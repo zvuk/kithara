@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::OnceLock;
+use std::{fs::File, sync::OnceLock};
 
 use thiserror::Error;
 
@@ -110,6 +110,53 @@ impl Asset {
         }
     }
 
+    /// Readable store path without populating the fixture's in-memory byte cache.
+    ///
+    /// An HTTP origin still materializes a missing store record.
+    /// Embedded assets have no filesystem path and return `None`.
+    ///
+    /// # Errors
+    /// Returns an error for unavailable assets, invalid store configuration,
+    /// or a store entry that is unreadable or is not a regular file.
+    pub fn try_path(&self) -> Result<Option<PathBuf>, AssetError> {
+        self.ensure_available()?;
+        match self.source {
+            Source::Embedded(_) => Ok(None),
+            #[cfg(not(target_arch = "wasm32"))]
+            Source::OnDisk(_) => {
+                let path = self.store_path()?;
+                File::open(&path)
+                    .and_then(|file| file.metadata())
+                    .and_then(|metadata| {
+                        if metadata.is_file() {
+                            Ok(())
+                        } else {
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "fixture path is not a regular file",
+                            ))
+                        }
+                    })
+                    .map_err(|source| AssetError::Read {
+                        source,
+                        path: path.clone(),
+                        name: self.entry.name,
+                    })?;
+                Ok(Some(path))
+            }
+        }
+    }
+
+    fn ensure_available(&self) -> Result<(), AssetError> {
+        if let Some(reason) = self.entry.unavailable {
+            return Err(AssetError::Unavailable {
+                reason,
+                name: self.entry.name,
+            });
+        }
+        Ok(())
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn store_path(&self) -> Result<PathBuf, AssetError> {
         crate::store::file(std::path::Path::new(self.entry.path)).map_err(|source| {
@@ -134,12 +181,7 @@ impl Asset {
     /// HTTP origin cannot supply it, or [`AssetError::Store`] when the runtime
     /// store override is invalid.
     pub fn try_bytes(&self) -> Result<&'static [u8], AssetError> {
-        if let Some(reason) = self.entry.unavailable {
-            return Err(AssetError::Unavailable {
-                reason,
-                name: self.entry.name,
-            });
-        }
+        self.ensure_available()?;
         match self.source {
             Source::Embedded(bytes) => Ok(bytes),
             #[cfg(not(target_arch = "wasm32"))]
@@ -184,5 +226,54 @@ mod tests {
                 reason: "HTTP 403; refresh KITHARA_TOKEN",
             })
         ));
+        assert!(matches!(
+            asset.try_path(),
+            Err(AssetError::Unavailable {
+                name: "remote_reference",
+                reason: "HTTP 403; refresh KITHARA_TOKEN",
+            })
+        ));
+    }
+
+    #[kithara::test(native)]
+    fn path_access_keeps_fixture_bytes_lazy() {
+        static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
+        let registered = crate::assets::allocation_ramp_default();
+        let asset = Asset::on_disk(registered.entry(), &BYTES);
+        let path = asset
+            .try_path()
+            .expect("prepared fixture is readable")
+            .expect("native fixture has a path");
+        assert_eq!(registered.path(), Some(path));
+        assert!(
+            BYTES.get().is_none(),
+            "path access must not retain full bytes"
+        );
+        assert!(
+            !asset
+                .try_bytes()
+                .expect("read the fixture bytes")
+                .is_empty()
+        );
+        assert!(BYTES.get().is_some());
+    }
+
+    #[kithara::test(native)]
+    fn missing_fixture_path_returns_a_read_error() {
+        static ENTRY: AssetEntry = AssetEntry {
+            name: "missing_path_access_test",
+            id: "missing-path-access-test",
+            path: "missing-path-access-test/absent.json",
+            content_type: "application/json",
+            unavailable: None,
+        };
+        static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
+        let asset = Asset::on_disk(&ENTRY, &BYTES);
+        let Err(AssetError::Read { name, source, .. }) = asset.try_path() else {
+            panic!("missing fixture must fail path access");
+        };
+        assert_eq!(name, ENTRY.name);
+        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        assert!(BYTES.get().is_none());
     }
 }

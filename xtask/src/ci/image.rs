@@ -182,6 +182,15 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, Strin
         ("CMAKE_VERSION", pins.cmake_version.clone()),
         ("CMAKE_AMD64_SHA256", pins.cmake_linux_amd64_sha256.clone()),
         ("CMAKE_ARM64_SHA256", pins.cmake_linux_arm64_sha256.clone()),
+        ("BINARYEN_VERSION", pins.binaryen_version.clone()),
+        (
+            "BINARYEN_AMD64_SHA256",
+            pins.binaryen_linux_amd64_sha256.clone(),
+        ),
+        (
+            "BINARYEN_ARM64_SHA256",
+            pins.binaryen_linux_arm64_sha256.clone(),
+        ),
         ("GECKODRIVER_VERSION", pins.geckodriver_version.clone()),
         (
             "GECKODRIVER_AMD64_SHA256",
@@ -246,8 +255,12 @@ pub(crate) fn runner_build_args(pins: &CiPins, base: &str) -> Vec<(&'static str,
     vec![
         ("CI_IMAGE", base.to_owned()),
         (
-            "ACTIONS_RUNNER_VERSION",
-            pins.actions_runner_version.clone(),
+            "ACTIONS_RUNNER_AMD64_URL",
+            pins.actions_runner_linux_amd64_url.clone(),
+        ),
+        (
+            "ACTIONS_RUNNER_ARM64_URL",
+            pins.actions_runner_linux_arm64_url.clone(),
         ),
         (
             "ACTIONS_RUNNER_AMD64_SHA256",
@@ -350,6 +363,22 @@ mod tests {
             let configured = configured_arguments(image.build_args(pins).unwrap());
             assert_eq!(declared_arguments(dockerfile), configured, "{dockerfile}");
         }
+    }
+
+    #[test]
+    fn the_toolchain_image_preinstalls_the_pinned_wasm_optimizer() {
+        let pins = &fixture().pins;
+        let arguments: BTreeMap<_, _> = linux_build_args(pins).unwrap().into_iter().collect();
+        for (name, expected) in [
+            ("BINARYEN_VERSION", &pins.binaryen_version),
+            ("BINARYEN_AMD64_SHA256", &pins.binaryen_linux_amd64_sha256),
+            ("BINARYEN_ARM64_SHA256", &pins.binaryen_linux_arm64_sha256),
+        ] {
+            assert_eq!(arguments.get(name), Some(expected));
+        }
+        let recipe = fs::read_to_string(workspace_root().join("docker/ci.Dockerfile")).unwrap();
+        assert!(recipe.contains("/usr/local/bin/wasm-opt"));
+        assert!(recipe.contains("binaryen-version_${BINARYEN_VERSION}"));
     }
 
     // The Android lane boots the AVD its pin names on every host, so the Linux

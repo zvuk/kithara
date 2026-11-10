@@ -123,10 +123,17 @@ fn bootstrap_does_not_require_the_cli_dependency_closure() {
             .iter(),
     );
     for (name, dependency) in dependencies {
-        if matches!(name.as_str(), "serde_json" | "tempfile" | "socket2" | "nix") {
+        if matches!(
+            name.as_str(),
+            "hex" | "sha2" | "serde_json" | "tempfile" | "socket2" | "nix"
+        ) {
             assert!(dependency.get("optional").is_none(), "{name}");
         } else {
-            assert_eq!(dependency["optional"].as_bool(), Some(true), "{name}");
+            assert_eq!(
+                dependency.get("optional").and_then(toml::Value::as_bool),
+                Some(true),
+                "{name}"
+            );
             assert!(
                 cli.contains(&toml::Value::from(format!("dep:{name}"))),
                 "{name}"

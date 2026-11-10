@@ -329,6 +329,7 @@ line_log = "no-block.log"
 
 [stress.environment]
 remove = [
+  "KITHARA_AUDIO_ARTIFACT_DIR",
   "KITHARA_FLASH_SYNC_BT",
   "KITHARA_FLASH_SYNC_TRACE",
   "KITHARA_HANG_DUMP_DIR",
@@ -451,6 +452,8 @@ KITHARA_NO_BLOCK_LOG = "no-block.log"
 [stress.modes.reproduction-load-flash-on]
 flash = true
 load = true
+# Each test fills the CPU set; its spinners already supply concurrent pressure.
+test_threads = "1"
 
 [stress.modes.reproduction-load-flash-on.set_env]
 KITHARA_FLASH_SYNC_TRACE = "1"
@@ -461,12 +464,12 @@ NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
 
 [stress.modes.reproduction-load-flash-on.raw_path_env]
-KITHARA_AUDIO_ARTIFACT_DIR = "audio"
 KITHARA_HANG_DUMP_DIR = "hang"
 
 [stress.modes.reproduction-load-flash-off]
 flash = false
 load = true
+test_threads = "1"
 
 [stress.modes.reproduction-load-flash-off.set_env]
 KITHARA_FLASH_SYNC_TRACE = "1"
@@ -477,7 +480,6 @@ NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
 
 [stress.modes.reproduction-load-flash-off.raw_path_env]
-KITHARA_AUDIO_ARTIFACT_DIR = "audio"
 KITHARA_HANG_DUMP_DIR = "hang"
 
 # The real-time contract, measured the same way. They belong in the run
@@ -620,7 +622,7 @@ features = ["no-block"]
 
 [test.load]
 default = false
-features = ["load"]
+features = ["kithara-test-utils/load"]
 
 [test.net_backends.none]
 features = []
@@ -862,13 +864,11 @@ default_backend = "none"
 owns = ["crates/kithara-render/"]
 cargo.packages = ["kithara-render"]
 cargo.profile = "test-release"
-undeclared_toggles = ["load"]
 
 # Each domain facade stays in `tests/`, but a branch selects it with the crate
 # that owns the production contract. The full workspace lane remains the
 # fallback and the default-branch proof.
 [test.lanes.abr]
-undeclared_toggles = ["load"]
 owns = ["crates/kithara-abr/"]
 cargo.packages = ["kithara-abr"]
 cargo.profile = "test-release"
@@ -899,7 +899,6 @@ cargo.packages = ["kithara-app", "kithara-app-document", "kithara-app-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.assets]
-undeclared_toggles = ["load"]
 owns = ["crates/kithara-assets/"]
 cargo.packages = ["kithara-assets"]
 cargo.profile = "test-release"
@@ -919,7 +918,7 @@ cargo.profile = "test-release"
 # the virtual clock has nothing to drive. The poll-blocking detector is the same
 # kind of property, and an unqualified feature no selected package declares fails
 # the whole run, so the lane names both as toggles it cannot carry.
-undeclared_toggles = ["flash", "no-block", "load"]
+undeclared_toggles = ["flash", "no-block"]
 
 [test.lanes.effects]
 owns = ["crates/kithara-effects/", "tests/crates/effects/"]
@@ -927,7 +926,6 @@ cargo.packages = ["kithara-effects", "kithara-effects-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.encode]
-undeclared_toggles = ["load"]
 owns = ["crates/kithara-encode/"]
 cargo.packages = ["kithara-encode"]
 cargo.profile = "test-release"
@@ -948,7 +946,6 @@ cargo.packages = ["kithara-host", "kithara-host-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.net]
-undeclared_toggles = ["load"]
 owns = ["crates/kithara-net/"]
 cargo.packages = ["kithara-net"]
 cargo.profile = "test-release"
@@ -958,7 +955,7 @@ cargo.profile = "test-release"
 # no transport on the host.
 [test.lanes.net-host]
 default_backend = "host"
-undeclared_toggles = ["flash", "no-block", "load"]
+undeclared_toggles = ["flash", "no-block"]
 owns = ["crates/kithara-net/src/backend/host/"]
 cargo.packages = ["kithara-net"]
 cargo.profile = "test-release"
@@ -974,7 +971,6 @@ cargo.packages = ["kithara-queue", "kithara-queue-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.storage]
-undeclared_toggles = ["load"]
 owns = ["crates/kithara-storage/"]
 cargo.packages = ["kithara-storage"]
 cargo.profile = "test-release"
@@ -1096,7 +1092,7 @@ default_features = [
 # The UI crates carry neither the virtual clock nor the poll-blocking detector:
 # both are properties of the player, and an unqualified feature no selected
 # package declares fails the whole run.
-undeclared_toggles = ["flash", "no-block", "load"]
+undeclared_toggles = ["flash", "no-block"]
 cargo.packages = [
   "kithara-ui",
   "kithara-ui-gallery",
@@ -1117,7 +1113,7 @@ default_features = [
   "kithara-ui-gallery/masonry",
   "kithara-ui-gallery/perf",
 ]
-undeclared_toggles = ["flash", "load"]
+undeclared_toggles = ["flash"]
 cargo.packages = ["kithara-ui", "kithara-ui-gallery"]
 cargo.profile = "test-release"
 runner.nextest.test_threads = 1
@@ -1235,7 +1231,6 @@ default_flash = false
 owns = ["tests/crates/warp/tests/rate_response.rs"]
 
 [test.lanes.usdt-render-scheduler]
-undeclared_toggles = ["load"]
 cargo.packages = ["kithara-render"]
 cargo.profile = "test-release"
 cargo.lib = true
@@ -1581,6 +1576,24 @@ role = "gate"
 kinds = ["weekly"]
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
+
+[ext.ci.lanes.crates-publish]
+cache_group = "host"
+label = "publication"
+os = ["macos", "linux"]
+tools = ["cargo", "just", "sccache", "kache"]
+program = "just"
+steps = [
+  { args = [
+    "release",
+    "crates",
+    "--dry-run",
+  ], label = "crates.io publication dry run", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "gate"
+kinds = ["weekly", "quarantine"]
+kinds_github = ["main", "branch", "merge-request", "nightly"]
+timeout_minutes = 60
 
 # Its own lane, and off the push gate: `cargo shear` reads what the source
 # actually imports, so a dependency reachable only under a `cfg` this build

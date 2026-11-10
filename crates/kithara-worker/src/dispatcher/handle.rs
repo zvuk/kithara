@@ -84,17 +84,6 @@ impl Dispatcher {
         let domain_cancel = config.cancel.clone();
         let name = config.name.clone();
         let config = Arc::new(config);
-        let inner = Arc::new(DispatcherInner {
-            config: Arc::clone(&config),
-            cmd_tx,
-            compute,
-            runtime,
-            admission: Mutex::new(Admission::Open),
-            cancel: cancel.clone(),
-            capacity: Arc::new(Capacity::default()),
-            next_id: AtomicU64::new(1),
-            wake: wake.clone(),
-        });
         let cancel_group = domain_cancel.map_or_else(
             || CancelGroup::from(cancel.clone()),
             |domain| CancelGroup::from(cancel.clone()) | domain,
@@ -106,9 +95,34 @@ impl Dispatcher {
             cancel_wake.wake();
         });
 
-        spawn_named(name, move || {
+        let thread_config = Arc::clone(&config);
+        let thread_wake = wake.clone();
+        let thread_cancel = cancel.clone();
+        let thread = spawn_named(name, move || {
             let _cancel_guards = cancel_guards;
-            run_loop(&cmd_rx, &wake, &cancel, &config, observer);
+            run_loop(
+                &cmd_rx,
+                &thread_wake,
+                &thread_cancel,
+                &thread_config,
+                observer,
+            );
+        });
+        #[cfg(target_arch = "wasm32")]
+        drop(thread);
+
+        let inner = Arc::new(DispatcherInner {
+            config,
+            capacity: Arc::new(Capacity::default()),
+            compute,
+            next_id: AtomicU64::new(1),
+            cancel,
+            admission: Mutex::new(Admission::Open),
+            runtime,
+            cmd_tx,
+            wake,
+            #[cfg(not(target_arch = "wasm32"))]
+            thread: Some(thread),
         });
 
         Self { inner }

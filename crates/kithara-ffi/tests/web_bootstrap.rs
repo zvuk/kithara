@@ -1,7 +1,10 @@
 #![cfg(target_arch = "wasm32")]
 
 use js_sys::futures::JsFuture;
-use kithara::platform::{thread, time::Duration};
+use kithara::platform::{
+    thread,
+    time::{Duration, timeout},
+};
 use kithara_ffi::{player::AudioPlayer, web::bindings};
 use kithara_test_utils::wait_until;
 use wasm_bindgen::prelude::*;
@@ -17,6 +20,8 @@ extern "C" {
     fn worklet_imports() -> u32;
     #[wasm_bindgen(js_name = bootstrapRequests)]
     fn bootstrap_requests() -> u32;
+    #[wasm_bindgen(js_name = bootstrapLocks)]
+    fn bootstrap_locks() -> js_sys::Promise;
     #[wasm_bindgen(js_name = audioContexts)]
     fn audio_contexts() -> String;
 }
@@ -58,11 +63,20 @@ async fn worklet_import_waits_for_worker_bootstrap_admission() {
         player.volume() == 0.25 && player.rt_process_calls_js() > 0
     })
     .await;
+    let volume = player.volume();
+    let mixer_blocks = player.rt_process_calls_js();
+    let contexts = audio_contexts();
+    // A stuck snapshot query must not hold up reporting a readiness failure.
+    let locks = timeout(
+        Duration::from_millis(100),
+        JsFuture::from(bootstrap_locks()),
+    )
+    .await;
     wasm_bindgen_test::console_log!(
-        "BOOTSTRAP_READY volume={} mixer_blocks={} audio_contexts={}",
-        player.volume(),
-        player.rt_process_calls_js(),
-        audio_contexts(),
+        "BOOTSTRAP_READY volume={} mixer_blocks={} audio_contexts={} bootstrap_locks={locks:?}",
+        volume,
+        mixer_blocks,
+        contexts,
     );
     ready.expect("the real mixer and owner run after admission is released");
 }
