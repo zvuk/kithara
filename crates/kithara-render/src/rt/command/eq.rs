@@ -137,7 +137,7 @@ impl Deck {
                 .get(band)
                 .ok_or(DeckRefusal::EqUnavailable { band })?;
             if binding.scope() != self.eq_programs.scope
-                || binding.layout() != self.eq_programs.layout
+                || binding.instance() != self.eq_programs.layout
                 || *authority != field.authority
             {
                 return Err(DeckRefusal::EqOutdated { band });

@@ -1,3 +1,4 @@
+mod binding;
 pub mod channels;
 mod curve;
 mod eq_program;
@@ -9,11 +10,12 @@ pub mod mix;
 pub mod protocol;
 pub mod snapshot;
 
+pub use binding::{EffectBinding, EqBinding, FilterBinding};
 pub use channels::{DeckEnds, DeckEvents, MixTapWriter, MixerInputs, SessionInbox, scope_channels};
 pub(crate) use curve::ParameterCurve;
 pub use curve::{ParameterCurveError, ParameterKnot};
-pub use eq_program::{EqBinding, EqGainProgram};
-pub use filter::{DeckFilterChange, FilterBinding, FilterSnapshot};
+pub use eq_program::EqGainProgram;
+pub use filter::{DeckFilterChange, FilterSnapshot};
 pub use gain::{SlotBinding, SlotGainProgram, SlotOutputSnapshot};
 pub use kithara_dsp::curve::{CurveShape, CurveShapeError};
 pub use mark::SlotMark;

@@ -1,6 +1,5 @@
-use kithara_command::{ScopeId, Seq};
 use kithara_effects::GainDb;
-use kithara_signal::{SessionEpoch, SessionFrame};
+use kithara_signal::SessionFrame;
 
 use super::{ParameterCurve, ParameterCurveError, ParameterKnot};
 
@@ -46,28 +45,6 @@ impl EqGainProgram {
             /// Final addressed frame, whose gain is held afterward.
             #[must_use]
             pub fn end(&self) -> SessionFrame;
-        }
-    }
-}
-
-/// The EQ layout and session axis on which a program was prepared.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(get)]
-pub struct EqBinding {
-    #[field(get, copy)]
-    scope: ScopeId,
-    #[field(get, copy)]
-    layout: Option<Seq>,
-    #[field(get, copy)]
-    epoch: SessionEpoch,
-}
-
-impl EqBinding {
-    pub(crate) fn new(scope: ScopeId, layout: Option<Seq>, epoch: SessionEpoch) -> Self {
-        Self {
-            scope,
-            layout,
-            epoch,
         }
     }
 }
