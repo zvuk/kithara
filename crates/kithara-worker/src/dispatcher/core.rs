@@ -335,6 +335,14 @@ pub(super) fn park_after_outcome(
     report: PassReport,
     progress_streak: &mut u32,
 ) {
+    kithara::probe_event!(
+        scheduler_pause_enter,
+        waiting = report.waiting_tasks,
+        backpressured = report.backpressured_tasks,
+        recheck_us = report.backpressure_recheck,
+        poll_us = budgets.backpressure_poll_interval,
+        wait_us = budgets.wait_timeout
+    );
     match report.outcome {
         PassOutcome::Progress => {
             *progress_streak += 1;
@@ -356,6 +364,11 @@ pub(super) fn park_after_outcome(
             wake.wait_timeout(budgets.idle_timeout);
         }
     }
+    kithara::probe_event!(
+        scheduler_pause_return,
+        waiting = report.waiting_tasks,
+        backpressured = report.backpressured_tasks
+    );
 }
 
 #[kithara::measure(label = "worker.backpressure.wait")]
@@ -381,7 +394,18 @@ fn wait_for_backpressure(
     let mut remaining = deadline;
     loop {
         let wait = poll_interval.min(remaining);
-        if wake.wait_poll_timeout(wait) {
+        kithara::probe_event!(scheduler_poll_enter, requested_us = wait);
+        #[cfg(feature = "usdt")]
+        let entered = kithara_platform::time::WallInstant::now();
+        let woken = wake.wait_poll_timeout(wait);
+        #[cfg(feature = "usdt")]
+        kithara::probe_event!(
+            scheduler_poll_return,
+            requested_us = wait,
+            elapsed_us = entered.elapsed(),
+            woken
+        );
+        if woken {
             return;
         }
         remaining = deadline.saturating_sub(started.elapsed());
