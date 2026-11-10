@@ -356,7 +356,7 @@ async fn a_seek_accepted_while_opening_is_adopted_before_the_first_start() {
 async fn selected_source_clock() -> (
     Queue<TestPools>,
     mock::DeckRig<TestPools>,
-    TestTempDir,
+    QueueFixture,
     AudioChunkInfo,
 ) {
     let (mut queue, _, _, mut rig, dir) = pending_selection();

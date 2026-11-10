@@ -20,7 +20,7 @@ async fn pending_successor() -> (
     TrackId,
     TrackId,
     mock::DeckRig<TestPools>,
-    TestTempDir,
+    QueueFixture,
 ) {
     let (mut queue, first, second, mut rig, dir) = selected().await;
     apply(

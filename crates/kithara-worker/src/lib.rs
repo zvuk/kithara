@@ -14,6 +14,8 @@ pub use config::{
     ComputePool, DispatcherConfig, DispatcherConfigPatch, OwnedPoolConfig, TaskConfig,
     WorkerConfig, WorkerConfigPatch,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use dispatcher::ShutdownError;
 pub use dispatcher::{Dispatcher, PendingTask, TaskError, TaskHandle};
 use humantime_serde as _;
 pub use observer::{Event, Observer, PassOutcome, PassReport};

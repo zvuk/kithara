@@ -12,7 +12,7 @@ struct HandoverRig {
     queue: Queue<TestPools>,
     deck: mock::DeckRig<TestPools>,
     loader: mock::DeckRig<TestPools>,
-    dir: TestTempDir,
+    dir: QueueFixture,
     ids: [TrackId; 3],
     last_lane: Option<kithara_render::LaneId>,
 }
