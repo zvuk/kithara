@@ -119,13 +119,123 @@ fn crates_at_version(versions: HashMap<String, String>, version: &str) -> Result
 
 fn run_dry_run(order: &[String], hack_crate: &str, no_verify: bool) -> Result<()> {
     let inputs = locate_publish_inputs(order)?;
+    let (released, manifests) = locate_workspace_versions()?;
     let args = PublishMode::DryRun.cargo_args(no_verify);
-    with_publish_inputs(
-        order.iter().map(|name| &inputs[name]),
-        hack_crate,
-        PublishLockfile::snapshot()?,
-        || run_cargo(&args, "cargo publish --workspace --dry-run"),
-    )
+    with_unreleased_version(&manifests, &released, || {
+        with_publish_inputs(
+            order.iter().map(|name| &inputs[name]),
+            hack_crate,
+            PublishLockfile::snapshot()?,
+            || run_cargo(&args, "cargo publish --workspace --dry-run"),
+        )
+    })
+}
+
+/// The version a dry run gives the workspace. `cargo publish --workspace`
+/// verifies each package against a local overlay of the others, but a version
+/// crates.io already holds resolves to the registry copy, so the branch's own
+/// cross-crate API would be checked against the last release. No release sits
+/// below `0.0.1`, so a requirement on this version only matches the overlay.
+const UNRELEASED_VERSION: &str = "0.0.0-unreleased";
+
+/// The version the publishable members share, and every manifest that can
+/// spell it: the root manifest and each member's.
+fn locate_workspace_versions() -> Result<(String, Vec<PathBuf>)> {
+    let metadata = MetadataCommand::new()
+        .no_deps()
+        .exec()
+        .context("failed to run cargo metadata")?;
+    let members: HashSet<_> = metadata.workspace_members.iter().collect();
+    let packages: Vec<_> = metadata
+        .packages
+        .iter()
+        .filter(|pkg| members.contains(&pkg.id))
+        .collect();
+    let mut versions: BTreeSet<String> = packages
+        .iter()
+        .filter(|pkg| {
+            pkg.publish
+                .as_ref()
+                .is_none_or(|registries| !registries.is_empty())
+        })
+        .map(|pkg| pkg.version.to_string())
+        .collect();
+    let Some(released) = versions.pop_first() else {
+        bail!("no publishable workspace member carries a version");
+    };
+    if !versions.is_empty() {
+        bail!(
+            "publishable workspace members carry more than one version: {released}, {versions:?}"
+        );
+    }
+    let mut manifests = vec![
+        metadata
+            .workspace_root
+            .join("Cargo.toml")
+            .into_std_path_buf(),
+    ];
+    manifests.extend(
+        packages
+            .iter()
+            .map(|pkg| pkg.manifest_path.clone().into_std_path_buf()),
+    );
+    Ok((released, manifests))
+}
+
+/// `manifest` with every quoted `released` version replaced by
+/// [`UNRELEASED_VERSION`], or `None` when it never spells it.
+fn unreleased_manifest(manifest: &str, released: &str) -> Option<String> {
+    let mut prepared = manifest.to_owned();
+    for quote in ['"', '\''] {
+        prepared = prepared.replace(
+            &format!("{quote}{released}{quote}"),
+            &format!("{quote}{UNRELEASED_VERSION}{quote}"),
+        );
+    }
+    (prepared != manifest).then_some(prepared)
+}
+
+fn with_unreleased_version(
+    manifests: &[PathBuf],
+    released: &str,
+    run: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let mut edits = Vec::new();
+    for path in manifests {
+        let original =
+            fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        if let Some(prepared) = unreleased_manifest(&original, released) {
+            edits.push(ManifestEdit {
+                path: path.clone(),
+                original,
+                prepared,
+            });
+        }
+    }
+    let result = (|| {
+        for edit in &edits {
+            fs::write(&edit.path, &edit.prepared)
+                .with_context(|| format!("prepare {}", edit.path.display()))?;
+        }
+        run()
+    })();
+    let errors: Vec<_> = edits
+        .iter()
+        .filter_map(|edit| {
+            fs::write(&edit.path, &edit.original)
+                .err()
+                .map(|error| format!("restore {}: {error}", edit.path.display()))
+        })
+        .collect();
+    if errors.is_empty() {
+        return result;
+    }
+    let restore_error = errors.join("; ");
+    match result {
+        Ok(()) => bail!("{restore_error}"),
+        Err(run_error) => Err(run_error)
+            .with_context(|| format!("also failed to restore manifests: {restore_error}")),
+    }
 }
 
 /// Publish each crate with a delay between them.
@@ -703,6 +813,8 @@ fn topo_sort(graph: &HashMap<String, Vec<String>>) -> Result<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
+    use cargo_metadata::semver;
+
     use super::*;
 
     #[test]
@@ -718,6 +830,49 @@ mod tests {
         assert!(!args.contains(&"--no-verify"));
         assert!(!args.contains(&"--list"));
         assert!(!args.contains(&"-p"));
+    }
+
+    #[test]
+    fn a_dry_run_verifies_the_branch_tree_under_a_version_no_release_holds() {
+        let manifest = r#"[workspace.package]
+version = "0.0.1-alpha5"
+[workspace.dependencies]
+kithara-effects = { path = "crates/kithara-effects", version = "0.0.1-alpha5" }
+hack = { version = '0.0.1-alpha5', path = 'hack' }
+other = "10.0.1-alpha5"
+"#;
+        let prepared = unreleased_manifest(manifest, "0.0.1-alpha5").unwrap();
+        assert_eq!(
+            prepared.matches(UNRELEASED_VERSION).count(),
+            3,
+            "{prepared}"
+        );
+        assert!(prepared.contains(r#""10.0.1-alpha5""#), "{prepared}");
+        assert!(unreleased_manifest("[package]\nversion = \"9.9.9\"\n", "0.0.1-alpha5").is_none());
+
+        let unreleased = semver::Version::parse(UNRELEASED_VERSION).unwrap();
+        let requirement = semver::VersionReq::parse(UNRELEASED_VERSION).unwrap();
+        assert!(requirement.matches(&unreleased));
+        for release in ["0.0.1-alpha.0", "0.0.1-alpha5", "0.0.1", "0.1.0"] {
+            assert!(!requirement.matches(&semver::Version::parse(release).unwrap()));
+        }
+
+        for succeeds in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("Cargo.toml");
+            fs::write(&path, manifest).unwrap();
+            let result =
+                with_unreleased_version(std::slice::from_ref(&path), "0.0.1-alpha5", || {
+                    assert!(fs::read_to_string(&path)?.contains(UNRELEASED_VERSION));
+                    if succeeds {
+                        Ok(())
+                    } else {
+                        bail!("synthetic dry run failure")
+                    }
+                });
+            assert_eq!(result.is_ok(), succeeds, "{result:?}");
+            assert_eq!(fs::read_to_string(&path).unwrap(), manifest);
+        }
     }
 
     #[test]
