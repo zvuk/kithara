@@ -16,6 +16,11 @@ use kithara_integration_tests::bufpool_ext::{Pools, TestPools, pools_with};
 use kithara_test_fixtures::integration_fixtures::{
     allocation_planar, allocation_ramp, allocation_sequence,
 };
+use tracing::{
+    Dispatch,
+    dispatcher::{self, DefaultGuard},
+    subscriber::NoSubscriber,
+};
 
 #[cfg(debug_assertions)]
 #[global_allocator]
@@ -23,6 +28,11 @@ static A: AllocDisabler = AllocDisabler;
 
 fn make_pools() -> Pools {
     eager_pools(0, 0)
+}
+
+// The flight recorder every test carries keeps each probe event in a heap line.
+fn detach_recorder() -> DefaultGuard {
+    dispatcher::set_default(&Dispatch::new(NoSubscriber::default()))
 }
 
 fn eager_pools(initial_buffers: usize, initial_capacity: usize) -> Pools {
@@ -305,6 +315,7 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(
     #[case] kind: StretchKind,
 ) {
     const FRAMES: usize = 8_192;
+    let _detached = detach_recorder();
     let pools = make_pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
     let (mut effect, first, second) = permit_alloc(|| {
@@ -366,6 +377,7 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(
     #[case] kind: StretchKind,
 ) {
     const FRAMES: usize = 8_192;
+    let _detached = detach_recorder();
     let pools = make_pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
     let (mut maximum, input) = permit_alloc(|| {

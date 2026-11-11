@@ -58,13 +58,8 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
                     .backend(backend)
                     .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
                     .build();
-                let output = render_configured_grid(
-                    config,
-                    Some(plan.clone()),
-                    &warp_nominal_clicks,
-                    Timeline::Anchored(anchor),
-                    None,
-                );
+                let output =
+                    render_configured_grid(config, Some(plan.clone()), &warp_nominal_clicks, None);
                 let clicks = click_positions(&mono(&output));
                 assert_eq!(
                     clicks.len(),
@@ -122,7 +117,7 @@ fn rendered_beats_follow_deck_tempo_and_ignore_manual_speed(
             f64_of(interval),
             spec().sample_rate,
         );
-        let output = render_on_grid(backend, 0.5, Some(plan), &source, bps, None);
+        let output = render_on_grid(backend, 0.5, Some(plan), &source, None);
         let clicks = click_positions(&mono(&output));
         assert_eq!(
             clicks.len(),
@@ -173,14 +168,7 @@ fn an_unmarked_span_renders_at_the_projected_rate(
         ),
         session_grid_spaced(f64_of(interval), spec().sample_rate),
     );
-    let output = render_on_grid(
-        backend,
-        2.0,
-        Some(projection),
-        &warp_nominal_clicks,
-        1.5,
-        None,
-    );
+    let output = render_on_grid(backend, 2.0, Some(projection), &warp_nominal_clicks, None);
     let clicks = click_positions(&mono(&output));
     assert_eq!(
         clicks.len(),
@@ -200,7 +188,7 @@ fn an_unmarked_span_renders_at_the_projected_rate(
 /// renders beats at the Host beat interval scaled by `asset_bps / host_bps`,
 /// whatever the manual speed asks for.
 ///
-/// The Host grid stands at `HOST_BPS`, and every case names an asset tempo the
+/// The Host grid stands at `HOST_BPM`, and every case names an asset tempo the
 /// acceptance queue carries, so a rate derived from the wrong member's tempo
 /// moves the interval away from its case by more than the shared tolerance.
 #[kithara::test]
@@ -220,7 +208,6 @@ fn host_sync_stretches_each_asset_tempo_onto_the_host_grid(
     warp_nominal_clicks: Vec<f32>,
 ) {
     const HOST_BPM: f64 = 100.0;
-    const HOST_BPS: f64 = 2.0;
     const QUEUE_BPM: [f64; 5] = [124.0, 96.0, 132.0, 74.0, 140.0];
 
     let source = warp_nominal_clicks;
@@ -231,7 +218,7 @@ fn host_sync_stretches_each_asset_tempo_onto_the_host_grid(
             host_spacing,
             spec().sample_rate,
         );
-        let output = render_on_grid(backend, 0.5, Some(plan), &source, HOST_BPS, None);
+        let output = render_on_grid(backend, 0.5, Some(plan), &source, None);
         let clicks = click_positions(&mono(&output));
         assert_eq!(clicks.len(), BARS, "every source beat survives {bpm} BPM");
         let interval = f64_of(NOMINAL) * bpm / HOST_BPM;
@@ -268,7 +255,6 @@ fn a_second_plan_through_one_renderer_keeps_only_its_own_tempo(
     warp_nominal_clicks: Vec<f32>,
 ) {
     const HOST_BPM: f64 = 100.0;
-    const HOST_BPS: f64 = 2.0;
     const LEAVING_BPM: f64 = 124.0;
     const ARRIVING_BPM: f64 = 140.0;
 
@@ -286,7 +272,6 @@ fn a_second_plan_through_one_renderer_keeps_only_its_own_tempo(
         1.0,
         Some(plan_of(LEAVING_BPM)),
         &source,
-        HOST_BPS,
         Some((switch_at, |source_frame, output_frame| {
             let spacing = f64_of(NOMINAL) * ARRIVING_BPM / HOST_BPM;
             plan_over_at(

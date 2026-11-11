@@ -47,7 +47,7 @@ fn identity_region_plan_refusal_retains_the_original_pcm() {
             .collect::<Vec<_>>(),
         bits
     );
-    assert!(renderer.committed.is_none());
+    assert_eq!(renderer.rendered_source_end(), None);
     assert!(renderer.scratch.is_none());
     assert!(renderer.pending_source.is_none());
     assert!(renderer.residency.is_none());
