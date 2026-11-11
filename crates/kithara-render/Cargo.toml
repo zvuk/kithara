@@ -34,7 +34,7 @@ kithara-bufpool = { workspace = true }
 kithara-command = { workspace = true }
 kithara-config = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
-kithara-derive = { workspace = true, features = ["patch"] }
+kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-dsp = { workspace = true }
 kithara-effects = { workspace = true }
 kithara-events = { workspace = true }

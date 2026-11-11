@@ -22,7 +22,7 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 apple-fused-src = ["kithara/apple-fused-src"]
 
 [dependencies]
-kithara = { workspace = true, features = ["usdt", "mock", "offline", "resample-rubato", "signal", "link"] }
+kithara = { workspace = true, features = ["usdt", "dsp", "mock", "offline", "resample-rubato", "signal", "link"] }
 kithara-command = { workspace = true }
 kithara-config = { workspace = true }
 kithara-integration-tests = { workspace = true, features = ["all", "link"] }

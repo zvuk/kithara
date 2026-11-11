@@ -115,7 +115,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                 pools.get_with_len::<f32>(capacity)?,
                 pools.get_with_len::<f32>(capacity)?,
             ],
-            render: RenderPass::new(pools, shape, config.mix().gain(), config)?,
+            render: RenderPass::new(pools, shape, config)?,
             tracks: TrackSlots::new(slots),
             armed: vec![None; slots.get()],
             held: vec![None; slots.get()],
@@ -528,6 +528,7 @@ impl Deck {
                 sounded = true;
             }
         }
+        sounded |= self.render.ringing();
         if sounded {
             self.render
                 .finish(&mut left[range.clone()], &mut right[range]);
