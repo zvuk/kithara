@@ -76,13 +76,16 @@ impl Adoptions {
         self.inflight.iter().any(|adopt| adopt.seq == seq)
     }
 
-    /// A cancelled repeat is still in flight; lane commands wait for it.
-    pub(super) fn cancelling(&self) -> bool {
-        self.inflight.iter().any(|adopt| adopt.cancelled)
-    }
-
-    pub(super) fn parking(&self) -> bool {
-        self.inflight.iter().any(|adopt| adopt.parked.is_some())
+    delegate::delegate! {
+        to self.inflight {
+            /// A cancelled repeat is still in flight; lane commands wait for it.
+            #[expr($.any(|adopt| adopt.cancelled))]
+            #[call(iter)]
+            pub(super) fn cancelling(&self) -> bool;
+            #[expr($.any(|adopt| adopt.parked.is_some()))]
+            #[call(iter)]
+            pub(super) fn parking(&self) -> bool;
+        }
     }
 
     pub(super) fn cancel_parked(&mut self) {
