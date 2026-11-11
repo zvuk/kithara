@@ -5,6 +5,7 @@ use kithara::{
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
+        tokio::{runtime::Handle, task::spawn_blocking_on},
     },
     play::{DeckMixerConfig, PlayWorkerConfig, ResourcePrep, TrackSettings},
     queue::{QueueConfig, QueueSettings},
@@ -58,7 +59,8 @@ pub(crate) struct NativeInner {
     /// separate scope.
     pub(super) shutdown: CancelToken,
     pub(super) queue: FfiQueueControl,
-    pub(super) queue_owner: HostOwned<FfiQueue>,
+    /// The queue's seat in the process Host; taken only by `Drop`.
+    pub(super) queue_owner: Option<HostOwned<FfiQueue>>,
     pub(super) event_bridge: Mutex<Option<EventBridge>>,
     pub(super) observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
 }
@@ -121,7 +123,7 @@ impl NativeInner {
         let resources = ResourceFactory::new(store, downloader, key_options);
         let inner = Self {
             resources,
-            queue_owner,
+            queue_owner: Some(queue_owner),
             queue,
             shutdown: cancel,
             observer: Mutex::default(),
@@ -161,13 +163,28 @@ impl NativeInner {
 }
 
 impl Drop for NativeInner {
-    /// Fire the master cancel pulse so the shutdown signal reaches subsystems before
-    /// structural Arc teardown unwinds. The facade owns `NativeInner` by value, so this
-    /// runs exactly when the `AudioPlayer` is dropped.
+    /// Leave the process Host, stop the event bridge, then fire the master
+    /// cancel pulse. The facade owns `NativeInner` by value, so this runs
+    /// exactly when the `AudioPlayer` is dropped. A drop inside a runtime
+    /// context (an observer releasing the final player from its callback)
+    /// hands that blocking teardown to the runtime's blocking pool instead of
+    /// stalling the async task that delivered the event.
     fn drop(&mut self) {
-        if let Err(error) = session::remove(&self.queue_owner) {
-            tracing::error!(?error, "failed to remove FFI Queue from the process Host");
+        let owner = self.queue_owner.take();
+        let bridge = self.event_bridge.lock().take();
+        let shutdown = self.shutdown.clone();
+        let teardown = move || {
+            if let Some(owner) = owner
+                && let Err(error) = session::remove(&owner)
+            {
+                tracing::error!(?error, "failed to remove FFI Queue from the process Host");
+            }
+            drop(bridge);
+            shutdown.cancel();
+        };
+        match Handle::try_current() {
+            Ok(runtime) => drop(spawn_blocking_on(&runtime, teardown)),
+            Err(_) => teardown(),
         }
-        self.shutdown.cancel();
     }
 }
