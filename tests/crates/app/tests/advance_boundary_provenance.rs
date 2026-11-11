@@ -13,7 +13,7 @@ use kithara::{
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{DeckMixerConfig, ResourceConfig, ResourceSrc, Settled},
+    play::{CrossfaderGain, DeckMixerConfig, ResourceConfig, ResourceSrc, Settled},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     warp::WarpConfig,
 };
@@ -73,6 +73,10 @@ const LINEAR_PATH_MAX_PEAK: f32 = 0.9;
 
 type ClassRun = (FrameClass, usize, usize);
 type ToneRun = (ToneClass, usize, usize);
+
+fn provenance_level() -> CrossfaderGain {
+    CrossfaderGain::checked(PROVENANCE_LEVEL).expect("the provenance level is a crossfader gain")
+}
 
 fn assert_provenance_headroom(rendered: &[f32], label: &str) {
     let left = deinterleave_left(rendered, usize::from(CHANNELS));
@@ -829,7 +833,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
     .await;
     let queue = harness.player().clone();
     harness
-        .run(&queue, |control| control.set_level(PROVENANCE_LEVEL))
+        .run(&queue, |control| control.set_crossfader(provenance_level()))
         .await
         .expect("set the mix level");
     let first = append_source_loaded(
@@ -1395,7 +1399,7 @@ async fn setup_queue_with_sample_rate(
         ))
         .await;
     harness
-        .run(&queue, |control| control.set_level(PROVENANCE_LEVEL))
+        .run(&queue, |control| control.set_crossfader(provenance_level()))
         .await
         .expect("set the mix level");
 
@@ -1436,7 +1440,7 @@ async fn setup_multivariant_flac_queue(sources: &[Url; 2], temp_dir: &TestTempDi
         ))
         .await;
     harness
-        .run(&queue, |control| control.set_level(PROVENANCE_LEVEL))
+        .run(&queue, |control| control.set_crossfader(provenance_level()))
         .await
         .expect("set the mix level");
 
@@ -1476,7 +1480,7 @@ async fn setup_flac_queue_with_player_config(
         ))
         .await;
     harness
-        .run(&queue, |control| control.set_level(PROVENANCE_LEVEL))
+        .run(&queue, |control| control.set_crossfader(provenance_level()))
         .await
         .expect("set the mix level");
     let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
@@ -1515,7 +1519,7 @@ async fn setup_sine_aac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> Que
         ))
         .await;
     harness
-        .run(&queue, |control| control.set_level(PROVENANCE_LEVEL))
+        .run(&queue, |control| control.set_crossfader(provenance_level()))
         .await
         .expect("set the mix level");
 

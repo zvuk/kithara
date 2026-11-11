@@ -31,7 +31,9 @@ use kithara::{
         time::{Duration, sleep},
         tokio::task,
     },
-    play::{MixTapWriter, PlayWorker, PlayWorkerConfig, PlayerFactory, ResourcePrep},
+    play::{
+        CrossfaderGain, MixTapWriter, PlayWorker, PlayWorkerConfig, PlayerFactory, ResourcePrep,
+    },
     queue::{Queue, QueueConfig, Transition},
 };
 use kithara_integration_tests::{
@@ -409,8 +411,9 @@ async fn run_deck_pair_worker(sender: wasm::HostSender<TestPools>, pair: Arc<Dec
             let levels = [CrossfaderBus::A, CrossfaderBus::B]
                 .map(|bus| crossfader_gain(bus, position).expect("a valid position"));
             for (deck, level) in decks.iter().zip(levels) {
+                let level = CrossfaderGain::checked(level).expect("a crossfader gain");
                 deck.control()
-                    .set_level(level)
+                    .set_crossfader(level)
                     .expect("set the crossfader level");
             }
             if applied == DeckPair::UNAPPLIED {
