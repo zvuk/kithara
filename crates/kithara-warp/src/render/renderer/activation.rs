@@ -47,6 +47,10 @@ where
         if meta.source_span.is_some_and(|span| !span.is_affine()) {
             return Err(crate::WarpRenderError::UnsupportedSourceGeometry);
         }
+        if output_limit > 0 && meta.spec == self.spec && self.unity_retirement_pending() {
+            self.retire_for_reprime()?;
+            self.prepare(meta.spec);
+        }
         if let Some(frames) = self.prepared_source_window(meta, output_limit)? {
             return Ok(frames);
         }
@@ -168,21 +172,17 @@ where
         let span = self.mapping_span(meta.frame_offset, meta.spec.sample_rate, outputs)?;
         let outputs =
             usize::try_from(span.output_frames()).map_err(|_| ElasticError::SampleCountOverflow)?;
-        let lookahead = if self.current_keylock {
-            self.projection_lookahead()?
-        } else {
-            0
-        };
+        let lookahead = self.projection_lookahead()?;
         let offset = lookahead
             .checked_add(outputs - 1)
             .and_then(|offset| u64::try_from(offset).ok())
             .ok_or(ElasticError::SampleCountOverflow)?;
         let (numerator, denominator) =
             self.mapped_position(meta.frame_offset, meta.spec.sample_rate, offset)?;
-        let radius = self.projection_radius()?;
+        let reach = self.source_reach()?;
         let end = u64::try_from(numerator.div_ceil(denominator.get()))
             .ok()
-            .and_then(|frame| frame.checked_add(radius + 1))
+            .and_then(|frame| frame.checked_add(reach))
             .ok_or(ElasticError::SampleCountOverflow)?;
         let frames = usize::try_from(end.saturating_sub(meta.frame_offset))
             .map_err(|_| ElasticError::SampleCountOverflow)?;
@@ -198,7 +198,8 @@ where
         })
     }
 
-    fn projection_radius(&self) -> Result<u64, ElasticError> {
+    /// Source frames past a position that a read at it reaches.
+    pub(super) fn source_reach(&self) -> Result<u64, ElasticError> {
         let correction = self.plan.as_ref().map_or(1.0, |plan| {
             plan.segments().iter().fold(1.0_f64, |minimum, segment| {
                 minimum.min(segment.ratio_correction())
@@ -207,10 +208,9 @@ where
         let radius = if f64::from(self.trajectory.speed_bounds()?.1) <= correction {
             0
         } else {
-            u64::try_from(crate::consts::SOURCE_RADIUS)
-                .map_err(|_| ElasticError::SampleCountOverflow)?
+            crate::consts::SOURCE_RADIUS
         };
-        Ok(radius)
+        u64::try_from(radius + 1).map_err(|_| ElasticError::SampleCountOverflow)
     }
 
     #[kithara::hang_watchdog]

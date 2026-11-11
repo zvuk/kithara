@@ -37,6 +37,7 @@ pin_project! {
 
     impl<F> PinnedDrop for Participating<F> {
         fn drop(this: Pin<&mut Self>) {
+            let this = this.project();
             hand_over(this.join.as_deref(), this.gate.on_drop());
         }
     }

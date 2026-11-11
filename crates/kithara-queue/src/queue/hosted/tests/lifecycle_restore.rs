@@ -34,6 +34,7 @@ fn apply_mix(
         deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
     let mut out = Outbox::new(&mut scope, &mut rig.dispatcher)
@@ -797,9 +798,11 @@ async fn player_lifecycle_admits_only_one_concurrent_close() {
                 When::Next,
                 kithara_command::Batch {
                     basis: Vec::new(),
-                    commands: vec![DeckPart::Mix(kithara_play::DeckMixSettingsChange::Level(
-                        1.0,
-                    ))],
+                    commands: vec![DeckPart::Mix(
+                        kithara_play::DeckMixSettingsChange::Crossfader(
+                            kithara_play::CrossfaderGain::MAX,
+                        ),
+                    )],
                 },
             )
             .expect("fill deck ring");

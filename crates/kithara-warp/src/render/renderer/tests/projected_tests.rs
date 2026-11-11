@@ -197,7 +197,7 @@ fn scalar_projected(
         .ok_or(ElasticError::PoolCapacity)?
         .capabilities();
     assert_eq!(
-        renderer.native_projection_speed(capabilities, renderer.current_keylock)?,
+        renderer.native_projection_rates(capabilities, renderer.current_keylock)?,
         None
     );
     let channels = usize::from(renderer.spec.channels);

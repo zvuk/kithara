@@ -153,6 +153,10 @@ jobs:
       && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly')) == 'nightly'
       && (inputs.only || '') == ''
     uses: ./.github/workflows/windows.yml
+    secrets:
+      KITHARA_DRM_PROD_KEY: ${{ secrets.KITHARA_DRM_PROD_KEY }}
+      KITHARA_DRM_PROD_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_PROD_AUTH_TOKEN }}
+      KITHARA_DRM_PROD_SP_ZV_TOKEN: ${{ secrets.KITHARA_DRM_PROD_SP_ZV_TOKEN }}
 
   # The Android baseline runs every night and every week, and a request for
   # it by name starts it alone.

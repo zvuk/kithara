@@ -15,6 +15,126 @@ fn executable(path: &Path, contents: &str) {
         .expect("make compiler-cache fixture executable runnable");
 }
 
+fn report_bytes(root: &Path, phase: &str) -> Vec<u8> {
+    let prefix = format!("gitlab-42-{phase}-");
+    let reports: Vec<_> = fs::read_dir(root.join(".ci-artifacts/cache"))
+        .expect("cache report directory")
+        .map(|entry| entry.expect("cache report entry").path())
+        .filter(|path| {
+            path.file_name()
+                .expect("cache report filename")
+                .to_str()
+                .expect("UTF-8 cache report filename")
+                .starts_with(&prefix)
+        })
+        .collect();
+    assert_eq!(reports.len(), 1, "one report for the owned runtime");
+    fs::read(&reports[0]).expect("cache report bytes")
+}
+
+#[test]
+fn cache_record_reads_tools_without_parsing_other_command_settings() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join(".config")).unwrap();
+    let program = env!("CARGO_BIN_EXE_fake-tool");
+    let config = json!({
+        "tools": {
+            "kache": { "program": program },
+            "sccache": { "program": program }
+        },
+        "stress": { "modes": { "future": { "future_budget": 1 } } }
+    });
+    fs::write(
+        temp.path().join(".config/xtask.toml"),
+        toml::to_string(&config).unwrap(),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["ci", "cache", "record", "bootstrap-driver"])
+        .current_dir(temp.path())
+        .env("CI_JOB_ID", "42")
+        .env_remove("GITHUB_RUN_ID")
+        .env("KACHE_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("KITHARA_TEST_STDOUT", "Cache hits 7\nCache misses 0\n")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&report_bytes(temp.path(), "bootstrap-driver")).unwrap();
+    assert_eq!(report["lane"], "bootstrap-driver");
+    assert_eq!(report["sccache"]["hits"], 7);
+}
+
+#[test]
+fn bootstrap_retains_evidence_without_a_cached_xtask() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join(".config")).unwrap();
+    fs::write(
+        temp.path().join(".config/xtask.toml"),
+        "[stress.modes.future]\nfuture_budget = 1\n",
+    )
+    .unwrap();
+    let transport = temp.path().join("transport-called");
+    executable(
+        &temp.path().join("just"),
+        &format!("#!/bin/sh\ntouch '{}'\nexit 91\n", transport.display()),
+    );
+    executable(
+        &temp.path().join("kache"),
+        "#!/bin/sh\ncase \"$1 $2\" in\n'daemon start') exec \"$BOOTSTRAP_FAKE_KACHE\" --kache-start ;;\n'daemon stop') exit 0 ;;\n*) printf '%s' \"$KITHARA_TEST_STDOUT\" ;;\nesac\n",
+    );
+    executable(
+        &temp.path().join("sccache"),
+        "#!/bin/sh\nprintf 'Cache hits 3\\nCache misses 0\\n'\n",
+    );
+    let host = temp.path().join("host.toml");
+    fs::write(&host, "[cache]\n").unwrap();
+    let path = std::env::join_paths(std::iter::once(temp.path().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    let mut stats: serde_json::Value = serde_json::from_str(&ready_stats()).unwrap();
+    stats["local_hits"] = json!(7);
+    stats["remote"] = json!("s3://fixture-private/cache");
+    let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
+        .args(["cache", "bootstrap", "sh", "-c", "printf '%s\\n' '{\"ok\":false,\"direction\":\"download\",\"outcome\":\"error\",\"elapsed_ms\":23,\"url\":\"secret\"}' > \"$KACHE_RUNTIME_DIR/transfers.jsonl\""])
+        .current_dir(temp.path())
+        .env("PATH", path)
+        .env("TMPDIR", temp.path())
+        .env("BOOTSTRAP_FAKE_KACHE", env!("CARGO_BIN_EXE_fake-tool"))
+        .env("KITHARA_TEST_STDOUT", stats.to_string())
+        .env("CI_JOB_ID", "42")
+        .env_remove("GITHUB_RUN_ID")
+        .env("KACHE_HOST_CONFIG", &host)
+        .env("SCCACHE_BUCKET", "scope")
+        .env("SCCACHE_ENDPOINT", "http://cache:9000")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bytes = report_bytes(temp.path(), "bootstrap");
+    let report: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(report["kache"]["counts"]["local_hits"], 7);
+    assert_eq!(report["sccache"]["hits"], 3);
+    assert_eq!(report["transfer_history"]["records"][0]["outcome"], "error");
+    assert_eq!(report["transfer_history"]["records"][0]["elapsed_ms"], 23);
+    assert!(!report.to_string().contains("secret"));
+    assert_eq!(report["steps"]["step_count"], 5);
+    assert!(
+        !String::from_utf8(bytes)
+            .unwrap()
+            .contains("fixture-private")
+    );
+    assert!(!transport.exists(), "bootstrap does not call cached xtask");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn cache_exec_refuses_a_full_volume_before_starting_the_compiler_cache() {
@@ -67,6 +187,7 @@ fn bootstrap_compiles_only_with_a_writable_s3_daemon() {
             ),
         );
         executable(&temp.path().join("just"), "#!/bin/sh\nexit 0\n");
+        executable(&temp.path().join("sccache"), "#!/bin/sh\nexit 2\n");
         let host = temp.path().join("host.toml");
         fs::write(&host, "[cache]\n").unwrap();
         let marker = temp.path().join("compiled");
@@ -74,7 +195,8 @@ fn bootstrap_compiles_only_with_a_writable_s3_daemon() {
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))
         .unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap")).args(["cache", "bootstrap"])
+        let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
+        .current_dir(temp.path()).args(["cache", "bootstrap"])
             .args(["sh", "-c", "test -z \"$GITHUB_ACTIONS$GITLAB_CI\" && test \"$RUSTC_WRAPPER\" = kache && test \"$KACHE_PREFETCH_ENABLED\" = false && touch \"$1\"", "compile"])
             .arg(&marker).env("PATH", path).env("TMPDIR", temp.path())
             .env("BOOTSTRAP_FAKE_KACHE", env!("CARGO_BIN_EXE_fake-tool"))
@@ -107,6 +229,7 @@ fn child_failure_preserves_its_exit_and_stops_only_the_owned_daemon() {
     let host = temp.path().join("host.toml");
     fs::write(&host, "[cache]\n").unwrap();
     executable(&temp.path().join("just"), "#!/bin/sh\nexit 0\n");
+    executable(&temp.path().join("sccache"), "#!/bin/sh\nexit 2\n");
     executable(
         &temp.path().join("kache"),
         &format!(
@@ -119,6 +242,7 @@ fn child_failure_preserves_its_exit_and_stops_only_the_owned_daemon() {
     ))
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
+        .current_dir(temp.path())
         .args(["cache", "failed-child", "sh", "-c", "exit 7"])
         .env("PATH", path)
         .env("TMPDIR", temp.path())
@@ -148,6 +272,7 @@ fn a_quiet_phase_can_finish_after_its_daemon_expires() {
     let host = temp.path().join("host.toml");
     fs::write(&host, "[cache]\n").unwrap();
     executable(&temp.path().join("just"), "#!/bin/sh\nexit 0\n");
+    executable(&temp.path().join("sccache"), "#!/bin/sh\nexit 2\n");
     executable(
         &temp.path().join("kache"),
         "#!/bin/sh\ncase \"$1 $2\" in\n'daemon start') rm -f \"$KACHE_RUNTIME_DIR/expired\"; exec \"$BOOTSTRAP_FAKE_KACHE\" --kache-start ;;\n'daemon stop') test ! -f \"$KACHE_RUNTIME_DIR/expired\" ;;\n*) exit 2 ;;\nesac\n",
@@ -157,6 +282,7 @@ fn a_quiet_phase_can_finish_after_its_daemon_expires() {
     ))
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
+        .current_dir(temp.path())
         .args([
             "cache",
             "quiet",
@@ -190,7 +316,9 @@ fn a_quiet_phase_can_finish_after_its_daemon_expires() {
 
 #[test]
 fn local_compilation_does_not_require_ci_services() {
+    let temp = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
+        .current_dir(temp.path())
         .args(["cache", "local", "sh", "-c", "exit 7"])
         .env_remove("CI_JOB_ID")
         .env_remove("GITHUB_RUN_ID")
@@ -208,6 +336,7 @@ fn a_failed_daemon_drain_fails_a_successful_compilation() {
     let host = temp.path().join("host.toml");
     fs::write(&host, "[cache]\n").unwrap();
     executable(&temp.path().join("just"), "#!/bin/sh\nexit 0\n");
+    executable(&temp.path().join("sccache"), "#!/bin/sh\nexit 2\n");
     executable(
         &temp.path().join("kache"),
         "#!/bin/sh\ncase \"$1 $2\" in\n'daemon start') exec \"$BOOTSTRAP_FAKE_KACHE\" --kache-start ;;\n'stats --json') printf '%s' '{\"remote\":\"s3://scope/kache\",\"daemon_connected\":true,\"daemon_remote_readonly\":false}' ;;\n'daemon stop') printf '%s' 'drain refused' >&2; exit 4 ;;\n*) exit 2 ;;\nesac\n",
@@ -217,6 +346,7 @@ fn a_failed_daemon_drain_fails_a_successful_compilation() {
     ))
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
+        .current_dir(temp.path())
         .args(["cache", "drain", "sh", "-c", "exit 0"])
         .env("PATH", path)
         .env("TMPDIR", temp.path())
@@ -247,6 +377,7 @@ fn the_target_lease_preserves_the_ci_context_and_child_exit() {
     let temp = tempfile::tempdir().unwrap();
     let target = temp.path().join("target");
     let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
+        .current_dir(temp.path())
         .arg("lease")
         .arg(&target)
         .args([
@@ -297,6 +428,7 @@ fn the_initial_driver_daemon_is_verified_and_released_before_the_child() {
             ),
         );
         executable(&temp.path().join("just"), "#!/bin/sh\nexit 0\n");
+        executable(&temp.path().join("sccache"), "#!/bin/sh\nexit 2\n");
         let path = std::env::join_paths(std::iter::once(temp.path().to_path_buf()).chain(
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))
@@ -350,6 +482,7 @@ fn an_unused_local_startup_runtime_needs_no_compiler_cache_service() {
     let runtime = temp.path().join("kithara-bootstrap.123456");
     fs::create_dir(&runtime).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_ci-bootstrap"))
+        .current_dir(temp.path())
         .arg("--bootstrap-runtime")
         .arg(&runtime)
         .arg("lease")

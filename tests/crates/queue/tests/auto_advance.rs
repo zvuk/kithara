@@ -255,7 +255,29 @@ async fn repeat_one_natural_advance_keeps_current_track() {
             mode: kithara::queue::QueueRepeatMode::One,
         })
     ));
-    let _ = render_loop(&queue, &harness, MAX_BLOCKS).await;
+    let mut loads: EventReceiver<TestEvent> = queue.subscribe();
+    let mut repeats = 0;
+    for _ in 0..MAX_BLOCKS {
+        let _ = render_loop(&queue, &harness, 1).await;
+        while let Ok(envelope) = receiver.try_recv() {
+            match envelope.event {
+                QueueEvent::TrackStatusChanged {
+                    id: reloading,
+                    status: TrackStatus::Pending,
+                } if reloading == id => {
+                    wait_for_loader_done_event(&mut loads, &queue, id, LOCAL_LOAD_DEADLINE)
+                        .await
+                        .expect("the repeat resource loads before offline callbacks resume");
+                }
+                QueueEvent::CurrentTrackAdvance {
+                    id: Some(repeated),
+                    reason: AdvanceReason::NaturalEof,
+                } if repeated == id => repeats += 1,
+                _ => {}
+            }
+        }
+    }
+    assert!(repeats > 0, "natural EOF must restart the selected track");
     assert_eq!(queue.current().map(|entry| entry.id), Some(id));
     assert!(
         queue.is_playing(),

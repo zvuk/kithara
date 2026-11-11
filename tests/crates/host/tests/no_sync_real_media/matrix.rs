@@ -7,7 +7,10 @@ use kithara::{
     hls::AbrMode,
     host::{HostConfig, HostSettings, Tap},
     platform::time::{self, Duration},
-    play::{CrossfadeSettings, PlayWorker, PlayWorkerConfig, ResourcePrep, TrackSettings},
+    play::{
+        CrossfadeSettings, CrossfaderGain, PlayWorker, PlayWorkerConfig, ResourcePrep,
+        TrackSettings,
+    },
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     signal::{SessionFrame, TransportRevision},
     warp::{StretchKind, WarpConfig},
@@ -372,6 +375,12 @@ async fn run_case(
     );
 
     for (deck_index, deck) in decks.iter().enumerate() {
+        assert_eq!(
+            deck.player.control().eq_band_count(),
+            10,
+            "{} deck {deck_index}: real-media capture retains the default ten-band EQ",
+            case.label,
+        );
         runtime::validate_deck(case, deck_index, deck, &mut failures);
     }
     runtime::record_transport_state(
@@ -1100,10 +1109,11 @@ async fn set_levels(
         .map(|deck| deck.player.control().clone())
         .collect();
     host.run(move || {
-        players
-            .iter()
-            .zip(levels)
-            .try_for_each(|(player, level)| player.set_level(level))
+        players.iter().zip(levels).try_for_each(|(player, level)| {
+            player.set_crossfader(
+                CrossfaderGain::checked(level).expect("matrix levels are crossfader gains"),
+            )
+        })
     })
     .await
 }
@@ -1151,11 +1161,6 @@ async fn prepare_deck(
         .build();
     let player = Queue::new(
         QueueConfig::builder()
-            .mixer(
-                kithara::play::DeckMixerConfig::builder()
-                    .eq_bands(0)
-                    .build(),
-            )
             .prep(prep)
             .store(store)
             .track(

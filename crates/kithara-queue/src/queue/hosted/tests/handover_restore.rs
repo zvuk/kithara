@@ -33,6 +33,7 @@ impl HandoverRig {
             deck_delivery: FrameCount::new(128),
             output: &output,
             deck: &deck,
+            planned_tempo: &mock::planned_tempo(),
         };
         let mut scope = self.deck.ring.scope(self.deck.scope).expect("deck scope");
         let mut out = Outbox::new(&mut scope, &mut self.deck.dispatcher).in_pass(pass);
@@ -49,7 +50,9 @@ impl HandoverRig {
                 When::Next,
                 Batch {
                     basis: Vec::new(),
-                    commands: vec![DeckPart::Mix(DeckMixSettingsChange::Level(0.5))],
+                    commands: vec![DeckPart::Mix(DeckMixSettingsChange::Crossfader(
+                        kithara_play::CrossfaderGain::MIN,
+                    ))],
                 },
             )
             .expect("unrelated native sequence")
@@ -430,7 +433,9 @@ impl HandoverRig {
                 When::Next,
                 Batch {
                     basis: Vec::new(),
-                    commands: vec![DeckPart::Mix(DeckMixSettingsChange::Level(1.0))],
+                    commands: vec![DeckPart::Mix(DeckMixSettingsChange::Crossfader(
+                        kithara_play::CrossfaderGain::MAX,
+                    ))],
                 },
             )
             .expect("fill available deck capacity");

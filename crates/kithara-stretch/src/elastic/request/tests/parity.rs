@@ -5,7 +5,6 @@
 use kithara_test_utils::{bufpool::pools as default_pools, kithara};
 use num_traits::ToPrimitive;
 
-use super::with_output_source_frames;
 use crate::{ElasticBackendConfig, ElasticConfig, ElasticRequest, StretchKind, build_engine};
 
 const CHANNELS: usize = 2;
@@ -185,7 +184,7 @@ fn misplaced_kicks(backend: StretchKind, name: &str, profile: Profile) -> Vec<St
             rendered + CONTROL_QUANTUM,
         )) - whole(advance_at(&mut advance, profile, rendered));
         let request = ElasticRequest::new(end - cursor, CONTROL_QUANTUM)
-            .and_then(|request| with_output_source_frames(request, audible))
+            .and_then(|request| request.with_output_source_frames(audible))
             .expect("control request");
         let mut block = vec![0.0; CONTROL_QUANTUM * CHANNELS];
         engine
