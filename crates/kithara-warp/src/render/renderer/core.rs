@@ -324,14 +324,16 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         Ok(())
     }
 
-    pub(in crate::render) fn rebase_source(&mut self, meta: AudioChunkInfo) {
-        if self
+    /// Resets when the held source ends elsewhere than `meta` starts; returns whether it did.
+    pub(in crate::render) fn rebase_source(&mut self, meta: AudioChunkInfo) -> bool {
+        let gap = self
             .residency
             .as_ref()
-            .is_some_and(|resident| resident.end.is_some_and(|end| end != meta.frame_offset))
-        {
+            .is_some_and(|resident| resident.end.is_some_and(|end| end != meta.frame_offset));
+        if gap {
             self.reset();
         }
+        gap
     }
 
     pub(in crate::render) fn clear_render_state(&mut self) {

@@ -54,8 +54,7 @@ where
         if let Some(frames) = self.prepared_source_window(meta, output_limit)? {
             return Ok(frames);
         }
-        self.rebase_source(meta);
-        if self.transition_pending() || self.engine_outdated() {
+        if self.rebase_source(meta) || self.transition_pending() || self.engine_outdated() {
             return Err(crate::WarpRenderError::NeedsService);
         }
         self.terminal_source_end = None;
