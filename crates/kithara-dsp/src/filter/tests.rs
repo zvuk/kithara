@@ -174,6 +174,47 @@ fn an_empty_range_keeps_the_state() {
 }
 
 #[kithara::test]
+fn reset_clears_history_and_keeps_the_design() {
+    let mut filter = built(1_000.0);
+    let mut warmup = stereo(256);
+    filter.process(&mut warmup, 0..256).expect("shape matches");
+    filter.reset();
+    let mut actual = stereo(256);
+    let mut expected = actual.clone();
+    filter.process(&mut actual, 0..256).expect("shape matches");
+    built(1_000.0)
+        .process(&mut expected, 0..256)
+        .expect("shape matches");
+    assert_eq!(bits(&actual), bits(&expected));
+}
+
+#[kithara::test]
+fn reset_restarts_the_quiet_frame_sequence() {
+    let mut filter = Biquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("filter builds");
+    filter
+        .retune(
+            0,
+            Coefficients {
+                b0: 1.0,
+                b1: 0.5,
+                b2: 0.0,
+                a1: 0.0,
+                a2: 0.0,
+            },
+        )
+        .expect("exact FIR");
+    let amplitude = f32::from_bits(0x3000_0000);
+    filter
+        .process(&mut [vec![amplitude]], 0..1)
+        .expect("one quiet frame");
+    filter.reset();
+    let mut actual = vec![vec![amplitude, 0.0, 0.0]];
+    filter.process(&mut actual, 0..3).expect("fresh sequence");
+    let expected = vec![vec![amplitude, amplitude / 2.0, 0.0]];
+    assert_eq!(bits(&actual), bits(&expected));
+}
+
+#[kithara::test]
 fn samples_outside_the_range_keep_their_bits() {
     let mut filter = built(1_000.0);
     let original = stereo(64);

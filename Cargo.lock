@@ -5244,6 +5244,7 @@ dependencies = [
  "bon",
  "delegate",
  "derive-where",
+ "derive_more",
  "fieldwork",
  "firewheel",
  "kithara-bufpool",
