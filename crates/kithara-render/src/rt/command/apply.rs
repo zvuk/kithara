@@ -74,7 +74,7 @@ impl Deck {
             }
             DeckPart::Mix(change) => {
                 self.mix.apply_change(change);
-                self.render.set_gain(self.mix.gain());
+                self.render.set_mix(self.mix);
                 Some(DeckPart::Mix(change))
             }
             DeckPart::Eq(DeckEqChange::Gain { band, gain }) => {
@@ -85,6 +85,7 @@ impl Deck {
                 .render
                 .take_eq_layout(layout)
                 .map(|layout| DeckPart::Returned(Returned::Eq(layout))),
+            DeckPart::Fx(change) => self.render.change_fx(change, self.sample_rate),
             DeckPart::GainProgram {
                 slot,
                 binding,
