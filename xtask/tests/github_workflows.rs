@@ -13,7 +13,7 @@ use syn::{
 
 const STRESS_RAW_DIR: &str = "${{ runner.temp }}/kithara-stress/raw";
 const STRESS_EXECUTE_COMMAND: &str = r#"args=(
-  --subject-root "$GITHUB_WORKSPACE/subject"
+  --subject-root "$RUNNER_TEMP/kithara-stress/subject"
   --output "$RUNNER_TEMP/kithara-stress/raw/shard-$SHARD_INDEX"
   --expected-controller-sha "$CONTROLLER_SHA"
   --expected-subject-sha "$SUBJECT_SHA"
@@ -28,7 +28,7 @@ const STRESS_EXECUTE_COMMAND: &str = r#"args=(
 # that does not exist and fail the run at argument parsing.
 for mode in $MODE; do args+=(--mode "$mode"); done
 for lane in $LANE; do args+=(--lane "$lane"); done
-just ci stress "${args[@]}""#;
+just ci cache-exec stress-execute just ci stress "${args[@]}""#;
 const STRESS_REPORT_COMMAND: &str = r#"args=()
 # One root per shard: each artifact carries its evidence under `shard-<index>`.
 for raw in "$RUNNER_TEMP"/kithara-stress/raw/shard-*; do args+=(--raw "$raw"); done
@@ -1129,14 +1129,17 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
         BTreeSet::from([
             "Checkout controller".to_owned(),
             "Checkout subject".to_owned(),
+            "Isolate stress subject".to_owned(),
             "Execute the stress run".to_owned(),
+            "Upload test audio".to_owned(),
             "Upload the raw stress evidence".to_owned(),
+            "Upload execution compiler-cache evidence".to_owned(),
         ])
     );
 
     assert_checkout(
         named_step(execute, "Checkout controller"),
-        "controller",
+        ".",
         "${{ job.workflow_repository }}",
         "${{ job.workflow_sha }}",
     );
@@ -1153,10 +1156,7 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
     );
 
     let run = named_step(execute, "Execute the stress run");
-    assert_eq!(
-        mapping_field(run, "working-directory").as_str(),
-        Some("controller")
-    );
+    assert_eq!(mapping_field(run, "working-directory").as_str(), Some("."));
     let stress_env = mapping_field(run, "env")
         .as_mapping()
         .expect("run environment is a mapping");
@@ -1197,6 +1197,38 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
     assert_eq!(
         mapping_field(raw_upload_inputs, "if-no-files-found").as_str(),
         Some("error")
+    );
+}
+
+#[test]
+fn stress_subject_is_isolated_and_shard_cache_evidence_is_retained() {
+    let workflow = github_workflow("stress.yml");
+    let execute = workflow_job(workflow_jobs(&workflow), "execute");
+    let isolate = named_step(execute, "Isolate stress subject");
+    assert!(
+        step_position(execute, "Checkout subject")
+            < step_position(execute, "Isolate stress subject")
+    );
+    assert!(
+        step_position(execute, "Isolate stress subject")
+            < step_position(execute, "Execute the stress run")
+    );
+    assert_eq!(
+        isolate["run"].as_str().unwrap().trim(),
+        "mkdir \"$RUNNER_TEMP/kithara-stress\"\nmv \"$GITHUB_WORKSPACE/subject\" \"$RUNNER_TEMP/kithara-stress/subject\""
+    );
+    let upload = named_step(execute, "Upload execution compiler-cache evidence");
+    assert!(upload["if"].as_str().unwrap().contains("always()"));
+    assert!(upload["if"].as_str().unwrap().contains("hashFiles("));
+    assert_eq!(
+        upload["with"]["name"].as_str(),
+        Some(
+            "compiler-cache-stress-execute-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}"
+        )
+    );
+    assert_eq!(
+        upload["with"]["path"].as_str(),
+        Some(".ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json")
     );
 }
 
@@ -2485,6 +2517,23 @@ fn a_checkout_never_fetches_every_branch() {
     );
 }
 
+#[test]
+fn lane_uploads_bootstrap_evidence_when_the_lane_has_not_started() {
+    let workflow = github_workflow("lane.yml");
+    let upload = named_step(
+        workflow_job(workflow_jobs(&workflow), "run"),
+        "Upload compiler-cache evidence",
+    );
+    assert_eq!(
+        mapping_field(upload, "if").as_str(),
+        Some(concat!(
+            "${{ always() && hashFiles(",
+            "format('.ci-artifacts/cache/github-{0}-{1}-{2}.json', github.run_id, github.run_attempt, inputs.lane), ",
+            "format('.ci-artifacts/cache/github-{0}-{1}-bootstrap*.json', github.run_id, github.run_attempt)) != '' }}"
+        ))
+    );
+}
+
 /// A runner keeps its checkout for every later job, and checkout turns garbage
 /// collection off in it, so each job's fetch left one more pack behind: up to
 /// 670 of them on one runner. The lane collects that checkout's garbage on
@@ -2894,6 +2943,58 @@ fn failed_catalog_reads_publish_no_selection_outputs() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn mandatory_audio_captures_are_uploaded_even_when_tests_fail() {
+    for (workflow, job, path) in [
+        ("lane.yml", "run", "tests/crates/sync/.ci-artifacts/audio"),
+        (
+            "windows.yml",
+            "windows",
+            "tests/crates/sync/.ci-artifacts/audio",
+        ),
+        (
+            "windows.yml",
+            "diagnostics",
+            "${{ runner.temp }}/windows-diagnostics-controller/tests/crates/sync/.ci-artifacts/audio",
+        ),
+        (
+            "stress.yml",
+            "execute",
+            "${{ runner.temp }}/kithara-stress/subject/tests/crates/sync/.ci-artifacts/audio",
+        ),
+    ] {
+        let workflow = github_workflow(workflow);
+        let steps = workflow_job(workflow_jobs(&workflow), job)["steps"]
+            .as_sequence()
+            .unwrap();
+        let upload = steps
+            .iter()
+            .find(|step| step["name"].as_str() == Some("Upload test audio"))
+            .expect("mandatory recordings must leave the runner before checkout cleanup");
+        assert_eq!(upload["if"].as_str(), Some("always()"));
+        assert_eq!(upload["with"]["path"].as_str(), Some(path));
+        assert_eq!(upload["with"]["include-hidden-files"].as_bool(), Some(true));
+        assert_eq!(upload["with"]["retention-days"].as_u64(), Some(14));
+    }
+    for (file, job) in [
+        ("apple.yml", "apple:test"),
+        ("apple.yml", "apple:test-flash-off"),
+        ("windows.yml", ".windows-suite"),
+    ] {
+        let text = fs::read_to_string(workspace_root().join(".gitlab/ci").join(file)).unwrap();
+        let pipeline: Value = serde_yaml_ng::from_str(&text).unwrap();
+        let artifacts = &pipeline[job]["artifacts"];
+        assert_eq!(artifacts["when"].as_str(), Some("always"));
+        assert!(
+            artifacts["paths"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .any(|path| path.as_str() == Some("tests/crates/sync/.ci-artifacts/audio/"))
+        );
+    }
+}
+
 /// `wreq` is the backend the Apple desktop app ships, and asking for it
 /// builds `BoringSSL` through cmake. The Windows guest carries neither that
 /// toolchain nor the product that would use the backend, so the lane names the
@@ -2933,6 +3034,9 @@ fn the_windows_lane_keeps_the_xtask_build_the_guest_keeps() {
     let xtask = mapping_field(env, "KITHARA_XTASK_TARGET")
         .as_str()
         .expect("the lane names where xtask builds itself");
+    let bootstrap = mapping_field(env, "KITHARA_BOOTSTRAP_TARGET")
+        .as_str()
+        .expect("the lane retains the lease-bootstrap build");
 
     assert!(
         xtask
@@ -2941,6 +3045,9 @@ fn the_windows_lane_keeps_the_xtask_build_the_guest_keeps() {
             .is_some_and(|name| !name.is_empty()),
         "xtask builds in `{xtask}`, outside `{kept}`, so the wiped checkout takes it"
     );
+    assert!(bootstrap.starts_with(&format!("{kept}\\")));
+    assert_ne!(bootstrap, xtask);
+    assert!(!bootstrap.starts_with(&format!("{xtask}\\")));
 }
 
 #[test]
@@ -2963,6 +3070,40 @@ fn filtered_android_runs_do_not_claim_baseline_acceptance() {
             .as_str()
             .unwrap()
             .contains("Android baseline on an emulator")
+    );
+}
+
+#[test]
+fn windows_storage_inventory_does_not_require_a_bootstrap_build() {
+    let workflow = github_workflow("windows.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "diagnostics");
+    let storage = first_step(job);
+    assert_eq!(
+        storage["name"].as_str(),
+        Some("Inspect Windows storage without bootstrap")
+    );
+    assert_eq!(storage["if"].as_str(), Some("${{ inputs.diagnostics }}"));
+    let command = storage["run"].as_str().unwrap();
+    assert!(command.contains("Get-PSDrive"));
+    assert!(command.contains("Get-Process"));
+    assert!(command.contains("du.exe"));
+    assert!(command.contains("-P -x -h --max-depth=4 C:/kithara-ci"));
+    assert!(!command.contains("Remove-Item"));
+    for line in command.lines().map(str::trim) {
+        assert!(!line.starts_with("just ") && !line.starts_with("cargo "));
+    }
+    let upload = named_step(job, "Preserve bootstrap storage inventory");
+    assert_eq!(
+        upload["if"].as_str(),
+        Some("${{ always() && inputs.diagnostics }}")
+    );
+    assert_eq!(
+        upload["with"]["path"].as_str(),
+        Some("${{ runner.temp }}/windows-storage.txt")
+    );
+    assert!(
+        step_position(job, "Preserve bootstrap storage inventory")
+            < step_position(job, "Checkout diagnostics controller")
     );
 }
 
@@ -3020,6 +3161,74 @@ fn windows_runner_context_is_bound_only_after_runner_assignment() {
 }
 
 #[test]
+fn windows_filtered_probes_route_lane_load_and_repetitions_to_the_harness() {
+    let workflow = github_workflow("windows.yml");
+    let inputs = &workflow["on"]["workflow_dispatch"]["inputs"];
+    for (name, kind, default) in [
+        ("test-lane", "string", "workspace"),
+        ("test-load", "choice", "off"),
+    ] {
+        assert_eq!(inputs[name]["type"].as_str(), Some(kind));
+        assert_eq!(inputs[name]["default"].as_str(), Some(default));
+    }
+    assert_eq!(inputs["test-count"]["type"].as_str(), Some("number"));
+    assert_eq!(inputs["test-count"]["default"].as_u64(), Some(1));
+    assert_eq!(
+        inputs["test-load"]["options"],
+        serde_yaml_ng::to_value(["off", "on"]).unwrap()
+    );
+    let job = workflow_job(workflow_jobs(&workflow), "diagnostics");
+    for (variable, input) in [
+        ("TEST_LANE", "test-lane"),
+        ("TEST_LOAD", "test-load"),
+        ("TEST_COUNT", "test-count"),
+    ] {
+        assert_eq!(
+            job["env"][variable].as_str(),
+            Some(format!("${{{{ inputs.{input} }}}}").as_str())
+        );
+    }
+    assert_eq!(
+        job["env"]["TEST_THREADS"].as_str(),
+        Some("${{ inputs.test-load == 'on' && '1' || 'num-cpus' }}")
+    );
+    let run = named_step(job, "Run diagnostic test selection")["run"]
+        .as_str()
+        .unwrap();
+    for argument in [
+        "\"--lane=$env:TEST_LANE\"",
+        "\"--load=$env:TEST_LOAD\"",
+        "\"--stress-count=$env:TEST_COUNT\"",
+        "\"--test-threads=$env:TEST_THREADS\"",
+        "--profile=ci",
+        "--retries=0",
+    ] {
+        assert!(run.split_whitespace().any(|arg| arg == argument));
+    }
+    assert_eq!(
+        named_step(
+            workflow_job(workflow_jobs(&workflow), "windows"),
+            "Run tests"
+        )["run"]
+            .as_str(),
+        Some("just ci cache-exec windows-test just test run --net-backend=none")
+    );
+    let upload = named_step(job, "Upload probe evidence")["with"]["path"]
+        .as_str()
+        .unwrap();
+    assert!(
+        upload.contains(
+            "${{ runner.temp }}/windows-diagnostics-controller/target/nextest/ci/junit.xml"
+        )
+    );
+    assert!(
+        upload.contains(
+            "${{ runner.temp }}/windows-diagnostics-controller/.ci-artifacts/cache/github-"
+        )
+    );
+}
+
+#[test]
 fn windows_diagnostics_preserve_old_evidence_before_a_scoped_probe() {
     let workflow = github_workflow("windows.yml");
     let diagnostic = workflow_job(workflow_jobs(&workflow), "diagnostics");
@@ -3033,22 +3242,31 @@ fn windows_diagnostics_preserve_old_evidence_before_a_scoped_probe() {
     let capture = index("Capture existing Windows evidence");
     let upload = index("Preserve existing Windows evidence");
     let controller = index("Checkout diagnostics controller");
+    let isolate = index("Isolate diagnostics Cargo workspace");
     let probe = index("Run diagnostic test selection");
-    assert!(controller < capture && capture < upload && upload < probe);
+    assert!(controller < isolate && isolate < capture && capture < upload && upload < probe);
     assert_eq!(
         steps[controller]["with"]["path"].as_str(),
         Some("diagnostics-controller")
     );
     assert_eq!(
-        steps[capture]["run"].as_str(),
+        steps[controller]["with"]["persist-credentials"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        steps[isolate]["run"].as_str(),
         Some(
-            "just --justfile diagnostics-controller/justfile ci windows-diagnostics --output \"$env:RUNNER_TEMP/windows-diagnostics\""
+            "[System.IO.Directory]::Move(\"$env:GITHUB_WORKSPACE/diagnostics-controller\", \"$env:RUNNER_TEMP/windows-diagnostics-controller\")"
         )
+    );
+    assert_eq!(
+        steps[capture]["run"].as_str(),
+        Some("just ci windows-diagnostics --output \"$env:RUNNER_TEMP/windows-diagnostics\"")
     );
     assert_eq!(
         steps[probe]["run"].as_str(),
         Some(
-            "just ci cache-exec windows-diagnostic just test run --net-backend=none \"--narrow=$env:TEST_FILTER\" --retries=0"
+            "just ci cache-exec windows-diagnostic just test run --net-backend=none \"--narrow=$env:TEST_FILTER\" \"--lane=$env:TEST_LANE\" \"--load=$env:TEST_LOAD\" \"--stress-count=$env:TEST_COUNT\" \"--test-threads=$env:TEST_THREADS\" --profile=ci --retries=0"
         )
     );
     assert_eq!(
@@ -3060,11 +3278,13 @@ fn windows_diagnostics_preserve_old_evidence_before_a_scoped_probe() {
         "Run tests",
     );
     assert!(acceptance["env"].get("KITHARA_FLASH_SYNC_TRACE").is_none());
-    for index in [index("Verify probe compiler cache"), probe] {
+    for index in [capture, index("Verify probe compiler cache"), probe] {
         assert_eq!(
             steps[index]["working-directory"].as_str(),
-            Some("diagnostics-controller")
+            Some("${{ runner.temp }}/windows-diagnostics-controller")
         );
+    }
+    for index in [index("Verify probe compiler cache"), probe] {
         assert!(
             steps[index]["if"]
                 .as_str()
@@ -3152,4 +3372,34 @@ fn the_host_provisions_itself_only_when_someone_asks_it_to() {
         Some(false),
         "a second pass would rebuild what the first is installing against"
     );
+}
+
+#[test]
+fn the_host_can_build_the_toolchain_without_provisioning_services() {
+    let workflow = github_workflow("host.yml");
+    let operation = &workflow["on"]["workflow_dispatch"]["inputs"]["operation"];
+    assert_eq!(operation["type"].as_str(), Some("choice"));
+    assert_eq!(operation["default"].as_str(), Some("provision"));
+    assert_eq!(
+        operation["options"],
+        serde_yaml_ng::from_str::<Value>("[provision, toolchain-image]").unwrap()
+    );
+    let job = workflow_job(workflow_jobs(&workflow), "provision");
+    let steps = mapping_field(job, "steps").as_sequence().unwrap();
+    for (command, condition) in [
+        (
+            "just ci host provision",
+            "${{ inputs.operation == 'provision' }}",
+        ),
+        (
+            "just ci host linux image toolchain",
+            "${{ inputs.operation == 'toolchain-image' }}",
+        ),
+    ] {
+        let step = steps
+            .iter()
+            .find(|step| step["run"].as_str() == Some(command))
+            .expect("explicit host operation");
+        assert_eq!(step["if"].as_str(), Some(condition));
+    }
 }

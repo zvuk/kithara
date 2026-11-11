@@ -32,6 +32,14 @@ jobs:
       - name: Run every UI test and photograph both hosts
         run: just ci lane deep-ui --kind nightly
 
+      - name: Upload compiler-cache evidence
+        if: ${{ always() && hashFiles(format('.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compiler-cache-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .ci-artifacts/cache/github-${{ github.run_id }}-${{ github.run_attempt }}-*.json
+          if-no-files-found: error
+
       - name: Upload both hosts, shipped studios, and difference masks
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

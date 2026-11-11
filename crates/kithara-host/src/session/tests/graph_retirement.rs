@@ -198,6 +198,10 @@ fn removing_the_last_deck_releases_the_output() {
     remove(&mut state, deck);
 
     assert!(state.ctx.is_none());
+    assert!(
+        state.retired_contexts.is_empty(),
+        "a context whose processor returned is reclaimed before removal completes"
+    );
 }
 
 /// The browser hands its output over once, on a user gesture, and a closed
@@ -376,6 +380,14 @@ fn idle_context_recreation_advances_generation_before_deferred_processor_drop() 
         );
     });
 
+    state.begin_iteration();
+    assert_eq!(
+        state.retired_contexts.len(),
+        1,
+        "the Host must own the detached context until its processor returns"
+    );
+    assert!(state.retired_contexts[0].is_active());
+
     insert(&mut state);
     let after = render_and_read_session_grid(&mut state);
     let second_live = state.root.grid().clone();
@@ -406,6 +418,54 @@ fn idle_context_recreation_advances_generation_before_deferred_processor_drop() 
         dev.retired_processors.clear();
         dev.defer_processor_drop = false;
     });
+    state.begin_iteration();
+    assert!(
+        state.retired_contexts.is_empty(),
+        "the owner pass reclaims the context after its processor returns"
+    );
+    assert_eq!(
+        state.root.grid().clone(),
+        second_live,
+        "late destruction must not invalidate the new session grid"
+    );
+}
+
+#[kithara::test]
+fn returned_processors_reclaim_only_their_detached_contexts() {
+    device(|dev| {
+        *dev = AudioDevice::default();
+        dev.defer_processor_drop = true;
+    });
+    let mut state = test_state(start_test_stream);
+    for pending in 1..=2 {
+        let deck = insert(&mut state);
+        assert!(deliver_one_block());
+        remove(&mut state, deck);
+        state.begin_iteration();
+        assert_eq!(state.retired_contexts.len(), pending);
+    }
+
+    insert(&mut state);
+    let current = render_and_read_session_grid(&mut state)
+        .session_grid()
+        .clone();
+    drop(device(|dev| dev.retired_processors.remove(0)));
+    state.begin_iteration();
+    assert_eq!(state.retired_contexts.len(), 1);
+    assert!(state.retired_contexts[0].is_active());
+    assert_eq!(state.root.grid().clone(), current);
+
+    device(|dev| {
+        dev.retired_processors.clear();
+        dev.defer_processor_drop = false;
+    });
+    state.begin_iteration();
+    assert!(state.retired_contexts.is_empty());
+    assert_eq!(state.root.grid().clone(), current);
+    assert!(
+        deliver_one_block(),
+        "the new graph still processes callbacks"
+    );
 }
 
 #[kithara::test]

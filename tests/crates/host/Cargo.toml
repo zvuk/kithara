@@ -41,6 +41,9 @@ url = { workspace = true }
 [target.'cfg(not(target_os = "android"))'.dependencies]
 kithara = { workspace = true, features = ["full", "symphonia"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { workspace = true, features = ["time"] }
+
 [lints]
 workspace = true
 

@@ -1,6 +1,8 @@
 use std::num::NonZeroUsize;
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::time::{Duration, ThreadTime, WallInstant};
 use kithara_signal::{AudioSpec, SampleCount};
 use kithara_stretch::{
     BackendCapabilities, ElasticBackendConfig, ElasticConfig, ElasticEngine, ElasticError,
@@ -370,6 +372,19 @@ where
     }
 
     fn rebuild_target(&mut self, spec: AudioSpec, kind: StretchKind, keylock: bool) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let started = {
+            let started = tracing::enabled!(target: "warp_target_cost", tracing::Level::DEBUG)
+                .then(|| (WallInstant::now(), ThreadTime::try_now()));
+            tracing::debug!(
+                target: "warp_target_cost",
+                phase = "begin",
+                rate = spec.sample_rate.get(),
+                backend = %kind,
+                keylock,
+            );
+            started
+        };
         drop(self.deferred_scratch.take());
         if spec != self.spec || (self.rebuild_pending && self.engine.is_none()) {
             self.clear_render_state();
@@ -409,5 +424,19 @@ where
         self.applied_pitch = f64::NAN;
         self.spec = spec;
         self.reset_pending = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((wall, cpu)) = started {
+            let cpu = cpu.and_then(|start| start.try_elapsed());
+            tracing::debug!(
+                target: "warp_target_cost",
+                phase = "end",
+                rate = spec.sample_rate.get(),
+                backend = %kind,
+                keylock,
+                wall_us = wall.elapsed().as_micros(),
+                cpu_us = cpu.as_ref().ok().map(Duration::as_micros),
+                cpu_error = ?cpu.err(),
+            );
+        }
     }
 }

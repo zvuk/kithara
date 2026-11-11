@@ -301,7 +301,7 @@ fn capture_source_anchor(harness: &ProductHarness) -> (u128, NonZeroU128) {
 }
 
 fn wrong_source(prepared: &PreparedSources) -> Audio {
-    kithara_integration_tests::pcm_oracle::prepared(&prepared.0.wrong_control_reference(0))
+    kithara_integration_tests::pcm_oracle::prepared(&prepared.provider().wrong_control_reference(0))
         .expect("independent wrong-source PCM")
 }
 

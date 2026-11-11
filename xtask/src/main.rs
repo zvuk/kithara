@@ -9,6 +9,8 @@ mod child;
 mod ci;
 mod config;
 mod job;
+#[cfg(unix)]
+mod measure_child;
 mod mutants;
 mod parity;
 mod publish;
@@ -67,6 +69,9 @@ enum Command {
     Ci(CiArgs),
     /// Verify test utilities outside workspace feature unification.
     TestUtils,
+    /// Measure one native child without changing its execution environment.
+    #[cfg(unix)]
+    MeasureChild(measure_child::MeasureChildArgs),
     /// Publish all public crates to crates.io in dependency order.
     Publish(PublishArgs),
     /// Run explicitly scoped mutation suites.
@@ -106,6 +111,10 @@ fn work() -> anyhow::Result<()> {
         .compact()
         .try_init();
     let cli = Cli::parse();
+    #[cfg(unix)]
+    if let Command::MeasureChild(args) = &cli.command {
+        return measure_child::run(args);
+    }
     // Cargo and nextest invoke these from the crate they are building, where
     // the repository root the self-cache resolves stays out of reach.
     if let Command::Android { command } = &cli.command
@@ -131,6 +140,8 @@ fn work() -> anyhow::Result<()> {
         Command::Wasm { command } => wasm::run(command, &ctx),
         Command::Ci(ref args) => ci::run(args, &ctx),
         Command::TestUtils => test_utils::run(&ctx),
+        #[cfg(unix)]
+        Command::MeasureChild(ref args) => measure_child::run(args),
         Command::Publish(ref args) => publish::run(args, &ctx),
         Command::Mutants(ref args) => mutants::run(args, &ctx),
         Command::Parity(ref args) => parity::run(args, &ctx),
