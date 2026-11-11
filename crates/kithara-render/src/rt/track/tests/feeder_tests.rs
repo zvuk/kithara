@@ -121,6 +121,10 @@ async fn epoch_validator_rejects_stale_chunks_after_seek() {
     assert_eq!(right, left);
     assert!(fixture.returned().is_some());
     assert!(fixture.returned().is_some());
+    assert!(
+        fixture.returned().is_some(),
+        "the spent packet goes back within the read that used it"
+    );
     assert!(fixture.returned().is_none());
 }
 

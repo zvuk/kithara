@@ -3,8 +3,8 @@ mod core;
 pub(crate) mod mock;
 mod packet;
 
-pub(in crate::worker) use core::PcmProducer;
 pub use core::PcmReceiver;
+pub(in crate::worker) use core::{PcmLead, PcmProducer};
 
 pub use packet::PcmPacket;
 #[cfg(test)]

@@ -158,10 +158,7 @@ pub(super) fn geometry(
     warp: &kithara_warp::WarpConfig,
     audio_buffer_chunks: NonZeroUsize,
 ) -> Result<FrameCount, PlayError> {
-    let source_block = warp.source_block_frames().get();
-    let packet = warp
-        .render_quantum_frames()
-        .map_or(source_block, |quantum| quantum.get().min(source_block));
+    let packet = kithara_render::pcm_quantum(warp).get();
     audio_buffer_chunks
         .get()
         .checked_add(1)

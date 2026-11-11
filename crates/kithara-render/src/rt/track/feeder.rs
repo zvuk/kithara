@@ -418,6 +418,7 @@ impl PlayerResource {
             self.offset += count;
             written += count;
             hang_reset!();
+            let spent = self.offset == chunk.frames();
             self.observed = Some(chunk.meta);
             self.mapped = if let Some((frame, position)) = chunk
                 .meta
@@ -431,6 +432,11 @@ impl PlayerResource {
             } else {
                 false
             };
+            // A spent packet goes back at once: its frames leave the producer's
+            // lead within the block that used them, not the block after.
+            if spent {
+                let _ = self.return_packet();
+            }
         }
         if self.mapped
             && let Some(position) = self.position.and_then(|point| point.position_at(0))

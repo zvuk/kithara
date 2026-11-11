@@ -11,7 +11,6 @@ use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount, SegmentId, SourceSp
 use kithara_stream::ActivityWriter;
 use kithara_test_utils::kithara;
 use kithara_worker::{Priority, Task, TickResult};
-use ringbuf::traits::{Consumer, Observer, Producer};
 
 use super::{
     super::{EngineLoad, PcmPacket, reader::PcmProducer},
@@ -146,7 +145,7 @@ where
             ),
             PcmPacket::Failed { failure, .. } => (None, Some(Err(*failure))),
         };
-        match self.port.forward.try_push(pending.packet) {
+        match self.port.push(pending.packet) {
             Ok(()) => {
                 if let Some(meta) = meta {
                     self.last_output = meta;
@@ -284,23 +283,23 @@ where
         }
     }
 
-    /// Half a packet while a full ring holds a packet behind the consumer's next
-    /// one. The consumer frees a slot without waking the worker and can read
+    /// Half a packet while a full lead holds a packet behind the consumer's next
+    /// one. The consumer frees lead without waking the worker and can read
     /// faster than real time, so the recheck never outgrows the packet it
-    /// refills; a one-packet ring has no lead to spare and keeps the
-    /// configured poll.
+    /// refills; a one-quantum lead has none to spare and keeps the configured
+    /// poll.
     fn backpressure_recheck(&self) -> Option<Duration> {
         let packet = self
             .last_output
             .spec
             .duration_for(u64::from(self.last_output.frames))
             .ok()?;
-        (self.port.forward.capacity().get() > 1 && !packet.is_zero()).then(|| packet / 2)
+        (self.port.lead.queues_ahead() && !packet.is_zero()).then(|| packet / 2)
     }
 
     #[kithara::hang_watchdog]
     fn recycle(&mut self) {
-        while let Some(packet) = self.port.reverse.try_pop() {
+        while let Some(packet) = self.port.reclaim() {
             hang_tick!();
             self.retire(packet);
             hang_reset!();
@@ -340,7 +339,7 @@ where
                 segment = self.source.cursor().segment.get(),
                 lane_frame = self.source.cursor().frame,
                 terminal_failed = matches!(self.terminal, Some(Err(_))),
-                forward_full = self.port.forward.is_full(),
+                forward_full = self.port.is_full(),
                 last_source_end = self.last_output.source_span.map(SourceSpan::end),
             );
             return TickResult::Backpressured;
@@ -381,9 +380,9 @@ where
                     reason = ?reason,
                     segment = self.source.cursor().segment.get(),
                     lane_frame = self.source.cursor().frame,
-                    forward_full = self.port.forward.is_full(),
+                    forward_full = self.port.is_full(),
                 );
-                if self.port.forward.is_full() {
+                if self.port.is_full() {
                     return TickResult::Backpressured;
                 }
                 self.source.upstream_parked();
@@ -437,22 +436,22 @@ mod tests {
         ))));
     }
 
-    /// A full ring is rechecked within half of the lead it holds beyond the
-    /// consumer's next packet, and a one-packet ring keeps the configured poll.
+    /// A full lead is rechecked within half of the packet it holds beyond the
+    /// consumer's next one, and a one-quantum lead keeps the configured poll.
     #[kithara::test(tokio)]
-    async fn a_full_ring_is_rechecked_within_half_a_packet() {
-        for (capacity, expected) in [
+    async fn a_full_lead_is_rechecked_within_half_a_packet() {
+        for (chunks, expected) in [
             (1, None),
             (3, Some(Duration::from_millis(5))),
             (8, Some(Duration::from_millis(5))),
         ] {
-            let mut fixture = NodeFixture::new(capacity).await;
+            let mut fixture = NodeFixture::framed(chunks, 480);
             assert_eq!(
                 fixture.node.backpressure_recheck(),
                 None,
                 "a lane that has not output a packet keeps the configured poll"
             );
-            for _ in 0..capacity {
+            for _ in 0..=chunks {
                 fixture.stage(PcmPacket::Chunk(Box::new(chunk(
                     SegmentId::FIRST,
                     &[0.25; 480],
@@ -465,9 +464,49 @@ mod tests {
             assert_eq!(
                 fixture.node.backpressure_recheck(),
                 expected,
-                "{capacity} slots of 480 frames at 48 kHz hold 10 ms each"
+                "{chunks} quanta of 480 frames at 48 kHz hold 10 ms each"
             );
         }
+    }
+
+    /// A one-quantum lane leads the reader's packet by one quantum of frames. A
+    /// short packet ending a source revision takes only its own frames, so the
+    /// whole packet after it enters once the reader returns the packet it
+    /// spent, and the block at the cut finds a full quantum queued.
+    #[kithara::test(tokio)]
+    async fn a_short_packet_leaves_the_next_quantum_room_in_the_lead() {
+        const QUANTUM: usize = 512;
+        const SHORT: usize = 363;
+        let mut fixture = NodeFixture::framed(1, QUANTUM);
+        let admit = |fixture: &mut NodeFixture, frames: usize| {
+            fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                SegmentId::FIRST,
+                &vec![0.25; frames],
+            ))));
+            fixture.node.admit()
+        };
+        assert_eq!(admit(&mut fixture, QUANTUM), TickResult::Progress);
+        let held = fixture.receiver.pop().expect("the reader takes its packet");
+        assert_eq!(admit(&mut fixture, SHORT), TickResult::Progress);
+        fixture
+            .receiver
+            .recycle(held)
+            .expect("the spent packet goes back");
+        fixture.node.recycle();
+
+        assert_eq!(
+            admit(&mut fixture, QUANTUM),
+            TickResult::Progress,
+            "a {SHORT}-frame packet must not hold a whole quantum of lead"
+        );
+        let mut queued = 0;
+        while let Some(PcmPacket::Chunk(chunk)) = fixture.receiver.pop() {
+            queued += chunk.frames();
+        }
+        assert!(
+            queued >= QUANTUM,
+            "the block at the cut needs {QUANTUM} frames, the lane queued {queued}"
+        );
     }
 
     #[kithara::test(tokio)]

@@ -11,7 +11,7 @@ use crate::{
     WarpSource,
     mock::{ScriptedSource, pcm_fixture::PcmFixture},
     test_pools::{TestPools, pools},
-    worker::PcmReceiver,
+    worker::{PcmReceiver, reader::PcmLead},
 };
 pub(in crate::worker::node) struct NodeFixture {
     pub(in crate::worker::node) node: DecoderNode<ScriptedSource, TestPools>,
@@ -24,11 +24,26 @@ impl NodeFixture {
         Self::with_steps(capacity, []).await
     }
 
+    /// A node whose lead holds `chunks` render quanta of `quantum` frames.
+    pub(in crate::worker::node) fn framed(chunks: usize, quantum: usize) -> Self {
+        let lead = PcmLead::new(
+            NonZeroUsize::new(chunks).expect("nonzero lead"),
+            NonZeroUsize::new(quantum).expect("nonzero quantum"),
+        );
+        Self::over(PcmFixture::framed(lead), [])
+    }
+
     pub(in crate::worker::node) async fn with_steps(
         capacity: usize,
         steps: impl IntoIterator<Item = TrackStep<AudioChunk>>,
     ) -> Self {
-        let mut fixture = PcmFixture::new(capacity, false).await;
+        Self::over(PcmFixture::new(capacity, false).await, steps)
+    }
+
+    fn over(
+        mut fixture: PcmFixture,
+        steps: impl IntoIterator<Item = TrackStep<AudioChunk>>,
+    ) -> Self {
         let writer = ActivityWriter::new();
         let activity = writer.reader();
         let spec = fixture.receiver.as_ref().expect("receiver").spec();

@@ -22,10 +22,52 @@ use super::{super::scheduler::StreamWake, packet::PcmPacket};
 pub(in crate::worker) struct PcmProducer {
     pub(in crate::worker) forward: HeapProd<PcmPacket>,
     pub(in crate::worker) reverse: HeapCons<PcmPacket>,
+    pub(in crate::worker) lead: PcmLead,
     pub(in crate::worker) playing: Output<bool>,
     pub(super) ready: FinalWake,
     pub(in crate::worker) events: EventBus,
     pub(in crate::worker) output_pending: bool,
+}
+
+/// Frames of the packets handed to the reader and not yet returned.
+///
+/// The lead is bounded in frames, not packets: a short packet ending a source
+/// revision takes only its own frames, so the next packet still fits beside it.
+/// The ring gives each quantum of the lead two slots, one for a full packet
+/// and one for the short packet a boundary cuts in front of it.
+pub(in crate::worker) struct PcmLead {
+    limit: usize,
+    quantum: usize,
+    slots: usize,
+    frames: usize,
+}
+
+impl PcmLead {
+    /// `chunks` quanta queued behind the packet the reader holds.
+    pub(in crate::worker) const fn new(chunks: NonZeroUsize, quantum: NonZeroUsize) -> Self {
+        let quanta = chunks.get().saturating_add(1);
+        Self {
+            limit: quanta.saturating_mul(quantum.get()),
+            quantum: quantum.get(),
+            slots: quanta.saturating_mul(2),
+            frames: 0,
+        }
+    }
+
+    /// Forward ring slots: two per quantum of lead.
+    pub(in crate::worker) const fn slots(&self) -> usize {
+        self.slots
+    }
+
+    /// An empty lead takes any packet; otherwise the packet must fit the limit.
+    const fn admits(&self, frames: usize) -> bool {
+        self.frames == 0 || self.frames.saturating_add(frames) <= self.limit
+    }
+
+    /// The lead holds more than one quantum behind the reader's packet.
+    pub(in crate::worker) const fn queues_ahead(&self) -> bool {
+        self.limit > self.quantum.saturating_mul(2)
+    }
 }
 
 pub(super) struct FinalWake(pub(super) Option<Arc<ThreadGate>>);
@@ -39,6 +81,30 @@ impl Drop for FinalWake {
 }
 
 impl PcmProducer {
+    /// Admit one packet into the lead, or hand it back while the lead or the
+    /// ring is full.
+    pub(in crate::worker) fn push(&mut self, packet: PcmPacket) -> Result<(), PcmPacket> {
+        let frames = packet.lead_frames();
+        if !self.lead.admits(frames) {
+            return Err(packet);
+        }
+        self.forward.try_push(packet)?;
+        self.lead.frames += frames;
+        Ok(())
+    }
+
+    /// Take back one packet the reader returned, releasing its lead.
+    pub(in crate::worker) fn reclaim(&mut self) -> Option<PcmPacket> {
+        let packet = self.reverse.try_pop()?;
+        self.lead.frames -= packet.lead_frames();
+        Some(packet)
+    }
+
+    /// A whole quantum no longer fits the lead.
+    pub(in crate::worker) fn is_full(&self) -> bool {
+        self.forward.is_full() || !self.lead.admits(self.lead.quantum)
+    }
+
     pub(in crate::worker) fn signal(&mut self) {
         self.output_pending = true;
         if let Some(ready) = &self.ready.0 {
@@ -69,17 +135,17 @@ pub struct PcmReceiver {
 }
 
 impl PcmReceiver {
-    /// The reverse ring fits forward capacity, the reader-held packet, and one
+    /// The reverse ring fits the forward slots, the reader-held packet, and one
     /// worker push between recycles, so returning an in-flight packet never fails.
     pub(in crate::worker) fn new<T>(
-        capacity: NonZeroUsize,
+        lead: PcmLead,
         block_on_underrun: bool,
         wake: StreamWake,
         audio: &Audio<T>,
         position: Duration,
     ) -> (Self, PcmProducer) {
-        let (forward_tx, forward_rx) = HeapRb::new(capacity.get()).split();
-        let (reverse_tx, reverse_rx) = HeapRb::new(capacity.get() + 2).split();
+        let (forward_tx, forward_rx) = HeapRb::new(lead.slots()).split();
+        let (reverse_tx, reverse_rx) = HeapRb::new(lead.slots() + 2).split();
         let (playing_tx, playing_rx) = triple_buffer(&false);
         let ready = block_on_underrun.then(|| Arc::new(ThreadGate::default()));
         (
@@ -99,6 +165,7 @@ impl PcmReceiver {
             PcmProducer {
                 forward: forward_tx,
                 reverse: reverse_rx,
+                lead,
                 playing: playing_rx,
                 ready: FinalWake(ready),
                 events: AudioSession::event_bus(audio).clone(),
