@@ -37,10 +37,11 @@ pub use kithara_render::{
     DispatcherProtocol, EngineLoad, EngineLoadSnapshot, InvalidCrossfade, LaneId, LoadRefusal,
     PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
     bridge::{
-        CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckMixSettings,
-        DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, EqSnapshot,
-        FadeDir, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault, Returned,
-        RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot, TrackClock,
+        CrossfaderGain, CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckFxChange,
+        DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot,
+        EqSnapshot, FadeDir, FxMix, MixTapWriter, ParameterCurveError, ParameterKnot,
+        PlaybackFault, Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot,
+        SlotSnapshot, TrackClock, Trim,
     },
     dispatch,
     rt::{
@@ -49,7 +50,7 @@ pub use kithara_render::{
     },
 };
 pub use kithara_sync::MIN_SPEED;
-pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
+pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, StretchKind};
 pub use player::{
     Bound, DeckControl, DeckPass, HostedDeck, Outbox, Player, PlayerConfig, PlayerFactory,
     PlayerImpl, Position, SeekBatch, Settled, Track, TrackCommand, TrackFactory, TrackReceipt,

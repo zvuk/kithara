@@ -1,4 +1,8 @@
-use std::{cell::RefCell, collections::VecDeque, marker::PhantomData};
+use std::{
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    marker::PhantomData,
+};
 
 use kithara_abr::AbrHandle;
 use kithara_command::{Live, Sender, Seq, Target, When};
@@ -61,6 +65,8 @@ pub struct PlayerImpl<S> {
     pub(super) source_basis: Option<AudioChunkInfo>,
     pub(super) observed_source: Option<AudioChunkInfo>,
     pub(super) projected_end: RefCell<Option<ProjectedEnd>>,
+    /// Cleared by lane-history mutations; entries name every other projection input.
+    pub(super) speed_projection: Cell<Option<SpeedProjection>>,
     pub(super) duration: Option<Duration>,
     pub(super) visible_origin: Option<Duration>,
     pub(super) media_origin: Option<Duration>,
@@ -112,6 +118,7 @@ impl<S> PlayerImpl<S> {
             source_basis: None,
             observed_source: None,
             projected_end: RefCell::new(None),
+            speed_projection: Cell::new(None),
             duration: None,
             visible_origin: None,
             media_origin: None,
@@ -277,6 +284,7 @@ impl<S> PlayerImpl<S> {
         };
         let lane = self.lane.as_mut().ok_or(PlayError::NotReady)?;
         let seq = Outbox::<S>::lane(lane, when, commands.clone())?;
+        self.speed_projection.set(None);
         self.lane_commands
             .extend(commands.into_iter().map(|command| {
                 tracing::debug!(

@@ -5,7 +5,7 @@ use kithara_events::{EventReceiver, EventSet, TrackId};
 use kithara_platform::sync::Arc;
 use kithara_play::{
     DeckMixSettings, DeckMixerConfig, DeckSnapshot, EngineLoadSnapshot, Player, PlayerStatus,
-    Position, SlotSnapshot, Track, TrackFactory, TrackSettings, TrackSnapshot,
+    Position, SlotSnapshot, StretchKind, Track, TrackFactory, TrackSettings, TrackSnapshot,
     TrackStatus as PlayingStatus,
 };
 
@@ -395,6 +395,18 @@ where
             .track
             .as_ref()
             .map_or_else(|| snapshot.initial.speed(), |track| track.speed)
+    }
+
+    /// The deck's keylock setting: the one its sounding and next tracks are given.
+    #[must_use]
+    pub fn keylock(&self) -> bool {
+        self.view.read().initial.keylock()
+    }
+
+    /// The stretch backend the deck's tracks render with.
+    #[must_use]
+    pub fn backend(&self) -> StretchKind {
+        self.view.read().initial.backend()
     }
 
     #[must_use]

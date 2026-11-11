@@ -25,6 +25,7 @@ use super::{
     graph::tap,
     protocol::{SessionError, StartStreamFn},
     queue::HostProtocol,
+    timeline::SessionTimeline,
     transport::{SessionGridGeneration, SessionInboxReturnNode, TransportObservation, install},
 };
 use crate::{
@@ -237,6 +238,8 @@ pub(crate) struct SessionState<T, S> {
     pub(crate) output: SessionOutput,
     pub(crate) session_metronome_node_id: Option<NodeID>,
     pub(crate) ctx: Option<FirewheelContext>,
+    /// Detached contexts awaiting the return of their backend processor.
+    pub(super) retired_contexts: Vec<FirewheelContext>,
     pub(crate) taps: Taps,
     /// The pause/resume fade length the session asks Firewheel for, in frames.
     /// `None` leaves Firewheel's own default in place.
@@ -254,6 +257,8 @@ pub(crate) struct SessionState<T, S> {
     /// The Host settings as the render graph confirmed them, with the
     /// changes still on their way to it.
     pub(crate) settings: Live<HostSettings, HostProtocol>,
+    /// The tempo map the Host accepted and the accepted changes in flight.
+    pub(crate) timeline: SessionTimeline,
     pub(crate) start_stream_fn: StartStreamFn<T>,
     /// Set when the output device is acquired once and cannot be rebuilt, so
     /// an idle session must keep it rather than release it.
@@ -261,7 +266,7 @@ pub(crate) struct SessionState<T, S> {
     pub(crate) stream_needs_restart: bool,
 }
 
-/// The stream outlives nothing: it is dropped before the context.
+/// Current and retired contexts drop after streams and before other state.
 ///
 /// Firewheel hands the stream its processor and waits, on its own drop, for
 /// that processor to come back. Declaration order would drop the context
@@ -271,6 +276,7 @@ impl<T, S> Drop for SessionState<T, S> {
     fn drop(&mut self) {
         self.stream.take();
         self.ctx.take();
+        self.retired_contexts.clear();
     }
 }
 
@@ -294,6 +300,7 @@ impl<T, S> SessionState<T, S> {
         let mut generation = SessionGridGeneration::new(grid_id);
         generation.commit_revision(BeatGridRevision::first());
         let state = Self {
+            timeline: SessionTimeline::new(settings.config().trajectory()),
             settings,
             channel_config,
             requested_max_block_frames: buffers.max_block_frames,
@@ -304,6 +311,7 @@ impl<T, S> SessionState<T, S> {
             root_view,
             start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
+            retired_contexts: Vec::new(),
             stream: None,
             channel: None,
             transport_observation: None,
@@ -323,7 +331,16 @@ impl<T, S> SessionState<T, S> {
         state
     }
 
+    /// Starts an owner pass. The transport snapshot is read before the clock:
+    /// a block publishes its snapshot after the stream advanced its clock, so
+    /// the clock read next counts frames on the axis the snapshot confirms.
     pub(crate) fn begin_iteration(&mut self) {
+        self.retired_contexts.retain(FirewheelContext::is_active);
+        let snapshot = self
+            .transport_observation
+            .as_mut()
+            .and_then(|observation| observation.read().snapshot());
+        self.timeline.observe(snapshot);
         let now = self.ctx.as_ref().and_then(|ctx| {
             let _ = ctx.stream_info()?;
             Some(SessionFrame::new(ctx.audio_clock().samples.0))
@@ -390,6 +407,15 @@ impl<T, S> SessionState<T, S> {
             stream_shape(self),
             sample_rate(self),
         );
+    }
+
+    /// Puts every batch the owner staged on the transport's ring.
+    pub(crate) fn publish_staged(&mut self) {
+        if let Some(channel) = &mut self.channel
+            && let Err(error) = channel.publish()
+        {
+            warn!(%error, "host publication gate closed");
+        }
     }
 }
 

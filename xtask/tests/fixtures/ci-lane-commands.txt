@@ -609,6 +609,46 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
+# crates-publish / branch
+  <require os> macos linux
+  <require tools> cargo just sccache kache
+  just release crates --dry-run
+    CARGO_BUILD_JOBS=2
+# crates-publish / platforms
+  <require os> macos linux
+  <require tools> cargo just sccache kache
+  just release crates --dry-run
+    CARGO_BUILD_JOBS=2
+# crates-publish / merge-request
+  <require os> macos linux
+  <require tools> cargo just sccache kache
+  just release crates --dry-run
+    CARGO_BUILD_JOBS=2
+# crates-publish / quarantine
+  <require os> macos linux
+  <require tools> cargo just sccache kache
+  just release crates --dry-run
+    CARGO_BUILD_JOBS=2
+# crates-publish / main
+  <require os> macos linux
+  <require tools> cargo just sccache kache
+  just release crates --dry-run
+    CARGO_BUILD_JOBS=2
+# crates-publish / nightly
+  <require os> macos linux
+  <require tools> cargo just sccache kache
+  just release crates --dry-run
+    CARGO_BUILD_JOBS=2
+# crates-publish / weekly
+  <require os> macos linux
+  <require tools> cargo just sccache kache
+  just release crates --dry-run
+    CARGO_BUILD_JOBS=2
+# crates-publish / release
+  <require os> macos linux
+  <require tools> cargo just sccache kache
+  just release crates --dry-run
+    CARGO_BUILD_JOBS=2
 # deep-bench / branch
   <require os> macos
   <require tools> cargo just

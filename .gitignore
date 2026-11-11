@@ -63,7 +63,7 @@ lcov.info
 # Temporary / local environment files
 .env
 .env.*
-/.ci-artifacts/
+.ci-artifacts/
 .foglamp/
 .cache/
 dhat-heap.json

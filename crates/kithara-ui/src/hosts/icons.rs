@@ -74,6 +74,7 @@ pub(crate) fn source(icon: IconName) -> IconSource {
         IconName::Bell => IconSource::Lucide(Icon::Bell),
         IconName::Charts => IconSource::Lucide(Icon::TrendingUp),
         IconName::ChevronDown => IconSource::Lucide(Icon::ChevronDown),
+        IconName::ChevronLeft => IconSource::Lucide(Icon::ChevronLeft),
         IconName::ChevronRight => IconSource::Lucide(Icon::ChevronRight),
         IconName::ChevronUp => IconSource::Lucide(Icon::ChevronUp),
         IconName::ChevronsLeft => IconSource::Lucide(Icon::ChevronsLeft),
@@ -98,6 +99,7 @@ pub(crate) fn source(icon: IconName) -> IconSource {
         IconName::Maximize => IconSource::Lucide(Icon::Maximize),
         IconName::Menu => IconSource::Lucide(Icon::Menu),
         IconName::Monitor => IconSource::Lucide(Icon::Monitor),
+        IconName::Music2 => IconSource::Lucide(Icon::Music2),
         IconName::MusicNote => IconSource::Lucide(Icon::Music),
         IconName::Orbit => IconSource::Lucide(Icon::Orbit),
         IconName::Pause => IconSource::Lucide(Icon::Pause),
@@ -142,8 +144,8 @@ mod tests {
     };
 
     #[kithara::test]
-    fn every_app_menu_glyph_resolves_to_its_lucide_namesake() {
-        let table: [(IconName, Lucide); 16] = [
+    fn each_listed_glyph_resolves_to_its_lucide_icon() {
+        let table = [
             (IconName::Menu, Lucide::Menu),
             (IconName::X, Lucide::X),
             (IconName::ChevronDown, Lucide::ChevronDown),
@@ -160,6 +162,8 @@ mod tests {
             (IconName::Radio, Lucide::Radio),
             (IconName::FolderPlus, Lucide::FolderPlus),
             (IconName::Save, Lucide::Save),
+            (IconName::Music2, Lucide::Music2),
+            (IconName::ChevronLeft, Lucide::ChevronLeft),
         ];
 
         for (icon, lucide) in table {

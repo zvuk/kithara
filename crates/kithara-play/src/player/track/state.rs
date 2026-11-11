@@ -257,6 +257,14 @@ pub(super) struct ProjectedEnd {
     pub(super) frame: u64,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct SpeedProjection {
+    pub(super) at: LaneFrame,
+    pub(super) initial_bits: u32,
+    pub(super) declick: FrameCount,
+    pub(super) speed: f32,
+}
+
 pub(super) enum PlannedChange<'a> {
     Speed(&'a SpeedCurve),
     Jump(Position),

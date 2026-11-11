@@ -1048,7 +1048,8 @@ dependencies = [
 [[package]]
 name = "btls-sys"
 version = "0.5.6"
-source = "git+https://github.com/0x676e67/btls?rev=ac7fe822bb1a3386c0ef0b44b4784a9429ba9903#ac7fe822bb1a3386c0ef0b44b4784a9429ba9903"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b1b8638a2e1c38a5ae4efa90ae57e643baec35a30d03fc5b399b893adc4954b"
 dependencies = [
  "bindgen 0.72.1",
  "cmake",
@@ -1541,7 +1542,7 @@ checksum = "fe6d2e5af09e8c8ad56c969f2157a3d4238cebc7c55f0a517728c38f7b200f81"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width 0.2.2",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -2564,7 +2565,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4342,7 +4343,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5667,6 +5668,7 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "nix",
  "num-traits",
  "serde",
  "tracing",
@@ -6264,6 +6266,7 @@ version = "0.0.1-alpha5"
 dependencies = [
  "cochlea-features",
  "delegate",
+ "fieldwork",
  "futures",
  "kithara",
  "kithara-app",
@@ -8703,7 +8706,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9487,7 +9490,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9500,7 +9503,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9557,7 +9560,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10543,10 +10546,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10890,7 +10893,8 @@ dependencies = [
 [[package]]
 name = "tokio-tungstenite"
 version = "0.30.0"
-source = "git+https://github.com/gerasim13/tokio-tungstenite?rev=5a3397227ea4bfaca922fda85168ecdc733ac622#5a3397227ea4bfaca922fda85168ecdc733ac622"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17a073bfed563fa236697a068031408a93cd9522e08abf9933ead3e73411bd71"
 dependencies = [
  "futures-util",
  "log",
@@ -11703,7 +11707,8 @@ dependencies = [
 [[package]]
 name = "vello"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/vello?rev=b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431#b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71acbd6b5f7f19841425845c113a89a54bbf60556ae39e7d0182a6f80ce37f5b"
 dependencies = [
  "bytemuck",
  "futures-intrusive",
@@ -11733,7 +11738,8 @@ dependencies = [
 [[package]]
 name = "vello_shaders"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/vello?rev=b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431#b963c3b2cb9d4f540d7a1f98b5a74caa78dc0431"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c381dde4e7d0d7957df0c0e3f8a7cc0976762d3972d97da5c71464e57ffefd3"
 dependencies = [
  "bytemuck",
  "log",
@@ -11923,8 +11929,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtimer"
-version = "0.4.3"
-source = "git+https://github.com/gerasim13/wasmtimer-rs?rev=c5d137cead6335f9398226a1af55ae75bad30d60#c5d137cead6335f9398226a1af55ae75bad30d60"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c62b7f338e4397a45d054c15a2b36a93d57cccdda7be11a7d7b045d47b5e70ce"
 dependencies = [
  "futures",
  "js-sys",
@@ -12506,7 +12513,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -12721,15 +12728,6 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets",
 ]

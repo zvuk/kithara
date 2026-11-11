@@ -29,6 +29,7 @@ pub(crate) enum DeckMsg {
     SetTempo(TempoPercent),
     SetQuality(Option<usize>),
     ToggleSync,
+    ToggleKeylock,
 }
 
 pub(crate) fn command(shown: &DeckSnapshot, eq_mode: EqMode, msg: &DeckMsg) -> Option<DeckCmd> {
@@ -49,6 +50,7 @@ pub(crate) fn command(shown: &DeckSnapshot, eq_mode: EqMode, msg: &DeckMsg) -> O
         DeckMsg::SetTempo(tempo) => DeckCmd::SetTempo(tempo),
         DeckMsg::SetQuality(variant) => DeckCmd::SetQuality(variant),
         DeckMsg::ToggleSync => DeckCmd::ToggleSync,
+        DeckMsg::ToggleKeylock => DeckCmd::ToggleKeylock,
     })
 }
 

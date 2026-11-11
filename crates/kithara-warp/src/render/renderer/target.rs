@@ -1,6 +1,8 @@
 use std::num::NonZeroUsize;
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::time::{Duration, ThreadTime, WallInstant};
 use kithara_signal::{AudioSpec, SampleCount};
 use kithara_stretch::{
     BackendCapabilities, ElasticBackendConfig, ElasticConfig, ElasticEngine, ElasticError,
@@ -9,7 +11,7 @@ use kithara_stretch::{
 use num_traits::ToPrimitive;
 use tracing::warn;
 
-use super::{core::WarpRenderer, residency::SourceResidency, transition::RetiringTarget};
+use super::{core::WarpRenderer, residency::SourceResidency};
 
 #[derive(Default)]
 pub(in crate::render) struct PreparedTarget {
@@ -86,11 +88,11 @@ where
             .as_ref()
             .map_or(0, |resident| resident.replacement.capacity() / channels);
         let measured = (|| -> Result<(), ElasticError> {
-            for backend in StretchKind::all().iter().filter(|backend| {
-                measure_capabilities && backend.capabilities().contains(BackendCapabilities::RATE)
-            }) {
+            for backend in
+                StretchKind::supporting(BackendCapabilities::RATE).filter(|_| measure_capabilities)
+            {
                 let capabilities =
-                    Self::config_for(*backend, backends, source_block_frames, spec, pools)
+                    Self::config_for(backend, backends, source_block_frames, spec, pools)
                         .and_then(build_engine)
                         .map(|engine| engine.capabilities())?;
                 {
@@ -261,6 +263,8 @@ where
             buffers: [first_buffer, second_buffer],
             stages: 1,
             feed: None,
+            audible: None,
+            cached_span: None,
             offset: 0,
         })
     }
@@ -313,13 +317,7 @@ where
     /// Service backend/spec changes and deferred destruction from the
     /// scheduler shell, never from the checked render core.
     pub(in crate::render) fn service_target(&mut self, spec: AudioSpec) {
-        if self
-            .retiring_target
-            .as_ref()
-            .is_some_and(RetiringTarget::complete)
-        {
-            self.retiring_target = None;
-        }
+        drop(self.deferred_trajectory.take());
         self.reprime_pending |= self.active && self.mapped_render && self.keylocked_unity();
         drop(self.retired_engine.take());
         if (self.transition_pending() || self.prepared_quantum.is_some()) && spec == self.spec {
@@ -374,10 +372,21 @@ where
     }
 
     fn rebuild_target(&mut self, spec: AudioSpec, kind: StretchKind, keylock: bool) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let started = {
+            let started = tracing::enabled!(target: "warp_target_cost", tracing::Level::DEBUG)
+                .then(|| (WallInstant::now(), ThreadTime::try_now()));
+            tracing::debug!(
+                target: "warp_target_cost",
+                phase = "begin",
+                rate = spec.sample_rate.get(),
+                backend = %kind,
+                keylock,
+            );
+            started
+        };
         drop(self.deferred_scratch.take());
-        if spec != self.spec
-            || (self.rebuild_pending && self.retiring_target.is_none() && self.engine.is_none())
-        {
+        if spec != self.spec || (self.rebuild_pending && self.engine.is_none()) {
             self.clear_render_state();
         }
         self.rebuild_pending = false;
@@ -415,9 +424,19 @@ where
         self.applied_pitch = f64::NAN;
         self.spec = spec;
         self.reset_pending = false;
-        let latency = self.engine_latency().get();
-        if let Some(target) = self.retiring_target.as_mut() {
-            target.extend(latency);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((wall, cpu)) = started {
+            let cpu = cpu.and_then(|start| start.try_elapsed());
+            tracing::debug!(
+                target: "warp_target_cost",
+                phase = "end",
+                rate = spec.sample_rate.get(),
+                backend = %kind,
+                keylock,
+                wall_us = wall.elapsed().as_micros(),
+                cpu_us = cpu.as_ref().ok().map(Duration::as_micros),
+                cpu_error = ?cpu.err(),
+            );
         }
     }
 }

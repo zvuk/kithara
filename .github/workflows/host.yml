@@ -1,9 +1,7 @@
 name: Host
 
-# Rolling a merged change onto the machines that serve the pipeline, without an
-# ssh session. The pins, the images, the units and the agents all come from the
-# commit this runs on, so the fleet is provisioned by the same review that
-# changed it.
+# The toolchain-image operation prepares a reviewed Linux image. Full
+# provisioning rolls merged configuration onto the host's services and runners.
 #
 # Opt-in on purpose: nothing here belongs on a push. It writes to the machine,
 # a rebuilt toolchain image costs half an hour, and most merges change nothing
@@ -11,6 +9,12 @@ name: Host
 # to a `docker/*.Dockerfile`, or to the host commands themselves.
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Provision this host or build only its Linux CI toolchain image.
+        type: choice
+        options: [provision, toolchain-image]
+        default: provision
 
 # The host serves one provisioning pass at a time. A second would rebuild the
 # images the first is installing services against.
@@ -34,4 +38,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Provision this machine
+        if: ${{ inputs.operation == 'provision' }}
         run: just ci host provision
+
+      - name: Build the Linux CI toolchain image
+        if: ${{ inputs.operation == 'toolchain-image' }}
+        run: just ci host linux image toolchain
