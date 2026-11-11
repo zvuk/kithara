@@ -502,6 +502,7 @@ fn native_marked_at<R>(
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &snapshot,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = rig.ring.scope(rig.scope).expect("scope");
     run(&mut Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass))

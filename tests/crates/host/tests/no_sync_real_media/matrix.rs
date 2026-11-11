@@ -375,6 +375,12 @@ async fn run_case(
     );
 
     for (deck_index, deck) in decks.iter().enumerate() {
+        assert_eq!(
+            deck.player.control().eq_band_count(),
+            10,
+            "{} deck {deck_index}: real-media capture retains the default ten-band EQ",
+            case.label,
+        );
         runtime::validate_deck(case, deck_index, deck, &mut failures);
     }
     runtime::record_transport_state(
@@ -1155,11 +1161,6 @@ async fn prepare_deck(
         .build();
     let player = Queue::new(
         QueueConfig::builder()
-            .mixer(
-                kithara::play::DeckMixerConfig::builder()
-                    .eq_bands(0)
-                    .build(),
-            )
             .prep(prep)
             .store(store)
             .track(

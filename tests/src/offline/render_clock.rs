@@ -76,10 +76,6 @@ impl<S, O: HostOwner<S>> HostOwner<S> for RenderClock<O> {
     fn release_id(command: &Self::Command) -> Option<DeckId> {
         O::release_id(command)
     }
-
-    fn is_next_tempo(command: &Self::Command) -> bool {
-        O::is_next_tempo(command)
-    }
 }
 
 impl<S, O, D, Face: ?Sized> HostRegistration<S, D, Face> for RenderClock<O>

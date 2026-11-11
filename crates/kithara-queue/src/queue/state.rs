@@ -1,4 +1,4 @@
-use kithara_assets::{AssetStore, StorageBackend};
+use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
 use kithara_command::mailbox;
 use kithara_events::{EventBus, TrackId};
@@ -85,7 +85,6 @@ where
         let loader = config.prep.as_ref().map(|prep| {
             let store = config.store.clone().unwrap_or_else(|| {
                 AssetStore::builder(prep.worker.pools().clone())
-                    .backend(StorageBackend::default())
                     .cancel(shutdown.child())
                     .build()
             });
@@ -363,10 +362,7 @@ pub(crate) mod tests {
         test_pools::{TestPools, pools},
     };
 
-    /// No queue test ever streams bytes, so the store is here to be wired, not
-    /// to hold anything. The default backend would map a file under the shared
-    /// temp root, which every parallel test process also owns and which Miri
-    /// cannot map at all.
+    /// Queue unit tests use memory storage so their fixture also works under Miri.
     pub(in crate::queue) fn make_store() -> AssetStore<TestPools> {
         AssetStore::builder(pools())
             .backend(StorageBackend::Memory)
@@ -392,6 +388,49 @@ pub(crate) mod tests {
             .build()
     }
 
+    #[kithara::test(native)]
+    fn default_queue_stores_have_independent_disk_roots() {
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        let queue = |store: Option<AssetStore<TestPools>>| {
+            Queue::new(
+                QueueConfig::builder()
+                    .prep(ResourcePrep::builder().worker(worker.clone()).build())
+                    .maybe_store(store)
+                    .build(),
+            )
+        };
+        let output = mock::output(None).get();
+        let track_config = |queue: &Queue<TestPools>, id| {
+            queue
+                .loader
+                .as_ref()
+                .expect("prepared queue has a loader")
+                .build_config(
+                    TrackId(id),
+                    crate::TrackSource::Uri("https://example.com/track.mp3".into()),
+                    &output,
+                )
+                .expect("build a bare URI track config")
+        };
+        let first = queue(None);
+        let second = queue(None);
+        let first_track = track_config(&first, 1);
+        let next_track = track_config(&first, 2);
+        let second_track = track_config(&second, 3);
+        assert!(first_track.store().is_same(next_track.store()));
+        assert_ne!(
+            first_track.store().root_dir(),
+            second_track.store().root_dir(),
+            "independent queues must not compete over persisted indices"
+        );
+        let shared = queue(Some(first_track.store().clone()));
+        assert!(
+            track_config(&shared, 4)
+                .store()
+                .is_same(first_track.store())
+        );
+    }
+
     pub(in crate::queue) fn with_outbox<Value>(
         queue: &mut Queue<TestPools>,
         rig: &mut DeckRig<TestPools>,
@@ -407,6 +446,7 @@ pub(crate) mod tests {
             deck_delivery: FrameCount::new(128),
             output: &output,
             deck: &deck,
+            planned_tempo: &mock::planned_tempo(),
         };
         let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
         let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);

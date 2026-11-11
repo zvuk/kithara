@@ -426,7 +426,10 @@ where
                 continue;
             }
             match self.apply_with_output(post.command, Some(pass.output), out) {
-                Ok(_) => post.answer.answer(Ok(())),
+                Ok(seq) => {
+                    tracing::debug!(?seq, "queue owner admitted command");
+                    post.answer.answer(Ok(()));
+                }
                 Err(error) => post.answer.answer(Err(error.into())),
             }
             hang_reset!();
@@ -482,6 +485,12 @@ where
         self.deck.mixer.clone_from(pass.deck);
         self.deck.mixer.sample_rate = rate;
         if !had_clock {
+            tracing::debug!(
+                clock_available = self.clock.is_some(),
+                sample_rate = rate,
+                mixer_blocks = self.deck.mixer.blocks,
+                "queue accepted initial host pass"
+            );
             self.arm_initial_load(Some(pass.output), out);
             self.pump_loads(Some(pass.output), out);
         }

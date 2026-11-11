@@ -7,6 +7,7 @@ use kithara::{
     warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
+    audio_artifact::{AudioArtifactTap, artifact_label},
     cochlea::{marked_rhythm_markers, synchronization_failures},
     offline::{OfflinePlayer, OfflinePlayerOptions, append_source_loaded, asset_source},
 };
@@ -74,6 +75,11 @@ async fn render_tempo_control(
     }
     captured.truncate(capture_frames * usize::from(CHANNELS));
     harness.close().await;
+    if let Some(mut artifact) = AudioArtifactTap::from_env(&artifact_label(), sample_rate, CHANNELS)
+        .expect("tempo control artifact")
+    {
+        artifact.push(&captured);
+    }
     captured
 }
 
@@ -139,18 +145,6 @@ async fn tempo_oracle_distinguishes_a_decorated_capture(
     #[case] accepted: bool,
 ) {
     let capture = render_tempo_control(sample_rate, played_bpm, true, false).await;
-    let failures = synchronization_failures(
-        "decorated tempo control",
-        &[&capture],
-        CHANNELS,
-        sample_rate,
-        127.0,
-    );
-    assert_eq!(
-        failures.is_empty(),
-        accepted,
-        "{played_bpm} BPM at {sample_rate}: {failures:?}"
-    );
     if accepted {
         let shifted = [vec![0.0; usize::from(CHANNELS)], capture.clone()].concat();
         let failures = synchronization_failures(
@@ -163,10 +157,28 @@ async fn tempo_oracle_distinguishes_a_decorated_capture(
         assert!(
             failures
                 .iter()
+                .all(|failure| failure == "one frame: beat phase spread is 1 frame"),
+            "{played_bpm} BPM at {sample_rate}: {failures:?}"
+        );
+        assert!(
+            failures
+                .iter()
                 .any(|failure| failure.contains("beat phase spread is 1 frame")),
             "{failures:?}"
         );
     } else {
+        let failures = synchronization_failures(
+            "decorated tempo control",
+            &[&capture],
+            CHANNELS,
+            sample_rate,
+            127.0,
+        );
+        assert_eq!(
+            failures.is_empty(),
+            accepted,
+            "{played_bpm} BPM at {sample_rate}: {failures:?}"
+        );
         assert!(
             failures.iter().any(|failure| failure.contains("tempo")),
             "wrong-rate decorated control must fail its tempo measurement: {failures:?}"

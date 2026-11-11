@@ -280,6 +280,7 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
     ) -> R {
         let deck = mixer.ends.snapshot.read();
         let mut scope = mixer.ring.scope(mixer.scope).expect("live mixer scope");
+        let planned_tempo = mock::planned_tempo();
         let mut out = Outbox::new(&mut scope, dispatcher).in_pass(DeckPass {
             mix: DeckMixSettings::default(),
             suspended: false,
@@ -288,6 +289,7 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
             deck_delivery: FrameCount::new(0),
             output,
             deck,
+            planned_tempo: &planned_tempo,
         });
         run(&mut out)
     }

@@ -51,6 +51,8 @@ Every fact below has one owner. Link to the owner; do not restate it.
   meets the requirements.
 - Workspace-first dependencies. Add versions only in the root workspace and
   reuse existing crates when possible.
+- Do not add `[patch.crates-io]` overrides to workspace manifests or Cargo
+  configuration. Declare publish-compatible dependencies directly.
 - Encoded/container media types live in `kithara-stream`. Do not duplicate
   `AudioCodec`, `ContainerFormat`, or `MediaInfo` elsewhere. Decoded-audio
   signal value types and pure sample/time math live in `kithara-signal`.
