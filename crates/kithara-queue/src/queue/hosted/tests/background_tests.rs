@@ -160,6 +160,8 @@ async fn prefetch_lane_caps_concurrent_loads(#[by_ref] worker_owner: &WorkerOwne
         max_seen = max_seen.max(unanswered.len());
     }
     assert!(max_seen <= 2, "concurrency exceeded cap: {}", max_seen);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -204,6 +206,8 @@ async fn spawn_load_bad_url_emits_failed_status(#[by_ref] worker_owner: &WorkerO
         }
     }
     assert!(saw_failed, "Failed status event missing");
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -232,6 +236,8 @@ async fn an_appended_track_loads_without_a_select(#[by_ref] worker_owner: &Worke
         .expect("parked track");
     assert_eq!(parked.track.snapshot().slot, None);
     assert!(!parked.track.snapshot().attached);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -278,6 +284,8 @@ async fn initial_append_loads_at_its_cue_without_a_seek(#[by_ref] worker_owner: 
         hold_loads(&mut queue, &mut rig).0.is_empty(),
         "the cue opens once"
     );
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -348,6 +356,8 @@ async fn preloaded_append_keeps_its_cue_without_seeking_the_current_track(
     assert_eq!(current.position, outgoing.position);
     assert_eq!(current.mark, outgoing.mark);
     assert_eq!(current.pending_lane, outgoing.pending_lane);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -401,6 +411,8 @@ async fn background_loads_stay_within_max_concurrent_loads(#[by_ref] worker_owne
         queue.track(ids[4]).expect("record").status,
         TrackStatus::Pending
     );
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -435,6 +447,8 @@ async fn selecting_a_background_loaded_track_opens_nothing_new(
             .any(|part| matches!(part, DeckPart::Attach { slot: named, .. } if *named == slot))
     );
     due.apply(());
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -464,6 +478,8 @@ async fn a_select_is_not_starved_by_hung_background_loads(#[by_ref] worker_owner
             TrackStatus::Loading
         );
     }
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -498,6 +514,8 @@ async fn the_first_append_arms_a_paused_initial_load(#[by_ref] worker_owner: &Wo
             .status,
         PlayingStatus::Playing { .. }
     ));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -522,6 +540,8 @@ async fn the_first_append_plays_with_autoplay(#[by_ref] worker_owner: &WorkerOwn
             .status,
         PlayingStatus::Playing { .. }
     ));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -534,6 +554,8 @@ async fn a_select_supersedes_the_initial_load(#[by_ref] worker_owner: &WorkerOwn
         TrackStatus::Cancelled
     );
     assert_eq!(queue.target.expect("new target").to, ids[1]);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -552,6 +574,8 @@ async fn selecting_another_track_consumes_the_opened_initial_resource(
         TrackStatus::Consumed
     );
     assert_eq!(queue.target.expect("new target").to, ids[1]);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -583,6 +607,8 @@ async fn an_unsupported_codec_fails_before_select(#[by_ref] worker_owner: &Worke
             .parked_iter()
             .all(|parked| parked.item != ids[1])
     );
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -610,6 +636,8 @@ async fn a_track_setting_reaches_background_loaded_tracks(#[by_ref] worker_owner
         .expect("background track");
     assert_eq!(track.projected().speed(), 1.25);
     drop(held);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -641,6 +669,8 @@ async fn a_selected_background_track_announces_loaded_once(#[by_ref] worker_owne
             .count(),
         1
     );
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -694,6 +724,8 @@ async fn a_failed_replacement_release_keeps_the_taken_background_track(
     assert_eq!(parked.load, Some(LoadState::Attaching(seq)));
     assert_eq!(parked.track.snapshot().slot, None);
     assert_eq!(parked.track.snapshot().status, PlayingStatus::Loaded);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -742,6 +774,8 @@ async fn a_stale_load_completion_does_not_cancel_the_live_target(
     answer(&mut queue, &mut rig, seq, loaded);
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(ids[1]));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -770,4 +804,6 @@ async fn a_superseded_initial_open_releases_its_answered_lane(
         TrackStatus::Cancelled
     );
     assert_eq!(queue.target.expect("selected target survives").to, ids[1]);
+    drop((queue, rig));
+    dir.finish().await;
 }

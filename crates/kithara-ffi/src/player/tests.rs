@@ -285,9 +285,7 @@ fn an_observer_can_release_the_final_player(#[case] during_load: bool) {
     });
     player.set_observer(observer.clone());
     *observer.player.lock() = Some(player);
-    {
-        let owner = observer.player.lock();
-        let player = owner.as_ref().expect("observer owns the final player");
+    let command = |player: &Arc<AudioPlayer>| {
         if during_load {
             let path = assets::sine_wav_a440_100_frames()
                 .path()
@@ -304,7 +302,14 @@ fn an_observer_can_release_the_final_player(#[case] during_load: bool) {
                 .set_repeat_mode(FfiRepeatMode::All)
                 .expect("publish callback event");
         }
-    }
+    };
+    command(
+        observer
+            .player
+            .lock()
+            .as_ref()
+            .expect("observer owns the final player"),
+    );
     let returned = received.recv_timeout(Instant::now() + Duration::from_secs(2));
     drop(observer.player.lock().take());
     returned.expect("the callback returned after freeing its player");

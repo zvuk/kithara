@@ -7,8 +7,11 @@ use crate::{Dispatcher, DispatcherConfig, WorkerConfig, compute::ComputeRuntime}
 /// Cloneable owner of shared worker runtime resources.
 ///
 /// Keep an application-owned clone while players use the worker. The last
-/// clone shuts down on drop. A thread cannot join itself, so a release on one
-/// of the worker's own threads joins every other worker thread.
+/// clone shuts down on drop. Inside a runtime context, or with a configured
+/// runtime, that drop hands the join to the runtime's blocking pool, which the
+/// runtime owner waits for; elsewhere it joins in place. A thread cannot join
+/// itself, so a release on one of the worker's own threads joins every other
+/// worker thread.
 #[derive(Clone)]
 pub struct Worker {
     inner: Arc<WorkerInner>,
@@ -44,7 +47,7 @@ impl Worker {
             Arc::clone(&self.inner.compute),
             self.inner.runtime.clone(),
             #[cfg(not(target_arch = "wasm32"))]
-            Arc::clone(&self.inner.threads),
+            &self.inner.threads,
         )
     }
 
@@ -79,21 +82,35 @@ struct WorkerInner {
 }
 
 impl WorkerInner {
-    fn shutdown(&self) {
+    fn stop(&self) {
         #[cfg(not(target_arch = "wasm32"))]
         self.threads.close();
         self.scope.cancel();
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.compute.stop();
-            self.threads.join();
-        }
+        self.compute.stop();
+    }
+
+    fn shutdown(&self) {
+        self.stop();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.threads.join();
     }
 }
 
 impl Drop for WorkerInner {
     fn drop(&mut self) {
-        self.shutdown();
+        self.stop();
+        #[cfg(not(target_arch = "wasm32"))]
+        match Handle::try_current().ok().or_else(|| self.runtime.clone()) {
+            Some(runtime) => {
+                let threads = Arc::clone(&self.threads);
+                drop(kithara_platform::tokio::task::spawn_blocking_on(
+                    &runtime,
+                    move || threads.join(),
+                ));
+            }
+            None => self.threads.join(),
+        }
     }
 }
 
@@ -167,11 +184,11 @@ mod tests {
             )
         );
         assert!(received.try_recv().is_err());
-        let owned = worker.inner.compute.pool().owned.lock();
-        let crate::compute::PoolState::Running(built) = &*owned else {
-            panic!("pool build must succeed");
+        let threads = match &*worker.inner.compute.pool().owned.lock() {
+            crate::compute::PoolState::Running(built) => Some(built.current_num_threads()),
+            _ => None,
         };
-        assert_eq!(built.current_num_threads(), 1);
+        assert_eq!(threads, Some(1), "pool build must succeed");
     }
 
     #[kithara::test(native, flash(false))]

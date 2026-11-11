@@ -13,6 +13,8 @@ use super::{
     pending::PendingTask,
     state::{Capacity, Reservation},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::ShutdownError;
 use crate::{
     DispatcherConfig, Task, TaskConfig, TaskContext, TaskControl, TaskId, Wake,
     compute::ComputeRuntime,
@@ -74,7 +76,7 @@ impl Dispatcher {
         cancel: CancelToken,
         compute: Arc<ComputeRuntime>,
         runtime: Option<Handle>,
-        #[cfg(not(target_arch = "wasm32"))] threads: Arc<crate::threads::Threads>,
+        #[cfg(not(target_arch = "wasm32"))] threads: &crate::threads::Threads,
     ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let wake = Wake::default();
@@ -113,7 +115,7 @@ impl Dispatcher {
         #[cfg(target_arch = "wasm32")]
         drop(spawn_named(name, run));
         #[cfg(not(target_arch = "wasm32"))]
-        drop(threads.spawn(name, run));
+        let thread = threads.spawn(name, run);
 
         let inner = Arc::new(DispatcherInner {
             config,
@@ -125,9 +127,28 @@ impl Dispatcher {
             runtime,
             cmd_tx,
             wake,
+            #[cfg(not(target_arch = "wasm32"))]
+            thread,
         });
 
         Self { inner }
+    }
+
+    /// Cancel this dispatcher and wait for native thread and TLS teardown.
+    ///
+    /// Call from a non-realtime thread. Concurrent callers wait for the same exit;
+    /// a panic remains an error on every later call. Other dispatchers are unaffected.
+    ///
+    /// # Errors
+    /// Returns [`ShutdownError::CurrentThread`] on the scheduler itself, or
+    /// [`ShutdownError::Panicked`] if the scheduler panicked or an earlier join unwound.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn shutdown_and_join(&self) -> Result<(), ShutdownError> {
+        self.inner.shutdown();
+        self.inner
+            .thread
+            .as_ref()
+            .map_or(Ok(()), |thread| thread.join())
     }
 
     /// Restricted immediate and deferred wake capability.

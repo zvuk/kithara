@@ -531,16 +531,10 @@ where
         output.meta.render_revision = self.rate.revision();
         output.meta.source_span = Some(span);
         self.map_output(&mut output)?;
-        self.commit_render(self.context.load(), &output);
         Ok(output)
     }
 
-    fn finish_flush(
-        &mut self,
-        output: Option<AudioChunk>,
-        complete: bool,
-        snapshot: Option<crate::RenderSnapshot>,
-    ) -> Option<AudioChunk> {
+    fn finish_flush(&mut self, output: Option<AudioChunk>, complete: bool) -> Option<AudioChunk> {
         let output = match output {
             Some(output) if output.frames() == 0 => {
                 self.defer_scratch(Some(output.samples));
@@ -548,9 +542,6 @@ where
             }
             output => output,
         };
-        if let Some(output) = output.as_ref() {
-            self.commit_render(snapshot, output);
-        }
         if complete {
             self.backend_transition_pending = false;
             self.reprime_pending = false;
@@ -594,7 +585,6 @@ where
         if !self.requires_staging() {
             return Ok(None);
         }
-        let snapshot = self.context.load();
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
         } else {
@@ -604,11 +594,7 @@ where
         self.output_start_meta = None;
         let channels = usize::from(self.spec.channels.max(1));
         if self.pending_unity_meta.is_some() {
-            let output = self.advance_transition(channels, None, output_limit);
-            if let Some(output) = output.as_ref() {
-                self.commit_render(snapshot, output);
-            }
-            return Ok(output);
+            return Ok(self.advance_transition(channels, None, output_limit));
         }
         let result = self
             .render_terminal_pending(channels, output_limit)
@@ -634,7 +620,7 @@ where
             self.held_source_frames()
         };
         let output = self.emit(None, held_source_frames);
-        Ok(self.finish_flush(output, complete, snapshot))
+        Ok(self.finish_flush(output, complete))
     }
 
     /// Prepare deferred renderer state for the current source format.
@@ -659,19 +645,17 @@ where
         if !self.requires_staging() && self.plan.is_some() {
             return ControlFlow::Break(chunk);
         }
-        let snapshot = self.context.load();
         self.prepared_quantum = None;
         let rate = self.rate;
         let speed = rate.speed();
         chunk.meta.render_revision = rate.revision();
-        ControlFlow::Continue(self.render_at(chunk, speed, snapshot, None))
+        ControlFlow::Continue(self.render_at(chunk, speed, None))
     }
 
     fn render_at(
         &mut self,
         chunk: AudioChunk,
         speed: f32,
-        snapshot: Option<crate::RenderSnapshot>,
         prepared: Option<PreparedQuantum>,
     ) -> Option<AudioChunk> {
         if chunk.spec() != self.spec {
@@ -704,7 +688,7 @@ where
             return None;
         }
         if let Some(output) = output.as_ref() {
-            self.commit_rate_render(snapshot, output, speed);
+            self.report_rate_render(output, speed);
         }
         output
     }
@@ -839,17 +823,16 @@ where
             return ControlFlow::Break(chunk);
         }
         self.prepared_quantum = None;
-        let snapshot = self.context.load();
         chunk.meta.render_revision = prepared.rate.revision();
-        ControlFlow::Continue(self.render_at(chunk, prepared.speed, snapshot, Some(prepared)))
+        ControlFlow::Continue(self.render_at(chunk, prepared.speed, Some(prepared)))
     }
 
     /// Discard renderer state after a source discontinuity.
     pub fn reset(&mut self) {
+        self.withdraw_speed_ahead();
         self.terminal_error = None;
         self.reset_pending = true;
         self.clear_render_state();
-        self.committed = None;
         self.prepared_quantum = None;
     }
 }

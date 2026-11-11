@@ -38,10 +38,8 @@ impl ComputePool {
             PoolConfig::OwnedLazy(config) => {
                 let mut owned = self.owned.lock();
                 if matches!(*owned, PoolState::Uninitialized) {
-                    *owned = match build_pool(config, &self.threads) {
-                        Ok(pool) => PoolState::Running(pool),
-                        Err(_) => PoolState::Failed,
-                    };
+                    *owned = build_pool(config, &self.threads)
+                        .map_or(PoolState::Failed, PoolState::Running);
                 }
                 match &*owned {
                     PoolState::Running(pool) => Ok(Spawner(Arc::clone(pool))),
@@ -57,12 +55,10 @@ impl ComputePool {
     }
 }
 
+/// Pool threads live in the worker's thread registry, which the worker joins.
 impl Drop for ComputePool {
     fn drop(&mut self) {
         self.stop();
-        if !self.threads.is_current() {
-            self.threads.join();
-        }
     }
 }
 

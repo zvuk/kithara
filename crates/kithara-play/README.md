@@ -16,7 +16,7 @@
 
 The playback orchestration crate behind Kithara. It provides concrete player,
 worker, resource, and session surfaces for queue, FFI, app, and test-harness
-crates; the real-time deck it drives lives in `kithara-render`. Enable `mock` for the `Equalizer` unimock helper.
+crates; the real-time deck it drives lives in `kithara-render`.
 Enable `perf` on native profiling builds for permanent `hotpath` timing at the
 playback worker boundary; ordinary builds compile the probes out.
 
@@ -113,7 +113,6 @@ resource.read(&mut buf);
   re-exported from `kithara-render`, which owns them.
 - `policy` owns domain-aware cache identity and DRM request routing above the
   filesystem, network, and cryptography crates.
-- `Equalizer` is the remaining mockable trait surface.
 
 ## Integration
 
@@ -141,7 +140,6 @@ resource.read(&mut buf);
   the master cancel lives at the consumer-crate top.
 
 File and HLS pipelines are unconditional; cpal output is the default backend.
-Enable `mock` for `EqualizerMock`.
 
 The role-first source tree is organized as `api/`, `player/`, `resource/`, and
 `session`, plus the

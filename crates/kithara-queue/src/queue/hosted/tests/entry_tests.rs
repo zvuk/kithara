@@ -312,6 +312,8 @@ async fn finish_disarms_and_ignores_stale_ticket(#[by_ref] worker_owner: &Worker
             .token()
             .is_cancelled()
     );
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -362,6 +364,8 @@ async fn a_seek_accepted_while_opening_is_adopted_before_the_first_start(
         }),
         "the first Start must wait for PCM from the requested segment"
     );
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 async fn selected_source_clock(
@@ -369,7 +373,7 @@ async fn selected_source_clock(
 ) -> (
     Queue<TestPools>,
     mock::DeckRig<TestPools>,
-    TestTempDir,
+    QueueFixture,
     AudioChunkInfo,
 ) {
     let (mut queue, _, _, mut rig, dir) = pending_selection(worker);
@@ -399,7 +403,8 @@ async fn selected_source_clock(
 async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position(
     #[by_ref] worker_owner: &WorkerOwner,
 ) {
-    let (mut queue, mut rig, _dir, clock) = selected_source_clock(&worker_owner.0).await;
+    let (mut queue, mut rig, fixture_directory, clock) =
+        selected_source_clock(&worker_owner.0).await;
     let before = queue.control().position_seconds();
     let first = with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
@@ -510,6 +515,8 @@ async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position(
     });
     queue.publish();
     assert_eq!(queue.control().position_seconds(), before);
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -517,7 +524,8 @@ async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position(
 async fn an_applied_seek_keeps_its_target_until_the_matching_render_mark(
     #[by_ref] worker_owner: &WorkerOwner,
 ) {
-    let (mut queue, mut rig, _dir, clock) = selected_source_clock(&worker_owner.0).await;
+    let (mut queue, mut rig, fixture_directory, clock) =
+        selected_source_clock(&worker_owner.0).await;
     let requested = Position::try_from_secs_f64(2.0).expect("requested seek");
     let sent = with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(queue, QueueCommand::Seek { to: requested }, out)
@@ -604,6 +612,8 @@ async fn an_applied_seek_keeps_its_target_until_the_matching_render_mark(
     });
     assert_eq!(queue.control().position_seconds(), Some(2.25));
     assert_eq!(queue.control().playback_view().position, Some(2.25));
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -738,6 +748,8 @@ async fn atomic_track_id_cas_arm_then_disarm(#[by_ref] worker_owner: &WorkerOwne
         .expect("matching receipt");
     assert_eq!(queue.current, Some(TrackId(3)));
     assert!(queue.target.is_none());
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test]
@@ -814,6 +826,8 @@ async fn an_item_is_loaded_on_its_load_receipt_before_its_attach_applies(
         TrackStatus::Loaded
     );
     assert_eq!(ready, 1);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -919,6 +933,8 @@ async fn a_pause_before_the_selected_item_enters_makes_it_current_paused(
             .status,
         PlayingStatus::Playing { .. }
     ));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -948,6 +964,8 @@ async fn play_with_a_pending_selection_enters_that_selection(#[by_ref] worker_ow
     assert_eq!(queue.current, Some(first));
     assert_ne!(queue.current, Some(second));
     assert!(queue.target.is_none());
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -1057,4 +1075,6 @@ async fn a_pause_over_a_scheduled_entry_settles_current_paused(
             .next_due(scheduled, 1)
             .is_none()
     );
+    drop((queue, rig));
+    dir.finish().await;
 }

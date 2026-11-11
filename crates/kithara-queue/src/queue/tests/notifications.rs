@@ -64,6 +64,8 @@ async fn notification_changed_carries_src(#[by_ref] worker_owner: &WorkerOwner) 
         panic!("changed identity must retain a URI source");
     };
     assert_eq!(source, expected_source);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -173,4 +175,6 @@ async fn notification_clone(#[by_ref] worker_owner: &WorkerOwner) {
         panic!("cloned stopped identity must retain a URI source");
     };
     assert_eq!(source, expected_source);
+    drop((queue, rig));
+    dir.finish().await;
 }

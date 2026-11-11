@@ -72,7 +72,7 @@ fn advance_stops_at_end() {
 
 #[kithara::test(tokio)]
 async fn insert_and_remove_preserve_resource(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, _, _dir) = empty_queue(&worker_owner.0);
+    let (mut queue, _, fixture_directory) = empty_queue(&worker_owner.0);
     let id = TrackId::allocate();
     queue.insert_entry(
         id,
@@ -83,6 +83,8 @@ async fn insert_and_remove_preserve_resource(#[by_ref] worker_owner: &WorkerOwne
     let removed = queue.tracks.records_mut().remove(0);
     assert_eq!(removed.source.uri(), Some("first"));
     assert_eq!(queue.tracks.records().len(), 0);
+    drop(queue);
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -153,6 +155,8 @@ async fn announce_carries_the_item_identity(
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(changes(&mut events), [Some(id)]);
     assert!(events.try_recv().is_err());
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -198,6 +202,8 @@ async fn clear_resets_cursor_and_announce(#[by_ref] worker_owner: &WorkerOwner) 
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.control().current_index(), Some(0));
     assert_eq!(changes(&mut events), [Some(first)]);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -230,6 +236,8 @@ async fn mark_announced_uses_swap_semantics(#[by_ref] worker_owner: &WorkerOwner
     answer_load(&mut queue, &mut rig, &dir).await;
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(changes(&mut events), [Some(second)]);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -240,6 +248,8 @@ async fn player_advance_emits_event(#[by_ref] worker_owner: &WorkerOwner) {
     answer_load(&mut queue, &mut rig, &dir).await;
     crate::mock::finish(&mut queue, &mut rig);
     assert!(matches!(changes(&mut events).as_slice(), [Some(id)] if *id == second));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -268,6 +278,8 @@ async fn player_advance_through_queue(#[by_ref] worker_owner: &WorkerOwner) {
     assert_eq!(queue.control().current_index(), Some(2));
     apply(&mut queue, &mut rig, QueueCommand::Next(Transition::None)).expect("exhausted");
     assert_eq!(queue.control().current_index(), Some(2));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -304,6 +316,8 @@ async fn player_insert_scenarios(
         .expect("insert first");
     }
     assert_eq!(queue.tracks.records().len(), expected_count);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -348,6 +362,8 @@ async fn player_remove_at_scenarios(#[by_ref] worker_owner: &WorkerOwner, #[case
         assert_eq!(queue.control().current_index(), Some(1));
         assert_eq!(queue.tracks.records().len(), 2);
     }
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -400,6 +416,8 @@ async fn cold_navigation_and_removal_preserve_item_identity(#[by_ref] worker_own
             assert_eq!(queue.control().tracks().len(), 1);
             assert_eq!(queue.control().tracks()[0].id, ids[1]);
             assert_eq!(queue.control().current_index(), None);
+            drop((queue, rig));
+            dir.finish().await;
             continue;
         }
         answer_load(&mut queue, &mut rig, &dir).await;
@@ -433,6 +451,8 @@ async fn cold_navigation_and_removal_preserve_item_identity(#[by_ref] worker_own
         apply(&mut queue, &mut rig, QueueCommand::Remove(ids[2])).expect("remove current");
         assert_eq!(queue.control().tracks().len(), 1);
         assert_eq!(queue.control().tracks()[0].id, ids[1]);
+        drop((queue, rig));
+        dir.finish().await;
     }
 }
 
@@ -481,6 +501,8 @@ async fn remove_at_shifts_current_and_reopens_announce(#[by_ref] worker_owner: &
     .expect("same identity at shifted position");
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(changes(&mut events), [Some(third)]);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -520,11 +542,13 @@ async fn replacing_current_item_re_announces_on_next_play(#[by_ref] worker_owner
     assert_eq!(queue.control().current_index(), Some(0));
     assert_eq!(changes(&mut events), [Some(replacement)]);
     assert_eq!(queue.tracks.records().len(), 2);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn select_item_out_of_range_returns_typed_error(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, mut rig, _dir) = empty_queue(&worker_owner.0);
+    let (mut queue, mut rig, fixture_directory) = empty_queue(&worker_owner.0);
     let id = TrackId::from(5_u64);
     let err = with_outbox(&mut queue, &mut rig, |queue, out| {
         queue.apply_command(
@@ -539,11 +563,13 @@ async fn select_item_out_of_range_returns_typed_error(#[by_ref] worker_owner: &W
     .expect_err("unknown item");
     assert!(matches!(err, QueueError::UnknownTrackId(actual) if actual == id));
     assert_eq!(queue.tracks.records().len(), 0);
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn checked_crossfade_update_respects_closed_owner(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, mut rig, _dir) = empty_queue(&worker_owner.0);
+    let (mut queue, mut rig, fixture_directory) = empty_queue(&worker_owner.0);
     let settings = crate::CrossfadeSettings {
         duration: 2.0,
         ..Default::default()
@@ -572,6 +598,8 @@ async fn checked_crossfade_update_respects_closed_owner(#[by_ref] worker_owner: 
         Err(PlayError::Closed)
     ));
     assert_eq!(queue.config.settings.crossfade().duration, 2.0);
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test]
@@ -682,6 +710,8 @@ async fn remove_all_items_releases_output_state_and_allows_fresh_playback(
     assert!(queue.control().is_playing());
     assert!(queue.active_current_index().is_some());
     apply(&mut queue, &mut rig, QueueCommand::RemoveAll).expect("final clear");
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -732,11 +762,14 @@ async fn an_inserted_resource_adopts_the_session_wake_mode(#[by_ref] worker_owne
     )
     .await
     .expect("an admitted source keeps reader events off the audio callback bus");
+    drop(due);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn close_waits_for_an_admitted_operation(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, mut rig, _dir) = empty_queue(&worker_owner.0);
+    let (mut queue, mut rig, fixture_directory) = empty_queue(&worker_owner.0);
     let id = TrackId::allocate();
     let postbox = queue.postbox.clone();
     let operation = postbox
@@ -773,12 +806,14 @@ async fn close_waits_for_an_admitted_operation(#[by_ref] worker_owner: &WorkerOw
         Err(PlayError::Closed)
     ));
     assert!(matches!(queue.ensure_open(), Err(PlayError::Closed)));
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
 async fn drop_does_not_wait_for_an_admitted_operation(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, _, _dir) = empty_queue(&worker_owner.0);
+    let (mut queue, _, fixture_directory) = empty_queue(&worker_owner.0);
     let observer = queue.shutdown.child();
     let postbox = queue.postbox.clone();
     let _ticket = postbox
@@ -797,12 +832,14 @@ async fn drop_does_not_wait_for_an_admitted_operation(#[by_ref] worker_owner: &W
         "drop cancels the subtree while the admitted operation remains outstanding"
     );
     drop(operation);
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
 async fn player_lifecycle_admits_only_one_concurrent_close(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, _, _, mut rig, _dir) = crate::mock::selected(&worker_owner.0).await;
+    let (mut queue, _, _, mut rig, fixture_directory) =
+        crate::mock::selected(&worker_owner.0).await;
     {
         let mut port = rig.ring.scope(rig.scope).expect("deck scope");
         for _ in 0..port.available() {
@@ -852,6 +889,8 @@ async fn player_lifecycle_admits_only_one_concurrent_close(#[by_ref] worker_owne
     })
     .expect("already closed cleanup is idempotent");
     assert!(queue.shutdown.is_cancelled());
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -885,6 +924,7 @@ async fn prepare_config_per_track_cancel_is_child_of_player_master(
         observer.is_cancelled(),
         "dropping the owner cancels the per-track child via its master"
     );
+    dir.finish().await;
 }
 
 #[kithara::test]
@@ -961,4 +1001,6 @@ async fn prebound_session_rejects_a_player_built_for_another_sample_rate(
             .map(NonZeroU32::get),
         Some(48_000)
     );
+    drop(queue);
+    dir.finish().await;
 }

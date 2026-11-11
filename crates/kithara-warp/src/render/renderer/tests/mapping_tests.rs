@@ -458,8 +458,11 @@ fn varispeed_pcm_matches_scalar_geometry_across_spans() {
                 let frame = u64::try_from(frame).expect("scalar frame");
                 super::super::super::source_sample::source_frame(
                     resident,
-                    span.source_ratio_at(frame)
-                        .expect("scalar source coordinate"),
+                    super::super::super::source_sample::split_position(
+                        span.source_ratio_at(frame)
+                            .expect("scalar source coordinate"),
+                    )
+                    .expect("representable source coordinate"),
                     mapping::span_speed(span, frame).expect("scalar source speed"),
                     None,
                     output,

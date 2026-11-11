@@ -28,6 +28,9 @@ pub(super) struct DispatcherInner {
     pub(super) runtime: Option<Handle>,
     pub(super) cmd_tx: mpsc::Sender<Command>,
     pub(super) wake: Wake,
+    /// Native scheduler thread, absent when its worker had already shut down.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) thread: Option<Arc<crate::threads::ThreadJoin>>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]

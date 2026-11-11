@@ -23,7 +23,7 @@ async fn pending_successor(
     TrackId,
     TrackId,
     mock::DeckRig<TestPools>,
-    TestTempDir,
+    QueueFixture,
 ) {
     let (mut queue, first, second, mut rig, dir) = selected(worker).await;
     apply(
@@ -103,6 +103,8 @@ async fn rate_events_follow_applied_playback_without_duplicates(
     assert_eq!(rates(&mut events), [2.0]);
     tick_fixture(&mut queue, &mut rig);
     assert!(rates(&mut events).is_empty());
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -124,6 +126,8 @@ async fn player_remove_all_resets_state(
     finish(&mut queue, &mut rig);
     assert_eq!(queue.current, None);
     assert_eq!(queue.control().status(), PlayerStatus::Unknown);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -154,6 +158,8 @@ async fn replay_same_item_does_not_re_emit_current_item_changed(
         second_count, 0,
         "resuming the same item must not re-announce CurrentItemChanged: {second:?}"
     );
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -209,7 +215,7 @@ async fn a_selected_resource_adopts_the_session_wake_mode(#[by_ref] worker_owner
 
 #[kithara::test(tokio)]
 async fn re_selecting_the_current_item_does_not_re_announce(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, item, _, mut rig, _dir) = selected(&worker_owner.0).await;
+    let (mut queue, item, _, mut rig, fixture_directory) = selected(&worker_owner.0).await;
     let mut rx = queue.control().subscribe();
     apply(
         &mut queue,
@@ -231,6 +237,8 @@ async fn re_selecting_the_current_item_does_not_re_announce(#[by_ref] worker_own
         announces, 0,
         "re-selecting the current item must not re-announce: {after:?}"
     );
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -255,27 +263,35 @@ async fn selecting_another_item_announces_it(#[by_ref] worker_owner: &WorkerOwne
         "selecting another item must announce it once: {after:?}"
     );
     assert_eq!(queue.current, Some(second));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn arm_next_arms_the_item(#[by_ref] worker_owner: &WorkerOwner) {
-    let (queue, _, second, _rig, _dir) = pending_successor(&worker_owner.0).await;
+    let (queue, _, second, fixture_deck, fixture_directory) =
+        pending_successor(&worker_owner.0).await;
     assert_eq!(queue.target.map(|target| target.to), Some(second));
+    drop((queue, fixture_deck));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn seek_seconds_updates_position_optimistically(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, _, _, mut rig, _dir) = pending_selection(&worker_owner.0);
+    let (mut queue, _, _, mut rig, fixture_directory) = pending_selection(&worker_owner.0);
     apply(&mut queue, &mut rig, QueueCommand::RemoveAll).expect("empty queue");
     let to = Duration::from_secs_f64(54.689_879_542);
     let outcome = apply(&mut queue, &mut rig, QueueCommand::Seek { to });
     assert!(matches!(outcome, Ok(None)));
     assert_eq!(queue.control().position_seconds(), Some(54.689_879_542));
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn arm_next_idempotent_for_the_armed_item(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, _, second, mut rig, _dir) = pending_successor(&worker_owner.0).await;
+    let (mut queue, _, second, mut rig, fixture_directory) =
+        pending_successor(&worker_owner.0).await;
     apply(
         &mut queue,
         &mut rig,
@@ -286,6 +302,8 @@ async fn arm_next_idempotent_for_the_armed_item(#[by_ref] worker_owner: &WorkerO
     )
     .expect("select same target");
     assert_eq!(queue.target.map(|target| target.to), Some(second));
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -312,11 +330,14 @@ async fn arm_next_replaces_a_previously_armed_item(#[by_ref] worker_owner: &Work
     )
     .expect("select third");
     assert_eq!(queue.target.map(|target| target.to), Some(third));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn commit_next_of_another_item_returns_typed_error(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, _, second, mut rig, _dir) = pending_successor(&worker_owner.0).await;
+    let (mut queue, _, second, mut rig, fixture_directory) =
+        pending_successor(&worker_owner.0).await;
     let other = TrackId::allocate();
     let err = with_outbox(&mut queue, &mut rig, |queue, out| {
         queue.apply_command(
@@ -333,6 +354,8 @@ async fn commit_next_of_another_item_returns_typed_error(#[by_ref] worker_owner:
         matches!(err, QueueError::UnknownTrackId(requested) if requested == other)
             && queue.target.is_some_and(|target| target.to == second)
     );
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -351,6 +374,8 @@ async fn commit_next_makes_the_successor_current_and_announces_it(
     );
     let announced = drain(&mut rx).iter().any(|event| matches!(event, QueueEvent::CurrentTrackChanged { id: Some(item) } if *item == second));
     assert!(announced, "commit_next must publish CurrentItemChanged");
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -371,14 +396,19 @@ async fn commit_next_idempotent_when_already_activated(#[by_ref] worker_owner: &
         finish(&mut queue, &mut rig);
     }
     assert_eq!(queue.current, Some(second));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn unarm_next_clears_an_armed_successor(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, first, _, mut rig, _dir) = pending_successor(&worker_owner.0).await;
+    let (mut queue, first, _, mut rig, fixture_directory) =
+        pending_successor(&worker_owner.0).await;
     with_outbox(&mut queue, &mut rig, Queue::cancel_target).expect("cancel pending transition");
     assert_eq!(queue.target.map(|target| target.to), None);
     assert_eq!(queue.current, Some(first));
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -389,6 +419,8 @@ async fn unarm_next_preserves_activated_current(#[by_ref] worker_owner: &WorkerO
     with_outbox(&mut queue, &mut rig, Queue::cancel_target).expect("cancel no pending target");
     assert_eq!(queue.target.map(|target| target.to), None);
     assert_eq!(queue.current, Some(second));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -430,6 +462,8 @@ async fn selecting_another_item_unarms_the_successor(#[by_ref] worker_owner: &Wo
     );
     assert_eq!(queue.current, Some(third));
     assert_ne!(queue.current, Some(second));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -452,4 +486,6 @@ async fn selecting_the_armed_item_promotes_it(#[by_ref] worker_owner: &WorkerOwn
         None,
         "armed track consumed by select"
     );
+    drop((queue, rig));
+    dir.finish().await;
 }

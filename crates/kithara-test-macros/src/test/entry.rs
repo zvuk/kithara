@@ -275,6 +275,13 @@ mod tests {
             self.async_depth -= 1;
         }
 
+        fn visit_item_fn_mut(&mut self, item: &mut syn::ItemFn) {
+            let depth = usize::from(item.sig.asyncness.is_some());
+            self.async_depth += depth;
+            visit_mut::visit_item_fn_mut(self, item);
+            self.async_depth -= depth;
+        }
+
         fn visit_expr_call_mut(&mut self, expression: &mut syn::ExprCall) {
             if let syn::Expr::Path(path) = &*expression.func
                 && path.path.is_ident("owner")

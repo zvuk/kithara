@@ -20,6 +20,8 @@ pub use dispatcher::{Dispatcher, PendingTask, TaskError, TaskHandle};
 use humantime_serde as _;
 pub use observer::{Event, Observer, PassOutcome, PassReport};
 pub use task::{Priority, Task, TaskContext, TaskControl, TaskId, TickResult};
+#[cfg(not(target_arch = "wasm32"))]
+pub use threads::ShutdownError;
 pub use wake::Wake;
 pub use worker::Worker;
 mod consts;

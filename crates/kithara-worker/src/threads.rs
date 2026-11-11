@@ -28,12 +28,15 @@ impl Threads {
             id: handle.thread().id(),
             state: Mutex::new(JoinState {
                 handle: Some(handle),
-                finished: false,
+                result: None,
             }),
             finished: Condvar::default(),
         });
-        state.handles.retain(|thread| !thread.state.lock().finished);
+        state
+            .handles
+            .retain(|thread| thread.state.lock().result.is_none());
         state.handles.push(Arc::clone(&thread));
+        drop(state);
         Some(thread)
     }
 
@@ -59,24 +62,27 @@ impl Threads {
         self.state.lock().closed = true;
     }
 
-    pub(crate) fn is_current(&self) -> bool {
-        let current = thread::current().id();
-        self.state
-            .lock()
-            .handles
-            .iter()
-            .any(|thread| thread.id == current)
-    }
-
     #[kithara::hang_watchdog]
     pub(crate) fn join(&self) {
         let handles = self.state.lock().handles.clone();
         for thread in handles {
             hang_tick!();
-            thread.join();
+            // A panicked or current thread has nothing left to wait for.
+            thread.join().ok();
             hang_reset!();
         }
     }
+}
+
+/// Failure to finish a native worker thread.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ShutdownError {
+    /// A thread cannot wait for itself to exit.
+    #[error("cannot join the current thread")]
+    CurrentThread,
+    /// The thread panicked or an earlier join unwound.
+    #[error("worker thread panicked")]
+    Panicked,
 }
 
 pub(crate) struct ThreadJoin {
@@ -87,32 +93,50 @@ pub(crate) struct ThreadJoin {
 
 struct JoinState {
     handle: Option<JoinHandle<()>>,
-    finished: bool,
+    result: Option<Result<(), ShutdownError>>,
+}
+
+/// Publishes a failed completion if the join unwinds before it records one.
+struct Publish<'a> {
+    thread: &'a ThreadJoin,
+    result: Result<(), ShutdownError>,
+}
+
+impl Drop for Publish<'_> {
+    fn drop(&mut self) {
+        self.thread.state.lock().result = Some(self.result);
+        self.thread.finished.notify_all();
+    }
 }
 
 impl ThreadJoin {
+    /// Wait for the thread and its TLS teardown. Concurrent callers wait for
+    /// the same exit, and every later call returns the recorded result.
     #[kithara::hang_watchdog]
-    pub(crate) fn join(&self) {
+    pub(crate) fn join(&self) -> Result<(), ShutdownError> {
         if self.id == thread::current().id() {
-            return;
+            return Err(ShutdownError::CurrentThread);
         }
         let mut state = self.state.lock();
-        if state.finished {
-            return;
+        if state.result.is_none() {
+            kithara_platform::no_block::forbid_bridged(None);
         }
-        kithara_platform::no_block::forbid_bridged(None);
         if let Some(handle) = state.handle.take() {
             drop(state);
-            let result = handle.join();
-            self.state.lock().finished = true;
-            self.finished.notify_all();
-            drop(result);
-        } else {
-            while !state.finished {
-                hang_tick!();
-                state = self.finished.wait(state);
-                hang_reset!();
-            }
+            let mut publish = Publish {
+                thread: self,
+                result: Err(ShutdownError::Panicked),
+            };
+            publish.result = handle.join().map_err(|_| ShutdownError::Panicked);
+            return publish.result;
         }
+        while state.result.is_none() {
+            hang_tick!();
+            state = self.finished.wait(state);
+            hang_reset!();
+        }
+        let result = state.result;
+        drop(state);
+        result.unwrap_or(Err(ShutdownError::Panicked))
     }
 }

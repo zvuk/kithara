@@ -883,6 +883,8 @@ async fn a_fade_in_makes_its_track_leading_and_a_preload_does_not(
     assert_eq!(queue.control().position_seconds(), Some(0.0));
     assert_eq!(queue.control().duration_seconds(), Some(162.0));
     drop((leading_source, successor_source));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]

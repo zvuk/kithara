@@ -407,7 +407,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .process(request, source, output)?;
         projection.feed = Some(source_range.end);
         projection.audible = Some(audible);
-        projection.cached_span = cached_span;
+        projection.cached_span = Some(cached_span);
         projection.offset = 0;
         Ok(())
     }
