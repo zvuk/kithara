@@ -102,11 +102,7 @@ impl<S> PlayerImpl<S> {
     ) -> Result<Option<Seq>, PlayError> {
         self.check_when(at, out)?;
         if matches!(self.status, TrackStatus::Ended { .. }) {
-            if !self
-                .adopting
-                .iter()
-                .any(|adoption| adoption.segment == self.segment.id)
-            {
+            if !self.adoptions.adopts(self.segment.id) {
                 self.segment(Position::ZERO, None, out)?;
             }
             self.resume = None;
@@ -264,7 +260,7 @@ impl<S> PlayerImpl<S> {
         at: When<SessionFrame>,
         out: &Outbox<'_, S>,
     ) -> Result<(Configuring, Option<usize>), PlayError> {
-        if self.adopting.iter().any(|adoption| adoption.cancelled) {
+        if self.adoptions.cancelling() {
             return Err(PlayError::NotReady);
         }
         if self.lane.is_none() {

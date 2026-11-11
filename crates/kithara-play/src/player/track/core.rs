@@ -22,7 +22,7 @@ use super::{
     },
     geometry::*,
     seat::Seat,
-    segment::Segment,
+    segment::{Adoptions, Segment},
     state::*,
 };
 use crate::{PlayError, resource::LaneGeometry};
@@ -40,8 +40,7 @@ pub struct PlayerImpl<S> {
     pub(super) loading: Option<Loading>,
     pub(super) segment: Segment,
     pub(super) issued_segment: SegmentId,
-    pub(super) adopting: Vec<Adoption>,
-    pub(super) newest_epoch_pending: Option<Seq>,
+    pub(super) adoptions: Adoptions,
     pub(super) lane_commands: Vec<LaneOperation>,
     pub(super) playback_commands: Vec<PlaybackOperation>,
     pub(super) speed_answers: VecDeque<SpeedAnswer>,
@@ -85,8 +84,7 @@ impl<S> PlayerImpl<S> {
             loading: None,
             segment: Segment::issued(SegmentId::FIRST, None, config.settings.speed()),
             issued_segment: SegmentId::FIRST,
-            adopting: Vec::new(),
-            newest_epoch_pending: None,
+            adoptions: Adoptions::default(),
             lane_commands: Vec::new(),
             playback_commands: Vec::new(),
             speed_answers: VecDeque::new(),
@@ -259,7 +257,7 @@ impl<S> PlayerImpl<S> {
         commands: Vec<LaneCommand>,
         when: When<LaneFrame>,
     ) -> Result<Seq, PlayError> {
-        if self.adopting.iter().any(|adoption| adoption.cancelled) {
+        if self.adoptions.cancelling() {
             return Err(PlayError::NotReady);
         }
         let session = match when {

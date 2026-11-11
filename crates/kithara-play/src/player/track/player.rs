@@ -11,7 +11,7 @@ use tracing::warn;
 use super::{
     super::outbox::{Bound, Outbox, Player, Settled, TrackReceipt},
     core::PlayerImpl,
-    segment::Segment,
+    segment::{Adoption, Segment},
     state::*,
 };
 use crate::PlayError;
@@ -91,7 +91,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                     .seat
                     .attaching()
                     .is_some_and(|attach| attach.seq == Some(seq));
-                let adopting = self.adopting.iter().any(|adopt| adopt.seq == seq);
+                let adopting = self.adoptions.includes(seq);
                 let playback = self.playback_commands.iter().position(|operation| {
                     operation.seq == Some(seq)
                         && operation
@@ -358,7 +358,7 @@ impl<S> PlayerImpl<S> {
         );
         self.playback_commands.clear();
         self.repeat = true;
-        self.adopting.push(Adoption {
+        self.adoptions.inflight.push(Adoption {
             seq,
             caller: seq,
             segment,
@@ -369,21 +369,12 @@ impl<S> PlayerImpl<S> {
     }
 
     fn supersede(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
-        if self
-            .adopting
-            .iter()
-            .any(|adoption| adoption.parked.is_some())
-            && self.lane.as_ref().is_none_or(|lane| lane.available() == 0)
-        {
+        if self.adoptions.parking() && self.lane.as_ref().is_none_or(|lane| lane.available() == 0) {
             return Err(PlayError::Full("lane"));
         }
         out.supersede(self.seat()?)?;
-        for adoption in &mut self.adopting {
-            if adoption.parked.is_some() {
-                adoption.cancelled = true;
-            }
-        }
-        self.newest_epoch_pending = None;
+        self.adoptions.cancel_parked();
+        self.adoptions.retry = None;
         self.repeat = false;
         Ok(None)
     }
@@ -404,8 +395,7 @@ impl<S> PlayerImpl<S> {
             self.play = None;
             self.segment.ready = false;
             self.playback_commands.clear();
-            self.adopting.clear();
-            self.newest_epoch_pending = None;
+            self.adoptions.clear();
             if let Err(error) = self.release_lane(out) {
                 warn!(%error, "lane release waits for dispatcher room");
             }
@@ -487,7 +477,7 @@ impl<S> PlayerImpl<S> {
             }
             self.segment.ready = false;
             self.withdraw_play();
-            self.newest_epoch_pending = None;
+            self.adoptions.retry = None;
             self.repeat = false;
             if let Some(attaching) = self.seat.attaching_mut() {
                 attaching.obsolete = true;

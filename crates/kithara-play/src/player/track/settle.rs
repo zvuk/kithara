@@ -16,7 +16,7 @@ use super::{
     },
     core::PlayerImpl,
     geometry::session_at,
-    segment::Segment,
+    segment::{Adoption, Segment},
     state::*,
 };
 use crate::PlayError;
@@ -89,7 +89,7 @@ impl<S> PlayerImpl<S> {
                 )
                 .map_err(|(error, _parts)| error)?;
             if let Some(adopt) = adopt {
-                self.adopting.push(Adoption {
+                self.adoptions.inflight.push(Adoption {
                     seq: adopt,
                     caller: adopt,
                     segment,
@@ -143,8 +143,7 @@ impl<S> PlayerImpl<S> {
             .copied()
             .filter(|attach| attach.seq == Some(seq));
         let mut answered = attaching.map_or(seq, |attach| attach.caller);
-        if let Some(index) = self.adopting.iter().position(|adopt| adopt.seq == seq) {
-            let adoption = self.adopting.remove(index);
+        if let Some(adoption) = self.adoptions.take(seq) {
             answered = adoption.caller;
             if let Some(settled) = self.apply_adoption(&adoption, outcome, out) {
                 return settled;
@@ -220,7 +219,7 @@ impl<S> PlayerImpl<S> {
             outcome,
             Outcome::Rejected(Rejection::Stale | Rejection::Refused(DeckRefusal::Outdated { .. }))
         ) {
-            self.newest_epoch_pending = Some(adoption.caller);
+            self.adoptions.retry = Some(adoption.caller);
             self.adopt_newest_epoch(out);
             return Some(Settled::Pending);
         }
@@ -251,8 +250,7 @@ impl<S> PlayerImpl<S> {
         self.segment.ready = false;
         self.play = None;
         self.playback_commands.clear();
-        self.adopting.clear();
-        self.newest_epoch_pending = None;
+        self.adoptions.clear();
         if let Err(error) = self.release_lane(out) {
             warn!(%error, "refused attachment waits for lane release room");
         }
@@ -308,8 +306,7 @@ impl<S> PlayerImpl<S> {
         self.play = None;
         self.segment.ready = false;
         self.playback_commands.clear();
-        self.adopting.clear();
-        self.newest_epoch_pending = None;
+        self.adoptions.clear();
         if let Err(error) = self.release_lane(out) {
             warn!(%error, "lane release waits for dispatcher room");
         }
@@ -317,10 +314,10 @@ impl<S> PlayerImpl<S> {
 
     pub(super) fn adopt_newest_epoch(&mut self, out: &mut Outbox<'_, S>) {
         if self.preparation_closed() {
-            self.newest_epoch_pending = None;
+            self.adoptions.retry = None;
             return;
         }
-        let Some(caller) = self.newest_epoch_pending else {
+        let Some(caller) = self.adoptions.retry else {
             return;
         };
         if out.deck_available() == 0 {
@@ -337,14 +334,14 @@ impl<S> PlayerImpl<S> {
             }],
         ) {
             Ok(Some(seq)) => {
-                self.adopting.push(Adoption {
+                self.adoptions.inflight.push(Adoption {
                     seq,
                     caller,
                     segment: self.segment.id,
                     parked: None,
                     cancelled: false,
                 });
-                self.newest_epoch_pending = None;
+                self.adoptions.retry = None;
             }
             Ok(None) => {}
             Err((error, _parts)) => warn!(%error, "the latest segment's adoption waits for room"),

@@ -105,10 +105,7 @@ impl<S> Track<S> for PlayerImpl<S> {
             return Err(PlayError::Lane(failure));
         }
         if matches!(self.status, TrackStatus::Ended { .. })
-            && self
-                .adopting
-                .iter()
-                .any(|adoption| adoption.segment == self.segment.id)
+            && self.adoptions.adopts(self.segment.id)
         {
             return Ok(false);
         }

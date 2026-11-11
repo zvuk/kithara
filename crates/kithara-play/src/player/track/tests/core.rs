@@ -1779,7 +1779,7 @@ fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
         &mut out), Settled::Applied { seq: answered, .. } if answered == seq)
     );
     assert_eq!(track.snapshot().position, Position::from_secs(8));
-    assert!(track.adopting.is_empty());
+    assert!(track.adoptions.inflight.is_empty());
 }
 
 #[kithara::test]
@@ -1832,7 +1832,7 @@ fn withdrawing_an_overtaken_epoch_leaves_the_newer_seek_published() {
         ));
     }
     assert_eq!(track.segment.id, newest);
-    assert!(track.adopting.is_empty());
+    assert!(track.adoptions.inflight.is_empty());
 }
 
 #[kithara::test]
@@ -3403,7 +3403,7 @@ async fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
     assert_eq!(prepared.snapshot().speed, before.speed);
     assert!(prepared.segment.ready);
     assert_eq!(prepared.segment.id, segment);
-    assert!(prepared.adopting.is_empty());
+    assert!(prepared.adoptions.inflight.is_empty());
     assert!(lane_commands(&mut inbox).is_empty());
     assert_eq!(
         in_pass(&mut rig, frame(0), |out| prepared.admit(

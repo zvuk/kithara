@@ -1,3 +1,4 @@
+use kithara_command::Seq;
 use kithara_signal::SegmentId;
 
 use super::state::Position;
@@ -34,5 +35,66 @@ impl Segment {
     /// leaves this one unready.
     pub(super) fn report_ready(&mut self, ready: SegmentId) {
         self.ready = ready == self.id;
+    }
+}
+
+/// One deck adoption of a segment, answered to `caller`.
+pub(super) struct Adoption {
+    pub(super) seq: Seq,
+    pub(super) caller: Seq,
+    pub(super) segment: SegmentId,
+    /// The segment and position a repeat left, restored if it is cancelled.
+    pub(super) parked: Option<(SegmentId, Position)>,
+    pub(super) cancelled: bool,
+}
+
+/// The deck adoptions a track has open.
+///
+/// Segment issue and repeat push adoptions; their receipts take them back.
+/// An adoption the deck refuses as stale or outdated leaves its caller in
+/// `retry` until the deck has room to adopt the current segment again.
+/// Release, a refused attach and returned PCM clear everything; a supersede
+/// and a failed preparation drop only the retry.
+#[derive(Default)]
+pub(super) struct Adoptions {
+    pub(super) inflight: Vec<Adoption>,
+    pub(super) retry: Option<Seq>,
+}
+
+impl Adoptions {
+    pub(super) fn take(&mut self, seq: Seq) -> Option<Adoption> {
+        let index = self.inflight.iter().position(|adopt| adopt.seq == seq)?;
+        Some(self.inflight.remove(index))
+    }
+
+    /// A deck adoption of `segment` is in flight.
+    pub(super) fn adopts(&self, segment: SegmentId) -> bool {
+        self.inflight.iter().any(|adopt| adopt.segment == segment)
+    }
+
+    pub(super) fn includes(&self, seq: Seq) -> bool {
+        self.inflight.iter().any(|adopt| adopt.seq == seq)
+    }
+
+    /// A cancelled repeat is still in flight; lane commands wait for it.
+    pub(super) fn cancelling(&self) -> bool {
+        self.inflight.iter().any(|adopt| adopt.cancelled)
+    }
+
+    pub(super) fn parking(&self) -> bool {
+        self.inflight.iter().any(|adopt| adopt.parked.is_some())
+    }
+
+    pub(super) fn cancel_parked(&mut self) {
+        for adoption in &mut self.inflight {
+            if adoption.parked.is_some() {
+                adoption.cancelled = true;
+            }
+        }
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.inflight.clear();
+        self.retry = None;
     }
 }

@@ -1280,7 +1280,12 @@ async fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_
     };
     assert_eq!(track.snapshot().mark, mark);
     assert_eq!(
-        track.adopting.last().expect("repeat adoption").parked,
+        track
+            .adoptions
+            .inflight
+            .last()
+            .expect("repeat adoption")
+            .parked,
         Some((original, Duration::from_millis(expected_raw_ms)))
     );
     rig.with_outbox(|out| track.apply(TrackCommand::Supersede, out))

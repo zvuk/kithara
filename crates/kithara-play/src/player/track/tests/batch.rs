@@ -205,7 +205,7 @@ async fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reser
     if let Some(attaching) = track.seat.attaching() {
         assert_eq!(attaching.play, None);
     }
-    let receipts = track.adopting.len()
+    let receipts = track.adoptions.inflight.len()
         + track.playback_commands.len()
         + usize::from(track.seat.attaching().is_some());
     for _ in 0..receipts {
@@ -593,7 +593,8 @@ async fn assert_terminal_adoption_refusal(cancelled: bool, outdated: bool) {
                 command_at_zero(&mut track, &mut rig, TrackCommand::Supersede);
                 assert!(
                     track
-                        .adopting
+                        .adoptions
+                        .inflight
                         .iter()
                         .any(|adoption| adoption.cancelled && adoption.parked.is_some())
                 );
@@ -662,14 +663,14 @@ async fn assert_terminal_adoption_refusal(cancelled: bool, outdated: bool) {
                     out,
                 )
             });
-            assert!(track.adopting.is_empty());
-            assert_eq!(track.newest_epoch_pending, None);
+            assert!(track.adoptions.inflight.is_empty());
+            assert_eq!(track.adoptions.retry, None);
             assert_eq!(track.segment.id, segment);
             assert_eq!(track.lane_commands.len(), lane_count);
             in_pass(&mut rig, frame(256), |out| track.tick(frame(256), out));
             assert_eq!(track.segment.id, segment);
             assert_eq!(track.lane_commands.len(), lane_count);
-            assert_eq!(track.newest_epoch_pending, None);
+            assert_eq!(track.adoptions.retry, None);
             if release_before_receipt {
                 assert_eq!(track.status(), TrackStatus::Released);
             } else {
