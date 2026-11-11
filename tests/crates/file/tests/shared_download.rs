@@ -29,10 +29,9 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
+    ModeledServer,
     bufpool_ext::{TestPools, pools},
-    hls_fixture::create_test_downloader,
 };
-use kithara_test_utils::TestHttpServer;
 
 const BODY: &[u8] = b"0123456789abcdefghijABCDEFGHIJ0123456789abcdefghijABCDEFGHIJ";
 
@@ -108,7 +107,6 @@ fn read_to_end(mut stream: Stream<File<TestPools>>) -> io::Result<Vec<u8>> {
 #[kithara::test(
     tokio,
     multi_thread,
-    flash(false),
     timeout(Duration::from_secs(10)),
     hang_timeout_secs(2)
 )]
@@ -123,7 +121,7 @@ async fn follower_joins_active_download_without_second_get() {
             gets: Arc::clone(&gets),
             released: released.clone(),
         });
-    let server = TestHttpServer::new(app).await;
+    let server = ModeledServer::new(app);
     let url = server.url("/audio.mp3");
     let pools = pools();
 
@@ -132,7 +130,7 @@ async fn follower_joins_active_download_without_second_get() {
         .build();
 
     let waveform_cfg = FileConfig::for_src(url.clone().into())
-        .downloader(create_test_downloader())
+        .downloader(server.downloader())
         .store(store.clone())
         .build();
     let waveform = Stream::<File<TestPools>>::new(waveform_cfg)
@@ -144,7 +142,7 @@ async fn follower_joins_active_download_without_second_get() {
         .expect("request handler remains alive");
 
     let player_cfg = FileConfig::for_src(url.into())
-        .downloader(create_test_downloader())
+        .downloader(server.downloader())
         .store(store)
         .look_ahead_bytes(16)
         .build();
@@ -182,7 +180,6 @@ async fn follower_joins_active_download_without_second_get() {
 #[kithara::test(
     tokio,
     multi_thread,
-    flash(false),
     timeout(Duration::from_secs(10)),
     hang_timeout_secs(2)
 )]
@@ -197,13 +194,13 @@ async fn immediate_read_exceeds_zero_look_ahead_without_stalling() {
             gets: Arc::clone(&gets),
             released,
         });
-    let server = TestHttpServer::new(app).await;
+    let server = ModeledServer::new(app);
     let pools = pools();
     let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .build();
     let config = FileConfig::for_src(server.url("/audio.mp3").into())
-        .downloader(create_test_downloader())
+        .downloader(server.downloader())
         .store(store)
         .look_ahead_bytes(0)
         .build();

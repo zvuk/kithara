@@ -162,8 +162,8 @@ pub use server_url::join_server_url;
     not(target_arch = "wasm32")
 ))]
 pub use test_server::{
-    BehaviorHandle, Content, Delivery, FixtureBehavior, InitGateHandle, PrivateTestServer,
-    SegmentGateHandle,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, InitGateHandle, ModeledServer,
+    PrivateTestServer, SegmentGateHandle,
 };
 #[cfg(any(feature = "all", feature = "audio", feature = "wasm"))]
 pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};

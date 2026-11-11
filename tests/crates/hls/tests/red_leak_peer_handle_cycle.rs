@@ -9,14 +9,13 @@ use std::{
 use kithara::{
     abr::Abr,
     download::{Downloader, DownloaderConfig, FetchCmd, Peer, PeerHandle},
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
         time::{self, Duration},
     },
 };
-use kithara_integration_tests::bufpool_ext::pools;
 
 /// Peer that stashes its own `PeerHandle` clone after registration —
 /// mirroring `HlsPeer` + `SegmentLoader` in production.
@@ -76,9 +75,8 @@ async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
     let cancel = CancelToken::never();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(kithara_integration_tests::TestServerHelper::shared_client(
             NetOptions::default(),
-            pools(),
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())
@@ -120,9 +118,8 @@ async fn registry_leaks_peer_without_teardown_when_handle_is_self_stored()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
     let cancel = CancelToken::never();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(kithara_integration_tests::TestServerHelper::shared_client(
             NetOptions::default(),
-            pools(),
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())
