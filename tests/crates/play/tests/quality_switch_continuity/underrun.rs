@@ -7,7 +7,11 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
     queue::ItemEvent,
 };
-use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::DelayRule};
+use kithara_integration_tests::{
+    CreatedHls, TestServerHelper,
+    audio_artifact::{AudioArtifactSet, audio_artifact_path},
+    fixture_protocol::DelayRule,
+};
 use kithara_render::bridge::DeckSnapshot;
 
 use super::*;
@@ -36,6 +40,7 @@ struct Render {
 struct CaptureBlock {
     capture: Range<usize>,
     output: Range<u64>,
+    started: WallInstant,
     started_unix_micros: Option<u128>,
     before: DeckSnapshot,
     after: DeckSnapshot,
@@ -93,12 +98,8 @@ impl CaptureBlock {
 }
 
 impl Render {
-    fn capture_window(&self) -> RangeInclusive<u128> {
-        let mut times = self.blocks.iter().map(|block| {
-            block
-                .started_unix_micros
-                .expect("capture block has a wall timestamp")
-        });
+    fn capture_window(&self) -> RangeInclusive<WallInstant> {
+        let mut times = self.blocks.iter().map(|block| block.started);
         let first = times.next().expect("capture has blocks");
         let last = times.fold(first, |previous, next| {
             assert!(
@@ -168,6 +169,35 @@ impl Render {
             underruns.join("\n"),
         )
     }
+}
+
+#[kithara::test]
+fn capture_window_uses_monotonic_time_when_calendar_time_moves_backwards() {
+    let started = WallInstant::now();
+    let later = started + Duration::from_millis(1);
+    let render = Render {
+        capture_frame: 0,
+        samples: Vec::new(),
+        blocks: [(started, 2_000), (later, 1_000)]
+            .into_iter()
+            .map(|(started, unix_micros)| CaptureBlock {
+                capture: 0..1,
+                output: 0..1,
+                started,
+                started_unix_micros: Some(unix_micros),
+                before: DeckSnapshot::default(),
+                after: DeckSnapshot::default(),
+                item_events: Vec::new(),
+                event_error: None,
+                refill_probes: Vec::new(),
+                admitted: Vec::new(),
+            })
+            .collect(),
+    };
+    assert!(render.blocks[0].started < render.blocks[1].started);
+    assert!(render.blocks[0].started_unix_micros > render.blocks[1].started_unix_micros);
+    let window = render.capture_window();
+    assert_eq!(window, started..=later);
 }
 
 fn target_rebuild_fixture(delay_ms: u64) -> HlsFixtureBuilder {
@@ -347,6 +377,7 @@ async fn capture_tiny_ring(
         let frames = (OBSERVATION_FRAMES - samples.len() / usize::from(CHANNELS)).min(BLOCK_FRAMES);
         let capture_start = samples.len() / usize::from(CHANNELS);
         let output_start = prepared.player.host().position();
+        let started = WallInstant::now();
         let started_unix_micros = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .ok()
@@ -408,6 +439,7 @@ async fn capture_tiny_ring(
             CaptureBlock {
                 capture: capture_start..capture_start + frames,
                 output: output_start..output_end,
+                started,
                 started_unix_micros,
                 before: snapshot_before,
                 after: snapshot_after,
@@ -685,6 +717,44 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
             (second, second_control, second_switched),
         ] {
             failures.extend(cold_switch_failures(*transition, &control, &switched));
+        }
+    }
+    if !failures.is_empty() {
+        let (events, overflowed) = kithara_test_utils::test::usdt::recorded();
+        let identity = [
+            "NEXTEST_RUN_ID",
+            "NEXTEST_BINARY_ID",
+            "NEXTEST_TEST_NAME",
+            "NEXTEST_ATTEMPT_ID",
+            "NEXTEST_ATTEMPT",
+            "NEXTEST_TOTAL_ATTEMPTS",
+            "NEXTEST_STRESS_CURRENT",
+        ]
+        .map(|key| (key, std::env::var_os(key)));
+        let evidence = format!(
+            "case=cold_target_variant_switch_keeps_playback_uninterrupted backend={backend:?} pid={} overflowed={overflowed} nextest={identity:?}\n{events:#?}\n",
+            std::process::id(),
+        );
+        let directory = std::env::var_os("KITHARA_HANG_DUMP_DIR")
+            .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+        let written = std::path::absolute(directory)
+            .and_then(|directory| {
+                AudioArtifactSet::new(
+                    &directory,
+                    "cold-target-variant-switch",
+                    SAMPLE_RATE,
+                    CHANNELS,
+                )
+            })
+            .and_then(|artifacts| {
+                let history = artifacts.write_bytes("usdt-history.txt", evidence.as_bytes())?;
+                audio_artifact_path(&history)
+            });
+        match written {
+            Ok(path) => {
+                tracing::error!(path = %path.display(), overflowed, "Cold-switch USDT history saved");
+            }
+            Err(error) => tracing::error!(%error, "Cold-switch USDT history export failed"),
         }
     }
     assert!(

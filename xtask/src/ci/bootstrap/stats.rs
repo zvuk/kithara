@@ -198,7 +198,7 @@ fn normalize(reply: &[u8]) -> io::Result<String> {
     if policy["local_only"] != false {
         report["remote"] = Value::Null;
     }
-    for field in "local_hits prefetch_hits remote_hits dups misses total_elapsed_ms hit_elapsed_ms miss_elapsed_ms".split_whitespace() {
+    for field in "local_hits prefetch_hits remote_hits dups misses errors total_elapsed_ms hit_elapsed_ms miss_elapsed_ms".split_whitespace() {
         report[field] = json!(stats["events"][field].as_u64());
     }
     Ok(report.to_string())
@@ -245,6 +245,17 @@ mod tests {
         }
         for invalid in [b"invalid".as_slice(), b"{}", b"{\"ok\":false,\"stats\":{}}"] {
             assert!(normalize(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn daemon_errors_survive_without_inventing_unreported_counts() {
+        for errors in [json!(0), json!(3), Value::Null, json!("invalid")] {
+            let mut reply = response();
+            reply["stats"]["events"]["errors"] = errors.clone();
+            let report: Value =
+                serde_json::from_str(&normalize(reply.to_string().as_bytes()).unwrap()).unwrap();
+            assert_eq!(report["errors"].as_u64(), errors.as_u64());
         }
     }
 

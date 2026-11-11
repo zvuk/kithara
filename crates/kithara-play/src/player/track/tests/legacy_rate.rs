@@ -1,5 +1,157 @@
 use super::*;
 
+fn assert_consumed_speed_twice(track: &Track, expected: f32) {
+    for _ in 0..2 {
+        assert_eq!(
+            track.consumed_speed().expect("consumed speed").to_bits(),
+            expected.to_bits()
+        );
+    }
+}
+
+#[kithara::test]
+fn speed_projection_keeps_frame_admission_fresh_after_warming() {
+    let (mut track, _inbox) = prepared_track();
+    assert_consumed_speed_twice(&track, 1.0);
+    track.status = TrackStatus::Playing { since: frame(0) };
+    assert!(matches!(track.consumed_speed(), Err(PlayError::Untimed)));
+    let mark = SlotMark {
+        session: frame(0),
+        lane: LaneFrame {
+            segment: track.segment,
+            frame: 0,
+        },
+        position: Duration::ZERO,
+    };
+    track.mark = Some(mark);
+    assert_consumed_speed_twice(&track, 1.0);
+    let foreign = SlotMark {
+        lane: LaneFrame {
+            segment: track.segment.next(),
+            frame: 0,
+        },
+        ..mark
+    };
+    track.resume = Some(foreign);
+    assert!(matches!(track.consumed_speed(), Err(PlayError::Untimed)));
+    track.resume = None;
+    track.mark = Some(foreign);
+    assert!(matches!(track.consumed_speed(), Err(PlayError::Untimed)));
+}
+
+#[kithara::test]
+fn speed_projection_keeps_same_frame_submissions_visible() {
+    let (mut track, _inbox) = prepared_track();
+    assert_consumed_speed_twice(&track, 1.0);
+    track
+        .send_lane(
+            LaneCommand::SetSpeed(SpeedCurve::Constant(1.75)),
+            When::At(LaneFrame {
+                segment: track.segment,
+                frame: 0,
+            }),
+        )
+        .expect("same-frame speed");
+    assert_consumed_speed_twice(&track, 1.75);
+}
+
+#[kithara::test]
+fn speed_projection_observes_applied_and_refused_receipts() {
+    let (mut track, mut inbox) = prepared_track();
+    let at = LaneFrame {
+        segment: track.segment,
+        frame: 0,
+    };
+    track
+        .send_lane(
+            LaneCommand::SetSpeed(SpeedCurve::Constant(1.75)),
+            When::Next,
+        )
+        .expect("unresolved speed");
+    assert_consumed_speed_twice(&track, 1.0);
+    inbox.drain();
+    inbox
+        .next_due(at, 1)
+        .expect("due next-frame speed")
+        .apply(kithara_render::LaneApplied {
+            source_basis: None,
+            engine_latency: FrameCount::new(0),
+            ready: None,
+        });
+    track.settle_lane();
+    assert_consumed_speed_twice(&track, 1.75);
+    track
+        .send_lane(
+            LaneCommand::SetSpeed(SpeedCurve::Constant(2.0)),
+            When::At(at),
+        )
+        .expect("second speed");
+    assert_consumed_speed_twice(&track, 2.0);
+    inbox.drain();
+    inbox
+        .next_due(at, 1)
+        .expect("due refused speed")
+        .refuse(kithara_audio::TrackFailureKind::Render);
+    track.settle_lane();
+    assert_consumed_speed_twice(&track, 1.75);
+}
+
+#[kithara::test]
+fn speed_projection_tracks_frame_segment_and_initial_rate() {
+    let (mut track, _inbox) = prepared_track();
+    track.segment_speed = 1.25;
+    track
+        .send_lane(
+            LaneCommand::SetSpeed(SpeedCurve::Ramp {
+                to: 2.0,
+                frames: std::num::NonZeroU64::new(40).expect("ramp length"),
+            }),
+            When::At(LaneFrame {
+                segment: track.segment,
+                frame: 0,
+            }),
+        )
+        .expect("relative ramp");
+    assert_consumed_speed_twice(&track, 1.25);
+    track.status = TrackStatus::Playing { since: frame(0) };
+    track.mark = Some(SlotMark {
+        session: frame(20),
+        lane: LaneFrame {
+            segment: track.segment,
+            frame: 20,
+        },
+        position: Duration::from_micros(20),
+    });
+    assert_consumed_speed_twice(&track, 1.625);
+    track.segment = track.segment.next();
+    track.mark.as_mut().expect("consumed mark").lane.segment = track.segment;
+    assert_consumed_speed_twice(&track, 1.25);
+    track.segment_speed = 1.5;
+    assert_consumed_speed_twice(&track, 1.5);
+}
+
+#[kithara::test]
+fn speed_projection_preserves_future_jump_overflow_after_declick_changes() {
+    let (mut track, _inbox) = prepared_track();
+    track.declick = FrameCount::new(0);
+    track
+        .send_lane(
+            LaneCommand::Jump { to: Duration::ZERO },
+            When::At(LaneFrame {
+                segment: track.segment,
+                frame: u64::MAX,
+            }),
+        )
+        .expect("future jump");
+    assert_consumed_speed_twice(&track, 1.0);
+    track.declick = FrameCount::new(1);
+    for _ in 0..2 {
+        assert!(matches!(track.consumed_speed(), Err(PlayError::Untimed)));
+    }
+    track.declick = FrameCount::new(0);
+    assert_consumed_speed_twice(&track, 1.0);
+}
+
 #[kithara::test]
 #[case::constant(SpeedCurve::Constant(1.75), 1.75)]
 #[case::approach(SpeedCurve::Approach(kithara_signal::ExponentialApproach::new(1.5, 2.0, 100.0).expect("approach")), (2.0 - 0.5 * (-0.1_f64).exp()).to_f32().expect("finite approach speed"))]
@@ -168,11 +320,13 @@ fn consumed_speed_matches_the_full_piecewise_schedule() {
                 },
                 position: Duration::from_micros(consumed),
             });
-            assert_eq!(
-                track.consumed_speed().expect("consumed rate").to_bits(),
-                expected.to_bits(),
-                "schedule {shift} at frame {consumed}"
-            );
+            for read in 0..2 {
+                assert_eq!(
+                    track.consumed_speed().expect("consumed rate").to_bits(),
+                    expected.to_bits(),
+                    "schedule {shift} at frame {consumed}, read {read}"
+                );
+            }
         }
     }
 }

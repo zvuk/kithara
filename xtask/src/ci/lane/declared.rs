@@ -82,13 +82,15 @@ pub(crate) fn run(
             .iter()
             .map(|arg| resolve(arg, process, pins))
             .collect::<Result<Vec<_>>>()?;
-        if let Some(filterset) = narrow
-            && let Some(request) = step.suite_request(lane, declared)
-        {
-            args.insert(
-                declared.len() - request.len(),
-                format!("--narrow={filterset}"),
-            );
+        if let Some(filterset) = narrow {
+            if let Some(request) = step.suite_request(lane, declared) {
+                args.insert(
+                    declared.len() - request.len(),
+                    format!("--narrow={filterset}"),
+                );
+            } else if step.miri_request(lane, declared).is_some() {
+                args.extend(["-E".to_owned(), filterset.to_owned()]);
+            }
         }
         let vars = step_vars(step, process, pins)?;
         let mut command = process.command(&program);
@@ -161,10 +163,20 @@ fn admit(lane: &CiLaneConfig, kind: &str, narrow: Option<&str>) -> Result<()> {
     if let Some(reason) = lane.kinds_refused.get(kind) {
         bail!("{reason}");
     }
-    let has_suite = lane
-        .steps
-        .iter()
-        .any(|step| step.suite_request(lane, step.args_in(kind)).is_some());
+    let mut has_suite = false;
+    for step in &lane.steps {
+        let args = step.args_in(kind);
+        has_suite |= step.suite_request(lane, args).is_some();
+        if let Some(request) = step.miri_request(lane, args) {
+            has_suite = true;
+            if narrow.is_some() && !request.is_empty() {
+                bail!(
+                    "lane `{}` cannot narrow a Miri step with existing arguments",
+                    lane.label
+                );
+            }
+        }
+    }
     if narrow.is_some() && !has_suite {
         bail!(
             "lane `{}` runs no test suite a filterset could narrow",
@@ -476,6 +488,36 @@ mod tests {
                 "test run --narrow=test(seek) --no-run --cargo-verbose --color never",
                 "fmt",
             ]
+        );
+    }
+
+    #[test]
+    fn a_miri_lane_hands_one_filter_argument_to_nextest() {
+        let mut lane = suite_lane();
+        lane.steps[0].args = vec!["test".to_owned(), "miri".to_owned()];
+        let filter = "package(kithara-queue) & test(selected)";
+
+        let steps = recorded_narrowed(&lane, Some(filter)).unwrap();
+
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].args, ["test", "miri", "-E", filter]);
+        assert_eq!(recorded(&lane)[0].args, ["test", "miri"]);
+    }
+
+    #[test]
+    fn a_miri_lane_with_a_legacy_selection_refuses_an_extra_filter() {
+        let mut lane = suite_lane();
+        lane.steps[0].args = ["test", "miri", "-E", "test(existing)"]
+            .map(str::to_owned)
+            .into();
+        lane.steps.extend(suite_lane().steps);
+
+        let error = recorded_narrowed(&lane, Some("test(other)")).unwrap_err();
+
+        assert!(error.to_string().contains("existing arguments"));
+        assert_eq!(
+            recorded(&lane)[0].args,
+            ["test", "miri", "-E", "test(existing)"]
         );
     }
 

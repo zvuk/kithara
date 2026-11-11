@@ -36,6 +36,9 @@ pub(crate) struct LinuxArgs {
 
 #[derive(Debug, Subcommand)]
 enum LinuxCommand {
+    /// Build one pinned image without provisioning host services.
+    #[command(subcommand)]
+    Image(ImageCommand),
     /// Install the host packages a runner machine needs beyond Docker.
     InstallTools,
     /// Create the caches and the fenced network the runners live on.
@@ -79,7 +82,7 @@ enum LinuxCommand {
     /// Build the Windows guest again when its licence is about to run out and
     /// it runs no job. A daily timer runs this.
     RenewWindows,
-    /// Report what the machine is currently serving.
+    /// Check configured runner services and report the guest state.
     Health,
 }
 
@@ -148,6 +151,10 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
 
     let host = LinuxHost::load(&args.config)?;
     match &args.command {
+        LinuxCommand::Image(image) => {
+            let pins = CiPins::load(&args.pins)?;
+            image::build_pinned(&process, *image, &pins, Some(&host.image_cache_env_file))
+        }
         LinuxCommand::InstallTools => unreachable!("handled before the profile is read"),
         LinuxCommand::Bootstrap => system::bootstrap(&process, &host),
         LinuxCommand::Firewall => firewall::apply(&process, &host),
@@ -196,6 +203,12 @@ mod tests {
 
     use super::*;
     use crate::Cli;
+
+    #[test]
+    fn an_image_build_uses_the_linux_host_profile() {
+        Cli::try_parse_from(["xtask", "ci", "host", "linux", "image", "toolchain"])
+            .expect("a host may build only its toolchain image");
+    }
 
     fn parse(command: &[&str]) -> Result<Cli, clap::Error> {
         let mut argv = vec![

@@ -1,7 +1,7 @@
 use kithara_platform::sync::WaitGate;
 use kithara_signal::SegmentId;
 use kithara_test_utils::kithara;
-use ringbuf::traits::Observer;
+use ringbuf::traits::{Observer, Producer};
 
 use super::super::core::PcmReceiver;
 use crate::{
@@ -121,18 +121,61 @@ async fn playback_publication_is_deferred_even_for_an_offline_receiver(#[case] b
 
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::test(hang_timeout_secs(1))]
+#[case::receiver(false)]
+#[case::fixture(true)]
 #[should_panic(expected = "wait_for_packet")]
-fn blocking_recv_without_preload_panics_when_no_chunk_arrives() {
+fn blocking_recv_without_preload_panics_when_no_chunk_arrives(#[case] fixture_wait: bool) {
     let runtime = kithara_platform::tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("fixture runtime");
     let fixture = runtime.block_on(PcmFixture::new(4, true));
-    fixture
-        .receiver
-        .as_ref()
-        .expect("blocking receiver")
-        .wait_for_packet();
+    let receiver = fixture.receiver.as_ref().expect("blocking receiver");
+    if fixture_wait {
+        crate::mock::wait_for_packet(receiver);
+    } else {
+        receiver.wait_for_packet();
+    }
+}
+
+#[kithara::test(native, hang_timeout_secs(1))]
+#[case::receiver(false)]
+#[case::fixture(true)]
+fn ready_packet_is_checked_after_a_timed_park(#[case] fixture_wait: bool) {
+    let runtime = kithara_platform::tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("fixture runtime");
+    let wake = kithara_worker::Wake::default();
+    let mut fixture = runtime.block_on(PcmFixture::with_wake(
+        4,
+        true,
+        crate::worker::scheduler::StreamWake::new(wake.clone()),
+    ));
+    let baseline = kithara_worker::mock::wake_state(&wake).0;
+    let mut producer = fixture.producer.take().expect("producer");
+    let packet = PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[1.0])));
+    // Keep the producer alive without notifying, so only the park deadline wakes the reader.
+    let publish = kithara_platform::thread::spawn(move || {
+        super::progress_tests::wait_for_demand(&wake, baseline);
+        producer.forward.try_push(packet).expect("packet fits");
+        producer
+    });
+    let receiver = fixture.receiver.as_ref().expect("receiver");
+    if fixture_wait {
+        crate::mock::wait_for_packet(receiver);
+    } else {
+        receiver.wait_for_packet();
+    }
+    fixture.producer = Some(
+        publish
+            .join()
+            .expect("publisher completes without notifying"),
+    );
+    let Some(PcmPacket::Chunk(packet)) = fixture.receiver.as_mut().expect("receiver").pop() else {
+        panic!("the timed park must retain the published packet");
+    };
+    assert_eq!(packet.samples.as_ref(), &[1.0]);
 }
 
 #[kithara::test(native, tokio)]

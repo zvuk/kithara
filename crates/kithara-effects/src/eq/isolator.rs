@@ -63,7 +63,7 @@ impl IsolatorEq {
             silence: MixDSP::new(silence, FadeCurve::Linear, config.smoothing(), rate),
             bypass_owner: None,
             silence_owner: None,
-            filters: CrossoverFilters::new(config.pools(), crossover_freqs, sample_rate)?,
+            filters: CrossoverFilters::new(crossover_freqs, sample_rate),
             gains: GainBank::new(
                 bands.iter().map(EqBandConfig::gain_db),
                 sample_rate,

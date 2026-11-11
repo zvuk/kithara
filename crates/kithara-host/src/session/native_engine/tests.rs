@@ -129,12 +129,6 @@ impl HostOwner<TestPools> for RigOwner {
             Command::Render { .. } => None,
         }
     }
-    fn is_next_tempo(command: &Command) -> bool {
-        match command {
-            Command::Host(command) => HostCore::<TestPools>::is_next_tempo(command),
-            Command::Render { .. } => false,
-        }
-    }
 }
 
 #[cfg(feature = "offline")]

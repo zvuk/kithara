@@ -71,7 +71,7 @@ impl Observer for DemandObserver {
 
 #[kithara::flash(io)]
 #[kithara::hang_watchdog]
-fn wait_for_demand(wake: &Wake, baseline: u64) {
+pub(super) fn wait_for_demand(wake: &Wake, baseline: u64) {
     loop {
         hang_tick!();
         let (signals, pending) = kithara_worker::mock::wake_state(wake);

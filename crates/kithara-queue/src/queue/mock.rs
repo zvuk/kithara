@@ -109,6 +109,7 @@ where
         deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
     let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
@@ -257,17 +258,36 @@ pub(crate) async fn answer_load(
     answer_loaded(queue, rig, loaded);
 }
 
-/// Opens the owner's requested source while retaining its lane inbox.
+/// The sequence of the load the owner holds for track `id`.
 ///
 /// # Panics
-/// Panics if the requested load is missing, refused, or stalls.
-#[kithara::flash(io)]
+/// Panics if the track has no load.
+pub(crate) fn load_seq(queue: &Queue<TestPools>, id: TrackId) -> Seq {
+    queue
+        .active
+        .iter()
+        .find(|active| active.item == id)
+        .and_then(|active| active.load)
+        .or_else(|| {
+            queue
+                .active
+                .parked_iter()
+                .find(|parked| parked.item == id)
+                .and_then(|parked| parked.load)
+        })
+        .expect("track has a load")
+        .seq()
+}
+
+/// The load request the owner dispatched for `seq`, taken from its lane inbox.
+///
+/// # Panics
+/// Panics if the requested load is missing or stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub(crate) async fn loaded_request(
-    worker: &PlayWorker<TestPools>,
+pub(crate) fn requested_load(
     rig: &mut DeckRig<TestPools>,
     seq: Seq,
-) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
+) -> kithara_render::LoadRequest<ResourceLoad<TestPools>> {
     use kithara_render::DispatcherCommand;
 
     rig.opens.drain();
@@ -282,13 +302,23 @@ pub(crate) async fn loaded_request(
     };
     assert!(due.commands().is_empty(), "one load per batch");
     due.defer();
-    hang_tick!();
-    let loaded = rig
-        .load_request_fixture(worker, *request)
+    *request
+}
+
+/// Opens the owner's requested source while retaining its lane inbox.
+///
+/// # Panics
+/// Panics if the requested load is missing, refused, or stalls.
+#[kithara::flash(io)]
+pub(crate) async fn loaded_request(
+    worker: &PlayWorker<TestPools>,
+    rig: &mut DeckRig<TestPools>,
+    seq: Seq,
+) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
+    let request = requested_load(rig, seq);
+    rig.load_request_fixture(worker, request)
         .await
-        .expect("opened owner source");
-    hang_reset!();
-    loaded
+        .expect("opened owner source")
 }
 
 /// Settles pending dispatcher commands through the first fixture load.
@@ -457,6 +487,7 @@ pub(crate) fn tick_fixture(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestP
         deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
     let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);

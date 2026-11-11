@@ -37,6 +37,7 @@ pub(crate) enum DeckCmd {
     SetTempo(TempoPercent),
     SetQuality(Option<usize>),
     ToggleSync,
+    ToggleKeylock,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

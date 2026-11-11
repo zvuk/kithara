@@ -1,94 +1,34 @@
-use std::{mem, num::NonZeroUsize};
+use std::mem;
 
 use kithara_bufpool::HasPool;
-use kithara_dsp::crossfade_linear;
 use kithara_signal::SourceSpan;
-use kithara_stretch::{ElasticCapabilities, ElasticError};
+use kithara_stretch::ElasticError;
+use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 
-use super::{super::trajectory::Trajectory, core::WarpRenderer, target::PreparedTarget};
-
-pub(in crate::render) struct RetiringTarget {
-    pub(in crate::render) trajectory: Option<Trajectory>,
-    target: PreparedTarget,
-    keylock: bool,
-    active: bool,
-    pitch: f64,
-    frames: usize,
-    rendered: usize,
-}
-
-impl RetiringTarget {
-    fn blend_output(
-        &mut self,
-        output: &mut [f32],
-        frames: usize,
-        channels: usize,
-    ) -> Result<(), ElasticError> {
-        let old = self
-            .target
-            .scratch
-            .as_ref()
-            .ok_or(ElasticError::PoolCapacity)?;
-        let channels = NonZeroUsize::new(channels).ok_or(ElasticError::SampleCountOverflow)?;
-        let samples = old.len().min(frames.saturating_mul(channels.get()));
-        crossfade_linear(
-            &old[..samples],
-            output,
-            channels,
-            self.rendered + 1,
-            self.frames,
-        );
-        self.rendered += frames;
-        Ok(())
-    }
-
-    pub(in crate::render) fn complete(&self) -> bool {
-        self.rendered == self.frames
-    }
-
-    pub(in crate::render) fn extend(&mut self, latency: usize) {
-        self.frames = self.frames.max(latency);
-    }
-}
+use super::core::WarpRenderer;
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
     pub(in crate::render) fn projection_lookahead(&self) -> Result<usize, ElasticError> {
+        if !self.current_keylock {
+            return Ok(0);
+        }
         let capabilities = self
             .engine
             .as_ref()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities();
-        let frames = self.target_lookahead(capabilities, self.current_keylock)?;
-        self.retiring_target.as_ref().map_or(Ok(frames), |target| {
-            let capabilities = target
-                .target
-                .engine
-                .as_ref()
-                .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-                .capabilities();
-            self.target_lookahead(capabilities, target.keylock && target.trajectory.is_none())
-                .map(|old| old.max(frames))
-        })
-    }
-
-    fn target_lookahead(
-        &self,
-        capabilities: ElasticCapabilities,
-        keylock: bool,
-    ) -> Result<usize, ElasticError> {
-        if !keylock {
-            return Ok(0);
-        }
         let latency = capabilities.latency();
-        if let Some(speed) = self.native_projection_speed(capabilities, keylock)? {
+        if let Some((speed, maximum)) =
+            self.native_projection_rates(capabilities, self.current_keylock)?
+        {
             (latency
                 .first()
                 .to_f64()
                 .ok_or(ElasticError::SampleCountOverflow)?
                 / speed
                 + self
-                    .native_projection_packet(speed, capabilities)?
+                    .native_projection_packet(maximum, capabilities)?
                     .to_f64()
                     .ok_or(ElasticError::SampleCountOverflow)?)
             .ceil()
@@ -105,55 +45,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
     }
 
-    pub(in crate::render) fn retire_mapped_target(&mut self) -> Result<(), ElasticError> {
-        let mut frames = self
-            .engine_latency()
-            .get()
-            .clamp(1, Self::MAX_OUTPUT_FRAMES);
-        if self.engine.is_none() {
-            return Err(ElasticError::EnginePreparation("engine is unavailable"));
-        }
-        let unity = self.stretch_target().1 && self.keylocked_unity();
-        let trajectory = unity.then(|| self.trajectory.clone());
-        if unity {
-            let mut identity = self.trajectory.clone();
-            identity.snap_to_frame()?;
-            let start = identity.span(0, self.spec.sample_rate, 1)?.start();
-            if let Some(end) = self.residency.as_ref().and_then(|resident| resident.end) {
-                frames = frames.max(
-                    usize::try_from(end.saturating_sub(start))
-                        .map_err(|_| ElasticError::SampleCountOverflow)?,
-                );
-            }
-            self.trajectory = identity;
-        }
-        self.retiring_target = Some(RetiringTarget {
-            trajectory,
-            target: PreparedTarget {
-                engine: self.engine.take(),
-                projection: self.projection.take(),
-                activation_scratch: self.activation_scratch.take(),
-                pending_source: self.pending_source.take(),
-                scratch: self.scratch.take(),
-                residency: None,
-            },
-            keylock: self.current_keylock,
-            active: unity && self.active,
-            pitch: f64::NAN,
-            frames,
-            rendered: 0,
-        });
-        Ok(())
-    }
-
-    fn swap_target(&mut self, target: &mut PreparedTarget) {
-        mem::swap(&mut self.engine, &mut target.engine);
-        mem::swap(&mut self.projection, &mut target.projection);
-        mem::swap(&mut self.activation_scratch, &mut target.activation_scratch);
-        mem::swap(&mut self.pending_source, &mut target.pending_source);
-        mem::swap(&mut self.scratch, &mut target.scratch);
-    }
-
     fn render_mapping(&mut self, span: SourceSpan) -> Result<(), ElasticError> {
         if self.current_keylock {
             self.render_projected(span)?;
@@ -168,67 +59,81 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         &mut self,
         span: SourceSpan,
     ) -> Result<(), ElasticError> {
+        if let Some(retired) = self.stateless_tail_owed.take() {
+            let law = mem::replace(&mut self.trajectory, retired);
+            let captured = self.capture_stateless_tail(span.start());
+            debug_assert!(self.deferred_trajectory.is_none());
+            self.deferred_trajectory = Some(mem::replace(&mut self.trajectory, law));
+            captured?;
+        }
         if self.keylocked_unity() {
             self.render_varispeed(span)?;
             self.active = false;
         } else {
             self.render_mapping(span)?;
         }
-        let Some(mut retiring) = self.retiring_target.take() else {
-            return Ok(());
-        };
-        let result = self.blend_retiring(span, &mut retiring);
-        self.retiring_target = Some(retiring);
-        result
+        Ok(())
     }
 
-    fn blend_retiring(
-        &mut self,
-        span: SourceSpan,
-        retiring: &mut RetiringTarget,
-    ) -> Result<(), ElasticError> {
-        let frames = usize::try_from(span.output_frames())
-            .map_err(|_| ElasticError::SampleCountOverflow)?
-            .min(retiring.frames - retiring.rendered);
-        if frames == 0 {
-            return Ok(());
+    /// Sample the retired stateless side from `start` on under its captured law
+    /// into the replacement, as far as the residency and its capacity hold it.
+    #[kithara::hang_watchdog]
+    fn capture_stateless_tail(&mut self, start: u64) -> Result<(), ElasticError> {
+        let channels = usize::from(self.spec.channels.max(1));
+        let reach = self.source_reach()?;
+        let (resident, scratch) = self
+            .residency
+            .as_mut()
+            .zip(self.scratch.as_ref())
+            .ok_or(ElasticError::PoolCapacity)?;
+        resident.next_replacement.clear();
+        let mut remaining = resident.next_replacement.capacity() / channels;
+        let piece = scratch.capacity() / channels;
+        let limit = resident
+            .end
+            .ok_or(ElasticError::EmptySource)?
+            .saturating_sub(reach);
+        while remaining > 0 {
+            hang_tick!();
+            let Some(folded) =
+                self.capture_stateless_piece(start, remaining.min(piece), limit, channels)?
+            else {
+                break;
+            };
+            remaining -= folded;
+            hang_reset!();
         }
-        let span = span
-            .for_output_range(
-                0..u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
-            )
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let tail_span = retiring
-            .trajectory
-            .as_ref()
-            .map(|trajectory| trajectory.span(span.start(), self.spec.sample_rate, frames))
-            .transpose()?;
-        self.swap_target(&mut retiring.target);
-        let keylock = self.current_keylock;
-        self.current_keylock = retiring.keylock && (keylock || retiring.trajectory.is_some());
-        mem::swap(&mut self.active, &mut retiring.active);
-        mem::swap(&mut self.applied_pitch, &mut retiring.pitch);
-        let result = if let (Some(trajectory), Some(tail_span)) =
-            (retiring.trajectory.as_mut(), tail_span)
-        {
-            if let Some(scratch) = self.scratch.as_mut() {
-                scratch.clear();
-            }
-            self.drain_tail(usize::from(self.spec.channels), frames)
-                .and_then(|complete| {
-                    self.active = !complete;
-                    trajectory.advance(tail_span)
-                })
-        } else {
-            self.render_mapping(span)
+        self.residency
+            .as_mut()
+            .ok_or(ElasticError::PoolCapacity)?
+            .finish_fold();
+        Ok(())
+    }
+
+    /// Fold the next piece of the stateless tail, at most `frames` long, and
+    /// return the frames folded. Returns `None` once the tail reaches `limit`,
+    /// after folding the part of the piece before it.
+    fn capture_stateless_piece(
+        &mut self,
+        start: u64,
+        frames: usize,
+        limit: u64,
+        channels: usize,
+    ) -> Result<Option<usize>, ElasticError> {
+        let frames = self.trajectory.output_limit(frames);
+        let span = self.mapping_span(start, self.spec.sample_rate, frames)?;
+        let Some(sampled) = Self::span_until(span, limit)? else {
+            return Ok(None);
         };
-        mem::swap(&mut self.applied_pitch, &mut retiring.pitch);
-        mem::swap(&mut self.active, &mut retiring.active);
-        self.current_keylock = keylock;
-        self.swap_target(&mut retiring.target);
-        result?;
-        let channels = usize::from(self.spec.channels);
-        let output = self.scratch.as_mut().ok_or(ElasticError::PoolCapacity)?;
-        retiring.blend_output(output, frames, channels)
+        self.render_varispeed(sampled)?;
+        let (resident, output) = self
+            .residency
+            .as_mut()
+            .zip(self.scratch.as_mut())
+            .ok_or(ElasticError::PoolCapacity)?;
+        let folded = resident.fold_supply(output, channels)?;
+        output.clear();
+        self.advance_trajectory(sampled)?;
+        Ok((sampled.output_frames() >= span.output_frames()).then_some(folded))
     }
 }
