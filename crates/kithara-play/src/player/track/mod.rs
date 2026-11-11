@@ -5,6 +5,7 @@ mod gain;
 mod geometry;
 mod load;
 mod player;
+mod seat;
 mod settle;
 mod state;
 mod transport;

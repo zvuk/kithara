@@ -6,6 +6,7 @@ mod gain;
 mod legacy_lifecycle;
 mod legacy_metrics;
 mod legacy_rate;
+mod lifecycle;
 mod media_time;
 
 use std::num::NonZeroU32;
@@ -30,6 +31,7 @@ use super::{
         settings::{PlayerConfig, TrackSettings, TrackSettingsChange},
     },
     geometry::*,
+    seat::Seat,
     state::*,
     *,
 };

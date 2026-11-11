@@ -20,6 +20,7 @@ use super::{
     },
     core::PlayerImpl,
     geometry::*,
+    seat::Seat,
     state::*,
 };
 use crate::{Bound, PlayError, Player};
@@ -127,12 +128,17 @@ impl<S> Track<S> for PlayerImpl<S> {
                 .playback_commands
                 .retain(|operation| operation.seq.is_some()),
         }
-        let Some(attaching) = self.attaching.filter(|attach| attach.seq.is_none()) else {
+        let Some(attaching) = self
+            .seat
+            .attaching()
+            .copied()
+            .filter(|attach| attach.seq.is_none())
+        else {
             return;
         };
         match result {
             Ok(seq) => {
-                if let Some(attach) = self.attaching.as_mut() {
+                if let Some(attach) = self.seat.attaching_mut() {
                     attach.seq = Some(seq);
                     if attach.replacement {
                         attach.caller = seq;
@@ -140,13 +146,13 @@ impl<S> Track<S> for PlayerImpl<S> {
                 }
             }
             Err(parts) => {
-                self.attaching = None;
+                self.seat.vacate();
                 if self.restore_attachment(parts) {
                     if self.play.is_none() {
                         self.play = attaching.play;
                     }
                     if attaching.replacement {
-                        self.slot = None;
+                        self.seat = Seat::Unseated;
                         self.reserved_ready();
                     }
                 } else {
@@ -161,7 +167,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         at: SessionFrame,
         sample_rate: NonZeroU32,
     ) -> Result<(Position, f64), PlayError> {
-        let media_origin = self.media_origin.ok_or(PlayError::Untimed)?;
+        let media_origin = self.extent.media_origin.ok_or(PlayError::Untimed)?;
         let (mark, target) = self.planned_target(at)?;
         let commands = self.planned_changes(mark.lane.segment, true)?;
         let base = SpeedCurve::Constant(self.segment_speed);
@@ -213,8 +219,9 @@ impl<S> Track<S> for PlayerImpl<S> {
             return Ok(Some(at));
         }
         let Some(endpoint) = self
+            .extent
             .duration
-            .and_then(|duration| self.media_origin?.checked_add(duration))
+            .and_then(|duration| self.extent.media_origin?.checked_add(duration))
         else {
             return Ok(None);
         };
@@ -328,7 +335,7 @@ impl<S> PlayerImpl<S> {
         if let Some(projection) = self.speed_projection.get()
             && projection.at == at
             && projection.initial_bits == initial_bits
-            && projection.declick == self.declick
+            && projection.declick == self.geometry.declick
         {
             return Ok(projection.speed);
         }
@@ -366,7 +373,7 @@ impl<S> PlayerImpl<S> {
         self.speed_projection.set(Some(SpeedProjection {
             at,
             initial_bits,
-            declick: self.declick,
+            declick: self.geometry.declick,
             speed,
         }));
         Ok(speed)
@@ -408,7 +415,7 @@ impl<S> PlayerImpl<S> {
                 }
                 LaneCommand::Jump { to } => {
                     let landing = frame
-                        .checked_add(self.declick.get() as u64)
+                        .checked_add(self.geometry.declick.get() as u64)
                         .ok_or(PlayError::Untimed)?;
                     let superseded = self.lane_commands.iter().any(|next| next.seq != operation.seq && next.applied() != Some(false)
                         && matches!(next.command, LaneCommand::Jump { .. })
