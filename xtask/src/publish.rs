@@ -126,6 +126,7 @@ fn run_dry_run(order: &[String], hack_crate: &str, no_verify: bool) -> Result<()
         .target_directory;
     let verification = fresh_verification_target(target.as_std_path())?;
     let target_dir = verification
+        .path()
         .to_str()
         .context("the verification target is not UTF-8")?;
     let args = PublishMode::DryRun { target_dir }.cargo_args(no_verify);
@@ -390,18 +391,18 @@ enum PublishMode<'a> {
 
 /// Cargo verifies each packaged crate against the crates packaged before it,
 /// which it builds as registry crates. It fingerprints a registry crate by
-/// name and version alone, so a target outliving one run links a dependent
-/// against an earlier run's build of the same version. The verification
-/// therefore builds in a target emptied before every run.
-fn fresh_verification_target(target: &Path) -> Result<PathBuf> {
-    let dir = target.join(consts::PUBLISH_VERIFICATION_DIR);
-    match fs::remove_dir_all(&dir) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error).with_context(|| format!("empty {}", dir.display())),
-    }
-    fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-    Ok(dir)
+/// name and version alone, and it unpacks the overlay registry under the
+/// shared cargo home in a directory keyed by the overlay's path, reusing an
+/// earlier unpack of the same version. A verification target outliving one
+/// run, or sharing its path with an earlier run, therefore compiles an
+/// earlier run's sources or links an earlier run's build. Every run verifies
+/// in its own new directory, removed when the run ends.
+fn fresh_verification_target(target: &Path) -> Result<tempfile::TempDir> {
+    fs::create_dir_all(target).with_context(|| format!("create {}", target.display()))?;
+    tempfile::Builder::new()
+        .prefix(consts::PUBLISH_VERIFICATION_DIR)
+        .tempdir_in(target)
+        .with_context(|| format!("create a verification target in {}", target.display()))
 }
 
 impl<'a> PublishMode<'a> {
@@ -775,21 +776,18 @@ mod tests {
     #[test]
     fn a_dry_publication_never_verifies_against_an_earlier_runs_build() {
         let target = tempfile::tempdir().expect("target");
-        let earlier = target.path().join(consts::PUBLISH_VERIFICATION_DIR);
-        fs::create_dir_all(earlier.join("debug")).expect("earlier verification");
-        fs::write(earlier.join("debug").join("libdep.rlib"), b"earlier").expect("earlier build");
+        let earlier = fresh_verification_target(target.path()).expect("earlier run");
+        fs::write(earlier.path().join("libdep.rlib"), b"earlier").expect("earlier build");
 
         let fresh = fresh_verification_target(target.path()).expect("fresh target");
 
-        assert_eq!(fresh, earlier);
-        assert_eq!(fs::read_dir(&fresh).expect("read target").count(), 0);
-        assert_eq!(
-            fresh_verification_target(&target.path().join("absent")).expect("first run"),
-            target
-                .path()
-                .join("absent")
-                .join(consts::PUBLISH_VERIFICATION_DIR)
-        );
+        assert_ne!(fresh.path(), earlier.path());
+        assert!(fresh.path().starts_with(target.path()));
+        assert_eq!(fs::read_dir(fresh.path()).expect("read target").count(), 0);
+        let ended = earlier.path().to_path_buf();
+        drop(earlier);
+        assert!(!ended.exists());
+        assert!(fresh_verification_target(&target.path().join("absent")).is_ok());
     }
 
     #[test]
