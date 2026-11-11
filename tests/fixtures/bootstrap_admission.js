@@ -7,6 +7,7 @@ let moduleCalls = 0;
 let requests = 0;
 const bootstrap = [];
 const contexts = [];
+const restoreNode = [];
 
 export async function holdBootstrapImports() {
     const locks = navigator.locks;
@@ -33,6 +34,19 @@ export async function holdBootstrapImports() {
         );
         return promise;
     };
+    const Node = globalThis.AudioWorkletNode;
+    globalThis.AudioWorkletNode = class extends Node {
+        constructor(...args) {
+            super(...args);
+            bootstrap.push({ phase: "node-constructed" });
+            this.port.addEventListener(
+                "message",
+                () => bootstrap.push({ phase: "processor-started" }),
+                { once: true },
+            );
+        }
+    };
+    restoreNode.push(() => { globalThis.AudioWorkletNode = Node; });
     descriptor = Object.getOwnPropertyDescriptor(BaseAudioContext.prototype, "audioWorklet");
     Object.defineProperty(BaseAudioContext.prototype, "audioWorklet", {
         ...descriptor,
@@ -79,6 +93,11 @@ export async function bootstrapLocks() {
         pending: snapshot.pending.filter(lock => lock.name === key),
     });
 }
+export function processorStartedWithinLease() {
+    const phases = bootstrap.map(entry => entry.phase);
+    const started = phases.indexOf("processor-started");
+    return started !== -1 && started < phases.indexOf("lock-resolved");
+}
 export function audioContexts() {
     try {
         return JSON.stringify(contexts.map(({ context, transitions }) => ({
@@ -92,6 +111,7 @@ export function audioContexts() {
         for (const entry of contexts) {
             for (const restore of entry.restore) restore();
         }
+        for (const restore of restoreNode.splice(0)) restore();
     }
 }
 

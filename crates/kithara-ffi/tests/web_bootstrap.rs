@@ -22,6 +22,8 @@ extern "C" {
     fn bootstrap_requests() -> u32;
     #[wasm_bindgen(js_name = bootstrapLocks)]
     fn bootstrap_locks() -> js_sys::Promise;
+    #[wasm_bindgen(js_name = processorStartedWithinLease)]
+    fn processor_started_within_lease() -> bool;
     #[wasm_bindgen(js_name = audioContexts)]
     fn audio_contexts() -> String;
 }
@@ -65,6 +67,7 @@ async fn worklet_import_waits_for_worker_bootstrap_admission() {
     .await;
     let volume = player.volume();
     let mixer_blocks = player.rt_process_calls_js();
+    let started_within_lease = processor_started_within_lease();
     let contexts = audio_contexts();
     // A stuck snapshot query must not hold up reporting a readiness failure.
     let locks = timeout(
@@ -79,4 +82,11 @@ async fn worklet_import_waits_for_worker_bootstrap_admission() {
         contexts,
     );
     ready.expect("the real mixer and owner run after admission is released");
+    // A wasm thread start that contends with another one waits on shared
+    // memory, which traps in an AudioWorklet, so the processor starts its
+    // thread before the worklet gives the bootstrap admission back.
+    assert!(
+        started_within_lease,
+        "the worklet processor starts its thread within the bootstrap admission",
+    );
 }
