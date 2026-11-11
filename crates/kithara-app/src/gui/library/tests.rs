@@ -254,7 +254,6 @@ fn a_startup_list_without_tracks_reports_empty() {
     assert_eq!(source.status(), PageStatus::Empty);
 }
 
-#[cfg(not(feature = "broadcast"))]
 mod startup {
     use std::convert::Infallible;
 
@@ -389,7 +388,7 @@ mod startup {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "broadcast")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod explorer {
     use std::{fs, path::Path};
 
