@@ -135,7 +135,7 @@ async fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reser
     let (mut track, mut inbox) = if reserved || initial == TrackStatus::Loading {
         let mut track = track(A);
         if reserved {
-            track.slot = None;
+            track.seat = Seat::Unseated;
         }
         load(&mut track, &mut rig, Duration::ZERO);
         let opened = opened_fixture(&mut rig, "refused-preparation").await;
@@ -202,12 +202,12 @@ async fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reser
     assert_eq!(track.snapshot().status, failed);
     assert_eq!(track.play, None);
     assert_eq!(track.ready, None);
-    if let Some(attaching) = track.attaching {
+    if let Some(attaching) = track.seat.attaching() {
         assert_eq!(attaching.play, None);
     }
     let receipts = track.adopting.len()
         + track.playback_commands.len()
-        + usize::from(track.attaching.is_some());
+        + usize::from(track.seat.attaching().is_some());
     for _ in 0..receipts {
         let receipt = answer_next(&mut rig, Ok(()));
         answer_track(&mut track, &mut rig, receipt);
@@ -404,7 +404,7 @@ fn assert_incumbent_survives_release(
         }
     }
     assert!(!newcomer.attached());
-    assert!(!newcomer.releasing);
+    assert!(!newcomer.seat.releasing());
 }
 
 fn settle_refused_replacement(
@@ -443,8 +443,8 @@ fn settle_refused_replacement(
     }
     assert!(refused);
     assert!(!newcomer.attached());
-    assert_eq!(newcomer.attach_at, None);
-    assert!(!newcomer.releasing);
+    assert!(newcomer.seat.attached_at().is_none());
+    assert!(!newcomer.seat.releasing());
 }
 
 async fn assert_failed_replacement_keeps_incumbent(
@@ -455,7 +455,7 @@ async fn assert_failed_replacement_keeps_incumbent(
     let mut support = rig();
     let (mut mixer, mut pcm) = playing_incumbent(&mut support).await;
     let mut newcomer = track(A);
-    newcomer.slot = None;
+    newcomer.seat = Seat::Unseated;
     load(&mut newcomer, &mut support, Duration::ZERO);
     let opened = opened_fixture(&mut support, "failed-replacement-newcomer").await;
     let receipt = support.open(Ok(opened)).expect("native newcomer open");

@@ -191,9 +191,18 @@ pub(super) fn track(slot: Slot) -> Track {
     track
 }
 
+/// The seat of a track the deck attached in `slot` on frame 0.
+pub(super) fn seated(slot: Slot) -> Seat {
+    Seat::Attached {
+        slot,
+        at: frame(0),
+        releasing: false,
+    }
+}
+
 fn unseated_track() -> Track {
     let mut held = track(A);
-    held.slot = None;
+    held.seat = Seat::Unseated;
     held
 }
 
@@ -266,7 +275,7 @@ pub(super) fn prepared_track() -> (Track, Inbox<LaneProtocol>) {
     let mut track = track(A);
     track.lane = Some(sender);
     track.status = TrackStatus::Loaded;
-    track.attach_at = Some(frame(0));
+    track.seat = seated(A);
     track.ready = Some(SegmentId::FIRST);
     track.segment_origin = Some(Position::ZERO);
     (track, inbox)
@@ -614,7 +623,7 @@ async fn an_installed_lane_the_owner_refuses_is_dropped_and_reported_cancelled()
     );
     assert_eq!(track.status(), TrackStatus::Released);
     assert!(track.loading.is_none());
-    assert!(track.attaching.is_none());
+    assert!(track.seat.attaching().is_none());
     assert!(track.play.is_none());
     assert!(track.ready.is_none());
     assert!(
@@ -1670,7 +1679,7 @@ fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
     let mut track = track(A);
     track.lane = Some(sender);
     track.status = TrackStatus::Loaded;
-    track.attach_at = Some(frame(0));
+    track.seat = seated(A);
     let before = track.snapshot();
     rig.with_outbox(|out| {
         track.apply(
@@ -1770,7 +1779,7 @@ fn withdrawing_an_overtaken_epoch_leaves_the_newer_seek_published() {
     let mut track = track(A);
     track.lane = Some(sender);
     track.status = TrackStatus::Loaded;
-    track.attach_at = Some(frame(0));
+    track.seat = seated(A);
     for seconds in [1, 2] {
         rig.with_outbox(|out| {
             track.apply(
@@ -1823,7 +1832,7 @@ fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
     let mut track = track(A);
     track.lane = Some(sender);
     track.status = TrackStatus::Loaded;
-    track.attach_at = Some(frame(0));
+    track.seat = seated(A);
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
@@ -3851,7 +3860,8 @@ async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     assert_eq!(track.snapshot().speed, 1.25, "the ramp has only begun");
     assert_eq!(track.ready, Some(segment));
     let attach = track
-        .attaching
+        .seat
+        .attaching()
         .expect("Attach is in flight")
         .seq
         .expect("native Attach Seq");
@@ -5012,7 +5022,8 @@ async fn a_delayed_attach_answer_keeps_its_applied_dependent_start() {
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live deck scope");
     let attached = track
-        .attaching
+        .seat
+        .attaching()
         .expect("pending native attachment")
         .seq
         .expect("attachment admission");
@@ -5064,7 +5075,7 @@ async fn a_delayed_attach_answer_keeps_its_applied_dependent_start() {
         track.snapshot().status,
         TrackStatus::Playing { since: frame(128) }
     );
-    assert!(track.attaching.is_none());
+    assert!(track.seat.attaching().is_none());
     assert!(track.loading.is_none());
     assert_eq!(rig.deck.mixer.held(A), Some("held-attach-start"));
 }

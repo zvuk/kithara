@@ -29,7 +29,7 @@ impl<S> PlayerImpl<S> {
         }
         let (lane, inbox) = item.lane_channel()?;
         let (ring_depth, declick) = item.lane_geometry()?;
-        self.class = if self.slot.is_some() {
+        self.class = if self.seat.slot().is_some() {
             ServiceClass::Warm
         } else {
             ServiceClass::Idle
@@ -186,13 +186,13 @@ impl<S> PlayerImpl<S> {
     }
 
     pub(super) fn attach(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
-        if out.is_grouped() || self.attaching.is_some() {
+        if out.is_grouped() || self.seat.attaching().is_some() {
             return Ok(());
         }
         let Some(loading) = self.loading.as_mut() else {
             return Ok(());
         };
-        let Some(slot) = self.slot else {
+        let Some(slot) = self.seat.slot() else {
             return Ok(());
         };
         if out.deck_available() == 0 {
@@ -222,14 +222,18 @@ impl<S> PlayerImpl<S> {
         }
         match out.deck_owned(at, parts) {
             Ok(attach) => {
-                self.attaching = Some(Attaching {
-                    seq: attach,
-                    caller: seq,
-                    at,
-                    replacement: false,
-                    play: if start { self.play.take() } else { None },
-                    obsolete: false,
-                });
+                self.seat = Seat::Attaching {
+                    slot,
+                    attach: Attaching {
+                        seq: attach,
+                        caller: seq,
+                        at,
+                        replacement: false,
+                        play: if start { self.play.take() } else { None },
+                        obsolete: false,
+                    },
+                    releasing: false,
+                };
                 Ok(())
             }
             Err((error, mut parts)) => {
@@ -245,7 +249,7 @@ impl<S> PlayerImpl<S> {
         };
         let Some(index) = parts.iter().position(|part| {
             matches!(part,
-                DeckPart::Attach { slot, .. } | DeckPart::Replace { slot, .. } if Some(*slot) == self.slot
+                DeckPart::Attach { slot, .. } | DeckPart::Replace { slot, .. } if Some(*slot) == self.seat.slot()
             )
         }) else {
             return false;
@@ -264,7 +268,7 @@ impl<S> PlayerImpl<S> {
 
     pub(super) fn reserved_ready(&mut self) {
         if !self.preparation_closed()
-            && self.slot.is_none()
+            && self.seat.slot().is_none()
             && self.ready == Some(self.segment)
             && self
                 .loading
@@ -286,13 +290,13 @@ impl<S> PlayerImpl<S> {
                 "a seat needs a timed deck batch".into(),
             ));
         }
-        if self.slot.is_some() {
+        if self.seat.slot().is_some() {
             return Err(PlayError::Internal("a track is seated once".into()));
         }
         if at == When::Next {
             return self.seat_next(slot, out);
         }
-        if self.attaching.is_some() || self.ready != Some(self.segment) {
+        if self.ready != Some(self.segment) {
             return Err(PlayError::NotReady);
         }
         let pass = out.pass().ok_or(PlayError::Untimed)?;
@@ -319,15 +323,18 @@ impl<S> PlayerImpl<S> {
         );
         match out.deck_owned(at, parts) {
             Ok(seq) => {
-                self.slot = Some(slot);
-                self.attaching = Some(Attaching {
-                    seq,
-                    caller: seq.unwrap_or(caller),
-                    at,
-                    replacement: true,
-                    play: self.play.take(),
-                    obsolete: false,
-                });
+                self.seat = Seat::Attaching {
+                    slot,
+                    attach: Attaching {
+                        seq,
+                        caller: seq.unwrap_or(caller),
+                        at,
+                        replacement: true,
+                        play: self.play.take(),
+                        obsolete: false,
+                    },
+                    releasing: false,
+                };
                 self.promote(out);
                 Ok(seq)
             }
@@ -345,7 +352,6 @@ impl<S> PlayerImpl<S> {
                         "replacement refusal did not return its original PCM".into(),
                     ));
                 }
-                self.slot = None;
                 self.reserved_ready();
                 Err(error)
             }
@@ -358,16 +364,16 @@ impl<S> PlayerImpl<S> {
             .as_ref()
             .is_none_or(|loading| loading.opened.is_none())
         {
-            self.slot = Some(slot);
+            self.seat = Seat::Named(slot);
             return Ok(None);
         }
         if out.deck_available() == 0 {
             return Err(PlayError::Full("deck"));
         }
-        self.slot = Some(slot);
+        self.seat = Seat::Named(slot);
         self.status = TrackStatus::Loading;
         if let Err(error) = self.attach(out) {
-            self.slot = None;
+            self.seat = Seat::Unseated;
             self.reserved_ready();
             return Err(error);
         }
@@ -379,7 +385,9 @@ impl<S> PlayerImpl<S> {
         let class = match self.status {
             TrackStatus::Playing { .. } => ServiceClass::Audible,
             TrackStatus::Ended { .. } | TrackStatus::Faded { .. } => ServiceClass::Idle,
-            _ if self.slot.is_some() && self.class == ServiceClass::Idle => ServiceClass::Warm,
+            _ if self.seat.slot().is_some() && self.class == ServiceClass::Idle => {
+                ServiceClass::Warm
+            }
             _ => return,
         };
         if self.class != class

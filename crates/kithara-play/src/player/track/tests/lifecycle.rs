@@ -134,7 +134,7 @@ async fn a_seated_track_publishes_each_step_from_load_to_release() {
 async fn a_track_loaded_off_the_deck_publishes_its_seat_once_seated() {
     let mut rig = rig();
     let mut track = track(A);
-    track.slot = None;
+    track.seat = Seat::Unseated;
     let unseated = published(&track);
     assert_eq!(unseated.slot, None);
 

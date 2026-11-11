@@ -519,7 +519,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
     };
     for mark in [deck.slots[0].mark, None] {
         let mut track = track(A);
-        track.attach_at = Some(frame(0));
+        track.seat = seated(A);
         deck.slots[0].mark = mark;
         deck.slots[0].source = Some(source);
         {

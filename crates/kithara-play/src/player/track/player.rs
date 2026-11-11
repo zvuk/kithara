@@ -83,10 +83,13 @@ impl<S> Player<S> for PlayerImpl<S> {
                 seq,
                 outcome,
                 batch,
-            } if batch.basis.iter().any(|&(slot, _)| Some(slot) == self.slot)
+            } if batch.basis.iter().any(|&(slot, _)| Some(slot) == self.seat.slot())
                 || batch.commands.iter().any(|part| matches!(part,
-                    DeckPart::GainProgram { slot, binding, .. } if Some(*slot) == self.slot && binding.item() == self.item)) => {
-                let attaching = self.attaching.is_some_and(|attach| attach.seq == Some(seq));
+                    DeckPart::GainProgram { slot, binding, .. } if Some(*slot) == self.seat.slot() && binding.item() == self.item)) => {
+                let attaching = self
+                    .seat
+                    .attaching()
+                    .is_some_and(|attach| attach.seq == Some(seq));
                 let adopting = self.adopting.iter().any(|adopt| adopt.seq == seq);
                 let playback = self.playback_commands.iter().position(|operation| {
                     operation.seq == Some(seq)
@@ -100,7 +103,8 @@ impl<S> Player<S> for PlayerImpl<S> {
                     return Settled::Pending;
                 }
                 let mut transport_current = self
-                    .attaching
+                    .seat
+                    .attaching()
                     .filter(|attach| attach.seq == Some(seq))
                     .is_none_or(|attach| !attach.obsolete);
                 if let Some(index) = playback {
@@ -131,7 +135,10 @@ impl<S> Player<S> for PlayerImpl<S> {
             if let Err(error) = self.release_lane(out) {
                 warn!(%error, "lane release waits for room");
             }
-        } else if self.releasing && self.attaching.is_none() && self.playback_commands.is_empty() {
+        } else if self.seat.releasing()
+            && self.seat.attaching().is_none()
+            && self.playback_commands.is_empty()
+        {
             if let Err(error) = self.release_track(out) {
                 warn!(%error, "released replacement waits to detach");
             }
@@ -151,7 +158,7 @@ impl<S> Player<S> for PlayerImpl<S> {
         TrackSnapshot {
             output: self.output,
             item: self.item,
-            slot: self.slot,
+            slot: self.seat.slot(),
             status: self.status,
             speed: self
                 .consumed_speed()
@@ -260,7 +267,8 @@ impl<S> PlayerImpl<S> {
         dir == FadeDir::In
             && out.is_grouped()
             && self
-                .attaching
+                .seat
+                .attaching()
                 .is_some_and(|attach| attach.seq.is_none() && attach.replacement && attach.at == at)
     }
 
@@ -300,7 +308,7 @@ impl<S> PlayerImpl<S> {
         track: Slot,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        if Some(track) == self.slot {
+        if Some(track) == self.seat.slot() {
             return self.repeat_after(out);
         }
         self.send_playback(
@@ -379,19 +387,17 @@ impl<S> PlayerImpl<S> {
     }
 
     fn settle_returned(&mut self, batch: &Batch<DeckProtocol>, out: &mut Outbox<'_, S>) {
-        if self.attached()
-            && self.attaching.is_none()
+        if self.seat.attached_at().is_some()
             && self.status != TrackStatus::Released
             && batch.commands.iter().any(|part| {
                 matches!(part, DeckPart::Returned(Returned::Pcm { slot, .. })
-                if Some(*slot) == self.slot)
+                if Some(*slot) == self.seat.slot())
             })
         {
             if !self.preparation_closed() {
                 self.status = TrackStatus::Released;
             }
-            self.attach_at = None;
-            self.releasing = false;
+            self.seat.detached();
             self.mark = None;
             self.play = None;
             self.ready = None;
@@ -412,7 +418,7 @@ impl<S> PlayerImpl<S> {
         seq: Seq,
     ) {
         if matches!(outcome, Outcome::Applied { .. })
-            && let Some(slot) = self.slot
+            && let Some(slot) = self.seat.slot()
             && let Some((_, basis)) = operation.basis.iter().find(|(named, _)| *named == slot)
         {
             if operation.action.is_some() {
@@ -434,24 +440,27 @@ impl<S> PlayerImpl<S> {
             return Settled::Pending;
         }
         match event {
-            DeckEvent::Failed { slot, at, fault } if Some(slot) == self.slot => {
+            DeckEvent::Failed { slot, at, fault } if Some(slot) == self.seat.slot() => {
                 if let TrackStatus::Playing { since } = self.status
                     && at.frames_since(since).is_some()
                 {
                     self.status = TrackStatus::Failed { at, fault };
                 }
             }
-            DeckEvent::Ended { slot, at } if Some(slot) == self.slot && !self.repeat => {
+            DeckEvent::Ended { slot, at } if Some(slot) == self.seat.slot() && !self.repeat => {
                 self.status = TrackStatus::Ended { at }
             }
             DeckEvent::Faded { slot, at }
-                if Some(slot) == self.slot && !matches!(self.status, TrackStatus::Ended { .. }) =>
+                if Some(slot) == self.seat.slot()
+                    && !matches!(self.status, TrackStatus::Ended { .. }) =>
             {
                 self.status = TrackStatus::Faded { at }
             }
             DeckEvent::UnderrunStarted { slot, item, .. }
             | DeckEvent::UnderrunEnded { slot, item, .. }
-                if Some(slot) == self.slot && item == self.item && self.loading.is_none() =>
+                if Some(slot) == self.seat.slot()
+                    && item == self.item
+                    && self.loading.is_none() =>
             {
                 self.mark = out
                     .pass()
@@ -478,7 +487,7 @@ impl<S> PlayerImpl<S> {
             self.withdraw_play();
             self.newest_epoch_pending = None;
             self.repeat = false;
-            if let Some(attaching) = self.attaching.as_mut() {
+            if let Some(attaching) = self.seat.attaching_mut() {
                 attaching.obsolete = true;
             }
         }

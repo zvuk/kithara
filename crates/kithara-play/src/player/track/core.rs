@@ -29,7 +29,7 @@ use crate::PlayError;
 /// The sole segment issuer and command producer for one track.
 pub struct PlayerImpl<S> {
     pub(super) item: TrackId,
-    pub(super) slot: Option<Slot>,
+    pub(super) seat: Seat,
     pub(super) class: ServiceClass,
     pub(super) lane: Option<Sender<LaneProtocol>>,
     pub(super) lane_id: Option<LaneId>,
@@ -37,7 +37,6 @@ pub struct PlayerImpl<S> {
     pub(super) output: kithara_render::bridge::SlotOutputSnapshot,
     pub(super) status: TrackStatus,
     pub(super) loading: Option<Loading>,
-    pub(super) attaching: Option<Attaching>,
     pub(super) segment: SegmentId,
     pub(super) ready: Option<SegmentId>,
     pub(super) issued_segment: SegmentId,
@@ -53,10 +52,8 @@ pub struct PlayerImpl<S> {
     pub(super) clock: TrackClock,
     /// The clock its seated RT track was last sent.
     pub(super) seated_clock: TrackClock,
-    pub(super) releasing: bool,
     pub(super) resume: Option<SlotMark>,
     pub(super) mark: Option<SlotMark>,
-    pub(super) attach_at: Option<SessionFrame>,
     pub(super) ring_depth: FrameCount,
     pub(super) engine_latency: FrameCount,
     pub(super) declick: FrameCount,
@@ -84,7 +81,7 @@ impl<S> PlayerImpl<S> {
     pub fn new(config: PlayerConfig) -> Result<Self, PlayError> {
         Ok(Self {
             item: config.item,
-            slot: config.slot,
+            seat: config.slot.map_or(Seat::Unseated, Seat::Named),
             class: ServiceClass::default(),
             lane: None,
             lane_id: None,
@@ -92,7 +89,6 @@ impl<S> PlayerImpl<S> {
             output: kithara_render::bridge::SlotOutputSnapshot::default(),
             status: TrackStatus::Idle,
             loading: None,
-            attaching: None,
             segment: SegmentId::FIRST,
             ready: None,
             issued_segment: SegmentId::FIRST,
@@ -106,10 +102,8 @@ impl<S> PlayerImpl<S> {
             repeat: false,
             clock: TrackClock::Media,
             seated_clock: TrackClock::Media,
-            releasing: false,
             resume: None,
             mark: None,
-            attach_at: None,
             ring_depth: FrameCount::new(0),
             engine_latency: FrameCount::new(0),
             declick: FrameCount::new(0),
@@ -135,12 +129,12 @@ impl<S> PlayerImpl<S> {
     }
 
     pub(super) fn seat(&self) -> Result<Slot, PlayError> {
-        self.slot.ok_or(PlayError::NoActiveSlot)
+        self.seat.slot().ok_or(PlayError::NoActiveSlot)
     }
 
     #[must_use]
     pub fn attached(&self) -> bool {
-        self.attaching.is_some() || self.attach_at.is_some()
+        matches!(self.seat, Seat::Attaching { .. } | Seat::Attached { .. })
     }
 
     /// Content position of a raw source time. A raw time read from the
@@ -183,7 +177,7 @@ impl<S> PlayerImpl<S> {
         if self.loading.is_some() {
             return;
         }
-        if let Some(seat) = self.slot
+        if let Some(seat) = self.seat.slot()
             && let Some(pass) = out.pass()
             && let Some(slot) = pass.deck.slots.get(seat.index())
         {
@@ -194,7 +188,7 @@ impl<S> PlayerImpl<S> {
                 self.output = slot.output;
             }
             if let Some(source) = slot.source.filter(|info| info.segment == self.segment)
-                && self.attach_at.is_some()
+                && self.seat.attached_at().is_some()
                 && !matches!(self.status, TrackStatus::Released)
             {
                 if self.segment_origin.is_none() {
@@ -223,12 +217,13 @@ impl<S> PlayerImpl<S> {
         if let When::At(frame) = at {
             let pass = out.pass().ok_or(PlayError::Untimed)?;
             let origin = self
-                .attach_at
+                .seat
+                .attached_at()
                 .map_or(pass.now, |attach| attach.max(pass.now));
             if frame < origin + pass.deck_delivery {
                 return Err(PlayError::Late);
             }
-            if self.attach_at.is_none() {
+            if self.seat.attached_at().is_none() {
                 return Err(PlayError::Untimed);
             }
         }
@@ -349,7 +344,7 @@ impl<S> PlayerImpl<S> {
     /// Drops the start this track still owes, with its pending attachment's.
     pub(super) fn withdraw_play(&mut self) {
         self.play = None;
-        if let Some(attaching) = self.attaching.as_mut() {
+        if let Some(attaching) = self.seat.attaching_mut() {
             attaching.play = None;
         }
     }

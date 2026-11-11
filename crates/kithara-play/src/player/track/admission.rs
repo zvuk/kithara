@@ -127,12 +127,17 @@ impl<S> Track<S> for PlayerImpl<S> {
                 .playback_commands
                 .retain(|operation| operation.seq.is_some()),
         }
-        let Some(attaching) = self.attaching.filter(|attach| attach.seq.is_none()) else {
+        let Some(attaching) = self
+            .seat
+            .attaching()
+            .copied()
+            .filter(|attach| attach.seq.is_none())
+        else {
             return;
         };
         match result {
             Ok(seq) => {
-                if let Some(attach) = self.attaching.as_mut() {
+                if let Some(attach) = self.seat.attaching_mut() {
                     attach.seq = Some(seq);
                     if attach.replacement {
                         attach.caller = seq;
@@ -140,13 +145,13 @@ impl<S> Track<S> for PlayerImpl<S> {
                 }
             }
             Err(parts) => {
-                self.attaching = None;
+                self.seat.vacate();
                 if self.restore_attachment(parts) {
                     if self.play.is_none() {
                         self.play = attaching.play;
                     }
                     if attaching.replacement {
-                        self.slot = None;
+                        self.seat = Seat::Unseated;
                         self.reserved_ready();
                     }
                 } else {

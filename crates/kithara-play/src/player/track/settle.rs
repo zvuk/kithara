@@ -77,7 +77,7 @@ impl<S> PlayerImpl<S> {
         self.ready = None;
         self.mark = None;
         self.resume = None;
-        if self.slot.is_none() && self.loading.is_some() {
+        if self.seat.slot().is_none() && self.loading.is_some() {
             self.status = TrackStatus::Loading;
         }
         if attached {
@@ -139,7 +139,11 @@ impl<S> PlayerImpl<S> {
         transport_current: bool,
         out: &mut Outbox<'_, S>,
     ) -> Settled {
-        let attaching = self.attaching.filter(|attach| attach.seq == Some(seq));
+        let attaching = self
+            .seat
+            .attaching()
+            .copied()
+            .filter(|attach| attach.seq == Some(seq));
         let mut answered = attaching.map_or(seq, |attach| attach.caller);
         if let Some(index) = self.adopting.iter().position(|adopt| adopt.seq == seq) {
             let adoption = self.adopting.remove(index);
@@ -169,9 +173,8 @@ impl<S> PlayerImpl<S> {
             }
         };
         if attaching.is_some() {
-            self.attaching = None;
+            self.seat.land(at);
             self.loading = None;
-            self.attach_at = Some(at);
             if transport_current {
                 self.status = TrackStatus::Loaded;
             }
@@ -239,17 +242,16 @@ impl<S> PlayerImpl<S> {
         batch: &mut Batch<DeckProtocol>,
         out: &mut Outbox<'_, S>,
     ) -> bool {
-        self.attaching = None;
+        let releasing = self.seat.releasing();
+        self.seat.vacate();
         let returned = self.restore_attachment(&mut batch.commands);
         self.loading = None;
-        self.attach_at = None;
-        if self.releasing
+        if releasing
             || !matches!(self.status, TrackStatus::Failed { .. })
                 && self.preparation_failure().is_none()
         {
             self.status = TrackStatus::Released;
         }
-        self.releasing = false;
         self.ready = None;
         self.play = None;
         self.playback_commands.clear();
@@ -272,18 +274,18 @@ impl<S> PlayerImpl<S> {
         for part in &batch.commands {
             match part {
                 DeckPart::Start { slot, .. } | DeckPart::Chain { to: slot, .. }
-                    if Some(*slot) == self.slot && transport_current =>
+                    if Some(*slot) == self.seat.slot() && transport_current =>
                 {
                     self.status = TrackStatus::Playing { since: at };
                     self.resume = None;
                 }
                 DeckPart::Returned(Returned::Stopped { slot, resume })
-                    if Some(*slot) == self.slot && transport_current =>
+                    if Some(*slot) == self.seat.slot() && transport_current =>
                 {
                     self.stopped(*resume);
                 }
                 DeckPart::Returned(Returned::Pcm { slot, .. })
-                    if Some(*slot) == self.slot && !attaching =>
+                    if Some(*slot) == self.seat.slot() && !attaching =>
                 {
                     self.released(out);
                 }
@@ -305,8 +307,7 @@ impl<S> PlayerImpl<S> {
 
     fn released(&mut self, out: &mut Outbox<'_, S>) {
         self.status = TrackStatus::Released;
-        self.attach_at = None;
-        self.releasing = false;
+        self.seat.detached();
         self.mark = None;
         self.play = None;
         self.ready = None;
@@ -329,7 +330,7 @@ impl<S> PlayerImpl<S> {
         if out.deck_available() == 0 {
             return;
         }
-        let Some(slot) = self.slot else {
+        let Some(slot) = self.seat.slot() else {
             return;
         };
         match out.deck_owned(
