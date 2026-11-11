@@ -66,6 +66,7 @@ fn deck_write(
         }
         ("deck.transport.toggle_play", WriteValue::Trigger) => DeckMsg::TogglePlayPause,
         ("deck.transport.toggle_sync", WriteValue::Trigger) => DeckMsg::ToggleSync,
+        ("deck.key.toggle_lock", WriteValue::Trigger) => DeckMsg::ToggleKeylock,
         ("deck.transport.prev", WriteValue::Trigger) => DeckMsg::Prev,
         ("deck.transport.next", WriteValue::Trigger) => DeckMsg::Next,
         ("deck.transport.seek_normalized", WriteValue::Scalar(position)) => {

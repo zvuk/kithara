@@ -951,6 +951,7 @@ fn a_ready_paused_segment_keeps_its_cue_over_an_old_slot_snapshot() {
         deck_delivery: FrameCount::new(0),
         output: &output,
         deck: &snapshot,
+        planned_tempo: &mock::planned_tempo(),
     };
     let deck = std::ops::DerefMut::deref_mut(&mut rig);
     let mut scope = deck.ring.scope(deck.scope).expect("live deck scope");

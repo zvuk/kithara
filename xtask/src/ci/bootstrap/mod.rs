@@ -6,6 +6,6 @@ mod consts;
 mod lease;
 mod stats;
 
-pub use cache::{CompilerCache, require_remote};
+pub use cache::{CompilerCache, record_evidence, require_remote};
 pub use command::run;
 pub use stats::statistics;

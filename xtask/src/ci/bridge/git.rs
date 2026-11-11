@@ -1,11 +1,13 @@
 use std::{
     fs,
+    io::Write,
     num::NonZeroU64,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
 
 use anyhow::{Context, Result, bail};
+use tempfile::NamedTempFile;
 
 use super::{
     api::{Github, Gitlab},
@@ -185,13 +187,18 @@ impl GitRepo {
                 "diff",
                 "--name-only",
                 "--no-renames",
+                "--ignore-submodules=none",
                 "-z",
                 "--merge-base",
                 base,
                 head,
                 "--",
             ])
-            .args(consts::CONTROL_PATHS)
+            .args(
+                consts::CONTROL_PATHS
+                    .iter()
+                    .map(|path| path.trim_end_matches('/')),
+            )
             .output()
             .context("running git diff for CI control paths")?;
         let paths = String::from_utf8(checked(output, "git diff for CI control paths")?)
@@ -285,23 +292,42 @@ impl GitRepo {
     }
 
     fn restore_control_paths(&self, tree: &Path, base: &str) -> Result<()> {
-        for path in consts::CONTROL_PATHS {
-            let path = path.trim_end_matches('/');
-            if self.exists_at(base, path)? {
-                git_in(tree, &["checkout", base, "--", path])?;
-            } else {
-                git_in(
-                    tree,
-                    &["rm", "-r", "--force", "--ignore-unmatch", "--", path],
-                )?;
-            }
+        let head = head_of(tree)?;
+        let paths = self.changed_control_paths(base, &head)?;
+        if paths.is_empty() {
+            return Ok(());
         }
+        let mut pathspec =
+            NamedTempFile::new_in(&self.root).context("creating trusted control pathspec")?;
+        for path in paths {
+            write!(pathspec, "{path}\0").context("writing trusted control pathspec")?;
+        }
+        let pathspec_arg = format!("--pathspec-from-file={}", path_text(pathspec.path())?);
+        git_in(
+            tree,
+            &[
+                "--literal-pathspecs",
+                "restore",
+                "--source",
+                base,
+                "--staged",
+                "--worktree",
+                "--no-overlay",
+                "--pathspec-file-nul",
+                &pathspec_arg,
+            ],
+        )?;
         Ok(())
     }
 
     fn commit_worktree(tree: &Path, head: &str) -> Result<String> {
         git_in(tree, &["add", "--all"])?;
-        if git_in(tree, &["diff", "--cached", "--quiet"]).is_ok() {
+        if git_in(
+            tree,
+            &["diff", "--ignore-submodules=none", "--cached", "--quiet"],
+        )
+        .is_ok()
+        {
             // Nothing was restored, but a merge may still have moved the tree,
             // so the answer is where the worktree stands — not the head it
             // started from.
@@ -315,6 +341,8 @@ impl GitRepo {
                 "user.name=kithara-bridge",
                 "-c",
                 "user.email=kithara-bridge@localhost",
+                "-c",
+                "diff.ignoreSubmodules=none",
                 "commit",
                 "--no-gpg-sign",
                 "--quiet",
@@ -881,6 +909,87 @@ mod tests {
         assert_eq!(blob(&repo, &judged, "src.rs"), "product\n");
         assert_eq!(blob(&repo, &judged, ".gitlab-ci.yml"), "trusted\n");
         assert_eq!(blob(&repo, &judged, "xtask/src/main.rs"), "// trusted\n");
+    }
+
+    #[test]
+    fn untrusted_judgement_restores_the_complete_control_tree() {
+        let (state, repo, base, _product, _head, _additive) = repository();
+        let work = state.path().join("work");
+        fs::write(work.join("xtask/[added].rs"), "untrusted addition\n").unwrap();
+        fs::write(work.join(".config/nextest.toml"), "untrusted profile\n").unwrap();
+        fs::write(work.join(".gitlab"), "untrusted directory replacement\n").unwrap();
+        fs::remove_file(work.join("xtask/src/main.rs")).unwrap();
+        let head = commit_review(&repo, &work);
+        assert!(repo.exists_at(&head, ".gitlab").unwrap());
+        assert!(
+            repo.changed_control_paths(&base, &head)
+                .unwrap()
+                .contains(&"xtask/[added].rs".to_owned())
+        );
+
+        let restored = judged(&repo, &base, &head, true);
+        assert_eq!(
+            repo.changed_control_paths(&base, &restored).unwrap(),
+            Vec::<String>::new(),
+            "untrusted additions and deletions cannot change the trusted control tree"
+        );
+        assert_eq!(blob(&repo, &restored, "src.rs"), "product\n");
+        assert!(!repo.exists_at(&restored, ".gitlab").unwrap());
+
+        let trusted = judged(&repo, &base, &head, false);
+        assert_eq!(
+            blob(&repo, &trusted, "xtask/[added].rs"),
+            "untrusted addition\n"
+        );
+        assert_eq!(
+            blob(&repo, &trusted, ".config/nextest.toml"),
+            "untrusted profile\n"
+        );
+        assert_eq!(blob(&repo, &trusted, "src.rs"), "product\n");
+        assert_eq!(
+            blob(&repo, &trusted, ".gitlab"),
+            "untrusted directory replacement\n"
+        );
+    }
+
+    #[test]
+    fn ignored_submodules_cannot_hide_control_gitlinks() {
+        let (state, repo, base, product, _head, _additive) = repository();
+        let work = state.path().join("work");
+        git(
+            &work,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{base},ci/link"),
+            ],
+        );
+        git(&work, &["commit", "--quiet", "-m", "trusted gitlink"]);
+        let trusted_base = head_of(&work).unwrap();
+        git(
+            &work,
+            &[
+                "update-index",
+                "--cacheinfo",
+                &format!("160000,{product},ci/link"),
+            ],
+        );
+        git(&work, &["commit", "--quiet", "-m", "changed gitlink"]);
+        let head = head_of(&work).unwrap();
+        repo.run(&["fetch", "--no-tags", work.to_str().unwrap(), &head], None)
+            .unwrap();
+        git(&repo.root, &["config", "diff.ignoreSubmodules", "all"]);
+
+        let restored = judged(&repo, &trusted_base, &head, true);
+        let oid = repo
+            .run(&["rev-parse", &format!("{restored}:ci/link")], None)
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(oid).unwrap().trim(),
+            base,
+            "the trusted gitlink OID must survive porcelain diff preferences"
+        );
     }
 
     /// A trusted author's change to the judge is what their run has to exercise,

@@ -42,6 +42,8 @@ pub(crate) const BLOCK_FRAMES: usize = 480;
 #[cfg(feature = "render")]
 pub(crate) const NATIVE_PACKET_FRAMES: usize = 480;
 #[cfg(feature = "render")]
+pub(crate) const NATIVE_CONTROL_PACKET_FRAMES: usize = 64;
+#[cfg(feature = "render")]
 pub(crate) const MAX_NATIVE_STRETCH: f64 = 2.0;
 
 #[cfg(feature = "render")]

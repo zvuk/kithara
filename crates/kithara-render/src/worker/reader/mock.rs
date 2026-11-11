@@ -307,20 +307,19 @@ pub fn wait_for_packet(receiver: &PcmReceiver) {
                 .and_then(kithara_abr::AbrHandle::current_variant_index),
         )
     };
+    let mut waited = None;
     loop {
-        hang_tick!(context("before_predicate", None));
         let since = ready.current();
+        let expired = __hang_detector.remaining().is_zero();
         if receiver.forward.try_peek().is_some() || !receiver.forward.write_is_held() {
             hang_reset!();
             return;
         }
+        if expired {
+            hang_tick!(context("expired_without_packet", waited));
+        }
         receiver.wake.wake();
-        let mut edge_moved = false;
-        hang_park!(
-            |remaining: Duration| {
-                edge_moved = ready.wait_timeout(since, remaining);
-            },
-            context("after_wait_before_predicate", Some((since, edge_moved)))
-        );
+        let edge_moved = ready.wait_timeout(since, __hang_detector.remaining());
+        waited = Some((since, edge_moved));
     }
 }

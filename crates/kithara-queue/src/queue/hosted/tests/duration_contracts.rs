@@ -77,6 +77,7 @@ impl DurationRig {
             deck_delivery: FrameCount::new(BLOCK_FRAMES),
             output: &output,
             deck: &deck,
+            planned_tempo: &mock::planned_tempo(),
         };
         let mut scope = self
             .mixer

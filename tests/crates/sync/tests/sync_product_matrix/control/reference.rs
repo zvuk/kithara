@@ -1043,6 +1043,7 @@ impl DecodedRecorder {
                         incoming = ?info,
                         previous_samples = samples.len(),
                         incoming_samples = pcm.len(),
+                        first_pcm_mismatch = ?samples.iter().zip(pcm.iter()).position(|(previous, incoming)| previous != incoming),
                         "decoder observation has conflicting source chunks"
                     );
                 }
@@ -1290,12 +1291,21 @@ impl DecodedCapture {
             .collect()
     }
 
+    pub(in super::super) fn physical_basis_lookup(
+        &self,
+        info: consumed::SourceIdentity,
+    ) -> impl Fn(SourcePosition) -> Result<(u64, SourceSpan), String> + '_ {
+        let candidates = self.physical_candidates();
+        move |position| self.physical_basis_among(&candidates, info, position)
+    }
+
     fn physical_basis_among<'a>(
         &self,
         candidates: impl IntoIterator<Item = impl std::borrow::Borrow<PhysicalCandidate<'a>>>,
         info: consumed::SourceIdentity,
         position: (u128, std::num::NonZeroU128),
     ) -> Result<(u64, SourceSpan), String> {
+        let mut mapped_frame = None::<(SourceInverse, u64)>;
         for candidate in candidates {
             let candidate = candidate.borrow();
             let decoded = candidate.decoded;
@@ -1303,13 +1313,21 @@ impl DecodedCapture {
                 continue;
             }
             let (basis, inverse) = candidate.basis.as_ref().map_err(Clone::clone)?;
-            let Some((frame, denominator)) =
-                inverse.and_then(|inverse| inverse.output_at(position))
-            else {
+            let Some(inverse) = inverse else {
                 continue;
             };
-            let frame =
-                u64::try_from(frame / denominator.get()).map_err(|error| error.to_string())?;
+            let frame = match mapped_frame.as_ref() {
+                Some((previous, frame)) if previous == inverse => *frame,
+                _ => {
+                    let Some((frame, denominator)) = inverse.output_at(position) else {
+                        continue;
+                    };
+                    let frame = u64::try_from(frame / denominator.get())
+                        .map_err(|error| error.to_string())?;
+                    mapped_frame = Some((*inverse, frame));
+                    frame
+                }
+            };
             if decoded.frame_range().contains(&frame) {
                 return Ok((decoded.frame_offset, *basis));
             }
@@ -1540,17 +1558,25 @@ impl DecodedCapture {
         let first = i64::try_from(domain.start).map_err(|error| error.to_string())?;
         let last = i64::try_from(domain.end - 1).map_err(|error| error.to_string())?;
         let mut read = self.sampler(info);
+        let mut window = [None::<(i64, [f32; N])>; (2 * SINC_RADIUS + 1) as usize];
         Ok(move |position: SourcePosition, speed: f64| {
             let source =
                 i64::try_from(position.0 / position.1.get()).map_err(|error| error.to_string())?;
             mapped_samples((position.0, position.1.get()), speed, |offset| {
                 let frame = source
                     .checked_add(offset)
-                    .ok_or_else(|| "fixture sample coordinate overflows".to_owned())?;
+                    .ok_or_else(|| "fixture sample coordinate overflows".to_owned())?
+                    .clamp(first, last);
+                let index = usize::try_from(frame % (2 * i64::from(SINC_RADIUS) + 1))
+                    .expect("bounded sample cache slot");
+                if let Some((_, samples)) = window[index].filter(|(cached, _)| *cached == frame) {
+                    return Ok(samples);
+                }
                 let mut samples = [0.0; N];
                 for (sample, channel) in samples.iter_mut().zip(channels) {
-                    *sample = read(frame.clamp(first, last), channel)?;
+                    *sample = read(frame, channel)?;
                 }
+                window[index] = Some((frame, samples));
                 Ok(samples)
             })
         })
@@ -2167,6 +2193,38 @@ fn check_persistent_physical_sampling(
     capture: &DecodedCapture,
     identity: consumed::SourceIdentity,
 ) {
+    for channels in [[0, 1], [1, 0], [0, 0], [0, 2]] {
+        let bounded = capture.sampler_at_domain(identity, channels, 0..96);
+        if let Ok(mut bounded) = bounded {
+            for frame in (0..96_u128).chain((0..96).rev()) {
+                for speed in [0.5, 1.0, 1.25, 8.0] {
+                    let position = (
+                        frame * 4 + 1,
+                        std::num::NonZeroU128::new(4).expect("quarter-frame phase"),
+                    );
+                    let source = i64::try_from(frame).expect("small fixture coordinate");
+                    let expected =
+                        mapped_samples((position.0, position.1.get()), speed, |offset| {
+                            let at = (source + offset).clamp(0, 95);
+                            Ok([
+                                capture.sample(identity, at, channels[0])?,
+                                capture.sample(identity, at, channels[1])?,
+                            ])
+                        });
+                    assert_eq!(
+                        bounded(position, speed).map(|pcm| pcm.map(f32::to_bits)),
+                        expected.map(|pcm| pcm.map(f32::to_bits)),
+                        "bounded source window: {position:?}, {speed}, {channels:?}",
+                    );
+                }
+            }
+        } else {
+            assert!(
+                capture.rejected,
+                "only a rejected capture has no bounded sampler"
+            );
+        }
+    }
     let mut readers = [
         capture.sampler(identity),
         capture.sampler(identity),
@@ -2278,6 +2336,7 @@ fn physical_basis_preserves_subframe_positions_above_f64_precision() {
         let candidates = capture.physical_candidates();
         let retained = capture.physical_basis_among(&candidates, identity, position);
         assert_eq!(fresh, retained);
+        assert_eq!(fresh, capture.physical_basis_lookup(identity)(position));
         let (offset, basis) =
             fresh.expect("an exact half-frame position belongs to the captured chunk");
         assert_eq!(offset, origin);
@@ -2286,6 +2345,74 @@ fn physical_basis_preserves_subframe_positions_above_f64_precision() {
             basis.output_ratio_at_source(offset, position),
             Some(expected)
         );
+    }
+}
+
+#[kithara::test(native)]
+fn physical_basis_reuse_preserves_geometry_and_error_order() {
+    let rate = NonZeroU32::new(48_000).expect("sample rate");
+    let fact = |frame_offset, raw: u128| AudioChunkInfo {
+        spec: AudioSpec::new(CHANNELS, rate),
+        source_revision: 7,
+        media_origin: Some(Duration::ZERO),
+        frame_offset,
+        frames: 1,
+        source_span: Some(
+            SourceSpan::try_from((raw, 1, std::num::NonZeroU128::MIN, rate, 1))
+                .expect("exact native source span"),
+        ),
+        ..AudioChunkInfo::default()
+    };
+    let first = fact(0, 0);
+    let identity = consumed::SourceIdentity {
+        spec: first.spec,
+        source_revision: first.source_revision,
+        media_origin: first.media_origin,
+    };
+    let capture = DecodedCapture::default();
+    let half = std::num::NonZeroU128::new(2).expect("half frame");
+    for raw in [1, 10] {
+        let second = fact(1, raw);
+        let candidates = [
+            PhysicalCandidate::new(&first),
+            PhysicalCandidate::new(&second),
+        ];
+        let position = (raw * 2 + 1, half);
+        let (offset, basis) = capture
+            .physical_basis_among(&candidates, identity, position)
+            .expect("the second source chunk covers its own raw origin");
+        assert_eq!(offset, 1);
+        assert_eq!(
+            basis.output_ratio_at_source(offset, position),
+            Some((3, half))
+        );
+    }
+    let second = fact(1, 1);
+    let third = fact(2, 2);
+    let foreign = AudioChunkInfo {
+        source_revision: 8,
+        ..second
+    };
+    for (middle, expected) in [(&second, false), (&foreign, true)] {
+        let candidates = [
+            PhysicalCandidate::new(&first),
+            PhysicalCandidate {
+                decoded: middle,
+                basis: Err("invalid decoded source basis".to_owned()),
+            },
+            PhysicalCandidate::new(&third),
+        ];
+        let found = capture.physical_basis_among(&candidates, identity, (5, half));
+        if expected {
+            assert_eq!(
+                found
+                    .expect("foreign invalid geometry is not this source")
+                    .0,
+                2
+            );
+        } else {
+            assert_eq!(found, Err("invalid decoded source basis".to_owned()));
+        }
     }
 }
 
@@ -2335,6 +2462,44 @@ fn bounded_sinc_reads_preserve_chunk_edges_and_source_identity() {
     let mut missing_chunk = capture.clone();
     missing_chunk.chunks.remove(&(7, 32));
     check_persistent_physical_sampling(&missing_chunk, identity);
+    let mut overflowing = capture.clone();
+    overflowing
+        .chunks
+        .first_entry()
+        .expect("first chunk")
+        .get_mut()
+        .0
+        .source_span = Some(
+        SourceSpan::try_from((
+            u128::from(u64::MAX) - 32,
+            1,
+            std::num::NonZeroU128::MIN,
+            NonZeroU32::new(24_000).expect("different source clock"),
+            32,
+        ))
+        .expect("valid source span whose clock normalization overflows"),
+    );
+    for captured in [&capture, &missing_chunk, &overflowing] {
+        for identity in [
+            identity,
+            consumed::SourceIdentity {
+                source_revision: 8,
+                ..identity
+            },
+        ] {
+            let lookup = captured.physical_basis_lookup(identity);
+            for numerator in [0, 1, 127, 128, 129, 255, 256, 383, 384] {
+                let position = (
+                    numerator,
+                    std::num::NonZeroU128::new(4).expect("quarter frame"),
+                );
+                assert_eq!(
+                    lookup(position),
+                    captured.physical_basis(identity, position)
+                );
+            }
+        }
+    }
     let denominator = std::num::NonZeroU128::new(4).expect("quarter-frame phase");
     let domain = 0..96;
     let mut across_frames = capture

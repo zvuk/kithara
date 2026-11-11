@@ -227,19 +227,21 @@ impl PcmReceiver {
             return;
         };
         loop {
-            hang_tick!();
             let since = ready.current();
+            let expired = __hang_detector.remaining().is_zero();
             if self.forward.try_peek().is_some() || !self.forward.write_is_held() {
                 hang_reset!();
                 return;
             }
+            if expired {
+                hang_tick!();
+            }
             self.wake.wake();
             let _real_io = kithara_platform::flash::real_io();
-            hang_park!(|remaining| {
-                kithara::probe_event!(pcm_wait_started);
-                ready.wait_timeout(since, remaining);
-                kithara::probe_event!(pcm_wait_finished);
-            });
+            let remaining = __hang_detector.remaining();
+            kithara::probe_event!(pcm_wait_started);
+            ready.wait_timeout(since, remaining);
+            kithara::probe_event!(pcm_wait_finished);
         }
     }
 

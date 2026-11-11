@@ -5,10 +5,11 @@ use syn::{Attribute, Ident};
 use super::{
     parse::TestArgs,
     shared::{
-        finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_hang_budget,
-        make_hard_timeout_watchdog, make_prekill_guard, make_runtime_builder, make_selenium_attrs,
-        make_serial_attr, make_test_setup, make_wasm_serial_guard, wrap_with_model,
-        wrap_with_soft_fail, wrap_with_timeout,
+        finalize_body, make_ambient_stmt, make_clock_measurement_stmt,
+        make_dedicated_worker_config, make_hang_budget, make_hard_timeout_watchdog,
+        make_prekill_guard, make_runtime_builder, make_selenium_attrs, make_serial_attr,
+        make_test_setup, make_wasm_serial_guard, wrap_with_model, wrap_with_soft_fail,
+        wrap_with_timeout,
     },
 };
 
@@ -51,6 +52,7 @@ pub(crate) fn emit_async_runtime_test(
     // unsafe `malloc` in a real-time context. Process-wide setup belongs
     // before the future exists.
     let test_setup = make_test_setup(args, remaining_attrs);
+    let clock_measurement = make_clock_measurement_stmt(args, fn_name);
     let runtime_body = quote! {
         {
             #test_setup
@@ -74,7 +76,7 @@ pub(crate) fn emit_async_runtime_test(
             )
         }
     };
-    let runtime_body = wrap_with_model(&runtime_body, args);
+    let runtime_body = wrap_with_model(&runtime_body, args, fn_name);
 
     quote! {
         #(#remaining_attrs)*
@@ -85,6 +87,7 @@ pub(crate) fn emit_async_runtime_test(
         #vis fn #fn_name() #ret_type {
             #hang_budget
             #prekill_guard
+            #clock_measurement
             #runtime_body
         }
     }
@@ -172,6 +175,7 @@ pub(crate) fn emit_async_timeout_test(
     // unsafe `malloc` in a real-time context. Process-wide setup belongs
     // before the future exists.
     let test_setup = make_test_setup(args, remaining_attrs);
+    let clock_measurement = make_clock_measurement_stmt(args, fn_name);
     let runtime_body = quote! {
         {
             #test_setup
@@ -223,7 +227,7 @@ pub(crate) fn emit_async_timeout_test(
             }
         }
     };
-    let runtime_body = wrap_with_model(&runtime_body, args);
+    let runtime_body = wrap_with_model(&runtime_body, args, fn_name);
 
     quote! {
         #(#remaining_attrs)*
@@ -251,6 +255,7 @@ pub(crate) fn emit_async_timeout_test(
                 }
             }
             let _wg = __WG(__done);
+            #clock_measurement
             #runtime_body
         }
     }

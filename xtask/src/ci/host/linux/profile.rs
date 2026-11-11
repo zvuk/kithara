@@ -30,6 +30,9 @@ pub(crate) struct LinuxHost {
     pub(crate) build_cache_size: String,
     /// Directory holding the caches jobs keep between runs.
     pub(crate) cache_root: PathBuf,
+    /// Separate compiler-store volume, keeping its journal away from target writes.
+    #[serde(default)]
+    pub(super) compiler_cache_root: Option<PathBuf>,
     /// Scoped credentials with an endpoint reachable from image builds.
     pub(crate) image_cache_env_file: PathBuf,
     /// Whole gigabytes, such as `50G`, each trust's compiler-cache store may
@@ -164,6 +167,12 @@ fn default_compiler_cache_size() -> String {
 }
 
 impl LinuxHost {
+    pub(super) fn compiler_cache_root(&self) -> PathBuf {
+        self.compiler_cache_root
+            .clone()
+            .unwrap_or_else(|| self.cache_root.join(crate::consts::KACHE_DIR))
+    }
+
     pub(crate) fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("reading Linux CI profile {}", path.display()))?;
@@ -189,6 +198,13 @@ impl LinuxHost {
         }
         if !self.cache_root.is_absolute() {
             bail!("Linux CI profile cache_root must be an absolute path");
+        }
+        if self
+            .compiler_cache_root
+            .as_ref()
+            .is_some_and(|root| !root.is_absolute())
+        {
+            bail!("Linux CI profile compiler_cache_root must be an absolute path");
         }
         if !self.image_cache_env_file.is_absolute() {
             bail!("Linux CI image builds must name their S3 environment by absolute path");
@@ -521,6 +537,20 @@ pub(crate) mod tests {
         let host = host_fixture();
         assert!(host.runner("kithara-ci-octocat").is_ok());
         assert!(host.runner("absent").is_err());
+    }
+
+    #[test]
+    fn compiler_store_root_requires_an_absolute_path() {
+        let mut host = host_fixture();
+        host.compiler_cache_root = Some("relative-store".into());
+
+        let error = host.validate().expect_err("relative compiler store");
+
+        assert!(
+            error
+                .to_string()
+                .contains("compiler_cache_root must be an absolute path")
+        );
     }
 
     /// A job told it needs no room would be admitted onto a full volume.

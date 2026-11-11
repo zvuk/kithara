@@ -209,8 +209,9 @@ impl Rig {
         Self::playback()
     }
 
+    /// Applies the commands the UI sent and returns their sequence numbers.
     #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
-    pub(crate) fn pump(&mut self) -> Vec<u64> {
+    pub(crate) fn apply(&mut self) -> Vec<u64> {
         let mut applied = Vec::new();
         let _ = __hang_detector.remaining();
         hang_tick!();
@@ -226,6 +227,13 @@ impl Rig {
             hang_reset!();
             let _ = __hang_detector.remaining();
         }
+        applied
+    }
+
+    #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
+    pub(crate) fn pump(&mut self) -> Vec<u64> {
+        let applied = self.apply();
+        let _ = __hang_detector.remaining();
         crate::engine::render_fixture(self, 128);
         self.engine.tick();
         self.engine.publish();

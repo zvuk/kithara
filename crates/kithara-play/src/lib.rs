@@ -55,7 +55,7 @@ pub use kithara_render::{
     },
 };
 pub use kithara_sync::MIN_SPEED;
-pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot};
+pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, StretchKind};
 pub use player::{
     Bound, DeckControl, DeckPass, HostedDeck, Outbox, Player, PlayerConfig, PlayerFactory,
     PlayerImpl, Position, SeekBatch, Settled, Track, TrackCommand, TrackFactory, TrackReceipt,

@@ -250,6 +250,25 @@ COPY --from=tool-builder /opt/kithara-ci-tools/bin/ /usr/local/cargo/bin/
 # It is statically linked, so it runs as copied, and digest-pinned in ci-pins.
 COPY --from=cache-client /usr/bin/rc /usr/local/bin/rc
 
+ARG BINARYEN_VERSION
+ARG BINARYEN_AMD64_SHA256
+ARG BINARYEN_ARM64_SHA256
+
+# Trunk uses this executable instead of downloading an optimizer during a lane.
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) slice=x86_64; sum="${BINARYEN_AMD64_SHA256}" ;; \
+      arm64) slice=aarch64; sum="${BINARYEN_ARM64_SHA256}" ;; \
+      *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL -o /tmp/binaryen.tar.gz \
+      "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-${slice}-linux.tar.gz" \
+ && echo "${sum}  /tmp/binaryen.tar.gz" | sha256sum -c - \
+ && mkdir -p /opt/binaryen \
+ && tar -xzf /tmp/binaryen.tar.gz -C /opt/binaryen --strip-components=1 \
+ && rm /tmp/binaryen.tar.gz \
+ && ln -s /opt/binaryen/bin/wasm-opt /usr/local/bin/wasm-opt \
+ && /usr/local/bin/wasm-opt --version
+
 # The account a job runs as. It is declared here rather than in the image that
 # starts the runner because images built on top of this one have state to hand
 # over — an emulator writes into the SDK it was created in — and they can only
@@ -293,7 +312,8 @@ RUN mkdir -p /etc/pulse/default.pa.d \
 ARG MONKEYS_AUDIO_SOURCE_URL
 ARG MONKEYS_AUDIO_SOURCE_SHA256
 
-RUN curl -fsSL -o /tmp/monkeys-audio.zip "${MONKEYS_AUDIO_SOURCE_URL}" \
+RUN curl -fsSL -H 'Accept: application/octet-stream' \
+      -o /tmp/monkeys-audio.zip "${MONKEYS_AUDIO_SOURCE_URL}" \
  && echo "${MONKEYS_AUDIO_SOURCE_SHA256}  /tmp/monkeys-audio.zip" | sha256sum -c - \
  && mkdir /tmp/monkeys-audio \
  && cmake -E chdir /tmp/monkeys-audio cmake -E tar xf /tmp/monkeys-audio.zip \

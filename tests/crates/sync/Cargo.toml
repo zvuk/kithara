@@ -29,6 +29,7 @@ kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
 
 cochlea-features = { workspace = true }
 delegate = { workspace = true }
+fieldwork = { workspace = true }
 futures = { workspace = true }
 num-traits = { workspace = true }
 ringbuf = { workspace = true }

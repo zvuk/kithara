@@ -9,7 +9,7 @@ use kithara_render::{Dispatched, DispatcherCommand, Loaded, ServiceClass};
 use super::*;
 use crate::{
     Transition,
-    mock::fixture_uri,
+    mock::{fixture_uri, load_seq},
     queue::slots::{LoadState, Slots},
 };
 
@@ -51,23 +51,6 @@ fn select(queue: &mut Queue<TestPools>, rig: &mut mock::DeckRig<TestPools>, id: 
         )
     })
     .expect("select fixture");
-}
-
-fn load_seq(queue: &Queue<TestPools>, id: TrackId) -> Seq {
-    queue
-        .active
-        .iter()
-        .find(|active| active.item == id)
-        .and_then(|active| active.load)
-        .or_else(|| {
-            queue
-                .active
-                .parked_iter()
-                .find(|parked| parked.item == id)
-                .and_then(|parked| parked.load)
-        })
-        .expect("track has a load")
-        .seq()
 }
 
 fn settle_dispatcher(queue: &mut Queue<TestPools>, rig: &mut mock::DeckRig<TestPools>) {
