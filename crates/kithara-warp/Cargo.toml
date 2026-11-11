@@ -39,7 +39,6 @@ kithara-sync = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 
-bon = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
 derive_more = { workspace = true }

@@ -1,9 +1,8 @@
-use std::num::{NonZero, NonZeroU64};
+use std::num::NonZero;
 
 use kithara_platform::sync::Arc;
-use kithara_signal::{AudioChunkInfo, OutputContext, SessionEpoch, SessionFrame};
+use kithara_signal::{AudioChunkInfo, SessionFrame};
 use kithara_sync::SpeedCurve;
-use kithara_test_fixtures::unit_fixtures::warp_pair;
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
@@ -14,7 +13,7 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::*;
-use crate::{PresentationFrontier, RenderContext, RenderSnapshot, Warp, consts, test_pools::pools};
+use crate::{Warp, consts, test_pools::pools};
 
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -63,31 +62,13 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
     let revision = WarpMapRevision::first()
         .checked_next()
         .expect("next revision");
-    let mut warp = Warp::new((), &config);
-    let publisher = warp.take_publisher().expect("publisher");
-    let output = OutputContext::new(
-        SessionFrame::new(0)..SessionFrame::new(128),
-        spec().sample_rate,
-        SessionEpoch::new(0),
-        None,
-    )
-    .expect("output context");
-    let context = RenderContext::new(output, None).expect("context");
-    publisher.publish(
-        &context,
-        PresentationFrontier::builder()
-            .source(0)
-            .output(SessionFrame::new(0))
-            .build(),
-    );
-    let mut renderer = warp.renderer(spec(), pools());
+    let mut renderer = Warp::new((), &config).renderer(spec(), pools());
     renderer
         .set_speed(SpeedCurve::Constant(1.5), u64::from(revision))
         .expect("projected trajectory");
     let mut source = 0;
-    for index in 0..3 {
+    for _ in 0..3 {
         let output = exact::mapped_signal(&mut renderer, &mut source, 128, |_| 0.25);
-        let committed = renderer.committed.as_ref().expect("committed PCM");
         assert_eq!(output.meta.render_revision, u64::from(revision));
         assert_eq!(
             output
@@ -96,11 +77,6 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
                 .expect("producer mapping")
                 .render_revision(),
             u64::from(revision)
-        );
-        assert_eq!(committed.context(), &context);
-        assert_eq!(
-            committed.frontier().output(),
-            SessionFrame::new((index + 1) * 128)
         );
     }
 }
@@ -167,38 +143,6 @@ fn projected_source_endpoints_do_not_drift_across_sample_rate_partitions() {
     feature = "stretch-glide"
 ))]
 #[kithara::test]
-fn projected_tail_keeps_sample_rate_rounding_across_partitions() {
-    let mut frontiers = Vec::new();
-    for partitions in [vec![480], vec![1; 480], vec![160; 3]] {
-        let mut renderer = planned_renderer(&WarpConfig::builder().speed(1.0).build());
-        renderer.rendered_source_end = Some((100, spec().sample_rate));
-        for frames in partitions {
-            let output = chunk(
-                &renderer.pools,
-                &vec![0.25; frames * usize::from(consts::CH)],
-            );
-            renderer.commit_render(renderer.context.load(), &output);
-        }
-        frontiers.push(
-            renderer
-                .committed
-                .as_ref()
-                .expect("tail frontier")
-                .frontier(),
-        );
-    }
-    assert_eq!(frontiers[0].output(), SessionFrame::new(480));
-    assert_eq!(frontiers[0].source(), 100);
-    assert_eq!(frontiers[0], frontiers[1]);
-    assert_eq!(frontiers[1], frontiers[2]);
-}
-
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-#[kithara::test]
 fn a_future_projection_retains_the_active_producer_until_activation() {
     let config = WarpConfig::builder()
         .render_quantum_frames(NonZero::new(128).expect("quantum"))
@@ -224,87 +168,17 @@ fn a_future_projection_retains_the_active_producer_until_activation() {
     }
 }
 
-#[kithara::test]
-fn commit_keeps_callback_context_separate_from_output_identity() {
-    let config = WarpConfig::builder().speed(1.0).build();
-    let mut warp = Warp::new((), &config);
-    let publisher = warp.take_publisher().expect("test Warp owns its publisher");
-    let mut renderer = warp.renderer(spec(), pools());
-    let output_rate = renderer.rate;
-    let output_map = crate::WarpMapRevision::first();
-    let callback_map = output_map.checked_next().expect("fixture map advances");
-    renderer
-        .set_speed(SpeedCurve::Constant(2.0), 1)
-        .expect("valid speed");
-    let callback_context = RenderContext::new_linear(
-        OutputContext::new(
-            SessionFrame::new(1_000)..SessionFrame::new(2_000),
-            spec().sample_rate,
-            SessionEpoch::new(1),
-            Some(kithara_signal::TransportRevision::first()),
-        )
-        .expect("fixture output range is valid"),
-        None,
-    )
-    .expect("fixture context is valid");
-    publisher.publish(
-        &callback_context,
-        PresentationFrontier::builder()
-            .source(41)
-            .output(SessionFrame::new(1_000))
-            .warp_map(callback_map)
-            .build(),
-    );
-    renderer.rendered_source_end = Some((41, spec().sample_rate));
-    let mut output = chunk(&renderer.pools, &[0.0; 64]);
-    output.meta.render_revision = output_rate.revision();
-    output.meta.mapping_revision = NonZeroU64::new(u64::from(output_map));
-    renderer.commit_render(renderer.context.load(), &output);
-
-    let committed = renderer.committed.as_ref().expect("output is committed");
-    assert_eq!(committed.context(), &callback_context);
-    assert_eq!(committed.frontier().warp_map(), Some(output_map));
-}
-
-fn planned_renderer_with_publisher(config: &WarpConfig) -> (WarpRenderer, crate::RenderPublisher) {
-    let mut warp = Warp::new((), config);
-    let publisher = warp.take_publisher().expect("fixture owns publisher");
-    let output = OutputContext::new(
-        SessionFrame::new(0)..SessionFrame::new(i64::from(consts::SR)),
-        spec().sample_rate,
-        SessionEpoch::new(0),
-        Some(kithara_signal::TransportRevision::first()),
-    )
-    .expect("fixture output context");
-    let context = RenderContext::new_linear(
-        output,
-        Some(
-            kithara_sync::SessionBeat::new(0.0).expect("beat")
-                ..kithara_sync::SessionBeat::new(1.0).expect("beat"),
-        ),
-    )
-    .expect("fixture context");
-    publisher.publish(
-        &context,
-        PresentationFrontier::builder()
-            .source(0)
-            .output(SessionFrame::new(0))
-            .build(),
-    );
-    (warp.renderer(spec(), pools()), publisher)
-}
-
 fn planned_renderer(config: &WarpConfig) -> WarpRenderer {
-    planned_renderer_with_publisher(config).0
+    Warp::new((), config).renderer(spec(), pools())
 }
 
 #[kithara::test]
-fn adoption_frontier_reports_only_committed_pcm() {
+fn the_source_frontier_follows_only_rendered_pcm() {
     let mut renderer = planned_renderer(&WarpConfig::builder().speed(1.0).build());
     let pools = renderer.pools.clone();
     let input = chunk(&pools, &[0.0; 256]);
 
-    assert!(renderer.committed.is_none());
+    assert_eq!(renderer.rendered_source_end(), None);
     renderer
         .prepare_source_window(input.meta, input.frames(), usize::MAX)
         .expect("initial quantum is prepared");
@@ -314,17 +188,13 @@ fn adoption_frontier_reports_only_committed_pcm() {
         .expect("prepared source shape")
         .expect("initial quantum renders");
 
-    let frontier = renderer
-        .committed
-        .as_ref()
-        .map(RenderSnapshot::frontier)
-        .expect("rendered PCM has a committed frontier");
-    assert_eq!(frontier.source(), 128);
-    assert_eq!(frontier.output(), SessionFrame::new(128));
-    assert_eq!(frontier.warp_map(), None);
+    assert_eq!(
+        renderer.rendered_source_end(),
+        Some((128, spec().sample_rate))
+    );
 
     renderer.reset();
-    assert!(renderer.committed.is_none());
+    assert_eq!(renderer.rendered_source_end(), None);
 }
 
 #[cfg(any(
@@ -430,29 +300,12 @@ fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
 #[kithara::test]
 fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     let config = WarpConfig::builder().speed(1.0).build();
-    let mut warp = Warp::new((), &config);
-    let publisher = warp.take_publisher().expect("fixture owns publisher");
-    let mut renderer = warp.renderer(spec(), pools());
+    let mut renderer = Warp::new((), &config).renderer(spec(), pools());
     let revision = crate::WarpMapRevision::from(NonZero::new(3).expect("fixture revision"));
     renderer
         .set_speed(SpeedCurve::Steps(Arc::from([(16, 1.0)])), 0)
         .expect("scheduled boundary");
-    let publish = |source| {
-        let frame = SessionFrame::new(i64::try_from(source).expect("fixture frame fits"));
-        let output =
-            OutputContext::new(frame..frame, spec().sample_rate, SessionEpoch::new(0), None)
-                .expect("fixture output");
-        let context = RenderContext::new(output, None).expect("fixture context");
-        publisher.publish(
-            &context,
-            PresentationFrontier::builder()
-                .source(source)
-                .output(frame)
-                .build(),
-        );
-    };
     let pools = renderer.pools.clone();
-    publish(0);
     renderer.prepare(spec());
     let first = chunk(&pools, &[0.0; 32]);
     assert_eq!(
@@ -480,7 +333,6 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
             .render_revision(),
         0
     );
-    publish(16);
     renderer
         .set_speed(SpeedCurve::Constant(1.0), u64::from(revision))
         .expect("activation command");
@@ -514,7 +366,6 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
         )
         .expect("future boundary retains the active command revision");
     assert!(future_revision > revision);
-    publish(48);
     renderer.prepare(spec());
     let mut bridge = chunk(&pools, &[0.0; 64]);
     bridge.meta.frame_offset = 48;
@@ -532,7 +383,6 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
         .expect("bridge PCM");
     assert_eq!(bridge.frames(), 32);
     assert_eq!(bridge.meta.render_revision, u64::from(revision));
-    publish(80);
     renderer.prepare(spec());
     let mut before_future_activation = chunk(&pools, &[0.0; 32]);
     before_future_activation.meta.frame_offset = 80;
@@ -600,7 +450,7 @@ fn prepared_projection_refuses_another_source_origin_without_consuming_pcm() {
         .break_value()
         .expect("different source origin is retained");
     assert_eq!(retained.samples.as_ptr(), original);
-    assert!(renderer.committed.is_none());
+    assert_eq!(renderer.rendered_source_end(), None);
     retained.meta.frame_offset = 0;
     let output = renderer
         .render_quantum(retained)
@@ -786,19 +636,16 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
             .expect("prepared source shape");
         source += u64::try_from(frames).expect("source count");
     }
-    let output_frontier = renderer
-        .committed
-        .as_ref()
-        .expect("mapped output frontier")
-        .frontier();
+    let output_frontier = renderer.rendered_source_end();
+    assert!(output_frontier.is_some(), "mapped output frontier");
     renderer.set_keylock(false);
     renderer.prepare(spec());
     renderer
         .prepare_engine_latency(spec())
         .expect("backend retirement");
     assert_eq!(
-        renderer.committed.as_ref().map(RenderSnapshot::frontier),
-        Some(output_frontier),
+        renderer.rendered_source_end(),
+        output_frontier,
         "backend retirement must not append another musical interval"
     );
     let meta = AudioChunkInfo {
@@ -822,16 +669,12 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
         .expect("resumed projected PCM");
     assert!(output.frames() > 0);
     assert_eq!(
-        renderer.rendered_source_end(),
-        Some((
-            renderer
-                .committed
-                .as_ref()
-                .expect("mapped output frontier")
-                .frontier()
-                .source(),
-            spec().sample_rate
-        ))
+        output
+            .meta
+            .source_span
+            .map(kithara_signal::SourceSpan::start),
+        output_frontier.map(|(source, _)| source),
+        "the new backend resumes at the retired backend's source frontier"
     );
 }
 
@@ -1233,43 +1076,6 @@ fn partial_manual_history_after_seek_keeps_the_reset_prime_contract(
         outputs[0], outputs[1],
         "reset history is independent of seek origin"
     );
-}
-
-#[kithara::test]
-fn render_commits_the_context_captured_for_the_operation(warp_pair: Vec<f32>) {
-    let pools = pools();
-    let config = WarpConfig::builder().speed(1.0).build();
-    let mut warp = Warp::new((), &config);
-    let publisher = warp.take_publisher().expect("test Warp owns its publisher");
-    let mut renderer = warp.renderer(spec(), pools.clone());
-    let output = OutputContext::new(
-        SessionFrame::new(1_000)..SessionFrame::new(1_001),
-        spec().sample_rate,
-        SessionEpoch::new(1),
-        None,
-    )
-    .expect("fixture output range is ordered");
-    let context = RenderContext::new(output, None).expect("fixture context is valid");
-    publisher.publish(
-        &context,
-        PresentationFrontier::builder()
-            .source(41)
-            .output(SessionFrame::new(1_000))
-            .build(),
-    );
-    let mut input = chunk(&pools, &warp_pair);
-    input.meta.frame_offset = 41;
-
-    let output = render_serviced(&mut renderer, input).expect("unity render succeeds");
-    let snapshot = renderer
-        .committed
-        .as_ref()
-        .expect("successful render commits a snapshot");
-
-    assert_eq!(output.frames(), 1);
-    assert_eq!(snapshot.context(), &context);
-    assert_eq!(snapshot.frontier().source(), 42);
-    assert_eq!(snapshot.frontier().output(), SessionFrame::new(1_001));
 }
 
 #[kithara::test]

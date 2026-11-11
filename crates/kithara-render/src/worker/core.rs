@@ -231,7 +231,7 @@ where
                 end_timestamp: position,
                 ..AudioChunkInfo::default()
             };
-            let (mut receiver, port) = PcmReceiver::new(
+            let (receiver, port) = PcmReceiver::new(
                 audio_buffer_chunks,
                 block_on_underrun,
                 wake,
@@ -239,11 +239,10 @@ where
                 position,
             );
             let activity = audio.take_activity_writer();
-            let mut warp = Warp::new(
+            let warp = Warp::new(
                 (),
                 &warp.starting_at(warp.speed(), start.keylock, start.backend),
             );
-            receiver.render_publisher = warp.take_publisher();
             let pools = self.pools().clone();
             let dispatch = tracing::dispatcher::get_default(Clone::clone);
             let span = tracing::Span::current();

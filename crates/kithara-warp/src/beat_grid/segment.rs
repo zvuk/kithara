@@ -1,6 +1,7 @@
 use super::{
     BeatEstimate, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision,
-    BeatGridSnapshotError, BeatGridState, BeatGridUnavailable, BeatGridView, view::stale,
+    BeatGridSnapshotError, BeatGridState, BeatGridUnavailable, BeatGridView,
+    view::{refuse, stale},
 };
 use crate::{
     AssetFrame, Beat, BeatsPerMinute, MapAxis, MapPoint, MapPosition, MapRegion, Meter, SegmentSet,
@@ -84,11 +85,8 @@ impl BeatGridView for SegmentGridView {
         &self,
         position: MapPoint<MapPosition>,
     ) -> BeatGridQuery<BeatEstimate<MapPoint<Beat>>> {
-        if let Some(stale) = stale(self, position.stamp()) {
-            return stale;
-        }
-        if position.value().kind() != self.axis().kind() {
-            return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
+        if let Some(refused) = refuse(self, position) {
+            return refused;
         }
         if self.outside_asset_extent(*position.value()) {
             return BeatGridQuery::OutsideDomain;
@@ -181,11 +179,8 @@ impl BeatGridView for SegmentGridView {
     }
 
     fn region_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatGridRegion> {
-        if let Some(stale) = stale(self, position.stamp()) {
-            return stale;
-        }
-        if position.value().kind() != self.axis().kind() {
-            return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
+        if let Some(refused) = refuse(self, position) {
+            return refused;
         }
         if self.outside_asset_extent(*position.value()) {
             return BeatGridQuery::OutsideDomain;
@@ -221,11 +216,8 @@ impl BeatGridView for SegmentGridView {
         &self,
         position: MapPoint<MapPosition>,
     ) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>> {
-        if let Some(stale) = stale(self, position.stamp()) {
-            return stale;
-        }
-        if position.value().kind() != self.axis().kind() {
-            return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
+        if let Some(refused) = refuse(self, position) {
+            return refused;
         }
         if self.outside_asset_extent(*position.value()) {
             return BeatGridQuery::OutsideDomain;
