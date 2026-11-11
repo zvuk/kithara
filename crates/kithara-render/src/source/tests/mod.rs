@@ -3,9 +3,11 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
+#[cfg(feature = "stretch-identity")]
+use kithara_audio::SourceEnd;
 use kithara_audio::{
-    AudioReadError, AudioSource, Fetch, SeekOutcome, SourceDiscontinuity, SourceEnd,
-    TrackFailureKind, TrackStep,
+    AudioReadError, AudioSource, Fetch, SeekOutcome, SourceDiscontinuity, TrackFailureKind,
+    TrackStep,
 };
 #[cfg(feature = "stretch-identity")]
 use kithara_command::Batch;
