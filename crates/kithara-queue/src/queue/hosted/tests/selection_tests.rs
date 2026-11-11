@@ -6,7 +6,7 @@ use crate::{
 
 #[kithara::test(tokio)]
 async fn select_unknown_id_errors() {
-    let (mut queue, mut rig, _dir) = empty_queue();
+    let (mut queue, mut rig, fixture_directory) = empty_queue();
     let err = with_outbox(&mut queue, &mut rig, |queue, out| {
         let output = *out.pass().expect("host pass").output;
         queue.apply_command(
@@ -20,11 +20,13 @@ async fn select_unknown_id_errors() {
     })
     .expect_err("unknown id should error");
     assert!(matches!(err, QueueError::UnknownTrackId(_)));
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn select_pending_track_stashes_pending_select() {
-    let (queue, id, _, _rig, _dir) = pending_selection();
+    let (queue, id, _, fixture_deck, fixture_directory) = pending_selection();
     match queue.target {
         Some(pending) => {
             assert_eq!(pending.to, id);
@@ -32,11 +34,13 @@ async fn select_pending_track_stashes_pending_select() {
         }
         None => panic!("BUG: select stashes pending entry"),
     }
+    drop((queue, fixture_deck));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn advance_to_next_on_empty_emits_queue_ended() {
-    let (mut queue, mut rig, _dir) = empty_queue();
+    let (mut queue, mut rig, fixture_directory) = empty_queue();
     let mut rx = queue.subscribe::<QueueEvent>();
     assert!(
         with_outbox(&mut queue, &mut rig, |queue, out| {
@@ -57,11 +61,13 @@ async fn advance_to_next_on_empty_emits_queue_ended() {
     let saw_ended =
         wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 200).await;
     assert!(saw_ended);
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn manual_next_at_exhaustion_does_not_emit_queue_ended() {
-    let (mut queue, mut rig, _dir) = empty_queue();
+    let (mut queue, mut rig, fixture_directory) = empty_queue();
     let mut rx = queue.subscribe::<QueueEvent>();
     assert_eq!(
         with_outbox(&mut queue, &mut rig, |queue, out| {
@@ -71,6 +77,8 @@ async fn manual_next_at_exhaustion_does_not_emit_queue_ended() {
         None
     );
     assert!(!wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 50).await);
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -110,11 +118,13 @@ async fn advance_to_next_cycles_then_emits_queue_ended() {
     let saw_ended =
         wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 400).await;
     assert!(saw_ended, "QueueEnded should be broadcast at end-of-queue");
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn admitted_pending_successor_becomes_navigation_authority() {
-    let (mut queue, first, second, mut rig, _dir) = crate::mock::selected().await;
+    let (mut queue, first, second, mut rig, fixture_directory) = crate::mock::selected().await;
     queue.current = Some(first);
     queue.tracks.set_status(first, TrackStatus::Consumed);
     queue.tracks.set_status(second, TrackStatus::Pending);
@@ -141,6 +151,8 @@ async fn admitted_pending_successor_becomes_navigation_authority() {
         .expect("successor selection must remain pending");
     assert_eq!(pending.playing, true);
     assert_eq!(pending.reason, AdvanceReason::NaturalEof);
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -197,4 +209,6 @@ async fn pending_override_latches_profile_without_mutating_default() {
         queue.control().crossfade_settings(),
         CrossfadeSettings::default()
     );
+    drop((queue, rig));
+    dir.finish().await;
 }

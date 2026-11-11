@@ -6,6 +6,8 @@ use kithara_platform::{
     tokio::runtime::Handle,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+use super::completion::{Completion, ShutdownError};
 use super::{
     core::run_loop,
     owner::{Admission, DispatcherInner},
@@ -122,10 +124,24 @@ impl Dispatcher {
             cmd_tx,
             wake,
             #[cfg(not(target_arch = "wasm32"))]
-            thread: Some(thread),
+            completion: Completion::new(thread),
         });
 
         Self { inner }
+    }
+
+    /// Cancel this dispatcher and wait for native thread and TLS teardown.
+    ///
+    /// Call from a non-realtime thread. Concurrent callers wait for the same exit;
+    /// a panic remains an error on every later call. Other dispatchers are unaffected.
+    ///
+    /// # Errors
+    /// Returns [`ShutdownError::CurrentThread`] on the scheduler itself, or
+    /// [`ShutdownError::Panicked`] if the scheduler panicked or an earlier join unwound.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn shutdown_and_join(&self) -> Result<(), ShutdownError> {
+        self.inner.shutdown();
+        self.inner.completion.join()
     }
 
     /// Restricted immediate and deferred wake capability.
