@@ -219,7 +219,7 @@ fn assert_quiet_curve_projection(
             at: When::Next,
         },
     );
-    let segment = track.segment;
+    let segment = track.segment.id;
     let seq = track.lane_commands.last().expect("native Segment").seq;
     assert_eq!(
         track.lane.as_ref().expect("real lane").available() + 1,
@@ -233,7 +233,7 @@ fn assert_quiet_curve_projection(
             .take_while(|operation| operation.seq == seq)
             .all(|operation| operation.applied().is_none())
     );
-    assert_eq!(track.ready, None);
+    assert!(!track.segment.ready);
     let mut spans = Vec::new();
     let mut metadata = Vec::new();
     let endpoint = origin + 3_960;
@@ -258,7 +258,8 @@ fn assert_quiet_curve_projection(
     }
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("real segment readiness");
-    assert_eq!(track.ready, Some(segment));
+    assert!(track.segment.ready);
+    assert_eq!(track.segment.id, segment);
     assert!(
         track
             .lane_commands
@@ -372,7 +373,7 @@ fn timed_media_target_is_translated_once_before_the_raw_lane_batch(#[case] align
     track.mark = Some(SlotMark {
         session: frame(0),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 0,
         },
         position: Duration::from_millis(576),
@@ -394,7 +395,7 @@ fn timed_media_target_is_translated_once_before_the_raw_lane_batch(#[case] align
     let due = inbox
         .next_due(
             LaneFrame {
-                segment: track.segment,
+                segment: track.segment.id,
                 frame: 8_000,
             },
             1,
@@ -458,12 +459,12 @@ fn planned_media_position_integrates_the_raw_prefix_before_clamping(
 ) {
     let mut track = track(A);
     track.extent.media_origin = Some(Duration::from_millis(576));
-    track.segment_speed = 2.0;
+    track.segment.speed = 2.0;
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
         session: frame(0),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 0,
         },
         position: Position::ZERO,
@@ -584,7 +585,7 @@ fn planned_media_position_is_untimed_until_its_source_basis_is_known() {
     track.mark = Some(SlotMark {
         session: frame(0),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 0,
         },
         position: Duration::from_secs(14),
@@ -611,7 +612,7 @@ async fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
     track.mark = Some(SlotMark {
         session: frame(0),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 0,
         },
         position: Duration::from_millis(raw_ms),
@@ -650,7 +651,7 @@ async fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
         track.mark = Some(SlotMark {
             session: frame(0),
             lane: LaneFrame {
-                segment: track.segment,
+                segment: track.segment.id,
                 frame: 0,
             },
             position: Duration::ZERO,
@@ -667,7 +668,7 @@ async fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
         .expect("actual preceding speed command");
         command_at_zero(&mut track, &mut rig, TrackCommand::SetHostRate { rate })
             .expect("actual new-generation command");
-        let segment = track.segment;
+        let segment = track.segment.id;
         let mut source = curve_source(
             inbox,
             rate,
@@ -824,7 +825,7 @@ async fn assert_source_end_resume_endpoint() {
     track.mark = Some(SlotMark {
         session: frame(0),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 0,
         },
         position: old_spec.duration_for(1).expect("retained old source end"),
@@ -841,7 +842,7 @@ async fn assert_source_end_resume_endpoint() {
     .expect("actual quarter-speed command");
     command_at_zero(&mut track, &mut rig, TrackCommand::SetHostRate { rate })
         .expect("actual source recreation command");
-    let segment = track.segment;
+    let segment = track.segment.id;
     assert!(track.observed_source.is_none());
     assert!(track.mark.is_none());
     assert!(matches!(track.planned_end(rate), Err(PlayError::Untimed)));
@@ -1162,8 +1163,8 @@ async fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_positio
                 .apply(TrackCommand::Seek { to: target }, &mut out)
                 .expect("paused seek")
                 .expect("seek adoption");
-            assert_eq!(track.segment, sought);
-            assert_eq!(track.ready, None);
+            assert_eq!(track.segment.id, sought);
+            assert!(!track.segment.ready);
             assert_eq!(
                 track
                     .apply(
@@ -1175,7 +1176,7 @@ async fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_positio
                     .expect("Play waits for the seek lane"),
                 None
             );
-            assert_eq!(track.segment, sought, "Play preserves the admitted seek");
+            assert_eq!(track.segment.id, sought, "Play preserves the admitted seek");
             assert_eq!(track.mark, Some(old_mark));
             seek
         };
@@ -1204,7 +1205,7 @@ async fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_positio
                 .iter()
                 .any(|settled| { matches!(settled, Settled::Applied { seq, .. } if *seq == seek) })
         );
-        assert_eq!(track.segment, sought);
+        assert_eq!(track.segment.id, sought);
         assert_eq!(
             track.snapshot().status,
             TrackStatus::Playing { since: frame(512) }
@@ -1230,7 +1231,7 @@ async fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_
         .expect("initial Start");
     let mut started = rig.block(frame(0), 0.0);
     settle(&mut track, &mut rig, &mut started);
-    let original = track.segment;
+    let original = track.segment.id;
     let original_basis = track.source_basis.expect("original prepared input basis");
     track.extent.media_origin = Some(Duration::from_millis(576));
     track.position = Duration::from_millis(media_ms);
@@ -1289,7 +1290,7 @@ async fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_
     assert!(refused.iter().any(|receipt| receipt.seq == repeated
         && matches!(receipt.outcome, Outcome::Rejected(Rejection::Stale))));
     settle(&mut track, &mut rig, &mut refused);
-    assert_eq!(track.segment, original);
+    assert_eq!(track.segment.id, original);
     inbox.drain();
     let mut restored = false;
     while let Some(due) = inbox.next_due(LaneFrame::default(), 1) {

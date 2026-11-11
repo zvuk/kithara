@@ -18,7 +18,7 @@ fn speed_projection_keeps_frame_admission_fresh_after_warming() {
     let mark = SlotMark {
         session: frame(0),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 0,
         },
         position: Duration::ZERO,
@@ -27,7 +27,7 @@ fn speed_projection_keeps_frame_admission_fresh_after_warming() {
     assert_consumed_speed_twice(&track, 1.0);
     let foreign = SlotMark {
         lane: LaneFrame {
-            segment: track.segment.next(),
+            segment: track.segment.id.next(),
             frame: 0,
         },
         ..mark
@@ -47,7 +47,7 @@ fn speed_projection_keeps_same_frame_submissions_visible() {
         .send_lane(
             LaneCommand::SetSpeed(SpeedCurve::Constant(1.75)),
             When::At(LaneFrame {
-                segment: track.segment,
+                segment: track.segment.id,
                 frame: 0,
             }),
         )
@@ -59,7 +59,7 @@ fn speed_projection_keeps_same_frame_submissions_visible() {
 fn speed_projection_observes_applied_and_refused_receipts() {
     let (mut track, mut inbox) = prepared_track();
     let at = LaneFrame {
-        segment: track.segment,
+        segment: track.segment.id,
         frame: 0,
     };
     track
@@ -99,7 +99,7 @@ fn speed_projection_observes_applied_and_refused_receipts() {
 #[kithara::test]
 fn speed_projection_tracks_frame_segment_and_initial_rate() {
     let (mut track, _inbox) = prepared_track();
-    track.segment_speed = 1.25;
+    track.segment.speed = 1.25;
     track
         .send_lane(
             LaneCommand::SetSpeed(SpeedCurve::Ramp {
@@ -107,7 +107,7 @@ fn speed_projection_tracks_frame_segment_and_initial_rate() {
                 frames: std::num::NonZeroU64::new(40).expect("ramp length"),
             }),
             When::At(LaneFrame {
-                segment: track.segment,
+                segment: track.segment.id,
                 frame: 0,
             }),
         )
@@ -117,16 +117,20 @@ fn speed_projection_tracks_frame_segment_and_initial_rate() {
     track.mark = Some(SlotMark {
         session: frame(20),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 20,
         },
         position: Duration::from_micros(20),
     });
     assert_consumed_speed_twice(&track, 1.625);
-    track.segment = track.segment.next();
-    track.mark.as_mut().expect("consumed mark").lane.segment = track.segment;
+    track.segment = Segment::issued(
+        track.segment.id.next(),
+        track.segment.origin,
+        track.segment.speed,
+    );
+    track.mark.as_mut().expect("consumed mark").lane.segment = track.segment.id;
     assert_consumed_speed_twice(&track, 1.25);
-    track.segment_speed = 1.5;
+    track.segment.speed = 1.5;
     assert_consumed_speed_twice(&track, 1.5);
 }
 
@@ -138,7 +142,7 @@ fn speed_projection_preserves_future_jump_overflow_after_declick_changes() {
         .send_lane(
             LaneCommand::Jump { to: Duration::ZERO },
             When::At(LaneFrame {
-                segment: track.segment,
+                segment: track.segment.id,
                 frame: u64::MAX,
             }),
         )
@@ -179,7 +183,7 @@ fn consumed_speed_preserves_the_origin_needed_by_each_curve(
             .send_lane(
                 LaneCommand::SetSpeed(curve),
                 When::At(LaneFrame {
-                    segment: track.segment,
+                    segment: track.segment.id,
                     frame: at,
                 }),
             )
@@ -189,7 +193,7 @@ fn consumed_speed_preserves_the_origin_needed_by_each_curve(
         .send_lane(
             LaneCommand::SetSpeed(SpeedCurve::Constant(3.5)),
             When::At(LaneFrame {
-                segment: track.segment,
+                segment: track.segment.id,
                 frame: 15,
             }),
         )
@@ -204,7 +208,7 @@ fn consumed_speed_preserves_the_origin_needed_by_each_curve(
     track.mark = Some(SlotMark {
         session: frame(20),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 20,
         },
         position: Duration::from_millis(20),
@@ -281,7 +285,7 @@ fn consumed_speed_matches_the_full_piecewise_schedule() {
                 .send_lane(
                     LaneCommand::SetSpeed(curve.clone()),
                     When::At(LaneFrame {
-                        segment: track.segment,
+                        segment: track.segment.id,
                         frame: at,
                     }),
                 )
@@ -299,9 +303,9 @@ fn consumed_speed_matches_the_full_piecewise_schedule() {
         schedule.sort_by_key(|(at, seq, _)| (*at, *seq));
         track.status = TrackStatus::Playing { since: frame(0) };
         for consumed in 0..128 {
-            let base = SpeedCurve::Constant(track.segment_speed);
+            let base = SpeedCurve::Constant(track.segment.speed);
             let mut curve = &base;
-            let mut origin = f64::from(track.segment_speed);
+            let mut origin = f64::from(track.segment.speed);
             let mut start = 0;
             for (at, _, next) in schedule.iter().filter(|(at, _, _)| *at <= consumed) {
                 origin = curve_speed(curve, origin, at - start).expect("prior curve boundary");
@@ -315,7 +319,7 @@ fn consumed_speed_matches_the_full_piecewise_schedule() {
             track.mark = Some(SlotMark {
                 session: frame(consumed.to_i64().expect("consumed frame fits i64")),
                 lane: LaneFrame {
-                    segment: track.segment,
+                    segment: track.segment.id,
                     frame: consumed,
                 },
                 position: Duration::from_micros(consumed),

@@ -105,7 +105,7 @@ impl<S> PlayerImpl<S> {
             if !self
                 .adopting
                 .iter()
-                .any(|adoption| adoption.segment == self.segment)
+                .any(|adoption| adoption.segment == self.segment.id)
             {
                 self.segment(Position::ZERO, None, out)?;
             }
@@ -117,7 +117,7 @@ impl<S> PlayerImpl<S> {
             tracing::debug!(
                 item = u64::from(self.item),
                 seq = operation.seq.get(),
-                current_segment = self.segment.get(),
+                current_segment = self.segment.id.get(),
                 applied = ?operation.applied(),
                 requested_when = ?operation.when,
                 paused_resume = ?resume,
@@ -129,7 +129,7 @@ impl<S> PlayerImpl<S> {
             self.play = Some(at);
             return Ok(None);
         }
-        if !self.attached() || self.ready != Some(self.segment) {
+        if !self.attached() || !self.segment.ready {
             self.play = Some(at);
             return Ok(None);
         }
@@ -152,7 +152,7 @@ impl<S> PlayerImpl<S> {
                 )
             })
         })?;
-        if resume.lane.segment != self.segment {
+        if resume.lane.segment != self.segment.id {
             return None;
         }
         self.lane_commands
@@ -189,7 +189,7 @@ impl<S> PlayerImpl<S> {
             out.deck(at, parts)?
         };
         if let Some(pending) = self.playback_commands.iter_mut().find(|operation| {
-            seq.is_none() && operation.seq.is_none() && operation.segment == self.segment
+            seq.is_none() && operation.seq.is_none() && operation.segment == self.segment.id
         }) {
             if action.is_some() {
                 pending.action = action;
@@ -202,7 +202,7 @@ impl<S> PlayerImpl<S> {
         } else {
             self.playback_commands.push(PlaybackOperation {
                 seq,
-                segment: self.segment,
+                segment: self.segment.id,
                 basis,
                 action,
                 obsolete: false,
@@ -303,8 +303,8 @@ impl<S> PlayerImpl<S> {
             && !self.lane_commands.iter().any(|operation| {
                 operation.applied().is_none()
                     && match operation.command {
-                        LaneCommand::SetSpeed(_) => operation.segment == self.segment,
-                        LaneCommand::Segment { id, .. } => id == self.segment,
+                        LaneCommand::SetSpeed(_) => operation.segment == self.segment.id,
+                        LaneCommand::Segment { id, .. } => id == self.segment.id,
                         _ => false,
                     }
             })
@@ -314,8 +314,8 @@ impl<S> PlayerImpl<S> {
                 .filter(|operation| {
                     operation.applied() == Some(true)
                         && match operation.command {
-                            LaneCommand::SetSpeed(_) => operation.segment == self.segment,
-                            LaneCommand::Segment { id, .. } => id == self.segment,
+                            LaneCommand::SetSpeed(_) => operation.segment == self.segment.id,
+                            LaneCommand::Segment { id, .. } => id == self.segment.id,
                             _ => false,
                         }
                 })
@@ -429,7 +429,7 @@ impl<S> PlayerImpl<S> {
         let operation = self.lane_commands.iter().rev().find(|operation| {
             matches!(operation.command,
                 LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. }
-                if id == self.segment)
+                if id == self.segment.id)
         })?;
         match operation.verdict {
             Some(Err(Rejection::Refused(failure))) => Some(failure),

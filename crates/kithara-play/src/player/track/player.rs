@@ -11,6 +11,7 @@ use tracing::warn;
 use super::{
     super::outbox::{Bound, Outbox, Player, Settled, TrackReceipt},
     core::PlayerImpl,
+    segment::Segment,
     state::*,
 };
 use crate::PlayError;
@@ -29,7 +30,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                 | TrackStatus::Loaded
                 | TrackStatus::Paused { .. }
                 | TrackStatus::Faded { .. }
-        ) && self.ready != Some(self.segment)
+        ) && !self.segment.ready
         {
             return None;
         }
@@ -143,7 +144,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                 warn!(%error, "released replacement waits to detach");
             }
         } else if self.attached()
-            && self.ready == Some(self.segment)
+            && self.segment.ready
             && let Some(at) = self.play
         {
             match self.play(at, out) {
@@ -335,10 +336,10 @@ impl<S> PlayerImpl<S> {
             return Err(PlayError::Full("deck"));
         }
         let parked_position = match self.resume.or(self.mark) {
-            Some(mark) if mark.lane.segment == self.segment => mark.position,
+            Some(mark) if mark.lane.segment == self.segment.id => mark.position,
             _ => self.raw_position(self.position)?,
         };
-        let parked = (self.segment, parked_position);
+        let parked = (self.segment.id, parked_position);
         let segment = self.issued_segment.next();
         self.send_lane(
             LaneCommand::Segment {
@@ -350,11 +351,12 @@ impl<S> PlayerImpl<S> {
         )?;
         self.issued_segment = segment;
         let seq = out.deferred(vec![DeckPart::Adopt { slot, segment }])?;
-        self.segment = segment;
-        self.segment_origin = Some(Position::ZERO);
+        self.segment = Segment::issued(
+            segment,
+            Some(Position::ZERO),
+            self.settings.projected().speed(),
+        );
         self.playback_commands.clear();
-        self.segment_speed = self.settings.projected().speed();
-        self.ready = None;
         self.repeat = true;
         self.adopting.push(Adoption {
             seq,
@@ -400,7 +402,7 @@ impl<S> PlayerImpl<S> {
             self.seat.detached();
             self.mark = None;
             self.play = None;
-            self.ready = None;
+            self.segment.ready = false;
             self.playback_commands.clear();
             self.adopting.clear();
             self.newest_epoch_pending = None;
@@ -483,7 +485,7 @@ impl<S> PlayerImpl<S> {
                     fault: PlaybackFault::Source(failure),
                 };
             }
-            self.ready = None;
+            self.segment.ready = false;
             self.withdraw_play();
             self.newest_epoch_pending = None;
             self.repeat = false;

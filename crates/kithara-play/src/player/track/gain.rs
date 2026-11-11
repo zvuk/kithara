@@ -13,7 +13,7 @@ impl<S> PlayerImpl<S> {
         if self.seat.releasing()
             || self.preparation_closed()
             || !self.attached()
-            || self.ready != Some(self.segment)
+            || !self.segment.ready
             || matches!(
                 self.status,
                 TrackStatus::Idle | TrackStatus::Loading | TrackStatus::Ended { .. }
@@ -30,7 +30,7 @@ impl<S> PlayerImpl<S> {
             .ok_or(PlayError::NotReady)?;
         let binding = observed
             .binding
-            .filter(|binding| binding.item() == self.item && binding.segment() == self.segment)
+            .filter(|binding| binding.item() == self.item && binding.segment() == self.segment.id)
             .filter(|_| observed.state != SlotState::Ended)
             .ok_or(PlayError::NotReady)?;
         self.send_playback(

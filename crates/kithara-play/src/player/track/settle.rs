@@ -16,6 +16,7 @@ use super::{
     },
     core::PlayerImpl,
     geometry::session_at,
+    segment::Segment,
     state::*,
 };
 use crate::PlayError;
@@ -70,11 +71,8 @@ impl<S> PlayerImpl<S> {
         if rate.is_none() {
             self.settings.track(seq, When::Next, change);
         }
-        self.segment = segment;
-        self.segment_origin = origin;
+        self.segment = Segment::issued(segment, origin, starting_speed.unwrap_or(final_speed));
         self.observed_source = None;
-        self.segment_speed = starting_speed.unwrap_or(final_speed);
-        self.ready = None;
         self.mark = None;
         self.resume = None;
         if self.seat.slot().is_none() && self.loading.is_some() {
@@ -195,7 +193,7 @@ impl<S> PlayerImpl<S> {
             return Some(Settled::Pending);
         }
         if adoption.cancelled {
-            if adoption.segment == self.segment
+            if adoption.segment == self.segment.id
                 && matches!(outcome, Outcome::Rejected(Rejection::Stale))
                 && let Some((segment, position)) = adoption.parked
             {
@@ -212,10 +210,8 @@ impl<S> PlayerImpl<S> {
                         reason: Rejection::Refused(error),
                     });
                 }
-                self.segment = segment;
-                self.segment_origin = Some(position);
+                self.segment = Segment::issued(segment, Some(position), self.segment.speed);
                 self.observed_source = None;
-                self.ready = None;
             }
             self.repeat = false;
             return Some(Settled::Pending);
@@ -228,7 +224,7 @@ impl<S> PlayerImpl<S> {
             self.adopt_newest_epoch(out);
             return Some(Settled::Pending);
         }
-        if matches!(outcome, Outcome::Applied { .. }) && adoption.segment == self.segment {
+        if matches!(outcome, Outcome::Applied { .. }) && adoption.segment == self.segment.id {
             self.repeat = false;
             if matches!(self.status, TrackStatus::Ended { .. }) {
                 self.status = TrackStatus::Loaded;
@@ -252,7 +248,7 @@ impl<S> PlayerImpl<S> {
         {
             self.status = TrackStatus::Released;
         }
-        self.ready = None;
+        self.segment.ready = false;
         self.play = None;
         self.playback_commands.clear();
         self.adopting.clear();
@@ -295,7 +291,7 @@ impl<S> PlayerImpl<S> {
     }
 
     fn stopped(&mut self, resume: Option<SlotMark>) {
-        self.resume = resume.filter(|mark| mark.lane.segment == self.segment);
+        self.resume = resume.filter(|mark| mark.lane.segment == self.segment.id);
         if let Some(position) = self
             .resume
             .and_then(|mark| self.content_mark_position(mark))
@@ -310,7 +306,7 @@ impl<S> PlayerImpl<S> {
         self.seat.detached();
         self.mark = None;
         self.play = None;
-        self.ready = None;
+        self.segment.ready = false;
         self.playback_commands.clear();
         self.adopting.clear();
         self.newest_epoch_pending = None;
@@ -337,14 +333,14 @@ impl<S> PlayerImpl<S> {
             When::Next,
             vec![DeckPart::Adopt {
                 slot,
-                segment: self.segment,
+                segment: self.segment.id,
             }],
         ) {
             Ok(Some(seq)) => {
                 self.adopting.push(Adoption {
                     seq,
                     caller,
-                    segment: self.segment,
+                    segment: self.segment.id,
                     parked: None,
                     cancelled: false,
                 });
@@ -372,8 +368,8 @@ impl<S> PlayerImpl<S> {
         if let Some(ready) = data.ready
             && !matches!(self.status, TrackStatus::Failed { .. })
         {
-            self.ready = Some(ready);
-            if ready == self.segment
+            self.segment.report_ready(ready);
+            if ready == self.segment.id
                 && let Some(basis) = data.source_basis
             {
                 self.source_basis = Some(basis);
@@ -402,7 +398,7 @@ impl<S> PlayerImpl<S> {
                 seq = seq.get(),
                 actual_apply_segment = at.segment.get(),
                 actual_apply_frame = at.frame,
-                current_segment = self.segment.get(),
+                current_segment = self.segment.id.get(),
                 requested_when = ?operation.when,
                 paused_resume = ?self.resume,
                 mark = ?self.mark,
@@ -421,7 +417,7 @@ impl<S> PlayerImpl<S> {
             }
             if let LaneCommand::Segment { id, from, .. } = operation.command
                 && data.ready == Some(id)
-                && id == self.segment
+                && id == self.segment.id
                 && !matches!(self.status, TrackStatus::Playing { .. })
                 && let Some(origin) = self.extent.media_origin
             {
