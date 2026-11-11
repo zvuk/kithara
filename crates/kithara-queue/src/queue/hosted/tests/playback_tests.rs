@@ -29,6 +29,8 @@ async fn spurious_item_did_play_to_end_is_filtered() {
         .expect("spurious terminal event");
     tick_fixture(&mut queue, &mut rig);
     assert_eq!(queue.current, None, "navigation must not have advanced");
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -68,6 +70,8 @@ async fn eof_after_queue_end_does_not_restart_from_first_track() {
     let saw_ended =
         wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 200).await;
     assert!(!saw_ended, "stale EOF must not duplicate QueueEnded");
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -76,7 +80,7 @@ async fn eof_after_queue_end_does_not_restart_from_first_track() {
 async fn replay_after_queue_end_restores_current_and_reports_the_next_end(
     #[case] seek_first: bool,
 ) {
-    let (mut queue, first, second, mut rig, _dir) = crate::mock::selected().await;
+    let (mut queue, first, second, mut rig, fixture_directory) = crate::mock::selected().await;
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(queue, QueueCommand::Remove(second), out)
     })
@@ -183,6 +187,8 @@ async fn replay_after_queue_end_restores_current_and_reports_the_next_end(
         std::iter::from_fn(|| events.try_recv().ok())
             .all(|envelope| !matches!(envelope.event, QueueEvent::QueueEnded))
     );
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -335,6 +341,8 @@ async fn play_retries_the_current_track_after_its_prefetch_failed() {
         TrackStatus::Consumed
     );
     assert!(queue.target.is_none());
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -366,6 +374,8 @@ async fn play_promotes_the_initial_pending_prefetch() {
         })
         .expect("promote initial prefetch");
         assert!(attempt_selected(&queue, id));
+        drop((queue, rig));
+        dir.finish().await;
     }
 }
 
