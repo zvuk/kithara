@@ -17,7 +17,6 @@ pub(super) fn observe(github: &Github, pull: &PullRequest) -> Result<Snapshot> {
     observe_current_run(
         pull,
         || github.workflow_runs(repository, &pull.head_sha),
-        |run_id, attempt| github.workflow_jobs(repository, run_id, attempt),
         || {
             Ok((
                 github.source_statuses(repository, &pull.head_sha)?,
@@ -27,23 +26,21 @@ pub(super) fn observe(github: &Github, pull: &PullRequest) -> Result<Snapshot> {
     )
 }
 
+/// Job mirrors come from the head's latest check-runs: each Actions job is a
+/// check-run in its workflow run's check suite, and the latest check-run per
+/// job is the job of the run's current attempt. The per-attempt jobs listing
+/// carries every step and regularly outlives the API gateway's deadline, so
+/// it is never read.
 fn observe_current_run(
     pull: &PullRequest,
     mut read_runs: impl FnMut() -> Result<Vec<Value>>,
-    mut read_jobs: impl FnMut(u64, u64) -> Result<Vec<Value>>,
     read_published: impl FnOnce() -> Result<(Vec<Value>, Vec<Value>)>,
 ) -> Result<Snapshot> {
     let runs = read_runs()?;
     let (published_statuses, checks) = read_published()?;
     let run = latest_run(&runs, pull)?;
     let mut statuses = if let Some(run) = run {
-        let run_id = run["id"]
-            .as_u64()
-            .context("GitHub workflow run has no id")?;
-        let attempt = run["run_attempt"]
-            .as_u64()
-            .context("GitHub workflow run has no attempt")?;
-        snapshot(run, &read_jobs(run_id, attempt)?, &checks)?.statuses
+        snapshot(run, &run_jobs(run, &checks)?)?.statuses
     } else {
         Vec::new()
     };
@@ -51,17 +48,7 @@ fn observe_current_run(
         if run.is_some_and(|run| same_run(run, current)) {
             continue;
         }
-        let run_id = current["id"]
-            .as_u64()
-            .context("GitHub workflow run has no id")?;
-        let attempt = current["run_attempt"]
-            .as_u64()
-            .context("GitHub workflow run has no attempt")?;
-        statuses.extend(workflow_checks(
-            current,
-            &read_jobs(run_id, attempt)?,
-            &checks,
-        )?);
+        statuses.extend(workflow_checks(current, &run_jobs(current, &checks)?)?);
     }
     statuses.extend(published_checks(pull, &runs, &published_statuses, &checks)?);
     let current_runs = read_runs()?;
@@ -165,14 +152,24 @@ fn published_checks(
     Ok(projected)
 }
 
-fn workflow_checks(run: &Value, jobs: &[Value], checks: &[Value]) -> Result<Vec<CheckStatus>> {
+fn run_jobs<'a>(run: &Value, checks: &'a [Value]) -> Result<Vec<&'a Value>> {
+    let suite = run["check_suite_id"]
+        .as_u64()
+        .context("GitHub workflow run has no check suite id")?;
+    Ok(checks
+        .iter()
+        .filter(|check| check.pointer("/check_suite/id").and_then(Value::as_u64) == Some(suite))
+        .collect())
+}
+
+fn workflow_checks(run: &Value, jobs: &[&Value]) -> Result<Vec<CheckStatus>> {
     let workflow = run["workflow_id"]
         .as_u64()
         .context("GitHub workflow run has no workflow id")?;
     let name = run["name"]
         .as_str()
         .context("GitHub workflow run has no name")?;
-    let mut statuses = workflow_job_checks(run, jobs, checks)?;
+    let mut statuses = workflow_job_checks(run, jobs)?;
     let (state, detail) = job_state(run)?;
     let label = format!("workflow: Actions {workflow} ({name})");
     for context in check_contexts("GitHub", &[label.as_str()]) {
@@ -181,7 +178,7 @@ fn workflow_checks(run: &Value, jobs: &[Value], checks: &[Value]) -> Result<Vec<
     Ok(statuses)
 }
 
-fn workflow_job_checks(run: &Value, jobs: &[Value], checks: &[Value]) -> Result<Vec<CheckStatus>> {
+fn workflow_job_checks(run: &Value, jobs: &[&Value]) -> Result<Vec<CheckStatus>> {
     let workflow = run["workflow_id"]
         .as_u64()
         .context("GitHub workflow run has no workflow id")?;
@@ -195,7 +192,6 @@ fn workflow_job_checks(run: &Value, jobs: &[Value], checks: &[Value]) -> Result<
     }
     jobs.iter()
         .map(|job| {
-            validate_job(run, job)?;
             let job_name = job["name"].as_str().context("GitHub job has no name")?;
             let mut label = format!("job: Actions workflow {workflow} ({name}): {job_name}");
             let duplicate = if counts[job_name] > 1 {
@@ -213,15 +209,7 @@ fn workflow_job_checks(run: &Value, jobs: &[Value], checks: &[Value]) -> Result<
             let identity = serde_json::to_vec(&("actions-job", workflow, job_name, duplicate))?;
             let context = check_context("GitHub", &label, &identity);
             let (state, conclusion) = job_state(job)?;
-            let title = job["check_run_url"]
-                .as_str()
-                .and_then(|url| {
-                    checks
-                        .iter()
-                        .find(|check| check["url"].as_str() == Some(url))
-                })
-                .and_then(|check| check.pointer("/output/title"))
-                .and_then(Value::as_str);
+            let title = job.pointer("/output/title").and_then(Value::as_str);
             let detail = check_detail(conclusion, title);
             Ok(check(context, state, detail, job["html_url"].as_str()))
         })
@@ -376,10 +364,10 @@ fn matches_source(run: &Value, pull: &PullRequest) -> bool {
             == pull.head_repository.as_deref()
 }
 
-fn snapshot(run: &Value, jobs: &[Value], checks: &[Value]) -> Result<Snapshot> {
+fn snapshot(run: &Value, jobs: &[&Value]) -> Result<Snapshot> {
     let complete = run["status"].as_str() == Some("completed");
     let url = run["html_url"].as_str();
-    let mut statuses = workflow_job_checks(run, jobs, checks)?;
+    let mut statuses = workflow_job_checks(run, jobs)?;
     let required = jobs
         .iter()
         .find(|job| job["name"].as_str() == Some("CI required"));
@@ -404,19 +392,6 @@ fn snapshot(run: &Value, jobs: &[Value], checks: &[Value]) -> Result<Snapshot> {
         complete,
         target_url: url.map(str::to_owned),
     })
-}
-
-fn validate_job(run: &Value, job: &Value) -> Result<()> {
-    let run_id = run["id"]
-        .as_u64()
-        .context("GitHub workflow run has no id")?;
-    let attempt = run["run_attempt"]
-        .as_u64()
-        .context("GitHub workflow run has no attempt")?;
-    if job["run_id"].as_u64() != Some(run_id) || job["run_attempt"].as_u64() != Some(attempt) {
-        bail!("GitHub job belongs to another workflow run or attempt");
-    }
-    Ok(())
 }
 
 fn job_state(job: &Value) -> Result<(&'static str, &str)> {
@@ -460,15 +435,19 @@ mod tests {
         json!({ "id": id, "workflow_id": 10, "check_suite_id": id * 10, "name": "CI", "run_attempt": 2, "head_sha": "a".repeat(40), "head_branch": "feature", "head_repository": {"full_name":"fork/kithara"}, "path":".github/workflows/ci.yml", "event":"push", "status":status, "conclusion":conclusion, "html_url":"https://github.com/fork/kithara/actions/runs/2" })
     }
 
+    /// An Actions job as the head's check-runs report it, in run 2's suite.
     fn job(name: &str, conclusion: &str) -> Value {
-        json!({ "id": 1, "name": name, "run_id": 2, "run_attempt": 2, "status":"completed", "conclusion":conclusion, "html_url": "https://github.com/fork/kithara/actions/runs/2/job/1" })
+        json!({ "id": 1, "name": name, "head_sha": "a".repeat(40), "app": {"id": 15368, "name": "GitHub Actions"}, "check_suite": {"id": 20}, "status":"completed", "conclusion":conclusion, "output": {"title": null}, "html_url": "https://github.com/fork/kithara/actions/runs/2/job/1" })
     }
 
-    fn workflow_job(run_id: u64, attempt: u64, name: &str, conclusion: &str) -> Value {
+    fn workflow_job(run_id: u64, name: &str, conclusion: &str) -> Value {
         let mut value = job(name, conclusion);
-        value["run_id"] = json!(run_id);
-        value["run_attempt"] = json!(attempt);
+        value["check_suite"]["id"] = json!(run_id * 10);
         value
+    }
+
+    fn snap(run: &Value, jobs: &[Value]) -> Result<Snapshot> {
+        snapshot(run, &jobs.iter().collect::<Vec<_>>())
     }
 
     fn status(id: u64, context: &str, state: &str) -> Value {
@@ -497,14 +476,7 @@ mod tests {
         observe_current_run(
             pull,
             || Ok(runs.to_vec()),
-            |run_id, _| {
-                Ok(jobs
-                    .iter()
-                    .filter(|job| job["run_id"].as_u64() == Some(run_id))
-                    .cloned()
-                    .collect())
-            },
-            || Ok((statuses.to_vec(), checks.to_vec())),
+            || Ok((statuses.to_vec(), [jobs, checks].concat())),
         )
     }
 
@@ -539,113 +511,30 @@ mod tests {
     fn success_requires_both_workflow_and_executed_required_job_success() {
         let completed = run(2, "completed", "success");
         assert_eq!(
-            aggregate(&snapshot(&completed, &[job("CI required", "success")], &[]).unwrap()),
+            aggregate(&snap(&completed, &[job("CI required", "success")]).unwrap()),
             "success"
         );
-        assert_eq!(
-            aggregate(&snapshot(&completed, &[], &[]).unwrap()),
-            "failure"
-        );
+        assert_eq!(aggregate(&snap(&completed, &[]).unwrap()), "failure");
         for conclusion in ["failure", "cancelled", "timed_out", "skipped", "neutral"] {
-            let snapshot = snapshot(&completed, &[job("CI required", conclusion)], &[]).unwrap();
+            let snapshot = snap(&completed, &[job("CI required", conclusion)]).unwrap();
             assert_eq!(aggregate(&snapshot), "failure", "{conclusion}");
         }
         let failed = run(2, "completed", "failure");
         assert_eq!(
-            aggregate(&snapshot(&failed, &[job("CI required", "success")], &[]).unwrap()),
+            aggregate(&snap(&failed, &[job("CI required", "success")]).unwrap()),
             "failure"
         );
     }
 
     #[test]
-    fn a_rerun_cannot_reuse_an_older_attempt_or_green_jobs_to_finish_early() {
-        let running = run(2, "in_progress", "");
-        assert_eq!(
-            aggregate(&snapshot(&running, &[job("CI required", "success")], &[]).unwrap()),
-            "pending"
-        );
-        let mut previous = job("CI required", "success");
-        previous["run_attempt"] = json!(1);
-        assert!(snapshot(&running, &[previous], &[]).is_err());
-    }
-
-    #[test]
-    fn a_run_attempt_or_verdict_change_during_job_listing_cannot_publish_stale_success() {
-        let completed = run(2, "completed", "success");
-        let mut next_attempt = completed.clone();
-        next_attempt["run_attempt"] = json!(3);
-        let mut different_conclusion = completed.clone();
-        different_conclusion["conclusion"] = json!("failure");
-        for current in [
-            Some(run(3, "in_progress", "")),
-            Some(next_attempt),
-            Some(run(2, "in_progress", "")),
-            Some(different_conclusion),
-            None,
-        ] {
-            let reads = RefCell::new(Vec::new());
-            let mut listed = [vec![completed.clone()], current.into_iter().collect()].into_iter();
-            let observed = observe_current_run(
-                &pull(),
-                || {
-                    reads.borrow_mut().push("runs");
-                    Ok(listed.next().expect("exactly two listing reads"))
-                },
-                |run_id, attempt| {
-                    reads.borrow_mut().push("jobs");
-                    assert_eq!((run_id, attempt), (2, 2));
-                    Ok(vec![job("CI required", "success")])
-                },
-                || Ok((Vec::new(), Vec::new())),
-            )
-            .unwrap();
-            assert_eq!(*reads.borrow(), ["runs", "jobs", "runs"]);
-            assert_eq!(aggregate(&observed), "pending");
-            assert!(!observed.complete);
-            assert_eq!(observed.statuses.len(), 1);
-            assert!(
-                observed
-                    .statuses
-                    .iter()
-                    .all(|status| status.state != "success")
-            );
-        }
-    }
-
-    #[test]
-    fn an_unchanged_run_observed_after_its_jobs_can_publish_success() {
-        let completed = run(2, "completed", "success");
-        let reads = RefCell::new(Vec::new());
-        let observed = observe_current_run(
-            &pull(),
-            || {
-                reads.borrow_mut().push("runs");
-                Ok(vec![completed.clone()])
-            },
-            |run_id, attempt| {
-                reads.borrow_mut().push("jobs");
-                assert_eq!((run_id, attempt), (2, 2));
-                Ok(vec![job("CI required", "success")])
-            },
-            || Ok((Vec::new(), Vec::new())),
-        )
-        .unwrap();
-        assert_eq!(*reads.borrow(), ["runs", "jobs", "runs"]);
-        assert_eq!(aggregate(&observed), "success");
-        assert!(observed.complete);
-        assert_eq!(observed.statuses.len(), 2);
-    }
-
-    #[test]
     fn skipped_optional_jobs_are_explicit_while_failed_jobs_stay_red() {
-        let snapshot = snapshot(
+        let snapshot = snap(
             &run(2, "completed", "failure"),
             &[
                 job("lint", "failure"),
                 job("optional", "skipped"),
                 job("CI required", "failure"),
             ],
-            &[],
         )
         .unwrap();
         assert_eq!(snapshot.statuses[0].state, "failure");
@@ -798,19 +687,15 @@ mod tests {
         let second = custom_run(3, 12, "completed", "failure");
         let mut stale = provider_check(100, "test", "failure");
         stale["check_suite"]["id"] = json!(10);
-        let mut first_check = provider_check(101, "test", "success");
-        first_check["check_suite"]["id"] = json!(20);
-        let mut second_check = provider_check(102, "test", "failure");
-        second_check["check_suite"]["id"] = json!(30);
         let observed = observe_values(
             &pull(),
             &[old, first, second],
             &[
-                workflow_job(2, 2, "test", "success"),
-                workflow_job(3, 2, "test", "failure"),
+                workflow_job(2, "test", "success"),
+                workflow_job(3, "test", "failure"),
             ],
             &[],
-            &[stale, first_check, second_check],
+            &[stale],
         )
         .unwrap();
         let jobs = observed
@@ -851,44 +736,11 @@ mod tests {
     }
 
     #[test]
-    fn completed_retry_uses_current_attempt_jobs_and_retires_old_same_suite_checks() {
-        let mut retry = custom_run(2, 11, "completed", "success");
-        retry["run_attempt"] = json!(3);
-        let mut removed = provider_check(50, "removed", "failure");
-        removed["check_suite"]["id"] = json!(20);
-        let current = workflow_job(2, 3, "retained", "success");
-        let observed =
-            observe_values(&pull(), &[retry.clone()], &[current], &[], &[removed]).unwrap();
-        assert_eq!(aggregate(&observed), "success");
-        assert!(
-            observed
-                .statuses
-                .iter()
-                .any(|status| status.context.contains("retained"))
-        );
-        assert!(
-            observed
-                .statuses
-                .iter()
-                .all(|status| !status.context.contains("removed"))
-        );
-        assert!(
-            observe_values(
-                &pull(),
-                &[retry],
-                &[workflow_job(2, 2, "retained", "success")],
-                &[],
-                &[]
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
     fn standard_required_gate_cannot_be_replaced_or_duplicated_by_other_providers() {
         for required in [Vec::new(), vec![job("CI required", "skipped")]] {
-            let mut native = provider_check(1, "CI required", "success");
-            native["check_suite"]["id"] = json!(20);
+            // A check suite belongs to one app, so another provider's
+            // "CI required" lives outside the workflow run's suite.
+            let native = provider_check(1, "CI required", "success");
             let observed = observe_values(
                 &pull(),
                 &[run(2, "completed", "success")],
@@ -904,7 +756,7 @@ mod tests {
                     .iter()
                     .filter(|status| status.context.contains("check:"))
                     .count(),
-                1
+                2
             );
             assert!(
                 observed
@@ -976,11 +828,11 @@ mod tests {
 
     #[test]
     fn literal_job_names_cannot_impersonate_duplicate_job_discriminators() {
-        let mut first = workflow_job(2, 2, "test", "failure");
+        let mut first = workflow_job(2, "test", "failure");
         first["id"] = json!(1);
-        let mut second = workflow_job(2, 2, "test", "success");
+        let mut second = workflow_job(2, "test", "success");
         second["id"] = json!(2);
-        let mut literal = workflow_job(2, 2, "test [job 1]", "success");
+        let mut literal = workflow_job(2, "test [job 1]", "success");
         literal["id"] = json!(3);
         let observed = observe_values(
             &pull(),
@@ -1013,14 +865,14 @@ mod tests {
         first["name"] = json!("CI / Linux");
         let mut second = custom_run(3, 12, "completed", "success");
         second["name"] = json!(format!("CI / {}", "Mac".repeat(100)));
-        let mut duplicate = workflow_job(3, 2, "matrix / test", "success");
+        let mut duplicate = workflow_job(3, "matrix / test", "success");
         duplicate["id"] = json!(2);
         let observed = observe_values(
             &pull(),
             &[first, second],
             &[
-                workflow_job(2, 2, "matrix / test", "success"),
-                workflow_job(3, 2, "matrix / test", "success"),
+                workflow_job(2, "matrix / test", "success"),
+                workflow_job(3, "matrix / test", "success"),
                 duplicate,
             ],
             &[],
@@ -1134,58 +986,86 @@ mod tests {
     }
 
     #[test]
-    fn native_diagnostics_use_only_the_exact_current_jobs_check_run() {
-        let mut current = job("tests", "failure");
-        current["check_run_url"] =
-            json!("https://api.github.com/repos/fork/kithara/check-runs/200");
-        let mut matching = provider_check(200, "tests", "failure");
-        matching["check_suite"]["id"] = json!(20);
-        matching["url"] = current["check_run_url"].clone();
-        matching["output"]["title"] = json!("assertion failed in replay");
-        let mut previous = provider_check(199, "tests", "failure");
-        previous["check_suite"]["id"] = json!(20);
-        previous["url"] = json!("https://api.github.com/repos/fork/kithara/check-runs/199");
-        previous["output"]["title"] = json!("old attempt diagnostic");
-        let checks = [previous, matching];
-        let observed = observe_values(
+    fn a_running_rerun_stays_pending_even_with_green_jobs() {
+        let running = run(2, "in_progress", "");
+        assert_eq!(
+            aggregate(&snap(&running, &[job("CI required", "success")]).unwrap()),
+            "pending"
+        );
+    }
+
+    #[test]
+    fn job_mirrors_come_from_the_runs_check_suite_without_a_jobs_listing() {
+        let reads = RefCell::new(Vec::new());
+        let mut failed = job("tests", "failure");
+        failed["id"] = json!(2);
+        failed["output"]["title"] = json!("assertion failed in replay");
+        let mut foreign = workflow_job(9, "tests", "success");
+        foreign["id"] = json!(3);
+        let observed = observe_current_run(
             &pull(),
-            &[run(2, "completed", "failure")],
-            &[job("CI required", "success"), current.clone()],
-            &[],
-            &checks,
+            || {
+                reads.borrow_mut().push("runs");
+                Ok(vec![run(2, "completed", "failure")])
+            },
+            || {
+                reads.borrow_mut().push("published");
+                Ok((
+                    Vec::new(),
+                    vec![job("CI required", "success"), failed, foreign],
+                ))
+            },
         )
         .unwrap();
-        let failed = observed
+        assert_eq!(*reads.borrow(), ["runs", "published", "runs"]);
+        let jobs = observed
             .statuses
+            .iter()
+            .filter(|status| status.context.contains("job:"))
+            .collect::<Vec<_>>();
+        assert_eq!(jobs.len(), 2);
+        let tests = jobs
             .iter()
             .find(|status| status.context.contains("tests"))
             .unwrap();
-        assert_eq!(failed.description, "failure: assertion failed in replay");
-        assert_eq!(failed.state, "failure");
-        assert!(
-            observed
-                .statuses
-                .iter()
-                .all(|status| !status.description.contains("old attempt"))
-        );
-        current["check_run_url"] = Value::Null;
-        let unmatched = observe_values(
+        assert_eq!(tests.state, "failure");
+        assert_eq!(tests.description, "failure: assertion failed in replay");
+        assert_eq!(aggregate(&observed), "failure");
+    }
+
+    #[test]
+    fn a_run_change_during_observation_cannot_publish_stale_success() {
+        let completed = run(2, "completed", "success");
+        let mut next_attempt = completed.clone();
+        next_attempt["run_attempt"] = json!(3);
+        let mut different_conclusion = completed.clone();
+        different_conclusion["conclusion"] = json!("failure");
+        for current in [
+            Some(run(3, "in_progress", "")),
+            Some(next_attempt),
+            Some(run(2, "in_progress", "")),
+            Some(different_conclusion),
+            None,
+        ] {
+            let mut listed = [vec![completed.clone()], current.into_iter().collect()].into_iter();
+            let observed = observe_current_run(
+                &pull(),
+                || Ok(listed.next().expect("exactly two listing reads")),
+                || Ok((Vec::new(), vec![job("CI required", "success")])),
+            )
+            .unwrap();
+            assert_eq!(aggregate(&observed), "pending");
+            assert!(!observed.complete);
+            assert_eq!(observed.statuses.len(), 1);
+        }
+        let observed = observe_current_run(
             &pull(),
-            &[run(2, "completed", "failure")],
-            &[job("CI required", "success"), current],
-            &[],
-            &checks,
+            || Ok(vec![completed.clone()]),
+            || Ok((Vec::new(), vec![job("CI required", "success")])),
         )
         .unwrap();
-        assert_eq!(
-            unmatched
-                .statuses
-                .iter()
-                .find(|status| status.context.contains("tests"))
-                .unwrap()
-                .description,
-            "failure"
-        );
+        assert_eq!(aggregate(&observed), "success");
+        assert!(observed.complete);
     }
 
     #[test]
@@ -1195,17 +1075,7 @@ mod tests {
             observe_current_run(
                 &pull(),
                 || Ok(vec![completed.clone()]),
-                |_, _| Ok(vec![job("CI required", "success")]),
-                || bail!("source statuses unavailable")
-            )
-            .is_err()
-        );
-        assert!(
-            observe_current_run(
-                &pull(),
-                || Ok(vec![completed.clone()]),
-                |_, _| bail!("jobs unavailable"),
-                || Ok((vec![status(1, "external", "success")], Vec::new()))
+                || bail!("source check-runs unavailable")
             )
             .is_err()
         );
@@ -1218,31 +1088,12 @@ mod tests {
                     if calls == 1 {
                         Ok(vec![completed.clone()])
                     } else {
-                        bail!("second page read unavailable")
+                        bail!("second listing unavailable")
                     }
                 },
-                |_, _| Ok(vec![job("CI required", "success")]),
-                || Ok((vec![status(1, "external", "success")], Vec::new()))
+                || Ok((Vec::new(), vec![job("CI required", "success")]))
             )
             .is_err()
         );
-    }
-
-    #[test]
-    fn another_workflow_changing_during_observation_cannot_leave_old_green() {
-        let previous = custom_run(2, 11, "completed", "success");
-        let mut retry = previous.clone();
-        retry["run_attempt"] = json!(3);
-        retry["status"] = json!("in_progress");
-        let mut reads = [vec![previous], vec![retry]].into_iter();
-        let observed = observe_current_run(
-            &pull(),
-            || Ok(reads.next().unwrap()),
-            |_, _| Ok(Vec::new()),
-            || Ok((vec![status(1, "old", "success")], Vec::new())),
-        )
-        .unwrap();
-        assert_eq!(aggregate(&observed), "pending");
-        assert_eq!(observed.statuses.len(), 1);
     }
 }
