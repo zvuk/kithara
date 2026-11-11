@@ -118,9 +118,6 @@ impl ThreadJoin {
             return Err(ShutdownError::CurrentThread);
         }
         let mut state = self.state.lock();
-        if state.result.is_none() {
-            kithara_platform::no_block::forbid_bridged(None);
-        }
         if let Some(handle) = state.handle.take() {
             drop(state);
             let mut publish = Publish {

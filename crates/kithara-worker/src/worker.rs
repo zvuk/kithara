@@ -1,7 +1,5 @@
 use kithara_platform::{CancelScope, sync::Arc, tokio::runtime::Handle};
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::threads::Threads;
 use crate::{Dispatcher, DispatcherConfig, WorkerConfig, compute::ComputeRuntime};
 
 /// Cloneable owner of shared worker runtime resources.
@@ -22,7 +20,7 @@ impl Worker {
     #[must_use]
     pub fn new(config: WorkerConfig) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
-        let threads = Arc::new(Threads::default());
+        let threads = Arc::new(crate::threads::Threads::default());
         Self {
             inner: Arc::new(WorkerInner {
                 runtime: config.runtime.clone(),
@@ -78,16 +76,17 @@ struct WorkerInner {
     scope: CancelScope,
     runtime: Option<Handle>,
     #[cfg(not(target_arch = "wasm32"))]
-    threads: Arc<Threads>,
+    threads: Arc<crate::threads::Threads>,
 }
 
 impl WorkerInner {
     fn stop(&self) {
         #[cfg(not(target_arch = "wasm32"))]
-        self.threads.close();
+        {
+            self.threads.close();
+            self.compute.stop();
+        }
         self.scope.cancel();
-        #[cfg(not(target_arch = "wasm32"))]
-        self.compute.stop();
     }
 
     fn shutdown(&self) {
