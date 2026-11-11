@@ -4,7 +4,6 @@ use firewheel::node::ProcBuffers;
 use kithara_command::{ScopedReceipt, Seq, When};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
-use kithara_warp::RenderContext;
 use num_traits::ToPrimitive;
 
 use super::{TestEnds, TestMixer, mixer_with_shape, send};
@@ -168,17 +167,13 @@ pub(in crate::rt) fn render(mixer: &mut TestMixer, frames: usize) -> (bool, Vec<
     mixer.inbox.0.drain();
     let level = mixer.inbox.0.scope(mixer.mixer.scope).expect("scope");
     let rate = mixer.mixer.deck.sample_rate;
-    let context = RenderContext::new_linear(
-        OutputContext::new(
-            SessionFrame::new(0)..SessionFrame::new(frames as i64),
-            rate,
-            SessionEpoch::new(0),
-            None,
-        )
-        .expect("output range"),
+    let context = OutputContext::new(
+        SessionFrame::new(0)..SessionFrame::new(frames as i64),
+        rate,
+        SessionEpoch::new(0),
         None,
     )
-    .expect("linear render");
+    .expect("output range");
     let rendered = mixer.mixer.render_block(
         Some(level),
         Some(&context),

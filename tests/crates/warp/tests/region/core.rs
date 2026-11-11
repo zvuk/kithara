@@ -411,8 +411,9 @@ pub(super) fn activation_keeps_the_absolute_host_frame_rounding_phase() {
         Some(TransportRevision::first()),
     )
     .expect("fixture output");
-    let context = RenderContext::new(output, Some(anchor)).expect("fixture context");
-    let beats = context.session_beats().expect("playing context");
+    let frames = output.output_frames();
+    let beats = anchor.beat_at(frames.start).expect("finite beat")
+        ..anchor.beat_at(frames.end).expect("finite beat");
     assert!((f64::from(beats.start) - 7.999_979_166_666_667).abs() < 1e-12);
     assert!((f64::from(beats.end) - 8.005_845_833_333_334).abs() < 1e-12);
     let target = BeatGridSnapshot::session(
@@ -451,7 +452,6 @@ pub(super) fn render_on_grid(
     speed: f32,
     plan: Option<Projection>,
     source: &[f32],
-    session_beats: f64,
     swap: Option<PlanSwap>,
 ) -> Vec<f32> {
     let config = WarpConfig::builder()
@@ -459,7 +459,7 @@ pub(super) fn render_on_grid(
         .keylock(true)
         .backend(backend)
         .build();
-    render_configured_grid(config, plan, source, Timeline::Linear(session_beats), swap)
+    render_configured_grid(config, plan, source, swap)
 }
 
 #[hang_watchdog]
@@ -467,33 +467,16 @@ pub(super) fn render_configured_grid(
     config: WarpConfig,
     plan: Option<Projection>,
     source: &[f32],
-    timeline: Timeline,
     swap: Option<PlanSwap>,
 ) -> Vec<f32> {
     let source = InterleavedView::new(source, spec(), FrameCount::new(source.len() / CH))
         .expect("fixture source is whole frames");
-    render_configured_grid_with_updates(config, plan, source, timeline, swap, None, &mut |_, _| {
-        None
-    })
-    .samples
+    render_configured_grid_with_updates(config, plan, source, swap, None, &mut |_, _| None).samples
 }
 
 /// A plan installed mid-render: once the source reaches the frame, the
 /// function builds the plan from the source frontier and the output frame.
 type PlanSwap = (usize, fn(u64, usize) -> Projection);
-
-/// A retarget installed at a source/output frontier: the session anchor, the
-/// map revision published with it, and the plan to install alongside.
-type Retarget = (SessionAnchor, WarpMapRevision, Option<Projection>);
-
-/// The session timeline a render publishes before its first block.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum Timeline {
-    /// Linear over this many session beats.
-    Linear(f64),
-    /// Along the trajectory this anchor starts.
-    Anchored(SessionAnchor),
-}
 
 /// A render's interleaved output and, for every chunk it presented, the
 /// output frame the chunk starts at with the source frame the renderer
@@ -503,49 +486,20 @@ pub(crate) struct Presented {
     pub(crate) positions: Vec<(usize, u64)>,
 }
 
-/// Renders `source` through `plan` against a session context published on
-/// `timeline`, stopping once `output_frames` are rendered; `updates` may
-/// retarget the context and install that retarget's plan at any
-/// source/output frontier.
+/// Renders `source` through `plan`, stopping once `output_frames` are
+/// rendered; `updates` may install a new plan at any source/output frontier.
 #[hang_watchdog]
 pub(crate) fn render_configured_grid_with_updates(
     config: WarpConfig,
     plan: Option<Projection>,
     source: InterleavedView<'_>,
-    timeline: Timeline,
     swap: Option<PlanSwap>,
     output_frames: Option<usize>,
-    updates: &mut dyn FnMut(u64, usize) -> Option<Retarget>,
+    updates: &mut dyn FnMut(u64, usize) -> Option<Projection>,
 ) -> Presented {
     let (source, spec) = (source.samples(), source.spec());
     let pools = pools();
-    let mut warp = Warp::new((), &config);
-    let publisher = warp.take_publisher().expect("fixture owns publisher");
-    let output = OutputContext::new(
-        SessionFrame::new(0)..SessionFrame::new(i64::from(spec.sample_rate.get())),
-        spec.sample_rate,
-        SessionEpoch::new(0),
-        Some(TransportRevision::first()),
-    )
-    .expect("fixture output");
-    let context = match timeline {
-        Timeline::Anchored(anchor) => {
-            RenderContext::new(output, Some(anchor)).expect("fixture trajectory context")
-        }
-        Timeline::Linear(session_beats) => RenderContext::new_linear(
-            output,
-            Some(SessionBeat::default()..SessionBeat::new(session_beats).expect("beat")),
-        )
-        .expect("fixture context"),
-    };
-    publisher.publish(
-        &context,
-        PresentationFrontier::builder()
-            .source(0)
-            .output(SessionFrame::new(0))
-            .build(),
-    );
-    let mut fx = warp.renderer(spec, pools.clone());
+    let mut fx = Warp::new((), &config).renderer(spec, pools.clone());
     if let Some(projection) = &plan {
         install_projection(&mut fx, projection, source.len() / CH, 0, config.speed());
     }
@@ -588,37 +542,14 @@ pub(crate) fn render_configured_grid_with_updates(
             hang_tick!();
             let source_frontier = fx.rendered_source_end().map_or(0, |frontier| frontier.0);
             let output_frontier = out.len() / CH;
-            if let Some((anchor, revision, plan)) = updates(source_frontier, output_frontier) {
-                let output_frame = SessionFrame::new(i64_of(output_frontier));
-                let output = OutputContext::new(
-                    output_frame
-                        ..SessionFrame::new(i64_of(
-                            output_frontier
-                                + usize::try_from(spec.sample_rate.get()).expect("sample rate"),
-                        )),
-                    spec.sample_rate,
-                    SessionEpoch::new(0),
-                    Some(TransportRevision::first()),
-                )
-                .expect("retarget output");
-                let context = RenderContext::new(output, Some(anchor)).expect("retarget context");
-                publisher.publish(
-                    &context,
-                    PresentationFrontier::builder()
-                        .source(source_frontier)
-                        .warp_map(revision)
-                        .output(output_frame)
-                        .build(),
+            if let Some(plan) = updates(source_frontier, output_frontier) {
+                install_projection(
+                    &mut fx,
+                    &plan,
+                    source.len() / CH,
+                    output_frontier,
+                    config.speed(),
                 );
-                if let Some(plan) = plan {
-                    install_projection(
-                        &mut fx,
-                        &plan,
-                        source.len() / CH,
-                        output_frontier,
-                        config.speed(),
-                    );
-                }
             }
             fx.prepare(spec);
             let remaining = frames - consumed;
@@ -635,7 +566,7 @@ pub(crate) fn render_configured_grid_with_updates(
                     continue;
                 }
                 Err(error) => panic!(
-                    "source quantum at {} with {remaining} remaining, backend {:?}, keylock={}, timeline={timeline:?}: {error:?}",
+                    "source quantum at {} with {remaining} remaining, backend {:?}, keylock={}: {error:?}",
                     meta.frame_offset,
                     config.backend(),
                     config.keylock()

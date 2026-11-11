@@ -19,8 +19,9 @@ pub(in crate::render) struct Projection {
     pub(in crate::render) feed: Option<u64>,
     /// Source frontier represented by the native engine's cached output.
     pub(in crate::render) audible: Option<u64>,
-    /// Accepted geometry of the cached packet when it fits one source span.
-    pub(in crate::render) cached_span: Option<SourceSpan>,
+    /// Accepted geometry of the cached packet from the last boundary of the
+    /// law inside it on, with the packet frame that geometry starts at.
+    pub(in crate::render) cached_span: Option<(usize, SourceSpan)>,
     pub(in crate::render) offset: usize,
 }
 
@@ -109,7 +110,7 @@ fn sample_projected_frame(
     };
     super::super::source_sample::source_frame(
         resident,
-        (position.numerator, position.denominator),
+        super::super::source_sample::split_position((position.numerator, position.denominator))?,
         speed,
         terminal_source_end,
         output,

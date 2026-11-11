@@ -1,8 +1,8 @@
 use std::ops::Range;
 
 use kithara_platform::time::Duration;
+use kithara_signal::OutputContext;
 use kithara_test_macros as kithara;
-use kithara_warp::RenderContext;
 use num_traits::ToPrimitive;
 
 use super::{PlayerTrack, ReadOutcome, RtSink};
@@ -82,14 +82,14 @@ impl PlayerTrack {
 
     #[kithara::probe(
         track_id = self.item_id.as_u64(),
-        output_base = context.map(|context| i64::from(context.output().output_frames().start)),
+        output_base = context.map(|context| i64::from(context.output_frames().start)),
         range_start = range.start,
         range_end = range.end,
         served_media_frames = self.resource.position().map_or(0, kithara_signal::SourceSpan::end)
     )]
     pub(crate) fn render(
         &mut self,
-        context: Option<&RenderContext>,
+        context: Option<&OutputContext>,
         buffers: TrackBuffers<'_, '_, '_>,
         range: Range<usize>,
         budget: &mut usize,
@@ -114,8 +114,7 @@ impl PlayerTrack {
             kithara::probe_event!(
                 pcm_context_refused,
                 track_id = self.item_id.as_u64(),
-                output_base =
-                    context.map(|context| i64::from(context.output().output_frames().start)),
+                output_base = context.map(|context| i64::from(context.output_frames().start)),
                 range_start = range.start,
                 range_end = range.end
             );
@@ -314,7 +313,6 @@ mod tests {
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
     use kithara_test_utils::kithara;
-    use kithara_warp::RenderContext;
 
     use crate::{
         rt::track::{PcmConsumer, PlayerResource},
@@ -334,12 +332,11 @@ mod tests {
             None,
         )
         .expect("fixture output range is ordered");
-        let context = RenderContext::new(output, None)
-            .expect("fixture context is valid")
+        let context = output
             .for_output_range(40..80)
             .expect("fixture subrange is valid");
 
-        let spec = AudioSpec::new(2, context.output().sample_rate());
+        let spec = AudioSpec::new(2, context.sample_rate());
         let mut ring = PacketRing::new(spec, Duration::from_secs(1), 1);
         ring.push(PcmPacket::Chunk(Box::new(chunk(
             spec,
@@ -356,7 +353,7 @@ mod tests {
         .expect("resource");
         resource.refresh_mark(&mut 1);
         let frontier = resource
-            .mark(context.output().output_frames().start)
+            .mark(context.output_frames().start)
             .expect("mapped mark");
 
         assert_eq!(frontier.lane.frame, 8_000);

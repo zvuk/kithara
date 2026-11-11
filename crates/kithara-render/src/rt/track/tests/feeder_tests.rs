@@ -193,7 +193,6 @@ fn fractional_packet(spec: AudioSpec, lane_frame: u64, samples: &[f32]) -> PcmPa
 #[cfg(feature = "usdt")]
 fn read_packet_sequence(delayed: bool, base: i64) -> (Vec<f32>, Vec<AudioChunkInfo>) {
     use kithara_signal::{OutputContext, SessionEpoch, SessionFrame};
-    use kithara_warp::RenderContext;
 
     use crate::worker::packet_tests::PacketRing;
 
@@ -220,18 +219,13 @@ fn read_packet_sequence(delayed: bool, base: i64) -> (Vec<f32>, Vec<AudioChunkIn
             ring.push(fractional_packet(spec, 2, &[0.75; 5]));
         }
         let at = base + offset;
-        let context = RenderContext::new(
-            OutputContext::new(
-                SessionFrame::new(at)
-                    ..SessionFrame::new(at + i64::try_from(frames).expect("frames")),
-                spec.sample_rate,
-                SessionEpoch::new(1),
-                None,
-            )
-            .expect("output context"),
+        let context = OutputContext::new(
+            SessionFrame::new(at)..SessionFrame::new(at + i64::try_from(frames).expect("frames")),
+            spec.sample_rate,
+            SessionEpoch::new(1),
             None,
         )
-        .expect("render context");
+        .expect("output context");
         let mut left = vec![0.0; frames];
         let mut right = vec![0.0; frames];
         assert_eq!(
