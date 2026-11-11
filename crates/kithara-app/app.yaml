@@ -6,8 +6,9 @@
 # Secrets MUST NOT be inlined here — use `$KITHARA_...` env references
 # instead and put the value in the workspace `.env` (gitignored) or
 # the build shell. A reference resolves from the process environment first and
-# from the table `build.rs` baked behind it second; a reference that resolves
-# nowhere stops startup rather than degrading silently.
+# from the table `build.rs` baked behind it second. A DRM provider whose
+# references resolve nowhere is left out with a warning; any other reference
+# that resolves nowhere stops startup.
 #
 # `build.rs` wraps every value read from an env reference with
 # `obfstr!()` so it does not appear as a plain run of bytes in
