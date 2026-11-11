@@ -31,6 +31,7 @@ use super::{
         settings::{PlayerConfig, TrackSettings, TrackSettingsChange},
     },
     geometry::*,
+    seat::Seat,
     state::*,
     *,
 };

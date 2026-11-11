@@ -356,10 +356,11 @@ impl<S> PlayerImpl<S> {
     }
 
     pub(super) fn release_lane(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
-        if self.release.is_none()
-            && let Some(lane) = self.lane_id
-        {
-            self.release = Some(out.release(lane)?);
+        if let Registration::Registered(lane) = self.registration {
+            self.registration = Registration::Releasing {
+                lane,
+                seq: out.release(lane)?,
+            };
         }
         Ok(())
     }
@@ -422,7 +423,7 @@ impl<S> PlayerImpl<S> {
                 && data.ready == Some(id)
                 && id == self.segment
                 && !matches!(self.status, TrackStatus::Playing { .. })
-                && let Some(origin) = self.media_origin
+                && let Some(origin) = self.extent.media_origin
             {
                 self.position = from.saturating_sub(origin);
                 if matches!(self.status, TrackStatus::Paused { .. }) {

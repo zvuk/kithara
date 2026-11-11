@@ -69,8 +69,11 @@ where
         + Send
         + 'static,
 {
-    let geometry = geometry(config.warp(), config.audio_buffer_chunks())
-        .map(|depth| (depth, config.declick_frames(sample_rate)));
+    let geometry =
+        geometry(config.warp(), config.audio_buffer_chunks()).map(|ring_depth| LaneGeometry {
+            ring_depth,
+            declick: config.declick_frames(sample_rate),
+        });
     let channel_worker = worker.clone();
     ResourceLoad {
         opener: Box::new(move |position, start, inbox| {

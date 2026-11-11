@@ -973,7 +973,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
             .build(),
     );
     track.lane = Some(sender);
-    track.declick = FrameCount::new(32);
+    track.geometry.declick = FrameCount::new(32);
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
         session: frame(0),
@@ -984,7 +984,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
         position: Duration::ZERO,
     });
     let to = Duration::from_secs(2);
-    let landing = frame(i64::try_from(track.declick.get()).expect("declick fits"));
+    let landing = frame(i64::try_from(track.geometry.declick.get()).expect("declick fits"));
     let seq = command_at_zero(
         &mut track,
         &mut rig,

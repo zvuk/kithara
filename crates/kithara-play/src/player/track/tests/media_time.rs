@@ -287,7 +287,7 @@ fn assert_quiet_curve_projection(
         lane: LaneFrame { segment, frame: 0 },
         position: initial,
     });
-    track.duration = Some(spec.duration_for(endpoint).expect("native endpoint"));
+    track.extent.duration = Some(spec.duration_for(endpoint).expect("native endpoint"));
     let mut physical_end = None;
     for (start, span) in spans {
         for offset in 0..=span.output_frames() {
@@ -344,7 +344,7 @@ fn assert_quiet_curve_projection(
 #[case::cue(true)]
 fn public_media_target_is_translated_once_before_the_raw_segment(#[case] cue: bool) {
     let (mut track, mut inbox) = prepared_track();
-    track.media_origin = Some(Duration::from_millis(576));
+    track.extent.media_origin = Some(Duration::from_millis(576));
     let target = Position::from_secs(2);
     let mut rig = rig();
     in_pass(&mut rig, frame(0), |out| {
@@ -367,7 +367,7 @@ fn public_media_target_is_translated_once_before_the_raw_segment(#[case] cue: bo
 #[case::align(true)]
 fn timed_media_target_is_translated_once_before_the_raw_lane_batch(#[case] align: bool) {
     let (mut track, mut inbox) = prepared_track();
-    track.media_origin = Some(Duration::from_millis(576));
+    track.extent.media_origin = Some(Duration::from_millis(576));
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
         session: frame(0),
@@ -417,7 +417,7 @@ fn timed_media_target_is_translated_once_before_the_raw_lane_batch(#[case] align
 #[case::cue(3)]
 fn unknown_media_translation_refuses_commands_without_changing_the_snapshot(#[case] command: u8) {
     let (mut track, mut inbox) = prepared_track();
-    track.media_origin = None;
+    track.extent.media_origin = None;
     track.position = Position::from_secs(7);
     let before = track.snapshot();
     let mut rig = rig();
@@ -457,7 +457,7 @@ fn planned_media_position_integrates_the_raw_prefix_before_clamping(
     #[case] expected_ms: u64,
 ) {
     let mut track = track(A);
-    track.media_origin = Some(Duration::from_millis(576));
+    track.extent.media_origin = Some(Duration::from_millis(576));
     track.segment_speed = 2.0;
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
@@ -578,7 +578,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
 #[kithara::test]
 fn planned_media_position_is_untimed_until_its_source_basis_is_known() {
     let mut track = track(A);
-    track.media_origin = None;
+    track.extent.media_origin = None;
     track.position = Duration::from_secs(7);
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
@@ -605,7 +605,7 @@ async fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
     #[case] raw_ms: u64,
 ) {
     let (mut track, mut inbox) = prepared_track();
-    track.media_origin = Some(Duration::from_millis(576));
+    track.extent.media_origin = Some(Duration::from_millis(576));
     track.position = Duration::from_millis(media_ms);
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
@@ -628,7 +628,7 @@ async fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
         [LaneCommand::SetHostRate { rate: requested, .. }] if *requested == rate
     ));
     assert_eq!(track.snapshot().position, Duration::from_millis(media_ms));
-    assert_eq!(track.media_origin, Some(Duration::from_millis(576)));
+    assert_eq!(track.extent.media_origin, Some(Duration::from_millis(576)));
     #[cfg(any(
         feature = "stretch-glide",
         feature = "stretch-signalsmith",
@@ -694,7 +694,7 @@ async fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
             "the native fact must precede Warp output partitioning"
         );
         track.observed_source = Some(chunk.meta);
-        track.duration = Some(
+        track.extent.duration = Some(
             AudioSpec::new(2, rate)
                 .duration_for(1_000)
                 .expect("native EOF"),
@@ -714,8 +714,8 @@ async fn host_rate_change_keeps_raw_resume_custody_without_a_media_seek(
             track.planned_end(rate).expect("new native EOF projection"),
             Some(frame(4_000))
         );
-        track.declick = source.declick_frames();
-        let landing = 1 + u64::try_from(track.declick.get()).expect("native declick");
+        track.geometry.declick = source.declick_frames();
+        let landing = 1 + u64::try_from(track.geometry.declick.get()).expect("native declick");
         assert!(landing < 4_000);
         track
             .send_lane(
@@ -815,10 +815,10 @@ async fn assert_source_end_resume_endpoint() {
 
     let (mut track, inbox) = prepared_track();
     track.source_basis = Some(old.meta);
-    track.media_origin = audio.media_origin();
-    track.duration = audio
+    track.extent.media_origin = audio.media_origin();
+    track.extent.duration = audio
         .media_end()
-        .zip(track.media_origin)
+        .zip(track.extent.media_origin)
         .map(|(end, origin)| end.checked_sub(origin).expect("actual old media extent"));
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
@@ -922,10 +922,10 @@ async fn assert_source_end_resume_endpoint() {
     );
     assert_eq!(source.media_end(), Some(Duration::from_millis(20)));
     track.observed_source = Some(first.meta);
-    track.media_origin = source.media_origin();
-    track.duration = source
+    track.extent.media_origin = source.media_origin();
+    track.extent.duration = source
         .media_end()
-        .zip(track.media_origin)
+        .zip(track.extent.media_origin)
         .map(|(end, origin)| end.checked_sub(origin).expect("media extent"));
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
@@ -996,7 +996,7 @@ async fn assert_source_end_resume_endpoint() {
         "881 real remaining native PCM frames at quarter speed"
     );
     assert_eq!(source.media_end(), Some(Duration::from_millis(20)));
-    track.duration = source
+    track.extent.duration = source
         .media_end()
         .zip(source.media_origin())
         .map(|(end, origin)| end.checked_sub(origin).expect("reconciled media extent"));
@@ -1025,7 +1025,7 @@ async fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_positio
     );
     let mut started = rig.block(frame(0), 0.0);
     settle(&mut track, &mut rig, &mut started);
-    track.media_origin = Some(Duration::from_millis(576));
+    track.extent.media_origin = Some(Duration::from_millis(576));
     let stopped = command_at_zero(
         &mut track,
         &mut rig,
@@ -1134,9 +1134,8 @@ async fn stopped_raw_mark_stays_raw_while_pause_and_resume_publish_media_positio
                 position: old_mark.position.as_secs_f64(),
                 source: Some(AudioChunkInfo {
                     segment: old_mark.lane.segment,
-                    media_origin: track.media_origin,
-                    visible_origin: track.visible_origin,
-                    media_end: track.duration,
+                    media_origin: track.extent.media_origin,
+                    media_end: track.extent.duration,
                     ..AudioChunkInfo::default()
                 }),
                 ..Default::default()
@@ -1233,7 +1232,7 @@ async fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_
     settle(&mut track, &mut rig, &mut started);
     let original = track.segment;
     let original_basis = track.source_basis.expect("original prepared input basis");
-    track.media_origin = Some(Duration::from_millis(576));
+    track.extent.media_origin = Some(Duration::from_millis(576));
     track.position = Duration::from_millis(media_ms);
     let mark = mark_ms.map(|raw_ms| SlotMark {
         session: frame(0),
@@ -1251,9 +1250,8 @@ async fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_
             position: mark.map_or(0.0, |mark| mark.position.as_secs_f64()),
             source: Some(AudioChunkInfo {
                 segment: original,
-                media_origin: track.media_origin,
-                visible_origin: track.visible_origin,
-                media_end: track.duration,
+                media_origin: track.extent.media_origin,
+                media_end: track.extent.duration,
                 ..AudioChunkInfo::default()
             }),
             ..Default::default()

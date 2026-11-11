@@ -10,6 +10,7 @@ use tracing::warn;
 use super::{
     super::outbox::{Outbox, Settled, rejection},
     core::PlayerImpl,
+    seat::{Attaching, Seat},
     state::*,
 };
 use crate::{OpenedTrack, PlayError, ResourceLoad};
@@ -28,7 +29,7 @@ impl<S> PlayerImpl<S> {
             return Err(PlayError::Full("dispatcher"));
         }
         let (lane, inbox) = item.lane_channel()?;
-        let (ring_depth, declick) = item.lane_geometry()?;
+        let geometry = item.lane_geometry()?;
         self.class = if self.seat.slot().is_some() {
             ServiceClass::Warm
         } else {
@@ -42,8 +43,7 @@ impl<S> PlayerImpl<S> {
             inbox,
         })?;
         self.lane = Some(lane);
-        self.ring_depth = ring_depth;
-        self.declick = declick;
+        self.geometry = geometry;
         self.position = position;
         self.segment_speed = self.settings.config().speed();
         self.segment_origin = None;
@@ -64,7 +64,8 @@ impl<S> PlayerImpl<S> {
         out: &mut Outbox<'_, S>,
     ) -> Settled {
         let seq = receipt.seq();
-        if self.release == Some(seq) {
+        if matches!(self.registration, Registration::Releasing { seq: release, .. } if release == seq)
+        {
             self.settle_release(&receipt);
             return Settled::Pending;
         }
@@ -109,7 +110,7 @@ impl<S> PlayerImpl<S> {
         loaded: Loaded<OpenedTrack>,
         out: &mut Outbox<'_, S>,
     ) -> Settled {
-        self.lane_id = Some(loaded.lane);
+        self.registration = Registration::Registered(loaded.lane);
         self.engine_latency = loaded.engine_latency;
         if self.segment == SegmentId::FIRST {
             self.ready = Some(SegmentId::FIRST);
@@ -120,13 +121,12 @@ impl<S> PlayerImpl<S> {
         }
         self.source_basis = prepared;
         self.observed_source = prepared;
-        self.duration = prepared.and_then(|meta| meta.media_end);
-        self.visible_origin = prepared.and_then(|meta| meta.visible_origin);
-        self.media_origin = prepared.and_then(|meta| meta.media_origin);
-        self.abr = loaded.opened.abr.clone();
-        self.metadata = loaded.opened.metadata.clone();
+        self.extent = Extent::of(prepared);
+        let OpenedTrack { pcm, abr, metadata } = loaded.opened;
+        self.abr = abr;
+        self.metadata = metadata;
         if let Some(loading) = self.loading.as_mut() {
-            loading.opened = Some(loaded.opened);
+            loading.opened = Some(pcm);
         }
         if self.status == TrackStatus::Released || self.preparation_failure().is_some() {
             self.loading = None;
@@ -168,14 +168,17 @@ impl<S> PlayerImpl<S> {
         &mut self,
         receipt: &Receipt<DispatcherProtocol<ResourceLoad<S>>>,
     ) {
-        self.release = None;
+        let Registration::Releasing { lane, .. } = self.registration else {
+            return;
+        };
+        self.registration = Registration::Registered(lane);
         match receipt.outcome() {
             Outcome::Applied {
                 data: Dispatched::Released,
                 ..
             } => {
                 self.lane = None;
-                self.lane_id = None;
+                self.registration = Registration::None;
             }
             Outcome::Rejected(reason) => warn!(?reason, "dispatcher refused lane release"),
             Outcome::Applied { .. } => {
@@ -198,10 +201,9 @@ impl<S> PlayerImpl<S> {
         if out.deck_available() == 0 {
             return Err(PlayError::Full("deck"));
         }
-        let Some(opened) = loading.opened.take() else {
+        let Some(pcm) = loading.opened.take() else {
             return Ok(());
         };
-        let OpenedTrack { pcm, .. } = opened;
         let seq = loading.seq;
         let at = When::Next;
         let mut parts = self.seated_with_clock(
@@ -258,11 +260,7 @@ impl<S> PlayerImpl<S> {
         else {
             unreachable!("the selected attachment carries PCM");
         };
-        loading.opened = Some(OpenedTrack {
-            pcm,
-            abr: self.abr.clone(),
-            metadata: self.metadata.clone(),
-        });
+        loading.opened = Some(pcm);
         true
     }
 
@@ -309,9 +307,8 @@ impl<S> PlayerImpl<S> {
             return Err(PlayError::NotReady);
         }
         let loading = self.loading.as_mut().ok_or(PlayError::NotReady)?;
-        let opened = loading.opened.take().ok_or(PlayError::NotReady)?;
+        let pcm = loading.opened.take().ok_or(PlayError::NotReady)?;
         let caller = loading.seq;
-        let OpenedTrack { pcm, abr, metadata } = opened;
         let parts = self.seated_with_clock(
             slot,
             vec![DeckPart::Replace {
@@ -346,7 +343,7 @@ impl<S> PlayerImpl<S> {
                     _ => None,
                 }) && let Some(loading) = self.loading.as_mut()
                 {
-                    loading.opened = Some(OpenedTrack { pcm, abr, metadata });
+                    loading.opened = Some(pcm);
                 } else {
                     return Err(PlayError::Internal(
                         "replacement refusal did not return its original PCM".into(),
@@ -391,7 +388,7 @@ impl<S> PlayerImpl<S> {
             _ => return,
         };
         if self.class != class
-            && let Some(lane) = self.lane_id
+            && let Some(lane) = self.registration.lane()
         {
             match out.prioritize(lane, class) {
                 Ok(_) => self.class = class,

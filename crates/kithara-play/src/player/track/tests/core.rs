@@ -34,9 +34,8 @@ fn retain_projection_source(track: &mut Track, rate: NonZeroU32) {
         frame_offset: spec.frame_at(mark.position).expect("native source offset"),
         segment: mark.lane.segment,
         lane_frame: mark.lane.frame,
-        visible_origin: track.visible_origin,
-        media_origin: track.media_origin,
-        media_end: track.duration,
+        media_origin: track.extent.media_origin,
+        media_end: track.extent.duration,
         ..AudioChunkInfo::default()
     };
     track.source_basis = Some(source);
@@ -62,7 +61,7 @@ fn ends_within_cases(
     #[case] expected: bool,
 ) {
     let mut track = track(A);
-    track.duration = (dur > 0.0).then(|| Duration::from_secs_f64(dur));
+    track.extent.duration = (dur > 0.0).then(|| Duration::from_secs_f64(dur));
     track.segment_speed = rate.to_f32().expect("fixture speed fits f32");
     track.status = if rate == 0.0 {
         TrackStatus::Paused {
@@ -186,8 +185,7 @@ pub(super) fn track(slot: Slot) -> Track {
         settings,
     })
     .expect("unity speed is a valid track speed");
-    track.visible_origin = Some(Duration::ZERO);
-    track.media_origin = Some(Duration::ZERO);
+    track.extent.media_origin = Some(Duration::ZERO);
     track
 }
 
@@ -647,7 +645,7 @@ async fn an_installed_lane_the_owner_refuses_is_dropped_and_reported_cancelled()
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live scope");
     assert!(track.lane.is_none());
-    assert!(track.lane_id.is_none());
+    assert!(track.registration.lane().is_none());
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("live scope");
     assert!(matches!(
@@ -1016,7 +1014,7 @@ async fn a_zero_frame_stop_retains_the_exact_commanded_cue(
     let origin = spec.duration_for(origin_frames).expect("media origin");
     let raw = origin + cue + spec.duration_for(consumed).expect("consumed frame time");
     track.position = cue;
-    track.media_origin = Some(origin);
+    track.extent.media_origin = Some(origin);
     track.observed_source = Some(AudioChunkInfo {
         spec,
         ..AudioChunkInfo::default()
@@ -2049,8 +2047,7 @@ pub(super) async fn loaded_with_item(
     let mut receipts = rig.block(frame(0), 0.0);
     settle(&mut track, rig, &mut receipts);
     assert_eq!(track.snapshot().status, TrackStatus::Loaded);
-    track.visible_origin = Some(Duration::ZERO);
-    track.media_origin = Some(Duration::ZERO);
+    track.extent.media_origin = Some(Duration::ZERO);
     (track, inbox)
 }
 
@@ -3457,7 +3454,7 @@ async fn a_loaded_track_sends_each_change_to_its_lane() {
         ),
     ] {
         let (mut track, mut inbox) = prepared_track();
-        track.media_origin = Some(Duration::from_millis(576));
+        track.extent.media_origin = Some(Duration::from_millis(576));
         assert_eq!(
             in_pass(&mut rig, frame(0), |out| track.admit(
                 TrackSettingsChange::Speed(1.5),
@@ -3796,7 +3793,7 @@ async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     assert!(sent.is_none(), "no lane to send to yet");
     assert!((track.snapshot().speed - 1.25).abs() < f32::EPSILON);
     let seq = load(&mut track, &mut rig, Position::ZERO);
-    track.media_origin = None;
+    track.extent.media_origin = None;
     let (sender, mut inbox) = lane();
     track.lane = Some(sender);
     let curve = SpeedCurve::Ramp {
@@ -3814,7 +3811,7 @@ async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     })
     .expect("pending load speed");
     assert!(sent.is_none());
-    assert_eq!(track.media_origin, None);
+    assert_eq!(track.extent.media_origin, None);
     assert_eq!(track.snapshot().speed, 1.25);
     assert_eq!(track.projected().speed(), 2.0);
     assert!(track.snapshot().pending_lane);
@@ -4018,8 +4015,7 @@ async fn stale_or_paused_failure_does_not_change_the_scoped_player(#[case] pause
 #[case::unknown(None)]
 fn planned_end_uses_the_visible_length_in_the_raw_source_clock(#[case] origin: Option<Duration>) {
     let mut track = track(A);
-    track.visible_origin = origin;
-    track.duration = origin.map(|_| Duration::from_millis(1_669));
+    track.extent.duration = origin.map(|_| Duration::from_millis(1_669));
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
         session: frame(0),
@@ -4041,7 +4037,10 @@ fn planned_end_uses_the_visible_length_in_the_raw_source_clock(#[case] origin: O
         track.mark.expect("raw mark").position,
         Duration::from_millis(1_500)
     );
-    assert_eq!(track.duration, origin.map(|_| Duration::from_millis(1_669)));
+    assert_eq!(
+        track.extent.duration,
+        origin.map(|_| Duration::from_millis(1_669))
+    );
     for rate in [44_100, 48_000] {
         let rate = NonZeroU32::new(rate).expect("native rate");
         let spec = AudioSpec::new(2, rate);
@@ -4058,7 +4057,7 @@ fn planned_end_uses_the_visible_length_in_the_raw_source_clock(#[case] origin: O
         };
         exact.source_basis = Some(source);
         exact.observed_source = Some(source);
-        exact.duration = source.media_end;
+        exact.extent.duration = source.media_end;
         exact.status = TrackStatus::Playing { since: frame(0) };
         exact.mark = Some(SlotMark {
             session: frame(1),
@@ -4100,8 +4099,8 @@ fn planned_end_uses_the_visible_length_in_the_raw_source_clock(#[case] origin: O
         frames: 16,
         ..source
     });
-    exact.media_origin = Some(origin);
-    exact.duration = source.media_end;
+    exact.extent.media_origin = Some(origin);
+    exact.extent.duration = source.media_end;
     exact.segment_speed = 0.25;
     exact.status = TrackStatus::Playing { since: frame(0) };
     for at in [0, 1, 7, 15] {
@@ -4132,7 +4131,7 @@ fn projecting_track() -> (Track, NonZeroU32) {
         ..AudioChunkInfo::default()
     };
     let mut track = track(A);
-    track.duration = source.media_end;
+    track.extent.duration = source.media_end;
     track.source_basis = Some(source);
     track.observed_source = Some(source);
     track.status = TrackStatus::Playing { since: frame(0) };
@@ -4184,7 +4183,7 @@ fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
         track.planned_end(rate).expect("new scalar"),
         Some(frame(105))
     );
-    track.duration = Some(Duration::from_millis(14));
+    track.extent.duration = Some(Duration::from_millis(14));
     assert_eq!(
         track.planned_end(rate).expect("new endpoint"),
         Some(frame(107))
@@ -4348,8 +4347,7 @@ fn planned_end_projects_again_after_a_backward_jump_past_the_first_endpoint() {
 #[kithara::test]
 fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
     let mut track = track(A);
-    track.visible_origin = Some(Duration::from_millis(717));
-    track.duration = Some(Duration::from_millis(1_669));
+    track.extent.duration = Some(Duration::from_millis(1_669));
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
         session: frame(0),
@@ -4383,14 +4381,14 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
         track.planned_end(mock::SAMPLE_RATE).expect("projected end"),
         Some(frame(7_553))
     );
-    track.duration = Some(Duration::from_millis(1_002));
+    track.extent.duration = Some(Duration::from_millis(1_002));
     assert_eq!(
         track
             .planned_end(mock::SAMPLE_RATE)
             .expect("EOF before Jump"),
         Some(frame(88))
     );
-    track.duration = Some(Duration::from_millis(1_669));
+    track.extent.duration = Some(Duration::from_millis(1_669));
     let operation = track
         .lane_commands
         .iter_mut()
@@ -4435,9 +4433,8 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
         (36_250_001, 23),
     ] {
         let mut exact = self::track(A);
-        exact.media_origin = basis.media_origin;
-        exact.visible_origin = basis.visible_origin;
-        exact.duration = basis.media_end;
+        exact.extent.media_origin = basis.media_origin;
+        exact.extent.duration = basis.media_end;
         exact.source_basis = Some(basis);
         exact.observed_source = Some(AudioChunkInfo {
             frames: 16,

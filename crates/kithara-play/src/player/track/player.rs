@@ -164,12 +164,12 @@ impl<S> Player<S> for PlayerImpl<S> {
                 .consumed_speed()
                 .unwrap_or_else(|_| self.settings.config().speed()),
             position: self.position,
-            duration: self.duration,
+            duration: self.extent.duration,
             abr: self.abr.clone(),
             metadata: self.metadata.clone(),
             mark: self.mark,
             engine_latency: self.engine_latency,
-            ring_depth: self.ring_depth,
+            ring_depth: self.geometry.ring_depth,
             lane_room: self.lane.as_ref().map_or(0, Sender::available),
             pending_lane: self
                 .lane_commands
@@ -180,7 +180,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                     .as_ref()
                     .is_some_and(|loading| loading.speed.is_some()),
             attached: self.attached(),
-            declick: self.declick,
+            declick: self.geometry.declick,
         }
     }
 }

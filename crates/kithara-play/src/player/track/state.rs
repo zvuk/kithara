@@ -7,14 +7,15 @@ use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
-    CrossfadeSettings, LaneCommand, LaneFrame,
+    CrossfadeSettings, LaneCommand, LaneFrame, LaneId,
     bridge::{FadeDir, PlaybackFault, Slot, SlotMark, TrackClock},
+    rt::track::PlayerResource,
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
 
 use super::super::settings::TrackSettingsChange;
-use crate::{OpenedTrack, PlayError, ResourceLoad};
+use crate::{PlayError, ResourceLoad};
 
 /// A position in a track's media.
 pub type Position = Duration;
@@ -164,9 +165,50 @@ impl AsRef<Self> for TrackSnapshot {
     }
 }
 
+/// Where the track's media lies on its source's raw clock.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Extent {
+    /// End of the track on the media clock.
+    pub(super) duration: Option<Duration>,
+    /// Raw source time of content zero.
+    pub(super) media_origin: Option<Duration>,
+}
+
+impl Extent {
+    pub(super) fn of(source: Option<AudioChunkInfo>) -> Self {
+        Self {
+            duration: source.and_then(|info| info.media_end),
+            media_origin: source.and_then(|info| info.media_origin),
+        }
+    }
+}
+
+/// The track's lane as the dispatcher knows it.
+#[derive(Clone, Copy)]
+pub(super) enum Registration {
+    /// The dispatcher holds no lane of this track.
+    None,
+    Registered(LaneId),
+    /// The release `seq` is in flight; a refusal leaves the lane registered.
+    Releasing {
+        lane: LaneId,
+        seq: Seq,
+    },
+}
+
+impl Registration {
+    pub(super) fn lane(self) -> Option<LaneId> {
+        match self {
+            Self::None => None,
+            Self::Registered(lane) | Self::Releasing { lane, .. } => Some(lane),
+        }
+    }
+}
+
 pub(super) struct Loading {
     pub(super) seq: Seq,
-    pub(super) opened: Option<OpenedTrack>,
+    /// The opened source's consumer, until a deck batch takes it.
+    pub(super) opened: Option<Box<PlayerResource>>,
     pub(super) speed: Option<(SpeedCurve, f32)>,
 }
 
@@ -176,119 +218,6 @@ pub(super) struct Adoption {
     pub(super) segment: SegmentId,
     pub(super) parked: Option<(SegmentId, Position)>,
     pub(super) cancelled: bool,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct Attaching {
-    pub(super) seq: Option<Seq>,
-    pub(super) caller: Seq,
-    pub(super) at: When<SessionFrame>,
-    pub(super) replacement: bool,
-    pub(super) play: Option<When<SessionFrame>>,
-    pub(super) obsolete: bool,
-}
-
-/// Where the track stands on the deck.
-pub(super) enum Seat {
-    /// Off the deck: not loaded, or loaded in the background.
-    Unseated,
-    /// The slot is named and the deck holds no consumer of this track in it.
-    Named(Slot),
-    /// The deck batch that puts the consumer in the slot is in flight.
-    Attaching {
-        slot: Slot,
-        attach: Attaching,
-        releasing: bool,
-    },
-    /// The deck holds the consumer since `at`.
-    Attached {
-        slot: Slot,
-        at: SessionFrame,
-        releasing: bool,
-    },
-}
-
-impl Seat {
-    pub(super) fn slot(&self) -> Option<Slot> {
-        match *self {
-            Self::Unseated => None,
-            Self::Named(slot) | Self::Attaching { slot, .. } | Self::Attached { slot, .. } => {
-                Some(slot)
-            }
-        }
-    }
-
-    pub(super) fn attaching(&self) -> Option<&Attaching> {
-        match self {
-            Self::Attaching { attach, .. } => Some(attach),
-            _ => None,
-        }
-    }
-
-    pub(super) fn attaching_mut(&mut self) -> Option<&mut Attaching> {
-        match self {
-            Self::Attaching { attach, .. } => Some(attach),
-            _ => None,
-        }
-    }
-
-    pub(super) fn attached_at(&self) -> Option<SessionFrame> {
-        match *self {
-            Self::Attached { at, .. } => Some(at),
-            _ => None,
-        }
-    }
-
-    /// A release asked for while a replacement was in flight: the detach goes
-    /// out once the replacement lands.
-    pub(super) fn releasing(&self) -> bool {
-        matches!(
-            self,
-            Self::Attaching {
-                releasing: true,
-                ..
-            } | Self::Attached {
-                releasing: true,
-                ..
-            }
-        )
-    }
-
-    pub(super) fn release_on_landing(&mut self) {
-        if let Self::Attaching { releasing, .. } = self {
-            *releasing = true;
-        }
-    }
-
-    /// The attach in flight was applied on `at`.
-    pub(super) fn land(&mut self, at: SessionFrame) {
-        if let Self::Attaching {
-            slot, releasing, ..
-        } = *self
-        {
-            *self = Self::Attached {
-                slot,
-                at,
-                releasing,
-            };
-        }
-    }
-
-    /// The deck let the consumer go; an attach still in flight stays.
-    pub(super) fn detached(&mut self) {
-        match self {
-            Self::Attached { slot, .. } => *self = Self::Named(*slot),
-            Self::Attaching { releasing, .. } => *releasing = false,
-            Self::Unseated | Self::Named(_) => {}
-        }
-    }
-
-    /// Nothing of this track is on the deck or on its way there.
-    pub(super) fn vacate(&mut self) {
-        if let Some(slot) = self.slot() {
-            *self = Self::Named(slot);
-        }
-    }
 }
 
 pub(super) struct LaneOperation {
