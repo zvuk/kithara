@@ -487,7 +487,6 @@ async fn sync_puts_the_deck_on_the_host_beat(rhythm_a_wav: String) {
     drop(served);
 }
 
-#[cfg(not(feature = "broadcast"))]
 #[kithara::test(native, tokio)]
 async fn offline_sync_capture_keeps_the_host_beat_clicks(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
@@ -503,7 +502,6 @@ async fn offline_sync_capture_keeps_the_host_beat_clicks(rhythm_a_wav: String) {
 
 /// The deck shows a seek landing on the in-phase position nearest the
 /// request, then plays on from it.
-#[cfg(not(feature = "broadcast"))]
 #[kithara::test(native, tokio)]
 async fn a_seek_on_a_synced_deck_shows_the_position_moving_on(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
@@ -1044,7 +1042,6 @@ async fn a_paused_synced_deck_stays_silent_when_its_selected_track_gets_a_grid(
 
 /// Play on a paused synced deck whose position lies before the first beat
 /// starts from that beat.
-#[cfg(not(feature = "broadcast"))]
 #[kithara::test(native, tokio)]
 async fn play_on_a_synced_deck_paused_before_the_first_beat_sounds(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, consts::TRACK_BPM).await;
@@ -1352,7 +1349,6 @@ async fn the_keylock_chip_holds_the_pitch_of_a_playing_deck(long_wav: String) {
 
 /// Every deck starts with keylock on and its chip shown, unless the
 /// document's queue section sets the track keylock.
-#[cfg(not(feature = "broadcast"))]
 #[kithara::test(native, tokio, flash(false))]
 #[case::shipped("{}", true)]
 #[case::document_turns_it_off("track:\n  keylock: false\n", false)]

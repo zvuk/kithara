@@ -1988,7 +1988,6 @@ fn every_control_the_studio_draws_declares_the_write_it_makes() {
     }
 }
 
-#[cfg(not(feature = "broadcast"))]
 mod answered {
     use std::collections::{BTreeMap, BTreeSet};
 
