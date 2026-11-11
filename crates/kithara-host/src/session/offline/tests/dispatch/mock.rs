@@ -1,8 +1,8 @@
 use super::*;
 pub(super) use crate::mock::{
-    Command, TestState, ask, constant_fixture, deck_snapshot, fixture_command, fixture_pass,
-    mix_registration, occupied_slots, play_fixture, probe_owner, registration, render_block,
-    test_state,
+    Command, TestState, ask, ask_for_seq, constant_fixture, deck_snapshot, fixture_command,
+    fixture_pass, mix_registration, occupied_slots, play_fixture, probe_owner, registration,
+    render_block, test_state,
 };
 
 #[derive(Default)]
