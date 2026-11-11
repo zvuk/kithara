@@ -62,7 +62,9 @@ impl HandoverRig {
                 When::Next,
                 Batch {
                     basis: Vec::new(),
-                    commands: vec![DeckPart::Mix(DeckMixSettingsChange::Level(0.5))],
+                    commands: vec![DeckPart::Mix(DeckMixSettingsChange::Crossfader(
+                        kithara_play::CrossfaderGain::MIN,
+                    ))],
                 },
             )
             .expect("unrelated native sequence")
@@ -443,7 +445,9 @@ impl HandoverRig {
                 When::Next,
                 Batch {
                     basis: Vec::new(),
-                    commands: vec![DeckPart::Mix(DeckMixSettingsChange::Level(1.0))],
+                    commands: vec![DeckPart::Mix(DeckMixSettingsChange::Crossfader(
+                        kithara_play::CrossfaderGain::MAX,
+                    ))],
                 },
             )
             .expect("fill available deck capacity");

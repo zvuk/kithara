@@ -62,6 +62,8 @@ pub struct OfflinePlayerOptions {
     gapless_mode: GaplessMode,
     #[builder(default)]
     mix: DeckMixSettings,
+    /// FX units the deck is built with; the mixer default when unset.
+    fx_units: Option<usize>,
     /// Await producer PCM during offline preparation, before graph processing.
     /// PCM suites opt in so decoder underruns cannot appear as rendered silence.
     /// Decoder stalls still fail the existing no-progress watchdog.
@@ -163,7 +165,16 @@ where
             QueueConfig::with_factory(factory)
                 .prep(prep.clone())
                 .track(track)
-                .mixer(DeckMixerConfig::builder().mix(options.mix).build())
+                .mixer(
+                    DeckMixerConfig::builder()
+                        .mix(options.mix)
+                        .fx_units(
+                            options
+                                .fx_units
+                                .unwrap_or_else(|| DeckMixerConfig::default().fx_units()),
+                        )
+                        .build(),
+                )
                 .settings(settings)
                 .store(memory_asset_store())
                 .maybe_downloader(options.downloader)

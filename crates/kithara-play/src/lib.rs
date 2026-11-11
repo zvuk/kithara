@@ -37,10 +37,11 @@ pub use kithara_render::{
     DispatcherProtocol, EngineLoad, EngineLoadSnapshot, InvalidCrossfade, LaneId, LoadRefusal,
     PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
     bridge::{
-        CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckMixSettings,
-        DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, EqSnapshot,
-        FadeDir, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault, Returned,
-        RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot, TrackClock,
+        CrossfaderGain, CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckFxChange,
+        DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot,
+        EqSnapshot, FadeDir, FxMix, MixTapWriter, ParameterCurveError, ParameterKnot,
+        PlaybackFault, Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot,
+        SlotSnapshot, TrackClock, Trim,
     },
     dispatch,
     rt::{
