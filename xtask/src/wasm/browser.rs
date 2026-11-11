@@ -134,6 +134,7 @@ fn execute(args: &TestArgs, ctx: &Ctx, process: &Process) -> Result<()> {
             .arg(&toolchain)
             .args(consts::WASM_TEST_ARGS)
             .args(selection)
+            .args(["--", "--nocapture"])
             .envs(&vars);
         process.run_command(&mut command, label)
     };
@@ -281,6 +282,11 @@ mod tests {
                 assert_eq!(env::split_paths(&step.env["PATH"]).next().unwrap(), target);
                 assert_eq!(values(step, "--target"), ["wasm32-unknown-unknown"]);
                 assert_eq!(values(step, "--profile"), ["test-release"]);
+                assert!(
+                    step.args.ends_with(&["--".into(), "--nocapture".into()]),
+                    "every browser test streams its console output before the summary: {:?}",
+                    step.args
+                );
                 assert_eq!(
                     values(step, "-Z"),
                     [

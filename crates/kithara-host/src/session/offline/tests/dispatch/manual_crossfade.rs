@@ -19,7 +19,7 @@ use num_traits::ToPrimitive;
 use ringbuf::{HeapCons, traits::Consumer};
 
 use super::*;
-use crate::{HostSettings, MetronomeConfig};
+use crate::{HostSettings, MetronomeConfig, session::queue::HostPart};
 
 struct ManualDeck {
     tracks: [PlayerImpl<TestPools>; 2],
@@ -165,7 +165,14 @@ impl HostedDeck<TestPools> for ManualDeck {
 
 #[kithara::test(tokio)]
 async fn a_manual_four_second_batch_reaches_the_host_output_on_its_native_frame() {
-    kithara_platform::tokio::task::spawn_blocking(manual_four_second_batch)
+    kithara_platform::tokio::task::spawn_blocking(|| manual_four_second_batch(false))
+        .await
+        .expect("the blocking manual Host render completes");
+}
+
+#[kithara::test(tokio)]
+async fn a_metronome_enabled_one_block_before_a_beat_sounds_from_its_applied_frame() {
+    kithara_platform::tokio::task::spawn_blocking(|| manual_four_second_batch(true))
         .await
         .expect("the blocking manual Host render completes");
 }
@@ -208,24 +215,32 @@ struct ManualRecording {
     reference_output: Vec<f32>,
     clock: u64,
     applied: usize,
+    metronome_at: u64,
 }
 
-fn manual_four_second_batch() {
+fn manual_four_second_batch(before_beat: bool) {
     let directory = TestTempDir::new();
     let sources = ManualSources::new(&directory);
     let mut hosts = ManualHosts::new(&sources);
-    let plan = hosts.prepare();
+    let plan = hosts.prepare(before_beat);
     let drops = Arc::new(AtomicU64::new(0));
-    let mut taps = hosts.capture_outputs(&plan, &drops);
+    let (mut taps, metronome) = hosts.capture_outputs(&plan, &drops);
     let settings = CrossfadeSettings::new(4.0, CrossfadeCurve::EqualPower, 0.7, 0.3)
         .expect("four-second manual fade");
     let transition = hosts.schedule(&plan, settings);
     hosts.state.owner.pass();
     let trace = usdt::scope();
-    let recording = hosts.render(&plan, settings, transition, &mut taps, &drops);
+    let recording = hosts.render(&plan, settings, transition, metronome, &mut taps, &drops);
     recording.assert_pcm(&sources, &plan, settings);
     let snapshot = hosts.assert_finished(&plan, &recording);
-    let grid = hosts.assert_grid(&plan, &recording);
+    let (grid, silent, sounding) = hosts.assert_grid(&plan, &recording);
+    assert!(sounding > 0, "the take checks at least one sounding beat");
+    if before_beat {
+        assert!(
+            silent > 0,
+            "the take checks a beat before the metronome applies"
+        );
+    }
     #[cfg(feature = "usdt")]
     assert_incoming_consumption(&trace, hosts.incoming_id, plan.at, sources.spec);
     drop(trace);
@@ -237,7 +252,12 @@ fn manual_four_second_batch() {
     let outgoing_id = hosts.outgoing_id;
     let incoming_id = hosts.incoming_id;
     if let Some(root) = std::env::var_os("KITHARA_AUDIO_ARTIFACT_DIR") {
-        let root = PathBuf::from(root).join("manual-four-second-host");
+        let take = if before_beat {
+            "manual-four-second-host-before-beat"
+        } else {
+            "manual-four-second-host"
+        };
+        let root = PathBuf::from(root).join(take);
         std::fs::create_dir_all(&root).expect("manual take artifact directory");
         kithara_play::mock::write_pcm_wav(&root.join("output.wav"), &output, spec)
             .expect("actual Host Output WAV");
@@ -354,7 +374,7 @@ impl ManualHosts {
         }
     }
 
-    fn prepare(&mut self) -> ManualPlan {
+    fn prepare(&mut self, before_beat: bool) -> ManualPlan {
         let id = self.id;
         let outgoing_id = self.outgoing_id;
         let incoming_id = self.incoming_id;
@@ -413,6 +433,17 @@ impl ManualHosts {
             reference_clock, clock,
             "reference uses every actual setup render range"
         );
+        if before_beat {
+            let beat = self.beat_after_block_start(clock);
+            while clock < beat / BLOCK * BLOCK {
+                fixture_pass(&mut self.state, &mut clock);
+                fixture_pass(&mut self.reference, &mut reference_clock);
+            }
+            assert_eq!(
+                reference_clock, clock,
+                "reference follows every advanced block"
+            );
+        }
         let snapshot = deck_snapshot(&mut self.state, id);
         let outgoing_slot = snapshot
             .slots
@@ -445,6 +476,28 @@ impl ManualHosts {
             outgoing_mark,
             expected_basis,
         }
+    }
+
+    /// The first upcoming beat whose checked window ends before the block after its own.
+    fn beat_after_block_start(&self, clock: u64) -> u64 {
+        let grid = self.state.root.grid().clone();
+        (clock.div_ceil(PERIOD)..clock.div_ceil(PERIOD) + 16)
+            .map(|ordinal| {
+                let BeatGridQuery::Resolved(estimate) = grid.position_at(MapPoint::new(
+                    grid.stamp(),
+                    Beat::new(ordinal.to_f64().expect("beat ordinal")).expect("beat"),
+                )) else {
+                    panic!("the actual Host grid resolves beat {ordinal}")
+                };
+                let MapPosition::Session(frame) = *estimate.value().value() else {
+                    panic!("beat {ordinal} maps to a session frame")
+                };
+                frame
+                    .frames_since(SessionFrame::new(0))
+                    .expect("beat after the session origin")
+            })
+            .find(|frame| *frame >= clock && frame % BLOCK + 256 < BLOCK)
+            .expect("a beat early in its block within sixteen beats")
     }
 
     fn settle_setup(
@@ -508,7 +561,11 @@ impl ManualHosts {
         crate::session::queue::place_moved(&mut self.state, moved);
     }
 
-    fn capture_outputs(&mut self, plan: &ManualPlan, drops: &Arc<AtomicU64>) -> Vec<HeapCons<f32>> {
+    fn capture_outputs(
+        &mut self,
+        plan: &ManualPlan,
+        drops: &Arc<AtomicU64>,
+    ) -> (Vec<HeapCons<f32>>, Seq) {
         let ManualPlan { start, end, .. } = *plan;
         let capacity = usize::try_from((end - start) * 2 + BLOCK * 2).expect("finite tap capacity");
         let mut taps = Vec::new();
@@ -520,20 +577,21 @@ impl ManualHosts {
                 .expect("attach real Host tap");
             taps.push(consumer);
         }
-        ask(
+        let metronome = ask_for_seq(
             &mut self.state,
             HostCommand::Configure(
                 HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true)),
                 When::Next,
             ),
         )
-        .expect("enable the actual Host metronome");
+        .expect("enable the actual Host metronome")
+        .expect("the timed metronome enable is sent as its own batch");
         configure_next(
             &mut self.reference,
             HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true)),
         )
         .expect("enable the real reference metronome at the same session frame");
-        taps
+        (taps, metronome)
     }
 
     fn schedule(&mut self, plan: &ManualPlan, settings: CrossfadeSettings) -> Seq {
@@ -587,6 +645,7 @@ impl ManualHosts {
         plan: &ManualPlan,
         settings: CrossfadeSettings,
         transition: Seq,
+        metronome: Seq,
         taps: &mut [HeapCons<f32>],
         drops: &AtomicU64,
     ) -> ManualRecording {
@@ -604,6 +663,7 @@ impl ManualHosts {
         let mut rendered = Vec::new();
         let mut reference_output = Vec::new();
         let mut applied = 0;
+        let mut metronome_at = None;
         while clock < end {
             self.state.owner.begin_pass();
             self.state
@@ -663,6 +723,27 @@ impl ManualHosts {
                         applied += 1;
                     }
                     ScopedReceipt::Root(receipt) => {
+                        if receipt.seq() == metronome {
+                            assert!(
+                                matches!(
+                                    receipt.batch().commands.as_slice(),
+                                    [HostPart::Settings(HostSettingsChange::Metronome(
+                                        MetronomeConfigChange::Enabled(true)
+                                    ))]
+                                ),
+                                "the metronome receipt answers its own enable"
+                            );
+                            let Outcome::Applied { at: enabled, .. } = receipt.outcome() else {
+                                panic!("the metronome enable applies: {:?}", receipt.outcome())
+                            };
+                            let enabled = enabled
+                                .frames_since(SessionFrame::new(0))
+                                .expect("the metronome applies on the session axis");
+                            assert!(
+                                metronome_at.replace(enabled).is_none(),
+                                "one metronome receipt"
+                            );
+                        }
                         crate::session::queue::settle_receipt(
                             &mut self.state,
                             &receipt,
@@ -688,12 +769,18 @@ impl ManualHosts {
         assert_eq!(master.len(), output.len());
         assert_eq!(reference_output.len(), output.len());
         assert_eq!(drops.load(Ordering::Relaxed), 0);
+        let metronome_at = metronome_at.expect("the metronome enable is answered during the take");
+        assert!(
+            (start..clock).contains(&metronome_at),
+            "the metronome applies inside the take"
+        );
         ManualRecording {
             master,
             output,
             reference_output,
             clock,
             applied,
+            metronome_at,
         }
     }
 
@@ -764,9 +851,16 @@ impl ManualHosts {
         snapshot
     }
 
-    fn assert_grid(&self, plan: &ManualPlan, recording: &ManualRecording) -> BeatGridSnapshot {
+    /// Returns the grid with the counts of checked beats before and after the metronome applies.
+    fn assert_grid(
+        &self,
+        plan: &ManualPlan,
+        recording: &ManualRecording,
+    ) -> (BeatGridSnapshot, usize, usize) {
         let start = plan.start;
         let clock = recording.clock;
+        let enabled = usize::try_from((recording.metronome_at - start) * 2).expect("in take");
+        let (mut silent, mut sounding) = (0, 0);
         let master = &recording.master;
         let output = &recording.output;
         let grid = self.state.root.grid().clone();
@@ -785,15 +879,32 @@ impl ManualHosts {
                 MapPosition::Session(SessionFrame::new(expected as i64))
             );
             let offset = usize::try_from((expected - start) * 2).expect("beat in take");
-            assert!(
-                output[offset + 2..offset + 512]
-                    .iter()
-                    .zip(&master[offset + 2..offset + 512])
-                    .any(|(output, master)| (output - master).abs() > 0.01),
-                "the real metronome sounds at mapped beat {ordinal}"
-            );
+            if expected >= recording.metronome_at {
+                assert!(
+                    output[offset + 2..offset + 512]
+                        .iter()
+                        .zip(&master[offset + 2..offset + 512])
+                        .any(|(output, master)| (output - master).abs() > 0.01),
+                    "the real metronome sounds at mapped beat {ordinal}"
+                );
+                sounding += 1;
+            } else {
+                let before = offset + 2..enabled.min(offset + 512);
+                assert!(
+                    !before.is_empty(),
+                    "beat {ordinal} has samples before the metronome"
+                );
+                assert!(
+                    output[before.clone()]
+                        .iter()
+                        .zip(&master[before])
+                        .all(|(output, master)| (output - master).abs() <= 0.01),
+                    "the metronome stays silent at mapped beat {ordinal} before it applies"
+                );
+                silent += 1;
+            }
         }
-        grid
+        (grid, silent, sounding)
     }
 }
 
