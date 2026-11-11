@@ -14,14 +14,14 @@ use kithara_platform::{
     time::{Duration, timeout},
 };
 use kithara_play::{
-    DeckMixSettings, DeckMixerConfig, DeckPart, DeckPass, HostedDeck, Outbox, PlayWorker,
-    PlayWorkerConfig, Player, ResourceConfig, ResourceLoad, ResourcePrep, ResourceSrc,
-    TrackReceipt, mock, mock::DeckRig,
+    DeckMixSettings, DeckMixerConfig, DeckPart, DeckPass, HostedDeck, Outbox, PlayWorker, Player,
+    ResourceConfig, ResourceLoad, ResourcePrep, ResourceSrc, TrackReceipt, mock, mock::DeckRig,
 };
 use kithara_signal::{FrameCount, SessionFrame};
 pub(crate) use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_test_utils::{TestTempDir, kithara};
 
+pub(crate) use super::fixture::QueueFixture;
 use crate::{Queue, QueueCommand, QueueConfig, TrackSource};
 
 /// Fixtures are seeded into the store under `.invalid` hosts, so no request
@@ -126,7 +126,7 @@ pub(crate) fn pending_selection() -> (
     TrackId,
     TrackId,
     DeckRig<TestPools>,
-    TestTempDir,
+    QueueFixture,
 ) {
     let (mut queue, mut rig, dir) = empty_queue();
     let source = fixture_uri(dir.path(), "entry.wav");
@@ -428,7 +428,7 @@ pub(crate) fn answer_deck(
 /// # Panics
 /// Panics if the PCM fixture cannot be written or the command rig cannot be created.
 #[must_use]
-pub(crate) fn empty_queue() -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
+pub(crate) fn empty_queue() -> (Queue<TestPools>, DeckRig<TestPools>, QueueFixture) {
     queue_with_load_settings(NonZeroUsize::new(3).expect("default cap"), false)
 }
 
@@ -441,11 +441,9 @@ pub(crate) fn empty_queue() -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDi
 pub(crate) fn queue_with_load_settings(
     max_concurrent_loads: NonZeroUsize,
     should_autoplay: bool,
-) -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
-    let dir = TestTempDir::new();
-    let prep = ResourcePrep::builder()
-        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-        .build();
+) -> (Queue<TestPools>, DeckRig<TestPools>, QueueFixture) {
+    let dir = QueueFixture::new();
+    let prep = ResourcePrep::builder().worker(dir.worker().clone()).build();
     let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .build();
@@ -547,7 +545,7 @@ pub(crate) async fn selected() -> (
     TrackId,
     TrackId,
     DeckRig<TestPools>,
-    TestTempDir,
+    QueueFixture,
 ) {
     let (mut queue, first, second, mut rig, dir) = pending_selection();
     hang_tick!();

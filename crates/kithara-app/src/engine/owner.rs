@@ -178,6 +178,10 @@ impl Engine {
         }
 
         self.session.close();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(error) = self.config.worker.shutdown_and_join() {
+            error!(%error, "playback worker shutdown failed");
+        }
         self.has_shut_down = true;
     }
 

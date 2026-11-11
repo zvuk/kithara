@@ -6,7 +6,7 @@ use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::{SourceResidency, source_frame};
+use super::{SourceResidency, source_frame, split_position};
 use crate::{
     StretchKind, Warp, WarpConfig,
     test_pools::{pools, sample_buffer},
@@ -33,17 +33,16 @@ fn reference(
                     .to_f32()
                     .expect("float conversion");
             }
+            let mut taps = [0.0; 33];
+            kithara_dsp::interp::sinc_hann_weights(
+                -16.0 - fraction,
+                speed.recip(),
+                17.0,
+                &mut taps,
+            );
             let mut total = 0.0;
             let mut weights = 0.0;
-            for offset in -16_i32..=16 {
-                let distance = f64::from(offset) - fraction;
-                let angle = std::f64::consts::PI * distance * speed.recip();
-                let sinc = if angle == 0.0 {
-                    speed.recip()
-                } else {
-                    angle.sin() / (std::f64::consts::PI * distance)
-                };
-                let weight = sinc * ((1.0 + (std::f64::consts::PI * distance / 17.0).cos()) * 0.5);
+            for (offset, weight) in (-16_i32..=16).zip(taps) {
                 let frame = (i32::try_from(source).expect("fixture frame") + offset)
                     .clamp(0, i32::try_from(last).expect("last frame"));
                 total += f64::from(
@@ -88,10 +87,11 @@ fn source_window_matches_independent_scalar_rows() {
                     let mut output = vec![7.0; count + 1];
                     source_frame(
                         &resident,
-                        (
+                        split_position((
                             u128::try_from(source).expect("frame") * denominator.get() + phase,
                             denominator,
-                        ),
+                        ))
+                        .expect("representable position"),
                         speed,
                         Some(64),
                         &mut output[..count],
@@ -136,15 +136,14 @@ fn integer_phase_needs_no_next_frame_and_preserves_special_bits() {
         )
         .expect("special PCM");
     let mut output = [7.0; 6];
-    source_frame(&resident, (0, NonZeroU128::MIN), 1.0, None, &mut output)
-        .expect("no lookahead required");
+    source_frame(&resident, (0, 0.0), 1.0, None, &mut output).expect("no lookahead required");
     assert_eq!(output.map(f32::to_bits), samples.map(f32::to_bits));
     for speed in [1.0, 2.0] {
         output.fill(7.0);
         assert_eq!(
             source_frame(
                 &resident,
-                (1, NonZeroU128::new(2).expect("phase")),
+                split_position((1, NonZeroU128::new(2).expect("phase"))).expect("half frame"),
                 speed,
                 None,
                 &mut output
@@ -157,19 +156,17 @@ fn integer_phase_needs_no_next_frame_and_preserves_special_bits() {
     }
     output.fill(7.0);
     assert_eq!(
-        source_frame(
-            &resident,
-            (u128::MAX, NonZeroU128::MIN),
-            1.0,
-            None,
-            &mut output
-        ),
+        split_position((u128::MAX, NonZeroU128::MIN)),
+        Err(ElasticError::SampleCountOverflow)
+    );
+    assert_eq!(
+        source_frame(&resident, (i64::MAX, 0.0), 1.0, None, &mut output),
         Err(ElasticError::SampleCountOverflow)
     );
     assert_eq!(output, [7.0; 6]);
     resident.origin = None;
     assert_eq!(
-        source_frame(&resident, (0, NonZeroU128::MIN), 1.0, None, &mut output),
+        source_frame(&resident, (0, 0.0), 1.0, None, &mut output),
         Err(ElasticError::EmptySource)
     );
     assert_eq!(output, [7.0; 6]);

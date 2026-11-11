@@ -3,7 +3,7 @@ use kithara::{abr::AbrMode, platform::sync::Arc};
 use super::WasmInner;
 use crate::{
     observer::FfiKeyProcessor,
-    types::{FfiAbrMode, FfiKeyRule},
+    types::{FfiAbrMode, FfiKeyRule, peak_bitrate_cap},
 };
 
 impl WasmInner {
@@ -15,12 +15,8 @@ impl WasmInner {
         else {
             return;
         };
-        let mode = match mode {
-            FfiAbrMode::Auto => AbrMode::Auto(None),
-            FfiAbrMode::Manual { variant_index } => AbrMode::manual(variant_index as usize),
-        };
-        if let Err(error) = handle.set_mode(mode) {
-            self.routes.error(error.to_string());
+        if let Err(error) = handle.set_mode(AbrMode::from(mode)) {
+            tracing::warn!(?error, "set_abr_mode rejected by ABR state");
         }
     }
 
@@ -53,20 +49,7 @@ impl WasmInner {
             .queue()
             .and_then(|queue| queue.current_abr_handle())
         {
-            handle.set_max_bandwidth_bps(effective_cap(wifi_bps, cellular_bps));
+            handle.set_max_bandwidth_bps(peak_bitrate_cap(wifi_bps, cellular_bps));
         }
     }
-}
-
-fn effective_cap(wifi_bps: f64, cellular_bps: f64) -> Option<u64> {
-    const U64_MAX_AS_F64: f64 = 18_446_744_073_709_551_615.0;
-    let cap = [wifi_bps, cellular_bps]
-        .into_iter()
-        .filter(|v| *v > 0.0)
-        .reduce(f64::min)
-        .filter(|v| v.is_finite() && *v > 0.0)?;
-    if cap >= U64_MAX_AS_F64 {
-        return Some(u64::MAX);
-    }
-    Some(num_traits::cast(cap.trunc()).unwrap_or(u64::MAX))
 }

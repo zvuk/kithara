@@ -105,10 +105,11 @@ fn native_cpu_accounts_for_actual_child_work() {
     const FIXTURE: &str = "KITHARA_MEASURE_CHILD_CPU_FIXTURE";
     if env::var_os(FIXTURE).is_some() {
         let mut result = 0u64;
-        for value in 0..2_000_000u64 {
+        // Keep the work above millisecond-scale native CPU accounting resolution.
+        for value in 0..64_000_000u64 {
             result = std::hint::black_box(result.wrapping_add(std::hint::black_box(value)));
         }
-        assert_eq!(result, 1_999_999_000_000);
+        assert_eq!(result, 2_047_999_968_000_000);
         println!("measured-child-pid={}", std::process::id());
         return;
     }
