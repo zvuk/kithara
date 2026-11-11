@@ -6,9 +6,53 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::{StreamExt, future::poll_fn, stream};
-use kithara::net::{HttpBody, HttpTransport, NetError};
+use kithara::{
+    download::{Downloader, DownloaderConfig},
+    net::{HttpBody, HttpClient, HttpTransport, NetError, NetOptions},
+    platform::tokio::runtime::Handle,
+};
+use kithara_test_utils::cancel_token;
 use tower_service::Service;
 use url::{Origin, Url};
+
+/// An ad-hoc test router served in memory, so its requests stay on the test
+/// clock instead of crossing a loopback socket.
+pub struct ModeledServer {
+    router: Router,
+    base_url: Url,
+}
+
+impl ModeledServer {
+    /// Serve `router` under a fixed test origin.
+    #[must_use]
+    pub fn new(router: Router) -> Self {
+        Self {
+            router,
+            base_url: Url::parse("http://modeled.test/").expect("valid modeled origin"),
+        }
+    }
+
+    /// Build a URL for `path` under this server.
+    #[must_use]
+    pub fn url(&self, path: &str) -> Url {
+        self.base_url.join(path).expect("join modeled URL path")
+    }
+
+    /// Download through this router with the default HTTP policy.
+    #[must_use]
+    pub fn downloader(&self) -> Downloader {
+        let client = HttpClient::new_with_transport(
+            NetOptions::default(),
+            Transport::new(self.router.clone(), self.base_url.origin()),
+            cancel_token(),
+        );
+        Downloader::new(
+            DownloaderConfig::for_client(client)
+                .runtime(Handle::current())
+                .build(),
+        )
+    }
+}
 
 pub(super) struct Transport {
     router: Router,

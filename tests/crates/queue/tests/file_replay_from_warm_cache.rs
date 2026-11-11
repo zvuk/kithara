@@ -9,7 +9,7 @@ use kithara::{
     decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
@@ -81,9 +81,8 @@ async fn build_session(cache_path: &Path) -> Session {
     .expect("create product offline queue");
     let tick = QueueTicker::spawn(queue.control(), Duration::from_millis(50));
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools,
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

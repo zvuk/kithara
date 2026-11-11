@@ -5,7 +5,7 @@ use kithara::{
     download::{Downloader, DownloaderConfig, DownloaderEvent},
     events::EventBus,
     hls::{AbrMode, Hls, HlsConfig},
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{
         CancelToken,
         time::{self, Duration},
@@ -20,13 +20,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 
-#[kithara::test(
-    tokio,
-    native,
-    flash(false),
-    timeout(Duration::from_secs(20)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let ladder = abr_binary_ladder(false, Duration::ZERO);
@@ -43,9 +37,8 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
     let cancel = CancelToken::never();
     let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())
