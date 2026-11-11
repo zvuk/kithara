@@ -5,7 +5,7 @@ use kithara_test_utils::kithara;
 
 use super::*;
 use crate::{
-    GridSegment, RegionPlan, Warp,
+    Warp,
     test_pools::{TestPools, pools, sample_buffer},
 };
 
@@ -35,9 +35,6 @@ fn keylock_reprime_retains_projected_source_history() {
     let config = WarpConfig::builder()
         .backend(StretchKind::Signalsmith)
         .speed(4.0)
-        .region_plan(kithara_platform::sync::Arc::new(
-            RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 0.25)]).expect("region"),
-        ))
         .render_quantum_frames(NonZeroUsize::new(128).expect("quantum"))
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools());

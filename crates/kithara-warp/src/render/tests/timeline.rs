@@ -1,5 +1,3 @@
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use kithara_platform::sync::Arc;
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
@@ -44,7 +42,7 @@ use super::{WarpRenderer, f64_of};
 ))]
 use super::{chunk, render_serviced, renderer, spec};
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use crate::{GridSegment, RegionPlan, Warp};
+use crate::Warp;
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 fn finish_unity_transition(
@@ -389,24 +387,15 @@ fn exact_output_frames_do_not_drift_across_partitions() {
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn one_frame_regions_accumulate_into_one_portable_request(
+fn sub_frame_outputs_accumulate_into_one_portable_request(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
 ) {
     let mut fx = renderer(
         &WarpConfig::builder()
-            .speed(1.0)
+            .speed(4.0)
             .keylock(true)
             .backend(backend)
-            .region_plan(Arc::new(
-                RegionPlan::new(vec![
-                    GridSegment::new(0, 1, 0.125),
-                    GridSegment::new(1, 2, 0.25),
-                    GridSegment::new(2, 3, 0.125),
-                    GridSegment::new(3, 4, 0.5),
-                ])
-                .expect("one-frame regions are ordered and non-empty"),
-            ))
             .build(),
     );
     let pools = fx.pools.clone();
@@ -451,47 +440,48 @@ fn pending_span_uses_earliest_start_and_latest_frontier(
 ) {
     let mut fx = renderer(
         &WarpConfig::builder()
-            .speed(1.0)
+            .speed(4.0)
             .keylock(true)
             .backend(backend)
-            .region_plan(Arc::new(
-                RegionPlan::new(vec![
-                    GridSegment::new(0, 1, 1.0),
-                    GridSegment::new(1, 2, 0.75),
-                    GridSegment::new(2, 3, 0.25),
-                ])
-                .expect("fixture regions are contiguous"),
-            ))
             .build(),
     );
     let pools = fx.pools.clone();
-    let source = warp_sine[..(3) * 2].to_vec();
-    let mut first = chunk(&pools, &source[..2 * usize::from(consts::CH)]);
+    let source = warp_sine[..8 * 2].to_vec();
+    let mut lead = chunk(&pools, &source[..4 * usize::from(consts::CH)]);
+    lead.meta.end_timestamp = Duration::from_millis(10);
+    let lead_output = render_serviced(&mut fx, lead).expect("four frames render one frame");
+
+    let mut first = chunk(
+        &pools,
+        &source[4 * usize::from(consts::CH)..6 * usize::from(consts::CH)],
+    );
+    first.meta.frame_offset = 4;
+    first.meta.timestamp = spec().duration_for(4).expect("test timestamp fits");
     first.meta.end_timestamp = Duration::from_millis(20);
     first.meta.segment_index = Some(1);
     first.meta.variant_index = Some(1);
-    first.meta.segment = kithara_signal::SegmentId::FIRST.next();
+    first.meta.segment = lead_output.meta.segment.next();
     first.meta.source_byte_offset = Some(10);
     first.meta.source_bytes = 20;
-    let first_output = render_serviced(&mut fx, first).expect("first frame renders");
+    assert!(render_serviced(&mut fx, first).is_none());
 
-    let mut second = chunk(&pools, &source[2 * usize::from(consts::CH)..]);
-    second.meta.frame_offset = 2;
+    let mut second = chunk(&pools, &source[6 * usize::from(consts::CH)..]);
+    second.meta.frame_offset = 6;
     second.meta.timestamp = Duration::from_millis(20);
     second.meta.end_timestamp = Duration::from_millis(30);
     second.meta.segment_index = Some(2);
     second.meta.variant_index = Some(2);
-    second.meta.segment = first_output.meta.segment.next();
+    second.meta.segment = lead_output.meta.segment.next().next();
     second.meta.source_byte_offset = Some(30);
     second.meta.source_bytes = 10;
     let second_output =
         render_serviced(&mut fx, second).expect("pending span completes on the next chunk");
 
-    assert!(first_output.meta.end_timestamp < second_output.meta.end_timestamp);
-    assert_eq!(second_output.meta.frame_offset, 1);
+    assert!(lead_output.meta.end_timestamp < second_output.meta.end_timestamp);
+    assert_eq!(second_output.meta.frame_offset, 4);
     assert_eq!(
         second_output.meta.timestamp,
-        spec().duration_for(1).expect("test timestamp fits")
+        spec().duration_for(4).expect("test timestamp fits")
     );
     assert_eq!(second_output.meta.end_timestamp, Duration::from_millis(30));
     assert_eq!(second_output.meta.segment_index, Some(2));
@@ -499,56 +489,6 @@ fn pending_span_uses_earliest_start_and_latest_frontier(
     assert_eq!(second_output.meta.segment.get(), 2);
     assert_eq!(second_output.meta.source_byte_offset, None);
     assert_eq!(second_output.meta.source_bytes, 0);
-}
-
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn rendered_source_frontier_excludes_pending_source(
-    #[case] backend: StretchKind,
-    warp_sine: Vec<f32>,
-) {
-    let probe = renderer(&WarpConfig::builder().keylock(true).backend(backend).build());
-    let source_latency = probe
-        .engine
-        .as_ref()
-        .expect("compiled backend is available")
-        .capabilities()
-        .latency()
-        .first();
-    assert!(source_latency <= probe.source_block_frames.get());
-    let latency = u64::try_from(source_latency).expect("source latency fits u64");
-    let mut fx = renderer(
-        &WarpConfig::builder()
-            .keylock(true)
-            .backend(backend)
-            .region_plan(Arc::new(
-                RegionPlan::new(vec![GridSegment::new(latency + 1, latency + 2, 0.25)])
-                    .expect("fixture region is valid"),
-            ))
-            .build(),
-    );
-    let pools = fx.pools.clone();
-
-    let source = warp_sine[..(source_latency + 2) * 2].to_vec();
-    let split = source_latency * usize::from(consts::CH);
-    render_serviced(&mut fx, chunk(&pools, &source[..split])).expect("latency-sized span renders");
-
-    let mut input = chunk(&pools, &source[split..]);
-    input.meta.frame_offset = u64::try_from(source_latency).expect("source latency fits u64");
-    let output = render_serviced(&mut fx, input).expect("the unity source frame renders");
-
-    assert_eq!(output.frames(), 1);
-    assert_eq!(fx.pending_frames(usize::from(consts::CH)), 1);
-    assert_eq!(
-        fx.rendered_source_end(),
-        Some((1, spec().sample_rate)),
-        "frontier excludes the source frame not yet submitted to the backend"
-    );
 }
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]

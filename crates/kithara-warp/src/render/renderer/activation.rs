@@ -58,9 +58,6 @@ where
         if self.transition_pending() || self.engine_outdated() {
             return Err(crate::WarpRenderError::NeedsService);
         }
-        if !self.requires_staging() && self.plan.is_some() {
-            return Err(crate::WarpRenderError::UnsupportedRegionPlan);
-        }
         self.terminal_source_end = None;
         let prepared = self.prepare_active_quantum(meta, remaining, output_limit)?;
         self.prepared_quantum = Some(prepared);
@@ -93,9 +90,8 @@ where
         output_limit: usize,
     ) -> Result<PreparedQuantum, ElasticError> {
         if !self.requires_staging()
-            || (self.plan.is_none()
-                && (self.trajectory.constant_unity()
-                    || (!self.current_keylock && self.trajectory.unity_interval())))
+            || self.trajectory.constant_unity()
+            || (!self.current_keylock && self.trajectory.unity_interval())
         {
             return self.prepare_unity_quantum(meta, remaining, output_limit);
         }
@@ -178,7 +174,8 @@ where
             .and_then(|offset| u64::try_from(offset).ok())
             .ok_or(ElasticError::SampleCountOverflow)?;
         let (numerator, denominator) =
-            self.mapped_position(meta.frame_offset, meta.spec.sample_rate, offset)?;
+            self.trajectory
+                .at_offset(meta.frame_offset, meta.spec.sample_rate, offset)?;
         let reach = self.source_reach()?;
         let end = u64::try_from(numerator.div_ceil(denominator.get()))
             .ok()
@@ -200,12 +197,7 @@ where
 
     /// Source frames past a position that a read at it reaches.
     pub(super) fn source_reach(&self) -> Result<u64, ElasticError> {
-        let correction = self.plan.as_ref().map_or(1.0, |plan| {
-            plan.segments().iter().fold(1.0_f64, |minimum, segment| {
-                minimum.min(segment.ratio_correction())
-            })
-        });
-        let radius = if f64::from(self.trajectory.speed_bounds()?.1) <= correction {
+        let radius = if self.trajectory.speed_bounds()?.1 <= 1.0 {
             0
         } else {
             crate::consts::SOURCE_RADIUS

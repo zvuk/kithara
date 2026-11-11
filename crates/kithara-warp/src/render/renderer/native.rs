@@ -56,7 +56,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         capabilities: ElasticCapabilities,
         keylock: bool,
     ) -> Result<Option<(f64, f64)>, ElasticError> {
-        if !keylock || self.plan.is_some() {
+        if !keylock {
             return Ok(None);
         }
         let (minimum, maximum) = trajectory.speed_bounds()?;
@@ -309,7 +309,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     }
 
     fn check_native_origin(&self, span: SourceSpan) -> Result<(), ElasticError> {
-        let expected = self.mapped_position(span.start(), self.spec.sample_rate, 0)?;
+        let expected = self
+            .trajectory
+            .at_offset(span.start(), self.spec.sample_rate, 0)?;
         let actual = span
             .source_ratio_at(0)
             .ok_or(ElasticError::SampleCountOverflow)?;

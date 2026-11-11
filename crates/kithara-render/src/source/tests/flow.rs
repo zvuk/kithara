@@ -550,17 +550,13 @@ async fn rejected_staged_quantum_retains_both_owning_buffers(quarter: Vec<f32>) 
 #[kithara::test(native)]
 #[cfg(feature = "stretch-signalsmith")]
 fn projected_keylock_switch_keeps_pending_input_during_resident_output(quarter: Vec<f32>) {
-    use kithara_warp::{GridSegment, RegionPlan};
     let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("sample rate"));
     let pools = pools();
     let config = kithara_warp::WarpConfig::builder()
-        .speed(1.0)
+        .speed(2.0 / 3.0)
         .keylock(true)
         .backend(StretchKind::Signalsmith)
         .render_quantum_frames(NonZeroUsize::new(128).expect("quantum"))
-        .region_plan(Arc::new(
-            RegionPlan::new(vec![GridSegment::new(0, 480_000, 1.5)]).expect("region geometry"),
-        ))
         .build();
     let head = Arc::new(AtomicU64::new(0));
     let raw = RawSource {

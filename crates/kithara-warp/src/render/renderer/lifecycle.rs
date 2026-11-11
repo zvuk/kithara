@@ -313,7 +313,6 @@ where
         self.output_remainder = 0.0;
         self.source_frames_admitted = 0;
         self.active = false;
-        self.region = None;
     }
 }
 
@@ -449,7 +448,6 @@ where
         self.source_frames_admitted = 0;
         self.reset_pending = false;
         self.active = false;
-        self.region = None;
     }
 }
 
@@ -639,9 +637,6 @@ where
         {
             return ControlFlow::Break(chunk);
         }
-        if !self.requires_staging() && self.plan.is_some() {
-            return ControlFlow::Break(chunk);
-        }
         self.prepared_quantum = None;
         let rate = self.rate;
         let speed = rate.speed();
@@ -702,8 +697,7 @@ where
             self.defer_scratch(Some(chunk.samples));
             return None;
         }
-        if self.plan.is_none()
-            && (!self.requires_staging() || self.trajectory.unity_interval())
+        if (!self.requires_staging() || self.trajectory.unity_interval())
             && self.stateless_tail_owed.is_none()
             && span.source_ratio_at(0)
                 == Some((

@@ -11,9 +11,6 @@ pub enum WarpRenderError {
     /// Another source span is already prepared and retains its producer identity.
     #[error("another source quantum is already prepared")]
     OutstandingQuantum,
-    /// This target has no renderer capable of applying a region plan.
-    #[error("region plan rendering is unavailable on this target")]
-    UnsupportedRegionPlan,
     /// Decoded input already has a nonlinear source law from another render stage.
     #[error("Warp requires affine decoded PCM geometry; nonlinear input is unsupported")]
     UnsupportedSourceGeometry,

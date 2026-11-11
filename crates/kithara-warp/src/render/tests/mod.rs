@@ -9,7 +9,6 @@ mod entry;
 mod exact;
 mod fixtures;
 #[cfg(feature = "stretch-identity")]
-mod identity;
 mod playback;
 mod projection;
 mod retirement;

@@ -240,7 +240,7 @@ where
         channels: usize,
         frames: usize,
     ) -> Result<(), ElasticError> {
-        let base = 1.0 / f64::from(speed);
+        let stretch = 1.0 / f64::from(speed);
         let pitch = if self.current_keylock {
             1.0
         } else {
@@ -253,16 +253,12 @@ where
             if consumed == frames {
                 return Ok(());
             }
-            let region = self.region_for(frame);
-            let left = u64::try_from(frames - consumed).unwrap_or(u64::MAX);
-            let span = region.end().saturating_sub(frame).min(left).max(1);
-            let stretch = base * region.correction();
             let capabilities = self
                 .engine
                 .as_ref()
                 .map(|engine| engine.capabilities())
                 .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-            let remaining = usize::try_from(span).unwrap_or(frames - consumed);
+            let remaining = frames - consumed;
             let pending_frames = self.pending_frames(channels);
             let available = Self::available_source(stretch, capabilities, pending_frames)?;
             let sub = Self::balanced_source_block(remaining, available);

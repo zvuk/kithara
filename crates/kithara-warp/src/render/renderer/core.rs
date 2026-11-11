@@ -1,11 +1,10 @@
 use std::num::{NonZeroU32, NonZeroU128, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SourceSpan};
 use kithara_stretch::{
     BackendCapabilities, ElasticBackendConfig, ElasticEngine, ElasticError, StretchKind,
-    build_engine,
 };
 use kithara_sync::SpeedCurve;
 use kithara_test_macros as kithara;
@@ -16,7 +15,7 @@ use super::{
     super::trajectory::{Fraction, Trajectory},
     target::PreparedTarget,
 };
-use crate::{ActiveRegion, RegionPlan, WarpConfig, WarpRenderError};
+use crate::{WarpConfig, WarpRenderError};
 
 /// The speed a renderer renders at and the revision that set it.
 #[derive(Clone, Copy, Debug)]
@@ -53,7 +52,7 @@ pub(in crate::render) struct PreparedQuantum {
 }
 
 /// Source-timeline exact-span time-stretch driven by its render lane.
-/// Unity speed without a region plan is a byte-identical passthrough.
+/// Unity speed is a byte-identical passthrough.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
     pub(in crate::render) terminal_error: Option<ElasticError>,
@@ -86,13 +85,8 @@ pub struct WarpRenderer<S> {
     /// Unity chunk retained while the active backend drains its tail.
     /// Its samples occupy `pending_source` without a copy.
     pub(in crate::render) pending_unity_meta: Option<AudioChunkInfo>,
-    /// Region plan the renderer was built with.
-    pub(in crate::render) plan: Option<Arc<RegionPlan>>,
     /// Source span and live speed selected by the scheduler for the next render.
     pub(in crate::render) prepared_quantum: Option<PreparedQuantum>,
-    /// Region covering the playhead - the lookup cursor. `None` forces a
-    /// fresh binary search (first chunk, region exit, seek).
-    pub(in crate::render) region: Option<ActiveRegion>,
     /// Maximum output frames between samples of live temporal controls.
     pub(in crate::render) render_quantum_frames: Option<NonZeroUsize>,
     /// Exact decoded-source boundary represented by the latest emitted chunk.
@@ -150,26 +144,12 @@ where
         let requested_keylock = config.keylock();
         let (current_kind, current_keylock) =
             Self::stretch_for(config.backend(), requested_keylock);
-        let plan = config.region_plan().clone();
         let speed = config.speed();
-        let target = if plan.is_some()
-            && !current_kind
-                .capabilities()
-                .contains(BackendCapabilities::RATE)
-        {
-            Self::config_for(current_kind, config, spec, &pools)
-                .and_then(build_engine)
-                .map(|engine| PreparedTarget {
-                    engine: Some(engine),
-                    ..PreparedTarget::default()
-                })
-        } else {
-            Self::prepare_target(config, spec, &pools, PreparedTarget::default(), true)
-        }
-        .unwrap_or_else(|error| {
-            warn!(%current_kind, %error, "time-stretch engine preparation failed");
-            PreparedTarget::default()
-        });
+        let target = Self::prepare_target(config, spec, &pools, PreparedTarget::default(), true)
+            .unwrap_or_else(|error| {
+                warn!(%current_kind, %error, "time-stretch engine preparation failed");
+                PreparedTarget::default()
+            });
         Self {
             terminal_error: None,
             trajectory: Trajectory::new(speed),
@@ -210,8 +190,6 @@ where
             scratch: target.scratch,
             activation_scratch: target.activation_scratch,
             deferred_scratch: None,
-            plan,
-            region: None,
         }
     }
 }
@@ -278,7 +256,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             return Err(ElasticError::EnginePreparation("engine is unavailable").into());
         }
         if !self.active && self.projection.is_some() {
-            let stages = self.projection_stages()?;
+            let stages = self.trajectory.projection_stages()?;
             if let Some(projection) = self.projection.as_mut() {
                 projection.stages = stages;
             }
@@ -382,7 +360,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.active = false;
         self.reprime_pending = false;
         self.resident_feed = None;
-        self.region = None;
         self.trajectory.reset();
         self.mapped_render = false;
         self.terminal_source_end = None;
@@ -561,38 +538,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .as_mut()
             .ok_or(ElasticError::PoolCapacity)?
             .remember_mapping(span)?;
-        self.advance_trajectory(span)?;
+        self.trajectory.advance(span)?;
         self.rendered_source_end = Some((span.end(), span.sample_rate()));
         self.rate = RateTarget::new(self.trajectory.speed()?, self.rate.revision());
         Ok(())
-    }
-
-    /// Step the law past a rendered mapping, landing on a whole source frame
-    /// where it crosses a region boundary.
-    pub(super) fn advance_trajectory(&mut self, span: SourceSpan) -> Result<(), ElasticError> {
-        self.trajectory.advance(span)?;
-        if let Some(plan) = self.plan.as_ref()
-            && plan.region_at(span.start()) != plan.region_at(span.end())
-        {
-            self.trajectory.snap_position()?;
-        }
-        Ok(())
-    }
-
-    /// Region covering `frame`, plus whether the playhead just crossed out
-    /// of a previously resolved region (a plan boundary or a seek).
-    pub(in crate::render) fn region_for(&mut self, frame: u64) -> ActiveRegion {
-        if let Some(r) = self.region
-            && r.contains(frame)
-        {
-            return r;
-        }
-        let next = self
-            .plan
-            .as_ref()
-            .map_or(ActiveRegion::UNBOUNDED, |p| p.region_at(frame));
-        self.region = Some(next);
-        next
     }
 
     /// Exact decoded-source boundary represented by the latest emitted samples.
@@ -712,11 +661,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     }
 
     pub(in crate::render) fn unity_passthrough(&self, speed: f32) -> bool {
-        !self.requires_staging()
-            || (self.plan.is_none() && self.trajectory.passthrough_speed(speed))
+        !self.requires_staging() || self.trajectory.passthrough_speed(speed)
     }
 
     pub(in crate::render) fn keylocked_unity(&self) -> bool {
-        self.current_keylock && self.plan.is_none() && self.trajectory.constant_unity()
+        self.current_keylock && self.trajectory.constant_unity()
     }
 }
