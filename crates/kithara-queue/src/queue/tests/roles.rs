@@ -294,6 +294,8 @@ async fn track_state_is_leading() {
             .current_track()
             .is_some_and(|track| track.snapshot().item == second)
     );
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -416,4 +418,6 @@ async fn track_state_maps_to_service_class(#[case] phase: &str, #[case] expected
         Some(expected),
         "actual {phase} lifecycle must prioritize its own lane"
     );
+    drop((queue, rig));
+    dir.finish().await;
 }

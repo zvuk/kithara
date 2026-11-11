@@ -72,7 +72,7 @@ fn advance_stops_at_end() {
 
 #[kithara::test(tokio)]
 async fn insert_and_remove_preserve_resource() {
-    let (mut queue, _, _dir) = empty_queue();
+    let (mut queue, _, fixture_directory) = empty_queue();
     let id = TrackId::allocate();
     queue.insert_entry(
         id,
@@ -83,6 +83,8 @@ async fn insert_and_remove_preserve_resource() {
     let removed = queue.tracks.records_mut().remove(0);
     assert_eq!(removed.source.uri(), Some("first"));
     assert_eq!(queue.tracks.records().len(), 0);
+    drop(queue);
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -150,6 +152,8 @@ async fn announce_carries_the_item_identity(#[case] loaded: bool) {
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(changes(&mut events), [Some(id)]);
     assert!(events.try_recv().is_err());
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -195,6 +199,8 @@ async fn clear_resets_cursor_and_announce() {
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.control().current_index(), Some(0));
     assert_eq!(changes(&mut events), [Some(first)]);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -227,6 +233,8 @@ async fn mark_announced_uses_swap_semantics() {
     answer_load(&mut queue, &mut rig, &dir).await;
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(changes(&mut events), [Some(second)]);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -237,6 +245,8 @@ async fn player_advance_emits_event() {
     answer_load(&mut queue, &mut rig, &dir).await;
     crate::mock::finish(&mut queue, &mut rig);
     assert!(matches!(changes(&mut events).as_slice(), [Some(id)] if *id == second));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -265,6 +275,8 @@ async fn player_advance_through_queue() {
     assert_eq!(queue.control().current_index(), Some(2));
     apply(&mut queue, &mut rig, QueueCommand::Next(Transition::None)).expect("exhausted");
     assert_eq!(queue.control().current_index(), Some(2));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -297,6 +309,8 @@ async fn player_insert_scenarios(#[case] insert_at_position: bool, #[case] expec
         .expect("insert first");
     }
     assert_eq!(queue.tracks.records().len(), expected_count);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -341,6 +355,8 @@ async fn player_remove_at_scenarios(#[case] scenario: u8) {
         assert_eq!(queue.control().current_index(), Some(1));
         assert_eq!(queue.tracks.records().len(), 2);
     }
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -393,6 +409,8 @@ async fn cold_navigation_and_removal_preserve_item_identity() {
             assert_eq!(queue.control().tracks().len(), 1);
             assert_eq!(queue.control().tracks()[0].id, ids[1]);
             assert_eq!(queue.control().current_index(), None);
+            drop((queue, rig));
+            dir.finish().await;
             continue;
         }
         answer_load(&mut queue, &mut rig, &dir).await;
@@ -426,6 +444,8 @@ async fn cold_navigation_and_removal_preserve_item_identity() {
         apply(&mut queue, &mut rig, QueueCommand::Remove(ids[2])).expect("remove current");
         assert_eq!(queue.control().tracks().len(), 1);
         assert_eq!(queue.control().tracks()[0].id, ids[1]);
+        drop((queue, rig));
+        dir.finish().await;
     }
 }
 
@@ -474,6 +494,8 @@ async fn remove_at_shifts_current_and_reopens_announce() {
     .expect("same identity at shifted position");
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(changes(&mut events), [Some(third)]);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -513,11 +535,13 @@ async fn replacing_current_item_re_announces_on_next_play() {
     assert_eq!(queue.control().current_index(), Some(0));
     assert_eq!(changes(&mut events), [Some(replacement)]);
     assert_eq!(queue.tracks.records().len(), 2);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn select_item_out_of_range_returns_typed_error() {
-    let (mut queue, mut rig, _dir) = empty_queue();
+    let (mut queue, mut rig, fixture_directory) = empty_queue();
     let id = TrackId::from(5_u64);
     let err = with_outbox(&mut queue, &mut rig, |queue, out| {
         queue.apply_command(
@@ -532,11 +556,13 @@ async fn select_item_out_of_range_returns_typed_error() {
     .expect_err("unknown item");
     assert!(matches!(err, QueueError::UnknownTrackId(actual) if actual == id));
     assert_eq!(queue.tracks.records().len(), 0);
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn checked_crossfade_update_respects_closed_owner() {
-    let (mut queue, mut rig, _dir) = empty_queue();
+    let (mut queue, mut rig, fixture_directory) = empty_queue();
     let settings = crate::CrossfadeSettings {
         duration: 2.0,
         ..Default::default()
@@ -565,6 +591,8 @@ async fn checked_crossfade_update_respects_closed_owner() {
         Err(PlayError::Closed)
     ));
     assert_eq!(queue.config.settings.crossfade().duration, 2.0);
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test]
@@ -669,6 +697,8 @@ async fn remove_all_items_releases_output_state_and_allows_fresh_playback() {
     assert!(queue.control().is_playing());
     assert!(queue.active_current_index().is_some());
     apply(&mut queue, &mut rig, QueueCommand::RemoveAll).expect("final clear");
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -719,11 +749,14 @@ async fn an_inserted_resource_adopts_the_session_wake_mode() {
     )
     .await
     .expect("an admitted source keeps reader events off the audio callback bus");
+    drop(due);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 async fn close_waits_for_an_admitted_operation() {
-    let (mut queue, mut rig, _dir) = empty_queue();
+    let (mut queue, mut rig, fixture_directory) = empty_queue();
     let id = TrackId::allocate();
     let postbox = queue.postbox.clone();
     let operation = postbox
@@ -760,12 +793,14 @@ async fn close_waits_for_an_admitted_operation() {
         Err(PlayError::Closed)
     ));
     assert!(matches!(queue.ensure_open(), Err(PlayError::Closed)));
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
 async fn drop_does_not_wait_for_an_admitted_operation() {
-    let (mut queue, _, _dir) = empty_queue();
+    let (mut queue, _, fixture_directory) = empty_queue();
     let observer = queue.shutdown.child();
     let postbox = queue.postbox.clone();
     let _ticket = postbox
@@ -784,12 +819,13 @@ async fn drop_does_not_wait_for_an_admitted_operation() {
         "drop cancels the subtree while the admitted operation remains outstanding"
     );
     drop(operation);
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
 async fn player_lifecycle_admits_only_one_concurrent_close() {
-    let (mut queue, _, _, mut rig, _dir) = crate::mock::selected().await;
+    let (mut queue, _, _, mut rig, fixture_directory) = crate::mock::selected().await;
     {
         let mut port = rig.ring.scope(rig.scope).expect("deck scope");
         for _ in 0..port.available() {
@@ -837,6 +873,8 @@ async fn player_lifecycle_admits_only_one_concurrent_close() {
     })
     .expect("already closed cleanup is idempotent");
     assert!(queue.shutdown.is_cancelled());
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -868,6 +906,7 @@ async fn prepare_config_per_track_cancel_is_child_of_player_master() {
         observer.is_cancelled(),
         "dropping the owner cancels the per-track child via its master"
     );
+    dir.finish().await;
 }
 
 #[kithara::test]
@@ -935,4 +974,6 @@ async fn prebound_session_rejects_a_player_built_for_another_sample_rate() {
             .map(NonZeroU32::get),
         Some(48_000)
     );
+    drop(queue);
+    dir.finish().await;
 }

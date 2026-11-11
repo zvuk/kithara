@@ -778,6 +778,8 @@ pub(crate) mod tests {
                     "seed {seed}, press {press}: Next enters the announced track"
                 );
             }
+            drop((queue, rig));
+            dir.finish().await;
         }
     }
 
@@ -817,6 +819,8 @@ pub(crate) mod tests {
                 .any(|event| matches!(event, QueueEvent::UpcomingChanged)),
             "the new upcoming track is announced: {heard:?}"
         );
+        drop((queue, rig));
+        dir.finish().await;
     }
 
     /// A queue event is heard only with the view that shows it, in the order

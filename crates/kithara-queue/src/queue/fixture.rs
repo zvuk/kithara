@@ -4,7 +4,7 @@ use kithara_test_utils::{
     bufpool::{TestPools, pools},
 };
 
-/// Owns the queue fixture's worker through native completion before directory cleanup.
+/// Owns the queue fixture's worker and directory through explicit completion.
 #[derive(derive_more::Deref, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct QueueFixture {
@@ -21,17 +21,18 @@ impl QueueFixture {
             worker: PlayWorker::new(PlayWorkerConfig::builder(pools()).build()),
         }
     }
-}
 
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for QueueFixture {
-    fn drop(&mut self) {
-        if let Err(error) = self.worker.shutdown_and_join() {
-            if std::thread::panicking() {
-                tracing::error!(%error, "queue fixture shutdown failed during unwinding");
-            } else {
-                panic!("queue fixture shutdown failed: {error}");
-            }
-        }
+    pub(super) async fn finish(self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        kithara_platform::tokio::task::spawn_blocking(move || {
+            let result = self.worker.shutdown_and_join();
+            drop(self);
+            result.expect("queue fixture dispatcher completion");
+        })
+        .await
+        .expect("queue fixture completion task");
+
+        #[cfg(target_arch = "wasm32")]
+        drop(self);
     }
 }
