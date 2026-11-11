@@ -332,7 +332,7 @@ impl Config {
         providers: &mut Vec<Value>,
         lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Vec<DisabledProvider> {
-        let mut disabled = Vec::new();
+        let mut disabled: Vec<DisabledProvider> = Vec::new();
         let mut index = 0;
         providers.retain_mut(|provider| {
             let path = format!("drm.providers[{index}]");
