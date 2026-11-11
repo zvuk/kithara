@@ -1,35 +1,67 @@
-use kithara_platform::sync::{Arc, OnceLock};
+use std::mem;
+
+use kithara_platform::sync::{Arc, Mutex};
 use rayon::ThreadPoolBuilder;
 
 use super::ComputeSubmitError;
-use crate::{OwnedPoolConfig, config::PoolConfig};
+use crate::{OwnedPoolConfig, config::PoolConfig, threads::Threads};
 
 pub(crate) struct ComputePool {
-    pub(crate) owned: OnceLock<Result<Arc<rayon::ThreadPool>, String>>,
+    pub(crate) owned: Mutex<PoolState>,
+    threads: Arc<Threads>,
+}
+
+pub(crate) enum PoolState {
+    Uninitialized,
+    Running(Arc<rayon::ThreadPool>),
+    Failed,
+    Stopped,
 }
 
 impl ComputePool {
-    pub(super) const fn new() -> Self {
+    pub(super) fn new(threads: Arc<Threads>) -> Self {
         Self {
-            owned: OnceLock::new(),
+            owned: Mutex::new(PoolState::Uninitialized),
+            threads,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn owned_is_initialized(&self) -> bool {
-        self.owned.get().is_some()
+        !matches!(*self.owned.lock(), PoolState::Uninitialized)
     }
 
     pub(super) fn spawner(&self, config: &PoolConfig) -> Result<Spawner, ComputeSubmitError> {
         match config {
             PoolConfig::Disabled => Err(ComputeSubmitError::Unavailable),
             PoolConfig::Shared(pool) => Ok(Spawner(Arc::clone(pool))),
-            PoolConfig::OwnedLazy(config) => self
-                .owned
-                .get_or_init(|| build_pool(config))
-                .as_ref()
-                .map(|pool| Spawner(Arc::clone(pool)))
-                .map_err(|_| ComputeSubmitError::Unavailable),
+            PoolConfig::OwnedLazy(config) => {
+                let mut owned = self.owned.lock();
+                if matches!(*owned, PoolState::Uninitialized) {
+                    *owned = match build_pool(config, &self.threads) {
+                        Ok(pool) => PoolState::Running(pool),
+                        Err(_) => PoolState::Failed,
+                    };
+                }
+                match &*owned {
+                    PoolState::Running(pool) => Ok(Spawner(Arc::clone(pool))),
+                    _ => Err(ComputeSubmitError::Unavailable),
+                }
+            }
+        }
+    }
+
+    pub(crate) fn stop(&self) {
+        let owned = mem::replace(&mut *self.owned.lock(), PoolState::Stopped);
+        drop(owned);
+    }
+}
+
+impl Drop for ComputePool {
+    fn drop(&mut self) {
+        self.stop();
+        if !self.threads.is_current() {
+            self.threads.join();
         }
     }
 }
@@ -42,11 +74,16 @@ impl Spawner {
     }
 }
 
-fn build_pool(config: &OwnedPoolConfig) -> Result<Arc<rayon::ThreadPool>, String> {
-    let prefix = config.name.clone();
+fn build_pool(
+    config: &OwnedPoolConfig,
+    threads: &Threads,
+) -> Result<Arc<rayon::ThreadPool>, String> {
     ThreadPoolBuilder::new()
         .num_threads(config.threads.get())
-        .thread_name(move |index| format!("{prefix}-{index}"))
+        .spawn_handler(|thread| {
+            let name = format!("{}-{}", config.name, thread.index());
+            threads.spawn_pool(name, move || thread.run())
+        })
         .build()
         .map(Arc::new)
         .map_err(|error| error.to_string())
@@ -58,12 +95,12 @@ mod tests {
 
     use kithara_platform::{
         CancelScope,
-        sync::{Arc, OnceLock, mpsc},
+        sync::{Arc, mpsc},
         time::{Duration, Instant},
     };
     use kithara_test_utils::kithara;
 
-    use super::ComputePool;
+    use super::PoolState;
     use crate::{
         OwnedPoolConfig, Wake, WorkerConfig,
         compute::{Budget, ComputeRuntime, ComputeSubmitError},
@@ -71,13 +108,12 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn owned_pool_failure_returns_payload_and_releases_both_permits() {
-        let failed = OnceLock::new();
-        assert!(failed.set(Err(String::from("pool build failed"))).is_ok());
-        let mut runtime = ComputeRuntime::new(
+        let runtime = ComputeRuntime::new(
             WorkerConfig::new()
                 .with_owned_pool(OwnedPoolConfig::new(NonZeroUsize::MIN, "failed-pool-test")),
+            Arc::default(),
         );
-        runtime.pool = ComputePool { owned: failed };
+        *runtime.pool.owned.lock() = PoolState::Failed;
         let task_budget = Arc::new(Budget::default());
         let scope = CancelScope::new(None);
         let token = scope.token().child();
@@ -106,7 +142,7 @@ mod tests {
                 .build()
                 .expect("test pool"),
         );
-        let mut runtime = ComputeRuntime::new(WorkerConfig::new().with_pool(pool));
+        let mut runtime = ComputeRuntime::new(WorkerConfig::new().with_pool(pool), Arc::default());
         let budget = Arc::new(Budget::default());
         let scope = CancelScope::new(None);
         let token = scope.token().child();

@@ -1,7 +1,8 @@
+#[cfg(target_arch = "wasm32")]
+use kithara_platform::thread::spawn_named;
 use kithara_platform::{
     CancelGroup, CancelToken,
     sync::{Arc, Mutex, Weak, atomic::AtomicU64, mpsc},
-    thread::spawn_named,
     time::Duration,
     tokio::runtime::Handle,
 };
@@ -73,6 +74,7 @@ impl Dispatcher {
         cancel: CancelToken,
         compute: Arc<ComputeRuntime>,
         runtime: Option<Handle>,
+        #[cfg(not(target_arch = "wasm32"))] threads: Arc<crate::threads::Threads>,
     ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let wake = Wake::default();
@@ -98,7 +100,7 @@ impl Dispatcher {
         let thread_config = Arc::clone(&config);
         let thread_wake = wake.clone();
         let thread_cancel = cancel.clone();
-        let thread = spawn_named(name, move || {
+        let run = move || {
             let _cancel_guards = cancel_guards;
             run_loop(
                 &cmd_rx,
@@ -107,9 +109,11 @@ impl Dispatcher {
                 &thread_config,
                 observer,
             );
-        });
+        };
         #[cfg(target_arch = "wasm32")]
-        drop(thread);
+        drop(spawn_named(name, run));
+        #[cfg(not(target_arch = "wasm32"))]
+        drop(threads.spawn(name, run));
 
         let inner = Arc::new(DispatcherInner {
             config,
@@ -121,8 +125,6 @@ impl Dispatcher {
             runtime,
             cmd_tx,
             wake,
-            #[cfg(not(target_arch = "wasm32"))]
-            thread: Some(thread),
         });
 
         Self { inner }

@@ -21,6 +21,8 @@ use kithara_play::{
 use kithara_signal::{FrameCount, SessionFrame};
 pub(crate) use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_test_utils::{TestTempDir, kithara};
+use kithara_warp::WarpConfig;
+use kithara_worker::Worker;
 
 use crate::{Queue, QueueCommand, QueueConfig, TrackSource};
 
@@ -121,14 +123,16 @@ where
 /// # Panics
 /// Panics if fixture creation, path conversion, or command admission fails.
 #[must_use]
-pub(crate) fn pending_selection() -> (
+pub(crate) fn pending_selection(
+    worker: &Worker,
+) -> (
     Queue<TestPools>,
     TrackId,
     TrackId,
     DeckRig<TestPools>,
     TestTempDir,
 ) {
-    let (mut queue, mut rig, dir) = empty_queue();
+    let (mut queue, mut rig, dir) = empty_queue(worker);
     let source = fixture_uri(dir.path(), "entry.wav");
     let first = TrackId::allocate();
     let second = TrackId::allocate();
@@ -158,6 +162,14 @@ pub(crate) fn pending_selection() -> (
     (queue, first, second, rig, dir)
 }
 
+fn fixture_prep(worker: PlayWorker<TestPools>) -> ResourcePrep<TestPools> {
+    let warp = WarpConfig::builder()
+        .source_block_frames(NonZeroUsize::new(1024).expect("fixture source block"))
+        .render_quantum_frames(NonZeroUsize::new(128).expect("fixture deck block"))
+        .build();
+    ResourcePrep::builder().worker(worker).warp(warp).build()
+}
+
 /// Opens the fixture source through the retained decoder dispatcher.
 ///
 /// # Panics
@@ -169,7 +181,7 @@ pub(crate) async fn loaded_fixture(
     rig: &mut DeckRig<TestPools>,
     dir: &TestTempDir,
 ) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
-    let prep = ResourcePrep::builder().worker(worker.clone()).build();
+    let prep = fixture_prep(worker.clone());
     let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .build();
@@ -428,8 +440,8 @@ pub(crate) fn answer_deck(
 /// # Panics
 /// Panics if the PCM fixture cannot be written or the command rig cannot be created.
 #[must_use]
-pub(crate) fn empty_queue() -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
-    queue_with_load_settings(NonZeroUsize::new(3).expect("default cap"), false)
+pub(crate) fn empty_queue(worker: &Worker) -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
+    queue_with_load_settings(worker, NonZeroUsize::new(3).expect("default cap"), false)
 }
 
 /// Creates an empty queue with the given loader cap and autoplay setting, its
@@ -439,13 +451,16 @@ pub(crate) fn empty_queue() -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDi
 /// Panics if the PCM fixture cannot be written or the command rig cannot be created.
 #[must_use]
 pub(crate) fn queue_with_load_settings(
+    worker: &Worker,
     max_concurrent_loads: NonZeroUsize,
     should_autoplay: bool,
 ) -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
     let dir = TestTempDir::new();
-    let prep = ResourcePrep::builder()
-        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-        .build();
+    let prep = fixture_prep(PlayWorker::new(
+        PlayWorkerConfig::builder(pools())
+            .worker(worker.clone())
+            .build(),
+    ));
     let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .build();
@@ -542,14 +557,16 @@ pub(crate) fn finish(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>)
 /// # Panics
 /// Panics if fixture creation, load admission, or deck entry fails or stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub(crate) async fn selected() -> (
+pub(crate) async fn selected(
+    worker: &Worker,
+) -> (
     Queue<TestPools>,
     TrackId,
     TrackId,
     DeckRig<TestPools>,
     TestTempDir,
 ) {
-    let (mut queue, first, second, mut rig, dir) = pending_selection();
+    let (mut queue, first, second, mut rig, dir) = pending_selection(worker);
     hang_tick!();
     answer_load(&mut queue, &mut rig, &dir).await;
     hang_reset!();

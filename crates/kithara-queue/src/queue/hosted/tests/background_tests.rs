@@ -117,9 +117,9 @@ fn events(receiver: &mut EventReceiver<QueueEvent>) -> Vec<QueueEvent> {
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog(ctx = String)]
-async fn prefetch_lane_caps_concurrent_loads() {
+async fn prefetch_lane_caps_concurrent_loads(#[by_ref] worker_owner: &WorkerOwner) {
     let (mut queue, mut rig, dir) =
-        queue_with_load_settings(NonZeroUsize::new(2).expect("cap"), false);
+        queue_with_load_settings(&worker_owner.0, NonZeroUsize::new(2).expect("cap"), false);
     let mut unanswered = Vec::new();
     let mut max_seen = 0;
     for _ in 0..6 {
@@ -163,8 +163,8 @@ async fn prefetch_lane_caps_concurrent_loads() {
 }
 
 #[kithara::test(tokio)]
-async fn spawn_load_bad_url_emits_failed_status() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn spawn_load_bad_url_emits_failed_status(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     append(&mut queue, &mut rig, &dir, 1);
     let id = TrackId::allocate();
     let mut receiver = queue.subscribe::<QueueEvent>();
@@ -207,8 +207,8 @@ async fn spawn_load_bad_url_emits_failed_status() {
 }
 
 #[kithara::test(tokio)]
-async fn an_appended_track_loads_without_a_select() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn an_appended_track_loads_without_a_select(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let ids = append(&mut queue, &mut rig, &dir, 2);
     let seq = load_seq(&queue, ids[1]);
     let mut receiver = queue.subscribe::<QueueEvent>();
@@ -235,8 +235,8 @@ async fn an_appended_track_loads_without_a_select() {
 }
 
 #[kithara::test(tokio)]
-async fn initial_append_loads_at_its_cue_without_a_seek() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn initial_append_loads_at_its_cue_without_a_seek(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let id = TrackId::allocate();
     let position = Duration::from_millis(5);
     with_outbox(&mut queue, &mut rig, |queue, out| {
@@ -281,8 +281,10 @@ async fn initial_append_loads_at_its_cue_without_a_seek() {
 }
 
 #[kithara::test(tokio)]
-async fn preloaded_append_keeps_its_cue_without_seeking_the_current_track() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn preloaded_append_keeps_its_cue_without_seeking_the_current_track(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let first = append(&mut queue, &mut rig, &dir, 1)[0];
     answer_load(&mut queue, &mut rig, &dir).await;
     crate::mock::finish(&mut queue, &mut rig);
@@ -350,9 +352,9 @@ async fn preloaded_append_keeps_its_cue_without_seeking_the_current_track() {
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn background_loads_stay_within_max_concurrent_loads() {
+async fn background_loads_stay_within_max_concurrent_loads(#[by_ref] worker_owner: &WorkerOwner) {
     let (mut queue, mut rig, dir) =
-        queue_with_load_settings(NonZeroUsize::new(2).expect("cap"), false);
+        queue_with_load_settings(&worker_owner.0, NonZeroUsize::new(2).expect("cap"), false);
     let ids = append(&mut queue, &mut rig, &dir, 5);
     let loads = hold_loads(&mut queue, &mut rig).0;
     assert_eq!(
@@ -402,8 +404,10 @@ async fn background_loads_stay_within_max_concurrent_loads() {
 }
 
 #[kithara::test(tokio)]
-async fn selecting_a_background_loaded_track_opens_nothing_new() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn selecting_a_background_loaded_track_opens_nothing_new(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let ids = append(&mut queue, &mut rig, &dir, 2);
     let seq = load_seq(&queue, ids[1]);
     hold_loads(&mut queue, &mut rig);
@@ -434,8 +438,8 @@ async fn selecting_a_background_loaded_track_opens_nothing_new() {
 }
 
 #[kithara::test(tokio)]
-async fn a_select_is_not_starved_by_hung_background_loads() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn a_select_is_not_starved_by_hung_background_loads(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let ids = append(&mut queue, &mut rig, &dir, 5);
     let loads = hold_loads(&mut queue, &mut rig).0;
     assert_eq!(
@@ -463,9 +467,9 @@ async fn a_select_is_not_starved_by_hung_background_loads() {
 }
 
 #[kithara::test(tokio)]
-async fn the_first_append_arms_a_paused_initial_load() {
+async fn the_first_append_arms_a_paused_initial_load(#[by_ref] worker_owner: &WorkerOwner) {
     let (mut queue, mut rig, dir) =
-        queue_with_load_settings(NonZeroUsize::new(3).expect("cap"), false);
+        queue_with_load_settings(&worker_owner.0, NonZeroUsize::new(3).expect("cap"), false);
     let id = append(&mut queue, &mut rig, &dir, 1)[0];
     let seq = load_seq(&queue, id);
     assert_eq!(
@@ -497,9 +501,9 @@ async fn the_first_append_arms_a_paused_initial_load() {
 }
 
 #[kithara::test(tokio)]
-async fn the_first_append_plays_with_autoplay() {
+async fn the_first_append_plays_with_autoplay(#[by_ref] worker_owner: &WorkerOwner) {
     let (mut queue, mut rig, dir) =
-        queue_with_load_settings(NonZeroUsize::new(3).expect("cap"), true);
+        queue_with_load_settings(&worker_owner.0, NonZeroUsize::new(3).expect("cap"), true);
     let id = append(&mut queue, &mut rig, &dir, 1)[0];
     let seq = load_seq(&queue, id);
     assert_eq!(
@@ -521,8 +525,8 @@ async fn the_first_append_plays_with_autoplay() {
 }
 
 #[kithara::test(tokio)]
-async fn a_select_supersedes_the_initial_load() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn a_select_supersedes_the_initial_load(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let ids = append(&mut queue, &mut rig, &dir, 2);
     select(&mut queue, &mut rig, ids[1]);
     assert_eq!(
@@ -533,8 +537,10 @@ async fn a_select_supersedes_the_initial_load() {
 }
 
 #[kithara::test(tokio)]
-async fn selecting_another_track_consumes_the_opened_initial_resource() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn selecting_another_track_consumes_the_opened_initial_resource(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let ids = append(&mut queue, &mut rig, &dir, 2);
     let seq = load_seq(&queue, ids[0]);
     hold_loads(&mut queue, &mut rig);
@@ -549,8 +555,8 @@ async fn selecting_another_track_consumes_the_opened_initial_resource() {
 }
 
 #[kithara::test(tokio)]
-async fn an_unsupported_codec_fails_before_select() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn an_unsupported_codec_fails_before_select(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let ids = append(&mut queue, &mut rig, &dir, 2);
     let seq = load_seq(&queue, ids[1]);
     let mut receiver = queue.subscribe::<QueueEvent>();
@@ -580,8 +586,8 @@ async fn an_unsupported_codec_fails_before_select() {
 }
 
 #[kithara::test(tokio)]
-async fn a_track_setting_reaches_background_loaded_tracks() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn a_track_setting_reaches_background_loaded_tracks(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let ids = append(&mut queue, &mut rig, &dir, 2);
     hold_loads(&mut queue, &mut rig);
     let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
@@ -607,8 +613,8 @@ async fn a_track_setting_reaches_background_loaded_tracks() {
 }
 
 #[kithara::test(tokio)]
-async fn a_selected_background_track_announces_loaded_once() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn a_selected_background_track_announces_loaded_once(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let ids = append(&mut queue, &mut rig, &dir, 2);
     let seq = load_seq(&queue, ids[1]);
     let mut receiver = queue.subscribe::<QueueEvent>();
@@ -639,8 +645,10 @@ async fn a_selected_background_track_announces_loaded_once() {
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
-async fn a_failed_replacement_release_keeps_the_taken_background_track() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn a_failed_replacement_release_keeps_the_taken_background_track(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     queue.active = Slots::new(1);
     let ids = append(&mut queue, &mut rig, &dir, 3);
     hold_loads(&mut queue, &mut rig);
@@ -689,8 +697,10 @@ async fn a_failed_replacement_release_keeps_the_taken_background_track() {
 }
 
 #[kithara::test(tokio)]
-async fn a_stale_load_completion_does_not_cancel_the_live_target() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn a_stale_load_completion_does_not_cancel_the_live_target(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let ids = append(&mut queue, &mut rig, &dir, 2);
     let seq = load_seq(&queue, ids[0]);
     hold_loads(&mut queue, &mut rig);
@@ -735,8 +745,10 @@ async fn a_stale_load_completion_does_not_cancel_the_live_target() {
 }
 
 #[kithara::test(tokio)]
-async fn a_superseded_initial_open_releases_its_answered_lane() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn a_superseded_initial_open_releases_its_answered_lane(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let ids = append(&mut queue, &mut rig, &dir, 2);
     let seq = load_seq(&queue, ids[0]);
     hold_loads(&mut queue, &mut rig);

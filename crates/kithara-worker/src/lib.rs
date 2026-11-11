@@ -3,6 +3,8 @@ mod config;
 mod dispatcher;
 mod observer;
 mod task;
+#[cfg(not(target_arch = "wasm32"))]
+mod threads;
 mod wake;
 
 #[cfg(any(test, feature = "mock"))]

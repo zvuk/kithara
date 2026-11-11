@@ -5,8 +5,8 @@ use crate::{
 };
 
 #[kithara::test(tokio)]
-async fn select_unknown_id_errors() {
-    let (mut queue, mut rig, _dir) = empty_queue();
+async fn select_unknown_id_errors(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, _dir) = empty_queue(&worker_owner.0);
     let err = with_outbox(&mut queue, &mut rig, |queue, out| {
         let output = *out.pass().expect("host pass").output;
         queue.apply_command(
@@ -23,8 +23,8 @@ async fn select_unknown_id_errors() {
 }
 
 #[kithara::test(tokio)]
-async fn select_pending_track_stashes_pending_select() {
-    let (queue, id, _, _rig, _dir) = pending_selection();
+async fn select_pending_track_stashes_pending_select(#[by_ref] worker_owner: &WorkerOwner) {
+    let (queue, id, _, _rig, _dir) = pending_selection(&worker_owner.0);
     match queue.target {
         Some(pending) => {
             assert_eq!(pending.to, id);
@@ -35,8 +35,8 @@ async fn select_pending_track_stashes_pending_select() {
 }
 
 #[kithara::test(tokio)]
-async fn advance_to_next_on_empty_emits_queue_ended() {
-    let (mut queue, mut rig, _dir) = empty_queue();
+async fn advance_to_next_on_empty_emits_queue_ended(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, _dir) = empty_queue(&worker_owner.0);
     let mut rx = queue.subscribe::<QueueEvent>();
     assert!(
         with_outbox(&mut queue, &mut rig, |queue, out| {
@@ -60,8 +60,8 @@ async fn advance_to_next_on_empty_emits_queue_ended() {
 }
 
 #[kithara::test(tokio)]
-async fn manual_next_at_exhaustion_does_not_emit_queue_ended() {
-    let (mut queue, mut rig, _dir) = empty_queue();
+async fn manual_next_at_exhaustion_does_not_emit_queue_ended(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, _dir) = empty_queue(&worker_owner.0);
     let mut rx = queue.subscribe::<QueueEvent>();
     assert_eq!(
         with_outbox(&mut queue, &mut rig, |queue, out| {
@@ -74,8 +74,8 @@ async fn manual_next_at_exhaustion_does_not_emit_queue_ended() {
 }
 
 #[kithara::test(tokio)]
-async fn advance_to_next_cycles_then_emits_queue_ended() {
-    let (mut queue, _first, second, mut rig, dir) = crate::mock::selected().await;
+async fn advance_to_next_cycles_then_emits_queue_ended(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, _first, second, mut rig, dir) = crate::mock::selected(&worker_owner.0).await;
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
             queue,
@@ -113,8 +113,10 @@ async fn advance_to_next_cycles_then_emits_queue_ended() {
 }
 
 #[kithara::test(tokio)]
-async fn admitted_pending_successor_becomes_navigation_authority() {
-    let (mut queue, first, second, mut rig, _dir) = crate::mock::selected().await;
+async fn admitted_pending_successor_becomes_navigation_authority(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, first, second, mut rig, _dir) = crate::mock::selected(&worker_owner.0).await;
     queue.current = Some(first);
     queue.tracks.set_status(first, TrackStatus::Consumed);
     queue.tracks.set_status(second, TrackStatus::Pending);
@@ -144,8 +146,10 @@ async fn admitted_pending_successor_becomes_navigation_authority() {
 }
 
 #[kithara::test(tokio)]
-async fn pending_override_latches_profile_without_mutating_default() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn pending_override_latches_profile_without_mutating_default(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let id = TrackId::allocate();
     let configured =
         CrossfadeSettings::new(2.0, kithara_play::CrossfadeCurve::EqualPower, 1.0, 0.5)

@@ -8,12 +8,13 @@ use kithara_test_utils::kithara;
 use crate::{
     QueueCommand, QueueEvent, TrackSource, Transition,
     mock::{answer_load, empty_queue, finish, fixture_uri, seed_fixture, with_outbox},
+    queue::{WorkerOwner, worker_owner},
 };
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
-async fn notification_changed_carries_src() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn notification_changed_carries_src(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let expected_source = fixture_uri(dir.path(), "next.mp3");
     seed_fixture(
         queue.config.store.as_ref().expect("fixture store"),
@@ -67,8 +68,8 @@ async fn notification_changed_carries_src() {
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn notification_clone() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn notification_clone(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let expected_source = fixture_uri(dir.path(), "ended.mp3");
     seed_fixture(
         queue.config.store.as_ref().expect("fixture store"),

@@ -300,21 +300,29 @@ mod tests {
     use kithara_sync::SpeedCurve;
     use kithara_test_utils::{TestTempDir, kithara, temp_dir};
     use kithara_warp::StretchKind;
+    use kithara_worker::Worker;
 
     use super::*;
     use crate::{
         QueueEvent, TrackStatus,
+        queue::{WorkerOwner, worker_owner},
         test_pools::{TestPools, pools},
         track::{TrackRecord, Tracks},
     };
 
-    fn fixture() -> (
+    fn fixture(
+        worker: &Worker,
+    ) -> (
         Loader<TestPools>,
         Mailbox<QueueCommand<TestPools>, QueueError>,
     ) {
         let (postbox, mailbox) = mailbox();
         let prep = ResourcePrep::builder()
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools())
+                    .worker(worker.clone())
+                    .build(),
+            ))
             .build();
         let store = AssetStore::builder(pools())
             .backend(StorageBackend::Memory)
@@ -332,8 +340,8 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn build_config_preserves_caller_supplied_config() {
-        let (loader, _mailbox) = fixture();
+    async fn build_config_preserves_caller_supplied_config(#[by_ref] worker_owner: &WorkerOwner) {
+        let (loader, _mailbox) = fixture(&worker_owner.0);
         let supplied_store = AssetStore::builder(pools())
             .backend(StorageBackend::Memory)
             .build();
@@ -359,8 +367,8 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn build_config_forwards_a_prepared_artifact() {
-        let (loader, _mailbox) = fixture();
+    async fn build_config_forwards_a_prepared_artifact(#[by_ref] worker_owner: &WorkerOwner) {
+        let (loader, _mailbox) = fixture(&worker_owner.0);
         let src = ResourceSrc::parse("https://example.com/a.mp3").expect("valid url");
         let grid = ResourceSrc::parse("https://example.com/a.grid").expect("valid artifact url");
         let given = ResourceConfig::for_src(src)
@@ -386,8 +394,8 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn build_config_labels_default_bus_with_track_id() {
-        let (loader, _mailbox) = fixture();
+    async fn build_config_labels_default_bus_with_track_id(#[by_ref] worker_owner: &WorkerOwner) {
+        let (loader, _mailbox) = fixture(&worker_owner.0);
         let mut rx = loader.prep.bus.subscribe::<QueueEvent>();
         let config = loader
             .build_config(
@@ -408,8 +416,8 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn build_config_invalid_uri_errors() {
-        let (loader, _mailbox) = fixture();
+    async fn build_config_invalid_uri_errors(#[by_ref] worker_owner: &WorkerOwner) {
+        let (loader, _mailbox) = fixture(&worker_owner.0);
         let Err(err) = loader.build_config(
             TrackId(1),
             TrackSource::Uri("not-a-url".into()),
@@ -421,8 +429,10 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn cancellation_wakes_an_attempt_waiting_for_admission() {
-        let (loader, _mailbox) = fixture();
+    async fn cancellation_wakes_an_attempt_waiting_for_admission(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (loader, _mailbox) = fixture(&worker_owner.0);
         let id = TrackId::allocate();
         let source: TrackSource<TestPools> = "https://example.com/pending.mp3".into();
         let mut tracks: Tracks<TestPools> = Tracks::default();
@@ -608,8 +618,11 @@ mod tests {
 
     #[kithara::test(native, tokio)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    async fn only_the_current_attempt_places_its_cover(temp_dir: TestTempDir) {
-        let (loader, mut mailbox) = fixture();
+    async fn only_the_current_attempt_places_its_cover(
+        #[by_ref] worker_owner: &WorkerOwner,
+        temp_dir: TestTempDir,
+    ) {
+        let (loader, mut mailbox) = fixture(&worker_owner.0);
         let id = TrackId::allocate();
         let audio = ResourceSrc::Path(temp_dir.path().join("missing.mp3"));
         let covered = |name: &str, cover: &[u8]| -> TrackSource<TestPools> {

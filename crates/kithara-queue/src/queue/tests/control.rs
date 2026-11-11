@@ -17,7 +17,10 @@ use crate::{
         TestPools, answer_loaded, finish, fixture_uri, load_seq, pending_selection, pools,
         requested_load, selected, with_outbox,
     },
-    queue::{QueueCommand, state},
+    queue::{
+        QueueCommand, state,
+        state::tests::{WorkerOwner, worker_owner},
+    },
 };
 
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
@@ -107,12 +110,14 @@ fn eq_call(
 }
 
 #[kithara::test(native)]
-fn a_handle_clone_sees_the_replacement_band_array() {
+fn a_handle_clone_sees_the_replacement_band_array(#[by_ref] worker_owner: &WorkerOwner) {
     let region = pools();
     let config = DeckMixerConfig::builder().eq_bands(4).build();
     let prep = kithara_play::ResourcePrep::builder()
         .worker(kithara_play::PlayWorker::new(
-            kithara_play::PlayWorkerConfig::builder(region.clone()).build(),
+            kithara_play::PlayWorkerConfig::builder(region.clone())
+                .worker(worker_owner.0.clone())
+                .build(),
         ))
         .build();
     let mut queue = Queue::new(QueueConfig::builder().prep(prep).mixer(config).build());
@@ -176,11 +181,12 @@ fn a_handle_clone_sees_the_replacement_band_array() {
 #[case(f64::INFINITY, None, 0)]
 #[case(f64::NAN, Some(Duration::from_secs(10)), 0)]
 async fn seek_frame_index_clamps_unrepresentable_targets(
+    #[by_ref] worker_owner: &WorkerOwner,
     #[case] target: f64,
     #[case] duration: Option<Duration>,
     #[case] expected_frame: u64,
 ) {
-    let (mut queue, _, _, mut rig, _dir) = pending_selection();
+    let (mut queue, _, _, mut rig, _dir) = pending_selection(&worker_owner.0);
     let seq = queue
         .active
         .iter()
@@ -235,8 +241,10 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
 }
 
 #[kithara::test(tokio)]
-async fn keylock_set_on_a_playing_queue_reads_back_and_reaches_a_track_appended_after_it() {
-    let (mut queue, _, _, mut rig, dir) = selected().await;
+async fn keylock_set_on_a_playing_queue_reads_back_and_reaches_a_track_appended_after_it(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, _, _, mut rig, dir) = selected(&worker_owner.0).await;
     let control = queue.control();
     assert!(!control.keylock(), "the queue starts with keylock off");
 

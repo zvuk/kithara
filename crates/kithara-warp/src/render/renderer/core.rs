@@ -166,18 +166,12 @@ where
                 .capabilities()
                 .contains(BackendCapabilities::RATE)
         {
-            Self::config_for(
-                current_kind,
-                config.backends(),
-                config.source_block_frames(),
-                spec,
-                &pools,
-            )
-            .and_then(build_engine)
-            .map(|engine| PreparedTarget {
-                engine: Some(engine),
-                ..PreparedTarget::default()
-            })
+            Self::config_for(current_kind, config, spec, &pools)
+                .and_then(build_engine)
+                .map(|engine| PreparedTarget {
+                    engine: Some(engine),
+                    ..PreparedTarget::default()
+                })
         } else {
             Self::prepare_target(config, spec, &pools, PreparedTarget::default(), true)
         }

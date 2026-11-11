@@ -1,19 +1,25 @@
-use kithara::platform::sync::mpsc;
+use kithara::platform::{
+    sync::{Arc, Mutex, mpsc},
+    time::{Duration, Instant},
+};
+use kithara_test_fixtures::assets;
 
-use crate::{config::FfiPlayerConfig, player::AudioPlayer, types::FfiError};
+use crate::{
+    config::FfiPlayerConfig,
+    observer::PlayerObserver,
+    player::AudioPlayer,
+    types::{FfiError, FfiPlayerEvent, FfiRepeatMode, FfiTrackStatus, FfiTransition},
+};
 
-#[kithara_test_utils::kithara::hang_watchdog(timeout = kithara_platform::time::Duration::from_secs(2))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(2))]
 fn wait_for_publication(mut published: impl FnMut() -> bool) {
-    let deadline =
-        kithara_platform::time::WallInstant::now() + kithara_platform::time::Duration::from_secs(2);
+    let deadline = kithara_platform::time::WallInstant::now() + Duration::from_secs(2);
     while !published() {
         hang_tick!();
         if kithara_platform::time::WallInstant::now() >= deadline {
             return;
         }
-        hang_park!(|_| kithara_platform::thread::paced_backoff(
-            kithara_platform::time::Duration::from_millis(5)
-        ));
+        hang_park!(|_| kithara_platform::thread::paced_backoff(Duration::from_millis(5)));
     }
     hang_reset!();
 }
@@ -218,22 +224,90 @@ fn anchorless_insert_goes_to_the_head_and_append_to_the_tail() {
     );
 }
 
-fn test_item(url: &str) -> std::sync::Arc<crate::item::AudioPlayerItem> {
+fn test_item(url: &str) -> Arc<crate::item::AudioPlayerItem> {
     crate::item::AudioPlayerItem::new(crate::types::FfiItemConfig::for_test(url))
 }
 
-struct FailureSignal(mpsc::Sender<()>);
+struct PlayerSignal {
+    matches: fn(&FfiPlayerEvent) -> bool,
+    signal: mpsc::Sender<()>,
+}
 
-impl crate::observer::PlayerObserver for FailureSignal {
-    fn on_event(&self, event: crate::types::FfiPlayerEvent) {
-        if let crate::types::FfiPlayerEvent::TrackStatusChanged {
-            status: crate::types::FfiTrackStatus::Failed { .. },
-            ..
-        } = event
-        {
-            let _ = self.0.send(());
+impl PlayerObserver for PlayerSignal {
+    fn on_event(&self, event: FfiPlayerEvent) {
+        if (self.matches)(&event) {
+            self.signal.send(()).ok();
         }
     }
+}
+
+struct DroppingObserver {
+    matches: fn(&FfiPlayerEvent) -> bool,
+    player: Mutex<Option<Arc<AudioPlayer>>>,
+    returned: mpsc::Sender<()>,
+}
+
+impl PlayerObserver for DroppingObserver {
+    fn on_event(&self, event: FfiPlayerEvent) {
+        if (self.matches)(&event) {
+            let player = self.player.lock().take();
+            if let Some(player) = player {
+                drop(player);
+                self.returned.send(()).ok();
+            }
+        }
+    }
+}
+
+#[kithara::test]
+#[case::mode_change(false)]
+#[case::loading(true)]
+fn an_observer_can_release_the_final_player(#[case] during_load: bool) {
+    crate::mock::offline();
+    let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
+    let (returned, received) = mpsc::channel();
+    let observer = Arc::new(DroppingObserver {
+        matches: if during_load {
+            |event| {
+                matches!(
+                    event,
+                    FfiPlayerEvent::TrackStatusChanged {
+                        status: FfiTrackStatus::Loading,
+                        ..
+                    }
+                )
+            }
+        } else {
+            |event| matches!(event, FfiPlayerEvent::RepeatModeChanged { .. })
+        },
+        player: Mutex::new(None),
+        returned,
+    });
+    player.set_observer(observer.clone());
+    *observer.player.lock() = Some(player);
+    {
+        let owner = observer.player.lock();
+        let player = owner.as_ref().expect("observer owns the final player");
+        if during_load {
+            let path = assets::sine_wav_a440_100_frames()
+                .path()
+                .expect("local WAV fixture");
+            let item = test_item(path.to_str().expect("UTF-8 fixture path"));
+            player
+                .append(Arc::clone(&item))
+                .expect("append callback track");
+            player
+                .select(&item, FfiTransition::None)
+                .expect("start callback load");
+        } else {
+            player
+                .set_repeat_mode(FfiRepeatMode::All)
+                .expect("publish callback event");
+        }
+    }
+    let returned = received.recv_timeout(Instant::now() + Duration::from_secs(2));
+    drop(observer.player.lock().take());
+    returned.expect("the callback returned after freeing its player");
 }
 
 /// The host calls `play()` from its own thread, which has no Tokio runtime.
@@ -244,16 +318,27 @@ fn play_retries_a_failed_track_from_a_thread_without_a_runtime() {
     crate::mock::offline();
     let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
     let (failed_tx, failed_rx) = mpsc::channel();
-    player.set_observer(std::sync::Arc::new(FailureSignal(failed_tx)));
+    player.set_observer(Arc::new(PlayerSignal {
+        matches: |event| {
+            matches!(
+                event,
+                FfiPlayerEvent::TrackStatusChanged {
+                    status: FfiTrackStatus::Failed { .. },
+                    ..
+                }
+            )
+        },
+        signal: failed_tx,
+    }));
     // The queue takes only an absolute path, and what is absolute differs
     // between platforms: a drive-less `/missing.mp3` is not one on Windows.
     let missing = std::env::temp_dir().join("kithara-ffi-missing.mp3");
     let item = test_item(missing.to_str().expect("a UTF-8 temporary path"));
     player.append(item.clone()).expect("queue accepts the item");
     player
-        .select(&item, crate::types::FfiTransition::None)
+        .select(&item, FfiTransition::None)
         .expect("the paused queue loads the selected item");
-    wait_for_failure(&failed_rx);
+    wait_for_player_signal(&failed_rx);
 
     player.play();
 
@@ -262,8 +347,8 @@ fn play_retries_a_failed_track_from_a_thread_without_a_runtime() {
 
 #[kithara::allow_block]
 #[kithara::flash(io)]
-#[kithara_test_utils::kithara::hang_watchdog(timeout = kithara_platform::time::Duration::from_secs(2))]
-fn wait_for_failure(receiver: &mpsc::Receiver<()>) {
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(2))]
+fn wait_for_player_signal(receiver: &mpsc::Receiver<()>) {
     let scope = kithara_platform::CancelScope::new(None);
     let mut cursor = 0;
     loop {
@@ -271,18 +356,15 @@ fn wait_for_failure(receiver: &mpsc::Receiver<()>) {
         crate::mock::render(cursor..cursor + 512, &scope.token()).expect("offline pull");
         cursor += 512;
         let mut received = false;
-        hang_park!(
-            |remaining: kithara_platform::time::Duration| match receiver.recv_timeout(
-                kithara_platform::time::Instant::now()
-                    + remaining.min(kithara_platform::time::Duration::from_millis(5))
-            ) {
-                Ok(()) => received = true,
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    panic!("the missing-file observer disconnected");
-                }
+        hang_park!(|remaining: Duration| match receiver
+            .recv_timeout(Instant::now() + remaining.min(Duration::from_millis(5)))
+        {
+            Ok(()) => received = true,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the player observer disconnected");
             }
-        );
+        });
         if received {
             hang_reset!();
             return;

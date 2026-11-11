@@ -9,10 +9,11 @@ use crate::{AdvanceReason, queue::state::tests::wait_for_queue_event};
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn pause_and_none_suppress_natural_eof_progression() {
+async fn pause_and_none_suppress_natural_eof_progression(#[by_ref] worker_owner: &WorkerOwner) {
     for action in [ActionAtItemEnd::Pause, ActionAtItemEnd::None] {
         hang_tick!();
-        let (mut queue, first, _second, mut rig, _dir) = crate::mock::selected().await;
+        let (mut queue, first, _second, mut rig, _dir) =
+            crate::mock::selected(&worker_owner.0).await;
         hang_reset!();
         with_outbox(&mut queue, &mut rig, |queue, out| {
             Player::apply(queue, QueueCommand::SetActionAtItemEnd(action), out)
@@ -53,8 +54,8 @@ async fn pause_and_none_suppress_natural_eof_progression() {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
-async fn a_tick_pauses_at_the_natural_end_it_drains() {
-    let (mut queue, first, _, mut rig, _dir) = crate::mock::selected().await;
+async fn a_tick_pauses_at_the_natural_end_it_drains(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, first, _, mut rig, _dir) = crate::mock::selected(&worker_owner.0).await;
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
             queue,
@@ -162,8 +163,10 @@ fn settle_natural_end_pause(
 }
 
 #[kithara::test(tokio)]
-async fn the_deck_leading_on_past_a_failed_track_advances_for_the_failure() {
-    let (mut queue, failed, successor, mut rig, dir) = crate::mock::selected().await;
+async fn the_deck_leading_on_past_a_failed_track_advances_for_the_failure(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, failed, successor, mut rig, dir) = crate::mock::selected(&worker_owner.0).await;
     let slot = queue
         .active
         .iter()
@@ -219,8 +222,8 @@ async fn the_deck_leading_on_past_a_failed_track_advances_for_the_failure() {
 }
 
 #[kithara::test(tokio)]
-async fn lag_recovery_keeps_an_ended_queue_ended() {
-    let (mut queue, last, _, mut rig, _dir) = crate::mock::selected().await;
+async fn lag_recovery_keeps_an_ended_queue_ended(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, last, _, mut rig, _dir) = crate::mock::selected(&worker_owner.0).await;
     queue.current = Some(last);
     queue.current = None;
     queue.navigation = crate::NavigationState::new(queue.navigation.history_limit());
@@ -240,8 +243,10 @@ async fn lag_recovery_keeps_an_ended_queue_ended() {
 }
 
 #[kithara::test(tokio)]
-async fn overflowing_player_observations_do_not_announce_an_unchanged_current_track() {
-    let (mut queue, id, _, mut rig, _dir) = crate::mock::selected().await;
+async fn overflowing_player_observations_do_not_announce_an_unchanged_current_track(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, id, _, mut rig, _dir) = crate::mock::selected(&worker_owner.0).await;
     let mut observations = queue.subscribe::<PlayerEvent>();
     let mut events = queue.subscribe::<QueueEvent>();
     for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
@@ -262,8 +267,8 @@ async fn overflowing_player_observations_do_not_announce_an_unchanged_current_tr
 }
 
 #[kithara::test(tokio)]
-async fn a_failure_observation_cannot_fail_the_current_track() {
-    let (mut queue, id, _, mut rig, _dir) = crate::mock::selected().await;
+async fn a_failure_observation_cannot_fail_the_current_track(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, id, _, mut rig, _dir) = crate::mock::selected(&worker_owner.0).await;
     let slot = queue
         .active
         .iter()

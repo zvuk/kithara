@@ -16,6 +16,7 @@ pub(super) use kithara_render::{
 };
 pub(super) use kithara_signal::{AudioChunkInfo, FrameCount, SessionFrame};
 pub(super) use kithara_test_utils::{TestTempDir, kithara};
+use kithara_worker::Worker;
 
 use super::*;
 use crate::mock::fixture_uri;
@@ -26,11 +27,15 @@ pub(super) use crate::{
 };
 
 #[kithara::test(native)]
-fn rejected_live_commands_leave_requested_values_unchanged() {
+fn rejected_live_commands_leave_requested_values_unchanged(#[by_ref] worker_owner: &WorkerOwner) {
     use crate::{CrossfadeSettings, QueueConfigPatch, QueueSettings, QueueSettingsChange};
 
     let prep = ResourcePrep::builder()
-        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::builder(pools())
+                .worker(worker_owner.0.clone())
+                .build(),
+        ))
         .build();
     let settings = QueueSettings::builder()
         .crossfade(CrossfadeSettings {
@@ -101,9 +106,13 @@ fn mix_command(
 }
 
 #[kithara::test(native)]
-fn rejected_slot_volume_leaves_live_values_unchanged() {
+fn rejected_slot_volume_leaves_live_values_unchanged(#[by_ref] worker_owner: &WorkerOwner) {
     let prep = ResourcePrep::builder()
-        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::builder(pools())
+                .worker(worker_owner.0.clone())
+                .build(),
+        ))
         .build();
     let mut queue = Queue::new(QueueConfig::builder().prep(prep).build());
     let control = queue.control();
@@ -225,8 +234,8 @@ async fn arm_current_fixture(
 }
 
 #[kithara::test(tokio)]
-async fn finish_disarms_and_ignores_stale_ticket() {
-    let (mut queue, id, _, mut rig, dir) = pending_selection();
+async fn finish_disarms_and_ignores_stale_ticket(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, id, _, mut rig, dir) = pending_selection(&worker_owner.0);
     let stale = rig
         .open(Err(kithara_play::LoadRefusal::Cancelled))
         .expect("old terminal dispatcher receipt");
@@ -306,8 +315,10 @@ async fn finish_disarms_and_ignores_stale_ticket() {
 }
 
 #[kithara::test(tokio)]
-async fn a_seek_accepted_while_opening_is_adopted_before_the_first_start() {
-    let (mut queue, first, _, mut rig, dir) = pending_selection();
+async fn a_seek_accepted_while_opening_is_adopted_before_the_first_start(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, first, _, mut rig, dir) = pending_selection(&worker_owner.0);
     let to = Position::from_millis(10);
     let sent = with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(queue, QueueCommand::Seek { to }, out)
@@ -353,13 +364,15 @@ async fn a_seek_accepted_while_opening_is_adopted_before_the_first_start() {
     );
 }
 
-async fn selected_source_clock() -> (
+async fn selected_source_clock(
+    worker: &Worker,
+) -> (
     Queue<TestPools>,
     mock::DeckRig<TestPools>,
     TestTempDir,
     AudioChunkInfo,
 ) {
-    let (mut queue, _, _, mut rig, dir) = pending_selection();
+    let (mut queue, _, _, mut rig, dir) = pending_selection(worker);
     let seq = queue
         .active
         .iter()
@@ -383,8 +396,10 @@ async fn selected_source_clock() -> (
 }
 
 #[kithara::test(tokio)]
-async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position() {
-    let (mut queue, mut rig, _dir, clock) = selected_source_clock().await;
+async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, mut rig, _dir, clock) = selected_source_clock(&worker_owner.0).await;
     let before = queue.control().position_seconds();
     let first = with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
@@ -499,8 +514,10 @@ async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position() {
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
-async fn an_applied_seek_keeps_its_target_until_the_matching_render_mark() {
-    let (mut queue, mut rig, _dir, clock) = selected_source_clock().await;
+async fn an_applied_seek_keeps_its_target_until_the_matching_render_mark(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, mut rig, _dir, clock) = selected_source_clock(&worker_owner.0).await;
     let requested = Position::try_from_secs_f64(2.0).expect("requested seek");
     let sent = with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(queue, QueueCommand::Seek { to: requested }, out)
@@ -590,8 +607,8 @@ async fn an_applied_seek_keeps_its_target_until_the_matching_render_mark() {
 }
 
 #[kithara::test(tokio)]
-async fn atomic_track_id_cas_arm_then_disarm() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn atomic_track_id_cas_arm_then_disarm(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     queue.config.action_at_item_end = ActionAtItemEnd::None;
     let source = TrackSource::Uri(fixture_uri(dir.path(), "entry.wav"));
     with_outbox(&mut queue, &mut rig, |queue, out| {
@@ -724,9 +741,13 @@ async fn atomic_track_id_cas_arm_then_disarm() {
 }
 
 #[kithara::test]
-fn a_host_pass_publishes_the_deck_mixer_counters() {
+fn a_host_pass_publishes_the_deck_mixer_counters(#[by_ref] worker_owner: &WorkerOwner) {
     let prep = ResourcePrep::builder()
-        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::builder(pools())
+                .worker(worker_owner.0.clone())
+                .build(),
+        ))
         .build();
     let mut queue = Queue::new(QueueConfig::builder().prep(prep).build());
     let control = queue.control();
@@ -753,8 +774,10 @@ fn a_host_pass_publishes_the_deck_mixer_counters() {
 }
 
 #[kithara::test(tokio)]
-async fn an_item_is_loaded_on_its_load_receipt_before_its_attach_applies() {
-    let (mut queue, first, _, mut rig, dir) = pending_selection();
+async fn an_item_is_loaded_on_its_load_receipt_before_its_attach_applies(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, first, _, mut rig, dir) = pending_selection(&worker_owner.0);
     let mut events = queue.subscribe::<QueueEvent>();
     answer_load(&mut queue, &mut rig, &dir).await;
     assert_eq!(
@@ -794,8 +817,10 @@ async fn an_item_is_loaded_on_its_load_receipt_before_its_attach_applies() {
 }
 
 #[kithara::test(tokio)]
-async fn a_pause_before_the_selected_item_enters_makes_it_current_paused() {
-    let (mut queue, first, _, mut rig, dir) = pending_selection();
+async fn a_pause_before_the_selected_item_enters_makes_it_current_paused(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, first, _, mut rig, dir) = pending_selection(&worker_owner.0);
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(queue, QueueCommand::Pause { at: When::Next }, out)
     })
@@ -897,8 +922,8 @@ async fn a_pause_before_the_selected_item_enters_makes_it_current_paused() {
 }
 
 #[kithara::test(tokio)]
-async fn play_with_a_pending_selection_enters_that_selection() {
-    let (mut queue, first, second, mut rig, dir) = pending_selection();
+async fn play_with_a_pending_selection_enters_that_selection(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, first, second, mut rig, dir) = pending_selection(&worker_owner.0);
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(queue, QueueCommand::Play { at: When::Next }, out)
     })
@@ -928,8 +953,11 @@ async fn play_with_a_pending_selection_enters_that_selection() {
 #[kithara::test(tokio)]
 #[case::stop_first(false)]
 #[case::stale_first(true)]
-async fn a_pause_over_a_scheduled_entry_settles_current_paused(#[case] reverse: bool) {
-    let (mut queue, first, _, mut rig, dir) = pending_selection();
+async fn a_pause_over_a_scheduled_entry_settles_current_paused(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] reverse: bool,
+) {
+    let (mut queue, first, _, mut rig, dir) = pending_selection(&worker_owner.0);
     let scheduled = SessionFrame::new(256);
     queue.target.as_mut().expect("selected target").bound =
         Some(kithara_play::Bound::AtOrAfter(scheduled));

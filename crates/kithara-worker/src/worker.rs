@@ -1,8 +1,14 @@
 use kithara_platform::{CancelScope, sync::Arc, tokio::runtime::Handle};
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::threads::Threads;
 use crate::{Dispatcher, DispatcherConfig, WorkerConfig, compute::ComputeRuntime};
 
 /// Cloneable owner of shared worker runtime resources.
+///
+/// Keep an application-owned clone while players use the worker. The last
+/// clone shuts down on drop. A thread cannot join itself, so a release on one
+/// of the worker's own threads joins every other worker thread.
 #[derive(Clone)]
 pub struct Worker {
     inner: Arc<WorkerInner>,
@@ -12,11 +18,19 @@ impl Worker {
     /// Create a worker from one complete configuration.
     #[must_use]
     pub fn new(config: WorkerConfig) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let threads = Arc::new(Threads::default());
         Self {
             inner: Arc::new(WorkerInner {
                 runtime: config.runtime.clone(),
                 scope: CancelScope::new(config.cancel.clone()),
-                compute: Arc::new(ComputeRuntime::new(config)),
+                compute: Arc::new(ComputeRuntime::new(
+                    config,
+                    #[cfg(not(target_arch = "wasm32"))]
+                    Arc::clone(&threads),
+                )),
+                #[cfg(not(target_arch = "wasm32"))]
+                threads,
             }),
         }
     }
@@ -29,7 +43,20 @@ impl Worker {
             self.inner.scope.token().child(),
             Arc::clone(&self.inner.compute),
             self.inner.runtime.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Arc::clone(&self.inner.threads),
         )
+    }
+
+    /// Cancel tasks and synchronously join native worker-owned threads.
+    /// Supplied compute pools remain owned by their caller.
+    ///
+    /// Called on one of the worker's own threads, it joins every other one.
+    ///
+    /// # Panics
+    /// Panics when blocking is forbidden in an async poll.
+    pub fn shutdown(&self) {
+        self.inner.shutdown();
     }
 
     delegate::delegate! {
@@ -47,11 +74,26 @@ struct WorkerInner {
     compute: Arc<ComputeRuntime>,
     scope: CancelScope,
     runtime: Option<Handle>,
+    #[cfg(not(target_arch = "wasm32"))]
+    threads: Arc<Threads>,
+}
+
+impl WorkerInner {
+    fn shutdown(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.threads.close();
+        self.scope.cancel();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.compute.stop();
+            self.threads.join();
+        }
+    }
 }
 
 impl Drop for WorkerInner {
     fn drop(&mut self) {
-        self.scope.cancel();
+        self.shutdown();
     }
 }
 
@@ -125,15 +167,10 @@ mod tests {
             )
         );
         assert!(received.try_recv().is_err());
-        let built = worker
-            .inner
-            .compute
-            .pool()
-            .owned
-            .get()
-            .expect("pool must be initialized")
-            .as_ref()
-            .expect("pool build must succeed");
+        let owned = worker.inner.compute.pool().owned.lock();
+        let crate::compute::PoolState::Running(built) = &*owned else {
+            panic!("pool build must succeed");
+        };
         assert_eq!(built.current_num_threads(), 1);
     }
 

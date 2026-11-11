@@ -16,6 +16,8 @@ mod types;
 mod view;
 
 pub(crate) use command::QueuePostbox;
+#[cfg(test)]
+pub(crate) use state::tests::{WorkerOwner, worker_owner};
 
 pub use self::{
     command::QueueCommand,
