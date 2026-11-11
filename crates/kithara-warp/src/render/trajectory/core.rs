@@ -393,6 +393,26 @@ impl Trajectory {
         }
     }
 
+    /// Whether the law keeps its current speed on every later output frame.
+    pub(in crate::render) fn holds_speed(&self) -> bool {
+        match &self.curve {
+            SpeedCurve::Constant(_) => true,
+            SpeedCurve::Steps(_) => self.frames_to_step().is_none(),
+            SpeedCurve::Ramp { frames, .. } => self.elapsed >= frames.get(),
+            SpeedCurve::Approach(_) | SpeedCurve::ApproachSteps(_) => false,
+        }
+    }
+
+    /// Output frames until the next step of a stepped law.
+    pub(in crate::render) fn frames_to_step(&self) -> Option<u64> {
+        let SpeedCurve::Steps(steps) = &self.curve else {
+            return None;
+        };
+        steps
+            .get(steps.partition_point(|(frame, _)| *frame <= self.elapsed))
+            .map(|(frame, _)| *frame - self.elapsed)
+    }
+
     pub(in crate::render) fn speed(&self) -> Result<f32, ElasticError> {
         self.speed_at()?.value()
     }

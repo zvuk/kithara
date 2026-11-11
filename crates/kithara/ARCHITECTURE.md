@@ -144,7 +144,7 @@ features keep their existing convenience: `file` also selects `assets` and
 `net`; `hls` selects `abr`, `assets`, `drm`, and `net`; `assets` selects
 `storage`; stretch backend features select `stretch`. For
 advanced control — multi-slot engine, crossfade, EQ — reach into
-`kithara::play` (`Engine`, `Player`, `CrossfadeConfig`, `Equalizer`). The
+`kithara::play` (`Engine`, `Player`, `CrossfadeConfig`). The
 slowest playing speed, `kithara::play::MIN_SPEED`, is re-exported even when no
 stretch backend is compiled; the flat `StretchKind` re-export and
 `kithara::warp::WarpRenderer` are gated on a native stretch backend.

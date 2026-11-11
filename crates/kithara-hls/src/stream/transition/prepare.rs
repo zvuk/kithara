@@ -84,25 +84,9 @@ where
             }
             return Ok(Some(transition));
         }
-        if state.incoming.is_some() {
-            let abort_intent = state
-                .incoming
-                .as_ref()
-                .is_some_and(|slot| slot.claim != claim);
-            self.discard_incoming(&mut state, abort_intent);
-        }
+        self.discard_other_incoming(&mut state, claim);
 
-        let Some(target) = self
-            .variants
-            .get(transition.incoming_variant().get())
-            .cloned()
-        else {
-            let _ = self.abr_state.abort_pending(claim.ticket());
-            return Err(StreamError::Source(SourceError::VariantNotFound(format!(
-                "incoming variant {}",
-                transition.incoming_variant().get()
-            ))));
-        };
+        let target = Arc::clone(self.incoming_target(transition, claim)?);
         let landing_time = plan.landing_time();
         validate_hls_reader_plan(&plan, &target.media_info(), landing_time)?;
         let session = match HlsSession::incoming(
@@ -119,11 +103,7 @@ where
                 return Err(error);
             }
         };
-        let claim_matches = match self.abr.pending_claim() {
-            PendingAbrClaim::Ready(current) | PendingAbrClaim::Locked(current) => current == claim,
-            _ => false,
-        };
-        if !claim_matches || self.variant_index() != transition.active_variant().get() {
+        if !self.claim_still_current(claim, transition) {
             session.abort();
             let _ = self.abr_state.abort_pending(claim.ticket());
             return Ok(None);

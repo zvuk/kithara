@@ -9,7 +9,7 @@ use num_traits::ToPrimitive;
 use super::*;
 use crate::{
     Warp,
-    test_pools::{pools, sample_buffer},
+    test_pools::{TestPools, pools, sample_buffer},
 };
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -25,6 +25,41 @@ const ENVELOPE_FRAMES: usize = 32;
 const ONSET_TOLERANCE: f64 = 240.0;
 const TONE_HZ: f64 = 440.0;
 const PITCH_WINDOW: usize = 12_000;
+
+/// Renders `frames` output frames of a held level from source frame `source` on.
+fn render_held(renderer: &mut WarpRenderer<TestPools>, source: &mut u64, frames: usize) {
+    let spec = renderer.spec;
+    let pcm = vec![0.25; 65_536 * 2];
+    let mut rendered = 0;
+    while rendered < frames {
+        renderer
+            .prepare_engine_latency(spec)
+            .expect("native service");
+        let meta = AudioChunkInfo {
+            spec,
+            frame_offset: *source,
+            ..Default::default()
+        };
+        let window = renderer
+            .prepare_source_window(meta, 65_536, (frames - rendered).min(480))
+            .expect("prepared source")
+            .get();
+        let first = usize::try_from(*source).expect("source offset") * 2;
+        let output = renderer
+            .render_quantum(AudioChunk::new(
+                AudioChunkInfo {
+                    frames: u32::try_from(window).expect("source count"),
+                    ..meta
+                },
+                sample_buffer(&renderer.pools, &pcm[first..first + window * 2]),
+            ))
+            .continue_value()
+            .expect("prepared shape")
+            .expect("warm native output");
+        *source += u64::try_from(window).expect("source frames");
+        rendered += output.frames();
+    }
+}
 
 #[kithara::test]
 #[cfg_attr(
@@ -55,37 +90,8 @@ fn native_retarget_rejects_incompatible_cached_source_geometry(
         .keylock(true)
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools());
-    let pcm = vec![0.25; 65_536 * 2];
     let mut source = 0;
-    let mut rendered = 0;
-    while rendered < frames_to_render {
-        renderer
-            .prepare_engine_latency(spec)
-            .expect("native service");
-        let meta = AudioChunkInfo {
-            spec,
-            frame_offset: source,
-            ..Default::default()
-        };
-        let frames = renderer
-            .prepare_source_window(meta, 65_536, (frames_to_render - rendered).min(480))
-            .expect("prepared source")
-            .get();
-        let first = usize::try_from(source).expect("source offset") * 2;
-        let output = renderer
-            .render_quantum(AudioChunk::new(
-                AudioChunkInfo {
-                    frames: u32::try_from(frames).expect("source count"),
-                    ..meta
-                },
-                sample_buffer(&renderer.pools, &pcm[first..first + frames * 2]),
-            ))
-            .continue_value()
-            .expect("prepared shape")
-            .expect("warm native output");
-        source += u64::try_from(frames).expect("source frames");
-        rendered += output.frames();
-    }
+    render_held(&mut renderer, &mut source, frames_to_render);
     let projection = renderer.projection.as_ref().expect("native cache");
     assert_eq!(projection.offset < projection.buffers[0].len(), continuous);
     let curve = if continuous {
@@ -108,6 +114,127 @@ fn native_retarget_rejects_incompatible_cached_source_geometry(
     assert!(
         renderer.transition_pending(),
         "incompatible queued output must retire"
+    );
+}
+
+/// A speed step the renderer takes at least one engine latency ahead stays in
+/// the engine: on its frame the new law replaces a law already at its speed.
+/// A nearer step, which the engine has been fed past, is left to re-prime the
+/// engine on its frame; a nearer step of another law moves the one taken, and
+/// a reset withdraws it.
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn native_speed_step_taken_a_latency_ahead_keeps_the_engine(#[case] backend: StretchKind) {
+    let spec = AudioSpec::new(2, NonZeroU32::new(8_000).expect("sample rate"));
+    let config = WarpConfig::builder()
+        .backend(backend)
+        .speed(0.8)
+        .keylock(true)
+        .build();
+    let mut renderer = Warp::new((), &config).renderer(spec, pools());
+    let mut source = 0;
+    render_held(&mut renderer, &mut source, 4_800);
+    let latency = renderer.engine_latency().get();
+    let lead = u64::try_from(latency).expect("engine latency");
+    let far = SpeedCurve::Constant(1.25);
+    let near = SpeedCurve::Constant(0.9);
+
+    assert!(
+        !renderer
+            .anticipate_speed(&near, lead - 1)
+            .expect("fed past"),
+        "the engine has been fed past a step nearer than its latency"
+    );
+    assert!(
+        renderer
+            .anticipate_speed(&far, lead + 480)
+            .expect("far step"),
+        "a step at least one latency ahead enters the law"
+    );
+    assert!(
+        !renderer
+            .anticipate_speed(&far, lead + 480)
+            .expect("held step"),
+        "the law already holds the step"
+    );
+    assert!(
+        renderer.anticipate_speed(&near, lead).expect("near step"),
+        "a nearer step of another law moves the one taken"
+    );
+    assert_eq!(renderer.trajectory.frames_to_step(), Some(lead));
+    render_held(&mut renderer, &mut source, latency);
+    renderer.set_speed(near, 1).expect("the step's law");
+    assert!(
+        !renderer.transition_pending(),
+        "the law on the step's frame continues the live engine"
+    );
+
+    render_held(&mut renderer, &mut source, 480);
+    assert!(renderer.anticipate_speed(&far, lead).expect("next step"));
+    renderer.reset();
+    assert_eq!(renderer.trajectory.frames_to_step(), None);
+    assert_eq!(
+        renderer.trajectory.speed().expect("held speed").to_bits(),
+        0.9_f32.to_bits(),
+        "the law returns to the speed it held"
+    );
+
+    render_held(&mut renderer, &mut source, 4_800);
+    renderer.set_speed(far, 2).expect("unannounced step");
+    assert!(
+        renderer.transition_pending(),
+        "a step the engine never read ahead re-primes it"
+    );
+}
+
+/// A Bungee packet can cross a step of its law, and its source mapping then
+/// covers the frames from that step on only. While output before the step is
+/// still queued, a law that differs there cannot be shown to match it.
+#[kithara::test]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn queued_output_before_a_packet_step_rejects_another_law(#[case] backend: StretchKind) {
+    let spec = AudioSpec::new(2, NonZeroU32::new(8_000).expect("sample rate"));
+    let config = WarpConfig::builder()
+        .backend(backend)
+        .speed(0.8)
+        .keylock(true)
+        .build();
+    let mut renderer = Warp::new((), &config).renderer(spec, pools());
+    let mut source = 0;
+    render_held(&mut renderer, &mut source, 4_800);
+    let lead = u64::try_from(renderer.engine_latency().get()).expect("engine latency") + 480;
+    assert!(
+        renderer
+            .anticipate_speed(&SpeedCurve::Constant(1.25), lead)
+            .expect("far step")
+    );
+    let queued_before_step = |renderer: &WarpRenderer<TestPools>| {
+        renderer.projection.as_ref().is_some_and(|projection| {
+            projection.cached_span.is_some_and(|(from, _)| {
+                from > 0 && projection.offset < from * usize::from(spec.channels)
+            })
+        })
+    };
+    let mut rendered = 0;
+    while !queued_before_step(&renderer) {
+        assert!(rendered < 8_000, "no packet crossed the step");
+        render_held(&mut renderer, &mut source, 1);
+        rendered += 1;
+    }
+    let step = renderer.trajectory.frames_to_step().expect("taken step");
+    let mut earlier = renderer.trajectory.clone();
+    earlier
+        .replace(SpeedCurve::Steps(Arc::from([(step - 1, 1.25)])))
+        .expect("earlier step");
+    assert!(
+        !renderer
+            .can_continue_native(&earlier)
+            .expect("cached geometry admission"),
+        "output queued before the packet's step cannot carry another law"
     );
 }
 

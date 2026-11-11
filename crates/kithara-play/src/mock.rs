@@ -38,16 +38,12 @@ use kithara_render::{
 use kithara_signal::{FrameCount, OutputContext, SessionEpoch, SessionFrame};
 use kithara_sync::{SessionBeat, Tempo, TempoStep, TempoTrajectory};
 use kithara_test_utils::kithara;
-use kithara_warp::RenderContext;
 use num_traits::ToPrimitive;
 
+pub use crate::resource::source_mock::{resource_tracks, track_load};
 use crate::{
     DeckPass, OpenedTrack, PlayError, ResourceLoad, TrackSettings, player::Outbox,
     session::SessionOutputView,
-};
-pub use crate::{
-    api::equalizer::EqualizerMock,
-    resource::source_mock::{resource_tracks, track_load},
 };
 
 /// Sample rate every mock session runs at.
@@ -560,8 +556,6 @@ impl MixerRig {
             None,
         )
         .ok_or_else(|| PlayError::Internal("mock output block is invalid".into()))?;
-        let context = RenderContext::new_linear(context, None)
-            .ok_or_else(|| PlayError::Internal("mock render context is invalid".into()))?;
         publish_render_context(&mut self.extra.store, context)
             .map_err(|error| PlayError::Internal(error.to_string()))?;
         let info = ProcInfo {

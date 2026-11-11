@@ -3,7 +3,6 @@
 mod core;
 #[cfg(not(target_arch = "wasm32"))]
 mod disk;
-mod inner;
 mod state;
 
 pub(crate) use core::{EvictConfig, LruIndex};

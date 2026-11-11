@@ -29,7 +29,7 @@ use kithara::{
     queue::TrackSource,
     signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame, TransportRevision},
     sync::SpeedCurve,
-    warp::{RenderContext, StretchKind},
+    warp::StretchKind,
 };
 use kithara_command::{
     Batch, ChannelConfig, LevelInbox, Port, ScopeId, ScopedConfig, ScopedInbox, ScopedSender,
@@ -318,17 +318,13 @@ fn render_block(mixer: &mut BenchMixer, out_l: &mut [f32], out_r: &mut [f32]) ->
     let end = mixer.frame + i64::try_from(frames).expect("bench frames fit i64");
     publish_render_context(
         &mut mixer.extra.store,
-        RenderContext::new_linear(
-            OutputContext::new(
-                SessionFrame::new(mixer.frame)..SessionFrame::new(end),
-                non_zero(consts::SAMPLE_RATE, "sample rate"),
-                SessionEpoch::new(0),
-                Some(TransportRevision::first()),
-            )
-            .expect("bench output range"),
-            None,
+        OutputContext::new(
+            SessionFrame::new(mixer.frame)..SessionFrame::new(end),
+            non_zero(consts::SAMPLE_RATE, "sample rate"),
+            SessionEpoch::new(0),
+            Some(TransportRevision::first()),
         )
-        .expect("bench linear context"),
+        .expect("bench output range"),
     )
     .expect("bench context slot");
     let info = ProcInfo {

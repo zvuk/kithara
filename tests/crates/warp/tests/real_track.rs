@@ -21,7 +21,7 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::{assets::by_name, reference};
 use num_traits::ToPrimitive;
 
-use crate::region::{CH, Presented, Projection, Timeline, render_configured_grid_with_updates};
+use crate::region::{CH, Presented, Projection, render_configured_grid_with_updates};
 
 mod consts {
     /// A presented chunk may publish a source frame this many output frames
@@ -338,11 +338,7 @@ fn render(
         }
         revision = revision.checked_next().expect("map revision");
         next += 1;
-        Some((
-            anchor,
-            revision,
-            Some(plan(&source, anchor, output, revision)),
-        ))
+        Some(plan(&source, anchor, output, revision))
     };
     let source_end = source_end(
         track.name,
@@ -363,7 +359,6 @@ fn render(
             FrameCount::new(source_end),
         )
         .expect("decoded track is whole frames"),
-        Timeline::Anchored(anchors[0]),
         None,
         Some(frames),
         &mut update,
