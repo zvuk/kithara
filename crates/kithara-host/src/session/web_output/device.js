@@ -8,7 +8,7 @@ export class HostDevice {
     this.closed = false;
     this.failure = undefined;
     this.listeners = [];
-    this.initialize(root, script, module, memory, channels).catch((error) => this.fail(error));
+    this.initialize(root, script, module, memory, channels).catch((error) => { if (!this.closed) this.fail(error); });
   }
 
   get sampleRate() { return this.context.sampleRate; }
@@ -103,7 +103,7 @@ export class HostDevice {
   }
 
   fail(error) {
-    this.failure = String(error);
+    if (this.failure === undefined) this.failure = String(error);
     this.close();
   }
 
