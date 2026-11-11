@@ -849,6 +849,10 @@ pub(crate) const STUDIO_CAPTURE: &str = "KITHARA_STUDIO_CAPTURE";
 /// config leaves `publish.user_agent` empty.
 pub(crate) const DEFAULT_USER_AGENT: &str = "xtask-publish";
 
+/// The directory under the workspace target where a publication dry run
+/// verifies its packaged crates.
+pub(crate) const PUBLISH_VERIFICATION_DIR: &str = "publish-verify";
+
 /// Who every commit the release makes is recorded as. The commits land in a
 /// public repository, so they carry no person's name or address.
 pub(crate) const IDENTITY: [(&str, &str); 4] = [
