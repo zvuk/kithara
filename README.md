@@ -2,10 +2,6 @@
 
 <img src="logo.svg" alt="kithara" width="400">
 
-</div>
-
-<div align="center">
-
 [![crates.io](https://img.shields.io/crates/v/kithara.svg)](https://crates.io/crates/kithara)
 [![docs.rs](https://docs.rs/kithara/badge.svg)](https://docs.rs/kithara)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
@@ -14,72 +10,74 @@
 
 # kithara
 
-> Open-source modular audio engine in Rust.
-> Contributions and reviews are welcome.
+An audio engine in Rust for streaming players and DJ software. Give it a URL:
+HLS (`.m3u8`) plays with adaptive bitrate, anything else streams progressively,
+and both are cached on disk. On top sits a multi-deck player with crossfade,
+EQ, beat sync, and key-locked tempo.
 
-> **Status: active development.** Public APIs are intended to remain stable within a release line, while internal implementation may evolve. Pin exact versions for production use.
+<p align="center">
 
-Modular audio engine in Rust. Streams, decodes, and plays audio from
-progressive HTTP and HLS sources with a persistent on-disk cache. Designed as
-an open-source alternative to AVPlayer with DJ-grade mixing — multi-slot
-playback, crossfading, and per-channel EQ.
+<img src="docs/assets/kithara-app.webp" alt="kithara-app: two decks with waveforms, mixer, and library" width="100%">
 
-Components are independent crates: use one standalone, or compose them into a
-full player.
+</p>
+
+<p align="center"><sub><code>kithara-app</code>, the desktop demo built on the engine.</sub></p>
 
 ## Features
 
-- **Player engine** — AVPlayer-style API with multi-slot playback, crossfading, and per-channel EQ (`kithara-play`)
-- **Progressive HTTP** — stream MP3, AAC, FLAC, and ALAC with disk caching and pull-driven range fetches
-- **HLS VOD** — adaptive bitrate, variant switching, cross-codec recreate, AES-128-CBC encrypted segments, on-disk segment cache
-- **Multi-backend decode** — Symphonia (software, cross-platform), Apple AudioToolbox (macOS/iOS), Android `MediaCodec` (Android)
-- **Decoded source pipeline** — decoder lifecycle, fixed-ratio sample-rate conversion, and readiness (`kithara-audio`)
-- **Progressive source analysis** — waveform and beat analysis over decoded source ranges (`kithara-analysis`)
-- **Playback chain** — shared worker, resident Warp, time-stretch/effects, and final output admission (`kithara-play`)
-- **Persistent disk cache** — lease/pin semantics, LRU eviction, crash-safe writes
-- **Zero-allocation hot paths** — sharded buffer pool for decode and I/O loops
-- **WASM** — browser playback bindings with shared-memory threading (`kithara-ffi` web module)
+- **Streaming** — progressive HTTP and HLS VOD: adaptive bitrate, codec
+  switching between variants, AES-128 encrypted segments.
+- **Disk cache** — crash-safe writes, LRU eviction, offline playback of cached
+  tracks.
+- **Decoding** — MP3, AAC (incl. HE-AAC), FLAC, ALAC, WAV, Opus, Vorbis.
+  Software decoding through Symphonia, hardware decoding through Apple
+  AudioToolbox and Android MediaCodec.
+- **DJ playback** — decks, crossfader, 3-band EQ, deck effects, tempo change
+  with key lock, beat and BPM analysis, beat sync between decks.
+- **Real-time safe** — no allocation in the audio callback; buffers come from a
+  preallocated pool.
+- **Platforms** — macOS, Linux, Windows, iOS and Android (Swift and Kotlin
+  bindings), and the browser (WASM).
 
-## Quick Start
-
-```bash
-cargo install just --locked
-cargo build --workspace
-just test all
-```
-
-Full environment setup, lint commands, and mobile (Android / Apple) build flows
-live in [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Demo Players
+## Run the demo
 
 ```bash
-# Native demo — the desktop DJ studio
-cargo run -p kithara-app -- <TRACK_URL_1> <TRACK_URL_2>
-
-# WASM browser demo (via kithara-ffi)
-cd crates/kithara-ffi
-RUSTUP_TOOLCHAIN=nightly trunk serve --config Trunk.toml --port 8080
+cargo run -p kithara-app --release                       # the bundled demo playlist
+cargo run -p kithara-app --release -- <FILE_OR_URL> ...   # your own files or URLs
 ```
 
-## Architecture
+On Linux install `libasound2-dev` first. To build the browser version, run
+`just platform wasm build --package kithara-app`; see
+[`kithara-app`](crates/kithara-app/README.md).
 
-A layered workspace of independent crates, from the public player API down to
-storage and platform primitives. See [ARCHITECTURE.md](ARCHITECTURE.md) for the
-facade architecture and [crate contracts](https://github.com/zvuk/kithara/wiki/kithara) for the crate map, data flow,
-and cross-crate contracts. Each crate also has its own `README.md`.
+## Use as a library
 
-## Contributing
+```toml
+[dependencies]
+kithara = "0.0.1-alpha5"
+```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and
-[docs/workflows/rust-ai.md](docs/workflows/rust-ai.md) for the local-first task
-flow.
+The [`kithara`](crates/kithara/README.md) crate is the entry point: one
+`Resource` type reads decoded PCM from a file, URL, or HLS stream. Every layer
+is also a crate of its own, so you can take only the HLS client, the cache, or
+the decoder. Mobile apps use the [Swift package](apple/README.md) or the
+[Android AAR](android/README.md).
 
-## Minimum Supported Rust Version (MSRV)
+## Project status
 
-The current MSRV is **1.89** (Rust edition 2024), tracked via `rust-version` in
-the workspace `Cargo.toml`. It may be bumped in pre-release alphas without a
-major version bump.
+Pre-release (`0.0.1-alpha`). The public API still changes between releases;
+pin an exact version.
+
+## Documentation
+
+- [API reference](https://docs.rs/kithara) on docs.rs.
+- [Architecture and crate contracts](https://github.com/zvuk/kithara/wiki/kithara)
+  on the wiki.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — building, tests, and pull requests.
+
+## Minimum Supported Rust Version
+
+Rust **1.95**, edition 2024 (`rust-version` in the workspace `Cargo.toml`).
 
 ## License
 
