@@ -6,7 +6,7 @@ mod fixture {
     use std::num::NonZeroU32;
 
     use firewheel::FirewheelContext;
-    use kithara_command::{Live, When};
+    use kithara_command::{Live, Seq, When};
     use kithara_effects::LimiterConfig;
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_play::{HostedDeck, PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep};
@@ -113,11 +113,19 @@ mod fixture {
         }
     }
 
-    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub(crate) fn ask<D: HostedDeck<TestPools>>(
         state: &mut TestState<D>,
         command: HostCommand<TestPools, D>,
     ) -> Result<(), PlayError> {
+        ask_for_seq(state, command).map(drop)
+    }
+
+    /// Asks `command` and returns the sequence of the batch it sent, if any.
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    pub(crate) fn ask_for_seq<D: HostedDeck<TestPools>>(
+        state: &mut TestState<D>,
+        command: HostCommand<TestPools, D>,
+    ) -> Result<Option<Seq>, PlayError> {
         kithara_platform::flash::participate_sync(|| {
             hang_tick!();
             state.owner.begin_pass();
@@ -129,12 +137,12 @@ mod fixture {
             }
             let result = state.owner.apply(command);
             hang_tick!();
-            result?;
+            let seq = result?;
             state.owner.pass();
             state.owner.begin_pass();
             state.owner.pass();
             hang_tick!();
-            Ok(())
+            Ok(seq)
         })
     }
 
