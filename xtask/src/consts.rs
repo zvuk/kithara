@@ -1061,10 +1061,3 @@ pub(crate) const PROBE_MANIFEST: &str =
 
 /// How far back from a CI bootstrap unit's newest build to keep its other builds.
 pub(crate) const GARBAGE_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
-
-/// The version a dry run gives the workspace. `cargo publish --workspace`
-/// verifies each package against a local overlay of the others, but a version
-/// crates.io already holds resolves to the registry copy, so the branch's own
-/// cross-crate API would be checked against the last release. No release sits
-/// below `0.0.1`, so a requirement on this version only matches the overlay.
-pub(crate) const UNRELEASED_VERSION: &str = "0.0.0-unreleased";
