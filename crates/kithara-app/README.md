@@ -16,6 +16,12 @@ The desktop DJ demo built on the engine: two decks with waveforms, BPM and
 beat sync, a mixer with EQ and crossfader, tempo with key lock, and a track
 library. It also builds for the browser (WebGPU).
 
+<p align="center">
+
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/docs/assets/kithara-app.webp" alt="kithara-app: two decks with waveforms, mixer, and library" width="100%">
+
+</p>
+
 ## Usage
 
 ```bash
