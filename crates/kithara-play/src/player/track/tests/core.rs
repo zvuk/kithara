@@ -3087,6 +3087,9 @@ fn repeat_wav_load(
         .store(AssetStore::builder(pools()).build())
         .worker(worker.clone())
         .host_sample_rate(mock::SAMPLE_RATE)
+        // WHY: The mixer rig renders offline, so a read waits for the worker's
+        // PCM instead of underrunning; the oracle counts blocks, not wall time.
+        .block_on_underrun(true)
         .build();
     let (_, config) = mock::resource_tracks(&config).expect("file config");
     let futures::future::Either::Left(config) = config else {
