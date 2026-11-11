@@ -1,10 +1,49 @@
+//! Deck parts a track sends its seated RT track outside transport: the clock
+//! it keeps and its gain programs.
+
 use kithara_command::{Seq, Target, When};
-use kithara_render::bridge::{DeckPart, SlotGainProgram, SlotState};
+use kithara_render::bridge::{DeckPart, Slot, SlotGainProgram, SlotState, TrackClock};
 
 use super::{core::PlayerImpl, state::TrackStatus};
 use crate::{Outbox, PlayError};
 
 impl<S> PlayerImpl<S> {
+    /// Seat parts carry the clock a fresh RT track lacks.
+    pub(super) fn seated_with_clock(
+        &mut self,
+        slot: Slot,
+        mut parts: Vec<DeckPart>,
+    ) -> Vec<DeckPart> {
+        if self.clock != TrackClock::Media {
+            parts.push(DeckPart::Clock {
+                slot,
+                clock: self.clock,
+            });
+        }
+        self.seated_clock = self.clock;
+        parts
+    }
+
+    /// Sends a changed clock to the RT track the deck has already seated; a
+    /// seat still in flight carries it itself.
+    pub(super) fn sync_clock(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+        let Some(slot) = self.seat.slot() else {
+            return Ok(None);
+        };
+        if self.clock == self.seated_clock || self.seat.attached_at().is_none() {
+            return Ok(None);
+        }
+        let sent = out.deck(
+            When::Next,
+            vec![DeckPart::Clock {
+                slot,
+                clock: self.clock,
+            }],
+        )?;
+        self.seated_clock = self.clock;
+        Ok(sent)
+    }
+
     pub(super) fn gain_program(
         &mut self,
         program: SlotGainProgram,

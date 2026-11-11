@@ -1,7 +1,6 @@
 mod admission;
-mod clock;
 mod core;
-mod gain;
+mod deck;
 mod geometry;
 mod load;
 mod player;
