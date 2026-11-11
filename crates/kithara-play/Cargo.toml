@@ -9,11 +9,6 @@ description = "Player engine: audio graph, EQ, crossfade, DJ-ready."
 keywords = ["audio", "player", "dj", "crossfade", "playback"]
 categories = ["multimedia::audio"]
 
-[package.metadata.cargo-machete]
-# `unimock` is reached only through `#[kithara::mock]`, whose expansion names
-# it; no source line in this crate spells the crate out.
-ignored = ["unimock"]
-
 [features]
 default = ["symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
@@ -74,7 +69,7 @@ stretch-glide = ["kithara-render/stretch-glide", "kithara-warp/stretch-glide"]
 stretch-identity = ["kithara-render/stretch-identity", "kithara-warp/stretch-identity"]
 usdt = ["kithara-effects/usdt", "kithara-render/usdt", "kithara-test-utils/usdt", "kithara-warp/usdt"]
 flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
-mock = ["dep:unimock", "kithara-audio/mock", "kithara-render/mock", "kithara-stream/mock"]
+mock = ["kithara-audio/mock", "kithara-render/mock", "kithara-stream/mock"]
 no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 perf = [
     "dep:hotpath",
@@ -135,7 +130,6 @@ sha2 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-unimock = { workspace = true, optional = true }
 url = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
@@ -153,8 +147,6 @@ kithara-dsp = { workspace = true }
 kithara-play = { path = ".", default-features = false, features = ["mock", "usdt"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
-
-unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }

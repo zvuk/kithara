@@ -1,16 +1,13 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    collections::HashSet,
-    sync::{OnceLock, Weak, atomic::AtomicBool},
-};
+use std::collections::HashSet;
 
 use kithara_platform::sync::{Arc, Mutex};
 
-use super::inner::LruInner;
+use super::state::LruState;
 use crate::{
     error::AssetsResult,
-    index::persistence::{FlushHub, Flushable, flush_sync},
+    index::persistence::{FlushHub, IndexCell, IndexState, flush_sync},
 };
 
 /// Eviction configuration for an assets store decorator.
@@ -26,15 +23,18 @@ pub(crate) struct EvictConfig {
 /// The evictor and disk deleter share one instance per cache directory; wasm stays ephemeral.
 #[derive(Clone)]
 pub(crate) struct LruIndex {
-    pub(super) inner: Arc<LruInner>,
+    pub(super) inner: Arc<IndexCell<Mutex<LruState>>>,
+}
+
+impl IndexState for Mutex<LruState> {
+    const NAME: &'static str = "lru";
 }
 
 impl std::fmt::Debug for LruIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut dbg = f.debug_struct("LruIndex");
         dbg.field("len", &self.inner.state.try_lock().map(|s| s.len()).ok());
-        #[cfg(not(target_arch = "wasm32"))]
-        dbg.field("persist", &self.inner.persist.is_some());
+        dbg.field("persist", &self.inner.is_persisted());
         dbg.finish()
     }
 }
@@ -43,22 +43,13 @@ impl LruIndex {
     /// Bind this index to a [`FlushHub`] for coordinated flushing.
     /// Called once per index instance; subsequent calls are no-ops.
     pub(crate) fn attach_to(&self, hub: &Arc<FlushHub>) {
-        if self.inner.hub.set(Arc::clone(hub)).is_err() {
-            return;
-        }
-        hub.register(Arc::downgrade(&self.inner) as Weak<dyn Flushable>);
+        self.inner.attach_to(hub);
     }
 
     /// Construct an ephemeral index (mem backend mode).
     pub(crate) fn ephemeral() -> Self {
         Self {
-            inner: Arc::new(LruInner {
-                state: Mutex::default(),
-                #[cfg(not(target_arch = "wasm32"))]
-                persist: None,
-                hub: OnceLock::new(),
-                dirty: AtomicBool::new(false),
-            }),
+            inner: Arc::new(IndexCell::new(Mutex::default())),
         }
     }
 

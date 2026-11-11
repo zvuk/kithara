@@ -55,7 +55,6 @@ impl PcmProducer {
 
 /// Receiver of rendered PCM; every packet is returned to the owning lane.
 pub struct PcmReceiver {
-    pub(crate) render_publisher: Option<kithara_warp::RenderPublisher>,
     pub(super) forward: HeapCons<PcmPacket>,
     pub(super) reverse: HeapProd<PcmPacket>,
     pub(super) playing: Input<bool>,
@@ -85,7 +84,6 @@ impl PcmReceiver {
         let ready = block_on_underrun.then(|| Arc::new(ThreadGate::default()));
         (
             Self {
-                render_publisher: None,
                 forward: forward_rx,
                 reverse: reverse_tx,
                 playing: playing_tx,

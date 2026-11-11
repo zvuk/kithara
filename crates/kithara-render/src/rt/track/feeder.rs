@@ -3,9 +3,11 @@ use std::ops::Range;
 use kithara_audio::FailureSource;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc, time::Duration};
-use kithara_signal::{AudioChunk, AudioChunkInfo, SegmentId, SessionFrame, SourceSpan};
+use kithara_signal::{
+    AudioChunk, AudioChunkInfo, OutputContext, SegmentId, SessionFrame, SourceSpan,
+    TransportRevision,
+};
 use kithara_test_macros as kithara;
-use kithara_warp::{PresentationFrontier, RenderContext, WarpMapRevision};
 
 use super::PcmConsumer;
 use crate::{LaneFrame, bridge::SlotMark, worker::PcmPacket};
@@ -124,9 +126,6 @@ impl PlayerResource {
 
     pub(super) fn select_segment(&mut self, segment: SegmentId) {
         if self.lane.segment != segment {
-            if let Some(publisher) = &self.consumer.get().receiver.render_publisher {
-                publisher.clear();
-            }
             self.lane = LaneFrame { segment, frame: 0 };
             self.mapped = false;
             self.eof = false;
@@ -313,7 +312,7 @@ impl PlayerResource {
 impl PlayerResource {
     pub(super) fn read(
         &mut self,
-        context: Option<&RenderContext>,
+        context: Option<&OutputContext>,
         buffers: &mut [&mut [f32]],
         range: Range<usize>,
         budget: &mut usize,
@@ -323,7 +322,7 @@ impl PlayerResource {
 
     pub(super) fn read_in(
         &mut self,
-        context: Option<&RenderContext>,
+        context: Option<&OutputContext>,
         buffers: &mut [&mut [f32]],
         range: Range<usize>,
         budget: &mut usize,
@@ -341,27 +340,21 @@ impl PlayerResource {
         }
         left[range.start..range.start + requested].fill(0.0);
         right[range.start..range.start + requested].fill(0.0);
-        self.consume(
-            requested,
-            budget,
-            wait_for_pcm,
-            |chunk, offset, written, receiver| {
-                copy_packet(
-                    chunk,
-                    offset,
-                    context,
-                    receiver,
-                    left,
-                    right,
-                    range.start + written.start..range.start + written.end,
-                );
-            },
-        )
+        self.consume(requested, budget, wait_for_pcm, |chunk, offset, written| {
+            copy_packet(
+                chunk,
+                offset,
+                context,
+                left,
+                right,
+                range.start + written.start..range.start + written.end,
+            );
+        })
     }
 
     /// Consumes `frames` lane frames without playing them.
     pub(super) fn discard(&mut self, frames: usize, budget: &mut usize) -> ReadOutcome {
-        self.consume(frames, budget, false, |_, _, _, _| {})
+        self.consume(frames, budget, false, |_, _, _| {})
     }
 
     /// Consumes up to `requested` lane frames in order, handing each packet
@@ -372,7 +365,7 @@ impl PlayerResource {
         requested: usize,
         budget: &mut usize,
         wait_for_pcm: bool,
-        mut take: impl FnMut(&AudioChunk, usize, Range<usize>, &crate::PcmReceiver),
+        mut take: impl FnMut(&AudioChunk, usize, Range<usize>),
     ) -> ReadOutcome {
         let mut written = 0;
         while written < requested {
@@ -421,12 +414,7 @@ impl PlayerResource {
             if count == 0 {
                 break;
             }
-            take(
-                chunk,
-                self.offset,
-                written..written + count,
-                &self.consumer.get().receiver,
-            );
+            take(chunk, self.offset, written..written + count);
             self.offset += count;
             written += count;
             hang_reset!();
@@ -456,8 +444,7 @@ impl PlayerResource {
 fn copy_packet(
     chunk: &AudioChunk,
     offset: usize,
-    context: Option<&RenderContext>,
-    receiver: &crate::PcmReceiver,
+    context: Option<&OutputContext>,
     left: &mut [f32],
     right: &mut [f32],
     output: Range<usize>,
@@ -468,24 +455,19 @@ fn copy_packet(
         let end = start.checked_add(u64::try_from(count).ok()?)?;
         let source = chunk.meta.source_span?.for_output_range(start..end)?;
         let offset = i64::try_from(output.start).ok()?;
-        let output_start = i64::from(context.output().output_frames().start).checked_add(offset)?;
+        let output_start = i64::from(context.output_frames().start).checked_add(offset)?;
         let output_end = output_start.checked_add(i64::try_from(count).ok()?)?;
-        if let Some(publisher) = &receiver.render_publisher {
-            publisher.publish(
-                context,
-                PresentationFrontier::builder()
-                    .source(source.start())
-                    .output(SessionFrame::new(output_start))
-                    .maybe_warp_map(source.mapping_revision().map(WarpMapRevision::from))
-                    .build(),
-            );
-        }
-        Some((source, output_start, output_end))
+        Some((
+            source,
+            output_start,
+            output_end,
+            context.transport_revision(),
+        ))
     });
     copy_samples(chunk, offset, left, right, output, presented.as_ref());
     #[cfg(feature = "usdt")]
     {
-        let Some((source, _, _)) = presented else {
+        let Some((source, _, _, transport_revision)) = presented else {
             return;
         };
         let words: [u64; 24] = source.into();
@@ -494,7 +476,8 @@ fn copy_packet(
             source_revision = chunk.meta.source_revision,
             sample_rate = chunk.meta.spec.sample_rate.get(),
             channels = u64::from(chunk.meta.spec.channels),
-            origin_present = chunk.meta.media_origin.is_some()
+            origin_present = chunk.meta.media_origin.is_some(),
+            transport_revision = transport_revision.map_or(0, u64::from)
         );
         let origin = chunk.meta.media_origin.unwrap_or_default();
         kithara::probe_event!(
@@ -521,7 +504,7 @@ fn copy_samples(
     left: &mut [f32],
     right: &mut [f32],
     output: Range<usize>,
-    presented: Option<&(SourceSpan, i64, i64)>,
+    presented: Option<&(SourceSpan, i64, i64, Option<TransportRevision>)>,
 ) {
     let channels = usize::from(chunk.spec().channels);
     for frame in 0..output.len() {
@@ -530,7 +513,7 @@ fn copy_samples(
         left[output] = chunk.samples[input];
         right[output] = chunk.samples[input + usize::from(channels > 1)];
     }
-    if let Some(&(source, output_start, output_end)) = presented {
+    if let Some(&(source, output_start, output_end, _)) = presented {
         kithara::probe_event!(
             pcm_consumed,
             render_revision = source.render_revision(),

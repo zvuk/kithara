@@ -81,4 +81,6 @@ async fn admission_fills_unset_metadata_from_the_decoder(cancel_token: CancelTok
         HostedDeck::close(queue, out)
     })
     .expect("close the queue before deferred loads run");
+    drop((queue, rig));
+    dir.finish().await;
 }
