@@ -1,8 +1,10 @@
 use std::ops::Range;
 
 use kithara_bufpool::HasPool;
+use kithara_platform::sync::Arc;
 use kithara_signal::SourceSpan;
 use kithara_stretch::{ElasticCapabilities, ElasticError, ElasticRequest};
+use kithara_sync::SpeedCurve;
 use num_traits::ToPrimitive;
 
 use super::{
@@ -11,6 +13,7 @@ use super::{
     mapping::{fraction, span_speed},
     projected::Projection,
 };
+use crate::WarpRenderError;
 
 pub(super) struct NativePacket {
     pub(super) source: Range<u64>,
@@ -19,6 +22,69 @@ pub(super) struct NativePacket {
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
+    /// Takes the speed step `curve` opens with into the law `lead` output frames
+    /// before [`Self::set_speed`] applies it, and returns whether the law changed.
+    ///
+    /// A live native keylock engine reads its law one latency ahead: it renders
+    /// through a step known that early, and `set_speed` then keeps the stream.
+    /// The step is taken when `lead` is at least that latency, the law holds
+    /// its speed, and `curve` opens on another speed the engine renders
+    /// natively, unity excepted. Any other step re-primes the engine on its
+    /// frame. A later call moves the step; [`Self::reset`] withdraws it.
+    ///
+    /// # Errors
+    /// Returns an error when the stepped law is not representable.
+    pub fn anticipate_speed(
+        &mut self,
+        curve: &SpeedCurve,
+        lead: u64,
+    ) -> Result<bool, WarpRenderError> {
+        let Some(speed) = self.step_ahead(curve, lead)? else {
+            return Ok(false);
+        };
+        let held = self.trajectory.speed()?;
+        let mut ahead = self.trajectory.clone();
+        ahead.replace(SpeedCurve::Steps(Arc::from([(lead, speed)])))?;
+        if !self.can_continue_native(&ahead)? {
+            return Ok(false);
+        }
+        self.speed_ahead = Some(held);
+        self.trajectory = ahead;
+        self.prepared_quantum = None;
+        Ok(true)
+    }
+
+    /// Whether the engine can still read a step `lead` output frames ahead
+    /// that its law does not hold yet.
+    fn reads_ahead(&self, lead: u64) -> Result<bool, ElasticError> {
+        let latency = u64::try_from(self.engine_latency().get())
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+        Ok(self.native_stream_live()
+            && lead >= latency
+            && (self.speed_ahead.is_some() || self.trajectory.holds_speed())
+            && self.trajectory.frames_to_step() != Some(lead))
+    }
+
+    /// The speed the law steps to `lead` output frames ahead for `curve`, or
+    /// `None` when that step is left to its frame.
+    fn step_ahead(&self, curve: &SpeedCurve, lead: u64) -> Result<Option<f32>, ElasticError> {
+        if !self.reads_ahead(lead)? {
+            return Ok(None);
+        }
+        let mut next = self.trajectory.clone();
+        let Ok(speed) = next.replace(curve.clone()) else {
+            return Ok(None);
+        };
+        let held = self.trajectory.speed()?;
+        let capabilities = self
+            .engine
+            .as_ref()
+            .ok_or(ElasticError::PoolCapacity)?
+            .capabilities();
+        let steps = speed.to_bits() != held.to_bits() && speed.to_bits() != 1.0_f32.to_bits();
+        Ok((steps && self.native_rates_at(&next, capabilities, true)?.is_some()).then_some(speed))
+    }
+
     pub(in crate::render) fn can_continue_native(
         &self,
         trajectory: &Trajectory,
@@ -92,6 +158,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .projection
             .as_ref()
             .and_then(|projection| projection.cached_span)
+            .map(|(_, span)| span)
             .filter(|span| span.is_affine())
         else {
             return Ok(false);
@@ -208,22 +275,33 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             && envelope.contains_rate(audible / output))
     }
 
+    /// Geometry of the packet of `frames` outputs that starts `output` frames
+    /// past `start`: its span from the last boundary of the law inside it on,
+    /// and the packet frame that span starts at.
     pub(super) fn native_cached_span(
         &self,
         start: u64,
         output: usize,
         frames: usize,
-    ) -> Result<Option<SourceSpan>, ElasticError> {
+    ) -> Result<(usize, SourceSpan), ElasticError> {
         let mut cursor = self.trajectory.clone();
         cursor.advance_by(
             start,
             self.spec.sample_rate,
             u64::try_from(output).map_err(|_| ElasticError::SampleCountOverflow)?,
         )?;
-        if cursor.output_limit(frames) < frames {
-            return Ok(None);
+        let mut from = 0;
+        let mut piece = cursor.output_limit(frames);
+        while piece < frames - from {
+            cursor.advance_by(
+                start,
+                self.spec.sample_rate,
+                u64::try_from(piece).map_err(|_| ElasticError::SampleCountOverflow)?,
+            )?;
+            from += piece;
+            piece = cursor.output_limit(frames - from);
         }
-        Ok(Some(cursor.span(start, self.spec.sample_rate, frames)?))
+        Ok((from, cursor.span(start, self.spec.sample_rate, piece)?))
     }
 
     fn native_cache_matches(
@@ -236,13 +314,17 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         if cached == 0 {
             return Ok(true);
         }
-        let Some(span) = projection.cached_span else {
+        let Some((from, span)) = projection.cached_span else {
             return Ok(false);
         };
-        let offset = projection
+        let Some(offset) = projection
             .offset
             .checked_div(usize::from(self.spec.channels))
-            .ok_or(ElasticError::SampleCountOverflow)?;
+            .ok_or(ElasticError::SampleCountOverflow)?
+            .checked_sub(from)
+        else {
+            return Ok(false);
+        };
         for frame in 0..=cached {
             let previous = offset
                 .checked_add(frame)

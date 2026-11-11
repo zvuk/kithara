@@ -180,7 +180,7 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
     #[case] duration: Option<Duration>,
     #[case] expected_frame: u64,
 ) {
-    let (mut queue, _, _, mut rig, _dir) = pending_selection();
+    let (mut queue, _, _, mut rig, fixture_directory) = pending_selection();
     let seq = queue
         .active
         .iter()
@@ -232,6 +232,8 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
         expected_frame
     );
     drop(source_packets);
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -280,4 +282,6 @@ async fn keylock_set_on_a_playing_queue_reads_back_and_reaches_a_track_appended_
         "the next track starts with keylock: {:?}",
         request.start
     );
+    drop((queue, rig));
+    dir.finish().await;
 }

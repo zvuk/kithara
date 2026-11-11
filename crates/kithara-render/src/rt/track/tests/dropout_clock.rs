@@ -4,7 +4,6 @@ use std::num::NonZeroU32;
 use kithara_platform::sync::Arc;
 use kithara_signal::{OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
-use kithara_warp::RenderContext;
 use ringbuf::{
     HeapRb,
     traits::{Consumer, Split},
@@ -25,7 +24,7 @@ const BLOCK: usize = 2;
 struct Rig {
     fixture: PcmFixture,
     track: PlayerTrack,
-    context: RenderContext,
+    context: OutputContext,
     events: Vec<DeckEvent>,
     metrics: RtMetrics,
 }
@@ -60,7 +59,7 @@ impl Rig {
         Self {
             fixture,
             track,
-            context: RenderContext::new(output, None).expect("render context"),
+            context: output,
             events: Vec::new(),
             metrics: RtMetrics::default(),
         }

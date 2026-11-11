@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use super::{
     BeatEstimate, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridStamp,
-    BeatGridState,
+    BeatGridState, BeatGridUnavailable,
 };
 use crate::{AssetFrame, Beat, BeatsPerMinute, MapAxis, MapPoint, MapPosition, Meter};
 
@@ -89,4 +89,16 @@ pub trait BeatGridView: Debug + Send + Sync + 'static {
 pub(super) fn stale<T>(grid: &impl BeatGridView, given: BeatGridStamp) -> Option<BeatGridQuery<T>> {
     let expected = grid.stamp();
     (given != expected).then_some(BeatGridQuery::Stale { expected, given })
+}
+
+/// Refuses a stale stamp, then a position on another axis than the grid's.
+pub(super) fn refuse<T>(
+    grid: &impl BeatGridView,
+    position: MapPoint<MapPosition>,
+) -> Option<BeatGridQuery<T>> {
+    stale(grid, position.stamp()).or_else(|| {
+        (position.value().kind() != grid.axis().kind()).then_some(BeatGridQuery::Unavailable(
+            BeatGridUnavailable::AxisMismatch,
+        ))
+    })
 }

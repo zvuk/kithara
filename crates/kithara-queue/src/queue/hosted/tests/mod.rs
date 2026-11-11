@@ -36,7 +36,7 @@ use self::entry_tests::*;
 use super::super::{Queue, QueueCommand, slots::Role};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::mock::{
-    answer_deck, answer_load, answer_loaded, empty_queue, loaded_fixture, pending_selection,
-    queue_with_load_settings, tick_fixture, with_outbox,
+    QueueFixture, answer_deck, answer_load, answer_loaded, empty_queue, loaded_fixture,
+    pending_selection, queue_with_load_settings, tick_fixture, with_outbox,
 };
 use crate::{ActionAtItemEnd, QueueError, QueueEvent, TrackStatus};

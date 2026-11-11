@@ -5932,7 +5932,6 @@ dependencies = [
  "sha2 0.11.1",
  "thiserror 2.0.21",
  "tracing",
- "unimock",
  "url",
  "yaml_serde",
 ]
@@ -6520,7 +6519,6 @@ dependencies = [
 name = "kithara-warp"
 version = "0.0.1-alpha5"
 dependencies = [
- "bon",
  "delegate",
  "derive-where",
  "derive_more",

@@ -433,26 +433,6 @@ fn the_first_block_anchors_session_beat_zero_at_the_host_tempo() {
 }
 
 #[kithara::test]
-fn transport_frame_carries_the_exact_processed_musical_context() {
-    let (_processor, mut extra, _output, _queue) = active_harness();
-    let frame = process_transport(&proc_info_at(block_frame(1)), &mut extra.store)
-        .expect("invariant: the next contiguous transport block is valid");
-    let beats = frame
-        .trajectory
-        .beat_at(SessionFrame::new(block_frame(1)))
-        .expect("finite beat")
-        ..frame
-            .trajectory
-            .beat_at(SessionFrame::new(block_frame(2)))
-            .expect("finite beat");
-
-    assert_eq!(frame.session_epoch, SessionEpoch::new(0));
-    assert_eq!(frame.transport_revision, TransportRevision::first());
-    assert!((f64::from(beats.start) - 0.02).abs() <= f64::EPSILON);
-    assert!((f64::from(beats.end) - 0.04).abs() <= f64::EPSILON);
-}
-
-#[kithara::test]
 fn pre_process_publishes_the_exact_render_context() {
     let (_processor, extra, _output, _queue) = active_harness();
     let info = proc_info_at(0);
@@ -460,20 +440,15 @@ fn pre_process_publishes_the_exact_render_context() {
         .expect("invariant: the pre-process node published this exact block");
 
     assert_eq!(
-        context.output().output_frames(),
+        context.output_frames(),
         &(SessionFrame::new(0)..SessionFrame::new(block_frame(1)))
     );
-    assert_eq!(context.output().sample_rate(), sample_rate());
-    assert_eq!(context.output().session_epoch(), SessionEpoch::new(0));
+    assert_eq!(context.sample_rate(), sample_rate());
+    assert_eq!(context.session_epoch(), SessionEpoch::new(0));
     assert_eq!(
-        context.output().transport_revision(),
+        context.transport_revision(),
         Some(TransportRevision::first())
     );
-    let beats = context
-        .session_beats()
-        .expect("invariant: active transport carries a musical range");
-    assert!(f64::from(beats.start).abs() <= f64::EPSILON);
-    assert!((f64::from(beats.end) - 0.02).abs() <= f64::EPSILON);
 }
 
 #[kithara::test]
