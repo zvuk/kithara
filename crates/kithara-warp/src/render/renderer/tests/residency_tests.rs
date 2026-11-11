@@ -33,7 +33,7 @@ fn keylock_reprime_retains_projected_source_history() {
         NonZeroU32::new(consts::SR).expect("sample rate"),
     );
     let config = WarpConfig::builder()
-        .backend(StretchKind::Glide)
+        .backend(StretchKind::Signalsmith)
         .speed(4.0)
         .region_plan(kithara_platform::sync::Arc::new(
             RegionPlan::new(vec![GridSegment::new(0, u64::MAX, 0.25)]).expect("region"),
@@ -47,7 +47,6 @@ fn keylock_reprime_retains_projected_source_history() {
         quantum(&mut renderer, &mut source);
         hang_reset!();
     }
-    renderer.set_backend(StretchKind::Signalsmith);
     renderer.set_keylock(true);
     renderer
         .set_speed(SpeedCurve::Constant(0.05), 2)
@@ -89,22 +88,19 @@ fn quantum(renderer: &mut WarpRenderer<TestPools>, source: &mut u64) -> AudioChu
 
 #[kithara::test]
 #[kithara::hang_watchdog]
+#[case::signalsmith_off(StretchKind::Signalsmith, true)]
+#[case::signalsmith_on(StretchKind::Signalsmith, false)]
 #[cfg_attr(
     feature = "stretch-bungee",
-    case::bungee_to_signalsmith(StretchKind::Bungee, StretchKind::Signalsmith)
-)]
-#[case::glide_to_signalsmith(StretchKind::Glide, StretchKind::Signalsmith)]
-#[cfg_attr(
-    feature = "stretch-bungee",
-    case::signalsmith_to_bungee(StretchKind::Signalsmith, StretchKind::Bungee)
+    case::bungee_off(StretchKind::Bungee, true)
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
-    case::glide_to_bungee(StretchKind::Glide, StretchKind::Bungee)
+    case::bungee_on(StretchKind::Bungee, false)
 )]
 fn retiring_keylock_admits_both_engines_source_packets(
     #[case] backend: StretchKind,
-    #[case] next: StretchKind,
+    #[case] keylock: bool,
 ) {
     let spec = AudioSpec::new(
         consts::CH,
@@ -112,7 +108,7 @@ fn retiring_keylock_admits_both_engines_source_packets(
     );
     let config = WarpConfig::builder()
         .backend(backend)
-        .keylock(true)
+        .keylock(keylock)
         .render_quantum_frames(NonZeroUsize::new(128).expect("quantum"))
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools());
@@ -125,7 +121,7 @@ fn retiring_keylock_admits_both_engines_source_packets(
                 .expect("speed");
         }
         if block == 32 {
-            renderer.set_backend(next);
+            renderer.set_keylock(!keylock);
         }
         let output = quantum(&mut renderer, &mut source);
         assert_eq!(output.frames(), 128);

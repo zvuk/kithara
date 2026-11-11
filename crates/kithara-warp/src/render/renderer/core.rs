@@ -107,8 +107,6 @@ pub struct WarpRenderer<S> {
     pub(in crate::render) pools: PoolRegion<S>,
     /// Engine kind currently prepared by the scheduler shell.
     pub(in crate::render) current_kind: StretchKind,
-    /// Backend the lane last asked for; the scheduler shell prepares its engine.
-    pub(in crate::render) requested_kind: StretchKind,
     /// Whether the lane last asked for a keylock engine.
     pub(in crate::render) requested_keylock: bool,
     /// Whether previous input ran through the backend. Drives a clean backend
@@ -137,8 +135,6 @@ pub struct WarpRenderer<S> {
     pub(in crate::render) applied_pitch: f64,
     /// Fractional output frames retained across exact-span requests.
     pub(in crate::render) output_remainder: f64,
-    /// Warm source consumed while priming but not yet represented by output.
-    pub(in crate::render) primed_source_debt: u64,
     /// Source frames admitted since the last renderer reset.
     pub(in crate::render) source_frames_admitted: u64,
 }
@@ -151,9 +147,9 @@ where
     pub(in crate::render) const OUTPUT_ROUNDING_MARGIN: f64 = 0.5;
     /// Build the slot at the source `spec` from the construction values of `config`.
     pub(crate) fn new(config: &WarpConfig, spec: AudioSpec, pools: PoolRegion<S>) -> Self {
-        let requested_kind = config.backend();
         let requested_keylock = config.keylock();
-        let (current_kind, current_keylock) = Self::stretch_for(requested_kind, requested_keylock);
+        let (current_kind, current_keylock) =
+            Self::stretch_for(config.backend(), requested_keylock);
         let plan = config.region_plan().clone();
         let speed = config.speed();
         let target = if plan.is_some()
@@ -186,7 +182,6 @@ where
             retired_engine: None,
             current_kind,
             current_keylock,
-            requested_kind,
             requested_keylock,
             backend_transition_pending: false,
             reprime_pending: false,
@@ -208,7 +203,6 @@ where
             pending_unity_meta: None,
             rendered_source_end: None,
             source_frames_admitted: 0,
-            primed_source_debt: 0,
             reset_pending: false,
             rebuild_pending: false,
             last_input_meta: None,
@@ -385,7 +379,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.prepared_quantum = None;
         self.rendered_source_end = None;
         self.source_frames_admitted = 0;
-        self.primed_source_debt = 0;
         self.active = false;
         self.reprime_pending = false;
         self.resident_feed = None;
@@ -467,9 +460,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         let backend_held = u64::try_from(latency)
             .unwrap_or(u64::MAX)
             .min(backend_admitted);
-        pending
-            .saturating_add(backend_held)
-            .saturating_add(self.primed_source_debt)
+        pending.saturating_add(backend_held)
     }
 }
 
@@ -639,16 +630,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.rebuild_pending = true;
     }
 
-    /// Render from the next prepared quantum on with `kind`'s engine. A running
-    /// engine retires its tail into a crossfade and the new engine re-primes
-    /// from the source history on this frame.
-    pub fn set_backend(&mut self, kind: StretchKind) {
-        self.requested_kind = kind;
-        self.retarget_engine();
-    }
-
     /// Render from the next prepared quantum on with a keylock engine when `on`
-    /// and the backend has one, switching engines as [`Self::set_backend`] does.
+    /// and the backend has one. A running engine retires its tail into a
+    /// crossfade and the new engine re-primes from the source history on this
+    /// frame.
     pub fn set_keylock(&mut self, on: bool) {
         self.requested_keylock = on;
         self.retarget_engine();
@@ -715,9 +700,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         )
     }
 
-    /// The engine the lane last asked for.
+    /// The engine the lane last asked for on the built backend.
     pub(in crate::render) fn stretch_target(&self) -> (StretchKind, bool) {
-        Self::stretch_for(self.requested_kind, self.requested_keylock)
+        Self::stretch_for(self.current_kind, self.requested_keylock)
     }
 
     /// Whether a live active-to-unity transition still owns queued samples.

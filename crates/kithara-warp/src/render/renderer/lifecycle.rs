@@ -312,7 +312,6 @@ where
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
         self.source_frames_admitted = 0;
-        self.primed_source_debt = 0;
         self.active = false;
         self.region = None;
     }
@@ -448,7 +447,6 @@ where
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
         self.source_frames_admitted = 0;
-        self.primed_source_debt = 0;
         self.reset_pending = false;
         self.active = false;
         self.region = None;
@@ -548,7 +546,6 @@ where
             self.active = false;
             self.pending_meta = None;
             self.source_frames_admitted = 0;
-            self.primed_source_debt = 0;
             self.reset_pending = true;
         }
         output

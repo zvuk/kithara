@@ -549,7 +549,7 @@ async fn rejected_staged_quantum_retains_both_owning_buffers(quarter: Vec<f32>) 
 
 #[kithara::test(native)]
 #[cfg(feature = "stretch-signalsmith")]
-fn projected_backend_switch_keeps_pending_input_during_resident_output(quarter: Vec<f32>) {
+fn projected_keylock_switch_keeps_pending_input_during_resident_output(quarter: Vec<f32>) {
     use kithara_warp::{GridSegment, RegionPlan};
     let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("sample rate"));
     let pools = pools();
