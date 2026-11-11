@@ -582,6 +582,7 @@ async fn deck_fx_unit_turned_dry_while_off_switches_on_dry() {
             (ON, vec![DeckFxChange::Power { unit: 0, on: true }]),
         ],
         None,
+        TAKE,
     )
     .await;
     assert_same(
