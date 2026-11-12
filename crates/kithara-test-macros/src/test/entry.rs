@@ -258,6 +258,37 @@ fn generate_default(ctx: &GenCtx<'_>) -> TokenStream2 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unmarked_tests_are_visible_but_ignored_under_miri() -> syn::Result<()> {
+        for attrs in ["", "tokio", "native", "wasm", "browser", "loom", "serial"] {
+            let args = syn::parse_str::<TestArgs>(attrs)?;
+            let function = syn::parse_str("fn contract() {}")?;
+            let expanded = generate(args, function)?.to_string();
+            assert!(
+                expanded.contains("cfg_attr (miri , ignore = \"not selected for Miri\")"),
+                "{attrs}: {expanded}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn marked_tests_keep_their_native_expansion() -> syn::Result<()> {
+        for attrs in ["", "tokio", "native", "serial"] {
+            let source = "fn contract() {}";
+            let original = generate(syn::parse_str(attrs)?, syn::parse_str(source)?)?
+                .to_string()
+                .replace("# [cfg_attr (miri , ignore = \"not selected for Miri\")]", "");
+            let marked = generate(
+                syn::parse_str(&format!("miri, {attrs}"))?,
+                syn::parse_str(source)?,
+            )?
+            .to_string();
+            assert_eq!(marked, original, "{attrs}");
+        }
+        Ok(())
+    }
+
     use syn::visit_mut::{self, VisitMut};
 
     use super::{TestArgs, emitted_name, generate};
