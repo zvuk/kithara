@@ -14,76 +14,86 @@
 
 # kithara
 
-A streaming audio engine for Rust. Point it at a URL and it plays: `.m3u8`
-streams adaptively over HLS, everything else downloads progressively. One
-`Resource` type gives you a unified decoded-audio read/seek interface. The player engine
-underneath adds multi-deck mixing, crossfade, and parametric EQ for DJ and
-pro-audio apps.
+An audio engine for streaming players and DJ software. Give it a URL: HLS
+(`.m3u8`) plays with adaptive bitrate, anything else streams progressively,
+and both are cached on disk. On top sits a multi-deck player with crossfade,
+EQ, beat sync, and key-locked tempo.
 
-- **Auto-detecting** — HLS for `.m3u8`, progressive download otherwise.
-- **Adaptive bitrate** for HLS, with segment caching and offline playback.
-- **Gapless** decode across MP3, AAC (incl. HE-AAC), FLAC, ALAC, WAV, Opus, Vorbis.
-- **Hardware or software decode** — Apple AudioToolbox and Android MediaCodec
-  backends, or the cross-platform Symphonia software decoder.
-- **DRM** — AES-128 decryption for protected HLS.
+<p align="center">
 
-`kithara` is the facade crate: it aggregates the engine layers
-(`audio`, `bufpool`, `decode`, `download`, `events`, `platform`, `play`, `signal`, `stream`, `warp`, and the
-feature-gated `analysis`/`file`/`hls`/`assets`/`net`/`storage`/`queue` pipelines plus `encode`, `stretch`, `ui`, and
-`worker`) behind one
-dependency and a single `Resource` entry point. The `abr` and `drm` modules are
-available when `hls` is enabled.
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/docs/assets/kithara-app.webp" alt="kithara-app: two decks with waveforms, mixer, and library" width="100%">
+
+</p>
+
+This is the facade crate: each engine layer is a module behind a feature of
+the same name (`kithara::hls`, `kithara::play`, `kithara::queue`, ...).
 
 ## Usage
 
+Play a list of tracks on the default audio device (features `queue` and the
+defaults):
+
 ```rust
-use kithara::audio::ReadOutcome;
-use kithara::assets::AssetStore;
 use kithara::bufpool::{OverallBudget, PoolConfig, pool_schema};
-use kithara::prelude::*;
+use kithara::host::{Host, HostConfig};
+use kithara::play::{PlayWorker, PlayWorkerConfig, ResourcePrep};
+use kithara::queue::{Queue, QueueConfig};
 
 pool_schema! {
-    AppPools {
+    pub AppPools {
         bytes: u8,
         samples: f32,
     }
 }
 
-let pool_config = || PoolConfig::builder().max_buffers(128).build();
-let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
-    .bytes(pool_config())
-    .samples(pool_config())
-    .build()?;
-let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-let config: ResourceConfig<AppPools> =
-    ResourceConfig::for_src(ResourceSrc::parse("https://example.com/song.mp3")?)
-        .store(AssetStore::builder(pools).build())
-        .downloader(downloader.clone())
-        .worker(worker)
-        .build();
-let mut resource = Resource::new(config).await?;
-resource.preload().await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // One memory budget for every buffer the engine allocates.
+    let pool = || PoolConfig::builder().max_buffers(128).build();
+    let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
+        .bytes(pool())
+        .samples(pool())
+        .build()?;
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
 
-let mut buf = [0.0f32; 1024];
-loop {
-    match resource.read(&mut buf)? {
-        ReadOutcome::Frames { count, .. } => play(&buf[..count.get()]),
-        ReadOutcome::Pending { .. } => continue, // buffering / seeking
-        ReadOutcome::Eof { .. } => break,
-    }
+    // The Host owns the output device; a Queue is one deck.
+    let mut host = Host::new(HostConfig::builder().build())?;
+    let deck = host.insert(Queue::new(
+        QueueConfig::builder()
+            .prep(ResourcePrep::builder().worker(worker).build())
+            .should_autoplay(true)
+            .build(),
+    ))?;
+    deck.set_tracks([
+        "https://example.com/track.mp3",
+        "https://example.com/stream/master.m3u8",
+    ])?;
+
+    tokio::signal::ctrl_c().await?;
+    Ok(())
 }
 ```
 
-`Resource` is a type-erased `Box<dyn AudioReader>`: the same `read()` / `seek()`
-interface whether the source is HLS, a remote file, or a local path. Build it
-from a `ResourceConfig`; `ReadOutcome` reports `Frames` / `Pending` / `Eof`.
-The optional `EventBus` (`resource.event_bus()`) is an observability
-side-channel and never sits in the audio path. For advanced control — multi-slot
-engine, crossfade, EQ — reach into `kithara::play`. The `prelude` collects the
-everyday types.
+## Features
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the architecture, detailed contracts, and invariants.
+The defaults give the desktop stack: file and HLS sources, Symphonia decoding,
+Rubato resampling, Signalsmith time-stretch, CPAL output, reqwest with rustls.
+Commonly added:
+
+- `queue` — playlists and crossfade between tracks (`kithara::queue`).
+- `link` — beat sync between decks (`kithara::link`).
+- `apple` / `android` — hardware decoders; `apple-net` uses `NSURLSession`.
+- `fdk-aac` — HE-AAC through libfdk-aac.
+- `offline` / `record` — render without an audio device, record the output.
+- `all` — every module with one compatible backend set.
+
+With `default-features = false` the crate is empty; enable the modules you
+import. The full list is in `Cargo.toml`.
 
 ## Integration
 
-[Crate contracts](https://github.com/zvuk/kithara/wiki/kithara).
+The modules are separate crates, so a project can depend on one directly:
+`kithara-hls` for an HLS client, `kithara-assets` for the cache,
+`kithara-decode` for decoding. See [ARCHITECTURE.md](ARCHITECTURE.md) for how
+the layers fit and the [crate contracts](https://github.com/zvuk/kithara/wiki/kithara)
+on the wiki.

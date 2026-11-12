@@ -95,6 +95,9 @@ pub(super) fn main(shutdown: CancelToken) -> AppResult {
         .log_directives
         .unwrap_or_else(|| vec!["info".to_string()]);
     init_tracing(&directives.iter().map(String::as_str).collect::<Vec<&str>>())?;
+    for provider in document.disabled_providers() {
+        tracing::warn!("{provider}");
+    }
     let runtime = tokio::runtime::Runtime::new()?;
     let _runtime_guard = runtime.enter();
 
