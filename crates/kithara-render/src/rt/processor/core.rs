@@ -4,6 +4,7 @@ use firewheel::{
     StreamInfo,
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
+use kithara_audio::TrackFailureKind;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_command::{LevelInbox, ScopeId, Target};
 use kithara_dsp::param::SmootherConfig;
@@ -23,8 +24,8 @@ use super::{
 };
 use crate::{
     bridge::{
-        DeckEvent, DeckMixSettings, DeckPart, DeckProtocol, DeckSnapshot, MixerInputs, RtMetrics,
-        SessionInbox, Slot, SlotSnapshot, SlotState,
+        DeckEvent, DeckMixSettings, DeckPart, DeckProtocol, DeckSnapshot, MixerInputs,
+        PlaybackFault, RtMetrics, SessionInbox, Slot, SlotSnapshot, SlotState,
     },
     rt::{RenderPass, TrackSlots},
 };
@@ -43,6 +44,7 @@ pub struct DeckMixer<E: SessionInbox> {
 }
 
 pub(in crate::rt) struct Deck {
+    pub(in crate::rt) scope: ScopeId,
     pub(in crate::rt) tracks: TrackSlots,
     pub(in crate::rt) armed: Vec<Option<Armed>>,
     pub(in crate::rt) tails: Vec<SlotTail>,
@@ -102,6 +104,7 @@ impl<E: SessionInbox> DeckMixer<E> {
             retired: false,
             session: PhantomData,
             deck: Deck {
+                scope,
                 tracks: TrackSlots::new(slots),
                 armed: vec![None; slots.get()],
                 tails,
@@ -322,6 +325,16 @@ impl<E: SessionInbox> DeckMixer<E> {
             &mut snapshot.eq,
             if self.retired { None } else { self.deck.epoch },
         );
+        snapshot.filter.publish(
+            self.deck.render.filter_settings(),
+            if self.retired {
+                None
+            } else {
+                self.deck
+                    .epoch
+                    .map(|epoch| self.deck.render.filter_binding(self.scope, epoch))
+            },
+        );
         self.snapshot.publish();
     }
 }
@@ -430,18 +443,23 @@ impl Deck {
     ) -> bool {
         let [scratch_left, scratch_right] = scratch;
         let capacity = scratch_left.len().min(scratch_right.len());
-        if context.is_none()
-            || range.end > capacity
-            || buffers.outputs.len() < crate::consts::MIN_STEREO
-            || buffers
-                .outputs
-                .iter()
-                .take(crate::consts::MIN_STEREO)
-                .any(|channel| range.end > channel.len())
-        {
+        if context.is_none() {
             for tail in &mut self.tails {
                 tail.advance(range.len());
             }
+            return false;
+        }
+        if !output_covers(buffers, range.end, capacity) {
+            if self.render.filter_settings().is_some() {
+                self.fail_filter(range.start, start, level);
+            }
+            for tail in &mut self.tails {
+                tail.advance(range.len());
+            }
+            return false;
+        }
+        if self.render.prepare_filter(self.sample_rate).is_err() {
+            self.fail_filter(range.start, start, level);
             return false;
         }
         if self.render.take_priming() {
@@ -503,6 +521,34 @@ impl Deck {
         sounded
     }
 
+    fn fail_filter(
+        &mut self,
+        offset: usize,
+        start: SessionFrame,
+        level: &mut LevelInbox<'_, DeckProtocol>,
+    ) {
+        for slot in self.tracks.slots() {
+            let Some(track) = self
+                .tracks
+                .at_mut(slot)
+                .filter(|track| track.state() == SlotState::Playing)
+            else {
+                continue;
+            };
+            let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, start);
+            track.fail(
+                PlaybackFault::Source(TrackFailureKind::Render),
+                offset,
+                &mut sink,
+            );
+            let curve = output_curve(level, track.output_program(), slot);
+            let completed = track.cancel_output(curve, sink.at(offset));
+            if let Some(seq) = completed {
+                self.complete_output(level, seq);
+            }
+        }
+    }
+
     fn tails_quiet(&self) -> bool {
         self.tails.iter().all(|tail| !tail.is_sounding())
     }
@@ -534,13 +580,7 @@ impl<E: SessionInbox> AudioNodeProcessor for DeckMixer<E> {
         extra: &mut ProcExtra,
     ) -> ProcessStatus {
         let start = SessionFrame::new(info.clock_samples.0);
-        let geometry_valid = info.frames <= self.capacity
-            && buffers.outputs.len() >= crate::consts::MIN_STEREO
-            && buffers
-                .outputs
-                .iter()
-                .take(crate::consts::MIN_STEREO)
-                .all(|channel| channel.len() >= info.frames)
+        let geometry_valid = output_covers(&buffers, info.frames, self.capacity)
             && self.deck.tails.iter().all(|tail| {
                 tail.capacity() >= self.deck.declick_frames.max(self.deck.evict_frames)
             });
@@ -559,4 +599,14 @@ impl<E: SessionInbox> AudioNodeProcessor for DeckMixer<E> {
             ProcessStatus::ClearAllOutputs
         }
     }
+}
+
+fn output_covers(buffers: &ProcBuffers, end: usize, capacity: usize) -> bool {
+    end <= capacity
+        && buffers.outputs.len() >= crate::consts::MIN_STEREO
+        && buffers
+            .outputs
+            .iter()
+            .take(crate::consts::MIN_STEREO)
+            .all(|channel| channel.len() >= end)
 }

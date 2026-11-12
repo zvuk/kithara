@@ -500,8 +500,11 @@ fn eq_refusals_preserve_running_pcm_and_return_the_original_program(#[case] kind
     if let DeckPart::EqProgram { binding, .. } = &mut replacement
         && kind == 1
     {
-        *binding =
-            crate::bridge::EqBinding::new(binding.scope(), binding.layout(), SessionEpoch::new(1));
+        *binding = crate::bridge::EqBinding::new(
+            binding.scope(),
+            binding.instance(),
+            SessionEpoch::new(1),
+        );
     }
     let mut commands = vec![replacement];
     if kind == 2 {

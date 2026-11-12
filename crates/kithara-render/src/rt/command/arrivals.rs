@@ -44,6 +44,14 @@ impl Deck {
         if due
             .commands()
             .iter()
+            .any(|part| matches!(part, DeckPart::Filter { .. }))
+        {
+            self.take_filter_due(due, context_valid);
+            return;
+        }
+        if due
+            .commands()
+            .iter()
             .any(|part| matches!(part, DeckPart::Chain { .. }))
         {
             due.refuse(DeckRefusal::Deferral);
@@ -271,6 +279,7 @@ impl Deck {
                 | DeckPart::Eq(_)
                 | DeckPart::GainProgram { .. }
                 | DeckPart::EqProgram { .. }
+                | DeckPart::Filter { .. }
                 | DeckPart::Returned(_) => {}
             }
         }

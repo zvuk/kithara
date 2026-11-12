@@ -1,19 +1,25 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
+use kithara_command::{ScopeId, Seq};
+use kithara_config::ConfigOwner;
 use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 use kithara_effects::{
     DeckEffect, FxParamChange, GainDb,
     eq::{EqConfig, EqLayout, StereoEq, generate_log_spaced_bands},
+    filter::{FilterEffect, FilterSettings, PrepareError},
 };
-use kithara_signal::SessionFrame;
+use kithara_signal::{AudioSpec, SessionEpoch, SessionFrame};
 
 use super::{
     command::{EqCurves, gain_at},
     processor::StreamShape,
 };
 use crate::{
-    bridge::{DeckFxChange, DeckMixSettings, DeckPart, Returned},
+    bridge::{
+        DeckFilterChange, DeckFxChange, DeckMixSettings, DeckPart, DeckRefusal, FilterBinding,
+        Returned,
+    },
     consts::{FADE_CHUNK, GAIN_SPAN},
 };
 
@@ -26,6 +32,8 @@ pub(crate) struct RenderPass {
     eq: StereoEq,
     /// The deck's FX units, after its equaliser.
     units: Box<[FxUnit]>,
+    filter: Option<Box<FilterEffect>>,
+    filter_instance: Option<Seq>,
     /// The wet signal of the unit running now.
     wet: [SampleBuffer; crate::consts::MIN_STEREO],
     /// Fader times crossfader, after the units, so it cuts their tails too.
@@ -77,6 +85,8 @@ impl RenderPass {
                 pools.get_with_len::<f32>(capacity)?,
                 pools.get_with_len::<f32>(capacity)?,
             ],
+            filter: None,
+            filter_instance: None,
             output: smoothed(mix.output_gain(), shape.sample_rate),
             priming: true,
         })
@@ -98,9 +108,59 @@ impl RenderPass {
         self.finish_output(left, right);
     }
 
+    pub(crate) fn finish_curves(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        start: SessionFrame,
+        curves: &EqCurves<'_>,
+    ) {
+        apply_gain(&mut self.trim, left, right);
+        if curves.iter().any(Option::is_some) {
+            for (frame, (left, right)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
+                self.apply_eq_curves(curves, frame_at(start, frame));
+                self.eq
+                    .process(core::slice::from_mut(left), core::slice::from_mut(right));
+            }
+        } else {
+            self.eq.process(left, right);
+        }
+        self.finish_output(left, right);
+    }
+
+    pub(crate) fn advance_curves(
+        &mut self,
+        start: SessionFrame,
+        frames: usize,
+        curves: &EqCurves<'_>,
+    ) {
+        for frame in 0..frames {
+            self.apply_eq_curves(curves, frame_at(start, frame));
+        }
+        self.advance_filter(frames);
+    }
+
+    pub(crate) fn advance_filter(&mut self, frames: usize) {
+        if let Some(filter) = &mut self.filter {
+            filter.advance(frames);
+        }
+    }
+
+    fn apply_eq_curves(&mut self, curves: &EqCurves<'_>, at: SessionFrame) {
+        for (band, curve) in curves.iter().flatten() {
+            self.eq.set_gain_explicit(*band, gain_at(curve, at));
+        }
+    }
+
     fn finish_output(&mut self, left: &mut [f32], right: &mut [f32]) {
         for unit in &mut self.units {
             unit.process(left, right, &mut self.wet);
+        }
+        if let Some(filter) = &mut self.filter {
+            let frames = left.len();
+            filter
+                .process(&mut [&mut *left, &mut *right], 0..frames)
+                .expect("deck admission validates every stereo plane before processing");
         }
         apply_gain(&mut self.output, left, right);
     }
@@ -118,14 +178,72 @@ impl RenderPass {
     /// or still ramps its dry/wet, which settles on its own frame only while
     /// the chain renders.
     pub(crate) fn ringing(&self) -> bool {
-        self.units.iter().any(|unit| {
-            unit.running()
-                && (!unit.mix.has_settled()
-                    || unit
-                        .effect
-                        .as_ref()
-                        .is_some_and(|effect| !effect.tail_exhausted()))
-        })
+        self.filter
+            .as_ref()
+            .is_some_and(|filter| !filter.tail_exhausted())
+            || self.units.iter().any(|unit| {
+                unit.running()
+                    && (!unit.mix.has_settled()
+                        || unit
+                            .effect
+                            .as_ref()
+                            .is_some_and(|effect| !effect.tail_exhausted()))
+            })
+    }
+
+    pub(crate) fn filter_binding(&self, scope: ScopeId, epoch: SessionEpoch) -> FilterBinding {
+        FilterBinding::new(scope, self.filter_instance, epoch)
+    }
+
+    pub(crate) fn filter_settings(&self) -> Option<FilterSettings> {
+        self.filter.as_ref().map(|filter| *filter.config())
+    }
+
+    pub(crate) fn prepare_filter(&mut self, rate: NonZeroU32) -> Result<(), PrepareError> {
+        if let Some(filter) = &mut self.filter {
+            filter.update_sample_rate(rate)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn change_filter(
+        &mut self,
+        change: DeckFilterChange,
+        binding: FilterBinding,
+        seq: Seq,
+        rate: NonZeroU32,
+    ) -> Result<Option<DeckPart>, (DeckRefusal, DeckFilterChange)> {
+        let old = match change {
+            DeckFilterChange::Install(filter) => {
+                if !filter.accepts_spec(AudioSpec::new(2, rate)) {
+                    return Err((DeckRefusal::FilterShape, DeckFilterChange::Install(filter)));
+                }
+                self.filter_instance = Some(seq);
+                self.filter.replace(filter)
+            }
+            DeckFilterChange::Clear => {
+                self.filter_instance = Some(seq);
+                self.filter.take()
+            }
+            change => {
+                let Some(filter) = self
+                    .filter
+                    .as_mut()
+                    .filter(|filter| filter.accepts_spec(AudioSpec::new(2, rate)))
+                else {
+                    return Err((DeckRefusal::FilterShape, change));
+                };
+                if let DeckFilterChange::Configure(value) = change {
+                    if let Err(error) = filter.configure(value) {
+                        return Err((DeckRefusal::Filter(error), change));
+                    }
+                } else {
+                    filter.reset();
+                }
+                return Ok(Some(DeckPart::Filter { binding, change }));
+            }
+        };
+        Ok(Some(DeckPart::Returned(Returned::Filter(old))))
     }
 
     /// Ramp the deck's trim and output to `mix` from the next frame rendered.
@@ -188,39 +306,6 @@ impl RenderPass {
         };
         let (unit, effect) = taken;
         effect.map(|effect| DeckPart::Returned(Returned::Fx { unit, effect }))
-    }
-
-    pub(crate) fn finish_eq_curves(
-        &mut self,
-        left: &mut [f32],
-        right: &mut [f32],
-        start: SessionFrame,
-        curves: &EqCurves<'_>,
-    ) {
-        apply_gain(&mut self.trim, left, right);
-        for (frame, (left, right)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
-            self.apply_eq_curves(curves, frame_at(start, frame));
-            self.eq
-                .process(core::slice::from_mut(left), core::slice::from_mut(right));
-        }
-        self.finish_output(left, right);
-    }
-
-    pub(crate) fn advance_eq_curves(
-        &mut self,
-        start: SessionFrame,
-        frames: usize,
-        curves: &EqCurves<'_>,
-    ) {
-        for frame in 0..frames {
-            self.apply_eq_curves(curves, frame_at(start, frame));
-        }
-    }
-
-    fn apply_eq_curves(&mut self, curves: &EqCurves<'_>, at: SessionFrame) {
-        for (band, curve) in curves.iter().flatten() {
-            self.eq.set_gain_explicit(*band, gain_at(curve, at));
-        }
     }
 
     delegate::delegate! {
@@ -307,12 +392,6 @@ impl FxUnit {
     }
 }
 
-fn frame_at(start: SessionFrame, frame: usize) -> SessionFrame {
-    SessionFrame::new(
-        i64::from(start).saturating_add(i64::try_from(frame).expect("prepared frame count")),
-    )
-}
-
 /// Fill `mixes` with the next values of a ramping `mix` and `keeps` with their
 /// complements, up to the frame the ramp settles on, and answer how many
 /// frames that is. The ramp settles on the first frame close enough to its
@@ -369,6 +448,12 @@ fn apply_gain(gain: &mut SmoothedParam, left: &mut [f32], right: &mut [f32]) {
         kithara_dsp::multiply_in_place(right, gains);
     }
     gain.settle();
+}
+
+fn frame_at(start: SessionFrame, frame: usize) -> SessionFrame {
+    SessionFrame::new(
+        i64::from(start).saturating_add(i64::try_from(frame).expect("prepared frame count")),
+    )
 }
 
 #[cfg(test)]
@@ -541,7 +626,7 @@ mod tests {
         let mut curves = [None; EqGainProgram::MAX_ACTIVE];
         curves[0] = Some((0, program.curve()));
         let (mut left, mut right) = ([0.125; 4], [-0.5; 4]);
-        render.finish_eq_curves(&mut left, &mut right, start, &curves);
+        render.finish_curves(&mut left, &mut right, start, &curves);
         assert_eq!(left.map(f32::to_bits), [0.125_f32.to_bits(); 4]);
         assert_eq!(right.map(f32::to_bits), [0.125_f32.to_bits(); 4]);
         let mut gains = [GainDb::DEFAULT];

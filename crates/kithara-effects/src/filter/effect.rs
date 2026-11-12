@@ -135,6 +135,16 @@ impl FilterEffect {
         }
     }
 
+    /// Advance the parameter clock while an exhausted filter has no audio input.
+    pub fn advance(&mut self, frames: usize) {
+        for _ in 0..frames {
+            if self.settled() {
+                break;
+            }
+            self.advance_parameters();
+        }
+    }
+
     /// Summarize the pending manual transitions without advancing their clocks.
     /// # Errors
     /// Refuses an unrepresentable changing-frame bound.

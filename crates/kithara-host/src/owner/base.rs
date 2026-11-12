@@ -586,15 +586,17 @@ where
                     };
                     let record = &mut self.decks.0[index].1;
                     let mix = record.mix.settle(&receipt).is_some();
-                    let eq = receipt.batch().commands.iter().any(|part| {
+                    let effects = receipt.batch().commands.iter().any(|part| {
                         matches!(
                             part,
                             DeckPart::Eq(_)
                                 | DeckPart::EqProgram { .. }
+                                | DeckPart::Filter { .. }
                                 | DeckPart::Returned(kithara_render::bridge::Returned::Eq(_))
+                                | DeckPart::Returned(kithara_render::bridge::Returned::Filter(_))
                         )
                     });
-                    if mix || eq {
+                    if mix || effects {
                         let outcome = match receipt.outcome() {
                             Outcome::Applied { at, .. } => Ok(*at),
                             Outcome::Rejected(reason) => Err(map_deck_rejection(*reason)),
