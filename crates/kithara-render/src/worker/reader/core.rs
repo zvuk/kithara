@@ -38,7 +38,7 @@ pub(in crate::worker) struct PcmProducer {
 pub(in crate::worker) struct PcmLead {
     limit: usize,
     quantum: usize,
-    slots: usize,
+    quanta: usize,
     frames: usize,
 }
 
@@ -49,14 +49,14 @@ impl PcmLead {
         Self {
             limit: quanta.saturating_mul(quantum.get()),
             quantum: quantum.get(),
-            slots: quanta.saturating_mul(2),
+            quanta,
             frames: 0,
         }
     }
 
     /// Forward ring slots: two per quantum of lead.
     pub(in crate::worker) const fn slots(&self) -> usize {
-        self.slots
+        self.quanta.saturating_mul(2)
     }
 
     /// An empty lead takes any packet; otherwise the packet must fit the limit.
