@@ -1298,6 +1298,52 @@ async fn decoder_file_seek_multiple(
     }
 }
 
+/// A seek after the decoder ran to the end of the file lands and decodes.
+#[kithara::test(tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(
+        SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT,
+        DecoderBackend::Symphonia
+    )
+)]
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    case(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::Symphonia)
+)]
+async fn a_seek_after_the_decoder_reached_eof_decodes_again(
+    #[case] asset: SignalAsset,
+    temp_dir: TestTempDir,
+    #[case] backend: DecoderBackend,
+) {
+    let (_server, url) = source(asset).await;
+    let Some(mut decoder) = open_test_audio(asset, &url, &temp_dir, backend, None).await else {
+        return;
+    };
+    read_to_eof(&mut decoder).await;
+    decoder.seek(Duration::from_secs(2)).unwrap();
+    next_chunk(&mut decoder, "after seek past EOF back to 2s").await;
+}
+
+#[kithara::flash(true)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+async fn read_to_eof(audio: &mut LaneAudio<Stream<File<TestPools>>, TestPools>) {
+    loop {
+        hang_tick!();
+        match AudioRead::next_chunk(audio) {
+            Ok(ChunkOutcome::Chunk(_)) => {
+                hang_reset!();
+            }
+            Ok(ChunkOutcome::Eof { .. }) => return,
+            Ok(ChunkOutcome::Pending { .. }) => {
+                audio.preload().expect("preload must succeed");
+                time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(e) => panic!("decode error before EOF: {e}"),
+        }
+    }
+}
+
 /// Decoder<Stream<File>> events are emitted on seek.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[case(SignalAsset::MP3_TRACK_SINE440_187S)]

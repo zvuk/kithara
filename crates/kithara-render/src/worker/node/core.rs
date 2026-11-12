@@ -11,7 +11,6 @@ use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount, SegmentId, SourceSp
 use kithara_stream::ActivityWriter;
 use kithara_test_utils::kithara;
 use kithara_worker::{Priority, Task, TickResult};
-use ringbuf::traits::{Consumer, Observer, Producer};
 
 use super::{
     super::{EngineLoad, PcmPacket, reader::PcmProducer},
@@ -146,7 +145,7 @@ where
             ),
             PcmPacket::Failed { failure, .. } => (None, Some(Err(*failure))),
         };
-        match self.port.forward.try_push(pending.packet) {
+        match self.port.push(pending.packet) {
             Ok(()) => {
                 if let Some(meta) = meta {
                     self.last_output = meta;
@@ -284,23 +283,23 @@ where
         }
     }
 
-    /// Half a packet while a full ring holds a packet behind the consumer's next
-    /// one. The consumer frees a slot without waking the worker and can read
+    /// Half a packet while a full lead holds a packet behind the consumer's next
+    /// one. The consumer frees lead without waking the worker and can read
     /// faster than real time, so the recheck never outgrows the packet it
-    /// refills; a one-packet ring has no lead to spare and keeps the
-    /// configured poll.
+    /// refills; a one-quantum lead has none to spare and keeps the configured
+    /// poll.
     fn backpressure_recheck(&self) -> Option<Duration> {
         let packet = self
             .last_output
             .spec
             .duration_for(u64::from(self.last_output.frames))
             .ok()?;
-        (self.port.forward.capacity().get() > 1 && !packet.is_zero()).then(|| packet / 2)
+        (self.port.lead.queues_ahead() && !packet.is_zero()).then(|| packet / 2)
     }
 
     #[kithara::hang_watchdog]
     fn recycle(&mut self) {
-        while let Some(packet) = self.port.reverse.try_pop() {
+        while let Some(packet) = self.port.reclaim() {
             hang_tick!();
             self.retire(packet);
             hang_reset!();
@@ -340,7 +339,7 @@ where
                 segment = self.source.cursor().segment.get(),
                 lane_frame = self.source.cursor().frame,
                 terminal_failed = matches!(self.terminal, Some(Err(_))),
-                forward_full = self.port.forward.is_full(),
+                forward_full = self.port.is_full(),
                 last_source_end = self.last_output.source_span.map(SourceSpan::end),
             );
             return TickResult::Backpressured;
@@ -381,9 +380,9 @@ where
                     reason = ?reason,
                     segment = self.source.cursor().segment.get(),
                     lane_frame = self.source.cursor().frame,
-                    forward_full = self.port.forward.is_full(),
+                    forward_full = self.port.is_full(),
                 );
-                if self.port.forward.is_full() {
+                if self.port.is_full() {
                     return TickResult::Backpressured;
                 }
                 self.source.upstream_parked();
@@ -437,35 +436,202 @@ mod tests {
         ))));
     }
 
-    /// A full ring is rechecked within half of the lead it holds beyond the
-    /// consumer's next packet, and a one-packet ring keeps the configured poll.
+    /// A full lead is rechecked within half of the packet it holds beyond the
+    /// consumer's next one, and a one-quantum lead keeps the configured poll.
     #[kithara::test(tokio)]
-    async fn a_full_ring_is_rechecked_within_half_a_packet() {
-        for (capacity, expected) in [
+    async fn a_full_lead_is_rechecked_within_half_a_packet() {
+        for (chunks, expected) in [
             (1, None),
             (3, Some(Duration::from_millis(5))),
             (8, Some(Duration::from_millis(5))),
         ] {
-            let mut fixture = NodeFixture::new(capacity).await;
+            let mut fixture = NodeFixture::framed(chunks, 480);
             assert_eq!(
                 fixture.node.backpressure_recheck(),
                 None,
                 "a lane that has not output a packet keeps the configured poll"
             );
-            for _ in 0..capacity {
+            for _ in 0..chunks {
                 fixture.stage(PcmPacket::Chunk(Box::new(chunk(
                     SegmentId::FIRST,
                     &[0.25; 480],
                 ))));
                 assert_eq!(fixture.node.admit(), TickResult::Progress);
             }
-            stage(&mut fixture, 0.5);
-            assert_eq!(fixture.node.admit(), TickResult::Backpressured);
+            fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                SegmentId::FIRST,
+                &[0.5; 480],
+            ))));
+            assert_eq!(
+                fixture.node.admit(),
+                TickResult::Backpressured,
+                "{chunks} queued quanta before the first read fill the ring depth"
+            );
 
             assert_eq!(
                 fixture.node.backpressure_recheck(),
                 expected,
-                "{capacity} slots of 480 frames at 48 kHz hold 10 ms each"
+                "{chunks} quanta of 480 frames at 48 kHz hold 10 ms each"
+            );
+        }
+    }
+
+    /// A one-quantum lane leads the reader's packet by one quantum of frames. A
+    /// short packet ending a source revision takes only its own frames, so the
+    /// whole packet after it enters once the reader returns the packet it
+    /// spent, and the block at the cut finds a full quantum queued.
+    #[kithara::test(tokio)]
+    async fn a_short_packet_leaves_the_next_quantum_room_in_the_lead() {
+        const QUANTUM: usize = 512;
+        const SHORT: usize = 363;
+        let mut fixture = NodeFixture::framed(1, QUANTUM);
+        let admit = |fixture: &mut NodeFixture, frames: usize| {
+            fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                SegmentId::FIRST,
+                &vec![0.25; frames],
+            ))));
+            fixture.node.admit()
+        };
+        assert_eq!(admit(&mut fixture, QUANTUM), TickResult::Progress);
+        let held = fixture.receiver.pop().expect("the reader takes its packet");
+        assert_eq!(admit(&mut fixture, SHORT), TickResult::Progress);
+        fixture
+            .receiver
+            .recycle(held)
+            .expect("the spent packet goes back");
+        fixture.node.recycle();
+
+        assert_eq!(
+            admit(&mut fixture, QUANTUM),
+            TickResult::Progress,
+            "a {SHORT}-frame packet must not hold a whole quantum of lead"
+        );
+        let mut queued = 0;
+        while let Some(PcmPacket::Chunk(chunk)) = fixture.receiver.pop() {
+            queued += chunk.frames();
+        }
+        assert!(
+            queued >= QUANTUM,
+            "the block at the cut needs {QUANTUM} frames, the lane queued {queued}"
+        );
+    }
+
+    /// A source whose packets stay below the render quantum, such as a decoder
+    /// emitting its own chunk size at unity speed, queues the configured
+    /// `chunks` packets and one more slot, never twice that many.
+    #[kithara::test(tokio)]
+    async fn packets_below_the_quantum_queue_one_slot_past_the_configured_chunks() {
+        const CHUNKS: usize = 3;
+        const QUANTUM: usize = 480;
+        const PACKET: usize = 120;
+        let mut fixture = NodeFixture::framed(CHUNKS, QUANTUM);
+        let mut queued = 0;
+        loop {
+            fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                SegmentId::FIRST,
+                &[0.25; PACKET],
+            ))));
+            match fixture.node.admit() {
+                TickResult::Progress => queued += 1,
+                TickResult::Backpressured => break,
+                other => panic!("an unread lane either queues or backpressures, got {other:?}"),
+            }
+        }
+        assert_eq!(queued, CHUNKS + 1);
+    }
+
+    /// The lead past the reader's mark stays below `chunks + 1` quanta, the
+    /// ring depth commands are scheduled against: a packet the reader spent
+    /// and returned frees its frames, and a packet it still holds has frames
+    /// behind the mark.
+    #[kithara::test(tokio)]
+    async fn the_lead_past_the_read_mark_stays_below_the_ring_depth() {
+        const QUANTUM: usize = 512;
+        let mut fixture = NodeFixture::framed(1, QUANTUM);
+        let admit = |fixture: &mut NodeFixture| {
+            fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                SegmentId::FIRST,
+                &[0.25; QUANTUM],
+            ))));
+            fixture.node.admit()
+        };
+        assert_eq!(admit(&mut fixture), TickResult::Progress);
+        let held = fixture.receiver.pop().expect("the reader takes its packet");
+        assert_eq!(
+            admit(&mut fixture),
+            TickResult::Progress,
+            "a block that ends inside the held packet needs the next one queued"
+        );
+        fixture
+            .receiver
+            .recycle(held)
+            .expect("the spent packet goes back");
+        fixture.node.recycle();
+
+        assert_eq!(
+            admit(&mut fixture),
+            TickResult::Backpressured,
+            "one queued quantum after a spent packet is the whole one-quantum lead"
+        );
+    }
+
+    /// A reader may trim the frames it read off a packet before handing it
+    /// back; the lead still releases everything the packet took.
+    #[kithara::test(tokio)]
+    async fn a_trimmed_return_releases_the_whole_packet() {
+        const CHUNKS: usize = 3;
+        const QUANTUM: usize = 512;
+        // Four parts fit the empty lead of `(CHUNKS + 1) * QUANTUM - 1`
+        // frames; three would if the trimmed packet kept its unread frames.
+        const PART: usize = 448;
+        let mut fixture = NodeFixture::framed(CHUNKS, QUANTUM);
+        let admit = |fixture: &mut NodeFixture, frames: usize| {
+            fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                SegmentId::FIRST,
+                &vec![0.25; frames],
+            ))));
+            fixture.node.admit()
+        };
+        assert_eq!(admit(&mut fixture, QUANTUM), TickResult::Progress);
+        let Some(PcmPacket::Chunk(mut held)) = fixture.receiver.pop() else {
+            panic!("the reader takes its packet");
+        };
+        held.samples.truncate(held.samples.len() / 4);
+        fixture
+            .receiver
+            .recycle(PcmPacket::Chunk(held))
+            .expect("the trimmed packet goes back");
+        fixture.node.recycle();
+
+        for part in 0..4 {
+            assert_eq!(
+                admit(&mut fixture, PART),
+                TickResult::Progress,
+                "part {part} of an empty lead"
+            );
+        }
+        assert_eq!(admit(&mut fixture, PART), TickResult::Backpressured);
+    }
+
+    /// A reader may keep the packets it takes: taking the next one spends
+    /// every packet before it, so the lead keeps moving without returns.
+    #[kithara::test(tokio)]
+    async fn a_packet_the_reader_keeps_is_spent_by_the_next_take() {
+        const QUANTUM: usize = 512;
+        let mut fixture = NodeFixture::framed(1, QUANTUM);
+        for packet in 0..4 {
+            fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                SegmentId::FIRST,
+                &[0.25; QUANTUM],
+            ))));
+            assert_eq!(
+                fixture.node.admit(),
+                TickResult::Progress,
+                "packet {packet} after the reader took every earlier one"
+            );
+            assert!(
+                fixture.receiver.pop().is_some(),
+                "the reader keeps packet {packet}"
             );
         }
     }

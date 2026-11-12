@@ -134,8 +134,9 @@ where
     /// An unset value uses the lane configuration's default.
     #[config(skip = "transferred to the render lane's preload quota")]
     pub(crate) preload_chunks: Option<NonZeroUsize>,
-    /// Packet capacity of each lane ring. An unset value uses the lane
-    /// configuration's default.
+    /// Rendered lead of each lane behind its reader's packet, in render
+    /// quanta counted in frames. An unset value uses the lane configuration's
+    /// default.
     #[config(skip = "transferred to the render lane's packet rings")]
     pub(crate) audio_buffer_chunks: Option<NonZeroUsize>,
     /// Explicit playback worker. Player preparation fills this field; direct
