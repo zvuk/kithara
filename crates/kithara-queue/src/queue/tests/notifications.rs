@@ -7,7 +7,9 @@ use kithara_test_utils::kithara;
 
 use crate::{
     QueueCommand, QueueEvent, TrackSource, Transition,
-    mock::{answer_load, empty_queue, finish, fixture_uri, seed_fixture, with_outbox},
+    mock::{
+        FixtureSource, answer_load, empty_queue, finish, fixture_uri, seed_fixture, with_outbox,
+    },
     queue::{WorkerOwner, worker_owner},
 };
 
@@ -45,7 +47,7 @@ async fn notification_changed_carries_src(#[by_ref] worker_owner: &WorkerOwner) 
         )
         .expect("select source");
     });
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     finish(&mut queue, &mut rig);
     let notification = std::iter::from_fn(|| {
         hang_tick!();
@@ -101,7 +103,7 @@ async fn notification_clone(#[by_ref] worker_owner: &WorkerOwner) {
         .expect("select stopped source");
     });
     hang_tick!();
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     hang_reset!();
     finish(&mut queue, &mut rig);
     let slot = queue

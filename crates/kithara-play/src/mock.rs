@@ -633,6 +633,7 @@ pub struct DeckRig<S> {
     pub opens: Inbox<DispatcherProtocol<ResourceLoad<S>>>,
     fixture_dispatcher: Option<FixtureDispatcher<S>>,
     fixture_lanes: Vec<Sender<kithara_render::LaneProtocol>>,
+    held_lanes: Vec<Inbox<kithara_render::LaneProtocol>>,
     now: SessionFrame,
     observation: kithara_render::bridge::DeckSnapshot,
 }
@@ -665,6 +666,7 @@ impl<S> DeckRig<S> {
             events: ends.events,
             fixture_dispatcher: None,
             fixture_lanes: Vec::new(),
+            held_lanes: Vec::new(),
             now: SessionFrame::new(0),
             observation,
         })
@@ -755,6 +757,12 @@ impl<S> DeckRig<S> {
             hang_reset!();
         }
         Ok(receipts)
+    }
+
+    /// Keeps a lane inbox open for the rig's lifetime, as a running lane keeps
+    /// the one its load request carried.
+    pub fn hold_lane(&mut self, inbox: Inbox<kithara_render::LaneProtocol>) {
+        self.held_lanes.push(inbox);
     }
 
     /// The queues a player sends to, lent for one pass.

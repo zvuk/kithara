@@ -14,8 +14,8 @@ use num_traits::ToPrimitive;
 use crate::{
     Queue, QueueConfig, QueueControl, QueueError, TrackSource, Transition,
     mock::{
-        TestPools, answer_loaded, finish, fixture_uri, load_seq, pending_selection, pools,
-        requested_load, selected, with_outbox,
+        FixtureSource, TestPools, answer_loaded, finish, fixture_uri, load_seq, pending_selection,
+        pools, requested_load, selected, with_outbox,
     },
     queue::{
         QueueCommand, state,
@@ -193,21 +193,15 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
         .find_map(|active| active.load)
         .expect("selected load")
         .seq();
-    let mut loaded =
-        crate::mock::loaded_request(queue.worker().expect("fixture worker"), &mut rig, seq).await;
-    let source = loaded
-        .opened
-        .pcm
-        .next_chunk_info()
-        .expect("prepared fixture source");
-    let (opened, source_packets) = crate::mock::opened_with_source(
-        loaded.opened,
+    let (loaded, source_packets) = crate::mock::synthetic_request(
+        &queue,
+        &mut rig,
+        seq,
         kithara_signal::AudioChunkInfo {
             media_end: duration,
-            ..source
+            ..crate::mock::fixture_chunk()
         },
     );
-    loaded.opened = opened;
     answer_loaded(&mut queue, &mut rig, loaded);
     finish(&mut queue, &mut rig);
     let control = queue.control();
@@ -246,7 +240,7 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
 async fn keylock_set_on_a_playing_queue_reads_back_and_reaches_a_track_appended_after_it(
     #[by_ref] worker_owner: &WorkerOwner,
 ) {
-    let (mut queue, _, _, mut rig, dir) = selected(&worker_owner.0).await;
+    let (mut queue, _, _, mut rig, dir) = selected(&worker_owner.0, FixtureSource::Synthetic).await;
     let control = queue.control();
     assert!(!control.keylock(), "the queue starts with keylock off");
 

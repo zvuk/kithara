@@ -37,7 +37,8 @@ async fn spurious_item_did_play_to_end_is_filtered(#[by_ref] worker_owner: &Work
 async fn eof_after_queue_end_does_not_restart_from_first_track(
     #[by_ref] worker_owner: &WorkerOwner,
 ) {
-    let (mut queue, _first, second, mut rig, dir) = crate::mock::selected(&worker_owner.0).await;
+    let (mut queue, _first, second, mut rig, dir) =
+        crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
             queue,
@@ -49,7 +50,7 @@ async fn eof_after_queue_end_does_not_restart_from_first_track(
         )
     })
     .expect("select last");
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
     queue.current = Some(second);
     queue.current = None;
@@ -84,7 +85,7 @@ async fn replay_after_queue_end_restores_current_and_reports_the_next_end(
     #[case] seek_first: bool,
 ) {
     let (mut queue, first, second, mut rig, fixture_directory) =
-        crate::mock::selected(&worker_owner.0).await;
+        crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(queue, QueueCommand::Remove(second), out)
     })
@@ -324,8 +325,7 @@ async fn play_retries_the_current_track_after_its_prefetch_failed(
         .seq();
     assert_ne!(retry_seq, failed_seq, "Play must start a new open");
     let loaded =
-        crate::mock::loaded_request(queue.worker().expect("fixture worker"), &mut rig, retry_seq)
-            .await;
+        crate::mock::loaded_request(&queue, &mut rig, retry_seq, FixtureSource::Synthetic).await;
     assert_eq!(loaded.opened.pcm.src().as_ref(), source);
     assert_eq!(
         loaded.opened.pcm.spec(),

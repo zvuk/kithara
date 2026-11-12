@@ -23,6 +23,13 @@ use crate::{LaneProtocol, LoadRefusal, ServiceClass, worker::scheduler::StreamWa
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct LaneId(u64);
 
+impl LaneId {
+    /// The lane a load admitted under `seq` runs on.
+    pub(crate) fn admitted(seq: Seq) -> Self {
+        Self(seq.get())
+    }
+}
+
 #[derive(Debug)]
 pub enum DispatcherCommand<I> {
     Load(Box<LoadRequest<I>>),
@@ -269,7 +276,7 @@ where
                         continue;
                     }
                     let seq = due.defer();
-                    let lane = LaneId(seq.get());
+                    let lane = LaneId::admitted(seq);
                     if request.class != ServiceClass::Idle {
                         self.playing_opens += 1;
                     }
@@ -841,7 +848,7 @@ mod tests {
                 When::Next,
                 Batch {
                     basis: Vec::new(),
-                    commands: vec![DispatcherCommand::Release(LaneId(seq.get()))],
+                    commands: vec![DispatcherCommand::Release(LaneId::admitted(seq))],
                 },
             )
             .expect("release admitting lane");
