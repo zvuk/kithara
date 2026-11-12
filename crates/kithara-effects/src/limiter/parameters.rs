@@ -43,3 +43,25 @@ impl TryFrom<f32> for ReleaseMs {
 pub struct ReleaseMsError {
     value: f32,
 }
+
+/// Time the output trails the input so the gain is down before a peak plays, from 0 to 20 ms.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Ranged)]
+#[ranged(min = 0.0, max = 20.0, default = 0.0)]
+pub struct LookaheadMs(f32);
+
+impl TryFrom<f32> for LookaheadMs {
+    type Error = LookaheadMsError;
+
+    fn try_from(value: f32) -> Result<Self, Self::Error> {
+        Self::checked(value).ok_or(LookaheadMsError { value })
+    }
+}
+
+/// A requested lookahead lies outside the supported delay range.
+#[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
+#[error("limiter lookahead must be between {min} and {max} ms, got {value}",
+    min = f32::from(LookaheadMs::MIN), max = f32::from(LookaheadMs::MAX))]
+#[non_exhaustive]
+pub struct LookaheadMsError {
+    value: f32,
+}

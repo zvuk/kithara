@@ -496,8 +496,7 @@ mod tests {
     use super::{Config, LoadError, StorageBackend, consts::BAKED_PATH};
     use crate::{
         config::AppConfig,
-        plugins,
-        pools::{self, AppPools},
+        plugins, pools,
         theme::{Palette, Rgb},
     };
 
@@ -910,7 +909,8 @@ mod tests {
         let path = write(&dir, "output-rate", "app:\n  sample_rate: 48000\n");
 
         let document = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
-        let host = HostConfig::<AppPools>::builder()
+        let pools = pools::build(&document.pools()).expect("valid app pool policy");
+        let host = HostConfig::builder(pools)
             .settings(
                 HostSettings::builder()
                     .maybe_sample_rate(document.app().sample_rate)

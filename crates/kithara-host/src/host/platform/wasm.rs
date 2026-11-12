@@ -33,7 +33,7 @@ impl<S, O: HostOwner<S>> Platform<S, O> {
         view: RootView,
         _block: Option<NonZeroU32>,
         channel_config: ScopedConfig,
-        output: SessionOutput,
+        output: SessionOutput<S>,
         settings: Live<HostSettings, HostProtocol>,
         layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
     ) -> Result<StartedPlatform<S, O>, PlayError>

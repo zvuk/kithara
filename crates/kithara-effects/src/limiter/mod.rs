@@ -4,4 +4,6 @@ mod parameters;
 mod scalar;
 
 pub use effect::{LimiterConfig, LimiterError, PeakLimiter};
-pub use parameters::{Ceiling, CeilingError, ReleaseMs, ReleaseMsError};
+pub use parameters::{
+    Ceiling, CeilingError, LookaheadMs, LookaheadMsError, ReleaseMs, ReleaseMsError,
+};

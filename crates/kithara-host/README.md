@@ -34,6 +34,9 @@ host.remove(&deck)?;
 `insert` takes ownership of a fully built player or queue and returns a
 `HostOwned` control handle. The audio device opens when the first deck plays.
 
+A limiter lookahead of `L` frames delays the whole output, metronome included:
+the first `L` output frames are silent pre-roll.
+
 ## Key Types
 
 - `Host` — the session; `insert`, `remove`, settings, subscriptions.

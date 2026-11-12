@@ -20,8 +20,9 @@ lines, and a real FFT with spectral helpers. Apple builds use Accelerate, other
 targets `fearless_simd` at the best level the CPU supports.
 
 No kernel panics. Only constructors allocate (`Biquad::new`, `Fft::new`, and
-`Fft::spectrum` off Apple); delay lines, autocorrelation, and FFT planes take
-their memory from the caller's `kithara-bufpool` region. The FFT builds only
+`Fft::spectrum` off Apple); delay lines, autocorrelation, the lookahead
+minimum window, and FFT planes take their memory from the caller's
+`kithara-bufpool` region. The FFT builds only
 with the `spectrum` feature.
 
 ## Usage
