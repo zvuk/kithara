@@ -3106,6 +3106,34 @@ new_crate_interval_secs = 610
 http_timeout_secs = 20
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
 
+[ext.ci.lanes.release-app]
+cache_group = "host"
+label = "macOS application"
+os = "macos"
+tools = [
+  "cargo",
+  "just",
+  "security",
+  "codesign",
+  "lipo",
+  "otool",
+  "strip",
+  "sips",
+  "iconutil",
+  "ditto",
+]
+program = "just"
+steps = [
+  { args = [
+    "release",
+    "app",
+  ], label = "Signed universal macOS application" },
+]
+role = "release"
+kinds = ["nightly", "release"]
+kinds_github = []
+timeout_minutes = 180
+
 [ext.release]
 # Release flow: the `release:*` CI jobs build every artifact, and
 # `release:publish` tags, publishes and deploys them (`just ci run
@@ -3121,7 +3149,11 @@ gitlab_package = "kithara"
 nightly_tag = "nightly"
 core_asset = "KitharaFFIInternal.xcframework.zip"
 merged_asset = "Kithara.xcframework.zip"
-platform_assets = ["kithara.aar", "kithara-okhttp.aar"]
+platform_assets = [
+  "kithara.aar",
+  "kithara-okhttp.aar",
+  "Kithara-macos-universal.zip",
+]
 http_timeout_secs = 60
 upload_timeout_secs = 600
 # WebAssembly channel: trunk dist (`just platform wasm build`) zipped and served

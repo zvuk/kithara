@@ -963,7 +963,7 @@ fn semver_audit_blocks_release_builds_but_not_other_pipeline_kinds() {
         BTreeSet::from(["release".to_owned(), "weekly".to_owned()])
     );
 
-    for job in ["release:xcframework", "release:android"] {
+    for job in ["release:xcframework", "release:android", "release:app"] {
         let needs = config
             .effective_value(job, "needs")
             .expect("release build declares its prerequisites");
@@ -977,6 +977,39 @@ fn semver_audit_blocks_release_builds_but_not_other_pipeline_kinds() {
             "{job} must wait for semver when a release schedules it"
         );
     }
+}
+
+#[test]
+fn the_application_archive_reaches_the_release_publisher() {
+    let config = GitlabConfig::load(&workspace_root());
+    assert_eq!(
+        config.effective_value("release:app", "tags"),
+        Some(serde_yaml_ng::from_str::<Value>("[kithara-release]").unwrap()),
+        "signing belongs to the protected release runner"
+    );
+    let paths = config.definition("release:app")["artifacts"]["paths"]
+        .as_sequence()
+        .expect("application artifacts");
+    for name in [
+        "Kithara-macos-universal.zip",
+        "Kithara-macos-universal.zip.sha256",
+    ] {
+        assert!(
+            paths.iter().any(|path| path.as_str() == Some(name)),
+            "{name}"
+        );
+    }
+    let needs = config
+        .effective_value("release:publish", "needs")
+        .expect("publish prerequisites");
+    assert!(
+        needs
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|need| need["job"].as_str() == Some("release:app")
+                && need["artifacts"].as_bool() == Some(true))
+    );
 }
 
 // The other direction. A lane that names the pipelines it belongs to and that no

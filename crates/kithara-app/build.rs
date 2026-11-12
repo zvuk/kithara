@@ -27,13 +27,18 @@ use std::{
 fn main() {
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"));
-    let app_yaml_path = manifest_dir.join("app.yaml");
+    let distribution = env::var_os("CARGO_FEATURE_DISTRIBUTION").is_some();
+    let app_yaml_path = manifest_dir.join(if distribution {
+        "app.public.yaml"
+    } else {
+        "app.yaml"
+    });
     let workspace_root = manifest_dir.join("..").join("..");
     let dotenv_path = workspace_root.join(".env");
 
     println!("cargo:rerun-if-changed={}", app_yaml_path.display());
     // Cargo treats a missing watched path as dirty on every build.
-    if dotenv_path.is_file() {
+    if !distribution && dotenv_path.is_file() {
         println!("cargo:rerun-if-changed={}", dotenv_path.display());
     }
 
@@ -44,7 +49,11 @@ fn main() {
     let web_src = fs::read_to_string(&web_yaml_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", web_yaml_path.display()));
 
-    let env_map = load_env(&dotenv_path);
+    let env_map = if distribution {
+        HashMap::new()
+    } else {
+        load_env(&dotenv_path)
+    };
     let target_arch =
         env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH is set by cargo");
     let baked = kithara_app_document::bake(&target_arch, &yaml_src, &web_src, &env_map)
