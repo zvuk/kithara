@@ -22,6 +22,7 @@ use super::{
     },
     geometry::*,
     seat::Seat,
+    segment::{Adoptions, Segment},
     state::*,
 };
 use crate::{PlayError, resource::LaneGeometry};
@@ -37,15 +38,12 @@ pub struct PlayerImpl<S> {
     pub(super) output: kithara_render::bridge::SlotOutputSnapshot,
     pub(super) status: TrackStatus,
     pub(super) loading: Option<Loading>,
-    pub(super) segment: SegmentId,
-    pub(super) ready: Option<SegmentId>,
+    pub(super) segment: Segment,
     pub(super) issued_segment: SegmentId,
-    pub(super) adopting: Vec<Adoption>,
-    pub(super) newest_epoch_pending: Option<Seq>,
+    pub(super) adoptions: Adoptions,
     pub(super) lane_commands: Vec<LaneOperation>,
     pub(super) playback_commands: Vec<PlaybackOperation>,
     pub(super) speed_answers: VecDeque<SpeedAnswer>,
-    pub(super) segment_speed: f32,
     pub(super) play: Option<When<SessionFrame>>,
     pub(super) repeat: bool,
     /// The clock the track keeps through a dropout.
@@ -57,7 +55,6 @@ pub struct PlayerImpl<S> {
     pub(super) geometry: LaneGeometry,
     pub(super) engine_latency: FrameCount,
     pub(super) position: Position,
-    pub(super) segment_origin: Option<Position>,
     pub(super) source_basis: Option<AudioChunkInfo>,
     pub(super) observed_source: Option<AudioChunkInfo>,
     pub(super) projected_end: RefCell<Option<ProjectedEnd>>,
@@ -85,15 +82,12 @@ impl<S> PlayerImpl<S> {
             output: kithara_render::bridge::SlotOutputSnapshot::default(),
             status: TrackStatus::Idle,
             loading: None,
-            segment: SegmentId::FIRST,
-            ready: None,
+            segment: Segment::issued(SegmentId::FIRST, None, config.settings.speed()),
             issued_segment: SegmentId::FIRST,
-            adopting: Vec::new(),
-            newest_epoch_pending: None,
+            adoptions: Adoptions::default(),
             lane_commands: Vec::new(),
             playback_commands: Vec::new(),
             speed_answers: VecDeque::new(),
-            segment_speed: config.settings.speed(),
             play: None,
             repeat: false,
             clock: TrackClock::Media,
@@ -103,7 +97,6 @@ impl<S> PlayerImpl<S> {
             geometry: LaneGeometry::default(),
             engine_latency: FrameCount::new(0),
             position: Position::ZERO,
-            segment_origin: None,
             source_basis: None,
             observed_source: None,
             projected_end: RefCell::new(None),
@@ -160,11 +153,11 @@ impl<S> PlayerImpl<S> {
         if let Some(mark) = self
             .resume
             .or(self.mark)
-            .filter(|mark| mark.lane.segment == self.segment)
+            .filter(|mark| mark.lane.segment == self.segment.id)
         {
             return Ok(mark.position);
         }
-        self.segment_origin.ok_or(PlayError::Untimed)
+        self.segment.origin.ok_or(PlayError::Untimed)
     }
 
     pub(super) fn observe(&mut self, out: &Outbox<'_, S>) {
@@ -177,21 +170,23 @@ impl<S> PlayerImpl<S> {
         {
             self.mark = slot.mark;
             if slot.binding.is_some_and(|binding| {
-                binding.item() == self.item && binding.segment() == self.segment
+                binding.item() == self.item && binding.segment() == self.segment.id
             }) {
                 self.output = slot.output;
             }
-            if let Some(source) = slot.source.filter(|info| info.segment == self.segment)
+            if let Some(source) = slot.source.filter(|info| info.segment == self.segment.id)
                 && self.seat.attached_at().is_some()
                 && !matches!(self.status, TrackStatus::Released)
             {
-                if self.segment_origin.is_none() {
-                    self.segment_origin = Some(source.timestamp);
+                if self.segment.origin.is_none() {
+                    self.segment.origin = Some(source.timestamp);
                 }
                 self.observed_source = Some(source);
                 self.extent = Extent::of(Some(source));
             }
-            if let Some(mark) = slot.mark.filter(|mark| mark.lane.segment == self.segment)
+            if let Some(mark) = slot
+                .mark
+                .filter(|mark| mark.lane.segment == self.segment.id)
                 && slot.position.is_finite()
                 && slot.position >= 0.0
                 && let Some(position) = self.content_mark_position(mark)
@@ -239,7 +234,7 @@ impl<S> PlayerImpl<S> {
                     return Err(PlayError::Late);
                 }
                 let mark = self.mark.ok_or(PlayError::Untimed)?;
-                if mark.lane.segment != self.segment
+                if mark.lane.segment != self.segment.id
                     || !matches!(self.status, TrackStatus::Playing { .. })
                 {
                     return Err(PlayError::Untimed);
@@ -262,7 +257,7 @@ impl<S> PlayerImpl<S> {
         commands: Vec<LaneCommand>,
         when: When<LaneFrame>,
     ) -> Result<Seq, PlayError> {
-        if self.adopting.iter().any(|adoption| adoption.cancelled) {
+        if self.adoptions.cancelling() {
             return Err(PlayError::NotReady);
         }
         let session = match when {
@@ -277,7 +272,7 @@ impl<S> PlayerImpl<S> {
                 tracing::debug!(
                     item = u64::from(self.item),
                     seq = seq.get(),
-                    current_segment = self.segment.get(),
+                    current_segment = self.segment.id.get(),
                     requested_when = ?when,
                     paused_resume = ?self.resume,
                     mark = ?self.mark,
@@ -309,7 +304,7 @@ impl<S> PlayerImpl<S> {
                 LaneOperation {
                     seq,
                     when,
-                    segment: self.segment,
+                    segment: self.segment.id,
                     session,
                     command,
                     verdict: None,

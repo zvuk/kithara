@@ -45,8 +45,8 @@ impl<S> PlayerImpl<S> {
         self.lane = Some(lane);
         self.geometry = geometry;
         self.position = position;
-        self.segment_speed = self.settings.config().speed();
-        self.segment_origin = None;
+        self.segment.speed = self.settings.config().speed();
+        self.segment.origin = None;
         self.source_basis = None;
         self.observed_source = None;
         self.loading = Some(Loading {
@@ -112,12 +112,12 @@ impl<S> PlayerImpl<S> {
     ) -> Settled {
         self.registration = Registration::Registered(loaded.lane);
         self.engine_latency = loaded.engine_latency;
-        if self.segment == SegmentId::FIRST {
-            self.ready = Some(SegmentId::FIRST);
+        if self.segment.id == SegmentId::FIRST {
+            self.segment.ready = true;
         }
         let prepared = loaded.opened.pcm.next_chunk_info();
-        if let Some(meta) = prepared.filter(|meta| meta.segment == self.segment) {
-            self.segment_origin = Some(meta.timestamp);
+        if let Some(meta) = prepared.filter(|meta| meta.segment == self.segment.id) {
+            self.segment.origin = Some(meta.timestamp);
         }
         self.source_basis = prepared;
         self.observed_source = prepared;
@@ -212,10 +212,10 @@ impl<S> PlayerImpl<S> {
                 slot,
                 item_id: self.item,
                 pcm,
-                segment: self.segment,
+                segment: self.segment.id,
             }],
         );
-        let start = self.play.is_some() && self.ready == Some(self.segment);
+        let start = self.play.is_some() && self.segment.ready;
         if start {
             parts.push(DeckPart::Start {
                 slot,
@@ -267,7 +267,7 @@ impl<S> PlayerImpl<S> {
     pub(super) fn reserved_ready(&mut self) {
         if !self.preparation_closed()
             && self.seat.slot().is_none()
-            && self.ready == Some(self.segment)
+            && self.segment.ready
             && self
                 .loading
                 .as_ref()
@@ -294,7 +294,7 @@ impl<S> PlayerImpl<S> {
         if at == When::Next {
             return self.seat_next(slot, out);
         }
-        if self.ready != Some(self.segment) {
+        if !self.segment.ready {
             return Err(PlayError::NotReady);
         }
         let pass = out.pass().ok_or(PlayError::Untimed)?;
@@ -315,7 +315,7 @@ impl<S> PlayerImpl<S> {
                 slot,
                 item_id: self.item,
                 pcm,
-                segment: self.segment,
+                segment: self.segment.id,
             }],
         );
         match out.deck_owned(at, parts) {

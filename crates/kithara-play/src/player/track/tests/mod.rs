@@ -32,6 +32,7 @@ use super::{
     },
     geometry::*,
     seat::Seat,
+    segment::Segment,
     state::*,
     *,
 };

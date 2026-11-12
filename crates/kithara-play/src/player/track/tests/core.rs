@@ -62,7 +62,7 @@ fn ends_within_cases(
 ) {
     let mut track = track(A);
     track.extent.duration = (dur > 0.0).then(|| Duration::from_secs_f64(dur));
-    track.segment_speed = rate.to_f32().expect("fixture speed fits f32");
+    track.segment.speed = rate.to_f32().expect("fixture speed fits f32");
     track.status = if rate == 0.0 {
         TrackStatus::Paused {
             at: Duration::from_secs_f64(pos),
@@ -274,8 +274,8 @@ pub(super) fn prepared_track() -> (Track, Inbox<LaneProtocol>) {
     track.lane = Some(sender);
     track.status = TrackStatus::Loaded;
     track.seat = seated(A);
-    track.ready = Some(SegmentId::FIRST);
-    track.segment_origin = Some(Position::ZERO);
+    track.segment.ready = true;
+    track.segment.origin = Some(Position::ZERO);
     (track, inbox)
 }
 
@@ -382,7 +382,7 @@ fn a_repeated_receipt_is_a_duplicate_and_changes_nothing(#[case] applied: bool) 
 fn a_receipt_skipping_a_phase_is_refused() {
     let mut rig = rig();
     let (mut track, _inbox) = prepared_track();
-    track.ready = None;
+    track.segment.ready = false;
     assert_eq!(
         command_at_zero(
             &mut track,
@@ -623,7 +623,7 @@ async fn an_installed_lane_the_owner_refuses_is_dropped_and_reported_cancelled()
     assert!(track.loading.is_none());
     assert!(track.seat.attaching().is_none());
     assert!(track.play.is_none());
-    assert!(track.ready.is_none());
+    assert!(!track.segment.ready);
     assert!(
         batch.commands.is_empty(),
         "the refused consumer is returned to its owner"
@@ -712,7 +712,13 @@ async fn installed_free_receipt_is_consumed_once(#[case] foreign: u8) {
     match foreign {
         0 => batch.basis = vec![(B, None)],
         2 => batch.basis = vec![(A, Some(other_seq))],
-        3 => track.segment = track.segment.next(),
+        3 => {
+            track.segment = Segment::issued(
+                track.segment.id.next(),
+                track.segment.origin,
+                track.segment.speed,
+            );
+        }
         _ => {}
     }
     let before = track.snapshot();
@@ -887,7 +893,7 @@ async fn a_next_pause_of_an_attached_track_settles_only_its_native_stop(
     let stopped_mark = SlotMark {
         session: frame(128),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 3 * u64::from(mock::SAMPLE_RATE.get()),
         },
         position: Position::from_secs(3),
@@ -948,7 +954,7 @@ async fn a_zero_frame_observation_retains_the_exact_commanded_cue(
         TrackStatus::Loaded
     };
     let source = AudioChunkInfo {
-        segment: track.segment,
+        segment: track.segment.id,
         spec,
         media_origin: Some(origin),
         ..AudioChunkInfo::default()
@@ -956,7 +962,7 @@ async fn a_zero_frame_observation_retains_the_exact_commanded_cue(
     let mark = SlotMark {
         session: frame(0),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: consumed,
         },
         position: raw,
@@ -1022,7 +1028,7 @@ async fn a_zero_frame_stop_retains_the_exact_commanded_cue(
     let mark = SlotMark {
         session: frame(0),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: consumed,
         },
         position: raw,
@@ -1090,7 +1096,7 @@ async fn processor_set_paused_updates_playback(#[case] mapped: bool) {
     let previous_mark = SlotMark {
         session: frame(0),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: u64::from(mock::SAMPLE_RATE.get()),
         },
         position: Position::from_secs(1),
@@ -1103,7 +1109,7 @@ async fn processor_set_paused_updates_playback(#[case] mapped: bool) {
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
             source: Some(AudioChunkInfo {
-                segment: track.segment,
+                segment: track.segment.id,
                 media_origin: Some(Duration::ZERO),
                 ..AudioChunkInfo::default()
             }),
@@ -1111,7 +1117,7 @@ async fn processor_set_paused_updates_playback(#[case] mapped: bool) {
             mark: Some(SlotMark {
                 session: frame(0),
                 lane: LaneFrame {
-                    segment: track.segment,
+                    segment: track.segment.id,
                     frame: 3 * u64::from(mock::SAMPLE_RATE.get()),
                 },
                 position: observed,
@@ -1157,7 +1163,7 @@ async fn processor_set_paused_updates_playback(#[case] mapped: bool) {
     let stopped_mark = SlotMark {
         session: frame(0),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 5 * u64::from(mock::SAMPLE_RATE.get()),
         },
         position: Position::from_secs(5),
@@ -1291,7 +1297,7 @@ async fn player_phase_kind_exhaustive() {
         inbox.drain();
         while let Some(due) = inbox.next_due(
             LaneFrame {
-                segment: track.segment,
+                segment: track.segment.id,
                 frame: 0,
             },
             1,
@@ -1299,7 +1305,7 @@ async fn player_phase_kind_exhaustive() {
             due.apply(kithara_render::LaneApplied {
                 source_basis: None,
                 engine_latency: FrameCount::new(0),
-                ready: Some(track.segment),
+                ready: Some(track.segment.id),
             });
         }
         let mut receipts = rig.block(frame(0), 0.0);
@@ -1546,7 +1552,7 @@ async fn play_after_an_ended_seek_preserves_its_segment_and_receipt(#[case] offs
     })
     .expect("ended Seek admitted")
     .expect("Seek adoption receipt");
-    let segment = track.segment;
+    let segment = track.segment.id;
     assert_eq!(
         in_pass(&mut rig, frame(1_024), |out| {
             track.apply(TrackCommand::Play { at: When::Next }, out)
@@ -1554,7 +1560,10 @@ async fn play_after_an_ended_seek_preserves_its_segment_and_receipt(#[case] offs
         .expect("Play waits for the requested segment"),
         None
     );
-    assert_eq!(track.segment, segment, "Play preserves the explicit Seek");
+    assert_eq!(
+        track.segment.id, segment,
+        "Play preserves the explicit Seek"
+    );
 
     inbox.drain();
     let lane_at = LaneFrame { segment, frame: 0 };
@@ -1569,7 +1578,10 @@ async fn play_after_an_ended_seek_preserves_its_segment_and_receipt(#[case] offs
     });
     assert!(inbox.next_due(lane_at, 1).is_none());
     in_pass(&mut rig, frame(1_024), |out| track.tick(frame(1_024), out));
-    assert_eq!(track.segment, segment, "lane readiness preserves the Seek");
+    assert_eq!(
+        track.segment.id, segment,
+        "lane readiness preserves the Seek"
+    );
     let mut receipts = rig.block(frame(1_024), to.as_secs_f64());
     let settled = settle(&mut track, &mut rig, &mut receipts);
     assert!(
@@ -1586,7 +1598,7 @@ async fn play_after_an_ended_seek_preserves_its_segment_and_receipt(#[case] offs
             since: frame(1_088)
         }
     );
-    assert_eq!(track.segment, segment);
+    assert_eq!(track.segment.id, segment);
     assert_eq!(track.snapshot().position, to);
 
     let advanced = to + Duration::from_millis(250);
@@ -1649,12 +1661,12 @@ fn playback_shared_seek_epoch_increments() {
     })
     .expect("live deck scope")
     .expect("load admitted");
-    assert_eq!(track.segment, SegmentId::FIRST);
+    assert_eq!(track.segment.id, SegmentId::FIRST);
     for expected in [1, 2, 3] {
         rig.with_outbox(|out| track.apply(TrackCommand::Seek { to: Position::ZERO }, out))
             .expect("live deck scope")
             .expect("seek admitted");
-        assert_eq!(track.segment.get(), expected);
+        assert_eq!(track.segment.id.get(), expected);
     }
     rig.deck.opens.drain();
     let mut request = rig.deck.opens.next_due((), 1).expect("one original load");
@@ -1715,7 +1727,7 @@ fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
     })
     .expect("live deck scope")
     .expect("fresh seek admitted");
-    assert_eq!(track.segment.get(), 2);
+    assert_eq!(track.segment.id.get(), 2);
     assert_eq!(track.snapshot().position, before.position);
     assert!(matches!(lane_commands(&mut inbox).as_slice(),
         [LaneCommand::Segment { id: first, from: first_from, .. },
@@ -1731,7 +1743,7 @@ fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
             source: Some(AudioChunkInfo {
-                segment: track.segment,
+                segment: track.segment.id,
                 media_origin: Some(Duration::ZERO),
                 ..AudioChunkInfo::default()
             }),
@@ -1739,7 +1751,7 @@ fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
             mark: Some(SlotMark {
                 session: frame(0),
                 lane: LaneFrame {
-                    segment: track.segment,
+                    segment: track.segment.id,
                     frame: 0,
                 },
                 position: Position::from_secs(8),
@@ -1767,7 +1779,7 @@ fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
         &mut out), Settled::Applied { seq: answered, .. } if answered == seq)
     );
     assert_eq!(track.snapshot().position, Position::from_secs(8));
-    assert!(track.adopting.is_empty());
+    assert!(track.adoptions.inflight.is_empty());
 }
 
 #[kithara::test]
@@ -1790,14 +1802,14 @@ fn withdrawing_an_overtaken_epoch_leaves_the_newer_seek_published() {
         .expect("live deck scope")
         .expect("seek admitted");
     }
-    let newest = track.segment;
+    let newest = track.segment.id;
     assert_eq!(newest.get(), 2);
     let overtaken = answer_next(&mut rig, Err(DeckRefusal::Outdated { slot: A }));
     assert!(matches!(
         answer_track(&mut track, &mut rig, overtaken),
         Settled::Pending
     ));
-    assert_eq!(track.segment, newest);
+    assert_eq!(track.segment.id, newest);
     assert_eq!(track.snapshot().position, Position::ZERO);
     let superseded = answer_next(&mut rig, Ok(()));
     assert!(matches!(
@@ -1819,8 +1831,8 @@ fn withdrawing_an_overtaken_epoch_leaves_the_newer_seek_published() {
             Settled::Applied { .. }
         ));
     }
-    assert_eq!(track.segment, newest);
-    assert!(track.adopting.is_empty());
+    assert_eq!(track.segment.id, newest);
+    assert!(track.adoptions.inflight.is_empty());
 }
 
 #[kithara::test]
@@ -1836,7 +1848,7 @@ fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
         slots: vec![SlotSnapshot {
             position: 1.5,
             source: Some(AudioChunkInfo {
-                segment: track.segment,
+                segment: track.segment.id,
                 media_origin: Some(Duration::ZERO),
                 media_end: Some(Duration::from_secs(162)),
                 visible_origin: Some(Duration::ZERO),
@@ -1845,7 +1857,7 @@ fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
             mark: Some(SlotMark {
                 session: frame(0),
                 lane: LaneFrame {
-                    segment: track.segment,
+                    segment: track.segment.id,
                     frame: 0,
                 },
                 position: Duration::from_secs_f64(1.5),
@@ -2131,7 +2143,7 @@ fn a_cued_subfloor_speed_reaches_the_lane_at_the_floor(#[case] speed: f32) {
         [LaneCommand::Segment { speed: SpeedCurve::Constant(sent), .. }]
             if *sent == kithara_sync::MIN_SPEED
     ));
-    assert_eq!(track.segment_speed, kithara_sync::MIN_SPEED);
+    assert_eq!(track.segment.speed, kithara_sync::MIN_SPEED);
     assert_eq!(track.projected().speed(), kithara_sync::MIN_SPEED);
 }
 
@@ -2630,7 +2642,7 @@ async fn a_native_stop_answers_without_overwriting_a_new_segments_position(
             },
         )
         .expect("new segment admitted");
-        assert_ne!(track.segment, SegmentId::FIRST);
+        assert_ne!(track.segment.id, SegmentId::FIRST);
         assert!(
             track.resume.is_none(),
             "a new segment retires the previous Stop's coordinates"
@@ -2660,7 +2672,7 @@ async fn a_native_stop_answers_without_overwriting_a_new_segments_position(
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
             source: Some(AudioChunkInfo {
-                segment: track.segment,
+                segment: track.segment.id,
                 media_origin: Some(Duration::ZERO),
                 ..AudioChunkInfo::default()
             }),
@@ -2668,7 +2680,7 @@ async fn a_native_stop_answers_without_overwriting_a_new_segments_position(
             mark: Some(SlotMark {
                 session: frame(0),
                 lane: LaneFrame {
-                    segment: track.segment,
+                    segment: track.segment.id,
                     frame: 0,
                 },
                 position,
@@ -2716,7 +2728,7 @@ async fn a_native_stop_answers_without_overwriting_a_new_segments_position(
 async fn detaching_a_member_withdraws_its_preparation() {
     let mut rig = rig();
     let (mut track, _inbox) = loaded(&mut rig, A, "track").await;
-    track.ready = None;
+    track.segment.ready = false;
     assert_eq!(
         command_at_zero(
             &mut track,
@@ -2737,7 +2749,7 @@ async fn detaching_a_member_withdraws_its_preparation() {
     ));
     assert_eq!(track.status(), TrackStatus::Released);
     assert!(track.play.is_none());
-    assert!(track.ready.is_none());
+    assert!(!track.segment.ready);
     assert!(track.playback_commands.is_empty());
     assert_eq!(rig.deck.mixer.held(A), None);
     assert!(matches!(
@@ -2878,7 +2890,7 @@ async fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
     let mut receipts = rig.block(frame(0), 0.0);
     settle(&mut old, &mut rig, &mut receipts);
     if repeat {
-        let original = old.segment;
+        let original = old.segment.id;
         let seq = rig
             .with_outbox(|out| old.apply(TrackCommand::PlayAfter { track: A }, out))
             .expect("deck scope")
@@ -2903,7 +2915,7 @@ async fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
                 .iter()
                 .all(|settled| matches!(settled, Settled::Pending))
         );
-        assert_eq!(old.segment, original);
+        assert_eq!(old.segment.id, original);
         lane.drain();
         let mut restored = false;
         while let Some(due) = lane.next_due(LaneFrame::default(), 1) {
@@ -3174,7 +3186,7 @@ async fn a_cancelled_repeat_reaches_its_original_end(#[case] frames: usize) {
     let [left, right] = &mut pcm;
     mixer.block(frame(64), [left, right]).expect("start block");
     settle_mixer(&mut track, &mut mixer, &mut dispatcher, frame(64));
-    let original = track.segment;
+    let original = track.segment.id;
     with_mixer(&mut mixer, &mut dispatcher, frame(128), |out| {
         track.apply(TrackCommand::PlayAfter { track: A }, out)
     })
@@ -3183,8 +3195,11 @@ async fn a_cancelled_repeat_reaches_its_original_end(#[case] frames: usize) {
         // WHY: The repeat epoch's PCM is produced outside Flash's task count.
         let _real_io = kithara_platform::flash::real_io();
         let deadline = kithara_platform::time::WallInstant::now() + Duration::from_secs(5);
-        while frames == 441 && track.ready != Some(track.segment) {
-            hang_tick!(format!("waiting for repeated segment {:?}", track.segment));
+        while frames == 441 && !track.segment.ready {
+            hang_tick!(format!(
+                "waiting for repeated segment {:?}",
+                track.segment.id
+            ));
             track.settle_lane();
             assert!(
                 kithara_platform::time::WallInstant::now() < deadline,
@@ -3237,7 +3252,7 @@ async fn a_cancelled_repeat_reaches_its_original_end(#[case] frames: usize) {
     }
     assert!(ended, "the original segment publishes Ended");
     assert!(matches!(track.snapshot().status, TrackStatus::Ended { .. }));
-    assert_eq!(track.segment, original);
+    assert_eq!(track.segment.id, original);
     assert!(
         frames == 441 || tail_audible,
         "cancellation retains the original unread tail"
@@ -3255,10 +3270,10 @@ async fn a_cancelled_repeat_reaches_its_original_end(#[case] frames: usize) {
     })
     .expect("a later seek remains admissible");
     assert_eq!(
-        track.segment, next_segment,
+        track.segment.id, next_segment,
         "a cancelled segment's buffered PCM is never adopted by a later seek"
     );
-    assert_ne!(track.segment, original.next());
+    assert_ne!(track.segment.id, original.next());
     drop(driver);
 }
 
@@ -3366,7 +3381,7 @@ async fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
     assert!(commands.is_empty(), "{commands:?}");
     let (mut prepared, mut inbox) = prepared_track();
     let before = prepared.snapshot();
-    let segment = prepared.segment;
+    let segment = prepared.segment.id;
     assert!(matches!(
         in_pass(&mut rig, frame(0), |out| prepared.admit(
             TrackSettingsChange::Speed(2.0),
@@ -3382,12 +3397,13 @@ async fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
         )),
         Err(PlayError::Full("deck"))
     ));
-    assert_eq!(prepared.segment, segment);
+    assert_eq!(prepared.segment.id, segment);
     assert_eq!(prepared.snapshot().position, before.position);
     assert_eq!(prepared.snapshot().status, before.status);
     assert_eq!(prepared.snapshot().speed, before.speed);
-    assert_eq!(prepared.ready, Some(segment));
-    assert!(prepared.adopting.is_empty());
+    assert!(prepared.segment.ready);
+    assert_eq!(prepared.segment.id, segment);
+    assert!(prepared.adoptions.inflight.is_empty());
     assert!(lane_commands(&mut inbox).is_empty());
     assert_eq!(
         in_pass(&mut rig, frame(0), |out| prepared.admit(
@@ -3416,9 +3432,9 @@ async fn a_loaded_track_sends_each_change_to_its_lane() {
         .expect("a valid speed");
 
     assert!(sent.is_some());
-    let segment = track.segment;
+    let segment = track.segment.id;
     assert_ne!(segment, SegmentId::FIRST);
-    assert_eq!(track.ready, None);
+    assert!(!track.segment.ready);
     assert_eq!(track.entry(crate::Bound::AtOrAfter(frame(128))), None);
     inbox.drain();
     let due = inbox
@@ -3445,7 +3461,8 @@ async fn a_loaded_track_sends_each_change_to_its_lane() {
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("live deck scope");
     assert!((track.snapshot().speed - 2.0).abs() < f32::EPSILON);
-    assert_eq!(track.ready, Some(segment));
+    assert!(track.segment.ready);
+    assert_eq!(track.segment.id, segment);
     assert_eq!(track.prepared_speed(), Some(&SpeedCurve::Constant(2.0)));
     for curve in [
         SpeedCurve::Ramp {
@@ -3477,7 +3494,7 @@ async fn a_loaded_track_sends_each_change_to_its_lane() {
             )
         })
         .expect("quiet curve");
-        let segment = track.segment;
+        let segment = track.segment.id;
         inbox.drain();
         let due = inbox
             .next_due(LaneFrame { segment, frame: 0 }, 1)
@@ -3493,7 +3510,7 @@ async fn a_loaded_track_sends_each_change_to_its_lane() {
                 if *id == segment && from.is_zero() && *speed == curve)
             );
         }
-        assert_eq!(track.ready, None);
+        assert!(!track.segment.ready);
         assert_eq!(track.prepared_speed(), Some(&curve));
         assert_eq!(track.snapshot().speed, 1.0);
         due.apply(kithara_render::LaneApplied {
@@ -3598,7 +3615,7 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
             )
             .is_some()
         );
-        let segment = track.segment;
+        let segment = track.segment.id;
         inbox.drain();
         let due = inbox
             .next_due(LaneFrame { segment, frame: 0 }, 1)
@@ -3613,7 +3630,7 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
                 matches!(due.commands(), [LaneCommand::SetSpeed(SpeedCurve::Constant(1.0)), LaneCommand::Segment { id, from, speed }]
                 if *id == segment && from.is_zero() && *speed == curve)
             );
-            assert_eq!(track.ready, None);
+            assert!(!track.segment.ready);
             assert_eq!(track.entry(crate::Bound::AtOrAfter(frame(128))), None);
         }
         assert_eq!(track.snapshot().speed, 1.0);
@@ -3637,7 +3654,7 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
             )
             .is_some()
         );
-        let replacement = track.segment;
+        let replacement = track.segment.id;
         inbox.drain();
         let due = inbox
             .next_due(
@@ -3660,7 +3677,7 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
                 matches!(due.commands(), [LaneCommand::Segment { id, from, speed: SpeedCurve::Constant(speed) }]
                 if *id == replacement && from.is_zero() && *speed == 1.5)
             );
-            assert_eq!(track.ready, None);
+            assert!(!track.segment.ready);
         }
         due.apply(kithara_render::LaneApplied {
             source_basis: None,
@@ -3680,7 +3697,8 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
             None
         );
         if !sounding {
-            assert_eq!(track.ready, Some(replacement));
+            assert!(track.segment.ready);
+            assert_eq!(track.segment.id, replacement);
             assert_eq!(track.prepared_speed(), Some(&SpeedCurve::Constant(1.5)));
             command_at_zero(
                 &mut track,
@@ -3699,7 +3717,7 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
             let due = inbox
                 .next_due(
                     LaneFrame {
-                        segment: track.segment,
+                        segment: track.segment.id,
                         frame: 0,
                     },
                     1,
@@ -3715,7 +3733,7 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
             drop(due);
             track.settle_lane();
             assert_eq!(track.snapshot().speed, 1.5);
-            assert_eq!(track.ready, None);
+            assert!(!track.segment.ready);
             let operations = track
                 .lane_commands
                 .iter()
@@ -3838,9 +3856,9 @@ async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
             .speed
             .is_none()
     );
-    let segment = track.segment;
+    let segment = track.segment.id;
     assert_ne!(segment, SegmentId::FIRST);
-    assert_eq!(track.ready, None);
+    assert!(!track.segment.ready);
     assert_eq!(track.snapshot().speed, 1.25);
     inbox.drain();
     let due = inbox
@@ -3858,7 +3876,8 @@ async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("native speed receipt");
     assert_eq!(track.snapshot().speed, 1.25, "the ramp has only begun");
-    assert_eq!(track.ready, Some(segment));
+    assert!(track.segment.ready);
+    assert_eq!(track.segment.id, segment);
     let attach = track
         .seat
         .attaching()
@@ -3890,9 +3909,9 @@ async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     );
     assert_eq!(track.snapshot().speed, 3.0);
     assert_eq!(track.projected().speed(), 3.0);
-    let latest = track.segment;
+    let latest = track.segment.id;
     assert_eq!(latest, segment.next());
-    assert_eq!(track.ready, None);
+    assert!(!track.segment.ready);
     inbox.drain();
     let due = inbox
         .next_due(
@@ -3922,7 +3941,8 @@ async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("actual newest speed receipt");
     assert_eq!(track.snapshot().speed, 3.0);
-    assert_eq!(track.ready, Some(latest));
+    assert!(track.segment.ready);
+    assert_eq!(track.segment.id, latest);
     assert_eq!(track.prepared_speed(), Some(&SpeedCurve::Constant(3.0)));
 }
 
@@ -4065,7 +4085,7 @@ fn planned_end_uses_the_visible_length_in_the_raw_source_clock(#[case] origin: O
         exact.mark = Some(SlotMark {
             session: frame(1),
             lane: LaneFrame {
-                segment: exact.segment,
+                segment: exact.segment.id,
                 frame: 1,
             },
             position: spec.duration_for(2).expect("interior native mark"),
@@ -4104,13 +4124,13 @@ fn planned_end_uses_the_visible_length_in_the_raw_source_clock(#[case] origin: O
     });
     exact.extent.media_origin = Some(origin);
     exact.extent.duration = source.media_end;
-    exact.segment_speed = 0.25;
+    exact.segment.speed = 0.25;
     exact.status = TrackStatus::Playing { since: frame(0) };
     for at in [0, 1, 7, 15] {
         exact.mark = Some(SlotMark {
             session: frame(i64::try_from(at).expect("session mark")),
             lane: LaneFrame {
-                segment: exact.segment,
+                segment: exact.segment.id,
                 frame: at,
             },
             position: span.position_at(at).expect("fractional consumed phase"),
@@ -4141,7 +4161,7 @@ fn projecting_track() -> (Track, NonZeroU32) {
     track.mark = Some(SlotMark {
         session: frame(0),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 0,
         },
         position: Duration::ZERO,
@@ -4159,7 +4179,7 @@ fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
     track.mark = Some(SlotMark {
         session: frame(103),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 3,
         },
         position: Duration::from_millis(3),
@@ -4172,7 +4192,7 @@ fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
     track.mark.as_mut().expect("observed mark").position = Duration::from_millis(4);
     assert!(matches!(track.planned_end(rate), Err(PlayError::Untimed)));
     track.mark.as_mut().expect("observed mark").position = Duration::from_millis(3);
-    track.segment_speed = 2.0;
+    track.segment.speed = 2.0;
     track.observed_source = Some(AudioChunkInfo {
         frames: 16,
         source_span: Some(
@@ -4198,7 +4218,7 @@ fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
         .send_lane(
             LaneCommand::SetSpeed(SpeedCurve::Constant(0.5)),
             When::At(LaneFrame {
-                segment: track.segment,
+                segment: track.segment.id,
                 frame: 5,
             }),
         )
@@ -4265,7 +4285,7 @@ fn planned_end_follows_the_new_source_law(#[case] owner: u8) {
     track.mark = Some(SlotMark {
         session: frame(3),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 3,
         },
         position: Duration::from_millis(5),
@@ -4291,7 +4311,7 @@ fn planned_end_uses_the_current_mark_after_the_source_endpoint(#[case] initially
         track.mark = Some(SlotMark {
             session: frame(100 + i64::try_from(at).expect("session frame")),
             lane: LaneFrame {
-                segment: track.segment,
+                segment: track.segment.id,
                 frame: at,
             },
             position: Duration::from_millis(at),
@@ -4314,7 +4334,7 @@ fn planned_end_projects_again_after_a_backward_jump_past_the_first_endpoint() {
                 to: Duration::from_millis(2),
             },
             When::At(LaneFrame {
-                segment: track.segment,
+                segment: track.segment.id,
                 frame: 12,
             }),
         )
@@ -4335,7 +4355,7 @@ fn planned_end_projects_again_after_a_backward_jump_past_the_first_endpoint() {
         track.mark = Some(SlotMark {
             session: frame(100 + i64::try_from(at).expect("session frame")),
             lane: LaneFrame {
-                segment: track.segment,
+                segment: track.segment.id,
                 frame: at,
             },
             position: Duration::from_millis(at - 10),
@@ -4398,7 +4418,7 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
         .find(|operation| operation.seq == seq)
         .expect("accepted Jump");
     operation.when = When::At(LaneFrame {
-        segment: track.segment,
+        segment: track.segment.id,
         frame: 40_000,
     });
     assert_eq!(
@@ -4445,11 +4465,11 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
             ..basis
         });
         exact.status = TrackStatus::Playing { since: frame(0) };
-        exact.segment_speed = 0.25;
+        exact.segment.speed = 0.25;
         exact.mark = Some(SlotMark {
             session: frame(0),
             lane: LaneFrame {
-                segment: exact.segment,
+                segment: exact.segment.id,
                 frame: 0,
             },
             position: basis.timestamp,
@@ -4462,7 +4482,7 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
                     to: Duration::from_nanos(target),
                 },
                 When::At(LaneFrame {
-                    segment: exact.segment,
+                    segment: exact.segment.id,
                     frame: 1,
                 }),
             )

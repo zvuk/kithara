@@ -1,11 +1,11 @@
 mod admission;
-mod clock;
 mod core;
-mod gain;
+mod deck;
 mod geometry;
 mod load;
 mod player;
 mod seat;
+mod segment;
 mod settle;
 mod state;
 mod transport;

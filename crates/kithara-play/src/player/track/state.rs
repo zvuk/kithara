@@ -212,14 +212,6 @@ pub(super) struct Loading {
     pub(super) speed: Option<(SpeedCurve, f32)>,
 }
 
-pub(super) struct Adoption {
-    pub(super) seq: Seq,
-    pub(super) caller: Seq,
-    pub(super) segment: SegmentId,
-    pub(super) parked: Option<(SegmentId, Position)>,
-    pub(super) cancelled: bool,
-}
-
 pub(super) struct LaneOperation {
     pub(super) seq: Seq,
     pub(super) when: When<LaneFrame>,
