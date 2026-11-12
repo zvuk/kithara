@@ -1,6 +1,7 @@
 use bungee_sys::Request;
 use kithara_bufpool::HasPool;
 use kithara_signal::PlanarBuffer;
+use num_traits::ToPrimitive;
 
 use super::{
     buffer::{InputBuffer, planar_buffer},
@@ -89,6 +90,26 @@ impl StreamCore {
         }
         self.source_latency_frames = frames;
         Ok(())
+    }
+
+    /// Source frames the native stretcher advances between adjacent grains at
+    /// unity speed and pitch.
+    pub(super) fn unit_hop_frames(&mut self) -> Result<usize, ElasticError> {
+        let mut request = Request {
+            position: 0.0,
+            speed: 1.0,
+            pitch: 1.0,
+            reset: 0,
+        };
+        self.native.next(&mut request);
+        request
+            .position
+            .ceil()
+            .to_usize()
+            .filter(|frames| *frames > 0)
+            .ok_or(ElasticError::EnginePreparation(
+                "Bungee reported an invalid grain hop",
+            ))
     }
 
     pub(super) fn source_latency_frames(&self) -> Result<usize, ElasticError> {
