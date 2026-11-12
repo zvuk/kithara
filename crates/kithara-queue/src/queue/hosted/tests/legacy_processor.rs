@@ -199,13 +199,15 @@ impl ThresholdRig {
                 .position_at(u64::from(source.frames))
                 .expect("physical source endpoint");
             let declared = Some(Duration::from_secs_f64(duration));
-            let (opened, mut packets) = crate::mock::opened_with_source(
-                loaded.opened,
+            let (declared_load, mut packets) = crate::mock::synthetic_loaded(
+                seq,
+                loaded.opened.pcm.src(),
                 AudioChunkInfo {
                     media_end: declared,
                     ..source
                 },
             );
+            let opened = declared_load.opened;
             assert_eq!(
                 opened
                     .pcm
@@ -827,20 +829,15 @@ async fn answer_duration(
     dir: &TestTempDir,
     duration: f64,
 ) -> kithara_render::mock::PacketRing {
-    let mut loaded = loaded_fixture(queue.worker().expect("fixture worker"), rig, dir).await;
-    let source = loaded
-        .opened
-        .pcm
-        .next_chunk_info()
-        .expect("prepared fixture source");
-    let (opened, packets) = crate::mock::opened_with_source(
-        loaded.opened,
+    let (mut loaded, packets) = crate::mock::synthetic_loaded(
+        crate::mock::selected_load_seq(queue),
+        &fixture_uri(dir.path(), "entry.wav"),
         AudioChunkInfo {
             media_end: Some(Duration::from_secs_f64(duration)),
-            ..source
+            ..crate::mock::fixture_chunk()
         },
     );
-    loaded.opened = opened;
+    loaded.opened.metadata.title = Some("Loaded fixture".to_owned());
     let receipt = rig.open(Ok(loaded)).expect("duration load receipt");
     with_outbox(queue, rig, |queue, out| {
         Player::settle(queue, TrackReceipt::Loaded(receipt), out)
@@ -984,12 +981,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         .and_then(|active| active.load)
         .expect("leading load")
         .seq();
-    let leading = loaded_request(
-        queue.worker().expect("fixture worker"),
-        &mut rig,
-        leading_load,
-    )
-    .await;
+    let leading = loaded_request(&queue, &mut rig, leading_load, FixtureSource::Decoded).await;
     rig.opens
         .resume(leading_load, (), ())
         .expect("leading dispatcher command")
@@ -1047,12 +1039,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         .and_then(|active| active.load)
         .expect("successor load")
         .seq();
-    let successor = loaded_request(
-        queue.worker().expect("fixture worker"),
-        &mut rig,
-        successor_load,
-    )
-    .await;
+    let successor = loaded_request(&queue, &mut rig, successor_load, FixtureSource::Decoded).await;
     rig.opens
         .resume(successor_load, (), ())
         .expect("successor dispatcher command")

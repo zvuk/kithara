@@ -21,7 +21,9 @@ use kithara_worker::{
 
 use super::{
     DecoderNode, PcmReceiver, PlayWorkerConfig, TrackConfig,
+    reader::PcmLead,
     scheduler::{PlaybackObserver, StreamWake},
+    track::pcm_quantum,
 };
 use crate::{
     LaneProtocol, ServiceClass, WarpSource,
@@ -243,7 +245,7 @@ where
                 ..AudioChunkInfo::default()
             };
             let (receiver, port) = PcmReceiver::new(
-                audio_buffer_chunks,
+                PcmLead::new(audio_buffer_chunks, pcm_quantum(&warp)),
                 block_on_underrun,
                 wake,
                 &audio,

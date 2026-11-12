@@ -213,7 +213,6 @@ impl LaneState {
                     .set_speed(curve.clone(), revision)
                     .map_err(|_| TrackFailureKind::Render)?,
                 LaneCommand::SetKeylock(on) => warp.set_keylock(*on),
-                LaneCommand::SetBackend(kind) => warp.set_backend(*kind),
                 LaneCommand::Jump { to } => {
                     let gain = self.jump.map_or(1.0, |jump| jump.gain(self.cursor.frame));
                     self.jump = Some(Jump::Down {

@@ -489,6 +489,55 @@ fn bench_stretch_backends(c: &mut Criterion) {
     group.finish();
 }
 
+/// Renders every source window `pcm` covers through prepared quanta, the way
+/// the render lane does, and returns the source frame after the last window.
+fn render_windows(
+    renderer: &mut WarpRenderer<TestPools>,
+    pools: &Pools,
+    spec: AudioSpec,
+    pcm: &[f32],
+) -> u64 {
+    let total = pcm.len() / consts::CHANNELS;
+    let mut source = 0;
+    loop {
+        let start = usize::try_from(source).expect("source frame fits usize");
+        if start == total {
+            return source;
+        }
+        renderer.prepare(spec);
+        renderer
+            .prepare_engine_latency(spec)
+            .expect("renderer service");
+        let meta = AudioChunkInfo {
+            spec,
+            frame_offset: source,
+            ..AudioChunkInfo::default()
+        };
+        let frames = renderer
+            .prepare_source_window(meta, total - start, usize::MAX)
+            .expect("source window")
+            .get();
+        if start + frames > total {
+            return source;
+        }
+        let mut input = make_chunk(
+            pools,
+            &pcm[start * consts::CHANNELS..(start + frames) * consts::CHANNELS],
+        );
+        input.meta = AudioChunkInfo {
+            frames: u32::try_from(frames).expect("window size"),
+            ..meta
+        };
+        black_box(
+            renderer
+                .render_quantum(input)
+                .continue_value()
+                .expect("prepared quantum"),
+        );
+        source += u64::try_from(frames).expect("source advance");
+    }
+}
+
 fn bench_stretch_process(c: &mut Criterion) {
     let pcm = make_pcm(consts::STRETCH_FRAMES);
     let pools = pools();
@@ -518,7 +567,25 @@ fn bench_stretch_process(c: &mut Criterion) {
                     (renderer, chunk)
                 },
                 |(mut renderer, chunk): (WarpRenderer<TestPools>, AudioChunk)| {
-                    black_box(renderer.render(chunk))
+                    let source = render_windows(&mut renderer, &pools, spec, &chunk.samples);
+                    let start = usize::try_from(source).expect("source frame fits usize");
+                    let held = chunk.frames() - start;
+                    if held > 0 {
+                        let frames = renderer
+                            .prepare_terminal_quantum(held)
+                            .expect("terminal quantum")
+                            .get();
+                        let mut input =
+                            make_chunk(&pools, &chunk.samples[start * consts::CHANNELS..]);
+                        input.meta.frame_offset = source;
+                        input.meta.frames = u32::try_from(frames).expect("window size");
+                        black_box(
+                            renderer
+                                .render_quantum(input)
+                                .continue_value()
+                                .expect("terminal input"),
+                        );
+                    }
                 },
                 BatchSize::SmallInput,
             );
@@ -711,12 +778,7 @@ fn bench_warp_transition(c: &mut Criterion) {
                         .build(),
                 )
                 .renderer(spec, pools.clone());
-                black_box(
-                    replacement
-                        .render(make_chunk(&pools, &pcm[..8192]))
-                        .continue_value()
-                        .expect("unprepared source"),
-                );
+                let resumed = render_windows(&mut replacement, &pools, spec, &pcm[..16_384]);
                 replacement.prepare(spec);
                 replacement.set_keylock(false);
                 replacement
@@ -725,10 +787,26 @@ fn bench_warp_transition(c: &mut Criterion) {
                 replacement
                     .prepare_engine_latency(spec)
                     .expect("replacement service");
-                let mut input = make_chunk(&pools, &pcm[8192..8320]);
-                input.meta.frame_offset = 4096;
+                let meta = AudioChunkInfo {
+                    spec,
+                    frame_offset: resumed,
+                    ..AudioChunkInfo::default()
+                };
+                let frames = replacement
+                    .prepare_source_window(meta, 128, 128)
+                    .expect("replacement window")
+                    .get();
+                let start = usize::try_from(resumed).expect("source frame fits usize");
+                let mut input = make_chunk(
+                    &pools,
+                    &pcm[start * consts::CHANNELS..(start + frames) * consts::CHANNELS],
+                );
+                input.meta = AudioChunkInfo {
+                    frames: u32::try_from(frames).expect("window size"),
+                    ..meta
+                };
                 let output = replacement
-                    .render(input)
+                    .render_quantum(input)
                     .continue_value()
                     .expect("replacement input")
                     .expect("replacement output");

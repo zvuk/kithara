@@ -440,6 +440,8 @@ futures-lite = "2"
 getrandom = "0.4.3"
 glob = "0.3"
 gloo-timers = { version = "0.4", features = ["futures"] }
+# The package graph `nextest-filtering` parses a filterset against.
+guppy = "0.19.1"
 
 # hex encoding
 hex = "0.4"
@@ -481,6 +483,9 @@ memory-stats = "1.2"
 mmap-io = { version = "1.0", default-features = false }
 naga = { version = "27", features = ["wgsl-in", "termcolor"] }
 ndk-context = "0.1.1"
+# The filterset parser of the pinned `cargo-nextest` (`.config/ci-pins.toml`),
+# so a filterset is rejected exactly when the runner would reject it.
+nextest-filtering = "=0.23.0"
 nix = { version = "0.31", features = ["poll", "resource", "signal"] }
 num-traits = { version = "0.2", default-features = false }
 obfstr = "0.4.6"

@@ -23,45 +23,51 @@ export class HostDevice {
       `import * as bindgen from ${JSON.stringify(root)};\n`, script,
     ], { type: "text/javascript" }));
     try {
-      await navigator.locks.request("wasm_safe_thread:bootstrap", () => this.context.audioWorklet.addModule(url));
+      await navigator.locks.request("wasm_safe_thread:bootstrap", async () => {
+        await this.context.audioWorklet.addModule(url);
+        if (this.closed) return;
+        await new Promise((resolve, reject) => {
+          this.node = new AudioWorkletNode(this.context, "KitharaOutput", {
+            numberOfInputs: 0, numberOfOutputs: 1,
+            channelCount: channels, outputChannelCount: [channels],
+            processorOptions: [module, memory],
+          });
+          this.node.onprocessorerror = (event) => { reject(event); this.fail(event.message); };
+          this.node.port.onmessage = ({ data }) => {
+            switch (data.kind) {
+              case "ready":
+                resolve();
+                this.booted = true;
+                if (this.closed) this.node.port.postMessage({ kind: "stop" });
+                else this.transfer();
+                break;
+              case "installed":
+                if (this.closed) { this.node.port.postMessage({ kind: "stop" }); break; }
+                try {
+                  this.node.connect(this.context.destination);
+                  this.connected = true;
+                  this.enableResume();
+                } catch (error) { this.fail(error); }
+                break;
+              case "error": reject(new Error(data.message)); this.fail(data.message); break;
+              case "stopped":
+                reject(new Error("output stopped before bootstrap completed"));
+                this.sent = false;
+                this.connected = false;
+                this.closed = true;
+                this.removeListeners();
+                this.node.disconnect();
+                this.node.port.close();
+                this.closeContext();
+                break;
+              default: reject(new Error("invalid output worklet message")); this.fail("invalid output worklet message");
+            }
+          };
+        });
+      });
     } finally {
       URL.revokeObjectURL(url);
     }
-    if (this.closed) return;
-    this.node = new AudioWorkletNode(this.context, "KitharaOutput", {
-      numberOfInputs: 0, numberOfOutputs: 1,
-      channelCount: channels, outputChannelCount: [channels],
-      processorOptions: [module, memory],
-    });
-    this.node.onprocessorerror = (event) => this.fail(event.message);
-    this.node.port.onmessage = ({ data }) => {
-      switch (data.kind) {
-        case "ready":
-          this.booted = true;
-          if (this.closed) this.node.port.postMessage({ kind: "stop" });
-          else this.transfer();
-          break;
-        case "installed":
-          if (this.closed) { this.node.port.postMessage({ kind: "stop" }); break; }
-          try {
-            this.node.connect(this.context.destination);
-            this.connected = true;
-            this.enableResume();
-          } catch (error) { this.fail(error); }
-          break;
-        case "error": this.fail(data.message); break;
-        case "stopped":
-          this.sent = false;
-          this.connected = false;
-          this.closed = true;
-          this.removeListeners();
-          this.node.disconnect();
-          this.node.port.close();
-          this.closeContext();
-          break;
-        default: this.fail("invalid output worklet message");
-      }
-    };
   }
 
   install(owner) {

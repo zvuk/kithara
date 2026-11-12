@@ -1,4 +1,4 @@
-use std::{fmt, num::NonZeroUsize};
+use std::fmt;
 
 use kithara_abr::AbrHandle;
 use kithara_audio::{Audio, AudioEvent, AudioSession};
@@ -17,11 +17,12 @@ use ringbuf::{
 };
 use triple_buffer::{Input, Output, triple_buffer};
 
-use super::{super::scheduler::StreamWake, packet::PcmPacket};
+use super::{super::scheduler::StreamWake, lead::PcmLead, packet::PcmPacket};
 
 pub(in crate::worker) struct PcmProducer {
     pub(in crate::worker) forward: HeapProd<PcmPacket>,
     pub(in crate::worker) reverse: HeapCons<PcmPacket>,
+    pub(in crate::worker) lead: PcmLead,
     pub(in crate::worker) playing: Output<bool>,
     pub(super) ready: FinalWake,
     pub(in crate::worker) events: EventBus,
@@ -39,6 +40,31 @@ impl Drop for FinalWake {
 }
 
 impl PcmProducer {
+    /// Admit one packet into the lead, or hand it back while the lead or the
+    /// ring is full.
+    pub(in crate::worker) fn push(&mut self, packet: PcmPacket) -> Result<(), PcmPacket> {
+        let frames = packet.lead_frames();
+        let queued = self.forward.occupied_len();
+        if !self.lead.admits(frames, queued) {
+            return Err(packet);
+        }
+        self.forward.try_push(packet)?;
+        self.lead.add(frames, queued);
+        Ok(())
+    }
+
+    /// Take back one packet the reader returned.
+    pub(in crate::worker) fn reclaim(&mut self) -> Option<PcmPacket> {
+        let packet = self.reverse.try_pop()?;
+        self.lead.count_return();
+        Some(packet)
+    }
+
+    /// A whole quantum no longer fits the lead.
+    pub(in crate::worker) fn is_full(&self) -> bool {
+        self.forward.is_full() || !self.lead.admits_quantum(self.forward.occupied_len())
+    }
+
     pub(in crate::worker) fn signal(&mut self) {
         self.output_pending = true;
         if let Some(ready) = &self.ready.0 {
@@ -69,17 +95,17 @@ pub struct PcmReceiver {
 }
 
 impl PcmReceiver {
-    /// The reverse ring fits forward capacity, the reader-held packet, and one
+    /// The reverse ring fits the forward slots, the reader-held packet, and one
     /// worker push between recycles, so returning an in-flight packet never fails.
     pub(in crate::worker) fn new<T>(
-        capacity: NonZeroUsize,
+        lead: PcmLead,
         block_on_underrun: bool,
         wake: StreamWake,
         audio: &Audio<T>,
         position: Duration,
     ) -> (Self, PcmProducer) {
-        let (forward_tx, forward_rx) = HeapRb::new(capacity.get()).split();
-        let (reverse_tx, reverse_rx) = HeapRb::new(capacity.get() + 2).split();
+        let (forward_tx, forward_rx) = HeapRb::new(lead.slots()).split();
+        let (reverse_tx, reverse_rx) = HeapRb::new(lead.slots() + 2).split();
         let (playing_tx, playing_rx) = triple_buffer(&false);
         let ready = block_on_underrun.then(|| Arc::new(ThreadGate::default()));
         (
@@ -99,6 +125,7 @@ impl PcmReceiver {
             PcmProducer {
                 forward: forward_tx,
                 reverse: reverse_rx,
+                lead,
                 playing: playing_rx,
                 ready: FinalWake(ready),
                 events: AudioSession::event_bus(audio).clone(),

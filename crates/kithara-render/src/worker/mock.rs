@@ -3,10 +3,13 @@ use std::num::NonZeroU32;
 use kithara_events::{EventReceiver, EventSet};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
-use ringbuf::traits::{Consumer, Producer};
+use ringbuf::traits::Consumer;
 
 use super::{
-    PcmPacket, PcmReceiver, packet_mock::PacketRing, reader::PcmProducer, scheduler::StreamWake,
+    PcmPacket, PcmReceiver,
+    packet_mock::PacketRing,
+    reader::{PcmLead, PcmProducer},
+    scheduler::StreamWake,
 };
 use crate::test_pools::{pools, sample_buffer};
 
@@ -42,9 +45,21 @@ impl PcmFixture {
         }
     }
 
+    /// A ring whose producer bounds its lead in render quanta, like a loaded lane.
+    pub(in crate::worker) fn framed(lead: PcmLead) -> Self {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let (receiver, producer) =
+            PacketRing::framed(spec, lead, StreamWake::new(kithara_worker::Wake::default()))
+                .into_ends();
+        Self {
+            receiver: Some(receiver),
+            producer: Some(producer),
+        }
+    }
+
     pub(crate) fn push(&mut self, packet: PcmPacket) -> Result<(), PcmPacket> {
         let producer = self.producer.as_mut().expect("live producer");
-        producer.forward.try_push(packet)?;
+        producer.push(packet)?;
         producer.signal();
         Ok(())
     }

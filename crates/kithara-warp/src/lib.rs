@@ -4,7 +4,6 @@
 
 mod beat_grid;
 mod coordinate;
-mod region;
 #[cfg(feature = "render")]
 mod render;
 mod segment;
@@ -27,7 +26,6 @@ pub use coordinate::{
 pub(crate) use kithara_signal::{SessionEpoch, SessionFrame};
 #[cfg(feature = "render")]
 pub use kithara_stretch::{BackendCapabilities as WarpCapabilities, StretchKind};
-pub use region::{ActiveRegion, GridSegment, RegionPlan, RegionPlanError};
 #[cfg(feature = "render")]
 pub use render::{SourceTrajectory, WarpRenderError, WarpRenderer};
 pub use segment::{

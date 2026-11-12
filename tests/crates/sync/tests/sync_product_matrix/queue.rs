@@ -816,8 +816,8 @@ impl QueueMusic {
             .render_quantum_frames(NonZeroUsize::new(BLOCK).expect("one observed Warp quantum"))
             .build();
         assert!(
-            warp.region_plan().is_none() && warp.source_block_frames().get() == SOURCE_BLOCK,
-            "UNSUPPORTED_ORACLE_WITNESS: capture requires the fixed Warp geometry without a region plan"
+            warp.source_block_frames().get() == SOURCE_BLOCK,
+            "UNSUPPORTED_ORACLE_WITNESS: capture requires the fixed Warp geometry"
         );
         let queue = Queue::new(
             QueueConfig::with_factory(LinkedFactory::new(

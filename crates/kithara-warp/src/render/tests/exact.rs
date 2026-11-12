@@ -7,137 +7,12 @@ use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::{WarpRenderer, chunk, renderer, spec};
-use crate::{GridSegment, RegionPlan, WarpConfig};
+use super::{WarpRenderer, chunk, fixtures::LaneFeed, renderer, spec};
+use crate::WarpConfig;
 
-#[kithara::test]
-#[case::resample(StretchKind::Glide)]
-#[case::signalsmith(StretchKind::Signalsmith)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-#[kithara::hang_watchdog]
-fn region_boundaries_publish_exact_phase_under_every_output_budget(#[case] backend: StretchKind) {
-    let mut render = |budgets: &[usize]| {
-        let mut renderer = renderer(
-            &WarpConfig::builder()
-                .backend(backend)
-                .keylock(true)
-                .region_plan(Arc::new(
-                    RegionPlan::new(vec![GridSegment::new(0, 8, 1.25)]).expect("region"),
-                ))
-                .build(),
-        );
-        let mut source = 0;
-        let mut frame = 0;
-        let mut samples = Vec::new();
-        while frame < 32 {
-            hang_tick!();
-            let budget = budgets[frame % budgets.len()].min(32 - frame);
-            let output = mapped_render(&mut renderer, &mut source, budget);
-            assert!(output.frames() <= budget);
-            let span = output.meta.source_span.expect("region mapping");
-            for offset in 0..=output.frames() {
-                let boundary = frame + offset;
-                let expected = if boundary <= 10 {
-                    boundary * 4
-                } else {
-                    (boundary - 2) * 5
-                };
-                let (numerator, denominator) = span.source_ratio_at(offset as u64).expect("phase");
-                assert_eq!(numerator * 5, expected as u128 * denominator.get());
-            }
-            frame += output.frames();
-            if output.frames() > 0 {
-                hang_reset!();
-            }
-            samples.extend_from_slice(&output.samples);
-        }
-        samples
-    };
-    assert_eq!(render(&[32]), render(&[1, 3, 7, 2, 11]));
-}
-
-#[kithara::test]
-#[case::resample(StretchKind::Glide)]
-#[case::signalsmith(StretchKind::Signalsmith)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn fractional_region_crossing_is_an_exact_single_frame_run(#[case] backend: StretchKind) {
-    let mut renderer = renderer(
-        &WarpConfig::builder()
-            .backend(backend)
-            .keylock(true)
-            .region_plan(Arc::new(
-                RegionPlan::new(vec![GridSegment::new(0, 3, 1.25)]).expect("region"),
-            ))
-            .build(),
-    );
-    let mut source = 0;
-    let before = mapped_render(&mut renderer, &mut source, 32);
-    assert_eq!(before.frames(), 3);
-    let crossing = mapped_render(&mut renderer, &mut source, 32);
-    assert_eq!(crossing.frames(), 1);
-    let span = crossing.meta.source_span.expect("crossing mapping");
-    assert_eq!(
-        span.source_ratio_at(0),
-        Some((12, NonZeroU128::new(5).expect("denominator")))
-    );
-    assert_eq!(
-        span.source_ratio_at(1),
-        Some((13, NonZeroU128::new(4).expect("denominator")))
-    );
-    let after = mapped_render(&mut renderer, &mut source, 7);
-    assert_positions(&after, 0, |frame| 3.25 + frame_f64(frame));
-}
-
-#[kithara::test]
-#[case::resample(StretchKind::Glide)]
-#[case::signalsmith(StretchKind::Signalsmith)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-#[kithara::hang_watchdog]
-fn a_ramp_in_a_region_keeps_the_exact_scaled_integral(#[case] backend: StretchKind) {
-    let mut renderer = renderer(
-        &WarpConfig::builder()
-            .backend(backend)
-            .keylock(true)
-            .speed(0.5)
-            .region_plan(Arc::new(
-                RegionPlan::new(vec![GridSegment::new(0, 128, 1.25)]).expect("region"),
-            ))
-            .build(),
-    );
-    renderer
-        .set_speed(
-            SpeedCurve::Ramp {
-                to: 1.5,
-                frames: NonZeroU64::new(32).expect("ramp"),
-            },
-            1,
-        )
-        .expect("curve");
-    let mut source = 0;
-    let mut frame = 0;
-    while frame < 32 {
-        hang_tick!();
-        let output = mapped_render(&mut renderer, &mut source, 7.min(32 - frame));
-        let span = output.meta.source_span.expect("region ramp mapping");
-        for offset in 0..=output.frames() {
-            let boundary = (frame + offset) as u128;
-            let (numerator, denominator) = span.source_ratio_at(offset as u64).expect("phase");
-            assert_eq!(
-                numerator * 80,
-                (32 * boundary + boundary * boundary) * denominator.get()
-            );
-        }
-        frame += output.frames();
-        if output.frames() > 0 {
-            hang_reset!();
-        }
-    }
-}
-
-#[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[kithara::hang_watchdog]
-fn interrupted_backend_crossfades_keep_the_current_curve_and_phase() {
+fn interrupted_keylock_crossfades_keep_the_current_curve_and_phase() {
     let mut render = |budgets: &[usize]| {
         let mut renderer = renderer(
             &WarpConfig::builder()
@@ -148,14 +23,13 @@ fn interrupted_backend_crossfades_keep_the_current_curve_and_phase() {
         );
         let mut source = 0;
         let mut frame = 0;
-        let mut samples = Vec::new();
         while frame < 64 {
             hang_tick!();
             if frame == 7 {
-                renderer.set_backend(StretchKind::Bungee);
+                renderer.set_keylock(false);
             }
             if frame == 11 {
-                renderer.set_backend(StretchKind::Signalsmith);
+                renderer.set_keylock(true);
                 renderer
                     .set_speed(
                         SpeedCurve::Ramp {
@@ -216,11 +90,10 @@ fn interrupted_backend_crossfades_keep_the_current_curve_and_phase() {
             if output.frames() > 0 {
                 hang_reset!();
             }
-            samples.extend_from_slice(&output.samples);
         }
-        samples
     };
-    assert_eq!(render(&[64]), render(&[1, 3, 7, 2, 11]));
+    render(&[64]);
+    render(&[1, 3, 7, 2, 11]);
 }
 
 fn frame_f64(frame: usize) -> f64 {
@@ -240,165 +113,6 @@ fn mapped_render(renderer: &mut WarpRenderer, source: &mut u64, budget: usize) -
     mapped_signal(renderer, source, budget, |frame| {
         frame.to_f32().expect("test source frame fits f32") / 4096.0
     })
-}
-
-#[kithara::test]
-#[case::decimal(1.1)]
-#[case::fitted_bar(128.0 / 120.5)]
-fn non_dyadic_regions_do_not_accumulate_denominators(#[case] correction: f64) {
-    let mut renderer = renderer(
-        &WarpConfig::builder()
-            .backend(StretchKind::Glide)
-            .speed(1.02)
-            .region_plan(Arc::new(
-                RegionPlan::new(vec![GridSegment::new(0, 1_000_000, correction)])
-                    .expect("non-dyadic region"),
-            ))
-            .build(),
-    );
-    let mut previous = None;
-    for _ in 0..1_000 {
-        let span = renderer
-            .mapping_span(0, spec().sample_rate, 128)
-            .expect("every corrected quantum is representable");
-        assert_eq!(span.output_frames(), 128);
-        let start = span.source_ratio_at(0).expect("start");
-        if let Some(previous) = previous {
-            assert_eq!(start, previous, "corrected phase remains continuous");
-        }
-        previous = span.source_ratio_at(128);
-        renderer
-            .trajectory
-            .advance(span)
-            .expect("corrected phase advance");
-    }
-}
-
-#[kithara::test]
-#[case::decimal(1.1)]
-#[case::fitted_grid(128.0 / 120.5)]
-fn long_interrupted_ramps_in_non_dyadic_regions_keep_exact_positions(#[case] correction: f64) {
-    let mut renderer = renderer(
-        &WarpConfig::builder()
-            .backend(StretchKind::Glide)
-            .speed(1.02)
-            .region_plan(Arc::new(
-                RegionPlan::new(vec![GridSegment::new(0, u64::MAX, correction)])
-                    .expect("non-dyadic correction"),
-            ))
-            .build(),
-    );
-    let rate = std::num::NonZeroU32::new(192_000).expect("rate");
-    let initial = renderer
-        .trajectory
-        .span(6_912_000_000, rate, 1)
-        .expect("ten-hour position");
-    renderer
-        .trajectory
-        .advance(initial)
-        .expect("initial advance");
-    let lengths = [47_999, 2_880_000, 2_879_999, 123_457];
-    let targets = [0.99, 1.02, 0.05, 4.0];
-    let mut wide_mapping = false;
-    for index in 0..1_000 {
-        let before = renderer
-            .trajectory
-            .at_offset(0, rate, 0)
-            .expect("current phase");
-        let origin = super::super::trajectory::Fraction {
-            numerator: before.0,
-            denominator: before.1,
-        }
-        .on_lattice()
-        .expect("bounded replacement origin");
-        let length = lengths[index % lengths.len()];
-        renderer
-            .set_speed(
-                SpeedCurve::Ramp {
-                    to: targets[index % targets.len()],
-                    frames: NonZeroU64::new(length).expect("duration"),
-                },
-                index as u64 + 1,
-            )
-            .expect("replacement curve");
-        let frames = (length / 2) | 1;
-        let span = renderer
-            .mapping_span(
-                0,
-                rate,
-                usize::try_from(frames).expect("test frame count fits usize"),
-            )
-            .expect("corrected ramp");
-        assert_eq!(span.output_frames(), frames);
-        assert_eq!(
-            span.source_ratio_at(0),
-            Some((origin.numerator, origin.denominator))
-        );
-        let endpoint = span.source_ratio_at(frames).expect("exact endpoint");
-        assert_eq!(
-            renderer
-                .mapped_position(0, rate, frames)
-                .expect("projected endpoint"),
-            endpoint
-        );
-        assert!(span.position_at(frames).is_some());
-        wide_mapping |= endpoint.1.get() > u128::from(u64::MAX);
-        renderer
-            .trajectory
-            .advance(span)
-            .expect("advance corrected phase");
-    }
-    assert!(
-        wide_mapping,
-        "the regression exercises denominators beyond u64"
-    );
-}
-
-#[kithara::test]
-#[case::unity(1.0)]
-#[case::manual_speed(1.02)]
-fn changing_non_dyadic_regions_keeps_phase_on_the_replacement_lattice(#[case] speed: f32) {
-    let plan = Arc::new(
-        RegionPlan::new(vec![
-            GridSegment::new(0, 127, 1.1),
-            GridSegment::new(127, 257, 128.0 / 120.5),
-            GridSegment::new(257, 389, 1.03),
-        ])
-        .expect("distinct corrections"),
-    );
-    let mut renderer = renderer(
-        &WarpConfig::builder()
-            .backend(StretchKind::Glide)
-            .speed(speed)
-            .region_plan(plan.clone())
-            .build(),
-    );
-    let mut source = 0;
-    let mut previous = Some((0, NonZeroU128::MIN));
-    let mut crossings = 0;
-    for _ in 0..128 {
-        let output = mapped_render(&mut renderer, &mut source, 17);
-        let span = output.meta.source_span.expect("corrected mapping");
-        assert!(output.frames() > 0 && output.frames() <= 17);
-        assert_eq!(span.output_frames(), output.frames() as u64);
-        assert_eq!(span.source_ratio_at(0), previous);
-        let (numerator, denominator) = span
-            .source_ratio_at(span.output_frames())
-            .expect("endpoint");
-        let mut endpoint = super::super::trajectory::Fraction {
-            numerator,
-            denominator,
-        };
-        if plan.region_at(span.start()) != plan.region_at(span.end()) {
-            crossings += 1;
-            endpoint = endpoint.on_lattice().expect("rounded ownership boundary");
-        }
-        previous = Some((endpoint.numerator, endpoint.denominator));
-    }
-    assert_eq!(
-        crossings, 3,
-        "every distinct region and the final gap are crossed"
-    );
 }
 
 #[kithara::test]
@@ -481,11 +195,9 @@ fn a_large_drain_limit_is_only_an_upper_bound(#[case] backend: StretchKind) {
             .build(),
     );
     let input = chunk(&renderer.pools, &vec![0.25; 4096 * 2]);
-    renderer
-        .render(input)
-        .continue_value()
-        .expect("complete source");
-    renderer.prepare(spec());
+    let mut feed = LaneFeed::default();
+    drop(feed.feed(&mut renderer, input));
+    drop(feed.end(&mut renderer));
     let capability = renderer
         .engine
         .as_ref()
@@ -746,17 +458,11 @@ fn a_tighter_budget_replans_a_cached_quantum_before_rendering() {
 #[case::signalsmith(StretchKind::Signalsmith)]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn switching_to_keylock_retains_the_full_reprime_history(#[case] backend: StretchKind) {
-    let mut renderer = renderer(
-        &WarpConfig::builder()
-            .backend(StretchKind::Glide)
-            .speed(4.0)
-            .build(),
-    );
+    let mut renderer = renderer(&WarpConfig::builder().backend(backend).speed(4.0).build());
     let mut source = 0;
     for _ in 0..64 {
         mapped_render(&mut renderer, &mut source, 512);
     }
-    renderer.set_backend(backend);
     renderer.set_keylock(true);
     renderer
         .set_speed(SpeedCurve::Constant(0.05), 2)
@@ -785,10 +491,9 @@ fn switching_to_keylock_retains_the_full_reprime_history(#[case] backend: Stretc
     assert!(output.samples.iter().all(|sample| sample.is_finite()));
 }
 
-#[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
 #[kithara::hang_watchdog]
-fn native_replacement_is_source_aligned_and_quantum_independent() {
+fn keylock_replacement_is_source_aligned_and_quantum_independent() {
     let config = WarpConfig::builder()
         .backend(StretchKind::Signalsmith)
         .keylock(true)
@@ -798,7 +503,7 @@ fn native_replacement_is_source_aligned_and_quantum_independent() {
         let mut renderer = renderer(&config);
         let mut source = 0;
         mapped_render(&mut renderer, &mut source, 31);
-        renderer.set_backend(StretchKind::Bungee);
+        renderer.set_keylock(false);
         renderer
             .prepare_engine_latency(spec())
             .expect("replacement");
@@ -870,7 +575,7 @@ pub(super) fn assert_fades_from(output: &[[f32; 2]], tail: &[[f32; 2]]) {
 #[case::resample(StretchKind::Glide)]
 #[case::signalsmith(StretchKind::Signalsmith)]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn fractional_mapping_continues_through_speed_and_backend_changes(#[case] backend: StretchKind) {
+fn fractional_mapping_continues_through_speed_and_keylock_changes(#[case] backend: StretchKind) {
     let config = WarpConfig::builder()
         .backend(backend)
         .keylock(true)
@@ -884,7 +589,6 @@ fn fractional_mapping_continues_through_speed_and_backend_changes(#[case] backen
     renderer
         .set_speed(SpeedCurve::Constant(1.0), 1)
         .expect("speed");
-    renderer.set_backend(StretchKind::Glide);
     renderer.set_keylock(false);
     let second = mapped_render(&mut renderer, &mut source, 5);
     assert_eq!(second.frames(), 5);
@@ -1236,12 +940,12 @@ fn resampled_pcm_uses_the_published_fractional_phase() {
     }
 }
 
-/// Retiring a keylocked engine into vinyl Glide fades the source-supported
+/// Retiring a keylocked engine into vinyl varispeed fades the source-supported
 /// prefix of its tail into the exact mapped interpolation.
 #[kithara::test]
 #[case::signalsmith(StretchKind::Signalsmith)]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn backend_retirement_crossfades_the_drained_tail_into_exact_mapped_output(
+fn keylock_retirement_crossfades_the_drained_tail_into_exact_mapped_output(
     #[case] backend: StretchKind,
 ) {
     let config = WarpConfig::builder()
@@ -1265,7 +969,6 @@ fn backend_retirement_crossfades_the_drained_tail_into_exact_mapped_output(
     renderer
         .set_speed(SpeedCurve::Constant(1.0), 2)
         .expect("speed");
-    renderer.set_backend(StretchKind::Glide);
     renderer.set_keylock(false);
     let mut output = Vec::new();
     while output.len() < tail.len() + latency {

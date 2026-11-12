@@ -723,8 +723,11 @@ mod tests {
         );
     }
 
+    /// A draft lane that holds none of the draft scope reports "skipped: not
+    /// required" and leaves an empty selection; the verdict counts that as a
+    /// pass, and only for the producer a branch expects.
     #[test]
-    fn a_proven_empty_branch_selection_passes_without_junit() {
+    fn a_draft_lane_skipped_as_not_required_passes_without_junit() {
         let directory = tempfile::tempdir().unwrap();
         let common = Common {
             reports: directory.path().join(consts::REPORT_DIR),

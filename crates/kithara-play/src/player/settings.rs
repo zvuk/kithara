@@ -23,7 +23,7 @@ pub struct TrackSettings {
     #[config(live, builder(default = false))]
     keylock: bool,
     /// The time-stretch backend that renders the track.
-    #[config(live, builder(default))]
+    #[config(builder(default))]
     backend: StretchKind,
 }
 
@@ -63,7 +63,6 @@ impl From<TrackSettingsChange> for LaneCommand {
         match change {
             TrackSettingsChange::Speed(speed) => Self::SetSpeed(SpeedCurve::Constant(speed)),
             TrackSettingsChange::Keylock(on) => Self::SetKeylock(on),
-            TrackSettingsChange::Backend(kind) => Self::SetBackend(kind),
         }
     }
 }
@@ -178,11 +177,6 @@ mod tests {
         assert!(matches!(
             LaneCommand::from(TrackSettingsChange::Keylock(true)),
             LaneCommand::SetKeylock(true)
-        ));
-        let backend = StretchKind::default();
-        assert!(matches!(
-            LaneCommand::from(TrackSettingsChange::Backend(backend)),
-            LaneCommand::SetBackend(sent) if sent == backend
         ));
     }
 

@@ -140,7 +140,13 @@ async fn prefetch_lane_caps_concurrent_loads(#[by_ref] worker_owner: &WorkerOwne
             hang_tick!(format!("answering held background load {seq:?}"));
             kithara_platform::time::timeout(
                 __hang_detector.remaining(),
-                loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir),
+                loaded_fixture(
+                    queue.worker().expect("fixture worker"),
+                    &mut rig,
+                    &dir,
+                    seq,
+                    FixtureSource::Synthetic,
+                ),
             )
             .await
             .unwrap_or_else(|error| {
@@ -218,7 +224,14 @@ async fn an_appended_track_loads_without_a_select(#[by_ref] worker_owner: &Worke
     let mut receiver = queue.subscribe::<QueueEvent>();
     let loads = hold_loads(&mut queue, &mut rig).0;
     assert!(loads.contains(&(seq, ServiceClass::Idle)));
-    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
+    let loaded = loaded_fixture(
+        queue.worker().expect("fixture worker"),
+        &mut rig,
+        &dir,
+        seq,
+        FixtureSource::Synthetic,
+    )
+    .await;
     answer(&mut queue, &mut rig, seq, loaded);
     assert_eq!(
         queue.track(ids[1]).expect("record").status,
@@ -294,7 +307,7 @@ async fn preloaded_append_keeps_its_cue_without_seeking_the_current_track(
 ) {
     let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let first = append(&mut queue, &mut rig, &dir, 1)[0];
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
     assert!(hold_loads(&mut queue, &mut rig).0.is_empty());
     let outgoing = queue.current_track().expect("current track").snapshot();
@@ -392,7 +405,14 @@ async fn background_loads_stay_within_max_concurrent_loads(#[by_ref] worker_owne
     for id in &ids[1..3] {
         hang_tick!();
         let seq = load_seq(&queue, *id);
-        let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
+        let loaded = loaded_fixture(
+            queue.worker().expect("fixture worker"),
+            &mut rig,
+            &dir,
+            seq,
+            FixtureSource::Synthetic,
+        )
+        .await;
         hang_reset!();
         answer(&mut queue, &mut rig, seq, loaded);
         assert!(
@@ -423,7 +443,14 @@ async fn selecting_a_background_loaded_track_opens_nothing_new(
     let ids = append(&mut queue, &mut rig, &dir, 2);
     let seq = load_seq(&queue, ids[1]);
     hold_loads(&mut queue, &mut rig);
-    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
+    let loaded = loaded_fixture(
+        queue.worker().expect("fixture worker"),
+        &mut rig,
+        &dir,
+        seq,
+        FixtureSource::Synthetic,
+    )
+    .await;
     answer(&mut queue, &mut rig, seq, loaded);
     select(&mut queue, &mut rig, ids[1]);
     let (loads, priorities) = hold_loads(&mut queue, &mut rig);
@@ -492,7 +519,14 @@ async fn the_first_append_arms_a_paused_initial_load(#[by_ref] worker_owner: &Wo
         hold_loads(&mut queue, &mut rig).0,
         vec![(seq, ServiceClass::Warm)]
     );
-    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
+    let loaded = loaded_fixture(
+        queue.worker().expect("fixture worker"),
+        &mut rig,
+        &dir,
+        seq,
+        FixtureSource::Synthetic,
+    )
+    .await;
     answer(&mut queue, &mut rig, seq, loaded);
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(id));
@@ -528,7 +562,14 @@ async fn the_first_append_plays_with_autoplay(#[by_ref] worker_owner: &WorkerOwn
         hold_loads(&mut queue, &mut rig).0,
         vec![(seq, ServiceClass::Warm)]
     );
-    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
+    let loaded = loaded_fixture(
+        queue.worker().expect("fixture worker"),
+        &mut rig,
+        &dir,
+        seq,
+        FixtureSource::Synthetic,
+    )
+    .await;
     answer(&mut queue, &mut rig, seq, loaded);
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(id));
@@ -566,7 +607,14 @@ async fn selecting_another_track_consumes_the_opened_initial_resource(
     let ids = append(&mut queue, &mut rig, &dir, 2);
     let seq = load_seq(&queue, ids[0]);
     hold_loads(&mut queue, &mut rig);
-    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
+    let loaded = loaded_fixture(
+        queue.worker().expect("fixture worker"),
+        &mut rig,
+        &dir,
+        seq,
+        FixtureSource::Synthetic,
+    )
+    .await;
     answer(&mut queue, &mut rig, seq, loaded);
     select(&mut queue, &mut rig, ids[1]);
     assert_eq!(
@@ -616,8 +664,15 @@ async fn a_track_setting_reaches_background_loaded_tracks(#[by_ref] worker_owner
     let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let ids = append(&mut queue, &mut rig, &dir, 2);
     hold_loads(&mut queue, &mut rig);
-    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
     let seq = load_seq(&queue, ids[1]);
+    let loaded = loaded_fixture(
+        queue.worker().expect("fixture worker"),
+        &mut rig,
+        &dir,
+        seq,
+        FixtureSource::Synthetic,
+    )
+    .await;
     let mut due = rig.opens.resume(seq, (), ()).expect("held background open");
     let held = std::mem::take(due.commands_mut());
     due.apply(Dispatched::Loaded(loaded));
@@ -647,7 +702,14 @@ async fn a_selected_background_track_announces_loaded_once(#[by_ref] worker_owne
     let seq = load_seq(&queue, ids[1]);
     let mut receiver = queue.subscribe::<QueueEvent>();
     hold_loads(&mut queue, &mut rig);
-    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
+    let loaded = loaded_fixture(
+        queue.worker().expect("fixture worker"),
+        &mut rig,
+        &dir,
+        seq,
+        FixtureSource::Synthetic,
+    )
+    .await;
     answer(&mut queue, &mut rig, seq, loaded);
     select(&mut queue, &mut rig, ids[1]);
     crate::mock::finish(&mut queue, &mut rig);
@@ -685,7 +747,14 @@ async fn a_failed_replacement_release_keeps_the_taken_background_track(
     for id in &ids[1..] {
         hang_tick!();
         let seq = load_seq(&queue, *id);
-        let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
+        let loaded = loaded_fixture(
+            queue.worker().expect("fixture worker"),
+            &mut rig,
+            &dir,
+            seq,
+            FixtureSource::Synthetic,
+        )
+        .await;
         answer(&mut queue, &mut rig, seq, loaded);
         hang_reset!();
     }
@@ -770,7 +839,14 @@ async fn a_stale_load_completion_does_not_cancel_the_live_target(
         TrackStatus::Loading
     );
     let seq = load_seq(&queue, ids[1]);
-    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
+    let loaded = loaded_fixture(
+        queue.worker().expect("fixture worker"),
+        &mut rig,
+        &dir,
+        seq,
+        FixtureSource::Synthetic,
+    )
+    .await;
     answer(&mut queue, &mut rig, seq, loaded);
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(ids[1]));
@@ -788,7 +864,14 @@ async fn a_superseded_initial_open_releases_its_answered_lane(
     hold_loads(&mut queue, &mut rig);
     select(&mut queue, &mut rig, ids[1]);
     assert_eq!(load_seq(&queue, ids[0]), seq);
-    let loaded = loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
+    let loaded = loaded_fixture(
+        queue.worker().expect("fixture worker"),
+        &mut rig,
+        &dir,
+        seq,
+        FixtureSource::Synthetic,
+    )
+    .await;
     let lane = loaded.lane;
     answer(&mut queue, &mut rig, seq, loaded);
     rig.opens.drain();

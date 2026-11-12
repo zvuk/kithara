@@ -86,11 +86,6 @@ where
         drop(reusable_projection);
         drop(reusable_engine);
         let channels = usize::from(spec.channels.max(1));
-        let expansion = config.region_plan().as_deref().map_or(1.0, |plan| {
-            plan.segments().iter().fold(1.0_f64, |expansion, segment| {
-                expansion.max(segment.ratio_correction().recip())
-            })
-        });
         let mut history_frames = reusable_residency
             .as_ref()
             .map_or(0, |resident| resident.history_frames)
@@ -130,7 +125,6 @@ where
                             .get()
                             .checked_mul(4)
                             .ok_or(ElasticError::SampleCountOverflow)?,
-                        expansion,
                     )?;
                     resident_frames = resident_frames.max(source_frames);
                 }
@@ -156,7 +150,6 @@ where
                         .get()
                         .checked_mul(2)
                         .ok_or(ElasticError::SampleCountOverflow)?,
-                    expansion,
                 )?;
                 resident_frames = resident_frames.max(source_frames);
                 let projection_frames = latency
@@ -284,10 +277,6 @@ where
     }
 
     fn service_scratch(&mut self) {
-        if !self.requires_staging() && self.plan.is_some() {
-            drop(self.deferred_scratch.take());
-            return;
-        }
         if self.scratch.is_some() {
             drop(self.deferred_scratch.take());
             return;
@@ -326,17 +315,15 @@ where
             self.service_scratch();
             return;
         }
-        let channels = usize::from(self.spec.channels.max(1));
-
         let (kind, keylock) = self.stretch_target();
         let entering_unity =
-            self.holds_stream_at(spec, channels) && self.unity_passthrough(self.rate.speed());
+            self.holds_stream_at(spec) && self.unity_passthrough(self.rate.speed());
         if entering_unity {
             self.service_scratch();
             return;
         }
         let backend_changed = kind != self.current_kind || keylock != self.current_keylock;
-        if backend_changed && self.holds_stream_at(spec, channels) {
+        if backend_changed && self.holds_stream_at(spec) {
             self.backend_transition_pending = true;
             self.service_scratch();
             return;
@@ -369,8 +356,8 @@ where
         }
     }
 
-    fn holds_stream_at(&self, spec: AudioSpec, channels: usize) -> bool {
-        spec == self.spec && (self.active || self.pending_frames(channels) > 0)
+    fn holds_stream_at(&self, spec: AudioSpec) -> bool {
+        spec == self.spec && self.active
     }
 
     fn rebuild_target(&mut self, spec: AudioSpec, kind: StretchKind, keylock: bool) {
@@ -409,7 +396,6 @@ where
             .backends(self.backends)
             .source_block_frames(self.source_block_frames)
             .maybe_render_quantum_frames(self.render_quantum_frames)
-            .maybe_region_plan(self.plan.clone())
             .build();
         let target = Self::prepare_target(&config, spec, &self.pools, reusable, spec != self.spec)
             .unwrap_or_else(|error| {

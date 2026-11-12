@@ -24,7 +24,7 @@ a tab, and the full test name per line. Empty, duplicate, or malformed records
 reject before build. The harness lists the same resolved lane and caller
 selection, requires exact identity-set equality, and reports missing and
 unexpected tests before executing any test. This supports one Nextest lane
-with the default non-ignored selection; `--touched`, rerun selection, and
+with the default non-ignored selection; `--draft`, rerun selection, and
 nondefault ignored selection cannot be combined with the guard. Compilation
 still follows the configured Cargo selection, and Run reuses its normal build
 artifacts. An unguarded run keeps its existing behavior.

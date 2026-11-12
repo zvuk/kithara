@@ -128,6 +128,18 @@ impl Ledger {
         })
     }
 
+    /// Whether reserving this head against this base in `scope` turns a
+    /// draft's verification into a full one.
+    pub(super) fn turns_ready(&self, head_sha: &str, base_sha: &str, scope: Scope) -> Result<bool> {
+        self.with_locked_data(|data| {
+            Ok(scope == Scope::Full
+                && data
+                    .verifications
+                    .get(&ledger_key(head_sha, base_sha))
+                    .is_some_and(|entry| entry.scope == Scope::Draft))
+        })
+    }
+
     /// The verification of this head against this base, opened when there is
     /// none. A full verification answers for a draft; a draft that turned
     /// ready opens its next attempt as a full one.
@@ -533,6 +545,19 @@ mod tests {
         assert_eq!(full.state, VerificationState::Testing);
         assert_eq!(full.attempt, draft.attempt + 1);
         assert_eq!(full.pipeline_id, None);
+    }
+
+    #[test]
+    fn only_a_draft_reserved_as_full_turns_ready() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+
+        assert!(!ledger.turns_ready("head", "base", Scope::Full).unwrap());
+        ledger.reserve("head", "base", Scope::Draft).unwrap();
+        assert!(!ledger.turns_ready("head", "base", Scope::Draft).unwrap());
+        assert!(ledger.turns_ready("head", "base", Scope::Full).unwrap());
+        ledger.reserve("head", "base", Scope::Full).unwrap();
+        assert!(!ledger.turns_ready("head", "base", Scope::Full).unwrap());
     }
 
     #[test]

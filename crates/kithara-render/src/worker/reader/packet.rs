@@ -9,3 +9,14 @@ pub enum PcmPacket {
         failure: TrackFailureKind,
     },
 }
+
+impl PcmPacket {
+    /// Frames this packet adds to a lane lead; markers count one so every
+    /// in-flight packet occupies the lead.
+    pub(in crate::worker) fn lead_frames(&self) -> usize {
+        match self {
+            Self::Chunk(chunk) => chunk.frames().max(1),
+            Self::Failed { .. } => 1,
+        }
+    }
+}
