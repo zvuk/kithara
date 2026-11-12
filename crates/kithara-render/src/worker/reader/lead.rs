@@ -17,7 +17,6 @@ use std::{collections::VecDeque, num::NonZeroUsize};
 pub(in crate::worker) struct PcmLead {
     limit: usize,
     quantum: usize,
-    quanta: usize,
     frames: usize,
     weights: VecDeque<usize>,
     admitted: usize,
@@ -31,7 +30,6 @@ impl PcmLead {
         Self {
             limit: quanta.saturating_mul(quantum.get()).saturating_sub(1),
             quantum: quantum.get(),
-            quanta,
             frames: 0,
             weights: VecDeque::with_capacity(quanta.saturating_add(2)),
             admitted: 0,
@@ -41,7 +39,7 @@ impl PcmLead {
 
     /// Forward ring slots: one per quantum of lead.
     pub(in crate::worker) const fn slots(&self) -> usize {
-        self.quanta
+        (self.limit + 1) / self.quantum
     }
 
     /// The lead while `queued` packets still wait in the forward ring.
