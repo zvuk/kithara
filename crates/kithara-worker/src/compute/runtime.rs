@@ -19,12 +19,23 @@ pub(crate) struct ComputeRuntime {
 }
 
 impl ComputeRuntime {
-    pub(crate) fn new(config: WorkerConfig) -> Self {
+    pub(crate) fn new(
+        config: WorkerConfig,
+        #[cfg(not(target_arch = "wasm32"))] threads: Arc<crate::threads::Threads>,
+    ) -> Self {
         Self {
             budget: Arc::new(Budget::default()),
-            pool: ComputePool::new(),
+            pool: ComputePool::new(
+                #[cfg(not(target_arch = "wasm32"))]
+                threads,
+            ),
             config,
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn stop(&self) {
+        self.pool.stop();
     }
 
     #[cfg(all(test, not(target_arch = "wasm32")))]

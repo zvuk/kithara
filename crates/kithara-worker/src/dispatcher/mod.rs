@@ -1,5 +1,3 @@
-#[cfg(not(target_arch = "wasm32"))]
-mod completion;
 mod core;
 mod handle;
 mod owner;
@@ -14,6 +12,3 @@ pub use pending::PendingTask;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod completion_tests;
-
-#[cfg(not(target_arch = "wasm32"))]
-pub use completion::ShutdownError;

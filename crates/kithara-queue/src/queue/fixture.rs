@@ -3,6 +3,7 @@ use kithara_test_utils::{
     TestTempDir,
     bufpool::{TestPools, pools},
 };
+use kithara_worker::Worker;
 
 /// Owns the queue fixture's worker and directory through explicit completion.
 #[derive(derive_more::Deref, fieldwork::Fieldwork)]
@@ -15,10 +16,14 @@ pub(crate) struct QueueFixture {
 }
 
 impl QueueFixture {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(worker: &Worker) -> Self {
         Self {
             directory: TestTempDir::new(),
-            worker: PlayWorker::new(PlayWorkerConfig::builder(pools()).build()),
+            worker: PlayWorker::new(
+                PlayWorkerConfig::builder(pools())
+                    .worker(worker.clone())
+                    .build(),
+            ),
         }
     }
 

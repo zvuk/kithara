@@ -8,8 +8,6 @@ use kithara_platform::{
     tokio::runtime::Handle,
 };
 
-#[cfg(not(target_arch = "wasm32"))]
-use super::completion::Completion;
 use super::{
     handle::TaskError,
     pending::PendingTask,
@@ -30,8 +28,9 @@ pub(super) struct DispatcherInner {
     pub(super) runtime: Option<Handle>,
     pub(super) cmd_tx: mpsc::Sender<Command>,
     pub(super) wake: Wake,
+    /// Native scheduler thread, absent when its worker had already shut down.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) completion: Completion,
+    pub(super) thread: Option<Arc<crate::threads::ThreadJoin>>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -126,14 +125,5 @@ impl DispatcherInner {
 impl Drop for DispatcherInner {
     fn drop(&mut self) {
         self.shutdown();
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(runtime) = &self.runtime
-            && let Some(thread) = self.completion.take_unjoined()
-        {
-            drop(kithara_platform::tokio::task::spawn_blocking_on(
-                runtime,
-                move || thread.join(),
-            ));
-        }
     }
 }

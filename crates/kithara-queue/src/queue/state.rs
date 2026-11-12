@@ -350,6 +350,7 @@ pub(crate) mod tests {
     };
     use kithara_signal::{FrameCount, SessionFrame};
     use kithara_test_utils::kithara;
+    use kithara_worker::{Worker, WorkerConfig};
 
     use super::{
         super::{QueueCommand, types::Placement},
@@ -362,6 +363,23 @@ pub(crate) mod tests {
         test_pools::{TestPools, pools},
     };
 
+    pub(crate) struct WorkerOwner(pub(crate) Worker);
+
+    impl Drop for WorkerOwner {
+        fn drop(&mut self) {
+            self.0.shutdown();
+        }
+    }
+
+    #[kithara::fixture]
+    pub(crate) fn worker_owner() -> WorkerOwner {
+        let mut config = WorkerConfig::new();
+        if let Ok(runtime) = RuntimeHandle::try_current() {
+            config = config.with_runtime(runtime);
+        }
+        WorkerOwner(Worker::new(config))
+    }
+
     /// Queue unit tests use memory storage so their fixture also works under Miri.
     pub(in crate::queue) fn make_store() -> AssetStore<TestPools> {
         AssetStore::builder(pools())
@@ -372,16 +390,20 @@ pub(crate) mod tests {
     /// A queue the mock session holds, seated the way a Host's insert seats it.
     /// A queue its Host has seated on a deck slot, with the mock that answers
     /// as the slot's audio thread.
-    pub(in crate::queue) fn make_queue() -> (Queue<TestPools>, DeckRig<TestPools>) {
-        let mut queue = Queue::new(queue_config());
+    pub(in crate::queue) fn make_queue(worker: &Worker) -> (Queue<TestPools>, DeckRig<TestPools>) {
+        let mut queue = Queue::new(queue_config(worker));
         queue.clock = Some((SessionFrame::new(0), FrameCount::new(128)));
         queue.deck.mixer.sample_rate = mock::SAMPLE_RATE.get();
         let audio_thread = DeckRig::new(DeckMixerConfig::default()).expect("deck scope");
         (queue, audio_thread)
     }
 
-    fn queue_config() -> QueueConfig<TestPools> {
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+    fn queue_config(worker: &Worker) -> QueueConfig<TestPools> {
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::builder(pools())
+                .worker(worker.clone())
+                .build(),
+        );
         QueueConfig::builder()
             .prep(ResourcePrep::builder().worker(worker).build())
             .store(make_store())
@@ -389,8 +411,12 @@ pub(crate) mod tests {
     }
 
     #[kithara::test(native)]
-    fn default_queue_stores_have_independent_disk_roots() {
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+    fn default_queue_stores_have_independent_disk_roots(#[by_ref] worker_owner: &WorkerOwner) {
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::builder(pools())
+                .worker(worker_owner.0.clone())
+                .build(),
+        );
         let queue = |store: Option<AssetStore<TestPools>>| {
             Queue::new(
                 QueueConfig::builder()
@@ -492,13 +518,13 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn queue_new_constructs_without_panic() {
-        let (_queue, _audio_thread) = make_queue();
+    fn queue_new_constructs_without_panic(#[by_ref] worker_owner: &WorkerOwner) {
+        let (_queue, _audio_thread) = make_queue(&worker_owner.0);
     }
 
     #[kithara::test]
-    fn a_control_reads_closed_once_its_queue_is_dropped() {
-        let (queue, _audio_thread) = make_queue();
+    fn a_control_reads_closed_once_its_queue_is_dropped(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, _audio_thread) = make_queue(&worker_owner.0);
         let control = queue.control();
         assert!(!control.is_closed(), "the queue still owns its mailbox");
 
@@ -508,11 +534,13 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn queue_registers_its_resident_players_deck_with_the_session() {
+    fn queue_registers_its_resident_players_deck_with_the_session(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
         let mut host = kithara_host::Host::new(kithara_host::HostConfig::offline(pools()).build())
             .expect("offline host");
         let deck = host
-            .insert(Queue::new(queue_config()))
+            .insert(Queue::new(queue_config(&worker_owner.0)))
             .expect("host registers the queue");
         let deck_id = deck.id();
         assert!(!deck.is_closed());
@@ -535,8 +563,10 @@ pub(crate) mod tests {
 
     #[kithara::test]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-    fn a_control_command_runs_when_the_holder_drains_the_queue() {
-        let (mut queue, mut rig) = make_queue();
+    fn a_control_command_runs_when_the_holder_drains_the_queue(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let control = queue.control();
         let (woke_tx, woke_rx) = mpsc::channel();
         HostedDeck::hold(&mut queue, Waker::from(Arc::new(Wakes(woke_tx))));
@@ -596,8 +626,10 @@ pub(crate) mod tests {
     /// until the executor holding the queue drains it.
     #[kithara::test(tokio)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-    async fn a_load_reaches_its_track_only_when_the_holder_drains_the_queue() {
-        let (mut queue, mut rig) = make_queue();
+    async fn a_load_reaches_its_track_only_when_the_holder_drains_the_queue(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let (woke_tx, mut woke_rx) = unbounded_channel();
         rig.dispatcher
             .hold(Waker::from(Arc::new(WakesTask(woke_tx))));
@@ -663,8 +695,8 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn a_closed_queue_rejects_mutation() {
-        let (mut queue, mut rig) = make_queue();
+    fn a_closed_queue_rejects_mutation(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
 
         with_outbox(&mut queue, &mut rig, |queue, _, out| {
             HostedDeck::close(queue, out)
@@ -688,8 +720,8 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn retained_config_follows_live_queue_controls() {
-        let (mut queue, mut rig) = make_queue();
+    fn retained_config_follows_live_queue_controls(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         apply(
             &mut queue,
             &mut rig,
@@ -726,9 +758,11 @@ pub(crate) mod tests {
     /// slots hold the first track and three presses: the fixture never
     /// retires an outgoing tail.
     #[kithara::test(tokio)]
-    async fn under_shuffle_next_enters_the_announced_upcoming_track() {
+    async fn under_shuffle_next_enters_the_announced_upcoming_track(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
         for seed in 0..8 {
-            let (mut queue, mut rig, dir) = crate::mock::empty_queue();
+            let (mut queue, mut rig, dir) = crate::mock::empty_queue(&worker_owner.0);
             queue.navigation = crate::navigation::tests::seeded(seed);
             for _ in 0..3 {
                 apply(
@@ -787,8 +821,10 @@ pub(crate) mod tests {
     /// and the queue says so: the deck follows the upcoming track on this
     /// event, though no transition target changed.
     #[kithara::test(tokio)]
-    async fn turning_repeat_on_announces_the_new_upcoming_track() {
-        let (mut queue, first, second, mut rig, dir) = crate::mock::selected().await;
+    async fn turning_repeat_on_announces_the_new_upcoming_track(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (mut queue, first, second, mut rig, dir) = crate::mock::selected(&worker_owner.0).await;
         let control = queue.control();
         apply(
             &mut queue,
@@ -827,8 +863,10 @@ pub(crate) mod tests {
     /// the queue made its changes: a handle that hears a track change reads
     /// that change.
     #[kithara::test]
-    fn a_current_item_event_is_published_with_its_committed_queue_view() {
-        let (mut queue, _) = make_queue();
+    fn a_current_item_event_is_published_with_its_committed_queue_view(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (mut queue, _) = make_queue(&worker_owner.0);
         let control = queue.control();
         let id = TrackId::allocate();
         queue.insert_entry(
@@ -866,8 +904,8 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn a_queue_event_is_heard_with_the_view_that_shows_it() {
-        let (mut queue, mut rig) = make_queue();
+    fn a_queue_event_is_heard_with_the_view_that_shows_it(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let control = queue.control();
         let id = TrackId::allocate();
         apply(
@@ -921,8 +959,8 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn cached_position_unknown_after_construction() {
-        let (mut queue, _audio_thread) = make_queue();
+    fn cached_position_unknown_after_construction(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, _audio_thread) = make_queue(&worker_owner.0);
         assert_eq!(
             queue.queue_snapshot().track.map(|track| track.position),
             None
@@ -930,8 +968,11 @@ pub(crate) mod tests {
         assert_eq!(queue.control().position_seconds(), None);
     }
 
-    fn armed_queue(id: TrackId) -> (Queue<TestPools>, DeckRig<TestPools>, Seq, Seq) {
-        let (mut queue, mut rig) = make_queue();
+    fn armed_queue(
+        worker: &Worker,
+        id: TrackId,
+    ) -> (Queue<TestPools>, DeckRig<TestPools>, Seq, Seq) {
+        let (mut queue, mut rig) = make_queue(worker);
         apply(
             &mut queue,
             &mut rig,
@@ -982,14 +1023,14 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn atomic_cached_position_unknown_loads_none() {
-        let (queue, _rig) = make_queue();
+    fn atomic_cached_position_unknown_loads_none(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, _rig) = make_queue(&worker_owner.0);
         assert_eq!(queue.control().position_seconds(), None);
     }
 
     #[kithara::test]
-    fn atomic_cached_position_round_trip_zero() {
-        let (mut queue, mut rig) = make_queue();
+    fn atomic_cached_position_round_trip_zero(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         apply(
             &mut queue,
             &mut rig,
@@ -1001,15 +1042,15 @@ pub(crate) mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn crossfade_arm_is_armed_for_matches_track() {
-        let (queue, _rig, _, _) = armed_queue(TrackId(2));
+    async fn crossfade_arm_is_armed_for_matches_track(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, _rig, _, _) = armed_queue(&worker_owner.0, TrackId(2));
         assert!(queue.target.is_some_and(|target| target.to == TrackId(2)));
         assert!(!queue.target.is_some_and(|target| target.to == TrackId(3)));
     }
 
     #[kithara::test]
-    fn cached_position_round_trips_through_queue() {
-        let (mut queue, mut rig) = make_queue();
+    fn cached_position_round_trips_through_queue(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         apply(
             &mut queue,
             &mut rig,
@@ -1023,14 +1064,14 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn crossfade_arm_disarmed_after_construction() {
-        let (queue, _rig) = make_queue();
+    fn crossfade_arm_disarmed_after_construction(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, _rig) = make_queue(&worker_owner.0);
         assert_eq!(queue.target.map(|target| target.to), None);
     }
 
     #[kithara::test(tokio)]
-    async fn crossfade_arm_take_only_disarms_matching_track() {
-        let (mut queue, _rig, seq, unrelated) = armed_queue(TrackId(9));
+    async fn crossfade_arm_take_only_disarms_matching_track(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, _rig, seq, unrelated) = armed_queue(&worker_owner.0, TrackId(9));
         assert_eq!(queue.target.map(|target| target.to), Some(TrackId(9)));
         queue
             .transition_applied(
@@ -1053,19 +1094,21 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn the_configured_prefetch_lead_reaches_the_player() {
-        let mut config = queue_config();
+    fn the_configured_prefetch_lead_reaches_the_player(#[by_ref] worker_owner: &WorkerOwner) {
+        let mut config = queue_config(&worker_owner.0);
         config.preload_lead = Duration::from_secs(8);
         let queue = Queue::new(config);
         assert!((queue.config.preload_lead.as_secs_f32() - 8.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test(native)]
-    fn queue_hands_its_session_the_resident_players_sync_attachment() {
+    fn queue_hands_its_session_the_resident_players_sync_attachment(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
         use kithara_host::{DeckId, Host, HostConfig, HostOwner};
 
         let expected = DeckId::allocate().expect("fixture deck id");
-        let queue = Queue::new(queue_config());
+        let queue = Queue::new(queue_config(&worker_owner.0));
         let control = queue.control();
         let append = control
             .postbox
@@ -1122,8 +1165,10 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn queue_control_post_preserves_order_and_reports_the_owner_outcome() {
-        let (mut queue, mut rig) = make_queue();
+    fn queue_control_post_preserves_order_and_reports_the_owner_outcome(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let control = queue.control();
         let first = TrackId(41);
         let second = TrackId(42);
@@ -1182,8 +1227,8 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn queue_control_rejects_mutation_after_close() {
-        let (mut queue, mut rig) = make_queue();
+    fn queue_control_rejects_mutation_after_close(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let control = queue.control();
         let close = control
             .postbox
@@ -1216,8 +1261,8 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn close_waits_for_an_admitted_queue_mutation() {
-        let (mut queue, mut rig) = make_queue();
+    fn close_waits_for_an_admitted_queue_mutation(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let control = queue.control();
         let mutation = control
             .postbox
