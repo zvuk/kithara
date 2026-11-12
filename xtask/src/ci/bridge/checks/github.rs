@@ -428,6 +428,7 @@ mod tests {
             head_branch: "feature".into(),
             scope: Scope::Full,
             author: "fork".into(),
+            tests: Ok(None),
         }
     }
 

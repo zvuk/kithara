@@ -35,9 +35,6 @@ stages:
 # instead by keeping the build directory between jobs.
 variables:
   CARGO_INCREMENTAL: "0"
-  # `--touched` measures a change from the default branch, which here is not
-  # the `main` it defaults to.
-  KITHARA_TOUCHED_BASE: $CI_DEFAULT_BRANCH
   # `GIT_CONFIG_COUNT` below is the git binary's protocol, which libgit2
   # does not read: Cargo's own fetch stayed on the stalling version and
   # spent twenty-five minutes listing the `boringssl` submodule's refs

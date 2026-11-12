@@ -7,6 +7,8 @@ pub(crate) use xtask::ci::cache_report::INPUT_LIMIT as CACHE_EVIDENCE_INPUT_LIMI
 
 pub(crate) const INPUT_BYTES: usize = 32 * 1024 * 1024;
 
+pub(crate) const DRAFT_FLAG: &str = "--draft";
+
 pub(crate) const WINDOWS_DIAGNOSTIC_REPORTS: usize = 64;
 pub(crate) const WINDOWS_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const WINDOWS_DIAGNOSTIC_OUTPUT_BYTES: usize = 64 * 1024;

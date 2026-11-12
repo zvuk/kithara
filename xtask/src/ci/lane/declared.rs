@@ -36,6 +36,7 @@ pub(crate) fn run(
     kind: PipelineKind,
     narrow: Option<&str>,
 ) -> Result<()> {
+    let drafted = kind == PipelineKind::Branch;
     let kind = kind_name(kind);
     admit(lane, &kind, narrow)?;
     if !lane.os.is_empty() {
@@ -82,15 +83,18 @@ pub(crate) fn run(
             .iter()
             .map(|arg| resolve(arg, process, pins))
             .collect::<Result<Vec<_>>>()?;
-        if let Some(filterset) = narrow {
-            if let Some(request) = step.suite_request(lane, declared) {
-                args.insert(
-                    declared.len() - request.len(),
-                    format!("--narrow={filterset}"),
-                );
-            } else if step.miri_request(lane, declared).is_some() {
-                args.extend(["-E".to_owned(), filterset.to_owned()]);
+        if let Some(request) = step.suite_request(lane, declared) {
+            let at = declared.len() - request.len();
+            if let Some(filterset) = narrow {
+                args.insert(at, format!("--narrow={filterset}"));
             }
+            if drafted {
+                args.insert(at, consts::DRAFT_FLAG.to_owned());
+            }
+        } else if let Some(filterset) = narrow
+            && step.miri_request(lane, declared).is_some()
+        {
+            args.extend(["-E".to_owned(), filterset.to_owned()]);
         }
         let vars = step_vars(step, process, pins)?;
         let mut command = process.command(&program);
@@ -133,24 +137,30 @@ pub(crate) fn run(
     Ok(())
 }
 
-/// Whether the lane has anything to run in `kind`: any step but a suite that
-/// selects no test lane on this branch. A lane with nothing to run has nothing
-/// to build either.
+/// Whether the lane has anything to run in `kind`: any step but, in a draft,
+/// a suite whose lane holds none of the draft scope `pr_tests` completes. A lane with nothing to
+/// run has nothing to build either.
 pub(crate) fn runs_anything(
     lane: &CiLaneConfig,
     kind: PipelineKind,
     narrow: Option<&str>,
     root: &Path,
     project: &ProjectConfig,
-    base: &str,
+    pr_tests: Option<&str>,
 ) -> Result<bool> {
+    let drafted = kind == PipelineKind::Branch;
     let kind = kind_name(kind);
     admit(lane, &kind, narrow)?;
     for step in &lane.steps {
         let Some(request) = step.suite_request(lane, step.args_in(&kind)) else {
             return Ok(true);
         };
-        if selects_any_lane(root, project, request, base)? {
+        let request: Vec<String> = drafted
+            .then(|| consts::DRAFT_FLAG.to_owned())
+            .into_iter()
+            .chain(request.iter().cloned())
+            .collect();
+        if selects_any_lane(root, project, &request, pr_tests)? {
             return Ok(true);
         }
     }
@@ -446,13 +456,22 @@ mod tests {
 
     /// The steps a lane asks for when its suite is narrowed to `narrow`.
     fn recorded_narrowed(lane: &CiLaneConfig, narrow: Option<&str>) -> Result<Vec<Step>> {
+        recorded_in(lane, PipelineKind::Main, narrow)
+    }
+
+    /// The steps a lane asks for in a `kind` pipeline.
+    fn recorded_in(
+        lane: &CiLaneConfig,
+        kind: PipelineKind,
+        narrow: Option<&str>,
+    ) -> Result<Vec<Step>> {
         let process = Process::recording(Path::new("/checkout"), Recording::default());
         run(
             &process,
             lane,
             &fixture().pins,
             &ToolsConfig::default(),
-            PipelineKind::Branch,
+            kind,
             narrow,
         )?;
         Ok(process.recorded().unwrap().steps().to_vec())
@@ -488,6 +507,27 @@ mod tests {
                 "test run --narrow=test(seek) --no-run --cargo-verbose --color never",
                 "fmt",
             ]
+        );
+    }
+
+    /// A branch pipeline is a draft: its suite runs the default branch's
+    /// command asking for the draft scope, and nothing else changes.
+    #[test]
+    fn a_branch_lane_runs_the_main_command_as_a_draft() {
+        let mut lane = suite_lane();
+        lane.steps[0].args.push("--timings".to_owned());
+        lane.steps.push(formatting_step());
+
+        let main = recorded_in(&lane, PipelineKind::Main, None).unwrap();
+        let branch = recorded_in(&lane, PipelineKind::Branch, Some("test(seek)")).unwrap();
+
+        let args = |steps: &[Step]| -> Vec<String> {
+            steps.iter().map(|step| step.args.join(" ")).collect()
+        };
+        assert_eq!(args(&main), ["test run --timings", "fmt"]);
+        assert_eq!(
+            args(&branch),
+            ["test run --draft --narrow=test(seek) --timings", "fmt"]
         );
     }
 

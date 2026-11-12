@@ -46,6 +46,13 @@ on:
           narrows nothing.
         default: ""
         type: string
+      pr-tests:
+        description: >-
+          The draft pull request's `kithara-tests` block, as the TOML between
+          its fences. A `branch` run adds it to the required tests; every
+          other kind ignores it.
+        default: ""
+        type: string
 
 # Not inherited from the caller: a called workflow gets its own environment.
 env:
@@ -81,6 +88,14 @@ jobs:
           selection=$(just ci lanes --role "$ROLE" --kind "$KIND" ${ONLY:+--only "$ONLY"})
           echo "selection=$selection" >> "$GITHUB_OUTPUT"
 
+      # A block the runner would reject fails the run here, before any lane
+      # builds, naming what is wrong with it.
+      - name: Check the draft's test block
+        if: ${{ inputs.kind == 'branch' && inputs.pr-tests != '' }}
+        env:
+          KITHARA_PR_TESTS: ${{ inputs.pr-tests }}
+        run: just ci pr-tests
+
   # Every lane's verdict, not the first one's: these answer independent
   # questions and a run that stops at the first red hides the rest.
   #
@@ -114,6 +129,7 @@ jobs:
       runner: ${{ matrix.runner || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
       narrow: ${{ inputs.narrow }}
+      pr-tests: ${{ inputs.pr-tests }}
 
   # A lane that reads what the matrix produced. It runs under `always()` so a
   # report still describes a night in which one measurement failed - a report
@@ -141,3 +157,4 @@ jobs:
       runner: ${{ matrix.runner || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
       narrow: ${{ inputs.narrow }}
+      pr-tests: ${{ inputs.pr-tests }}

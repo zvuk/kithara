@@ -127,6 +127,8 @@ pub(super) fn pull_request(value: &Value) -> Result<PullRequest> {
     let draft = value["draft"]
         .as_bool()
         .context("GitHub pull response has no draft flag")?;
+    let tests = xtask::ci::github::pr_tests_block(value["body"].as_str().unwrap_or_default())
+        .map_err(|error| error.to_string());
     Ok(PullRequest {
         number,
         head_sha,
@@ -134,5 +136,6 @@ pub(super) fn pull_request(value: &Value) -> Result<PullRequest> {
         head_branch,
         scope: if draft { Scope::Draft } else { Scope::Full },
         author,
+        tests,
     })
 }
