@@ -6,7 +6,7 @@ use kithara::{
     host::Tap,
     play::{CurveShape, FilterProgram, ParameterKnot, PlayError, ResourceConfig, ResourceSrc},
     queue::{QueueError, TrackSource},
-    signal::{AudioSpec, SessionFrame},
+    signal::SessionFrame,
     warp::WarpConfig,
 };
 use kithara_command::When;
@@ -105,9 +105,7 @@ async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u
     assert_eq!(harness.metrics().underruns(), 0);
     let actual_rate = harness.host().spec().await.sample_rate;
     assert_eq!(actual_rate.get(), SAMPLE_RATE);
-    let mut reference =
-        FilterEffect::new(AudioSpec::new(2, actual_rate), FilterSettings::default())
-            .expect("independent reference state");
+    let mut reference = FilterEffect::new(actual_rate, FilterSettings::default());
     let start = harness.host().position();
     let turn = start + 529 + phase;
     harness
@@ -255,8 +253,7 @@ async fn filter_tail_and_programme_outlive_source_eof_and_close_while_owned() {
     assert_eq!(tap.drain(), drained);
     take.extend(drained);
     let rate = harness.host().spec().await.sample_rate;
-    let mut reference =
-        FilterEffect::new(AudioSpec::new(2, rate), FilterSettings::default()).expect("reference");
+    let mut reference = FilterEffect::new(rate, FilterSettings::default());
     let mut expected = Vec::with_capacity(take.len());
     for offset in 0..take.len() / 2 {
         let at = start + u64::try_from(offset).expect("capture frame");

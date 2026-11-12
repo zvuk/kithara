@@ -3,7 +3,6 @@
 use std::num::NonZeroU32;
 
 use kithara_effects::filter::{Cutoff, FilterEffect, FilterSettings, Kind};
-use kithara_signal::AudioSpec;
 use kithara_test_utils::kithara;
 
 const FRAMES: usize = 8192;
@@ -33,7 +32,7 @@ fn sweep_settings(kind: Kind, start: f64, end: f64) -> (FilterSettings, f64, f64
 fn sweep_impulse(kind: Kind, start: f64, end: f64) -> Vec<f32> {
     let rate = NonZeroU32::new(RATE).expect("nonzero rate");
     let (settings, from, to) = sweep_settings(kind, start, end);
-    let mut filter = FilterEffect::new(AudioSpec::new(2, rate), settings).expect("filter");
+    let mut filter = FilterEffect::new(rate, settings);
     let knobs: Vec<_> = (0..FRAMES)
         .map(|frame| {
             let progress = f64::from(u32::try_from(frame).expect("bounded frame"))

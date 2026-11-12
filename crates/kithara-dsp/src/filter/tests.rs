@@ -438,7 +438,7 @@ fn nan_input_is_nonquiet_under_every_partition() {
 const SVF_RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("nonzero rate");
 
 fn variable(response: Response, planes: &mut [Vec<f32>], cutoffs: &[f64]) {
-    let mut filter = StateVariableFilter::new(TWO);
+    let mut filter = StateVariableFilter::<2>::new();
     let frames = cutoffs.len();
     filter
         .process(planes, 0..frames, cutoffs, SVF_RATE, Q, response)
@@ -491,7 +491,7 @@ fn state_variable_outputs_match_the_cookbook_biquad(
 #[case(Q)]
 #[case(10.0)]
 fn zero_input_never_grows_under_per_frame_modulation(#[case] q: f64) {
-    let mut filter = StateVariableFilter::new(NonZeroUsize::MIN);
+    let mut filter = StateVariableFilter::<1>::new();
     let mut kick = vec![1.0_f32];
     filter
         .process(
@@ -545,7 +545,7 @@ fn a_sixty_second_sweep_stays_bounded(#[case] response: Response, #[case] q: f64
         })
         .collect();
     let mut plane: Vec<f32> = sine_440().iter().copied().cycle().take(frames).collect();
-    let mut filter = StateVariableFilter::new(NonZeroUsize::MIN);
+    let mut filter = StateVariableFilter::<1>::new();
     filter
         .process(
             &mut [plane.as_mut_slice()],
@@ -571,7 +571,7 @@ fn state_variable_blocks_are_bit_identical_under_any_partition() {
     let mut whole = stereo(frames);
     variable(Response::HighPass, &mut whole, &cutoffs);
     let mut split = stereo(frames);
-    let mut filter = StateVariableFilter::new(TWO);
+    let mut filter = StateVariableFilter::<2>::new();
     let mut start = 0;
     for length in [1, 7, 300, 3].into_iter().cycle() {
         if start == frames {
@@ -593,9 +593,73 @@ fn state_variable_blocks_are_bit_identical_under_any_partition() {
     assert_eq!(bits(&split), bits(&whole));
 }
 
+/// Every plane of a `CHANNELS`-wide filter runs the one-channel kernel on its
+/// own history, and a plane count other than `CHANNELS` is refused.
+fn channels_are_independent_mono_filters<const CHANNELS: usize>() {
+    let frames = 1_027;
+    let cutoffs: Vec<_> = (0..frames)
+        .map(|frame| 300.0 + 5.0 * f64::from(u32::try_from(frame).expect("frame")))
+        .collect();
+    let mut planes: Vec<Vec<f32>> = (1..=CHANNELS)
+        .map(|channel| {
+            let scale = f32::from(u8::try_from(channel).expect("channel")) / 8.0;
+            [1.0, -1.0, 0.5, 0.0]
+                .iter()
+                .cycle()
+                .take(frames)
+                .map(|sample| sample * scale)
+                .collect()
+        })
+        .collect();
+    let mut expected = planes.clone();
+    for plane in &mut expected {
+        StateVariableFilter::<1>::new()
+            .process(
+                std::slice::from_mut(plane),
+                0..frames,
+                &cutoffs,
+                SVF_RATE,
+                Q,
+                Response::LowPass,
+            )
+            .expect("mono kernel");
+    }
+    let mut filter = StateVariableFilter::<CHANNELS>::new();
+    let mut short = vec![vec![0.25; frames]; CHANNELS.saturating_sub(1)];
+    assert_eq!(
+        filter.process(
+            &mut short,
+            0..frames,
+            &cutoffs,
+            SVF_RATE,
+            Q,
+            Response::LowPass
+        ),
+        Err(FilterError::Shape)
+    );
+    filter
+        .process(
+            &mut planes,
+            0..frames,
+            &cutoffs,
+            SVF_RATE,
+            Q,
+            Response::LowPass,
+        )
+        .expect("wide kernel");
+    assert_eq!(bits(&planes), bits(&expected));
+}
+
+#[kithara::test]
+fn state_variable_channels_are_independent_at_one_two_and_six_channels() {
+    channels_are_independent_mono_filters::<1>();
+    channels_are_independent_mono_filters::<2>();
+    channels_are_independent_mono_filters::<6>();
+}
+
 #[kithara::test]
 fn state_variable_refusals_change_nothing_and_quiet_tails_reset() {
-    let mut filter = StateVariableFilter::new(TWO);
+    let mut filter = StateVariableFilter::<2>::new();
     let mut planes = stereo(8);
     let before = bits(&planes);
     for (cutoffs, q, error) in [

@@ -11,6 +11,6 @@ pub use error::FilterError;
 
 pub use self::{
     biquad::Biquad,
-    svf::{Response, StateVariableFilter},
+    svf::{Response, SVF_CHUNK_FRAMES, StateVariableFilter},
 };
 pub use crate::backend::Fir;

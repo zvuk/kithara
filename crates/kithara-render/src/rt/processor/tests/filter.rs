@@ -47,8 +47,7 @@ pub(super) fn knob(value: f64) -> FilterKnob {
 
 /// The deck filter at `rate`, moved to `start` at once.
 pub(super) fn reference(rate: NonZeroU32, start: FilterKnob) -> FilterEffect {
-    let mut filter = FilterEffect::new(AudioSpec::new(2, rate), FilterSettings::default())
-        .expect("stereo filter");
+    let mut filter = FilterEffect::new(rate, FilterSettings::default());
     filter.configure(start);
     filter.reset();
     filter

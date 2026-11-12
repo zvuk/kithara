@@ -20,7 +20,7 @@ Firewheel node that puts the limiter on a session bus. It does not decode
 audio, own player or session state, or reach the network.
 
 `filter::FilterEffect` is the deck filter knob: transparent at its center,
-low-pass to the left and high-pass to the right, on the DSP owner's
+low-pass to the left and high-pass to the right, on the DSP owner's stereo
 state-variable filter. `FilterSettings` fixes the cutoff ranges and Q; the knob
 maps geometrically into them and the cutoff stays below 0.45 of the sample
 rate. A manual knob glides; a program sets one knob position per frame without

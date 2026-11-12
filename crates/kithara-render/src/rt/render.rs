@@ -7,7 +7,7 @@ use kithara_effects::{
     eq::{EqConfig, EqLayout, StereoEq, generate_log_spaced_bands},
     filter::{FilterEffect, FilterKnob},
 };
-use kithara_signal::{AudioSpec, SessionFrame};
+use kithara_signal::SessionFrame;
 
 use super::{
     command::{EqCurves, gain_at},
@@ -66,8 +66,7 @@ impl RenderPass {
         };
         let capacity = usize::try_from(shape.max_block_frames.get()).unwrap_or(usize::MAX);
         let mix = config.mix();
-        let mut filter = FilterEffect::new(AudioSpec::new(2, shape.sample_rate), config.filter())
-            .expect("a stereo filter has channels");
+        let mut filter = FilterEffect::new(shape.sample_rate, config.filter());
         filter.configure(mix.filter());
         filter.reset();
         Ok(Self {

@@ -137,13 +137,13 @@ fn biquad_never_allocates_after_construction() {
 }
 
 #[kithara::test(native)]
-fn state_variable_filter_never_allocates_after_construction() {
-    let mut filter = StateVariableFilter::new(TWO);
+fn state_variable_filter_construction_and_processing_never_allocate() {
+    let mut filter = assert_no_alloc(StateVariableFilter::<2>::new);
     let cutoffs: Vec<_> = (0..FRAMES)
         .map(|frame| 200.0 + 4.0 * f64::from(u16::try_from(frame).expect("frame")))
         .collect();
     let rate = NonZeroU32::new(48_000).expect("nonzero rate");
-    let mut planes = vec![vec![0.25_f32; FRAMES]; TWO.get()];
+    let mut planes = vec![vec![0.25_f32; FRAMES]; 2];
     assert_no_alloc(|| {
         filter
             .process(

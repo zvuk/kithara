@@ -4,7 +4,7 @@ use criterion::{BatchSize, Criterion};
 use kithara::{
     effects::filter::{FilterEffect, FilterKnob, FilterSettings},
     play::{CurveShape, FilterProgram, ParameterKnot},
-    signal::{AudioSpec, SessionFrame},
+    signal::SessionFrame,
 };
 use kithara_command::When;
 use kithara_integration_tests::offline::OfflinePlayer;
@@ -87,8 +87,7 @@ async fn oracle(
     prelude: usize,
 ) -> (Vec<f32>, f64) {
     let rate = harness.host().spec().await.sample_rate;
-    let mut filter = FilterEffect::new(AudioSpec::new(2, rate), FilterSettings::default())
-        .expect("reference state");
+    let mut filter = FilterEffect::new(rate, FilterSettings::default());
     filter.configure(knob(START));
     let warm = FILTER_WARM + if prelude == 0 { PRELUDE } else { 0 };
     let take = if prelude == 0 { frames } else { 1024 };

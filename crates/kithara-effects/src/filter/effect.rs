@@ -1,19 +1,18 @@
 use std::{
-    num::{NonZeroU32, NonZeroUsize},
+    num::NonZeroU32,
     ops::{DerefMut, Range},
 };
 
 use kithara_dsp::{
-    filter::{FilterError, Response, StateVariableFilter},
+    filter::{FilterError, Response, SVF_CHUNK_FRAMES, StateVariableFilter},
     param::{SmoothedParam64, SmootherConfig},
 };
-use kithara_signal::AudioSpec;
 
 use super::{FilterKnob, FilterSettings, Kind};
 use crate::consts;
 
 /// The deck filter: one bipolar knob over the low-pass and high-pass outputs
-/// of one state-variable filter.
+/// of one stereo state-variable filter.
 ///
 /// The center passes the signal bit for bit and holds no history. A manual
 /// knob change glides with the shared one-pole in f64; a program sets the
@@ -24,35 +23,30 @@ use crate::consts;
 #[config_owner(settings)]
 #[non_exhaustive]
 pub struct FilterEffect {
-    spec: AudioSpec,
+    rate: NonZeroU32,
     settings: FilterSettings,
     knob: SmoothedParam64,
     stage: Stage,
-    glide: Box<[f64]>,
 }
 
 impl FilterEffect {
-    /// Prepare state and scratch outside audio processing, at the center.
-    /// # Errors
-    /// [`FilterError::Shape`] without channels.
-    pub fn new(spec: AudioSpec, settings: FilterSettings) -> Result<Self, FilterError> {
-        let channels = NonZeroUsize::new(usize::from(spec.channels)).ok_or(FilterError::Shape)?;
-        Ok(Self {
-            spec,
+    /// Prepare the filter at `rate`, at the center.
+    #[must_use]
+    pub fn new(rate: NonZeroU32, settings: FilterSettings) -> Self {
+        Self {
+            rate,
             settings,
             knob: SmoothedParam64::new(
                 f64::from(FilterKnob::default()),
                 0.0,
                 SmootherConfig::default(),
-                spec.sample_rate,
+                rate,
             ),
             stage: Stage {
-                filter: StateVariableFilter::new(channels),
+                filter: StateVariableFilter::new(),
                 side: None,
-                cutoffs: vec![0.0; consts::FILTER_BLOCK_FRAMES].into_boxed_slice(),
             },
-            glide: vec![0.0; consts::FILTER_BLOCK_FRAMES].into_boxed_slice(),
-        })
+        }
     }
 
     /// The knob value the filter currently runs at.
@@ -69,7 +63,7 @@ impl FilterEffect {
             current,
             (target - current).abs(),
             SmootherConfig::default(),
-            self.spec.sample_rate,
+            self.rate,
         );
         self.knob.set_value(target);
     }
@@ -77,17 +71,10 @@ impl FilterEffect {
     /// Retune at a new rate without allocating or resetting history; the knob
     /// map recomputes its cutoffs for that rate.
     pub fn update_sample_rate(&mut self, rate: NonZeroU32) {
-        let spec = AudioSpec::new(self.spec.channels, rate);
-        if !self.accepts_spec(spec) {
+        if rate != self.rate {
             self.knob.update_sample_rate(rate);
-            self.spec = spec;
+            self.rate = rate;
         }
-    }
-
-    /// Whether this filter is already prepared for the exact format.
-    #[must_use]
-    pub fn accepts_spec(&self, spec: AudioSpec) -> bool {
-        self.spec == spec
     }
 
     /// Filter a validated range of every plane in place under the manual knob.
@@ -98,15 +85,15 @@ impl FilterEffect {
         planes: &mut [P],
         range: Range<usize>,
     ) -> Result<(), FilterError> {
-        self.check_planes(planes, &range)?;
+        Self::check_planes(planes, &range)?;
         if self.stage.side.is_none() && self.knob.has_settled() {
             return Ok(());
         }
-        let rate = self.spec.sample_rate;
+        let mut glide = [0.0; SVF_CHUNK_FRAMES];
         let mut start = range.start;
         while start < range.end {
-            let end = range.end.min(start + consts::FILTER_BLOCK_FRAMES);
-            let knobs = &mut self.glide[..end - start];
+            let end = range.end.min(start + SVF_CHUNK_FRAMES);
+            let knobs = &mut glide[..end - start];
             for knob in knobs.iter_mut() {
                 if !self.knob.has_settled() {
                     self.knob.next_smoothed();
@@ -115,7 +102,7 @@ impl FilterEffect {
                 *knob = self.knob.current_value();
             }
             self.stage
-                .run(&self.settings, rate, planes, start..end, knobs)?;
+                .run(&self.settings, self.rate, planes, start..end, knobs)?;
             start = end;
         }
         Ok(())
@@ -133,7 +120,7 @@ impl FilterEffect {
         range: Range<usize>,
         knobs: &[f64],
     ) -> Result<(), FilterError> {
-        self.check_planes(planes, &range)?;
+        Self::check_planes(planes, &range)?;
         if knobs.len() != range.len() {
             return Err(FilterError::Shape);
         }
@@ -146,19 +133,18 @@ impl FilterEffect {
         let Some(last) = knobs.last() else {
             return Ok(());
         };
-        let rate = self.spec.sample_rate;
-        self.stage.run(&self.settings, rate, planes, range, knobs)?;
+        self.stage
+            .run(&self.settings, self.rate, planes, range, knobs)?;
         self.knob.set_value(*last);
         self.knob.reset_to_target();
         Ok(())
     }
 
     fn check_planes<P: DerefMut<Target = [f32]>>(
-        &self,
         planes: &[P],
         range: &Range<usize>,
     ) -> Result<(), FilterError> {
-        if planes.len() == usize::from(self.spec.channels)
+        if planes.len() == consts::STEREO.get()
             && planes
                 .iter()
                 .all(|plane| plane.get(range.clone()).is_some())
@@ -180,7 +166,7 @@ impl FilterEffect {
         }
         let side = self
             .settings
-            .response(self.spec.sample_rate, self.knob.current_value())
+            .response(self.rate, self.knob.current_value())
             .map(|(kind, _)| kind);
         self.stage.enter(side);
     }
@@ -197,16 +183,15 @@ impl FilterEffect {
         self.stage.filter.reset();
         self.stage.side = self
             .settings
-            .response(self.spec.sample_rate, self.knob.current_value())
+            .response(self.rate, self.knob.current_value())
             .map(|(kind, _)| kind);
     }
 }
 
-/// The filter state, the side it runs on and the per-frame cutoff scratch.
+/// The stereo filter state and the side it runs on.
 struct Stage {
-    filter: StateVariableFilter,
+    filter: StateVariableFilter<{ consts::STEREO.get() }>,
     side: Option<Kind>,
-    cutoffs: Box<[f64]>,
 }
 
 impl Stage {
@@ -227,16 +212,17 @@ impl Stage {
         knobs: &[f64],
     ) -> Result<(), FilterError> {
         let q = f64::from(settings.q());
+        let mut cutoffs = [0.0; SVF_CHUNK_FRAMES];
         let mut offset = 0;
         while offset < knobs.len() {
             let side = settings.response(rate, knobs[offset]).map(|(kind, _)| kind);
             self.enter(side);
-            let limit = knobs.len().min(offset + self.cutoffs.len());
+            let limit = knobs.len().min(offset + SVF_CHUNK_FRAMES);
             let mut end = offset;
             while end < limit {
                 match settings.response(rate, knobs[end]) {
                     Some((kind, cutoff)) if Some(kind) == side => {
-                        self.cutoffs[end - offset] = cutoff;
+                        cutoffs[end - offset] = cutoff;
                     }
                     None if side.is_none() => {}
                     _ => break,
@@ -251,7 +237,7 @@ impl Stage {
                 self.filter.process(
                     planes,
                     range.start + offset..range.start + end,
-                    &self.cutoffs[..end - offset],
+                    &cutoffs[..end - offset],
                     rate,
                     q,
                     response,
