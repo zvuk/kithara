@@ -4,191 +4,208 @@ use kithara_config::Config;
 use kithara_dsp::filter::{Coefficients, FilterError, Hertz, Type};
 
 use super::{Cutoff, Q};
-use crate::GainDb;
 
-/// The four causal conditioning responses supported by [`FilterConfig`].
+/// The pass response the knob selects on one side of its center.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum Kind {
-    HighPass,
     LowPass,
-    LowShelf,
-    HighShelf,
+    HighPass,
 }
 
-impl Kind {
-    fn filter_type(self, gain: f64) -> Result<Type<f64>, FilterError> {
-        match self {
-            Self::HighPass if gain == 0.0 => Ok(Type::HighPass),
-            Self::LowPass if gain == 0.0 => Ok(Type::LowPass),
-            Self::LowShelf => Ok(Type::LowShelf(gain)),
-            Self::HighShelf => Ok(Type::HighShelf(gain)),
-            _ => Err(FilterError::Parameters),
-        }
-    }
-}
-
-/// Validated construction settings for one second-order filter.
+/// The deck filter's fixed sweep ranges and resonance.
+///
+/// The low-pass cutoff falls from `low_edge` next to the center to
+/// `low_extreme` at the left end; the high-pass cutoff rises from `high_edge`
+/// to `high_extreme` at the right end. Both follow a geometric map of the
+/// knob's distance from center.
 #[derive(Clone, Copy, Debug, PartialEq, Config)]
 #[config(builder(existing), fields(value, get(copy)))]
 #[non_exhaustive]
 pub struct FilterSettings {
-    /// Pass response or shelf polarity.
-    kind: Kind,
-    /// Frequency in Hz, below Nyquist at preparation time.
-    #[config(live)]
-    cutoff_hz: Cutoff,
-    /// Shelf gain in `[-24, 6]` dB; pass filters require zero.
-    #[config(live)]
-    gain_db: GainDb,
-    /// Resonance within the admitted positive range.
-    #[config(live)]
+    /// Low-pass cutoff next to the center.
+    low_edge: Cutoff,
+    /// Low-pass cutoff at the left end of the knob.
+    low_extreme: Cutoff,
+    /// High-pass cutoff next to the center.
+    high_edge: Cutoff,
+    /// High-pass cutoff at the right end of the knob.
+    high_extreme: Cutoff,
+    /// Resonance of both responses.
     q: Q,
+}
+
+impl Default for FilterSettings {
+    fn default() -> Self {
+        Self {
+            low_edge: Cutoff::LOW_EDGE,
+            low_extreme: Cutoff::LOW_EXTREME,
+            high_edge: Cutoff::HIGH_EDGE,
+            high_extreme: Cutoff::HIGH_EXTREME,
+            q: Q::default(),
+        }
+    }
 }
 
 #[bon]
 impl FilterSettings {
+    /// # Errors
+    /// Refuses a low-pass range that does not fall away from center or a
+    /// high-pass range that does not rise away from it.
     #[builder(
         builder_type(vis = "pub"),
         start_fn(name = builder, vis = "pub"),
         finish_fn(vis = "pub")
     )]
     fn new(
-        kind: Kind,
-        cutoff_hz: Cutoff,
+        #[builder(default = Cutoff::LOW_EDGE)] low_edge: Cutoff,
+        #[builder(default = Cutoff::LOW_EXTREME)] low_extreme: Cutoff,
+        #[builder(default = Cutoff::HIGH_EDGE)] high_edge: Cutoff,
+        #[builder(default = Cutoff::HIGH_EXTREME)] high_extreme: Cutoff,
         #[builder(default)] q: Q,
-        #[builder(default)] gain_db: GainDb,
     ) -> Result<Self, FilterError> {
-        kind.filter_type(f64::from(f32::from(gain_db)))?;
+        if low_extreme >= low_edge || high_extreme <= high_edge {
+            return Err(FilterError::Parameters);
+        }
         Ok(Self {
-            kind,
-            cutoff_hz,
-            gain_db,
+            low_edge,
+            low_extreme,
+            high_edge,
+            high_extreme,
             q,
         })
     }
 
-    pub(super) fn coefficients(&self, rate: f64) -> Result<Coefficients<f64>, FilterError> {
-        self.coefficients_at(
-            rate,
-            f64::from(self.cutoff_hz),
+    /// The response a knob position asks for, `None` at the center.
+    #[must_use]
+    pub fn response(&self, knob: f64) -> Option<(Kind, f64)> {
+        if knob < 0.0 {
+            Some((Kind::LowPass, self.cutoff(Kind::LowPass, -knob)))
+        } else if knob > 0.0 {
+            Some((Kind::HighPass, self.cutoff(Kind::HighPass, knob)))
+        } else {
+            None
+        }
+    }
+
+    /// Geometric interpolation from the edge (distance 0) to the extreme (distance 1).
+    fn cutoff(&self, kind: Kind, distance: f64) -> f64 {
+        let (edge, extreme) = match kind {
+            Kind::LowPass => (self.low_edge, self.low_extreme),
+            Kind::HighPass => (self.high_edge, self.high_extreme),
+        };
+        let edge = f64::from(edge);
+        edge * (f64::from(extreme) / edge).powf(distance)
+    }
+
+    /// Coefficients for `knob` at `rate`, `None` at the center.
+    pub(super) fn coefficients(
+        &self,
+        rate: f64,
+        knob: f64,
+    ) -> Result<Option<Coefficients<f64>>, FilterError> {
+        let Some((kind, cutoff)) = self.response(knob) else {
+            return Ok(None);
+        };
+        if !cutoff.is_finite() || cutoff >= rate / 2.0 {
+            return Err(FilterError::Parameters);
+        }
+        let kind = match kind {
+            Kind::LowPass => Type::LowPass,
+            Kind::HighPass => Type::HighPass,
+        };
+        Coefficients::from_params(
+            kind,
+            Hertz::from_hz(rate).map_err(|_| FilterError::Parameters)?,
+            Hertz::from_hz(cutoff).map_err(|_| FilterError::Parameters)?,
             f64::from(self.q),
-            f64::from(f32::from(self.gain_db)),
         )
+        .map(Some)
+        .map_err(|_| FilterError::Parameters)
     }
 
-    pub(super) fn coefficients_at(
-        &self,
-        rate: f64,
-        cutoff: f64,
-        q: f64,
-        gain: f64,
-    ) -> Result<Coefficients<f64>, FilterError> {
-        if cutoff >= rate / 2.0 {
+    /// Cutoffs swept by knob positions in `low..=high`, `None` when only the center is.
+    pub(super) fn cutoff_hull(&self, low: f64, high: f64) -> Option<[f64; 2]> {
+        let mut hull: Option<[f64; 2]> = None;
+        let mut include = |value: f64| {
+            hull = Some(hull.map_or([value, value], |[min, max]| {
+                [min.min(value), max.max(value)]
+            }));
+        };
+        if low < 0.0 {
+            include(self.cutoff(Kind::LowPass, -low));
+            include(self.cutoff(Kind::LowPass, -high.min(0.0)));
+        }
+        if high > 0.0 {
+            include(self.cutoff(Kind::HighPass, low.max(0.0)));
+            include(self.cutoff(Kind::HighPass, high));
+        }
+        hull
+    }
+
+    /// Cutoff travel of a knob move in warped log Hz at `rate`.
+    ///
+    /// A move through the center travels to its edge on one side and from the
+    /// other edge on the other; the response restarts there from reset state.
+    /// # Errors
+    /// Refuses nonfinite knob values or cutoffs at or above Nyquist.
+    pub fn travel(&self, rate: f64, from: f64, to: f64) -> Result<f64, FilterError> {
+        if !from.is_finite() || !to.is_finite() {
             return Err(FilterError::Parameters);
         }
-        let kind = self.kind.filter_type(gain)?;
-        let design =
-            || Coefficients::from_params(kind, Hertz::from_hz(rate)?, Hertz::from_hz(cutoff)?, q);
-        design().map_err(|_| FilterError::Parameters)
+        let side = |kind: Kind, from: f64, to: f64| -> Result<f64, FilterError> {
+            let warp = |distance: f64| {
+                let cutoff = self.cutoff(kind, distance);
+                if cutoff >= rate / 2.0 {
+                    Err(FilterError::Parameters)
+                } else {
+                    Ok((std::f64::consts::PI * cutoff / rate).tan().ln())
+                }
+            };
+            Ok((warp(to)? - warp(from)?).abs())
+        };
+        let low = if from < 0.0 || to < 0.0 {
+            side(Kind::LowPass, -from.min(0.0), -to.min(0.0))?
+        } else {
+            0.0
+        };
+        let high = if from > 0.0 || to > 0.0 {
+            side(Kind::HighPass, from.max(0.0), to.max(0.0))?
+        } else {
+            0.0
+        };
+        let travel = low + high;
+        if travel.is_finite() {
+            Ok(travel)
+        } else {
+            Err(FilterError::Parameters)
+        }
     }
-    pub(super) fn admit_smoothing(
-        &self,
-        rate: f64,
-        cutoff: f64,
-        q: f64,
-        gain: f64,
-    ) -> Result<(), FilterError> {
-        if ![cutoff, q, gain].iter().all(|value| value.is_finite()) {
+
+    /// Stability margin of every pass response with a cutoff in `cutoff` at `rate`.
+    pub(super) fn range_margin(&self, rate: f64, cutoff: [f64; 2]) -> Result<f64, FilterError> {
+        let [low, high] = cutoff;
+        if !low.is_finite() || !high.is_finite() || low <= 0.0 || low > high || high >= rate / 2.0 {
             return Err(FilterError::Parameters);
         }
-        let target_cutoff = f64::from(self.cutoff_hz);
-        let target_q = f64::from(self.q);
-        let target_gain = f64::from(f32::from(self.gain_db));
-        self.admit_ranges(
-            rate,
-            [cutoff.min(target_cutoff), cutoff.max(target_cutoff)],
-            [q.min(target_q), q.max(target_q)],
-            [gain.min(target_gain), gain.max(target_gain)],
-        )
-    }
-
-    fn validate_ranges(
-        &self,
-        rate: f64,
-        cutoff: [f64; 2],
-        q: [f64; 2],
-        gain: [f64; 2],
-    ) -> Result<(), FilterError> {
-        let [cutoff, target_cutoff] = cutoff;
-        let [q, target_q] = q;
-        let [gain, target_gain] = gain;
-        if ![cutoff, target_cutoff, q, target_q, gain, target_gain]
-            .iter()
-            .all(|value| value.is_finite())
-            || cutoff <= 0.0
-            || q <= 0.0
-            || cutoff > target_cutoff
-            || q > target_q
-            || gain > target_gain
-            || cutoff.max(target_cutoff) >= rate / 2.0
-        {
-            return Err(FilterError::Parameters);
-        }
-        self.kind.filter_type(gain)?;
-        self.kind.filter_type(target_gain)?;
-        Ok(())
-    }
-
-    pub(super) fn admit_ranges(
-        &self,
-        rate: f64,
-        cutoff: [f64; 2],
-        q: [f64; 2],
-        gain: [f64; 2],
-    ) -> Result<(), FilterError> {
-        self.range_margin(rate, cutoff, q, gain).map(|_| ())
-    }
-
-    pub(super) fn range_margin(
-        &self,
-        rate: f64,
-        cutoff: [f64; 2],
-        q: [f64; 2],
-        gain: [f64; 2],
-    ) -> Result<f64, FilterError> {
-        self.validate_ranges(rate, cutoff, q, gain)?;
-        let [cutoff, target_cutoff] = cutoff;
-        let [q, target_q] = q;
-        let [gain, target_gain] = gain;
-        let angles = [cutoff.min(target_cutoff), cutoff.max(target_cutoff)]
-            .map(|hz| std::f64::consts::TAU * hz / rate);
-        let [low, high] = angles;
+        let q = f64::from(self.q);
+        let angles = cutoff.map(|hz| std::f64::consts::TAU * hz / rate);
         let sines = angles.map(f64::sin);
         let minimum_sine = sines[0].min(sines[1]);
-        let maximum_sine =
-            if low <= std::f64::consts::FRAC_PI_2 && high >= std::f64::consts::FRAC_PI_2 {
-                1.0
-            } else {
-                sines[0].max(sines[1])
-            };
-        let cosine = angles.map(|angle| angle.cos().abs());
-        let maximum_cosine = cosine[0].max(cosine[1]);
-        let alpha_min = minimum_sine / (2.0 * q.max(target_q));
-        let alpha_max = maximum_sine / (2.0 * q.min(target_q));
-        let gains = if matches!(self.kind, Kind::LowShelf | Kind::HighShelf) {
-            [gain.min(target_gain), gain.max(target_gain)].map(|db| 10.0_f64.powf(db / 40.0))
+        let maximum_sine = if angles[0] <= std::f64::consts::FRAC_PI_2
+            && angles[1] >= std::f64::consts::FRAC_PI_2
+        {
+            1.0
         } else {
-            [1.0, 1.0]
+            sines[0].max(sines[1])
         };
-        let [gain_min, gain_max] = gains;
-        let denominator_max = gain_max
-            + 1.0
-            + (gain_min - 1.0).abs().max((gain_max - 1.0).abs()) * maximum_cosine
-            + 2.0 * gain_max.sqrt() * alpha_max;
-        let schur = 4.0 * gain_min.min(1.0) * (1.0 - maximum_cosine) / denominator_max;
-        let damping = 4.0 * gain_min.sqrt() * alpha_min / denominator_max;
-        let lower_pole = 4.0 * gain_min.min(1.0) / denominator_max;
+        let maximum_cosine = angles
+            .map(|angle| angle.cos().abs())
+            .into_iter()
+            .fold(0.0, f64::max);
+        let denominator_max = 2.0 + 2.0 * maximum_sine / (2.0 * q);
+        let schur = 4.0 * (1.0 - maximum_cosine) / denominator_max;
+        let damping = 4.0 * (minimum_sine / (2.0 * q)) / denominator_max;
+        let lower_pole = 4.0 / denominator_max;
         // Reserve coefficient and comparison rounding across the continuous parameter box.
         let rounding = f64::from(f32::EPSILON);
         if schur > 1.5 * rounding && damping > 0.5 * rounding && lower_pole > 0.5 * rounding {
@@ -201,43 +218,13 @@ impl FilterSettings {
     }
 }
 
-/// Parameters and scratch resources of one prepared second-order filter.
-#[derive(Config, derive_more::From)]
+/// Settings and scratch resources of the deck filter.
+#[derive(derive_more::From)]
 #[derive_where::derive_where(Clone, Debug)]
-#[config(builder(existing), fields(value, get(copy)))]
 #[non_exhaustive]
 pub struct FilterConfig<S> {
     /// Scratch storage supplied by the owning playback region.
-    #[config(skip = "injected pool region", get(ref))]
     pub(super) pools: PoolRegion<S>,
-    /// Fixed settings carried into this prepared instance.
+    /// Fixed sweep ranges and resonance.
     pub(super) settings: FilterSettings,
-}
-
-#[bon]
-impl<S> FilterConfig<S> {
-    #[builder(
-        builder_type(vis = "pub"),
-        start_fn(name = builder, vis = "pub"),
-        finish_fn(vis = "pub")
-    )]
-    fn new(
-        #[builder(start_fn)] pools: PoolRegion<S>,
-        kind: Kind,
-        cutoff_hz: Cutoff,
-        #[builder(default)] q: Q,
-        #[builder(default)] gain_db: GainDb,
-    ) -> Result<Self, FilterError> {
-        let settings = FilterSettings::builder()
-            .kind(kind)
-            .cutoff_hz(cutoff_hz)
-            .q(q)
-            .gain_db(gain_db)
-            .build()?;
-        Ok(Self::from((pools, settings)))
-    }
-
-    pub(super) fn coefficients(&self, rate: f64) -> Result<Coefficients<f64>, FilterError> {
-        self.settings.coefficients(rate)
-    }
 }
