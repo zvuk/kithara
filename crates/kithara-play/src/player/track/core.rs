@@ -1,8 +1,4 @@
-use std::{
-    cell::{Cell, RefCell},
-    collections::VecDeque,
-    marker::PhantomData,
-};
+use std::{cell::RefCell, marker::PhantomData};
 
 use kithara_abr::AbrHandle;
 use kithara_command::{Live, Sender, Seq, Target, When};
@@ -41,9 +37,8 @@ pub struct PlayerImpl<S> {
     pub(super) segment: Segment,
     pub(super) issued_segment: SegmentId,
     pub(super) adoptions: Adoptions,
-    pub(super) lane_commands: Vec<LaneOperation>,
+    pub(super) lane_history: LaneHistory,
     pub(super) playback_commands: Vec<PlaybackOperation>,
-    pub(super) speed_answers: VecDeque<SpeedAnswer>,
     pub(super) play: Option<When<SessionFrame>>,
     pub(super) repeat: bool,
     /// The clock the track keeps through a dropout.
@@ -58,8 +53,6 @@ pub struct PlayerImpl<S> {
     pub(super) source_basis: Option<AudioChunkInfo>,
     pub(super) observed_source: Option<AudioChunkInfo>,
     pub(super) projected_end: RefCell<Option<ProjectedEnd>>,
-    /// Cleared by lane-history mutations; entries name every other projection input.
-    pub(super) speed_projection: Cell<Option<SpeedProjection>>,
     pub(super) extent: Extent,
     pub(super) abr: Option<AbrHandle>,
     pub(super) metadata: TrackMetadata,
@@ -85,9 +78,8 @@ impl<S> PlayerImpl<S> {
             segment: Segment::issued(SegmentId::FIRST, None, config.settings.speed()),
             issued_segment: SegmentId::FIRST,
             adoptions: Adoptions::default(),
-            lane_commands: Vec::new(),
+            lane_history: LaneHistory::default(),
             playback_commands: Vec::new(),
-            speed_answers: VecDeque::new(),
             play: None,
             repeat: false,
             clock: TrackClock::Media,
@@ -100,7 +92,6 @@ impl<S> PlayerImpl<S> {
             source_basis: None,
             observed_source: None,
             projected_end: RefCell::new(None),
-            speed_projection: Cell::new(None),
             extent: Extent::default(),
             abr: None,
             metadata: TrackMetadata::default(),
@@ -266,9 +257,8 @@ impl<S> PlayerImpl<S> {
         };
         let lane = self.lane.as_mut().ok_or(PlayError::NotReady)?;
         let seq = Outbox::<S>::lane(lane, when, commands.clone())?;
-        self.speed_projection.set(None);
-        self.lane_commands
-            .extend(commands.into_iter().map(|command| {
+        self.lane_history
+            .submit(commands.into_iter().map(|command| {
                 tracing::debug!(
                     item = u64::from(self.item),
                     seq = seq.get(),

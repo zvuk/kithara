@@ -61,7 +61,7 @@ impl<S> Track<S> for PlayerImpl<S> {
             .or(self.mark)
             .is_some_and(|mark| mark.lane.segment == self.segment.id && mark.lane.frame > 0);
         let mut prepared = None;
-        for operation in self.lane_commands.iter().rev() {
+        for operation in self.lane_history.commands.iter().rev() {
             if operation.applied() == Some(false) {
                 continue;
             }
@@ -259,31 +259,33 @@ impl<S> Track<S> for PlayerImpl<S> {
 
     fn speed_receipt(&mut self) -> Option<Settled> {
         self.settle_lane();
-        let (index, settled) =
-            self.speed_answers
-                .iter()
-                .enumerate()
-                .find_map(|(index, (seq, outcome))| {
-                    let settled = match outcome {
-                        Ok((lane, session)) => {
-                            let at = (*session)
-                                .or_else(|| self.mark.and_then(|mark| session_at(mark, *lane)))?;
-                            Settled::Applied { seq: *seq, at }
-                        }
-                        Err(reason) => Settled::Rejected {
-                            seq: *seq,
-                            reason: reason.clone(),
-                        },
-                    };
-                    Some((index, settled))
-                })?;
-        self.speed_answers.remove(index);
+        let (index, settled) = self
+            .lane_history
+            .speed_answers
+            .iter()
+            .enumerate()
+            .find_map(|(index, (seq, outcome))| {
+                let settled = match outcome {
+                    Ok((lane, session)) => {
+                        let at = (*session)
+                            .or_else(|| self.mark.and_then(|mark| session_at(mark, *lane)))?;
+                        Settled::Applied { seq: *seq, at }
+                    }
+                    Err(reason) => Settled::Rejected {
+                        seq: *seq,
+                        reason: reason.clone(),
+                    },
+                };
+                Some((index, settled))
+            })?;
+        self.lane_history.speed_answers.remove(index);
         Some(settled)
     }
 
     fn speed_applied(&mut self, seq: Seq) -> Option<bool> {
         self.settle_lane();
-        self.lane_commands
+        self.lane_history
+            .commands
             .iter()
             .find(|operation| operation.seq == seq)
             .and_then(LaneOperation::applied)
@@ -303,7 +305,11 @@ impl<S> Track<S> for PlayerImpl<S> {
         self.settle_lane();
         let position = self.raw_position(position)?;
         self.segment_with(position, None, speed, out)?;
-        Ok(self.lane_commands.last().map(|operation| operation.seq))
+        Ok(self
+            .lane_history
+            .commands
+            .last()
+            .map(|operation| operation.seq))
     }
 }
 
@@ -329,7 +335,7 @@ impl<S> PlayerImpl<S> {
             frame,
         };
         let initial_bits = self.segment.speed.to_bits();
-        if let Some(projection) = self.speed_projection.get()
+        if let Some(projection) = self.lane_history.speed_projection.get()
             && projection.at == at
             && projection.initial_bits == initial_bits
             && projection.declick == self.geometry.declick
@@ -367,12 +373,14 @@ impl<S> PlayerImpl<S> {
         let speed = curve_speed(curve, origin, frame.saturating_sub(start))?
             .to_f32()
             .ok_or(PlayError::Untimed)?;
-        self.speed_projection.set(Some(SpeedProjection {
-            at,
-            initial_bits,
-            declick: self.geometry.declick,
-            speed,
-        }));
+        self.lane_history
+            .speed_projection
+            .set(Some(SpeedProjection {
+                at,
+                initial_bits,
+                declick: self.geometry.declick,
+                speed,
+            }));
         Ok(speed)
     }
 
@@ -382,8 +390,8 @@ impl<S> PlayerImpl<S> {
         future: bool,
     ) -> Result<Vec<(u64, Seq, PlannedChange<'_>)>, PlayError> {
         let mut commands: Vec<(u64, Seq, PlannedChange<'_>)> =
-            Vec::with_capacity(self.lane_commands.len());
-        for operation in &self.lane_commands {
+            Vec::with_capacity(self.lane_history.commands.len());
+        for operation in &self.lane_history.commands {
             if operation.applied() == Some(false) {
                 continue;
             }
@@ -414,7 +422,7 @@ impl<S> PlayerImpl<S> {
                     let landing = frame
                         .checked_add(self.geometry.declick.get() as u64)
                         .ok_or(PlayError::Untimed)?;
-                    let superseded = self.lane_commands.iter().any(|next| next.seq != operation.seq && next.applied() != Some(false)
+                    let superseded = self.lane_history.commands.iter().any(|next| next.seq != operation.seq && next.applied() != Some(false)
                         && matches!(next.command, LaneCommand::Jump { .. })
                         && matches!(next.when, When::At(at) if at.segment == segment && (at.frame > frame || at.frame == frame && next.seq > operation.seq) && at.frame < landing));
                     if !superseded {

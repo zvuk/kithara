@@ -199,7 +199,8 @@ fn consumed_speed_preserves_the_origin_needed_by_each_curve(
         )
         .expect("accepted before rejection");
     track
-        .lane_commands
+        .lane_history
+        .commands
         .iter_mut()
         .find(|operation| operation.seq == rejected)
         .expect("recorded rejected curve")
@@ -292,7 +293,8 @@ fn consumed_speed_matches_the_full_piecewise_schedule() {
                 .expect("scheduled curve");
             if index % 5 == 0 {
                 track
-                    .lane_commands
+                    .lane_history
+                    .commands
                     .last_mut()
                     .expect("recorded curve")
                     .verdict = Some(Err(Rejection::Stale));

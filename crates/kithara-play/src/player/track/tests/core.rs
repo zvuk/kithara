@@ -1383,7 +1383,7 @@ fn a_relocation_is_refused_off_the_applied_lane(#[case] invalid: u8) {
     assert_eq!(track.snapshot().speed, before.speed);
     assert_eq!(track.snapshot().status, before.status);
     assert_eq!(track.snapshot().mark, before.mark);
-    assert!(track.lane_commands.is_empty());
+    assert!(track.lane_history.commands.is_empty());
     assert!(track.playback_commands.is_empty());
 }
 
@@ -1413,7 +1413,7 @@ fn an_audible_member_under_a_map_the_group_never_applied_is_refused() {
     assert_eq!(track.snapshot().mark, before.mark);
     assert_eq!(track.snapshot().status, before.status);
     assert!(lane_commands(&mut inbox).is_empty());
-    assert!(track.lane_commands.is_empty());
+    assert!(track.lane_history.commands.is_empty());
     assert!(track.playback_commands.is_empty());
     rig.deck.ring.publish().expect("publish empty scope");
     rig.deck.inbox.drain();
@@ -1466,7 +1466,7 @@ fn worker_handoff_geometry_derives_source_output_and_beat_together() {
     );
     assert_eq!(track.snapshot().position, Position::ZERO);
     assert!(lane_commands(&mut inbox).is_empty());
-    assert!(track.lane_commands.is_empty());
+    assert!(track.lane_history.commands.is_empty());
     assert!(track.playback_commands.is_empty());
 }
 
@@ -3712,7 +3712,12 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
                 },
             )
             .expect("quiet rejected preparation");
-            let seq = track.lane_commands.last().expect("native preparation").seq;
+            let seq = track
+                .lane_history
+                .commands
+                .last()
+                .expect("native preparation")
+                .seq;
             inbox.drain();
             let due = inbox
                 .next_due(
@@ -3735,7 +3740,8 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
             assert_eq!(track.snapshot().speed, 1.5);
             assert!(!track.segment.ready);
             let operations = track
-                .lane_commands
+                .lane_history
+                .commands
                 .iter()
                 .filter(|operation| operation.seq == seq)
                 .collect::<Vec<_>>();
@@ -3747,6 +3753,7 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
             );
             assert!(
                 track
+                    .lane_history
                     .speed_answers
                     .iter()
                     .all(|(answered, _)| *answered != seq)
@@ -4228,7 +4235,8 @@ fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
         Some(frame(113))
     );
     track
-        .lane_commands
+        .lane_history
+        .commands
         .iter_mut()
         .find(|operation| operation.seq == seq)
         .expect("accepted speed")
@@ -4396,7 +4404,8 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
         .expect("raw jump");
     assert!(
         track
-            .lane_commands
+            .lane_history
+            .commands
             .iter()
             .any(|operation| operation.seq == seq)
     );
@@ -4413,7 +4422,8 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
     );
     track.extent.duration = Some(Duration::from_millis(1_669));
     let operation = track
-        .lane_commands
+        .lane_history
+        .commands
         .iter_mut()
         .find(|operation| operation.seq == seq)
         .expect("accepted Jump");
