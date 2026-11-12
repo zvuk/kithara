@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, fmt, num::NonZeroUsize};
+use std::fmt;
 
 use kithara_abr::AbrHandle;
 use kithara_audio::{Audio, AudioEvent, AudioSession};
@@ -17,7 +17,7 @@ use ringbuf::{
 };
 use triple_buffer::{Input, Output, triple_buffer};
 
-use super::{super::scheduler::StreamWake, packet::PcmPacket};
+use super::{super::scheduler::StreamWake, lead::PcmLead, packet::PcmPacket};
 
 pub(in crate::worker) struct PcmProducer {
     pub(in crate::worker) forward: HeapProd<PcmPacket>,
@@ -27,85 +27,6 @@ pub(in crate::worker) struct PcmProducer {
     pub(super) ready: FinalWake,
     pub(in crate::worker) events: EventBus,
     pub(in crate::worker) output_pending: bool,
-}
-
-/// Frames rendered ahead of the reader's read mark.
-///
-/// The lead is bounded in frames, not packets: a short packet ending a source
-/// revision takes only its own frames, so the next packet still fits beside it.
-/// A reader spends its packets in order, so once it takes a packet every
-/// packet it took before is spent, whether or not it ever hands that one back.
-/// The latest packet it took is spent once every packet taken has come back,
-/// and otherwise has at least one frame behind the read mark, so the lead past
-/// that mark never reaches `(chunks + 1)` quanta. The ring gives each quantum
-/// of the lead two slots, one for a full packet and one for the short packet a
-/// boundary cuts in front of it. Packet weights are kept from admission, since
-/// a reader may trim or keep a packet it takes.
-pub(in crate::worker) struct PcmLead {
-    limit: usize,
-    quantum: usize,
-    quanta: usize,
-    frames: usize,
-    weights: VecDeque<usize>,
-    admitted: usize,
-    returned: usize,
-}
-
-impl PcmLead {
-    /// `chunks` quanta queued behind the packet the reader holds.
-    pub(in crate::worker) fn new(chunks: NonZeroUsize, quantum: NonZeroUsize) -> Self {
-        let quanta = chunks.get().saturating_add(1);
-        let slots = quanta.saturating_mul(2);
-        Self {
-            limit: quanta.saturating_mul(quantum.get()).saturating_sub(1),
-            quantum: quantum.get(),
-            quanta,
-            frames: 0,
-            weights: VecDeque::with_capacity(slots.saturating_add(2)),
-            admitted: 0,
-            returned: 0,
-        }
-    }
-
-    /// Forward ring slots: two per quantum of lead.
-    pub(in crate::worker) const fn slots(&self) -> usize {
-        self.quanta.saturating_mul(2)
-    }
-
-    /// The lead while `queued` packets still wait in the forward ring.
-    fn lead(&self, queued: usize) -> usize {
-        let taken = self.weights.len().saturating_sub(queued);
-        let Some(latest) = taken.checked_sub(1) else {
-            return self.frames;
-        };
-        let spent: usize = self.weights.range(..latest).sum();
-        let held = self.admitted.saturating_sub(queued) > self.returned;
-        let behind = if held { 1 } else { self.weights[latest] };
-        self.frames - spent - behind
-    }
-
-    /// Whether `frames` more fit the lead while `queued` packets still wait in
-    /// the forward ring.
-    fn admits(&self, frames: usize, queued: usize) -> bool {
-        let lead = self.lead(queued);
-        lead == 0 || lead.saturating_add(frames) <= self.limit
-    }
-
-    /// Admit `frames` once every packet taken before the latest one is spent.
-    fn add(&mut self, frames: usize, queued: usize) {
-        let taken = self.weights.len().saturating_sub(queued);
-        for spent in self.weights.drain(..taken.saturating_sub(1)) {
-            self.frames -= spent;
-        }
-        self.frames += frames;
-        self.weights.push_back(frames);
-        self.admitted += 1;
-    }
-
-    /// The lead holds more than one quantum behind the reader's packet.
-    pub(in crate::worker) const fn queues_ahead(&self) -> bool {
-        self.limit > self.quantum.saturating_mul(2)
-    }
 }
 
 pub(super) struct FinalWake(pub(super) Option<Arc<ThreadGate>>);
@@ -135,16 +56,13 @@ impl PcmProducer {
     /// Take back one packet the reader returned.
     pub(in crate::worker) fn reclaim(&mut self) -> Option<PcmPacket> {
         let packet = self.reverse.try_pop()?;
-        self.lead.returned += 1;
+        self.lead.count_return();
         Some(packet)
     }
 
     /// A whole quantum no longer fits the lead.
     pub(in crate::worker) fn is_full(&self) -> bool {
-        self.forward.is_full()
-            || !self
-                .lead
-                .admits(self.lead.quantum, self.forward.occupied_len())
+        self.forward.is_full() || !self.lead.admits_quantum(self.forward.occupied_len())
     }
 
     pub(in crate::worker) fn signal(&mut self) {

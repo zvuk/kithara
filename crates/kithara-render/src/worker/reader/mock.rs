@@ -20,7 +20,8 @@ use triple_buffer::triple_buffer;
 
 use super::{
     PcmPacket, PcmReceiver,
-    core::{FinalWake, PcmLead, PcmProducer},
+    core::{FinalWake, PcmProducer},
+    lead::PcmLead,
 };
 use crate::worker::scheduler::StreamWake;
 
