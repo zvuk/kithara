@@ -415,13 +415,14 @@ mod tests {
             )
             .worker(worker)
             .build();
+        let wake = kithara_worker::Wake::default();
         let resource = {
             // WHY: The fixture's disk open must consume real time before the watchdog expires.
             let _real_io = kithara_platform::flash::real_io();
             hang_tick!("direct resource awaits its source open".to_owned());
             kithara_platform::time::timeout(
                 __hang_detector.remaining(),
-                Resource::open(config, kithara_worker::Wake::default()),
+                Resource::open(config, wake.clone()),
             )
             .await
             .expect("direct reader opens within the watchdog budget")
@@ -431,21 +432,30 @@ mod tests {
         let mut reader: Box<dyn AudioReader> = resource.into();
         assert_eq!(reader.spec().sample_rate, crate::mock::SAMPLE_RATE);
         let mut frames = 0;
-        for _ in 0..8192 {
+        loop {
             hang_tick!(format!("direct reader waits for EOF after {frames} frames"));
             match reader.next_chunk().expect("decoded chunk") {
                 ChunkOutcome::Chunk(chunk) => {
                     frames += chunk.frames();
                     hang_reset!();
                 }
-                ChunkOutcome::Pending { .. } => kithara_platform::tokio::task::yield_now().await,
+                ChunkOutcome::Pending { .. } => {
+                    // WHY: the source reads on real threads and wakes the
+                    // reader's owner once the bytes it waits for land.
+                    let _real_io = kithara_platform::flash::real_io();
+                    let wake = wake.clone();
+                    let budget = __hang_detector.remaining();
+                    let _ = kithara_platform::tokio::task::spawn_blocking(move || {
+                        kithara_worker::mock::wait_wake(&wake, budget)
+                    })
+                    .await;
+                }
                 ChunkOutcome::Eof { .. } => {
                     assert_eq!(frames, 4096);
                     return;
                 }
             }
         }
-        panic!("direct reader did not reach EOF");
     }
 
     #[kithara::test]

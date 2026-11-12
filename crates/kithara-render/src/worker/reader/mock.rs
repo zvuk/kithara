@@ -314,7 +314,8 @@ pub(in crate::worker) fn packet_fixture(
 fn unframed(capacity: usize) -> PcmLead {
     PcmLead::new(
         NonZeroUsize::new(capacity).expect("nonzero fixture ring"),
-        NonZeroUsize::MAX,
+        NonZeroUsize::new(usize::MAX / capacity.saturating_add(1))
+            .expect("nonzero fixture quantum"),
     )
 }
 

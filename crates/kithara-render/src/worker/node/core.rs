@@ -451,15 +451,22 @@ mod tests {
                 None,
                 "a lane that has not output a packet keeps the configured poll"
             );
-            for _ in 0..=chunks {
+            for _ in 0..chunks {
                 fixture.stage(PcmPacket::Chunk(Box::new(chunk(
                     SegmentId::FIRST,
                     &[0.25; 480],
                 ))));
                 assert_eq!(fixture.node.admit(), TickResult::Progress);
             }
-            stage(&mut fixture, 0.5);
-            assert_eq!(fixture.node.admit(), TickResult::Backpressured);
+            fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                SegmentId::FIRST,
+                &[0.5; 480],
+            ))));
+            assert_eq!(
+                fixture.node.admit(),
+                TickResult::Backpressured,
+                "{chunks} queued quanta before the first read fill the ring depth"
+            );
 
             assert_eq!(
                 fixture.node.backpressure_recheck(),
@@ -507,6 +514,99 @@ mod tests {
             queued >= QUANTUM,
             "the block at the cut needs {QUANTUM} frames, the lane queued {queued}"
         );
+    }
+
+    /// The lead past the reader's mark stays below `chunks + 1` quanta, the
+    /// ring depth commands are scheduled against: a packet the reader spent
+    /// and returned frees its frames, and a packet it still holds has frames
+    /// behind the mark.
+    #[kithara::test(tokio)]
+    async fn the_lead_past_the_read_mark_stays_below_the_ring_depth() {
+        const QUANTUM: usize = 512;
+        let mut fixture = NodeFixture::framed(1, QUANTUM);
+        let admit = |fixture: &mut NodeFixture| {
+            fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                SegmentId::FIRST,
+                &[0.25; QUANTUM],
+            ))));
+            fixture.node.admit()
+        };
+        assert_eq!(admit(&mut fixture), TickResult::Progress);
+        let held = fixture.receiver.pop().expect("the reader takes its packet");
+        assert_eq!(
+            admit(&mut fixture),
+            TickResult::Progress,
+            "a block that ends inside the held packet needs the next one queued"
+        );
+        fixture
+            .receiver
+            .recycle(held)
+            .expect("the spent packet goes back");
+        fixture.node.recycle();
+
+        assert_eq!(
+            admit(&mut fixture),
+            TickResult::Backpressured,
+            "one queued quantum after a spent packet is the whole one-quantum lead"
+        );
+    }
+
+    /// A reader may trim the frames it read off a packet before handing it
+    /// back; the lead still releases everything the packet took.
+    #[kithara::test(tokio)]
+    async fn a_trimmed_return_releases_the_whole_packet() {
+        const QUANTUM: usize = 512;
+        const PART: usize = 256;
+        let mut fixture = NodeFixture::framed(1, QUANTUM);
+        let admit = |fixture: &mut NodeFixture, frames: usize| {
+            fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                SegmentId::FIRST,
+                &vec![0.25; frames],
+            ))));
+            fixture.node.admit()
+        };
+        assert_eq!(admit(&mut fixture, QUANTUM), TickResult::Progress);
+        let Some(PcmPacket::Chunk(mut held)) = fixture.receiver.pop() else {
+            panic!("the reader takes its packet");
+        };
+        held.samples.truncate(held.samples.len() / 4);
+        fixture
+            .receiver
+            .recycle(PcmPacket::Chunk(held))
+            .expect("the trimmed packet goes back");
+        fixture.node.recycle();
+
+        for part in 0..3 {
+            assert_eq!(
+                admit(&mut fixture, PART),
+                TickResult::Progress,
+                "part {part} of an empty one-quantum lead"
+            );
+        }
+        assert_eq!(admit(&mut fixture, PART), TickResult::Backpressured);
+    }
+
+    /// A reader may keep the packets it takes: taking the next one spends
+    /// every packet before it, so the lead keeps moving without returns.
+    #[kithara::test(tokio)]
+    async fn a_packet_the_reader_keeps_is_spent_by_the_next_take() {
+        const QUANTUM: usize = 512;
+        let mut fixture = NodeFixture::framed(1, QUANTUM);
+        for packet in 0..4 {
+            fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                SegmentId::FIRST,
+                &[0.25; QUANTUM],
+            ))));
+            assert_eq!(
+                fixture.node.admit(),
+                TickResult::Progress,
+                "packet {packet} after the reader took every earlier one"
+            );
+            assert!(
+                fixture.receiver.pop().is_some(),
+                "the reader keeps packet {packet}"
+            );
+        }
     }
 
     #[kithara::test(tokio)]
