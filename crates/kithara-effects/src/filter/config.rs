@@ -1,8 +1,14 @@
+use std::num::NonZeroU32;
+
 use bon::bon;
 use kithara_config::Config;
 use kithara_dsp::filter::FilterError;
 
 use super::{Cutoff, Q};
+
+/// Highest cutoff the knob map gives, as a share of the sample rate: below
+/// Nyquist with margin, and above every default cutoff at 44.1 kHz and up.
+const NYQUIST_SHARE: f64 = 0.45;
 
 /// The pass response the knob selects on one side of its center.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,16 +80,21 @@ impl FilterSettings {
         })
     }
 
-    /// The response a knob position asks for, `None` at the center.
+    /// The response a knob position asks for at `rate`, `None` at the center.
+    ///
+    /// The cutoff never exceeds [`NYQUIST_SHARE`] of `rate`: near the
+    /// configured edges the map holds a plateau instead of reaching Nyquist.
     #[must_use]
-    pub fn response(&self, knob: f64) -> Option<(Kind, f64)> {
-        if knob < 0.0 {
-            Some((Kind::LowPass, self.cutoff(Kind::LowPass, -knob)))
+    pub fn response(&self, rate: NonZeroU32, knob: f64) -> Option<(Kind, f64)> {
+        let limit = NYQUIST_SHARE * f64::from(rate.get());
+        let side = if knob < 0.0 {
+            Kind::LowPass
         } else if knob > 0.0 {
-            Some((Kind::HighPass, self.cutoff(Kind::HighPass, knob)))
+            Kind::HighPass
         } else {
-            None
-        }
+            return None;
+        };
+        Some((side, self.cutoff(side, knob.abs()).min(limit)))
     }
 
     /// Geometric interpolation from the edge (distance 0) to the extreme (distance 1).
@@ -94,23 +105,5 @@ impl FilterSettings {
         };
         let edge = f64::from(edge);
         edge * (f64::from(extreme) / edge).powf(distance)
-    }
-
-    /// Refuses a rate whose Nyquist frequency any configured cutoff reaches.
-    pub(super) fn check(&self, rate: f64) -> Result<(), FilterError> {
-        let nyquist = rate / 2.0;
-        if [
-            self.low_edge,
-            self.low_extreme,
-            self.high_edge,
-            self.high_extreme,
-        ]
-        .into_iter()
-        .all(|cutoff| f64::from(cutoff) < nyquist)
-        {
-            Ok(())
-        } else {
-            Err(FilterError::Parameters)
-        }
     }
 }

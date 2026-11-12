@@ -113,7 +113,9 @@ fn bits(samples: &[f32]) -> Vec<u32> {
 
 /// The kernel response and cutoff the settings give `value`.
 fn response(settings: &FilterSettings, value: f64) -> (Response, f64) {
-    let (kind, hz) = settings.response(value).expect("off center");
+    let (kind, hz) = settings
+        .response(spec(1).sample_rate, value)
+        .expect("off center");
     let response = match kind {
         Kind::LowPass => Response::LowPass,
         Kind::HighPass => Response::HighPass,
@@ -246,10 +248,11 @@ fn program_blocks_are_bit_identical_under_two_partitions() {
 fn a_sixty_second_sweep_from_200_to_8000_hz_is_accepted_and_stays_finite() {
     let rate = 48_000_u32;
     let settings = FilterSettings::default();
+    let rate_hz = NonZeroU32::new(rate).expect("rate");
     let position = |hz: f64| (hz / 30.0).ln() / (10_000.0_f64 / 30.0).ln();
     let (from, to) = (position(200.0), position(8_000.0));
     for (value, hz) in [(from, 200.0), (to, 8_000.0)] {
-        let (kind, actual) = settings.response(value).expect("high-pass side");
+        let (kind, actual) = settings.response(rate_hz, value).expect("high-pass side");
         assert_eq!(kind, Kind::HighPass);
         assert!((actual - hz).abs() < 1e-6 * hz, "{actual} Hz for {hz} Hz");
     }
@@ -308,11 +311,6 @@ fn filter_rejects_invalid_parameters_and_ranges() {
     assert_eq!(
         FilterEffect::new(spec(0), FilterSettings::default()).err(),
         Some(FilterError::Shape)
-    );
-    let low_rate = AudioSpec::new(1, NonZeroU32::new(32_000).expect("rate"));
-    assert_eq!(
-        FilterEffect::new(low_rate, end_at(Kind::HighPass, 20_000.0)).err(),
-        Some(FilterError::Parameters)
     );
     let mut effect = filter(spec(1), FilterSettings::default());
     let mut plane = [0.25_f32; 4];
@@ -416,7 +414,7 @@ fn low_pass_impulse_has_the_declared_causal_delay() {
 }
 
 #[kithara::test]
-fn refused_rate_and_plane_geometry_leave_format_and_history_untouched() {
+fn refused_plane_geometry_leaves_format_and_history_untouched() {
     let settings = end_at(Kind::HighPass, 20_000.0);
     let mut effect = filter(spec(1), settings);
     let mut reference = filter(spec(1), settings);
@@ -427,22 +425,106 @@ fn refused_rate_and_plane_geometry_leave_format_and_history_untouched() {
                 .any(|sample| *sample != 0.0)
         );
     }
-    let refused = AudioSpec::new(1, NonZeroU32::new(32_000).expect("changed rate"));
     let mut invalid_planes: [&mut [f32]; 0] = [];
     assert_eq!(
         effect.process(&mut invalid_planes, 0..0),
         Err(FilterError::Shape)
     );
-    assert_eq!(
-        effect.update_sample_rate(refused.sample_rate),
-        Err(FilterError::Parameters)
-    );
-    assert!(!effect.accepts_spec(refused));
     assert!(effect.accepts_spec(spec(1)));
     let expected = held(&mut reference, 1, &[0.0; 3], 1.0);
     let actual = held(&mut effect, 1, &[0.0; 3], 1.0);
     assert!(expected.iter().any(|sample| *sample != 0.0));
     assert_eq!(bits(&actual), bits(&expected));
+}
+
+/// Below 44.1 kHz the map holds its cutoffs under 0.45 of the rate: the
+/// filter runs at the ends of both sides, and the center stays transparent.
+#[kithara::test]
+#[case(32_000)]
+#[case(1_000)]
+fn low_rates_hold_the_cutoff_below_nyquist(#[case] rate: u32) {
+    let rate = NonZeroU32::new(rate).expect("rate");
+    let limit = 0.45 * f64::from(rate.get());
+    for q in [Q::default(), Q::MAX] {
+        let settings = FilterSettings::builder().q(q).build().expect("settings");
+        let mut previous: Option<(Kind, f64)> = None;
+        for step in -1_000..=1_000 {
+            let value = f64::from(step) / 1_000.0;
+            let Some((kind, hz)) = settings.response(rate, value) else {
+                assert_eq!(step, 0);
+                previous = None;
+                continue;
+            };
+            assert!(hz > 0.0 && hz <= limit, "{hz} Hz at {value}");
+            if let Some((last_kind, last)) = previous.filter(|(last_kind, _)| *last_kind == kind) {
+                assert_eq!(last_kind, kind);
+                match kind {
+                    Kind::LowPass => assert!(hz >= last, "low-pass rises toward the center"),
+                    Kind::HighPass => assert!(hz >= last, "high-pass rises toward the end"),
+                }
+                assert!(
+                    hz / last < 1.01 && last / hz < 1.01,
+                    "no step: {last} to {hz}"
+                );
+            }
+            previous = Some((kind, hz));
+        }
+        let mut effect = filter(AudioSpec::new(2, rate), settings);
+        let input = [1.0, -1.0, 0.25, -0.25].repeat(512);
+        assert_eq!(bits(&held(&mut effect, 2, &input, 0.0)), bits(&input));
+        for value in [-1.0, -f64::EPSILON, f64::EPSILON, 1.0] {
+            let output = held(&mut effect, 2, &input, value);
+            assert!(output.iter().all(|sample| sample.is_finite()));
+        }
+    }
+}
+
+/// At 44.1 and 48 kHz no default cutoff reaches the limit, so the deck
+/// filter is the kernel at the unclamped geometric map, bit for bit.
+#[kithara::test]
+#[case(44_100)]
+#[case(48_000)]
+fn the_limit_leaves_44_1_and_48_khz_unchanged(#[case] rate: u32) {
+    let rate = NonZeroU32::new(rate).expect("rate");
+    let settings = FilterSettings::default();
+    let input = [0.5, -0.25, 0.125, -1.0].repeat(256);
+    for (value, kernel, edge, extreme) in [
+        (-1.0, Response::LowPass, 15_000.0_f64, 40.0_f64),
+        (-f64::EPSILON, Response::LowPass, 15_000.0, 40.0),
+        (f64::EPSILON, Response::HighPass, 30.0, 10_000.0),
+        (1.0, Response::HighPass, 30.0, 10_000.0),
+    ] {
+        let hz = edge * (extreme / edge).powf(value.abs());
+        let mut effect = filter(AudioSpec::new(1, rate), settings);
+        let mut expected = input.clone();
+        StateVariableFilter::new(NonZeroUsize::MIN)
+            .process(
+                &mut [expected.as_mut_slice()],
+                0..input.len(),
+                &vec![hz; input.len()],
+                rate,
+                f64::from(settings.q()),
+                kernel,
+            )
+            .expect("unclamped kernel");
+        assert_eq!(bits(&held(&mut effect, 1, &input, value)), bits(&expected));
+    }
+}
+
+/// A rate change off center keeps the knob and its history; the next frames
+/// use the map at the new rate.
+#[kithara::test]
+fn a_rate_change_off_center_keeps_the_knob_and_remaps_the_cutoff() {
+    let low = NonZeroU32::new(32_000).expect("rate");
+    let mut effect = filter(spec(1), FilterSettings::default());
+    effect.configure(knob(-0.05));
+    held(&mut effect, 1, &[0.25; 64], -0.05);
+    effect.update_sample_rate(low);
+    assert!(effect.accepts_spec(AudioSpec::new(1, low)));
+    assert_eq!(effect.knob(), -0.05);
+    assert!(!effect.tail_exhausted());
+    let output = processed(&mut effect, 1, &[0.25; 64]).expect("remapped frames");
+    assert!(output.iter().all(|sample| sample.is_finite()));
 }
 
 /// Compare settled fixture RMS against the bilinear Butterworth magnitude.
@@ -535,9 +617,7 @@ fn prepared_filter_controls_process_reset_and_rate_retune_never_allocate() {
             let target = knob(if index % 2 == 0 { -0.6 } else { 0.4 });
             let mut planes = vec![vec![0.25; frames]; usize::from(channels)];
             assert_no_alloc::assert_no_alloc(|| {
-                effect
-                    .update_sample_rate(spec(channels).sample_rate)
-                    .expect("same format");
+                effect.update_sample_rate(spec(channels).sample_rate);
                 effect.configure(target);
                 effect
                     .process(&mut planes, 0..frames)

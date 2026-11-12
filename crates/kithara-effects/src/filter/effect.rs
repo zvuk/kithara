@@ -34,11 +34,9 @@ pub struct FilterEffect {
 impl FilterEffect {
     /// Prepare state and scratch outside audio processing, at the center.
     /// # Errors
-    /// [`FilterError::Shape`] without channels, [`FilterError::Parameters`]
-    /// when a configured cutoff reaches the Nyquist frequency of `spec`.
+    /// [`FilterError::Shape`] without channels.
     pub fn new(spec: AudioSpec, settings: FilterSettings) -> Result<Self, FilterError> {
         let channels = NonZeroUsize::new(usize::from(spec.channels)).ok_or(FilterError::Shape)?;
-        settings.check(f64::from(spec.sample_rate.get()))?;
         Ok(Self {
             spec,
             settings,
@@ -76,19 +74,14 @@ impl FilterEffect {
         self.knob.set_value(target);
     }
 
-    /// Retune at a new rate without allocating or resetting history.
-    /// # Errors
-    /// Refuses a rate whose Nyquist frequency a configured cutoff reaches,
-    /// without changing state.
-    pub fn update_sample_rate(&mut self, rate: NonZeroU32) -> Result<(), FilterError> {
+    /// Retune at a new rate without allocating or resetting history; the knob
+    /// map recomputes its cutoffs for that rate.
+    pub fn update_sample_rate(&mut self, rate: NonZeroU32) {
         let spec = AudioSpec::new(self.spec.channels, rate);
-        if self.accepts_spec(spec) {
-            return Ok(());
+        if !self.accepts_spec(spec) {
+            self.knob.update_sample_rate(rate);
+            self.spec = spec;
         }
-        self.settings.check(f64::from(rate.get()))?;
-        self.knob.update_sample_rate(rate);
-        self.spec = spec;
-        Ok(())
     }
 
     /// Whether this filter is already prepared for the exact format.
@@ -187,7 +180,7 @@ impl FilterEffect {
         }
         let side = self
             .settings
-            .response(self.knob.current_value())
+            .response(self.spec.sample_rate, self.knob.current_value())
             .map(|(kind, _)| kind);
         self.stage.enter(side);
     }
@@ -204,7 +197,7 @@ impl FilterEffect {
         self.stage.filter.reset();
         self.stage.side = self
             .settings
-            .response(self.knob.current_value())
+            .response(self.spec.sample_rate, self.knob.current_value())
             .map(|(kind, _)| kind);
     }
 }
@@ -236,12 +229,12 @@ impl Stage {
         let q = f64::from(settings.q());
         let mut offset = 0;
         while offset < knobs.len() {
-            let side = settings.response(knobs[offset]).map(|(kind, _)| kind);
+            let side = settings.response(rate, knobs[offset]).map(|(kind, _)| kind);
             self.enter(side);
             let limit = knobs.len().min(offset + self.cutoffs.len());
             let mut end = offset;
             while end < limit {
-                match settings.response(knobs[end]) {
+                match settings.response(rate, knobs[end]) {
                     Some((kind, cutoff)) if Some(kind) == side => {
                         self.cutoffs[end - offset] = cutoff
                     }
