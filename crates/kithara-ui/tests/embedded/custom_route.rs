@@ -2,20 +2,24 @@
 //! its own widget on: `MasonryHost::with_custom`, `MasonryRoot`, and its
 //! actions out of `MasonryRoot::take_actions`, driven only through public API.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
-    draw::{DrawListBuilder, Rect},
-    ids::{EndpointId, SourceUri},
+    draw::{DrawListBuilder, Pt, Rect},
+    ids::SourceUri,
     interact::{
         Hit, Input, MOUSE, Outcome, PointerButton, PointerId, PointerInput, PointerOwnership,
         PointerPhase,
     },
-    registry::{EndpointCategory, EndpointDesc, EndpointRegistry},
+    module::Pose,
+    registry::{EndpointCategory, EndpointDesc, MapEndpoints, ValueKind},
     render::{
         CustomSkin, Published, ReadValue, Reads, Skin, document,
         document::{Clock, Ctx},
@@ -152,23 +156,37 @@ impl CustomWidget for Presser {
     }
 }
 
-struct NoEndpoints;
+/// The one endpoint the fixture reads: how far a driven object has travelled
+/// toward its far pose.
+const SQUASH: &str = "fixture.squash";
 
-impl EndpointRegistry for NoEndpoints {
-    fn endpoint(&self, _category: EndpointCategory, _id: &EndpointId) -> Option<&EndpointDesc> {
-        None
+#[derive(Default)]
+struct Squash {
+    phase: Cell<f64>,
+}
+
+impl Reads for Squash {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        (endpoint == SQUASH).then(|| ReadValue::Scalar(self.phase.get()))
     }
 }
 
-struct NoReads;
-
-impl Reads for NoReads {
-    fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
-        None
-    }
+fn ctx<'a>(ui: &'a CompiledUi, reads: &'a Squash) -> Ctx<'a, 'a> {
+    Ctx::new(
+        ui,
+        reads,
+        &view::EMPTY,
+        builtin::skin_doc(),
+        Clock::default(),
+    )
 }
 
-fn document() -> CompiledUi {
+/// The custom widget's slot, standing at the window's left edge.
+const SLOT: &str = r#"Spacer(id: "custom", size: Some((w: Fixed(40.0), h: Fixed(40.0))))"#;
+
+/// A module whose one row holds `custom`, the document node the widget mounts
+/// in place of.
+fn document(custom: &str) -> CompiledUi {
     let mut resolver = MemResolver::default();
     resolver.insert(
         "route.klayout.ron",
@@ -177,15 +195,21 @@ fn document() -> CompiledUi {
     );
     resolver.insert(
         "route.kmodule.ron",
-        r#"(schema: "kithara.module", version: 1, id: "route", chrome: Plain,
-            root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
-                Spacer(id: "custom", size: Some((w: Fixed(40.0), h: Fixed(40.0)))),
-            ]))"#,
+        &format!(
+            r#"(schema: "kithara.module", version: 1, id: "route", chrome: Plain,
+            root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [{custom}]))"#
+        ),
+    );
+    let mut endpoints = MapEndpoints::default();
+    endpoints.insert(
+        EndpointCategory::Model,
+        SQUASH,
+        EndpointDesc::new(ValueKind::Scalar),
     );
     compile(
         "route.klayout.ron",
         &resolver,
-        &NoEndpoints,
+        &endpoints,
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
@@ -205,15 +229,11 @@ fn skin() -> Skin {
     .unwrap_or_else(|error| panic!("the route skin must resolve: {error}"))
 }
 
-fn mounted(ui: &CompiledUi, skin: &Skin, widget: Presser) -> MasonryRoot<Out> {
-    let reads = NoReads;
-    let ctx = Ctx::new(
-        ui,
-        &reads,
-        &view::EMPTY,
-        builtin::skin_doc(),
-        Clock::default(),
-    );
+fn mounted<Widget>(ui: &CompiledUi, skin: &Skin, reads: &Squash, widget: Widget) -> MasonryRoot<Out>
+where
+    Widget: CustomWidget<Action = Probe>,
+{
+    let ctx = ctx(ui, reads);
     let host = MasonryHost::map_actions(ctx, skin, Out::Document).with_custom(
         "demo/custom",
         widget,
@@ -307,9 +327,9 @@ fn identities(seen: &Rc<RefCell<Vec<PointerInput>>>) -> Vec<(PointerId, PointerP
 /// neutral model numbers them from zero, the mouse being zero.
 #[kithara::test]
 fn every_pointer_reaches_the_widget_under_its_own_identity() {
-    let (ui, skin) = (document(), skin());
+    let (ui, skin) = (document(SLOT), skin());
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let mut root = mounted(&ui, &skin, Presser::new(&seen));
+    let mut root = mounted(&ui, &skin, &Squash::default(), Presser::new(&seen));
 
     send(
         &mut root,
@@ -348,9 +368,9 @@ fn every_pointer_reaches_the_widget_under_its_own_identity() {
 
 #[kithara::test]
 fn buttons_and_click_counts_arrive_as_the_platform_reported_them() {
-    let (ui, skin) = (document(), skin());
+    let (ui, skin) = (document(SLOT), skin());
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let mut root = mounted(&ui, &skin, Presser::new(&seen));
+    let mut root = mounted(&ui, &skin, &Squash::default(), Presser::new(&seen));
 
     send(
         &mut root,
@@ -416,9 +436,9 @@ fn buttons_and_click_counts_arrive_as_the_platform_reported_them() {
 /// the cancel ends the capture, input elsewhere no longer reaches the widget.
 #[kithara::test]
 fn a_cancelled_capture_ends_and_no_other_pointer_completes_it() {
-    let (ui, skin) = (document(), skin());
+    let (ui, skin) = (document(SLOT), skin());
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let mut root = mounted(&ui, &skin, Presser::new(&seen));
+    let mut root = mounted(&ui, &skin, &Squash::default(), Presser::new(&seen));
 
     send(
         &mut root,
@@ -450,9 +470,9 @@ fn a_cancelled_capture_ends_and_no_other_pointer_completes_it() {
 
 #[kithara::test]
 fn a_held_press_reports_its_long_press_from_the_frame_loop() {
-    let (ui, skin) = (document(), skin());
+    let (ui, skin) = (document(SLOT), skin());
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let mut root = mounted(&ui, &skin, Presser::new(&seen));
+    let mut root = mounted(&ui, &skin, &Squash::default(), Presser::new(&seen));
 
     send(&mut root, [down(2, INSIDE, MasonryButton::Primary, 1)]);
     for _ in 0..4 {
@@ -468,5 +488,190 @@ fn a_held_press_reports_its_long_press_from_the_frame_loop() {
             label: "held 600 ms".to_owned(),
         })],
         "the long press leaves once, from the frame that crossed the threshold, and its release completes nothing"
+    );
+}
+
+/// Where the identity-posed slot's box stands in the window: the row centres
+/// its one 40 by 40 child in the window's 120-pixel height.
+const ORIGIN: Pt = Pt { x: 0.0, y: 40.0 };
+
+/// Records where, in its own space, the widget was pressed.
+struct Spot {
+    pressed: Rc<RefCell<Vec<Pt>>>,
+}
+
+impl CustomWidget for Spot {
+    type Action = Probe;
+
+    fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Probe> {
+        match (input, hit.inside()) {
+            (
+                Input::Pointer(PointerInput {
+                    phase: PointerPhase::Down,
+                    ..
+                }),
+                Some(at),
+            ) => {
+                self.pressed.borrow_mut().push(at);
+                Outcome::captured()
+            }
+            _ => Outcome::IGNORED,
+        }
+    }
+
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        Size2::new(40.0, 40.0)
+    }
+
+    fn paint(
+        &mut self,
+        _list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        _bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
+    }
+}
+
+fn posed(pose: &Pose) -> String {
+    format!(
+        "Object(id: \"posed\", transform: (position: ({:?}, {:?}), anchor: ({:?}, {:?}), \
+         scale: ({:?}, {:?}), rotation: {:?}), child: {SLOT})",
+        pose.position.0,
+        pose.position.1,
+        pose.anchor.0,
+        pose.anchor.1,
+        pose.scale.0,
+        pose.scale.1,
+        pose.rotation,
+    )
+}
+
+fn pose(position: (f32, f32), anchor: (f32, f32), scale: (f32, f32), rotation: f32) -> Pose {
+    let mut pose = Pose::default();
+    pose.position = position;
+    pose.anchor = anchor;
+    pose.scale = scale;
+    pose.rotation = rotation;
+    pose
+}
+
+/// A point the widget painted at `local` is pressed where the pose put it on
+/// screen, worked out forward from the document's own pose; the widget must
+/// be handed `local` back. The moved case lands wholly outside the box the
+/// row laid out, which only reaches the widget if routing follows the pose.
+#[kithara::test]
+#[case::unposed(pose((0.0, 0.0), (0.0, 0.0), (1.0, 1.0), 0.0))]
+#[case::moved(pose((60.0, -20.0), (0.0, 0.0), (1.0, 1.0), 0.0))]
+#[case::scaled(pose((0.0, 0.0), (20.0, 20.0), (2.0, 0.5), 0.0))]
+#[case::turned(pose((0.0, 0.0), (20.0, 20.0), (1.0, 1.0), 90.0))]
+#[case::all_at_once(pose((15.0, 5.0), (10.0, 30.0), (1.5, 1.5), 30.0))]
+fn a_posed_widget_is_hit_where_it_was_painted(#[case] pose: Pose) {
+    const LOCAL: Pt = Pt { x: 30.0, y: 10.0 };
+    let (ui, skin) = (document(&posed(&pose)), skin());
+    let pressed = Rc::new(RefCell::new(Vec::new()));
+    let mut root = mounted(
+        &ui,
+        &skin,
+        &Squash::default(),
+        Spot {
+            pressed: Rc::clone(&pressed),
+        },
+    );
+    let shown = pose.matrix().apply(LOCAL);
+    let at = (f64::from(ORIGIN.x + shown.x), f64::from(ORIGIN.y + shown.y));
+
+    send(&mut root, [down(1, at, MasonryButton::Primary, 1)]);
+
+    let pressed = pressed.borrow();
+    assert_eq!(
+        pressed.len(),
+        1,
+        "the press at {at:?} must reach the widget"
+    );
+    assert!(
+        (pressed[0].x - LOCAL.x).abs() < 1.0e-3 && (pressed[0].y - LOCAL.y).abs() < 1.0e-3,
+        "the widget must be pressed at {LOCAL:?}, the point it painted there, not {:?}",
+        pressed[0]
+    );
+}
+
+/// A pose that flattens the widget onto a line has no inverse: no point on
+/// screen names one point of the widget. The host says so rather than handing
+/// the widget a point it did not paint.
+#[kithara::test]
+fn a_pose_without_an_inverse_is_refused_rather_than_hit() {
+    let flat = pose((0.0, 0.0), (20.0, 20.0), (0.0, 1.0), 0.0);
+    let (ui, skin) = (document(&posed(&flat)), skin());
+    let pressed = Rc::new(RefCell::new(Vec::new()));
+    let mut root = mounted(
+        &ui,
+        &skin,
+        &Squash::default(),
+        Spot {
+            pressed: Rc::clone(&pressed),
+        },
+    );
+
+    send(
+        &mut root,
+        [
+            down(1, (20.0, 60.0), MasonryButton::Primary, 1),
+            down(1, (10.0, 50.0), MasonryButton::Primary, 1),
+        ],
+    );
+
+    assert!(
+        pressed.borrow().is_empty(),
+        "a flattened widget must not be pressed"
+    );
+    assert!(
+        kithara_test_utils::flight::tail()
+            .iter()
+            .any(|line| line.contains("demo/custom") && line.contains("no inverse")),
+        "the refusal must be reported, naming the widget"
+    );
+}
+
+/// The pose can also go flat under a gesture already held. The widget is not
+/// handed the pointer through a transform that no longer names a point of it:
+/// it is told its gesture was cancelled, and the capture ends there.
+#[kithara::test]
+fn a_held_gesture_is_cancelled_when_its_pose_goes_flat() {
+    let (ui, skin) = (
+        document(&format!(
+            "Object(id: \"squashed\", transform: (anchor: (20.0, 20.0)), \
+             to: (anchor: (20.0, 20.0), scale: (0.0, 1.0)), \
+             phase: Model(id: \"{SQUASH}\"), child: {SLOT})"
+        )),
+        skin(),
+    );
+    let reads = Squash::default();
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let mut root = mounted(&ui, &skin, &reads, Presser::new(&seen));
+
+    send(&mut root, [down(3, INSIDE, MasonryButton::Primary, 1)]);
+    reads.phase.set(1.0);
+    root.refresh(ctx(&ui, &reads));
+    send(
+        &mut root,
+        [
+            moved(3, INSIDE),
+            moved(3, OUTSIDE),
+            up(3, OUTSIDE, MasonryButton::Primary, 1),
+        ],
+    );
+
+    assert_eq!(
+        identities(&seen),
+        [
+            (PointerId(2), PointerPhase::Down),
+            (PointerId(2), PointerPhase::Cancel),
+        ],
+        "the held gesture must end once, as cancelled, and nothing after it may reach the widget"
+    );
+    assert!(
+        root.take_actions().is_empty(),
+        "a cancelled gesture completes nothing"
     );
 }

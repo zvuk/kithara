@@ -1,6 +1,6 @@
 use crate::{
     atoms::{table::face::TableFace, tree::Tree as TreeFace},
-    draw::{DrawList, Rect, Transform},
+    draw::{DrawList, Rect},
     hosts::hosted::{SearchPlan, TablePlan, TreePlan},
     interact::{Hit, Input, Outcome},
     masonry::{
@@ -46,10 +46,7 @@ where
         false
     }
 
-    /// A projection hands back a list it already finished, so no pose reaches
-    /// what it drew. The document refuses to put one on a `Table` or a `Tree`
-    /// for exactly that reason, rather than moving the box and not the picture.
-    fn draw_list(&mut self, bounds: Rect, _transform: Transform) -> DrawList {
+    fn draw_list(&mut self, bounds: Rect) -> DrawList {
         self.plan.draw_list(&mut self.text, bounds)
     }
 

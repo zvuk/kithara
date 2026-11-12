@@ -11,6 +11,7 @@ use super::{
     spot::Spot,
 };
 use crate::{
+    backends::affine,
     draw::{Pt, Rgba, Transform},
     expand::Binding,
     hosts::{hosted::HostedControlPlan, solve},
@@ -615,6 +616,20 @@ impl<Action> MasonryNode<Action> {
         self.widget.id()
     }
 
+    /// Stands the mounted leaf in every enclosing object's pose. The pose is
+    /// the node's Masonry transform, so what the leaf draws and the region
+    /// that answers the pointer move as one, and a press lands in the leaf's
+    /// own space through the inverse of the very transform it was painted
+    /// with. A pose with no inverse is reported here: such a leaf still
+    /// paints, but the node refuses every pointer it is offered.
+    pub(crate) fn place(&mut self, path: &str, transform: Transform) {
+        if !transform.is_invertible() {
+            tracing::warn!(%path, "`{path}` will not take the pointer: its pose has no inverse");
+        }
+        self.widget.options.transform = affine(transform);
+        self.widget.widget.place(transform);
+    }
+
     delegate::delegate! {
         to self.widget.widget {
             /// What this node runs when pressed, and with the other button.
@@ -623,10 +638,6 @@ impl<Action> MasonryNode<Action> {
                 primary: Option<Box<dyn Fn() -> HostAction>>,
                 secondary: Option<Box<dyn Fn() -> HostAction>>,
             );
-            /// Offsets everything the mounted leaf draws, without moving the
-            /// box the layout gave it or the region that answers the pointer.
-            /// Nothing is standing yet at mount, so the answer is discarded.
-            pub(crate) fn place(&mut self, transform: Transform) -> bool;
             /// The stepping surface this flow carries over itself.
             pub(crate) fn set_detent(&mut self, detent: Detent);
             /// Where this placement of a stage stands, and what carries it.

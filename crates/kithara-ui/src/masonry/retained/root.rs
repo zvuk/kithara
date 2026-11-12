@@ -28,6 +28,7 @@ use super::{
 #[cfg(feature = "capture")]
 use crate::draw::Rgba;
 use crate::{
+    backends::affine,
     draw::Pt,
     hosts::drag::DragSession,
     interact::{
@@ -827,7 +828,7 @@ where
                 let mut node = widget.downcast::<Node>();
                 let moved = node.widget.place(transform);
                 if moved {
-                    node.ctx.request_paint_only();
+                    node.ctx.set_transform(affine(transform));
                 }
                 moved
             });

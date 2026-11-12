@@ -241,6 +241,21 @@ pub fn portable_scroll(delta: ScrollDelta, scale: f64) -> Option<Scroll> {
 /// names no pointer is the mouse's.
 #[must_use]
 pub fn portable_pointer_id(event: &PointerEvent) -> PointerId {
+    let PointerInfo {
+        pointer_id: Some(id),
+        ..
+    } = pointer_info(event)
+    else {
+        return MOUSE;
+    };
+    let mut number = PointerNumber(0);
+    id.hash(&mut number);
+    PointerId(number.0.saturating_sub(1))
+}
+
+/// The pointer that produced `event`, whatever the event says it did.
+#[must_use]
+pub const fn pointer_info(event: &PointerEvent) -> &PointerInfo {
     let (PointerEvent::Down(PointerButtonEvent { pointer, .. })
     | PointerEvent::Up(PointerButtonEvent { pointer, .. })
     | PointerEvent::Move(PointerUpdate { pointer, .. })
@@ -249,16 +264,7 @@ pub fn portable_pointer_id(event: &PointerEvent) -> PointerId {
     | PointerEvent::Leave(pointer)
     | PointerEvent::Scroll(PointerScrollEvent { pointer, .. })
     | PointerEvent::Gesture(PointerGestureEvent { pointer, .. })) = event;
-    let PointerInfo {
-        pointer_id: Some(id),
-        ..
-    } = pointer
-    else {
-        return MOUSE;
-    };
-    let mut number = PointerNumber(0);
-    id.hash(&mut number);
-    PointerId(number.0.saturating_sub(1))
+    pointer
 }
 
 /// The masonry identity of a neutral pointer, inverse to

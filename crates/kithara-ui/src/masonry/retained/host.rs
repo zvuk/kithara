@@ -561,7 +561,7 @@ where
             },
             |widget| self.custom_leaf(widget, None, declared),
         );
-        output.place(transform);
+        output.place(path, transform);
         if self.ctx.ui.driven {
             output.watch_placement(path_id);
         }
