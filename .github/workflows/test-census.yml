@@ -1,6 +1,9 @@
 name: Test census
 
 on:
+  push:
+    paths:
+      - .github/workflows/test-census.yml
   workflow_dispatch:
     inputs:
       base:
@@ -36,7 +39,7 @@ env:
 
 jobs:
   inventory:
-    if: github.actor == github.repository_owner && vars.KITHARA_RUNNER_LABELS != ''
+    if: github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner && vars.KITHARA_RUNNER_LABELS != ''
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 120
     strategy:
