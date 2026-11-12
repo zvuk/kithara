@@ -23,8 +23,9 @@ pub(super) enum VerificationState {
 
 /// How much of the merge a verification checks.
 ///
-/// A draft is still being written: it runs what its change touched, as a
-/// branch push does. A pull request ready for review runs everything.
+/// A draft is still being written: it runs the draft scope, the required tests
+/// and what its description names, as a branch push does. A pull request ready
+/// for review runs everything.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Scope {
@@ -54,6 +55,9 @@ pub(super) struct PullRequest {
     /// GitHub login of whoever opened it, matched against the trusted authors
     /// the host configured.
     pub(super) author: String,
+    /// The description's `kithara-tests` block, which a draft runs beside the
+    /// required tests, or why it cannot be read.
+    pub(super) tests: Result<Option<String>, String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

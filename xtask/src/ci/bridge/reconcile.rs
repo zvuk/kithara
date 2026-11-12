@@ -288,6 +288,11 @@ impl Bridge {
             self.repo
                 .weakening_control_paths(base_sha, &pull.head_sha)?
         };
+        if ledger.turns_ready(&pull.head_sha, base_sha, pull.scope)? {
+            dispatch_ready(pull, |repository, branch| {
+                self.github.dispatch_ci(repository, branch)
+            })?;
+        }
         let entry = ledger.reserve(&pull.head_sha, base_sha, pull.scope)?;
         if reject_control_changes(
             pull.number,
@@ -311,6 +316,16 @@ impl Bridge {
             config: &self.config,
         };
         let Some(pipeline_id) = entry.pipeline_id else {
+            let pr_tests = match (entry.scope, &pull.tests) {
+                (Scope::Full, _) => None,
+                (Scope::Draft, Ok(tests)) => tests.as_deref(),
+                (Scope::Draft, Err(error)) => {
+                    let detail = format!("GitHub PR #{}: {error}", pull.number);
+                    self.github
+                        .report_status(&pull.head_sha, "failure", &detail, None)?;
+                    return ledger.reject(&pull.head_sha, base_sha, entry.attempt, detail);
+                }
+            };
             let reference = quarantine_ref(&pull.head_sha, base_sha, entry.attempt, entry.scope);
             // The base is merged in either way; trust decides only whether the
             // pull request keeps its own CI configuration on top of it.
@@ -341,8 +356,13 @@ impl Bridge {
                 &discovered,
                 ledger.last_pass(&pull.head_sha, base_sha)?.as_deref(),
                 || {
-                    self.gitlab
-                        .create_pipeline(&reference, &pull.head_sha, base_sha, entry.scope)
+                    self.gitlab.create_pipeline(
+                        &reference,
+                        &pull.head_sha,
+                        base_sha,
+                        entry.scope,
+                        pr_tests,
+                    )
                 },
                 |attempt, pipeline_id| {
                     ledger.attach(&pull.head_sha, base_sha, attempt, pipeline_id)
@@ -570,7 +590,7 @@ fn verification_base(
 fn scoped(scope: Scope, detail: String) -> String {
     match scope {
         Scope::Full => detail,
-        Scope::Draft => format!("Draft, touched tests only: {detail}"),
+        Scope::Draft => format!("Draft, required and named tests only: {detail}"),
     }
 }
 
@@ -676,6 +696,24 @@ fn start_verification(
 /// and guessing at the conflict is not the bridge's to do. The author gets a
 /// verdict they can act on instead of a run of whatever their branch was built
 /// against months ago.
+/// Starts the full GitHub run of a pull request that left draft, on its head
+/// branch in the repository it lives in. A deleted head repository has no
+/// workflow left to start.
+fn dispatch_ready(
+    pull: &PullRequest,
+    dispatch: impl FnOnce(&str, &str) -> Result<()>,
+) -> Result<()> {
+    let Some(repository) = &pull.head_repository else {
+        return Ok(());
+    };
+    info!(
+        pull = pull.number,
+        head = %pull.head_sha,
+        "draft turned ready; starting its full GitHub run"
+    );
+    dispatch(repository, &pull.head_branch)
+}
+
 fn reject_unmergeable(
     pull_number: u64,
     head_sha: &str,
@@ -863,6 +901,36 @@ mod tests {
         config.gitlab_url = "https://gitlab.example/".parse().unwrap();
         config.gitlab_project_path = "team/audio".into();
         config
+    }
+
+    #[test]
+    fn a_draft_that_turns_ready_dispatches_its_head_branch_once() {
+        let pull = PullRequest {
+            number: 7,
+            head_sha: "a".repeat(40),
+            head_repository: Some("fork/kithara".into()),
+            head_branch: "feature".into(),
+            scope: Scope::Full,
+            author: "fork".into(),
+            tests: Ok(None),
+        };
+        let mut dispatched = Vec::new();
+
+        dispatch_ready(&pull, |repository, branch| {
+            dispatched.push((repository.to_owned(), branch.to_owned()));
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            dispatched,
+            [("fork/kithara".to_owned(), "feature".to_owned())]
+        );
+        let gone = PullRequest {
+            head_repository: None,
+            ..pull
+        };
+        dispatch_ready(&gone, |_, _| panic!("a deleted fork has no workflow")).unwrap();
     }
 
     #[test]
@@ -2228,9 +2296,12 @@ mod tests {
     }
 
     #[test]
-    fn a_draft_reports_that_it_ran_only_what_it_touched() {
+    fn a_draft_reports_that_it_ran_only_the_draft_scope() {
         assert_eq!(scoped(Scope::Full, "passed".into()), "passed");
-        assert!(scoped(Scope::Draft, "passed".into()).starts_with("Draft, touched tests only:"));
+        assert!(
+            scoped(Scope::Draft, "passed".into())
+                .starts_with("Draft, required and named tests only:")
+        );
     }
 
     #[test]

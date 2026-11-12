@@ -1,9 +1,10 @@
-use std::{fmt::Display, fs, path::Path, process::Command};
+use std::{fs, path::Path, process::Command};
 
 use anyhow::{Context, Result};
 use clap::Args;
 
 use super::{
+    draft::{DraftScope, PR_TESTS_ENV},
     inventory::admit_expected,
     request::TestRequest,
     resolve::{ResolvedLane, resolve},
@@ -13,17 +14,17 @@ use crate::{
     Ctx,
     common::project::{ProjectConfig, TestCommandConfig},
     retried::Evidence,
-    touched::{self, Touched},
-    verdict::ChildFailure,
 };
 
 #[derive(Debug, Args)]
 #[command(trailing_var_arg = true)]
 pub struct TestArgs {
     /// Arguments for the configured test command. Recipe-level flags accepted anywhere:
-    /// `--lane=<configured-name>`, `--touched`, `--flash=true|false|on|off`, `--no-flash`,
+    /// `--lane=<configured-name>`, `--flash=true|false|on|off`, `--no-flash`,
     /// `--loom=true|false|on|off`, `--no-loom`, `--no-block=true|false|on|off`,
     /// `--load=true|false|on|off`, `--net-backend=<configured-name>`, `--narrow=<filterset>`,
+    /// `--draft` (only the lane's share of the required packages and the pull request's
+    /// `KITHARA_PR_TESTS` block),
     /// `--selection-output=<path>` (JSON lane names), and `--expected-tests=<path>`
     /// (UTF-8 TSV: binary ID, tab, full test name per line).
     #[arg(value_name = "ARGS", allow_hyphen_values = true)]
@@ -35,57 +36,59 @@ pub(crate) fn run(args: &TestArgs, ctx: &Ctx) -> Result<()> {
     let root = &ctx.root;
     let test = &ctx.config.test;
 
-    let base = touched::base_branch(&|name| std::env::var_os(name));
-    let plan = plan(test, root, &request, &base)?;
+    let block = std::env::var(PR_TESTS_ENV).ok();
+    let plan = plan(test, root, &request, block.as_deref())?;
     if let Some(output) = &request.selection_output {
         plan.write_selection(&root.join(output))?;
     }
     match plan {
-        Plan::Touched(selected) if selected.is_empty() => {
-            println!("no owned path touched; the nightly sweep covers these lanes");
+        Plan::Lane(lane_name) => run_lane(test, root, lane_name, &request),
+        Plan::NotRequired(lane_name) => {
+            println!("{lane_name}: skipped: not required");
             Ok(())
         }
-        Plan::Touched(selected) => run_each(&selected, |run| {
-            let mut command = touched_command(test, run, &request)?;
-            execute(test, root, run.lane(), &mut command)
-        }),
-        Plan::Lane(lane_name) => run_lane(test, root, lane_name, &request),
+        Plan::Draft { lane, scope } => {
+            let mut command = draft_command(test, lane, &scope, &request)?;
+            execute(test, root, lane, &mut command)
+        }
     }
 }
 
-/// Whether the test command given `args` runs any lane: a `--touched` run
-/// whose branch touched none of its lanes since it left `base` runs nothing.
+/// Whether the test command given `args` runs any lane: a `--draft` run of a
+/// lane that holds none of the draft scope `pr_tests` completes runs nothing.
 ///
 /// # Errors
 ///
 /// Fails when `args` are not a valid request, the test configuration is
-/// invalid, or git cannot say what the branch touched.
+/// invalid, or the draft scope cannot be read.
 pub fn selects_any_lane(
     root: &Path,
     project: &ProjectConfig,
     args: &[String],
-    base: &str,
+    pr_tests: Option<&str>,
 ) -> Result<bool> {
     let request = TestRequest::parse(args)?;
-    Ok(match plan(&project.test, root, &request, base)? {
-        Plan::Touched(selected) => !selected.is_empty(),
-        Plan::Lane(_) => true,
+    Ok(match plan(&project.test, root, &request, pr_tests)? {
+        Plan::NotRequired(_) => false,
+        Plan::Lane(_) | Plan::Draft { .. } => true,
     })
 }
 
 /// The lanes a request runs.
 enum Plan<'a> {
-    /// The runs the branch touched, possibly none.
-    Touched(Vec<Touched>),
     /// One lane, whole.
     Lane(&'a str),
+    /// One lane's share of the draft scope.
+    Draft { lane: &'a str, scope: DraftScope },
+    /// A draft lane that holds none of the draft scope.
+    NotRequired(&'a str),
 }
 
 impl Plan<'_> {
     fn write_selection(&self, path: &Path) -> Result<()> {
         let lanes: Vec<&str> = match self {
-            Self::Touched(selected) => selected.iter().map(Touched::lane).collect(),
-            Self::Lane(lane) => vec![lane],
+            Self::Lane(lane) | Self::Draft { lane, .. } => vec![lane],
+            Self::NotRequired(_) => Vec::new(),
         };
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
@@ -99,47 +102,22 @@ fn plan<'a>(
     test: &'a TestCommandConfig,
     root: &Path,
     request: &'a TestRequest,
-    base: &str,
+    pr_tests: Option<&str>,
 ) -> Result<Plan<'a>> {
     validate_config(test)?;
-    if request.touched {
-        return Ok(Plan::Touched(touched::lanes(
-            test,
-            root,
-            base,
-            &request.lanes,
-        )?));
+    let lane = select_lane(test, request)?;
+    if !request.draft {
+        return Ok(Plan::Lane(lane));
     }
-    select_lane(test, request).map(Plan::Lane)
-}
-
-/// Run `selected` serially without letting the first failure hide the rest:
-/// the error names each red lane with its own reason and leaves with the
-/// first one's exit code.
-pub(super) fn run_each<T, F>(selected: &[T], mut run: F) -> Result<()>
-where
-    T: Display,
-    F: FnMut(&T) -> Result<()>,
-{
-    let mut failures = Vec::new();
-    let mut code = None;
-    for lane in selected {
-        println!("=== {lane} ===");
-        if let Err(error) = run(lane) {
-            code.get_or_insert_with(|| {
-                error
-                    .downcast_ref::<ChildFailure>()
-                    .map_or(1, ChildFailure::exit_code)
-            });
-            failures.push(format!("{error:#}"));
-        }
-    }
-    code.map_or(Ok(()), |code| {
-        Err(ChildFailure::explained(
-            "touched test lanes".to_owned(),
-            Some(code),
-            failures.join("\n"),
-        ))
+    let scope = DraftScope::load(test, root, pr_tests)?;
+    let holds = test
+        .lanes
+        .get(lane)
+        .is_some_and(|config| scope.holds(&config.cargo));
+    Ok(if holds {
+        Plan::Draft { lane, scope }
+    } else {
+        Plan::NotRequired(lane)
     })
 }
 
@@ -179,16 +157,8 @@ pub(super) fn execute(
     evidence.verdict(lane_name, &test.known_flakes, status.code())
 }
 
-pub(super) fn lane_command(
-    test: &TestCommandConfig,
-    lane_name: &str,
-    request: &TestRequest,
-) -> Result<Command> {
-    requested_lane(test, lane_name, request)?.command(NextestAction::Run, &request.passthrough)
-}
-
 /// The lane as `request` asks for it, narrowed to the request's filterset.
-fn requested_lane(
+pub(super) fn requested_lane(
     test: &TestCommandConfig,
     lane_name: &str,
     request: &TestRequest,
@@ -200,18 +170,19 @@ fn requested_lane(
     }
 }
 
-/// The command of one touched run: a lane whole, or narrowed to packages.
-pub(super) fn touched_command(
+/// The command of one draft lane: the lane's own command with one added
+/// filterset, the draft scope, and a pass when the lane holds none of it.
+fn draft_command(
     test: &TestCommandConfig,
-    run: &Touched,
+    lane_name: &str,
+    scope: &DraftScope,
     request: &TestRequest,
 ) -> Result<Command> {
-    match run {
-        Touched::Whole(lane_name) => lane_command(test, lane_name, request),
-        Touched::Narrowed { lane, packages } => requested_lane(test, lane, request)?
-            .narrowed(packages)?
-            .command(NextestAction::Run, &request.passthrough),
-    }
+    let mut extra = request.passthrough.clone();
+    extra.push("--no-tests=pass".to_owned());
+    requested_lane(test, lane_name, request)?
+        .filtered(scope.filterset())?
+        .command(NextestAction::Run, &extra)
 }
 
 /// Operation on the same configured nextest selection.
@@ -237,24 +208,117 @@ pub fn nextest_command_for_lane(
 #[cfg(test)]
 mod selection_tests {
     use super::*;
+    use crate::common::project::{
+        TestCargoOptions, TestLaneConfig, TestNetBackendConfig, TestRequiredConfig,
+    };
+
+    fn args_of(command: &Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn request(args: &[&str]) -> TestRequest {
+        TestRequest::parse(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>()).unwrap()
+    }
+
+    /// A lane that builds the required `xtask`, and one that builds none of
+    /// the required packages.
+    fn drafted() -> TestCommandConfig {
+        let lane = |packages: &[&str]| TestLaneConfig {
+            cargo: TestCargoOptions {
+                packages: packages.iter().map(|name| (*name).to_owned()).collect(),
+                ..TestCargoOptions::default()
+            },
+            ..TestLaneConfig::default()
+        };
+        TestCommandConfig {
+            lanes: [
+                ("tooling".to_owned(), lane(&["xtask", "kithara-devtools"])),
+                ("harness".to_owned(), lane(&["kithara-test-utils"])),
+            ]
+            .into_iter()
+            .collect(),
+            net_backends: [("none".to_owned(), TestNetBackendConfig::default())]
+                .into_iter()
+                .collect(),
+            default_backend: "none".to_owned(),
+            default_lane: "tooling".to_owned(),
+            nextest_config: ".config/nextest.toml".to_owned(),
+            required: TestRequiredConfig {
+                packages: vec!["xtask".to_owned()],
+            },
+            ..TestCommandConfig::default()
+        }
+    }
+
+    /// A draft lane runs exactly what the default branch runs, with one
+    /// filterset for the draft scope added and an empty selection allowed.
+    #[test]
+    fn a_draft_lane_runs_its_own_command_with_one_filter_for_the_draft_scope() {
+        let test = drafted();
+        let root = crate::test::repository_tests::root();
+        let main = request(&["--lane=tooling", "--profile", "ci"]);
+        let draft = request(&["--lane=tooling", "--draft", "--profile", "ci"]);
+
+        let main_args = args_of(
+            &requested_lane(&test, "tooling", &main)
+                .unwrap()
+                .command(NextestAction::Run, &main.passthrough)
+                .unwrap(),
+        );
+        let Plan::Draft { lane, scope } = plan(&test, &root, &draft, None).unwrap() else {
+            panic!("a lane that builds a required package runs its share of the draft");
+        };
+        let draft_args = args_of(&draft_command(&test, lane, &scope, &draft).unwrap());
+
+        let filter = draft_args.iter().position(|arg| arg == "-E").unwrap();
+        assert_eq!(draft_args[filter + 1], "package(xtask)");
+        assert_eq!(draft_args.iter().filter(|arg| *arg == "-E").count(), 1);
+        assert_eq!(
+            draft_args.last().map(String::as_str),
+            Some("--no-tests=pass")
+        );
+        let mut rest = draft_args.clone();
+        rest.pop();
+        rest.drain(filter..=filter + 1);
+        assert_eq!(rest, main_args);
+    }
+
+    #[test]
+    fn a_draft_lane_that_holds_no_required_package_is_not_required() {
+        let test = drafted();
+        let root = crate::test::repository_tests::root();
+        let args = ["--lane=harness".to_owned(), "--draft".to_owned()];
+
+        assert!(matches!(
+            plan(&test, &root, &request(&["--lane=harness", "--draft"]), None).unwrap(),
+            Plan::NotRequired("harness")
+        ));
+        let project = ProjectConfig {
+            test,
+            ..ProjectConfig::default()
+        };
+        assert!(!selects_any_lane(&root, &project, &args, None).unwrap());
+        assert!(
+            selects_any_lane(
+                &root,
+                &project,
+                &args,
+                Some("packages = [\"kithara-test-utils\"]")
+            )
+            .unwrap()
+        );
+    }
 
     #[test]
     fn selection_output_names_the_lanes_in_the_execution_plan() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reports/selection.json");
         for (plan, expected) in [
-            (Plan::Touched(Vec::new()), vec![]),
             (Plan::Lane("workspace"), vec!["workspace"]),
-            (
-                Plan::Touched(vec![
-                    Touched::Whole("audio".to_owned()),
-                    Touched::Narrowed {
-                        lane: "workspace".to_owned(),
-                        packages: ["kithara-net".to_owned()].into_iter().collect(),
-                    },
-                ]),
-                vec!["audio", "workspace"],
-            ),
+            (Plan::NotRequired("workspace"), vec![]),
         ] {
             plan.write_selection(&path).unwrap();
             let selected: Vec<String> = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();

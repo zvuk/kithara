@@ -599,13 +599,20 @@ known_flakes = []
 # Features shared by every lane. UI renderer features belong to the dedicated
 # `ui` lane so the general workspace run does not build those test targets.
 features = []
-# Paths no single lane owns: the routing itself. A change here runs every lane
-# that declares `owns`, because a change to what belongs where has to be tested
-# by the routes it moves.
-shared_paths = [
-  ".config/xtask.toml",
-  ".config/nextest.toml",
-  "tests/Cargo.toml",
+
+# The test packages a draft runs whatever its pull request names: the seven
+# that failed on the most branches between 2026-10-05 and 2026-11-11, above the
+# gap between 19 branches and 13. Reviewed by hand; a ready pull request and
+# `main` run everything.
+[test.required]
+packages = [
+  "kithara-queue-tests",
+  "kithara-hls-tests",
+  "kithara-sync-tests",
+  "kithara-play-tests",
+  "xtask",
+  "kithara-app",
+  "kithara-decode-tests",
 ]
 
 # Cargo applies an unqualified workspace feature to every selected package
@@ -807,15 +814,6 @@ cargo.profile = "test-release"
 # the same low-level closure and are all exercised by one branch change.
 [test.lanes.core]
 default_features = ["kithara-platform/tokio-rt-multi-thread"]
-owns = [
-  "crates/kithara-bufpool/",
-  "crates/kithara-events/",
-  "crates/kithara-platform/",
-  "crates/kithara-signal/",
-  "crates/kithara-stream/",
-  "tests/crates/core/",
-  "tests/crates/stream/",
-]
 cargo.packages = [
   "kithara-bufpool",
   "kithara-events",
@@ -831,13 +829,6 @@ cargo.profile = "test-release"
 # dedicated tests package. It deliberately uses the lightweight fixture
 # registry declared by `kithara-audio-tests`.
 [test.lanes.audio]
-owns = [
-  "crates/kithara-audio/",
-  "crates/kithara-record/",
-  "crates/kithara-resampler/",
-  "crates/kithara-stretch/",
-  "tests/crates/audio/",
-]
 cargo.packages = [
   "kithara-audio",
   "kithara-record",
@@ -849,19 +840,16 @@ cargo.profile = "test-release"
 
 
 [test.lanes.sync]
-owns = ["crates/kithara-sync/", "crates/kithara-link/", "tests/crates/sync/"]
 cargo.packages = ["kithara-sync", "kithara-link", "kithara-sync-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.warp]
 default_backend = "none"
-owns = ["crates/kithara-warp/", "tests/crates/warp/"]
 cargo.packages = ["kithara-warp", "kithara-warp-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.render]
 default_backend = "none"
-owns = ["crates/kithara-render/"]
 cargo.packages = ["kithara-render"]
 cargo.profile = "test-release"
 
@@ -869,18 +857,11 @@ cargo.profile = "test-release"
 # that owns the production contract. The full workspace lane remains the
 # fallback and the default-branch proof.
 [test.lanes.abr]
-owns = ["crates/kithara-abr/"]
 cargo.packages = ["kithara-abr"]
 cargo.profile = "test-release"
 
 [test.lanes.analysis]
 default_features = ["kithara-beat/dsp", "kithara-waveform/dsp"]
-owns = [
-  "crates/kithara-analysis/",
-  "crates/kithara-beat/",
-  "crates/kithara-waveform/",
-  "tests/crates/analysis/",
-]
 cargo.packages = [
   "kithara-analysis",
   "kithara-beat",
@@ -890,28 +871,20 @@ cargo.packages = [
 cargo.profile = "test-release"
 
 [test.lanes.app]
-owns = [
-  "crates/kithara-app/",
-  "crates/kithara-app-document/",
-  "tests/crates/app/",
-]
 cargo.packages = ["kithara-app", "kithara-app-document", "kithara-app-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.assets]
-owns = ["crates/kithara-assets/"]
 cargo.packages = ["kithara-assets"]
 cargo.profile = "test-release"
 
 [test.lanes.decode]
-owns = ["crates/kithara-decode/", "tests/crates/decode/"]
 cargo.packages = ["kithara-decode", "kithara-decode-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.dsp]
 default_backend = "none"
 default_features = ["kithara-dsp/spectrum"]
-owns = ["crates/kithara-dsp/", "tests/crates/dsp/"]
 cargo.packages = ["kithara-dsp", "kithara-dsp-tests"]
 cargo.profile = "test-release"
 # kithara-dsp declares no `flash` feature: its kernels never wait on a clock, so
@@ -921,32 +894,26 @@ cargo.profile = "test-release"
 undeclared_toggles = ["flash", "no-block"]
 
 [test.lanes.effects]
-owns = ["crates/kithara-effects/", "tests/crates/effects/"]
 cargo.packages = ["kithara-effects", "kithara-effects-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.encode]
-owns = ["crates/kithara-encode/"]
 cargo.packages = ["kithara-encode"]
 cargo.profile = "test-release"
 
 [test.lanes.file]
-owns = ["crates/kithara-file/", "tests/crates/file/"]
 cargo.packages = ["kithara-file", "kithara-file-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.hls]
-owns = ["crates/kithara-hls/", "tests/crates/hls/"]
 cargo.packages = ["kithara-hls", "kithara-hls-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.host]
-owns = ["crates/kithara-host/", "tests/crates/host/"]
 cargo.packages = ["kithara-host", "kithara-host-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.net]
-owns = ["crates/kithara-net/"]
 cargo.packages = ["kithara-net"]
 cargo.profile = "test-release"
 
@@ -956,22 +923,18 @@ cargo.profile = "test-release"
 [test.lanes.net-host]
 default_backend = "host"
 undeclared_toggles = ["flash", "no-block"]
-owns = ["crates/kithara-net/src/backend/host/"]
 cargo.packages = ["kithara-net"]
 cargo.profile = "test-release"
 
 [test.lanes.play]
-owns = ["crates/kithara-play/", "tests/crates/play/"]
 cargo.packages = ["kithara-play", "kithara-play-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.queue]
-owns = ["crates/kithara-queue/", "tests/crates/queue/"]
 cargo.packages = ["kithara-queue", "kithara-queue-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.storage]
-owns = ["crates/kithara-storage/"]
 cargo.packages = ["kithara-storage"]
 cargo.profile = "test-release"
 
@@ -999,11 +962,6 @@ cargo.profile = "test-release"
 # and the generators that write the CI pipelines. None of it ships.
 [test.lanes.tooling]
 default_backend = "none"
-owns = [
-  "xtask/",
-  "crates/kithara-devtools-trace-format/",
-  "crates/kithara-devtools/",
-]
 cargo.packages = ["kithara-devtools-trace-format", "kithara-devtools", "xtask"]
 cargo.profile = "test-release"
 runner.nextest.ignore_default_filter = true
@@ -1011,7 +969,7 @@ runner.nextest.ignore_default_filter = true
 # the player, not of the tools that build it — so leaving flash on would fail the
 # lane on `none of the selected packages contains these features`. The
 # poll-blocking detector is the same kind of property, and the gate asks every
-# touched lane for it, so the lane names both as toggles it cannot carry.
+# lane it runs for it, so the lane names both as toggles it cannot carry.
 undeclared_toggles = ["flash", "no-block", "load"]
 
 # The harness itself: the test attribute crate, the shared test helpers, and the
@@ -1027,11 +985,6 @@ undeclared_toggles = ["flash", "no-block", "load"]
 # not build the facade, so the shared spelling fails the lane outright on `none
 # of the selected packages contains this feature`.
 [test.lanes.harness]
-owns = [
-  "crates/kithara-test-utils/",
-  "crates/kithara-test-macros/",
-  "crates/kithara-platform/tests/flash_",
-]
 default_flash = false
 default_features = [
   "kithara-platform/flash",
@@ -1057,12 +1010,6 @@ runner.nextest.filter = "binary_id(=kithara-platform::flash_attr) + binary_id(=k
 # product tests start lying, which is why they keep a lane rather than being
 # dropped.
 [test.lanes.fixtures]
-owns = [
-  "tests/src/",
-  "tests/crates/harness/tests/suite_harness.rs",
-  "tests/crates/harness/tests/flash_lexical.rs",
-  "tests/crates/harness/tests/timeout_guard.rs",
-]
 default_backend = "none"
 # `analysis` compiles the beat-grid helper, whose unit tests live nowhere else.
 default_features = ["harness", "kithara-integration-tests/analysis"]
@@ -1073,14 +1020,6 @@ cargo.tests = ["suite_harness"]
 runner.nextest.ignore_default_filter = true
 
 [test.lanes.ui]
-owns = [
-  ".github/workflows/ui.yml",
-  "crates/kithara-ui/",
-  "crates/kithara-ui-gallery/",
-  "crates/kithara-ui-input/",
-  "crates/kithara-ui-shaping/",
-  "crates/kithara-app/src/gui/",
-]
 default_features = [
   "kithara-app/backend-cpal",
   "kithara-ui/capture",
@@ -1183,7 +1122,6 @@ default_flash = false
 # What only the `broadcast` feature turns on, and every test of
 # `kithara-broadcast`, so a change to the crate the lane owns runs its tests.
 [test.lanes.broadcast]
-owns = ["crates/kithara-broadcast/", "tests/crates/broadcast/"]
 cargo.packages = ["kithara-app", "kithara-broadcast", "kithara-broadcast-tests"]
 cargo.profile = "test-release"
 cargo.lib = true
@@ -1228,7 +1166,6 @@ cargo.tests = ["warp_playback"]
 runner.nextest.filter = "test(/rate_response::/)"
 default_features = ["kithara-warp-tests/usdt"]
 default_flash = false
-owns = ["tests/crates/warp/tests/rate_response.rs"]
 
 [test.lanes.usdt-render-scheduler]
 cargo.packages = ["kithara-render"]
@@ -1237,7 +1174,6 @@ cargo.lib = true
 runner.nextest.filter = "test(/worker::node::tests::scheduler_tests::probed::/)"
 default_features = ["kithara-render/usdt"]
 default_flash = false
-owns = ["crates/kithara-render/src/worker/node/"]
 
 [test.lanes.usdt-hls]
 cargo.packages = ["kithara-hls-tests"]
@@ -1246,10 +1182,6 @@ cargo.tests = ["hls"]
 runner.nextest.filter = "test(/(hls_variant_playlists_concurrent::variant_media_playlists_load_concurrently|flac_swallow_fixture)/)"
 default_features = ["kithara-hls-tests/usdt"]
 default_flash = false
-owns = [
-  "tests/crates/hls/tests/hls_variant_playlists_concurrent.rs",
-  "tests/crates/hls/tests/flac_swallow_fixture.rs",
-]
 
 [test.lanes.usdt-hls-stress]
 cargo.packages = ["kithara-hls-tests"]
@@ -1258,7 +1190,6 @@ cargo.tests = ["hls_stress"]
 runner.nextest.filter = "test(/stress_seek_audio::stress_seek_audio_hls/)"
 default_features = ["kithara-hls-tests/usdt"]
 default_flash = false
-owns = ["tests/crates/hls/tests/stress_seek_audio.rs"]
 
 [test.lanes.usdt-queue]
 cargo.packages = ["kithara-queue-tests"]
@@ -1267,7 +1198,6 @@ cargo.tests = ["queue"]
 runner.nextest.filter = "test(/full_playthrough_census/)"
 default_features = ["kithara-queue-tests/usdt"]
 default_flash = false
-owns = ["tests/crates/queue/tests/full_playthrough_census.rs"]
 
 # The harness (tests/crates/ffi-web/tests/selenium.rs) reads
 # KITHARA_SELENIUM_BROWSER to pick a browser and defaults to chrome if unset.
@@ -2115,14 +2045,7 @@ timeout_minutes = 60
 # diagnostic, because the compiler never reached one.
 #
 # The two clock lanes run one recipe and differ in the clock they ask for and
-# the directory they build in. Every kind runs the suite whole except a branch
-# push, which runs `--touched`: the build `main` runs, with the run narrowed to
-# the packages of the lanes the branch touched. One build per directory however
-# many lanes a branch touched, so no lane's build replaces the shared test
-# dylib another one linked. That is fail-closed: shared configuration and every
-# path without a reviewed domain owner run `workspace` whole, and a branch only
-# becomes narrow after its path is explicitly owned by one of the lanes above. A
-# lane with a configuration of its own is reached through `linux-support`.
+# the directory they build in.
 [ext.ci.lanes.linux-test-simulated-clock]
 cache_group = "linux"
 github_runner = "kithara-test-simulated"
@@ -2145,15 +2068,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux flash and no-block gate", args_by_kind = { branch = [
-    "test",
-    "run",
-    "--touched",
-    "--no-block=on",
-    "--profile",
-    "ci",
-    "--timings",
-  ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
   { args = [
     "test",
     "test-utils",
@@ -2203,11 +2118,11 @@ kinds_github = ["nightly"]
 timeout_minutes = 180
 
 # `just test` runs neither the build tooling nor the harness the product tests
-# are written with, so a product change can break them from the other side and
-# no branch push notices. These three run them whole on every `main` push and
-# every night; a branch push that touches their own sources runs them through
-# `linux-support`. GitLab declares them weekly behind its Linux platform gate,
-# which no schedule opens.
+# are written with, so a product change can break them from the other side.
+# These lanes, with `net-host` and `broadcast`, run them under their own
+# configuration: whole on a ready pull request, `main` and every night, and
+# the draft scope's part they hold on any other branch push. GitLab declares
+# them weekly behind its Linux platform gate, which no schedule opens.
 [ext.ci.lanes.linux-tooling]
 cache_group = "linux"
 label = "Linux"
@@ -2223,7 +2138,7 @@ steps = [
 ]
 role = "gate"
 kinds = []
-kinds_github = ["main", "nightly"]
+kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-harness]
@@ -2241,7 +2156,7 @@ steps = [
 ]
 role = "gate"
 kinds = []
-kinds_github = ["main", "nightly"]
+kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-fixtures]
@@ -2265,7 +2180,7 @@ steps = [
 ]
 role = "gate"
 kinds = []
-kinds_github = ["main", "nightly"]
+kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-broadcast]
@@ -2281,16 +2196,13 @@ steps = [
     "--lane=broadcast",
   ], label = "Linux broadcast lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
-role = "deep"
+role = "gate"
 kinds = []
-kinds_github = ["nightly"]
+kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
-# A full run carries `kithara-net`'s own tests on the Linux host under its
-# `client-host` backend only here. A branch push that touches that backend
-# runs them through `linux-support`'s `--touched` step, so this lane has no
-# `branch` kind, nor the `merge-request` kind that schedules what `branch`
-# does; Android runs the backend with a real transport.
+# `kithara-net`'s own tests run on the Linux host under its `client-host`
+# backend only here; Android runs the backend with a real transport.
 [ext.ci.lanes.linux-net-host]
 cache_group = "linux"
 label = "Linux"
@@ -2305,7 +2217,7 @@ steps = [
   ], label = "Linux net-host lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds_github = ["main"]
+kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-integration-regressions]
@@ -2455,56 +2367,11 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "real-clock suite", rebuild_check = true, args_by_kind = { branch = [
-    "test",
-    "run",
-    "--touched",
-    "--flash=off",
-    "--profile",
-    "ci",
-    "--timings",
-  ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ], label = "real-clock suite", rebuild_check = true, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 120
-
-# The suites `just test` does not carry, or carries under a configuration other
-# than their own: the build tooling, the harness it is written with,
-# `kithara-net` under its host backend and the broadcast stack. A `main` push
-# and the nightly run get them whole from their own lanes; a branch push or a
-# ready pull request runs here the ones it touched, so a change to their own
-# sources does not wait for `main`. The clock lanes run the workspace build
-# only, so a branch reaches these suites here and nowhere else. The UI suite is
-# not one of them: only `ui.yml` judges it, on a graphics device, and a branch
-# run gets it by touching a UI-owned path or naming `deep-ui` among its required
-# lanes.
-[ext.ci.lanes.linux-support]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just", "sccache", "kache"]
-program = "just"
-steps = [
-  { args = [
-    "test",
-    "run",
-    "--touched",
-    "--lane=tooling",
-  ], label = "build tooling suites this push touches", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
-  { args = [
-    "test",
-    "run",
-    "--touched",
-    "--lane=harness",
-    "--lane=fixtures",
-    "--lane=net-host",
-    "--lane=broadcast",
-  ], label = "own-configuration suites this push touches", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
-]
-role = "gate"
-kinds_github = ["branch", "merge-request"]
-timeout_minutes = 180
 
 [ext.ci.lanes.linux-usdt]
 cache_group = "linux"
@@ -2952,7 +2819,6 @@ steps = [
   ], label = "Apple flash and no-block gate", args_by_kind = { branch = [
     "test",
     "run",
-    "--touched",
     "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
     "--flash=on",
     "--no-block=on",

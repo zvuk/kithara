@@ -1103,14 +1103,27 @@ fn a_draft_pull_request_runs_as_a_branch_under_quarantine_trust() {
     );
 }
 
-/// `--touched` measures a branch from the default branch, which on `GitLab` is
-/// not `main`.
+/// A draft's test block fails the pipeline before the suite that would run
+/// it: the check runs only when a draft carries a block, and the suite waits
+/// for it.
 #[test]
-fn a_touched_run_measures_from_the_default_branch() {
-    let pipeline = yaml(workspace_root().join(".gitlab/ci/pipeline.yml"));
+fn a_draft_test_block_is_checked_before_the_suite_runs() {
+    let apple = yaml(workspace_root().join(".gitlab/ci/apple.yml"));
+    let check = &apple["apple:pr-tests"];
     assert_eq!(
-        pipeline["variables"]["KITHARA_TOUCHED_BASE"].as_str(),
-        Some("$CI_DEFAULT_BRANCH")
+        check["rules"][0]["if"].as_str(),
+        Some("$KITHARA_PIPELINE_KIND == \"branch\" && $KITHARA_PR_TESTS")
+    );
+    assert_eq!(check["script"][0].as_str(), Some("just ci pr-tests"));
+    let needs = apple["apple:test"]["needs"]
+        .as_sequence()
+        .expect("the suite names what it waits for");
+    assert!(
+        needs
+            .iter()
+            .any(|need| need["job"].as_str() == Some("apple:pr-tests")
+                && need["optional"].as_bool() == Some(true)),
+        "the suite does not wait for the block check: {needs:?}"
     );
 }
 

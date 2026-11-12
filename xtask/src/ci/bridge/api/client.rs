@@ -13,6 +13,8 @@ use super::{
     http::{Api, Payload, paginated},
     sources::pull_request,
 };
+use kithara_devtools::test::PR_TESTS_ENV;
+
 use crate::ci::run::PipelineKind;
 
 pub(in crate::ci::bridge) struct Github {
@@ -85,6 +87,19 @@ impl Github {
         }
     }
 
+    /// Starts the `CI` workflow of the repository a pull request's head lives
+    /// in, on its head branch. GitHub runs no fork workflow on an upstream
+    /// pull request event, so a draft that turns ready would otherwise wait
+    /// for its next push to run in full.
+    pub(in crate::ci::bridge) fn dispatch_ci(&self, repository: &str, branch: &str) -> Result<()> {
+        self.request(
+            &Method::POST,
+            &format!("/repos/{repository}/actions/workflows/ci.yml/dispatches"),
+            Some(&serde_json::json!({ "ref": branch })),
+        )
+        .map(drop)
+    }
+
     pub(in crate::ci::bridge) fn git_header(&self) -> String {
         let basic = STANDARD.encode(format!("x-access-token:{}", self.token));
         format!("Authorization: Basic {basic}")
@@ -139,8 +154,9 @@ impl Gitlab {
         head_sha: &str,
         base_sha: &str,
         scope: Scope,
+        pr_tests: Option<&str>,
     ) -> Result<u64> {
-        let form = pipeline_form(reference, head_sha, base_sha, scope);
+        let form = pipeline_form(reference, head_sha, base_sha, scope, pr_tests);
         let payload = Payload::Form(&form);
         let response = self.request(&Method::POST, "pipeline", Some(&payload))?;
         response["id"]
@@ -337,12 +353,14 @@ impl Gitlab {
 }
 
 /// The form that starts a verification run. A draft says so, and the parent
-/// pipeline dispatches it as a branch.
+/// pipeline dispatches it as a branch; its test block, when it has one, reaches
+/// every job of the run as `KITHARA_PR_TESTS`.
 fn pipeline_form(
     reference: &str,
     head_sha: &str,
     base_sha: &str,
     scope: Scope,
+    pr_tests: Option<&str>,
 ) -> Vec<(String, String)> {
     let mut form = vec![
         ("ref".into(), reference.into()),
@@ -357,6 +375,10 @@ fn pipeline_form(
     if scope == Scope::Draft {
         form.push(("variables[][key]".into(), "KITHARA_QUARANTINE_DRAFT".into()));
         form.push(("variables[][value]".into(), "1".into()));
+        if let Some(block) = pr_tests {
+            form.push(("variables[][key]".into(), PR_TESTS_ENV.into()));
+            form.push(("variables[][value]".into(), block.into()));
+        }
     }
     form
 }
@@ -625,6 +647,7 @@ mod tests {
                 head_branch: "feature".into(),
                 scope: Scope::Full,
                 author: "octocat".into(),
+                tests: Ok(None),
             }
         );
     }
@@ -665,9 +688,46 @@ mod tests {
     }
 
     #[test]
+    fn a_description_test_block_is_read_and_a_second_one_is_an_error() {
+        let pull = |body: &str| {
+            pull_request(&json!({
+                "number": 427,
+                "draft": true,
+                "body": body,
+                "head": {"sha": "a".repeat(40), "ref": "feature"},
+                "user": {"login": "octocat"}
+            }))
+            .unwrap()
+            .tests
+        };
+
+        assert_eq!(
+            pull("Text\n```kithara-tests\npackages = [\"a\"]\n```\n"),
+            Ok(Some("packages = [\"a\"]".to_owned()))
+        );
+        assert!(pull("```kithara-tests\n```\n```kithara-tests\n```\n").is_err());
+    }
+
+    #[test]
+    fn a_draft_run_carries_its_test_block() {
+        let form = pipeline_form("ref", "head", "base", Scope::Draft, Some("filter = \"x\""));
+        let keys: Vec<&str> = form.iter().map(|(_, value)| value.as_str()).collect();
+
+        assert!(
+            keys.windows(2)
+                .any(|pair| pair == ["KITHARA_PR_TESTS", "filter = \"x\""])
+        );
+        assert!(
+            !pipeline_form("ref", "head", "base", Scope::Full, Some("filter = \"x\""))
+                .iter()
+                .any(|(_, value)| value == "KITHARA_PR_TESTS")
+        );
+    }
+
+    #[test]
     fn a_draft_run_is_marked_for_the_dispatcher() {
         assert_eq!(
-            pipeline_form("ref", "head", "base", Scope::Draft)
+            pipeline_form("ref", "head", "base", Scope::Draft, None)
                 .iter()
                 .filter(|(key, _)| key == "variables[][key]")
                 .map(|(_, value)| value.as_str())
@@ -679,7 +739,7 @@ mod tests {
             ]
         );
         assert!(
-            !pipeline_form("ref", "head", "base", Scope::Full)
+            !pipeline_form("ref", "head", "base", Scope::Full, None)
                 .iter()
                 .any(|(_, value)| value == "KITHARA_QUARANTINE_DRAFT")
         );
