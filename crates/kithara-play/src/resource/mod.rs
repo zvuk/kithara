@@ -14,6 +14,7 @@ pub use artifact::{
 pub use config::ResourceConfig;
 pub use lane::ResourceLane;
 pub use prepare::{ResourcePrep, ResourcePrepPatch};
+pub(crate) use reader::LaneGeometry;
 #[cfg(feature = "mock")]
 pub(crate) use reader::mock as source_mock;
 pub use reader::{OpenedTrack, Resource, ResourceLoad};

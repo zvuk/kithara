@@ -133,7 +133,7 @@ fn speed_projection_tracks_frame_segment_and_initial_rate() {
 #[kithara::test]
 fn speed_projection_preserves_future_jump_overflow_after_declick_changes() {
     let (mut track, _inbox) = prepared_track();
-    track.declick = FrameCount::new(0);
+    track.geometry.declick = FrameCount::new(0);
     track
         .send_lane(
             LaneCommand::Jump { to: Duration::ZERO },
@@ -144,11 +144,11 @@ fn speed_projection_preserves_future_jump_overflow_after_declick_changes() {
         )
         .expect("future jump");
     assert_consumed_speed_twice(&track, 1.0);
-    track.declick = FrameCount::new(1);
+    track.geometry.declick = FrameCount::new(1);
     for _ in 0..2 {
         assert!(matches!(track.consumed_speed(), Err(PlayError::Untimed)));
     }
-    track.declick = FrameCount::new(0);
+    track.geometry.declick = FrameCount::new(0);
     assert_consumed_speed_twice(&track, 1.0);
 }
 

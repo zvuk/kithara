@@ -23,7 +23,6 @@ use crate::{
 
 #[derive(Debug)]
 pub(super) struct TransportFrame {
-    pub(super) trajectory: SessionAnchor,
     pub(super) transport_revision: TransportRevision,
     pub(super) session_epoch: SessionEpoch,
 }
@@ -406,7 +405,6 @@ impl TransportState {
             self.session_grid.epoch(),
         ));
         Ok(TransportFrame {
-            trajectory: anchor,
             session_epoch: self.session_grid.epoch(),
             transport_revision: self.revision,
         })

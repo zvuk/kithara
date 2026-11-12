@@ -2,7 +2,8 @@ use kithara_sync::{SessionAnchor, SessionBeat};
 
 use super::{
     BeatEstimate, BeatGridId, BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridState,
-    BeatGridUnavailable, BeatGridView, view::stale,
+    BeatGridUnavailable, BeatGridView,
+    view::{refuse, stale},
 };
 use crate::{
     AssetFrame, Beat, BeatEvidence, BeatsPerMinute, FrameUncertainty, MapAxis, MapPoint,
@@ -117,21 +118,15 @@ impl BeatGridView for SessionGridView {
     }
 
     fn rate_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<f64> {
-        if let Some(stale) = stale(self, position.stamp()) {
-            return stale;
-        }
-        if !matches!(*position.value(), MapPosition::Session(_)) {
-            return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
+        if let Some(refused) = refuse(self, position) {
+            return refused;
         }
         BeatGridQuery::Resolved(1.0)
     }
 
     fn region_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatGridRegion> {
-        if let Some(stale) = stale(self, position.stamp()) {
-            return stale;
-        }
-        if !matches!(position.value(), MapPosition::Session(_)) {
-            return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
+        if let Some(refused) = refuse(self, position) {
+            return refused;
         }
         BeatGridQuery::Resolved(BeatGridRegion::Unbounded)
     }
@@ -141,11 +136,8 @@ impl BeatGridView for SessionGridView {
     }
 
     fn source_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<AssetFrame> {
-        if let Some(stale) = stale(self, position.stamp()) {
-            return stale;
-        }
-        if !matches!(*position.value(), MapPosition::Session(_)) {
-            return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
+        if let Some(refused) = refuse(self, position) {
+            return refused;
         }
         BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry)
     }

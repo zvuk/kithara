@@ -543,14 +543,26 @@ const fn attempt_name(scope: Scope) -> &'static str {
     }
 }
 
-/// The base a pull request is judged against. One ready for review follows
-/// the default branch; a draft stays on the base it was last judged against
-/// until its author pushes, so a moving default branch does not queue every
-/// draft again.
-fn verification_base(scope: Scope, latest: Option<String>, current: &str) -> String {
+/// The base a pull request is judged against.
+///
+/// A verification runs to its verdict against the base it started on, and a
+/// pass there stands for the head: a full run outlasts the default branch's
+/// pace, so following every move would leave a pull request without a verdict.
+/// A rejected ready pull request is judged again on the current base; a draft
+/// stays where it was judged until its author pushes.
+fn verification_base(
+    scope: Scope,
+    latest: Option<(String, VerificationState)>,
+    current: &str,
+) -> String {
     match (scope, latest) {
-        (Scope::Draft, Some(latest)) => latest,
-        (Scope::Draft, None) | (Scope::Full, _) => current.to_owned(),
+        (Scope::Draft, Some((latest, _)))
+        | (Scope::Full, Some((latest, VerificationState::Testing | VerificationState::Verified))) => {
+            latest
+        }
+        (Scope::Draft, None) | (Scope::Full, None | Some((_, VerificationState::Rejected))) => {
+            current.to_owned()
+        }
     }
 }
 
@@ -2131,24 +2143,54 @@ mod tests {
     /// author pushes.
     #[test]
     fn a_draft_stays_on_the_base_it_was_judged_against() {
-        assert_eq!(
-            verification_base(
-                Scope::Draft,
-                Some(consts::OLDER_BASE.into()),
-                consts::CURRENT_BASE
-            ),
-            consts::OLDER_BASE
-        );
+        for state in [
+            VerificationState::Testing,
+            VerificationState::Verified,
+            VerificationState::Rejected,
+        ] {
+            assert_eq!(
+                verification_base(
+                    Scope::Draft,
+                    Some((consts::OLDER_BASE.into(), state)),
+                    consts::CURRENT_BASE
+                ),
+                consts::OLDER_BASE
+            );
+        }
         assert_eq!(
             verification_base(Scope::Draft, None, consts::CURRENT_BASE),
             consts::CURRENT_BASE
         );
+    }
+
+    /// A full verification runs 75-85 minutes and main moves every 30-90, so
+    /// restarting it on every move left a long-lived pull request without a
+    /// verdict all day. A verification runs to its verdict against the base it
+    /// started on, and a pass there stands; only a rejection, or a new head,
+    /// sends it to the current base.
+    #[test]
+    fn a_ready_verification_keeps_its_base_until_it_is_rejected() {
+        for state in [VerificationState::Testing, VerificationState::Verified] {
+            assert_eq!(
+                verification_base(
+                    Scope::Full,
+                    Some((consts::OLDER_BASE.into(), state)),
+                    consts::CURRENT_BASE
+                ),
+                consts::OLDER_BASE,
+                "{state:?}"
+            );
+        }
         assert_eq!(
             verification_base(
                 Scope::Full,
-                Some(consts::OLDER_BASE.into()),
+                Some((consts::OLDER_BASE.into(), VerificationState::Rejected)),
                 consts::CURRENT_BASE
             ),
+            consts::CURRENT_BASE
+        );
+        assert_eq!(
+            verification_base(Scope::Full, None, consts::CURRENT_BASE),
             consts::CURRENT_BASE
         );
     }

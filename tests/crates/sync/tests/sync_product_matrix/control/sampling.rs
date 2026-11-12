@@ -19,16 +19,13 @@ impl SampleKernel {
         } else {
             let cutoff = speed.recip();
             let mut weights = [0.0; (2 * SINC_RADIUS + 1) as usize];
-            let mut normalizer = 0.0;
-            for (weight, offset) in weights.iter_mut().zip(-SINC_RADIUS..=SINC_RADIUS) {
-                let distance = f64::from(offset) - fraction;
-                *weight = kithara::dsp::interp::sinc_hann_weight(
-                    distance,
-                    cutoff,
-                    f64::from(SINC_RADIUS + 1),
-                );
-                normalizer += *weight;
-            }
+            kithara::dsp::interp::sinc_hann_weights(
+                f64::from(-SINC_RADIUS) - fraction,
+                cutoff,
+                f64::from(SINC_RADIUS + 1),
+                &mut weights,
+            );
+            let normalizer: f64 = weights.iter().sum();
             Some((weights, normalizer))
         };
         Ok(Self { fraction, sinc })
@@ -94,12 +91,16 @@ pub(super) fn scalar_reference(
             .ok_or_else(|| "control source sample is not finite f32".to_owned());
     }
     let cutoff = speed.recip();
+    let mut taps = [0.0; (2 * SINC_RADIUS + 1) as usize];
+    kithara::dsp::interp::sinc_hann_weights(
+        f64::from(-SINC_RADIUS) - fraction,
+        cutoff,
+        f64::from(SINC_RADIUS + 1),
+        &mut taps,
+    );
     let mut total = 0.0;
     let mut weights = 0.0;
-    for offset in -SINC_RADIUS..=SINC_RADIUS {
-        let distance = f64::from(offset) - fraction;
-        let weight =
-            kithara::dsp::interp::sinc_hann_weight(distance, cutoff, f64::from(SINC_RADIUS + 1));
+    for (offset, weight) in (-SINC_RADIUS..=SINC_RADIUS).zip(taps) {
         total += f64::from(sample(i64::from(offset))?) * weight;
         weights += weight;
     }

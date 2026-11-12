@@ -7,6 +7,7 @@ documents and reusable agent assets that should be loaded only when relevant.
   references. Open the one that matches the trigger below, and nothing else.
 - `workflows/`: task, planning, handoff, and PR-description workflows.
 - `rules/`: tool-neutral entry rules exposed through tool-specific symlinks.
+- `assets/`: images referenced from README files.
 - `agents/`: concrete subagent/scenario definitions exposed through symlinks.
 - `skills/`: reusable local agent skills.
 - `plans/`: dated implementation plans and archived planning material.

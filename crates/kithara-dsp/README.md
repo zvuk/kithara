@@ -14,25 +14,16 @@
 
 # kithara-dsp
 
-Vector DSP kernels over planar `f32` slices. The layout functions match
-`fast_interleave` for `f32`: Apple builds run the stereo pair on Accelerate,
-every other target runs it on `fearless_simd` at the best SIMD level the CPU
-reports, and other channel counts take a bit-exact strided copy. `filter`
-runs multichannel biquad cascades and ordered FIR reconstruction; `envelope` links
-interval peaks, takes each gain target's window minimum and releases gains before
-clamping. `interp` reads a window at fractional
-positions and `spectrum` takes the real FFT of a Hann-windowed frame on the
-same backends; `downmix` folds interleaved frames to mono and `sum_squares`
-reduces a slice. The FFT, the bin kernels and the autocorrelation build only
-with the `spectrum` feature, off by default, so a build that runs no analysis
-compiles no FFT; `spectrum::FftLen` and `SpectrumError` are always
-available. No kernel panics; only `filter::Biquad::new`,
-`spectrum::Fft::new` and, off Apple, `Fft::spectrum` allocate.
-`Fft::spectrum` takes its sample planes, `spectrum::Autocorrelation::new`
-its padding, `delay::DelayLine::new` its frame history and
-`envelope::MinimumWindow::new` its older targets from the caller's
-`kithara-bufpool` region; off Apple the complex planes of the transform are
-the FFT library's own.
+SIMD kernels over planar `f32` audio: interleave and deinterleave, downmix,
+biquad and FIR filters, envelopes, fractional-position interpolation, delay
+lines, and a real FFT with spectral helpers. Apple builds use Accelerate, other
+targets `fearless_simd` at the best level the CPU supports.
+
+No kernel panics. Only constructors allocate (`Biquad::new`, `Fft::new`, and
+`Fft::spectrum` off Apple); delay lines, autocorrelation, the lookahead
+minimum window, and FFT planes take their memory from the caller's
+`kithara-bufpool` region. The FFT builds only
+with the `spectrum` feature.
 
 ## Usage
 
@@ -103,19 +94,9 @@ assert_eq!(samples, [0.0, 0.5]);
 
 ## Integration
 
-`kithara-signal` interleaves and deinterleaves its buffers through the layout
-functions; its pooled planar buffer goes through the channel-major ones, so
-no channel count allocates. `kithara-resampler`'s Glide backend filters
-through `filter::Biquad`, interpolates through `interp::interpolate` and places
-its positions with `interp::RateRamp`. `kithara-decode` sanitizes resampled
-planes. `kithara-beat`'s spectral detector reads novelty from `spectrum::Fft`
-and `prediction_difference` and its tempo period from `spectrum::Autocorrelation`;
-`kithara-waveform` sums band energy with `sum_squares` over an `Fft`, and it,
-`kithara-analysis`'s producer and its beat analyzer downmix through `downmix`.
-The build target picks the backend at compile time; on x86 the SIMD level is
-detected once per process, so a call costs one load before the kernel runs.
-
-Warp uses the scalar frame operations for its mapped source-window arithmetic;
-source coordinates, residency, tap selection and normalization remain in Warp.
+The shared kernel layer under `kithara-signal`, `kithara-resampler`,
+`kithara-decode`, `kithara-effects`, `kithara-warp`, and the analysis crates.
+The backend is chosen at compile time; on x86 the SIMD level is detected once
+per process.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-dsp) for detailed contracts, invariants, and internals.

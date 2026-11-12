@@ -57,7 +57,10 @@ pub(super) fn serve() -> io::Result<ExitCode> {
             "remote_readonly":stats["daemon_remote_readonly"],"local_only":false},
         "events":stats,
     }});
-    writeln!(socket, "{reply}")?;
+    // Unlink before replying: once the client has its reply, the next
+    // `daemon start` binds a new socket at this path, which a later unlink
+    // here would delete.
     fs::remove_file(path)?;
+    writeln!(socket, "{reply}")?;
     Ok(ExitCode::SUCCESS)
 }
