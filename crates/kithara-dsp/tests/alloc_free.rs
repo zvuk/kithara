@@ -1,14 +1,14 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 #[cfg(feature = "spectrum")]
 use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, prediction_difference};
 use kithara_dsp::{
     fade::{self, FadeCurve},
-    filter::{Biquad, Coefficients, Hertz, Type},
+    filter::{Biquad, Coefficients, Hertz, Response, StateVariableFilter, Type},
     interp::{InterpError, Interpolation, interpolate, interpolate_frame, weighted_frames},
 };
 use kithara_test_utils::{bufpool::pools, kithara};
@@ -133,6 +133,39 @@ fn biquad_never_allocates_after_construction() {
         filter
             .process(&mut planes, 0..FRAMES)
             .expect("silence resets");
+    });
+}
+
+#[kithara::test(native)]
+fn state_variable_filter_never_allocates_after_construction() {
+    let mut filter = StateVariableFilter::new(TWO);
+    let cutoffs: Vec<_> = (0..FRAMES)
+        .map(|frame| 200.0 + 4.0 * f64::from(u16::try_from(frame).expect("frame")))
+        .collect();
+    let rate = NonZeroU32::new(48_000).expect("nonzero rate");
+    let mut planes = vec![vec![0.25_f32; FRAMES]; TWO.get()];
+    assert_no_alloc(|| {
+        filter
+            .process(
+                &mut planes,
+                0..FRAMES,
+                &cutoffs,
+                rate,
+                1.0,
+                Response::LowPass,
+            )
+            .expect("shape matches");
+        filter.reset();
+        filter
+            .process(
+                &mut planes,
+                0..FRAMES,
+                &cutoffs,
+                rate,
+                1.0,
+                Response::HighPass,
+            )
+            .expect("shape matches");
     });
 }
 

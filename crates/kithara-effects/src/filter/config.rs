@@ -1,7 +1,6 @@
 use bon::bon;
-use kithara_bufpool::PoolRegion;
 use kithara_config::Config;
-use kithara_dsp::filter::{Coefficients, FilterError, Hertz, Type};
+use kithara_dsp::filter::FilterError;
 
 use super::{Cutoff, Q};
 
@@ -97,134 +96,21 @@ impl FilterSettings {
         edge * (f64::from(extreme) / edge).powf(distance)
     }
 
-    /// The response and its coefficients for `knob` at `rate`, `None` at the center.
-    pub(super) fn coefficients(
-        &self,
-        rate: f64,
-        knob: f64,
-    ) -> Result<Option<(Kind, Coefficients<f64>)>, FilterError> {
-        let Some((kind, cutoff)) = self.response(knob) else {
-            return Ok(None);
-        };
-        if !cutoff.is_finite() || cutoff >= rate / 2.0 {
-            return Err(FilterError::Parameters);
-        }
-        let design = match kind {
-            Kind::LowPass => Type::LowPass,
-            Kind::HighPass => Type::HighPass,
-        };
-        Coefficients::from_params(
-            design,
-            Hertz::from_hz(rate).map_err(|_| FilterError::Parameters)?,
-            Hertz::from_hz(cutoff).map_err(|_| FilterError::Parameters)?,
-            f64::from(self.q),
-        )
-        .map(|coefficients| Some((kind, coefficients)))
-        .map_err(|_| FilterError::Parameters)
-    }
-
-    /// Cutoffs swept by knob positions in `low..=high`, `None` when only the center is.
-    pub(super) fn cutoff_hull(&self, low: f64, high: f64) -> Option<[f64; 2]> {
-        let mut hull: Option<[f64; 2]> = None;
-        let mut include = |value: f64| {
-            hull = Some(hull.map_or([value, value], |[min, max]| {
-                [min.min(value), max.max(value)]
-            }));
-        };
-        if low < 0.0 {
-            include(self.cutoff(Kind::LowPass, -low));
-            include(self.cutoff(Kind::LowPass, -high.min(0.0)));
-        }
-        if high > 0.0 {
-            include(self.cutoff(Kind::HighPass, low.max(0.0)));
-            include(self.cutoff(Kind::HighPass, high));
-        }
-        hull
-    }
-
-    /// Cutoff travel of a knob move in warped log Hz at `rate`.
-    ///
-    /// A move through the center travels to its edge on one side and from the
-    /// other edge on the other; the response restarts there from reset state.
-    /// # Errors
-    /// Refuses nonfinite knob values or cutoffs at or above Nyquist.
-    pub fn travel(&self, rate: f64, from: f64, to: f64) -> Result<f64, FilterError> {
-        if !from.is_finite() || !to.is_finite() {
-            return Err(FilterError::Parameters);
-        }
-        let side = |kind: Kind, from: f64, to: f64| -> Result<f64, FilterError> {
-            let warp = |distance: f64| {
-                let cutoff = self.cutoff(kind, distance);
-                if cutoff >= rate / 2.0 {
-                    Err(FilterError::Parameters)
-                } else {
-                    Ok((std::f64::consts::PI * cutoff / rate).tan().ln())
-                }
-            };
-            Ok((warp(to)? - warp(from)?).abs())
-        };
-        let low = if from < 0.0 || to < 0.0 {
-            side(Kind::LowPass, -from.min(0.0), -to.min(0.0))?
-        } else {
-            0.0
-        };
-        let high = if from > 0.0 || to > 0.0 {
-            side(Kind::HighPass, from.max(0.0), to.max(0.0))?
-        } else {
-            0.0
-        };
-        let travel = low + high;
-        if travel.is_finite() {
-            Ok(travel)
-        } else {
-            Err(FilterError::Parameters)
-        }
-    }
-
-    /// Stability margin of every pass response with a cutoff in `cutoff` at `rate`.
-    pub(super) fn range_margin(&self, rate: f64, cutoff: [f64; 2]) -> Result<f64, FilterError> {
-        let [low, high] = cutoff;
-        if !low.is_finite() || !high.is_finite() || low <= 0.0 || low > high || high >= rate / 2.0 {
-            return Err(FilterError::Parameters);
-        }
-        let q = f64::from(self.q);
-        let angles = cutoff.map(|hz| std::f64::consts::TAU * hz / rate);
-        let sines = angles.map(f64::sin);
-        let minimum_sine = sines[0].min(sines[1]);
-        let maximum_sine = if angles[0] <= std::f64::consts::FRAC_PI_2
-            && angles[1] >= std::f64::consts::FRAC_PI_2
+    /// Refuses a rate whose Nyquist frequency any configured cutoff reaches.
+    pub(super) fn check(&self, rate: f64) -> Result<(), FilterError> {
+        let nyquist = rate / 2.0;
+        if [
+            self.low_edge,
+            self.low_extreme,
+            self.high_edge,
+            self.high_extreme,
+        ]
+        .into_iter()
+        .all(|cutoff| f64::from(cutoff) < nyquist)
         {
-            1.0
-        } else {
-            sines[0].max(sines[1])
-        };
-        let maximum_cosine = angles
-            .map(|angle| angle.cos().abs())
-            .into_iter()
-            .fold(0.0, f64::max);
-        let denominator_max = 2.0 + 2.0 * maximum_sine / (2.0 * q);
-        let schur = 4.0 * (1.0 - maximum_cosine) / denominator_max;
-        let damping = 4.0 * (minimum_sine / (2.0 * q)) / denominator_max;
-        let lower_pole = 4.0 / denominator_max;
-        // Reserve coefficient and comparison rounding across the continuous parameter box.
-        let rounding = f64::from(f32::EPSILON);
-        if schur > 1.5 * rounding && damping > 0.5 * rounding && lower_pole > 0.5 * rounding {
-            Ok((schur - 1.5 * rounding)
-                .min(damping - 0.5 * rounding)
-                .min(lower_pole - 0.5 * rounding))
+            Ok(())
         } else {
             Err(FilterError::Parameters)
         }
     }
-}
-
-/// Settings and scratch resources of the deck filter.
-#[derive(derive_more::From)]
-#[derive_where::derive_where(Clone, Debug)]
-#[non_exhaustive]
-pub struct FilterConfig<S> {
-    /// Scratch storage supplied by the owning playback region.
-    pub(super) pools: PoolRegion<S>,
-    /// Fixed sweep ranges and resonance.
-    pub(super) settings: FilterSettings,
 }

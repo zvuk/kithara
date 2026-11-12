@@ -2,11 +2,9 @@
 
 use std::num::NonZeroU32;
 
-use kithara_effects::filter::{
-    Cutoff, FilterConfig, FilterEffect, FilterKnob, FilterMotion, FilterSettings, Kind,
-};
+use kithara_effects::filter::{Cutoff, FilterEffect, FilterSettings, Kind};
 use kithara_signal::AudioSpec;
-use kithara_test_utils::{bufpool::pools, kithara};
+use kithara_test_utils::kithara;
 
 const FRAMES: usize = 8192;
 const ORIGIN: usize = 4096;
@@ -35,41 +33,24 @@ fn sweep_settings(kind: Kind, start: f64, end: f64) -> (FilterSettings, f64, f64
 fn sweep_impulse(kind: Kind, start: f64, end: f64) -> Vec<f32> {
     let rate = NonZeroU32::new(RATE).expect("nonzero rate");
     let (settings, from, to) = sweep_settings(kind, start, end);
-    let knob = |value| FilterKnob::checked(value).expect("sweep knob");
-    let mut filter = FilterEffect::new(
-        AudioSpec::new(2, rate),
-        FilterConfig::from((pools(), settings)),
-    )
-    .expect("filter");
-    filter.set_explicit(knob(from)).expect("sweep start");
-    let motion = FilterMotion::new(
-        rate,
-        from.min(to)..=from.max(to),
-        from,
-        settings
-            .travel(f64::from(RATE), from, to)
-            .expect("travel"),
-        u64::try_from(FRAMES).expect("bounded frames"),
-        u64::try_from(FRAMES - 1).expect("bounded transitions"),
-    )
-    .expect("ordered sweep");
-    filter.admit_trajectory(rate, motion).expect("admitted sweep");
+    let mut filter = FilterEffect::new(AudioSpec::new(2, rate), settings).expect("filter");
+    let knobs: Vec<_> = (0..FRAMES)
+        .map(|frame| {
+            let progress = f64::from(u32::try_from(frame).expect("bounded frame"))
+                / f64::from(u32::try_from(FRAMES - 1).expect("bounded duration"));
+            if frame == FRAMES - 1 {
+                to
+            } else {
+                from + (to - from) * progress
+            }
+        })
+        .collect();
     let mut planes = [vec![0.0; FRAMES], vec![0.0; FRAMES]];
     planes[0][ORIGIN] = 0.25;
     planes[1][ORIGIN] = -0.125;
-    for frame in 0..FRAMES {
-        let progress = f64::from(u32::try_from(frame).expect("bounded frame"))
-            / f64::from(u32::try_from(FRAMES - 1).expect("bounded duration"));
-        let value = if frame == FRAMES - 1 {
-            to
-        } else {
-            from + (to - from) * progress
-        };
-        filter.set_explicit(knob(value)).expect("prepared point");
-        filter
-            .process(&mut planes, frame..frame + 1)
-            .expect("frame");
-    }
+    filter
+        .process_program(&mut planes, 0..FRAMES, &knobs)
+        .expect("sweep program");
     assert!(planes.iter().flatten().all(|sample| sample.is_finite()));
     for (left, right) in planes[0].iter().zip(&planes[1]) {
         assert_eq!(-0.5 * left, *right);
