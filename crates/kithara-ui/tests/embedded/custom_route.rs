@@ -52,13 +52,13 @@ const OUTSIDE: (f64, f64) = (150.0, 50.0);
 
 /// The consumer's own action, carrying a payload the host must not touch.
 #[derive(Clone, Debug, PartialEq)]
-enum Probe {
+pub(super) enum Probe {
     Pressed { by: PointerId, label: String },
     Held { by: PointerId, label: String },
 }
 
 #[derive(Debug, PartialEq)]
-enum Out {
+pub(super) enum Out {
     Document(Published),
     Probe(Probe),
 }
@@ -161,7 +161,7 @@ impl CustomWidget for Presser {
 const SQUASH: &str = "fixture.squash";
 
 #[derive(Default)]
-struct Squash {
+pub(super) struct Squash {
     phase: Cell<f64>,
 }
 
@@ -182,11 +182,12 @@ fn ctx<'a>(ui: &'a CompiledUi, reads: &'a Squash) -> Ctx<'a, 'a> {
 }
 
 /// The custom widget's slot, standing at the window's left edge.
-const SLOT: &str = r#"Spacer(id: "custom", size: Some((w: Fixed(40.0), h: Fixed(40.0))))"#;
+pub(super) const SLOT: &str =
+    r#"Spacer(id: "custom", size: Some((w: Fixed(40.0), h: Fixed(40.0))))"#;
 
 /// A module whose one row holds `custom`, the document node the widget mounts
 /// in place of.
-fn document(custom: &str) -> CompiledUi {
+pub(super) fn document(custom: &str) -> CompiledUi {
     let mut resolver = MemResolver::default();
     resolver.insert(
         "route.klayout.ron",
@@ -218,7 +219,7 @@ fn document(custom: &str) -> CompiledUi {
     .unwrap_or_else(|error| panic!("the route fixture must compile: {error}"))
 }
 
-fn skin() -> Skin {
+pub(super) fn skin() -> Skin {
     Skin::resolve_with_font_policy(
         builtin::skin_doc().clone(),
         builtin::text_doc(),
@@ -229,7 +230,12 @@ fn skin() -> Skin {
     .unwrap_or_else(|error| panic!("the route skin must resolve: {error}"))
 }
 
-fn mounted<Widget>(ui: &CompiledUi, skin: &Skin, reads: &Squash, widget: Widget) -> MasonryRoot<Out>
+pub(super) fn mounted<Widget>(
+    ui: &CompiledUi,
+    skin: &Skin,
+    reads: &Squash,
+    widget: Widget,
+) -> MasonryRoot<Out>
 where
     Widget: CustomWidget<Action = Probe>,
 {

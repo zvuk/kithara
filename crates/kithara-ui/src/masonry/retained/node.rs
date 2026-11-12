@@ -7,7 +7,7 @@ use masonry::{
         AccessCtx, AllowRawMut, BoxConstraints, ChildrenIds, ComposeCtx, CursorIcon, EventCtx,
         LayoutCtx, PaintCtx, PointerButton as MasonryPointerButton, PointerEvent, PropertiesMut,
         PropertiesRef, QueryCtx, RegisterCtx, TextEvent, Update, UpdateCtx, Widget, WidgetId,
-        WidgetPod,
+        WidgetMut, WidgetPod,
     },
     kurbo::{Point, Size as MasonrySize},
     vello::Scene,
@@ -637,6 +637,21 @@ impl Node {
 /// only callers are the tree builder and the render root; keeping them apart
 /// from the widget's behaviour is what says so.
 impl Node {
+    /// Repaints the node for state only the application can see, and keeps
+    /// framing its leaf while the leaf asks for frames.
+    pub(crate) fn invalidate(mut widget: WidgetMut<'_, dyn Widget>) {
+        let mut node = widget.downcast::<Self>();
+        node.ctx.request_paint_only();
+        if node
+            .widget
+            .layout
+            .leaf()
+            .is_some_and(|leaf| leaf.repaint() != Repaint::None)
+        {
+            node.ctx.request_anim_frame();
+        }
+    }
+
     /// Whether this node is something the host has to declare: a leaf that
     /// draws through a pass of its own rather than into the scene, or a custom
     /// widget whose pictures may live on the device.

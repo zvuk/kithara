@@ -24,7 +24,7 @@ use crate::{
             menu::PickerLayer,
             node::{Detent, Face, Faces, Node},
             picker::{EngineTarget, HostedEngine},
-            popover::PopoverState,
+            popover::{PopoverState, SurfaceKind},
         },
     },
     render::{Published, Skin},
@@ -276,6 +276,12 @@ pub(crate) enum Watched {
     Lit {
         id: WidgetId,
         flag: Binding,
+    },
+    /// Content the application installed at a path, repainted when the
+    /// application says the state it shows changed.
+    Custom {
+        id: WidgetId,
+        path: String,
     },
     Zone {
         id: WidgetId,
@@ -682,6 +688,12 @@ impl<Action> MasonryNode<Action> {
         self.registrations.watch(Watched::Read { id, binding });
     }
 
+    pub(crate) fn watch_custom(&mut self, path: &str) {
+        let id = self.widget.id();
+        let path = path.to_owned();
+        self.registrations.watch(Watched::Custom { id, path });
+    }
+
     pub(crate) fn watch_placement(&mut self, path: InternId) {
         let id = self.widget.id();
         self.registrations.watch(Watched::Placed { path, id });
@@ -740,4 +752,37 @@ fn merge_window(
         (Some(window), None) | (None, Some(window)) => Some(window),
         (None, None) => None,
     }
+}
+
+/// Stacks every modal above the other surfaces and layers, under only the
+/// window's own layer, whatever its place in the document: the layer order is
+/// the paint order, and the surface order is the order input finds them in.
+pub(crate) fn stack_modals_on_top(
+    layers: &mut [NewWidget<dyn Widget>],
+    popovers: &mut [Within<PopoverRegistration>],
+    window: Option<&WindowTracker>,
+) {
+    popovers.sort_by_key(|popover| matches!(popover.item.state.kind(), SurfaceKind::Modal));
+    let modals: Vec<WidgetId> = popovers
+        .iter()
+        .filter(|popover| matches!(popover.item.state.kind(), SurfaceKind::Modal))
+        .map(|popover| popover.item.layer)
+        .collect();
+    let edges = window.and_then(|window| window.layer);
+    layers.sort_by_key(|layer| {
+        let id = layer.id();
+        (Some(id) == edges, modals.contains(&id))
+    });
+}
+
+/// The widgets the application installed its own content in at `path`; the
+/// branches of an adaptive block can mount one path more than once.
+pub(crate) fn installed_at(watched: &[Within<Watched>], path: &str) -> Vec<WidgetId> {
+    watched
+        .iter()
+        .filter_map(|watched| match &watched.item {
+            Watched::Custom { id, path: at } if at == path => Some(*id),
+            _ => None,
+        })
+        .collect()
 }

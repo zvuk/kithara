@@ -2,6 +2,7 @@
 
 //! Embedded host contracts that do not require iced, a window or a GPU.
 
+mod custom_frames;
 mod custom_route;
 mod external_image;
 
