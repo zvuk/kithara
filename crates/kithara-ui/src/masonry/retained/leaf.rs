@@ -26,8 +26,8 @@ use crate::{
         solve::{Length, Size},
     },
     interact::{
-        CursorShape, Hit, Input, MOUSE, Outcome, PointerInput, PointerOwnership, PointerPhase,
-        masonry::{cursor_icon, pointer_button},
+        CursorShape, Hit, Input, Outcome, PointerInput, PointerOwnership, PointerPhase,
+        masonry::{cursor_icon, pointer_button, portable_pointer_id},
     },
     masonry::{external::ExternalImageDeclaration, shader::ShaderDeclaration},
     module::TextAlign,
@@ -465,7 +465,11 @@ where
             y: point.y.as_(),
         });
         Some(Input::Pointer(PointerInput::new(
-            MOUSE, button, phase, at, clicks,
+            portable_pointer_id(event),
+            button,
+            phase,
+            at,
+            clicks,
         )))
     }
 

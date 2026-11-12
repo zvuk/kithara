@@ -32,10 +32,10 @@ use crate::{
         vis::VisFrame,
     },
     interact::{
-        CursorShape, Hit, Input, MOUSE, PointerInput, PointerOwnership, PointerPhase,
+        CursorShape, Hit, Input, PointerInput, PointerOwnership, PointerPhase,
         masonry::{
-            cursor_icon, pointer_button, pointer_position, portable_modifiers, portable_scroll,
-            portable_text_input,
+            cursor_icon, pointer_button, pointer_position, portable_modifiers, portable_pointer_id,
+            portable_scroll, portable_text_input,
         },
     },
     layout::{FrameCorners, FrameSides},
@@ -473,9 +473,13 @@ impl Node {
             },
         );
         let input = match (pointer, event) {
-            (Some((phase, button, clicks)), _) => {
-                Input::Pointer(PointerInput::new(MOUSE, button, phase, window, clicks))
-            }
+            (Some((phase, button, clicks)), _) => Input::Pointer(PointerInput::new(
+                portable_pointer_id(event),
+                button,
+                phase,
+                window,
+                clicks,
+            )),
             (None, PointerEvent::Scroll(scroll)) => {
                 Input::Wheel(portable_scroll(scroll.delta, ctx.get_scale_factor())?)
             }
