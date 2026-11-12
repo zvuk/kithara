@@ -3,13 +3,13 @@
     reason = "match is more readable for these quote!-emitting branches"
 )]
 
-use kithara_test_args::TestArgs;
+use kithara_test_args::{TestArgs, TestFlags};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Attribute, Expr, Ident, ext::IdentExt as _};
 
 pub(crate) fn make_serial_attr(args: &TestArgs) -> TokenStream2 {
-    if args.is_serial {
+    if args.flags().contains(TestFlags::SERIAL) {
         quote! {
             #[::kithara_test_utils::serial_test::serial(crate = ::kithara_test_utils::serial_test)]
         }
@@ -23,7 +23,7 @@ pub(crate) fn make_serial_attr(args: &TestArgs) -> TokenStream2 {
 /// async lock instead. The lock is declared right here, next to the `await`
 /// that takes it — it has one caller and needs no home of its own.
 pub(crate) fn make_wasm_serial_guard(args: &TestArgs) -> TokenStream2 {
-    if args.is_serial {
+    if args.flags().contains(TestFlags::SERIAL) {
         quote! {
             static KITHARA_WASM_SERIAL:
                 ::kithara_test_utils::kithara_platform::AsyncMutex<()> =
@@ -60,7 +60,7 @@ pub(crate) fn make_runtime_builder(args: &TestArgs) -> TokenStream2 {
     // Each constructor is taken on its own line: they return the builder by
     // value and every method after them borrows it, so naming one expression
     // that ends in a method call would bind a reference to a temporary.
-    let (base, threads) = if args.is_multi_thread {
+    let (base, threads) = if args.flags().contains(TestFlags::MULTI_THREAD) {
         (
             quote! {
                 ::kithara_test_utils::kithara_platform::tokio::runtime::Builder::new_multi_thread()
@@ -95,7 +95,7 @@ pub(crate) fn make_runtime_builder(args: &TestArgs) -> TokenStream2 {
 /// these guards: a body-held scope inside the cancellable timeout tears down
 /// non-LIFO on `Elapsed`.
 pub(crate) fn make_ambient_stmt(args: &TestArgs) -> TokenStream2 {
-    let flash = args.flash.unwrap_or(true);
+    let flash = args.flash().unwrap_or(true);
     quote! {
         let __flash_ambient =
             ::kithara_test_utils::kithara_platform::flash::ambient_scope(#flash);
@@ -106,7 +106,7 @@ pub(crate) fn make_ambient_stmt(args: &TestArgs) -> TokenStream2 {
 
 pub(crate) fn make_clock_measurement_stmt(args: &TestArgs, fn_name: &Ident) -> TokenStream2 {
     let name = fn_name.unraw().to_string();
-    let flash = args.flash.unwrap_or(true);
+    let flash = args.flash().unwrap_or(true);
     quote! {
         #[cfg(not(target_arch = "wasm32"))]
         let __kithara_clock_measurement =
@@ -119,7 +119,7 @@ pub(crate) fn make_clock_measurement_stmt(args: &TestArgs, fn_name: &Ident) -> T
 
 /// Native synchronous statements own credit after their ambient scope is installed.
 pub(crate) fn wrap_with_sync_participation(body: &TokenStream2, args: &TestArgs) -> TokenStream2 {
-    if args.is_loom || args.flash == Some(false) {
+    if args.flags().contains(TestFlags::LOOM) || args.flash() == Some(false) {
         return body.clone();
     }
     quote! {
@@ -136,7 +136,7 @@ pub(crate) fn wrap_with_sync_participation(body: &TokenStream2, args: &TestArgs)
 /// the log subscriber, then the `load` feature's CPU contention held until
 /// the body ends.
 pub(crate) fn make_test_setup(args: &TestArgs, remaining_attrs: &[&Attribute]) -> TokenStream2 {
-    let init = if let Some(filter) = &args.tracing_filter {
+    let init = if let Some(filter) = args.tracing_filter() {
         quote! {
             ::kithara_test_utils::test::setup_tracing_with_filter(#filter);
         }
@@ -188,7 +188,7 @@ pub(crate) fn wrap_with_model(
     args: &TestArgs,
     fn_name: &Ident,
 ) -> TokenStream2 {
-    if !args.is_loom {
+    if !args.flags().contains(TestFlags::LOOM) {
         return body.clone();
     }
     let clock_measurement = make_clock_measurement_stmt(args, fn_name);
@@ -421,16 +421,16 @@ pub(crate) fn finalize_body(
     fn_name: &Ident,
     is_async: bool,
 ) -> TokenStream2 {
-    let hang_budget = make_hang_budget(args.hang_timeout_secs);
-    let clock_measurement = if args.is_loom {
+    let hang_budget = make_hang_budget(args.hang_timeout_secs());
+    let clock_measurement = if args.flags().contains(TestFlags::LOOM) {
         TokenStream2::new()
     } else {
         make_clock_measurement_stmt(args, fn_name)
     };
-    let body = if args.soft_fail_patterns.is_empty() {
+    let body = if args.soft_fail_patterns().is_empty() {
         inner.clone()
     } else {
-        wrap_with_soft_fail(inner, fn_name, is_async, &args.soft_fail_patterns)
+        wrap_with_soft_fail(inner, fn_name, is_async, args.soft_fail_patterns())
     };
     quote! { { #hang_budget #clock_measurement #body } }
 }

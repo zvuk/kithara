@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use kithara_devtools::{Ctx, common::walker::walk_rs_files};
-use kithara_test_args::TestArgs;
+use kithara_test_args::{TestArgs, TestFlags};
 use syn::visit::{self, Visit};
 
 pub(super) fn check(ctx: &Ctx, packages: &[String]) -> Result<()> {
@@ -92,7 +92,9 @@ impl<'ast> Visit<'ast> for Marks {
                 _ => attribute.parse_args::<TestArgs>(),
             };
             match args {
-                Ok(args) if args.is_miri => self.tests.push(function.sig.ident.to_string()),
+                Ok(args) if args.flags().contains(TestFlags::MIRI) => {
+                    self.tests.push(function.sig.ident.to_string())
+                }
                 Ok(_) => {}
                 Err(error) => self.errors.push(format!("{}: {error}", function.sig.ident)),
             }

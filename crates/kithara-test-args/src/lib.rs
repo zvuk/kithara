@@ -4,35 +4,54 @@ use syn::{
     parse::{Parse, ParseStream},
 };
 
+bitflags::bitflags! {
+    /// Execution modes and explicit boolean settings of a test attribute.
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub struct TestFlags: u16 {
+        const BROWSER = 1 << 0;
+        const LOOM = 1 << 1;
+        const MIRI = 1 << 2;
+        const MULTI_THREAD = 1 << 3;
+        const NATIVE_ONLY = 1 << 4;
+        const SELENIUM = 1 << 5;
+        const SERIAL = 1 << 6;
+        const TOKIO = 1 << 7;
+        const WASM_ONLY = 1 << 8;
+        const FLASH_EXPLICIT = 1 << 9;
+        const FLASH_ENABLED = 1 << 10;
+    }
+}
+
 /// Arguments accepted by the shared Kithara test attribute.
-#[derive(Default)]
+#[derive(Default, fieldwork::Fieldwork)]
+#[fieldwork(get, set)]
 pub struct TestArgs {
-    /// `flash(true|false)`; `None` defaults to `true` at expansion. `true` runs
-    /// ambient and active flash mode for the test body; `false` keeps both off.
-    pub flash: Option<bool>,
-    /// `hang_timeout_secs(N)`: the liveness budget `#[kithara::hang_watchdog]`
-    /// arms with inside this test. Shortens the REAL wait a watchdog park costs
-    /// on the flash-off lane, where the ambient budget is spent in wall time.
-    pub hang_timeout_secs: Option<u64>,
-    pub timeout: Option<Expr>,
-    pub tracing_filter: Option<String>,
-    /// Substring patterns for soft-fail: if a panic message contains any of
-    /// these (case-insensitive), the test prints a warning instead of failing.
-    pub soft_fail_patterns: Vec<String>,
-    pub is_browser: bool,
-    pub is_loom: bool,
-    pub is_miri: bool,
-    pub is_multi_thread: bool,
-    pub is_native_only: bool,
-    pub is_selenium: bool,
-    pub is_serial: bool,
-    pub is_tokio: bool,
-    pub is_wasm_only: bool,
+    #[field(get(copy))]
+    flags: TestFlags,
+    hang_timeout_secs: Option<u64>,
+    #[field(get(option_borrow_inner = false))]
+    timeout: Option<Expr>,
+    tracing_filter: Option<String>,
+    soft_fail_patterns: Vec<String>,
 }
 
 impl TestArgs {
-    fn check_exclusive(a: bool, a_name: &str, b: bool, b_name: &str) -> syn::Result<()> {
-        if a && b {
+    /// The explicit flash setting; absence keeps the expansion's default.
+    #[must_use]
+    pub fn flash(&self) -> Option<bool> {
+        self.flags
+            .contains(TestFlags::FLASH_EXPLICIT)
+            .then_some(self.flags.contains(TestFlags::FLASH_ENABLED))
+    }
+
+    fn check_exclusive(
+        &self,
+        a: TestFlags,
+        a_name: &str,
+        b: TestFlags,
+        b_name: &str,
+    ) -> syn::Result<()> {
+        if self.flags.contains(a | b) {
             Err(Error::new(
                 Span::call_site(),
                 format!("`{a_name}` and `{b_name}` are mutually exclusive"),
@@ -43,36 +62,58 @@ impl TestArgs {
     }
 
     fn validate(&mut self) -> syn::Result<()> {
-        Self::check_exclusive(self.is_tokio, "tokio", self.is_wasm_only, "wasm")?;
-        Self::check_exclusive(self.is_wasm_only, "wasm", self.is_native_only, "native")?;
-        Self::check_exclusive(self.is_browser, "browser", self.is_wasm_only, "wasm")?;
-        Self::check_exclusive(self.is_selenium, "selenium", self.is_wasm_only, "wasm")?;
-        Self::check_exclusive(self.is_selenium, "selenium", self.is_browser, "browser")?;
-        Self::check_exclusive(self.is_loom, "loom", self.is_wasm_only, "wasm")?;
-        Self::check_exclusive(self.is_loom, "loom", self.is_browser, "browser")?;
-        Self::check_exclusive(self.is_loom, "loom", self.is_selenium, "selenium")?;
-        Self::check_exclusive(self.is_loom, "loom", self.is_multi_thread, "multi_thread")?;
-        Self::check_exclusive(self.is_loom, "loom", self.is_tokio, "tokio")?;
+        self.check_exclusive(TestFlags::TOKIO, "tokio", TestFlags::WASM_ONLY, "wasm")?;
+        self.check_exclusive(
+            TestFlags::WASM_ONLY,
+            "wasm",
+            TestFlags::NATIVE_ONLY,
+            "native",
+        )?;
+        self.check_exclusive(TestFlags::BROWSER, "browser", TestFlags::WASM_ONLY, "wasm")?;
+        self.check_exclusive(
+            TestFlags::SELENIUM,
+            "selenium",
+            TestFlags::WASM_ONLY,
+            "wasm",
+        )?;
+        self.check_exclusive(
+            TestFlags::SELENIUM,
+            "selenium",
+            TestFlags::BROWSER,
+            "browser",
+        )?;
+        self.check_exclusive(TestFlags::LOOM, "loom", TestFlags::WASM_ONLY, "wasm")?;
+        self.check_exclusive(TestFlags::LOOM, "loom", TestFlags::BROWSER, "browser")?;
+        self.check_exclusive(TestFlags::LOOM, "loom", TestFlags::SELENIUM, "selenium")?;
+        self.check_exclusive(
+            TestFlags::LOOM,
+            "loom",
+            TestFlags::MULTI_THREAD,
+            "multi_thread",
+        )?;
+        self.check_exclusive(TestFlags::LOOM, "loom", TestFlags::TOKIO, "tokio")?;
 
-        if self.is_loom && !self.soft_fail_patterns.is_empty() {
+        if self.flags.contains(TestFlags::LOOM) && !self.soft_fail_patterns.is_empty() {
             return Err(Error::new(
                 Span::call_site(),
                 "`loom` and `soft_fail` are mutually exclusive",
             ));
         }
 
-        if self.is_selenium {
-            self.is_native_only = true;
-            self.is_tokio = true;
-            self.is_serial = true;
-            self.is_multi_thread = true;
+        if self.flags.contains(TestFlags::SELENIUM) {
+            self.flags.insert(
+                TestFlags::NATIVE_ONLY
+                    | TestFlags::TOKIO
+                    | TestFlags::SERIAL
+                    | TestFlags::MULTI_THREAD,
+            );
         }
 
-        if self.is_loom {
-            self.is_native_only = true;
+        if self.flags.contains(TestFlags::LOOM) {
+            self.flags.insert(TestFlags::NATIVE_ONLY);
         }
 
-        if self.is_multi_thread && !self.is_tokio {
+        if self.flags.contains(TestFlags::MULTI_THREAD) && !self.flags.contains(TestFlags::TOKIO) {
             return Err(Error::new(
                 Span::call_site(),
                 "`multi_thread` requires `tokio` (or `selenium` which implies it)",
@@ -106,38 +147,40 @@ impl Parse for TestArgs {
         while !input.is_empty() {
             let ident: Ident = input.parse()?;
             match ident.to_string().as_str() {
-                "tokio" => args.is_tokio = true,
-                "wasm" => args.is_wasm_only = true,
-                "native" => args.is_native_only = true,
-                "browser" => args.is_browser = true,
-                "loom" => args.is_loom = true,
-                "miri" => args.is_miri = true,
-                "serial" => args.is_serial = true,
-                "selenium" => args.is_selenium = true,
-                "multi_thread" => args.is_multi_thread = true,
+                "tokio" => args.flags.insert(TestFlags::TOKIO),
+                "wasm" => args.flags.insert(TestFlags::WASM_ONLY),
+                "native" => args.flags.insert(TestFlags::NATIVE_ONLY),
+                "browser" => args.flags.insert(TestFlags::BROWSER),
+                "loom" => args.flags.insert(TestFlags::LOOM),
+                "miri" => args.flags.insert(TestFlags::MIRI),
+                "serial" => args.flags.insert(TestFlags::SERIAL),
+                "selenium" => args.flags.insert(TestFlags::SELENIUM),
+                "multi_thread" => args.flags.insert(TestFlags::MULTI_THREAD),
                 "timeout" => {
                     let content;
                     syn::parenthesized!(content in input);
-                    args.timeout = Some(content.parse()?);
+                    args.set_timeout(Some(content.parse()?));
                 }
                 "flash" => {
                     let content;
                     syn::parenthesized!(content in input);
                     let lit: syn::LitBool = content.parse()?;
-                    args.flash = Some(lit.value);
+                    args.flags.insert(TestFlags::FLASH_EXPLICIT);
+                    args.flags.set(TestFlags::FLASH_ENABLED, lit.value);
                 }
                 "hang_timeout_secs" => {
                     let content;
                     syn::parenthesized!(content in input);
                     let secs: syn::LitInt = content.parse()?;
-                    args.hang_timeout_secs = Some(secs.base10_parse()?);
+                    args.set_hang_timeout_secs(Some(secs.base10_parse()?));
                 }
                 "soft_fail" => {
-                    args.soft_fail_patterns = parse_comma_separated(input, |content| {
+                    let patterns = parse_comma_separated(input, |content| {
                         let pattern: syn::LitStr = content.parse()?;
                         Ok(pattern.value())
                     })?;
-                    if args.soft_fail_patterns.is_empty() {
+                    args.set_soft_fail_patterns(patterns);
+                    if args.soft_fail_patterns().is_empty() {
                         return Err(Error::new(
                             ident.span(),
                             "soft_fail requires at least one pattern string",
@@ -148,7 +191,7 @@ impl Parse for TestArgs {
                     let content;
                     syn::parenthesized!(content in input);
                     let value: syn::LitStr = content.parse()?;
-                    args.tracing_filter = Some(value.value());
+                    args.set_tracing_filter(Some(value.value()));
                 }
                 other => {
                     return Err(Error::new(
@@ -169,13 +212,50 @@ impl Parse for TestArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::TestArgs;
+    use super::{TestArgs, TestFlags};
+
+    #[test]
+    fn flash_preserves_default_false_true_and_last_assignment() -> syn::Result<()> {
+        for (source, expected) in [
+            ("", None),
+            ("flash(false)", Some(false)),
+            ("flash(true)", Some(true)),
+            ("flash(false), miri, flash(true)", Some(true)),
+            ("flash(true), tokio, flash(false)", Some(false)),
+        ] {
+            let args = syn::parse_str::<TestArgs>(source)?;
+            assert_eq!(args.flash(), expected, "{source}");
+            assert_eq!(
+                args.flags().contains(TestFlags::FLASH_EXPLICIT),
+                expected.is_some(),
+                "{source}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mode_bits_remain_independent_and_selenium_keeps_its_implications() -> syn::Result<()> {
+        let args = syn::parse_str::<TestArgs>("miri, tokio")?;
+        assert_eq!(args.flags(), TestFlags::MIRI | TestFlags::TOKIO);
+        let args = syn::parse_str::<TestArgs>("selenium")?;
+        assert_eq!(
+            args.flags(),
+            TestFlags::SELENIUM
+                | TestFlags::NATIVE_ONLY
+                | TestFlags::TOKIO
+                | TestFlags::SERIAL
+                | TestFlags::MULTI_THREAD
+        );
+        assert_eq!(args.flash(), None);
+        Ok(())
+    }
 
     #[test]
     fn loom_implies_native() -> syn::Result<()> {
         let args = syn::parse_str::<TestArgs>("loom")?;
-        assert!(args.is_loom);
-        assert!(args.is_native_only);
+        assert!(args.flags().contains(TestFlags::LOOM));
+        assert!(args.flags().contains(TestFlags::NATIVE_ONLY));
         Ok(())
     }
 

@@ -3,7 +3,7 @@
     reason = "proc_macro parse_macro_input! produces owned values"
 )]
 
-use kithara_test_args::TestArgs;
+use kithara_test_args::{TestArgs, TestFlags};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -38,14 +38,14 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
-    if args.is_loom && func.sig.asyncness.is_some() {
+    if args.flags().contains(TestFlags::LOOM) && func.sig.asyncness.is_some() {
         return Err(Error::new_spanned(
             func.sig.asyncness,
             "`loom` requires a synchronous deterministic model; extract the concurrent contract \
              from async integration work",
         ));
     }
-    if args.is_loom && !matches!(func.sig.output, ReturnType::Default) {
+    if args.flags().contains(TestFlags::LOOM) && !matches!(func.sig.output, ReturnType::Default) {
         return Err(Error::new_spanned(
             &func.sig.output,
             "`loom` tests must return `()` so every failing permutation panics inside the model",
@@ -59,7 +59,7 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
         .filter(|a| !is_case_attr(a))
         .cloned()
         .collect();
-    if !args.is_miri {
+    if !args.flags().contains(TestFlags::MIRI) {
         attributes.push(syn::parse_quote!(#[cfg_attr(miri, ignore = "not selected for Miri")]));
     }
     let remaining_attrs: Vec<_> = attributes.iter().collect();
@@ -80,13 +80,13 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
         body_stmts: &func.block.stmts,
     };
 
-    if args.is_wasm_only {
+    if args.flags().contains(TestFlags::WASM_ONLY) {
         return Ok(generate_wasm_only(&ctx));
     }
-    if args.is_native_only && !args.is_browser {
+    if args.flags().contains(TestFlags::NATIVE_ONLY) && !args.flags().contains(TestFlags::BROWSER) {
         return Ok(generate_native_only(&ctx));
     }
-    if args.is_browser {
+    if args.flags().contains(TestFlags::BROWSER) {
         return Ok(generate_browser(&ctx));
     }
     Ok(generate_default(&ctx))
@@ -123,7 +123,7 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
         let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
         let full = quote! { { #test_setup #scoped #preamble #ambient #(#body_stmts)* } };
-        let with_timeout = wrap_with_timeout(&full, &ctx.args.timeout, true, name);
+        let with_timeout = wrap_with_timeout(&full, ctx.args.timeout(), true, name);
         let wrapped = finalize_body(&with_timeout, ctx.args, name, true);
         let serial_guard = make_wasm_serial_guard(ctx.args);
         let remaining_attrs = ctx.remaining_attrs;
@@ -153,7 +153,7 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
 
 /// native-only (without browser): `cfg(not(wasm32))` + `#[test]` or `#[tokio::test]`.
 fn generate_native_only(ctx: &GenCtx<'_>) -> TokenStream2 {
-    let native_is_async = ctx.is_async || ctx.args.is_tokio;
+    let native_is_async = ctx.is_async || ctx.args.flags().contains(TestFlags::TOKIO);
     let serial_attr = make_serial_attr(ctx.args);
     let mut tests = TokenStream2::new();
 
@@ -193,7 +193,7 @@ fn generate_native_only(ctx: &GenCtx<'_>) -> TokenStream2 {
 }
 
 fn emitted_name(name: &Ident, args: &TestArgs) -> Ident {
-    if args.is_loom {
+    if args.flags().contains(TestFlags::LOOM) {
         format_ident!("loom_model_{name}", span = name.span())
     } else {
         name.clone()
@@ -205,7 +205,8 @@ fn emitted_name(name: &Ident, args: &TestArgs) -> Ident {
 ///   native, browser    → sync native + browser wasm
 ///   tokio, browser     → async native + browser wasm
 fn generate_browser(ctx: &GenCtx<'_>) -> TokenStream2 {
-    let browser_only = !ctx.args.is_tokio && !ctx.args.is_native_only;
+    let browser_only = !ctx.args.flags().contains(TestFlags::TOKIO)
+        && !ctx.args.flags().contains(TestFlags::NATIVE_ONLY);
     let mut tests = TokenStream2::new();
 
     let mut emit = |name: &Ident, case_values: Option<&[Expr]>| {

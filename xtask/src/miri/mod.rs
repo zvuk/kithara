@@ -76,7 +76,10 @@ pub(crate) fn run(args: &MiriArgs, ctx: &Ctx) -> Result<()> {
     info!(?command, "running the declared Miri selection");
     let status = command.status().context("run Miri nextest")?;
     if !status.success() {
-        return Err(ChildFailure::inherited("Miri nextest", status.code()));
+        return Err(ChildFailure::inherited(
+            "Miri nextest".to_owned(),
+            status.code(),
+        ));
     }
     Ok(())
 }
