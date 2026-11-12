@@ -551,11 +551,14 @@ fn bench_render_buffers(c: &mut Criterion) {
     }
     group.finish();
 }
+#[path = "support/deck_eq_curves.rs"]
+mod deck_eq_curves;
 #[path = "support/slot_gain.rs"]
 mod slot_gain;
 
 criterion_group!(
     benches,
+    deck_eq_curves::bench,
     slot_gain::host_curve,
     slot_gain::gain_shape,
     bench_resampler_process,

@@ -1,7 +1,8 @@
+use kithara_command::Seq;
 use kithara_effects::GainDb;
 use kithara_signal::AudioChunkInfo;
 
-use super::{RtMetricsSnapshot, SlotBinding, SlotMark, SlotOutputSnapshot, SlotState};
+use super::{EqBinding, RtMetricsSnapshot, SlotBinding, SlotMark, SlotOutputSnapshot, SlotState};
 use crate::rt::DeckMixerConfig;
 
 /// What a deck's mixer last published of each slot and of itself, once per block.
@@ -26,6 +27,9 @@ impl DeckSnapshot {
             eq: EqSnapshot {
                 bands: config.eq_bands(),
                 gains: vec![GainDb::default(); config.eq_bands()],
+                binding: None,
+                programs: vec![None; config.eq_bands()],
+                authorities: vec![None; config.eq_bands()],
             },
             ..Self::default()
         }
@@ -38,6 +42,9 @@ pub struct EqSnapshot {
     bands: usize,
     #[field(get_mut, vis = "pub(crate)")]
     gains: Vec<GainDb>,
+    binding: Option<EqBinding>,
+    programs: Vec<Option<Seq>>,
+    authorities: Vec<Option<Seq>>,
 }
 
 impl EqSnapshot {
@@ -49,6 +56,47 @@ impl EqSnapshot {
     #[must_use]
     pub fn gain(&self, band: usize) -> Option<GainDb> {
         self.gains.get(band).copied().filter(|_| band < self.bands)
+    }
+
+    #[must_use]
+    pub const fn binding(&self) -> Option<EqBinding> {
+        self.binding
+    }
+
+    #[must_use]
+    pub fn program(&self, band: usize) -> Option<Seq> {
+        self.programs
+            .get(band)
+            .copied()
+            .flatten()
+            .filter(|_| band < self.bands)
+    }
+
+    #[must_use]
+    pub fn authority(&self, band: usize) -> Option<Seq> {
+        self.authorities
+            .get(band)
+            .copied()
+            .flatten()
+            .filter(|_| band < self.bands)
+    }
+
+    pub(crate) fn publish_program(
+        &mut self,
+        band: usize,
+        program: Option<Seq>,
+        authority: Option<Seq>,
+    ) {
+        if let Some(value) = self.programs.get_mut(band) {
+            *value = program;
+        }
+        if let Some(value) = self.authorities.get_mut(band) {
+            *value = authority;
+        }
+    }
+
+    pub(crate) fn set_binding(&mut self, binding: Option<EqBinding>) {
+        self.binding = binding;
     }
 
     pub(crate) fn set_bands(&mut self, bands: usize) {

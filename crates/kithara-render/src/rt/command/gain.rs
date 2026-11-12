@@ -75,10 +75,11 @@ impl Deck {
     }
 
     pub(in crate::rt) fn output_finished(&self, commands: &[DeckPart], seq: Seq) -> bool {
-        !self
-            .tracks
-            .slots()
-            .any(|slot| self.tracks.at(slot).and_then(PlayerTrack::output_program) == Some(seq))
+        !self.eq_programs.has_seq(seq)
+            && !self
+                .tracks
+                .slots()
+                .any(|slot| self.tracks.at(slot).and_then(PlayerTrack::output_program) == Some(seq))
             && !commands
                 .iter()
                 .any(|part| matches!(part, DeckPart::Stop { .. }))
@@ -151,6 +152,7 @@ impl Deck {
         if self.epoch == Some(epoch) {
             return;
         }
+        self.cancel_eq_epoch(level);
         for slot in self.tracks.slots() {
             let previous = self
                 .tracks

@@ -1,6 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 mod cases;
+mod eq_programs;
 mod gain;
 mod starvation;
 

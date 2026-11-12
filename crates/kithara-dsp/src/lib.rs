@@ -18,6 +18,8 @@
 
 mod backend;
 mod consts;
+/// Clock-free parameter progression in f64.
+pub mod curve;
 /// Prepared planar frame history read before each write.
 pub mod delay;
 /// Ordered target-gain recursion and stateless interval peak linking.
