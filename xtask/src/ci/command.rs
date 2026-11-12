@@ -98,9 +98,9 @@ pub(crate) fn run(args: &CiArgs, ctx: &Ctx) -> Result<()> {
         CiCommand::Lane(args) => super::lane::direct::run(args, ctx),
         CiCommand::Lanes(args) => super::lane::select::run(args, ctx),
         CiCommand::WindowsDiagnostics { output } => super::windows_diagnostics::run(output, ctx),
-        CiCommand::PrTests => match std::env::var(kithara_devtools::test::PR_TESTS_ENV) {
-            Ok(block) => kithara_devtools::test::validate_pr_tests(&ctx.root, &block),
-            Err(_) => Ok(()),
-        },
+        CiCommand::PrTests => std::env::var(kithara_devtools::test::PR_TESTS_ENV)
+            .map_or(Ok(()), |block| {
+                kithara_devtools::test::validate_pr_tests(&ctx.root, &block)
+            }),
     }
 }
