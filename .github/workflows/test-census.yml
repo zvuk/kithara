@@ -74,7 +74,7 @@ jobs:
           args=(nextest list --locked --cargo-profile test-release --ignore-default-filter --run-ignored=all --message-format=json)
           for package in "${packages[@]}"; do args+=(--package "$package"); done
           [[ -z "$FEATURES" ]] || args+=(--features "$FEATURES")
-          just ci cache-exec test-census /usr/bin/time -p -o .ci-artifacts/census/time.txt cargo "${args[@]}" > .ci-artifacts/census/inventory.json
+          just ci cache-exec test-census just tooling xtask measure-child cargo "${args[@]}" > .ci-artifacts/census/inventory.json 2> >(tee .ci-artifacts/census/build.log >&2)
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
