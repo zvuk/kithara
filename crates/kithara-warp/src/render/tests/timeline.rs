@@ -156,61 +156,12 @@ fn manual_ramp_to_the_rate_limit_keeps_quantized_requests_bounded() {
             .expect("a complete ramp quantum emits PCM");
         output_frames += output.frames();
         assert!(output.frames() <= 32, "the output quantum stays bounded");
-        assert!(
-            fx.output_remainder.abs() <= 1.0,
-            "quantization debt must stay within one frame: {}",
-            fx.output_remainder
-        );
     }
     assert!(
         output_frames > 10_000,
         "rendering continues past the former stall"
     );
     assert_eq!(fx.trajectory.speed().expect("settled speed"), 4.0);
-}
-
-#[kithara::test]
-fn exact_output_frames_do_not_drift_across_partitions() {
-    let stretch = 1.0 / 1.3;
-    let partitions = [127, 509, 2048, 17, 4096];
-    let mut remainder = 0.0;
-    let mut actual = 0;
-    for frames in partitions {
-        let (output, next_remainder) = WarpRenderer::output_frames(frames, stretch, remainder)
-            .expect("invariant: finite positive stretch");
-        actual += output;
-        remainder = next_remainder;
-    }
-    let source_frames = partitions.into_iter().sum::<usize>();
-    let expected = (f64_of(source_frames) * stretch)
-        .round()
-        .to_usize()
-        .expect("invariant: fixture output span fits usize");
-
-    assert_eq!(actual, expected);
-    assert_eq!(WarpRenderer::balanced_source_block(8193, 8192), 4097);
-
-    let mut remainder = 0.0;
-    let actual = [1, 1, 4096]
-        .into_iter()
-        .map(|frames| {
-            let (output, next_remainder) = WarpRenderer::output_frames(frames, 0.5, remainder)
-                .expect("singleton spans retain their quantization debt");
-            remainder = next_remainder;
-            output
-        })
-        .sum::<usize>();
-    assert_eq!(actual, 2049);
-
-    let mut remainder = 0.0;
-    let outputs = [1, 1, 1, 1].map(|frames| {
-        let (output, next_remainder) = WarpRenderer::output_frames(frames, 0.25, remainder)
-            .expect("four sub-frame spans form one exact output frame");
-        remainder = next_remainder;
-        output
-    });
-    assert_eq!(outputs, [0, 0, 0, 1]);
-    assert_eq!(remainder, 0.0);
 }
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
@@ -354,7 +305,7 @@ fn live_unity_transition_drains_active_backend_tail(
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn negative_rounding_debt_adds_no_frame_at_unity_transition(
+fn a_fractional_identity_phase_snaps_to_its_nearest_frame_without_starving(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
 ) {
@@ -367,54 +318,38 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
         let frame = usize::try_from(frame).expect("test source frame fits usize");
         warp_sine[frame * 2 % warp_sine.len()]
     };
-    let render = |debt| {
-        let mut fx = renderer(&config);
-        let mut twin = renderer(&config);
-        let mut source = 0;
-        let first = super::exact::mapped_signal(&mut fx, &mut source, 2, signal);
-        assert_eq!(first.frames(), 2);
-        super::exact::mapped_signal(&mut twin, &mut 0, 2, signal);
-        let tail = super::exact::supported_tail(&mut twin);
-        fx.output_remainder = debt;
-        fx.set_speed(SpeedCurve::Constant(1.0), 1)
-            .expect("unity command");
-        fx.prepare_engine_latency(spec())
-            .expect("identity transition");
-        let mut samples = first.samples.to_vec();
-        for index in 0..=tail.len().div_ceil(128) {
-            let unity = super::exact::mapped_signal(&mut fx, &mut source, 128, signal);
-            assert_eq!(unity.frames(), 128, "negative debt adds no frame");
-            let span = unity.meta.source_span.expect("unity mapping");
-            if index == 0 {
-                assert_eq!(
-                    span.source_ratio_at(0),
-                    Some((1, std::num::NonZeroU128::MIN)),
-                    "R6 rounds the 1.25-frame identity phase to frame 1 under the tail crossfade"
-                );
-            }
-            let identity: Vec<f32> = (span.start()..span.end())
-                .flat_map(|frame| [signal(frame); 2])
-                .collect();
-            samples.extend_from_slice(&unity.samples);
-            fx.prepare(spec());
-            if unity.samples[..] == identity[..] {
-                assert!(!fx.transition_pending());
-                return samples;
-            }
+    let mut fx = renderer(&config);
+    let mut twin = renderer(&config);
+    let mut source = 0;
+    let first = super::exact::mapped_signal(&mut fx, &mut source, 2, signal);
+    assert_eq!(first.frames(), 2);
+    super::exact::mapped_signal(&mut twin, &mut 0, 2, signal);
+    let tail = super::exact::supported_tail(&mut twin);
+    fx.set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("unity command");
+    fx.prepare_engine_latency(spec())
+        .expect("identity transition");
+    for index in 0..=tail.len().div_ceil(128) {
+        let unity = super::exact::mapped_signal(&mut fx, &mut source, 128, signal);
+        assert_eq!(unity.frames(), 128, "the identity transition adds no frame");
+        let span = unity.meta.source_span.expect("unity mapping");
+        if index == 0 {
+            assert_eq!(
+                span.source_ratio_at(0),
+                Some((1, std::num::NonZeroU128::MIN)),
+                "R6 rounds the 1.25-frame identity phase to frame 1 under the tail crossfade"
+            );
         }
-        panic!("the complete unity transition must converge");
-    };
-    let reference_samples = render(0.0);
-    let actual_samples = render(-0.4);
-    assert_eq!(
-        actual_samples.len() / usize::from(consts::CH),
-        reference_samples.len() / usize::from(consts::CH),
-        "negative rounding debt adds no output frame"
-    );
-    assert_eq!(
-        actual_samples, reference_samples,
-        "negative rounding debt adds no samples to the complete transition"
-    );
+        let identity: Vec<f32> = (span.start()..span.end())
+            .flat_map(|frame| [signal(frame); 2])
+            .collect();
+        fx.prepare(spec());
+        if unity.samples[..] == identity[..] {
+            assert!(!fx.transition_pending());
+            return;
+        }
+    }
+    panic!("the complete unity transition must converge");
 }
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]

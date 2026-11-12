@@ -115,7 +115,6 @@ pub(in crate::render) struct LaneFeed {
 }
 
 impl LaneFeed {
-    /// Admit one decoded chunk and render every quantum the held source covers.
     pub(in crate::render) fn feed(
         &mut self,
         fx: &mut WarpRenderer,
@@ -165,7 +164,6 @@ impl LaneFeed {
         panic!("held source must drain into quanta");
     }
 
-    /// End of source: render the held suffix as the terminal quantum.
     pub(in crate::render) fn end(&mut self, fx: &mut WarpRenderer) -> Vec<AudioChunk> {
         let mut out = Vec::new();
         let held = self.held_frames();
@@ -232,7 +230,6 @@ impl LaneFeed {
     }
 }
 
-/// Drain the renderer's terminal tail until it is exhausted.
 pub(in crate::render) fn drain_tail(fx: &mut WarpRenderer) -> Vec<AudioChunk> {
     let mut out = Vec::new();
     for _ in 0..LANE_STEPS {
@@ -244,7 +241,6 @@ pub(in crate::render) fn drain_tail(fx: &mut WarpRenderer) -> Vec<AudioChunk> {
     panic!("terminal drain must converge");
 }
 
-/// Interleaved samples of rendered outputs, in order.
 pub(in crate::render) fn samples(outputs: &[AudioChunk]) -> Vec<f32> {
     outputs
         .iter()

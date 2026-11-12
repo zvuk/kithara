@@ -315,17 +315,15 @@ where
             self.service_scratch();
             return;
         }
-        let channels = usize::from(self.spec.channels.max(1));
-
         let (kind, keylock) = self.stretch_target();
         let entering_unity =
-            self.holds_stream_at(spec, channels) && self.unity_passthrough(self.rate.speed());
+            self.holds_stream_at(spec) && self.unity_passthrough(self.rate.speed());
         if entering_unity {
             self.service_scratch();
             return;
         }
         let backend_changed = kind != self.current_kind || keylock != self.current_keylock;
-        if backend_changed && self.holds_stream_at(spec, channels) {
+        if backend_changed && self.holds_stream_at(spec) {
             self.backend_transition_pending = true;
             self.service_scratch();
             return;
@@ -358,8 +356,8 @@ where
         }
     }
 
-    fn holds_stream_at(&self, spec: AudioSpec, channels: usize) -> bool {
-        spec == self.spec && (self.active || self.pending_frames(channels) > 0)
+    fn holds_stream_at(&self, spec: AudioSpec) -> bool {
+        spec == self.spec && self.active
     }
 
     fn rebuild_target(&mut self, spec: AudioSpec, kind: StretchKind, keylock: bool) {

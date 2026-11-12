@@ -12,24 +12,6 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
-    /// Select source demand up to the next output quantum's mapped endpoint.
-    /// Filter and engine lookahead remain in the separately prepared source window.
-    ///
-    /// # Errors
-    /// Returns pending activation or the geometry/engine admission error.
-    pub fn prepare_quantum(
-        &mut self,
-        meta: AudioChunkInfo,
-        remaining: usize,
-        output_limit: usize,
-    ) -> Result<FrameCount, crate::WarpRenderError> {
-        self.prepare_source_window(meta, remaining, output_limit)?;
-        let prepared = self
-            .prepared_quantum
-            .ok_or(crate::WarpRenderError::OutstandingQuantum)?;
-        Ok(FrameCount::new(prepared.active_frames))
-    }
-
     /// Prepare the decoded-source window, including filter and engine lookahead.
     /// Supply this physical extent to `render_quantum`; only its mapped span is emitted.
     ///

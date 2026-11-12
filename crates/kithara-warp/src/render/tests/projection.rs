@@ -1052,7 +1052,6 @@ fn partial_manual_history_after_seek_keeps_the_reset_prime_contract(
             )
             .expect("both partial history chunks remain resident");
         assert_eq!(&resident.samples[range], &warp_sine[..68]);
-        assert_eq!(renderer.pending_frames(2), 0);
         assert!(
             renderer
                 .pending_source

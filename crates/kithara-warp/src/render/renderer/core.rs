@@ -77,9 +77,7 @@ pub struct WarpRenderer<S> {
     pub(in crate::render) last_input_meta: Option<AudioChunkInfo>,
     /// Exact source coordinate at which the current output scratch begins.
     pub(in crate::render) output_start_meta: Option<AudioChunkInfo>,
-    /// Earliest metadata represented by `pending_source`.
-    pub(in crate::render) pending_meta: Option<AudioChunkInfo>,
-    /// Source whose cumulative output is still below one representable frame.
+    /// Storage for unity samples queued behind a draining tail.
     /// Capacity is reserved from the injected pool before the render loop.
     pub(in crate::render) pending_source: Option<SampleBuffer>,
     /// Unity chunk retained while the active backend drains its tail.
@@ -115,9 +113,6 @@ pub struct WarpRenderer<S> {
     pub(in crate::render) deferred_trajectory: Option<Trajectory>,
     /// Speed the law holds up to a step taken ahead of its lane frame.
     pub(in crate::render) speed_ahead: Option<f32>,
-    /// Source frame the engine reads next while it trails the decoded frontier
-    /// after a prime; the residency holds every frame from it on.
-    pub(in crate::render) resident_feed: Option<u64>,
     pub(in crate::render) current_keylock: bool,
     /// One scheduler-shell rebuild requested for a re-prime or after a checked
     /// engine failure. The intent is consumed even when preparation fails.
@@ -127,10 +122,6 @@ pub struct WarpRenderer<S> {
     pub(in crate::render) reset_pending: bool,
     /// Last pitch factor pushed to the backend; avoids redundant updates.
     pub(in crate::render) applied_pitch: f64,
-    /// Fractional output frames retained across exact-span requests.
-    pub(in crate::render) output_remainder: f64,
-    /// Source frames admitted since the last renderer reset.
-    pub(in crate::render) source_frames_admitted: u64,
 }
 
 impl<S> WarpRenderer<S>
@@ -138,7 +129,6 @@ where
     S: HasPool<f32>,
 {
     pub(in crate::render) const MAX_OUTPUT_FRAMES: usize = 163_840;
-    pub(in crate::render) const OUTPUT_ROUNDING_MARGIN: f64 = 0.5;
     /// Build the slot at the source `spec` from the construction values of `config`.
     pub(crate) fn new(config: &WarpConfig, spec: AudioSpec, pools: PoolRegion<S>) -> Self {
         let requested_keylock = config.keylock();
@@ -168,7 +158,6 @@ where
             stateless_tail_owed: None,
             deferred_trajectory: None,
             speed_ahead: None,
-            resident_feed: None,
             pools,
             spec,
             source_block_frames: config.source_block_frames(),
@@ -177,12 +166,9 @@ where
             applied_pitch: f64::NAN,
             rate: RateTarget::new(speed, 0),
             active: false,
-            output_remainder: 0.0,
             pending_source: target.pending_source,
-            pending_meta: None,
             pending_unity_meta: None,
             rendered_source_end: None,
-            source_frames_admitted: 0,
             reset_pending: false,
             rebuild_pending: false,
             last_input_meta: None,
@@ -305,7 +291,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         if let Some(source) = self.pending_source.as_mut() {
             source.clear();
         }
-        self.pending_meta = None;
         self.pending_unity_meta = None;
     }
 
@@ -355,13 +340,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.last_input_meta = None;
         self.output_start_meta = None;
         self.applied_pitch = f64::NAN;
-        self.output_remainder = 0.0;
         self.prepared_quantum = None;
         self.rendered_source_end = None;
-        self.source_frames_admitted = 0;
         self.active = false;
         self.reprime_pending = false;
-        self.resident_feed = None;
         self.trajectory.reset();
         self.mapped_render = false;
         self.terminal_source_end = None;
@@ -424,23 +406,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             && (!self.requires_staging() || !self.unity_passthrough(self.rate.speed()))
             && self.stretch_target() != (self.current_kind, self.current_keylock)
     }
-
-    pub(in crate::render) fn held_source_frames(&self) -> u64 {
-        if !self.active {
-            return 0;
-        }
-        let pending = u64::try_from(self.pending_frames(usize::from(self.spec.channels.max(1))))
-            .unwrap_or(u64::MAX);
-        let backend_admitted = self.source_frames_admitted.saturating_sub(pending);
-        let latency = self
-            .engine
-            .as_ref()
-            .map_or(0, |engine| engine.capabilities().latency().first());
-        let backend_held = u64::try_from(latency)
-            .unwrap_or(u64::MAX)
-            .min(backend_admitted);
-        pending.saturating_add(backend_held)
-    }
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
@@ -479,23 +444,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         Ok(start)
     }
 
-    pub(in crate::render) fn pending_frames(&self, channels: usize) -> usize {
-        if self.pending_unity_meta.is_some() {
-            return 0;
-        }
-        self.pending_source
-            .as_deref()
-            .map_or(0, |source| source.len() / channels)
-    }
-
-    pub(in crate::render) fn record_rendered_source_end(
-        &mut self,
-        meta: AudioChunkInfo,
-        held_source_frames: u64,
-    ) {
-        let admitted = meta.frame_offset.saturating_add(u64::from(meta.frames));
+    pub(in crate::render) fn record_rendered_source_end(&mut self, meta: AudioChunkInfo) {
         self.rendered_source_end = Some((
-            admitted.saturating_sub(held_source_frames),
+            meta.frame_offset.saturating_add(u64::from(meta.frames)),
             meta.spec.sample_rate,
         ));
     }
