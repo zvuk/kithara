@@ -1,4 +1,7 @@
-use std::f64::consts::PI;
+use std::{
+    f64::consts::PI,
+    ops::{Add, Div, Mul, Sub},
+};
 
 use fearless_simd::{f64x2, prelude::*};
 
@@ -16,13 +19,13 @@ pub(crate) fn step<S: Simd>(
     let [a1, a2, a3] = coefficients.map(|value| f64x2::splat(simd, value));
     let damping = f64x2::splat(simd, damping);
     let two = f64x2::splat(simd, 2.0);
-    let v3 = x - s2;
-    let v1 = a1 * s1 + a2 * v3;
-    let v2 = s2 + a2 * s1 + a3 * v3;
-    let state = [two * v1 - s1, two * v2 - s2];
+    let v3 = x.sub(s2);
+    let v1 = a1.mul(s1).add(a2.mul(v3));
+    let v2 = s2.add(a2.mul(s1)).add(a3.mul(v3));
+    let state = [two.mul(v1).sub(s1), two.mul(v2).sub(s2)];
     let output = match response {
         Response::LowPass => v2,
-        Response::HighPass => x - damping * v1 - v2,
+        Response::HighPass => x.sub(damping.mul(v1)).sub(v2),
     };
     (state, output)
 }
@@ -37,10 +40,12 @@ pub(super) fn cutoff_angles<S: Simd>(
     let len = cutoffs.len().min(angles.len());
     let pi = f64x2::splat(simd, PI);
     let rate = f64x2::splat(simd, rate);
-    for (cutoffs, angles) in cutoffs[..len].chunks(2).zip(angles[..len].chunks_mut(2)) {
+    for (cutoffs, angles) in cutoffs.chunks(2).zip(angles.chunks_mut(2)) {
         let cutoff = f64x2::from_fn(simd, |lane| cutoffs.get(lane).copied().unwrap_or(0.0));
-        let values = pi * cutoff / rate;
-        angles.copy_from_slice(&values.as_slice()[..angles.len()]);
+        let values = pi.mul(cutoff).div(rate);
+        for (angle, value) in angles.iter_mut().zip(values.as_slice()).take(cutoffs.len()) {
+            *angle = *value;
+        }
     }
     len
 }
@@ -62,7 +67,7 @@ mod tests {
                     .cycle()
                     .take(len)
                     .collect();
-                let mut output = vec![-7.0; len + 1];
+                let mut output = vec![-7.0; len.saturating_add(1)];
                 dispatch!(level, simd => {
                     assert_eq!(cutoff_angles(simd, &cutoffs, 48_000.0, &mut output), len);
                 });
@@ -73,7 +78,10 @@ mod tests {
                 for (actual, cutoff) in output.iter().zip(&cutoffs) {
                     assert_eq!(actual.to_bits(), (PI * cutoff / 48_000.0).tan().to_bits());
                 }
-                assert_eq!(output[len].to_bits(), (-7.0_f64).to_bits());
+                assert_eq!(
+                    output.get(len).expect("unwritten tail").to_bits(),
+                    (-7.0_f64).to_bits()
+                );
             }
         }
     }
@@ -87,7 +95,12 @@ mod tests {
             400.0,
             20_000.0,
             23_999.0,
-            f64::from_bits(24_000.0_f64.to_bits() - 1),
+            f64::from_bits(
+                24_000.0_f64
+                    .to_bits()
+                    .checked_sub(1)
+                    .expect("positive float bits"),
+            ),
         ];
         let mut gains = [-7.0; 8];
         dispatch!(Level::new(), simd => platform::svf_gains(simd, &cutoffs, 48_000.0, &mut gains));
