@@ -97,29 +97,29 @@ impl FilterSettings {
         edge * (f64::from(extreme) / edge).powf(distance)
     }
 
-    /// Coefficients for `knob` at `rate`, `None` at the center.
+    /// The response and its coefficients for `knob` at `rate`, `None` at the center.
     pub(super) fn coefficients(
         &self,
         rate: f64,
         knob: f64,
-    ) -> Result<Option<Coefficients<f64>>, FilterError> {
+    ) -> Result<Option<(Kind, Coefficients<f64>)>, FilterError> {
         let Some((kind, cutoff)) = self.response(knob) else {
             return Ok(None);
         };
         if !cutoff.is_finite() || cutoff >= rate / 2.0 {
             return Err(FilterError::Parameters);
         }
-        let kind = match kind {
+        let design = match kind {
             Kind::LowPass => Type::LowPass,
             Kind::HighPass => Type::HighPass,
         };
         Coefficients::from_params(
-            kind,
+            design,
             Hertz::from_hz(rate).map_err(|_| FilterError::Parameters)?,
             Hertz::from_hz(cutoff).map_err(|_| FilterError::Parameters)?,
             f64::from(self.q),
         )
-        .map(Some)
+        .map(|coefficients| Some((kind, coefficients)))
         .map_err(|_| FilterError::Parameters)
     }
 

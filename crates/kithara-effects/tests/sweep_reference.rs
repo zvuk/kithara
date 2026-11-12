@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 use kithara_effects::filter::{
-    Cutoff, FilterConfig, FilterEffect, FilterMotion, FilterParameter, FilterSettingsChange, Kind,
+    Cutoff, FilterConfig, FilterEffect, FilterKnob, FilterMotion, FilterSettings, Kind,
 };
 use kithara_signal::AudioSpec;
 use kithara_test_utils::{bufpool::pools, kithara};
@@ -13,46 +13,59 @@ const ORIGIN: usize = 4096;
 const RATE: u32 = 44_100;
 const FREQUENCIES: [f64; 7] = [40.0, 200.0, 400.0, 800.0, 1000.0, 2000.0, 10_000.0];
 
-fn sweep_impulse(kind: Kind, start: f64, end: f64) -> Vec<f32> {
-    let rate = NonZeroU32::new(RATE).expect("nonzero rate");
-    let config = FilterConfig::builder(pools())
-        .kind(kind)
-        .cutoff_hz(Cutoff::checked(start).expect("start cutoff"))
+/// Knob range whose log map spans `start..end` Hz on the side of `kind`.
+fn sweep_settings(kind: Kind, start: f64, end: f64) -> (FilterSettings, f64, f64) {
+    let cutoff = |hz| Cutoff::checked(hz).expect("sweep cutoff");
+    let (edge, extreme, sign) = match kind {
+        Kind::LowPass => (1_600.0, 100.0, -1.0),
+        Kind::HighPass => (20.0, 2_000.0, 1.0),
+    };
+    let low = kind == Kind::LowPass;
+    let settings = FilterSettings::builder()
+        .maybe_low_edge(low.then(|| cutoff(edge)))
+        .maybe_low_extreme(low.then(|| cutoff(extreme)))
+        .maybe_high_edge((!low).then(|| cutoff(edge)))
+        .maybe_high_extreme((!low).then(|| cutoff(extreme)))
         .build()
         .expect("sweep settings");
-    let mut filter = FilterEffect::new(AudioSpec::new(2, rate), config).expect("filter");
-    let mut motions = filter.motions(rate).expect("held fields");
-    motions[FilterParameter::CutoffHz.index()] = FilterMotion::new(
-        FilterParameter::CutoffHz,
+    let knob = |hz: f64| sign * (hz / edge).ln() / (extreme / edge).ln();
+    (settings, knob(start), knob(end))
+}
+
+fn sweep_impulse(kind: Kind, start: f64, end: f64) -> Vec<f32> {
+    let rate = NonZeroU32::new(RATE).expect("nonzero rate");
+    let (settings, from, to) = sweep_settings(kind, start, end);
+    let knob = |value| FilterKnob::checked(value).expect("sweep knob");
+    let mut filter = FilterEffect::new(
+        AudioSpec::new(2, rate),
+        FilterConfig::from((pools(), settings)),
+    )
+    .expect("filter");
+    filter.set_explicit(knob(from)).expect("sweep start");
+    let motion = FilterMotion::new(
         rate,
-        start..=end,
-        start,
-        FilterMotion::distance(FilterParameter::CutoffHz, rate, start, end).expect("travel"),
+        from.min(to)..=from.max(to),
+        from,
+        settings
+            .travel(f64::from(RATE), from, to)
+            .expect("travel"),
         u64::try_from(FRAMES).expect("bounded frames"),
         u64::try_from(FRAMES - 1).expect("bounded transitions"),
     )
     .expect("ordered sweep");
-    filter
-        .admit_trajectory(rate, &motions)
-        .expect("admitted sweep");
+    filter.admit_trajectory(rate, motion).expect("admitted sweep");
     let mut planes = [vec![0.0; FRAMES], vec![0.0; FRAMES]];
     planes[0][ORIGIN] = 0.25;
     planes[1][ORIGIN] = -0.125;
     for frame in 0..FRAMES {
         let progress = f64::from(u32::try_from(frame).expect("bounded frame"))
             / f64::from(u32::try_from(FRAMES - 1).expect("bounded duration"));
-        let cutoff = if frame == 0 {
-            start
-        } else if frame == FRAMES - 1 {
-            end
+        let value = if frame == FRAMES - 1 {
+            to
         } else {
-            start * (end / start).powf(progress)
+            from + (to - from) * progress
         };
-        filter
-            .set_explicit(FilterSettingsChange::CutoffHz(
-                Cutoff::checked(cutoff).expect("logarithmic cutoff"),
-            ))
-            .expect("prepared point");
+        filter.set_explicit(knob(value)).expect("prepared point");
         filter
             .process(&mut planes, frame..frame + 1)
             .expect("frame");
