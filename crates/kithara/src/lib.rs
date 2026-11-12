@@ -186,7 +186,7 @@ pub use kithara_test_macros::{
     allow_block, fixture, mock, no_block, rtsan_forbid_blocking, test, test_utils_flash as flash,
 };
 #[cfg(feature = "warp")]
-pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError, StretchKind};
+pub use kithara_warp::StretchKind;
 
 #[cfg(feature = "mock")]
 pub mod mock {
@@ -248,7 +248,7 @@ pub mod prelude {
     #[cfg(feature = "stretch")]
     pub use kithara_stretch::{ElasticConfig, ElasticEngine, StretchKind as StretchEngineKind};
     #[cfg(feature = "warp")]
-    pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError, StretchKind};
+    pub use kithara_warp::StretchKind;
     #[cfg(feature = "waveform")]
     pub use kithara_waveform::{Bucket, Waveform};
     #[cfg(feature = "beat")]

@@ -2,12 +2,11 @@ use std::num::NonZeroUsize;
 
 use kithara_config::Config;
 use kithara_derive::Patch;
-use kithara_platform::sync::Arc;
 use kithara_stretch::{
     ElasticBackendConfig, ElasticBackendConfigPatch, ElasticBackendConfigPatchError, StretchKind,
 };
 
-use crate::{RegionPlan, consts};
+use crate::consts;
 
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
@@ -43,10 +42,6 @@ pub struct WarpConfig {
         patch(skip)
     )]
     backend: StretchKind,
-    /// Per-region ratio corrections a renderer built from this configuration
-    /// applies over source frames.
-    #[config(skip = "shared immutable region plan", get(ref), patch(skip))]
-    region_plan: Option<Arc<RegionPlan>>,
     /// Backend preparation geometry, independent of compiled engine choices.
     /// The render lane owns backend selection.
     #[config(nested, builder(default), get(copy), patch(nested, fallible))]
