@@ -43,6 +43,7 @@ fn sine_mp3(total_frames: usize, peak: i16) -> Vec<u8> {
 /// Frame-addressable 120 BPM pulse tracks for encoded-file tests.
 #[kithara::asset(ext = "mp3", content_type = "audio/mpeg")]
 #[case::deck_a_120bpm_48k(48_000, 2, 576_000, 120.0, 220.0)]
+#[case::deck_a_120bpm_48k_2s(48_000, 2, 96_000, 120.0, 220.0)]
 #[case::deck_b_120bpm_48k(48_000, 2, 576_000, 120.0, 880.0)]
 fn rhythm_mp3(
     sample_rate: u32,

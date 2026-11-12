@@ -375,6 +375,11 @@ pub(crate) fn rhythm_a_mp3() -> String {
 }
 
 #[kithara::fixture]
+pub(crate) fn rhythm_a_short_mp3() -> String {
+    asset_url(&assets::rhythm_mp3_deck_a_120bpm_48k_2s())
+}
+
+#[kithara::fixture]
 pub(crate) fn rhythm_b_mp3() -> String {
     asset_url(&assets::rhythm_mp3_deck_b_120bpm_48k())
 }

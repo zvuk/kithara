@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, panic::AssertUnwindSafe};
 
 use ::kithara::{
     analysis::{AnalysisFile, AnalysisProgress, FrameCoverage, FrameSpan, TrackAnalysis, Waveform},
@@ -9,13 +9,13 @@ use ::kithara::{
     file::File,
     platform::{
         CancelToken,
-        flash::real_io,
         sync::Arc,
         time::{self, Duration},
         tokio::sync::watch,
     },
     play::PlayWorkerConfig,
 };
+use futures::FutureExt;
 use kithara_test_utils::{TestTempDir, kithara, off_thread::OffThread, temp_dir};
 
 use super::{
@@ -24,8 +24,8 @@ use super::{
     fixtures::{
         analysis, app_config, axis, beats_only, document, fingerprint, grid, long_wav,
         memory_store, other_axis, persistence, progress, queue_off, queue_off_named, revision_held,
-        revision_of, rhythm_a_mp3, rhythm_b_mp3, served_grid, served_waveform, short_wav, snapshot,
-        test_pools, tone_mp3, track, track_prepared, track_sourced,
+        revision_of, rhythm_a_mp3, rhythm_a_short_mp3, rhythm_b_mp3, served_grid, served_waveform,
+        short_wav, snapshot, test_pools, tone_mp3, track, track_prepared, track_sourced,
     },
     run::{Activity, Run},
     service::{Owner, resource_config_from_source},
@@ -934,9 +934,55 @@ async fn settle(owner: &mut Owner) {
     }
 }
 
+#[kithara::test(native, tokio)]
+async fn a_stalled_analysis_pass_uses_the_virtual_progress_budget(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
+    let _held = owner.subscribe(queue, track_id, source, axis());
+    let _stalled = take_over_run(&mut owner, None);
+    let virtual_mode = ::kithara::platform::flash::ambient_snapshot();
+    let started = time::Instant::now();
+    let real_started = time::WallInstant::now();
+
+    let result = AssertUnwindSafe(drive_once(&mut owner))
+        .catch_unwind()
+        .await;
+    let elapsed = started.elapsed();
+    let real_elapsed = real_started.elapsed();
+    let still_running = matches!(&owner.active, Some(Activity::Running(_)));
+    cancel.cancel();
+    host.close().await;
+
+    let panic = result.expect_err("a pass with no publication must time out");
+    let message = panic
+        .downcast_ref::<String>()
+        .expect("a progress-budget panic carries its diagnostics");
+    assert!(
+        message.starts_with("the pass progresses:")
+            || (message.starts_with("[HangDetector]") && message.contains("::drive_once")),
+        "only the progress budget may refuse the stalled pass: {message}"
+    );
+    assert!(
+        still_running,
+        "timeout must not claim that the pass completed"
+    );
+    if virtual_mode {
+        assert_eq!(
+            elapsed,
+            Duration::from_secs(2),
+            "retain the progress budget"
+        );
+        assert!(
+            real_elapsed < Duration::from_secs(1),
+            "a virtual progress budget must not park the host: {real_elapsed:?}"
+        );
+    }
+}
+
 #[kithara::hang_watchdog(timeout = Duration::from_secs(2), ctx = String)]
 async fn drive_once(owner: &mut Owner) {
-    let _real_io = real_io();
     let result = {
         let progress = time::timeout(
             Duration::from_secs(2).min(__hang_detector.remaining()),
@@ -1049,7 +1095,6 @@ async fn an_invalid_layout_yields_no_analysis(tone_mp3: String) {
 #[kithara::test(
     native,
     tokio,
-    flash(false),
     tracing(
         "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
     )
@@ -1061,13 +1106,13 @@ async fn a_track_shorter_than_its_header_claims_is_done(tone_mp3: String) {
 #[kithara::test(
     native,
     tokio,
-    flash(false),
     tracing(
         "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
     )
 )]
-async fn a_resampled_track_is_covered_from_its_first_frame(rhythm_a_mp3: String) {
-    the_source_gave_everything_it_can(&rhythm_a_mp3).await;
+async fn a_resampled_track_is_covered_from_its_first_frame(rhythm_a_short_mp3: String) {
+    // Keep the rate-conversion geometry while bounding unrelated NN work.
+    the_source_gave_everything_it_can(&rhythm_a_short_mp3).await;
 }
 
 async fn the_source_gave_everything_it_can(url: &str) {
