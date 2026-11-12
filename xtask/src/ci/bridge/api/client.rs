@@ -2,6 +2,7 @@ use std::fs;
 
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use kithara_devtools::test::PR_TESTS_ENV;
 use reqwest::{Method, Url};
 use serde_json::Value;
 
@@ -13,8 +14,6 @@ use super::{
     http::{Api, Payload, paginated},
     sources::pull_request,
 };
-use kithara_devtools::test::PR_TESTS_ENV;
-
 use crate::ci::run::PipelineKind;
 
 pub(in crate::ci::bridge) struct Github {
