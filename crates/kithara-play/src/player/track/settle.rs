@@ -219,7 +219,7 @@ impl<S> PlayerImpl<S> {
             outcome,
             Outcome::Rejected(Rejection::Stale | Rejection::Refused(DeckRefusal::Outdated { .. }))
         ) {
-            self.adoptions.retry = Some(adoption.caller);
+            self.adoptions.newest_epoch = Some(adoption.caller);
             self.adopt_newest_epoch(out);
             return Some(Settled::Pending);
         }
@@ -314,10 +314,10 @@ impl<S> PlayerImpl<S> {
 
     pub(super) fn adopt_newest_epoch(&mut self, out: &mut Outbox<'_, S>) {
         if self.preparation_closed() {
-            self.adoptions.retry = None;
+            self.adoptions.newest_epoch = None;
             return;
         }
-        let Some(caller) = self.adoptions.retry else {
+        let Some(caller) = self.adoptions.newest_epoch else {
             return;
         };
         if out.deck_available() == 0 {
@@ -341,7 +341,7 @@ impl<S> PlayerImpl<S> {
                     parked: None,
                     cancelled: false,
                 });
-                self.adoptions.retry = None;
+                self.adoptions.newest_epoch = None;
             }
             Ok(None) => {}
             Err((error, _parts)) => warn!(%error, "the latest segment's adoption waits for room"),

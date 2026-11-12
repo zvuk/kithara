@@ -374,7 +374,7 @@ impl<S> PlayerImpl<S> {
         }
         out.supersede(self.seat()?)?;
         self.adoptions.cancel_parked();
-        self.adoptions.retry = None;
+        self.adoptions.newest_epoch = None;
         self.repeat = false;
         Ok(None)
     }
@@ -477,7 +477,7 @@ impl<S> PlayerImpl<S> {
             }
             self.segment.ready = false;
             self.withdraw_play();
-            self.adoptions.retry = None;
+            self.adoptions.newest_epoch = None;
             self.repeat = false;
             if let Some(attaching) = self.seat.attaching_mut() {
                 attaching.obsolete = true;

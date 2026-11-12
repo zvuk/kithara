@@ -664,13 +664,13 @@ async fn assert_terminal_adoption_refusal(cancelled: bool, outdated: bool) {
                 )
             });
             assert!(track.adoptions.inflight.is_empty());
-            assert_eq!(track.adoptions.retry, None);
+            assert_eq!(track.adoptions.newest_epoch, None);
             assert_eq!(track.segment.id, segment);
             assert_eq!(track.lane_commands.len(), lane_count);
             in_pass(&mut rig, frame(256), |out| track.tick(frame(256), out));
             assert_eq!(track.segment.id, segment);
             assert_eq!(track.lane_commands.len(), lane_count);
-            assert_eq!(track.adoptions.retry, None);
+            assert_eq!(track.adoptions.newest_epoch, None);
             if release_before_receipt {
                 assert_eq!(track.status(), TrackStatus::Released);
             } else {

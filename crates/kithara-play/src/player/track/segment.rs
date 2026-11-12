@@ -51,14 +51,15 @@ pub(super) struct Adoption {
 /// The deck adoptions a track has open.
 ///
 /// Segment issue and repeat push adoptions; their receipts take them back.
-/// An adoption the deck refuses as stale or outdated leaves its caller in
-/// `retry` until the deck has room to adopt the current segment again.
-/// Release, a refused attach and returned PCM clear everything; a supersede
-/// and a failed preparation drop only the retry.
+/// When the deck refuses an adoption as stale or outdated, a newer epoch has
+/// overtaken it: its caller waits in `newest_epoch` until the deck has room
+/// to adopt the current segment under that epoch. Release, a refused attach
+/// and returned PCM clear everything; a supersede and a failed preparation
+/// drop only the waiting caller.
 #[derive(Default)]
 pub(super) struct Adoptions {
     pub(super) inflight: Vec<Adoption>,
-    pub(super) retry: Option<Seq>,
+    pub(super) newest_epoch: Option<Seq>,
 }
 
 impl Adoptions {
@@ -98,6 +99,6 @@ impl Adoptions {
 
     pub(super) fn clear(&mut self) {
         self.inflight.clear();
-        self.retry = None;
+        self.newest_epoch = None;
     }
 }
