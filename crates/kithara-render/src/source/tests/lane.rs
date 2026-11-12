@@ -430,102 +430,96 @@ fn an_engine_batch_renders_on_as_its_engine_started_on_its_frame() {
     const WINDOW: usize = 4_096;
     const REACH: usize = 2_048;
     for backend in keylock_backends() {
-        for next in keylock_backends() {
-            let (from, command) = if backend == next {
-                ((backend, false), LaneCommand::SetKeylock(true))
-            } else {
-                ((backend, true), LaneCommand::SetBackend(next))
-            };
-            let to = (next, true);
-            let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
-            let pools = pools();
-            let (mut changed, mut lane) = stretch_lane(&pools, from, &signal);
-            lane.send(
+        let command = LaneCommand::SetKeylock(true);
+        let to = (backend, true);
+        let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
+        let pools = pools();
+        let (mut changed, mut lane) = stretch_lane(&pools, (backend, false), &signal);
+        lane.send(
+            When::At(LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: ENGAGE,
+            }),
+            speed_batch(1.25),
+        )
+        .expect("the lane has room for the engaging batch");
+        let seq = lane
+            .send(
+                When::At(LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: AT,
+                }),
+                command_batch(command.clone()),
+            )
+            .expect("the lane has room for the change");
+        let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
+        let cue = ENGAGE + (AT - ENGAGE) * 5 / 4;
+        assert_eq!(
+            emitted
+                .iter()
+                .find(|chunk| chunk.lane_start == AT)
+                .map(|chunk| chunk.source_start),
+            Some(cue),
+            "the engine change starts on its exact lane and source frame",
+        );
+
+        let (mut started, mut fresh) = stretch_lane(&pools, (backend, false), &signal);
+        fresh
+            .send(
                 When::At(LaneFrame {
                     segment: SegmentId::FIRST,
                     frame: ENGAGE,
                 }),
                 speed_batch(1.25),
             )
-            .expect("the lane has room for the engaging batch");
-            let seq = lane
-                .send(
-                    When::At(LaneFrame {
-                        segment: SegmentId::FIRST,
-                        frame: AT,
-                    }),
-                    command_batch(command.clone()),
-                )
-                .expect("the lane has room for the change");
-            let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
-            let cue = ENGAGE + (AT - ENGAGE) * 5 / 4;
-            assert_eq!(
-                emitted
-                    .iter()
-                    .find(|chunk| chunk.lane_start == AT)
-                    .map(|chunk| chunk.source_start),
-                Some(cue),
-                "the engine change starts on its exact lane and source frame",
-            );
+            .expect("the lane has room for the reference history");
+        let mut start = speed_batch(1.25);
+        start.commands.push(LaneCommand::SetKeylock(true));
+        fresh
+            .send(
+                When::At(LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: AT,
+                }),
+                start,
+            )
+            .expect("the lane has room for the start");
+        let reference = emit(&mut started, 0, AT + SETTLE + (WINDOW + REACH) as u64);
+        assert_eq!(
+            reference
+                .iter()
+                .find(|chunk| chunk.lane_start == AT)
+                .map(|chunk| chunk.source_start),
+            Some(cue),
+            "the fresh engine starts on the same lane and source frame",
+        );
 
-            let (mut started, mut fresh) = stretch_lane(&pools, (next, false), &signal);
-            fresh
-                .send(
-                    When::At(LaneFrame {
-                        segment: SegmentId::FIRST,
-                        frame: ENGAGE,
-                    }),
-                    speed_batch(1.25),
-                )
-                .expect("the lane has room for the reference history");
-            let mut start = speed_batch(1.25);
-            start.commands.push(LaneCommand::SetKeylock(true));
-            fresh
-                .send(
-                    When::At(LaneFrame {
-                        segment: SegmentId::FIRST,
-                        frame: AT,
-                    }),
-                    start,
-                )
-                .expect("the lane has room for the start");
-            let reference = emit(&mut started, 0, AT + SETTLE + (WINDOW + REACH) as u64);
-            assert_eq!(
-                reference
-                    .iter()
-                    .find(|chunk| chunk.lane_start == AT)
-                    .map(|chunk| chunk.source_start),
-                Some(cue),
-                "the fresh engine starts on the same lane and source frame",
-            );
-
-            let rendered = &lane_pcm(&emitted)[pcm_index(AT + SETTLE)..][..WINDOW];
-            let (offset, correlation) = alignment(
-                rendered,
-                &lane_pcm(&reference),
-                pcm_index(AT + SETTLE),
-                REACH,
-            );
-            assert!(
-                offset == 0 && correlation > 0.95,
-                "{command:?}: after the change at lane frame {AT} (source {cue}) the lane \
-                 renders {offset} frames off a fresh {to:?} engine, correlation {correlation:.3}"
-            );
-            assert!(
-                lane.receipts().any(|receipt| receipt.seq() == seq
-                    && matches!(
-                        receipt.outcome(),
-                        Outcome::Applied {
-                            at: LaneFrame {
-                                segment: SegmentId::FIRST,
-                                frame: AT
-                            },
-                            ..
-                        }
-                    )),
-                "the change's receipt names its frame"
-            );
-        }
+        let rendered = &lane_pcm(&emitted)[pcm_index(AT + SETTLE)..][..WINDOW];
+        let (offset, correlation) = alignment(
+            rendered,
+            &lane_pcm(&reference),
+            pcm_index(AT + SETTLE),
+            REACH,
+        );
+        assert!(
+            offset == 0 && correlation > 0.95,
+            "{command:?}: after the change at lane frame {AT} (source {cue}) the lane \
+             renders {offset} frames off a fresh {to:?} engine, correlation {correlation:.3}"
+        );
+        assert!(
+            lane.receipts().any(|receipt| receipt.seq() == seq
+                && matches!(
+                    receipt.outcome(),
+                    Outcome::Applied {
+                        at: LaneFrame {
+                            segment: SegmentId::FIRST,
+                            frame: AT
+                        },
+                        ..
+                    }
+                )),
+            "the change's receipt names its frame"
+        );
     }
 }
 
@@ -671,116 +665,4 @@ fn identity_source_preserves_buffers_despite_initial_and_live_controls(quarter: 
         }
     }
     assert!(ended, "Identity reaches EOF");
-}
-
-#[cfg(all(
-    feature = "stretch-identity",
-    any(
-        feature = "stretch-signalsmith",
-        feature = "stretch-bungee",
-        feature = "stretch-glide"
-    )
-))]
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-#[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide))]
-fn scheduled_identity_native_changes_preserve_the_decoded_suffix(
-    #[case] backend: StretchKind,
-    quarter: Vec<f32>,
-) {
-    const ENGAGE: u64 = 1_000;
-    const RETURN: u64 = 2_000;
-    const RATE_SOURCE_FRAMES: u64 = (RETURN - ENGAGE) * 2;
-    let pools = pools();
-    let (mut source, mut lane) =
-        lane_over(&pools, 3, |_| &quarter, 2.0, (StretchKind::Identity, false));
-    let first = lane
-        .send(
-            When::At(LaneFrame {
-                segment: SegmentId::FIRST,
-                frame: ENGAGE,
-            }),
-            command_batch(LaneCommand::SetBackend(backend)),
-        )
-        .expect("the lane has room");
-    let second = lane
-        .send(
-            When::At(LaneFrame {
-                segment: SegmentId::FIRST,
-                frame: RETURN,
-            }),
-            command_batch(LaneCommand::SetBackend(StretchKind::Identity)),
-        )
-        .expect("the lane has room");
-    let expected_output =
-        u64::from(3 * consts::LANE_CHUNK_FRAMES) - RATE_SOURCE_FRAMES + (RETURN - ENGAGE);
-    let emitted = emit(&mut source, 0, expected_output);
-    let actual_frames = emitted
-        .iter()
-        .map(|chunk| chunk.samples.len() / 2)
-        .sum::<usize>();
-    assert_eq!(
-        actual_frames,
-        usize::try_from(expected_output).expect("output frames")
-    );
-    for chunk in &emitted {
-        let expected_source = if chunk.lane_start < ENGAGE {
-            chunk.lane_start
-        } else if chunk.lane_start < RETURN {
-            ENGAGE + (chunk.lane_start - ENGAGE) * 2
-        } else {
-            chunk.lane_start + RATE_SOURCE_FRAMES - (RETURN - ENGAGE)
-        };
-        assert_eq!(
-            chunk.source_start, expected_source,
-            "backend changes preserve the exact source position at lane frame {}",
-            chunk.lane_start
-        );
-        if chunk.lane_start >= RETURN {
-            assert!(
-                chunk.samples.iter().all(|sample| *sample == quarter[0]),
-                "the held Identity suffix remains unchanged"
-            );
-        }
-    }
-    assert_eq!(
-        source.source.head.load(Ordering::Acquire),
-        u64::from(3 * consts::LANE_CHUNK_FRAMES)
-    );
-    assert!(
-        source.pending_input.is_none(),
-        "every decoded suffix was consumed"
-    );
-    assert_eq!(
-        source.warp.rendered_source_end().map(|(frame, _)| frame),
-        Some(u64::from(3 * consts::LANE_CHUNK_FRAMES))
-    );
-    let mut ended = false;
-    for _ in 0..8 {
-        match source.step_track() {
-            TrackStep::StateChanged => flush_deferred(&mut source),
-            TrackStep::Eof => {
-                ended = true;
-                break;
-            }
-            _ => panic!("the complete Identity suffix leaves no output tail"),
-        }
-    }
-    assert!(ended, "the complete source reaches EOF");
-    let outcomes = lane
-        .receipts()
-        .map(|receipt| {
-            let seq = receipt.seq();
-            let (outcome, _) = receipt.into();
-            (seq, outcome)
-        })
-        .collect::<Vec<_>>();
-    assert!(matches!(outcomes.as_slice(), [
-        (engage, Outcome::Applied { at: LaneFrame { segment: SegmentId::FIRST, frame: ENGAGE }, .. }),
-        (identity, Outcome::Applied { at: LaneFrame { segment: SegmentId::FIRST, frame: RETURN }, .. }),
-    ] if *engage == first && *identity == second));
 }

@@ -96,7 +96,7 @@ fn identity_preserves_pcm_and_unity_accounting_despite_live_controls() {
         );
         let original_samples = input.samples.as_ptr();
         let frames = renderer
-            .prepare_quantum(input.meta, 8, usize::MAX)
+            .prepare_source_window(input.meta, 8, usize::MAX)
             .expect("Identity admits the unchanged source span");
         assert_eq!(frames.get(), 8);
         let output = renderer
@@ -145,8 +145,12 @@ fn warp_unity_preserves_original_samples(warp_sine: Vec<f32>) {
     let original_samples = input.samples.as_ptr();
 
     renderer.prepare(spec);
+    let frames = renderer
+        .prepare_source_window(input.meta, 4096, usize::MAX)
+        .expect("unity admits the complete source span");
+    assert_eq!(frames.get(), 4096);
     let output = renderer
-        .render(input)
+        .render_quantum(input)
         .continue_value()
         .expect("the complete source span is accepted")
         .expect("unity rendering produces samples");

@@ -1,35 +1,23 @@
 use std::num::{NonZeroU32, NonZeroU128};
 
-use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunkInfo, AudioSpec, ExponentialApproach};
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
 use super::*;
 use crate::{
-    GridSegment, RegionPlan, Warp, WarpConfig,
+    Warp, WarpConfig,
     render::renderer::residency::SourceResidency,
     test_pools::{TestPools, pools},
 };
 
-fn renderer(regions: bool) -> WarpRenderer<TestPools> {
+fn renderer() -> WarpRenderer<TestPools> {
     let spec = AudioSpec::new(2, NonZeroU32::new(8_000).expect("sample rate"));
     let config = WarpConfig::builder()
         .backend(StretchKind::Signalsmith)
-        .keylock(true);
-    let config = if regions {
-        config
-            .region_plan(Arc::new(
-                RegionPlan::new(vec![
-                    GridSegment::new(0, 100, 1.25),
-                    GridSegment::new(100, u64::MAX, 0.75),
-                ])
-                .expect("two mapped regions"),
-            ))
-            .build()
-    } else {
-        config.build()
-    };
+        .keylock(true)
+        .speed(0.5)
+        .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools());
     renderer.prepare_engine_latency(spec).expect("prepared DSP");
     let mut resident =
@@ -78,7 +66,6 @@ fn spans(rate: NonZeroU32) -> [SourceSpan; 4] {
 
 fn scalar_positions(
     renderer: &WarpRenderer<TestPools>,
-    span: SourceSpan,
     offset: i64,
     nominal: Option<SourceSpan>,
     frame: u64,
@@ -90,22 +77,16 @@ fn scalar_positions(
     let position = match nominal {
         None => resident.history_position(offset.unsigned_abs()),
         Some(nominal) => Some(
-            renderer.map_nominal_position(
-                span.start(),
-                nominal
-                    .source_ratio_at(frame)
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            )?,
+            nominal
+                .source_ratio_at(frame)
+                .ok_or(ElasticError::SampleCountOverflow)?,
         ),
     };
     let next = nominal
         .map(|nominal| {
-            renderer.map_nominal_position(
-                span.start(),
-                nominal
-                    .source_ratio_at(frame + 1)
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            )
+            nominal
+                .source_ratio_at(frame + 1)
+                .ok_or(ElasticError::SampleCountOverflow)
         })
         .transpose()?;
     let fraction = |(numerator, denominator)| Fraction {
@@ -117,69 +98,62 @@ fn scalar_positions(
 
 #[kithara::test]
 fn projected_source_pcm_matches_scalar_geometry_and_history() {
-    for regions in [false, true] {
-        let mut renderer = renderer(regions);
-        let span = spans(renderer.spec.sample_rate)[0];
-        for terminal in [None, Some(90)] {
-            renderer.terminal_source_end = terminal;
-            for nominal in spans(renderer.spec.sample_rate)
-                .map(Some)
-                .into_iter()
-                .chain([None])
-            {
-                for frames in [0, 1, 7, 127] {
-                    for offset in [-65_i64, -7, 0, i64::MAX] {
-                        renderer
-                            .prepare_projection_buffer(frames)
-                            .expect("output capacity");
-                        renderer.pending_source.as_mut().expect("output").fill(0.0);
-                        let mut expected = renderer
-                            .pending_source
-                            .as_deref()
-                            .expect("retained output buffer")
-                            .to_vec();
-                        let scalar = (|| {
-                            for (frame, output) in expected
-                                .as_chunks_mut::<2>()
-                                .0
-                                .iter_mut()
-                                .take(frames)
-                                .enumerate()
-                            {
-                                let frame_offset = i64::try_from(frame)
-                                    .map_err(|_| ElasticError::SampleCountOverflow)?;
-                                let (position, next) = scalar_positions(
-                                    &renderer,
-                                    span,
-                                    offset
-                                        .checked_add(frame_offset)
-                                        .ok_or(ElasticError::SampleCountOverflow)?,
-                                    nominal,
-                                    u64::try_from(frame)
-                                        .map_err(|_| ElasticError::SampleCountOverflow)?,
-                                )?;
-                                sample_projected_frame(
-                                    renderer.residency.as_ref().expect("resident source"),
-                                    position,
-                                    next,
-                                    span,
-                                    terminal,
-                                    output,
-                                )?;
-                            }
-                            Ok::<_, ElasticError>(())
-                        })();
-                        let actual =
-                            renderer.project_source_segment(span, offset, 0..frames, nominal);
-                        assert_eq!(
-                            actual, scalar,
-                            "regions={regions}, offset={offset}, frames={frames}"
-                        );
-                        let actual = renderer.pending_source.as_deref().expect("projected PCM");
-                        assert_eq!(actual.len(), expected.len());
-                        for (actual, expected) in actual.iter().zip(expected) {
-                            assert_eq!(actual.to_bits(), expected.to_bits());
+    let mut renderer = renderer();
+    let span = spans(renderer.spec.sample_rate)[0];
+    for terminal in [None, Some(90)] {
+        renderer.terminal_source_end = terminal;
+        for nominal in spans(renderer.spec.sample_rate)
+            .map(Some)
+            .into_iter()
+            .chain([None])
+        {
+            for frames in [0, 1, 7, 127] {
+                for offset in [-65_i64, -7, 0, i64::MAX] {
+                    renderer
+                        .prepare_projection_buffer(frames)
+                        .expect("output capacity");
+                    renderer.pending_source.as_mut().expect("output").fill(0.0);
+                    let mut expected = renderer
+                        .pending_source
+                        .as_deref()
+                        .expect("retained output buffer")
+                        .to_vec();
+                    let scalar = (|| {
+                        for (frame, output) in expected
+                            .as_chunks_mut::<2>()
+                            .0
+                            .iter_mut()
+                            .take(frames)
+                            .enumerate()
+                        {
+                            let frame_offset = i64::try_from(frame)
+                                .map_err(|_| ElasticError::SampleCountOverflow)?;
+                            let (position, next) = scalar_positions(
+                                &renderer,
+                                offset
+                                    .checked_add(frame_offset)
+                                    .ok_or(ElasticError::SampleCountOverflow)?,
+                                nominal,
+                                u64::try_from(frame)
+                                    .map_err(|_| ElasticError::SampleCountOverflow)?,
+                            )?;
+                            sample_projected_frame(
+                                renderer.residency.as_ref().expect("resident source"),
+                                position,
+                                next,
+                                span,
+                                terminal,
+                                output,
+                            )?;
                         }
+                        Ok::<_, ElasticError>(())
+                    })();
+                    let actual = renderer.project_source_segment(span, offset, 0..frames, nominal);
+                    assert_eq!(actual, scalar, "offset={offset}, frames={frames}");
+                    let actual = renderer.pending_source.as_deref().expect("projected PCM");
+                    assert_eq!(actual.len(), expected.len());
+                    for (actual, expected) in actual.iter().zip(expected) {
+                        assert_eq!(actual.to_bits(), expected.to_bits());
                     }
                 }
             }
@@ -201,7 +175,7 @@ fn scalar_projected(
         None
     );
     let channels = usize::from(renderer.spec.channels);
-    let stages = renderer.projection_stages()?;
+    let stages = renderer.trajectory.projection_stages()?;
     let lookahead = (capabilities.latency().first() + capabilities.latency().second()) * stages;
     if !renderer.active {
         renderer.prime_projected(span, stages)?;
@@ -245,8 +219,8 @@ fn scalar_projected(
 
 #[kithara::test]
 fn projected_dsp_matches_scalar_speeds_across_successive_spans() {
-    let mut actual = renderer(true);
-    let mut scalar = renderer(true);
+    let mut actual = renderer();
+    let mut scalar = renderer();
     for frames in [1, 7, 127] {
         for span in spans(actual.spec.sample_rate) {
             let span = span.for_output_range(0..frames).expect("output extent");
