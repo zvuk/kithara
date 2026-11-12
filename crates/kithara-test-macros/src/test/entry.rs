@@ -3,6 +3,7 @@
     reason = "proc_macro parse_macro_input! produces owned values"
 )]
 
+use kithara_test_args::TestArgs;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -13,7 +14,6 @@ use super::{
     expand_async::emit_browser_test,
     expand_sync::{emit_native_only_one, emit_one_test},
     fixture_args::{ParamInfo, extract_params, make_preamble},
-    parse::TestArgs,
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_serial_attr,
         make_sync_test_attrs, make_test_setup, make_wasm_serial_guard,
@@ -53,7 +53,16 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
     }
 
     let cases = extract_cases(&func.attrs)?;
-    let remaining_attrs: Vec<_> = func.attrs.iter().filter(|a| !is_case_attr(a)).collect();
+    let mut attributes: Vec<_> = func
+        .attrs
+        .iter()
+        .filter(|a| !is_case_attr(a))
+        .cloned()
+        .collect();
+    if !args.is_miri {
+        attributes.push(syn::parse_quote!(#[cfg_attr(miri, ignore = "not selected for Miri")]));
+    }
+    let remaining_attrs: Vec<_> = attributes.iter().collect();
     let params = extract_params(&func)?;
 
     // The emit paths enter dynamic flash after installing ambient. Ordinary
@@ -258,6 +267,10 @@ fn generate_default(ctx: &GenCtx<'_>) -> TokenStream2 {
 
 #[cfg(test)]
 mod tests {
+    use syn::visit_mut::{self, VisitMut};
+
+    use super::{TestArgs, emitted_name, generate};
+
     #[test]
     fn unmarked_tests_are_visible_but_ignored_under_miri() -> syn::Result<()> {
         for attrs in ["", "tokio", "native", "wasm", "browser", "loom", "serial"] {
@@ -278,7 +291,10 @@ mod tests {
             let source = "fn contract() {}";
             let original = generate(syn::parse_str(attrs)?, syn::parse_str(source)?)?
                 .to_string()
-                .replace("# [cfg_attr (miri , ignore = \"not selected for Miri\")]", "");
+                .replace(
+                    "# [cfg_attr (miri , ignore = \"not selected for Miri\")] ",
+                    "",
+                );
             let marked = generate(
                 syn::parse_str(&format!("miri, {attrs}"))?,
                 syn::parse_str(source)?,
@@ -288,10 +304,6 @@ mod tests {
         }
         Ok(())
     }
-
-    use syn::visit_mut::{self, VisitMut};
-
-    use super::{TestArgs, emitted_name, generate};
 
     #[derive(Default)]
     struct FixtureContext {

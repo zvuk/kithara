@@ -3,11 +3,10 @@
     reason = "match is more readable for these quote!-emitting branches"
 )]
 
+use kithara_test_args::TestArgs;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Attribute, Expr, Ident, ext::IdentExt as _};
-
-use super::parse::TestArgs;
 
 pub(crate) fn make_serial_attr(args: &TestArgs) -> TokenStream2 {
     if args.is_serial {

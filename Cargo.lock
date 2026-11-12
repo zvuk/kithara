@@ -2902,7 +2902,7 @@ dependencies = [
 [[package]]
 name = "firewheel-web-audio"
 version = "0.6.0"
-source = "git+https://github.com/gerasim13/bevy_seedling?rev=016e91daa4fa89dcc61e7b055ba3187ac7d65f66#016e91daa4fa89dcc61e7b055ba3187ac7d65f66"
+source = "git+https://github.com/gerasim13/bevy_seedling?rev=75633a05ae4656e95fc2ece238a8ca72adc9fe7e#75633a05ae4656e95fc2ece238a8ca72adc9fe7e"
 dependencies = [
  "audioadapter",
  "bevy_platform",
@@ -6377,6 +6377,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-test-args"
+version = "0.0.1-alpha5"
+dependencies = [
+ "proc-macro2",
+ "syn 3.0.6",
+]
+
+[[package]]
 name = "kithara-test-dylib"
 version = "0.0.1-alpha5"
 dependencies = [
@@ -6419,6 +6427,7 @@ dependencies = [
 name = "kithara-test-macros"
 version = "0.0.1-alpha5"
 dependencies = [
+ "kithara-test-args",
  "proc-macro2",
  "quote",
  "syn 3.0.6",
@@ -6765,6 +6774,8 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "portable-atomic",
+ "proc-macro2",
+ "quote",
  "raw-window-handle",
  "regex",
  "regex-automata",
@@ -12133,7 +12144,7 @@ dependencies = [
 [[package]]
 name = "wasm_safe_thread"
 version = "0.1.1"
-source = "git+https://github.com/gerasim13/wasm_safe_thread?rev=02470f5b4094773daba114639e0ff02951da5a62#02470f5b4094773daba114639e0ff02951da5a62"
+source = "git+https://github.com/gerasim13/wasm_safe_thread?rev=d5e597ba15b5de325f92a4dd5c781366c69a8b9e#d5e597ba15b5de325f92a4dd5c781366c69a8b9e"
 dependencies = [
  "continue",
  "js-sys",
@@ -13269,6 +13280,7 @@ dependencies = [
  "hex",
  "humantime",
  "kithara-devtools",
+ "kithara-test-args",
  "nix",
  "plist",
  "proc-macro2",

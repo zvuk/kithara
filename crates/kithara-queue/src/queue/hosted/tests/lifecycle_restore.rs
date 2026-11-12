@@ -254,7 +254,7 @@ async fn player_advance_emits_event(#[by_ref] worker_owner: &WorkerOwner) {
     dir.finish().await;
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(miri, tokio)]
 async fn player_advance_through_queue(#[by_ref] worker_owner: &WorkerOwner) {
     let (mut queue, _, second, mut rig, dir) =
         crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
@@ -269,18 +269,38 @@ async fn player_advance_through_queue(#[by_ref] worker_owner: &WorkerOwner) {
         },
     )
     .expect("third");
-    assert_eq!(queue.control().current_index(), Some(0));
+    assert_eq!(
+        queue.control().current_index(),
+        Some(0),
+        "load and start the first item"
+    );
     apply(&mut queue, &mut rig, QueueCommand::Next(Transition::None)).expect("second");
     answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
-    assert_eq!(queue.control().current_index(), Some(1));
-    assert_eq!(queue.current, Some(second));
+    assert_eq!(
+        queue.control().current_index(),
+        Some(1),
+        "advance and admit the second item"
+    );
+    assert_eq!(
+        queue.current,
+        Some(second),
+        "settle the second item as current"
+    );
     apply(&mut queue, &mut rig, QueueCommand::Next(Transition::None)).expect("third");
     answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
-    assert_eq!(queue.control().current_index(), Some(2));
+    assert_eq!(
+        queue.control().current_index(),
+        Some(2),
+        "advance and admit the third item"
+    );
     apply(&mut queue, &mut rig, QueueCommand::Next(Transition::None)).expect("exhausted");
-    assert_eq!(queue.control().current_index(), Some(2));
+    assert_eq!(
+        queue.control().current_index(),
+        Some(2),
+        "exhaustion retains the final cursor"
+    );
     drop((queue, rig));
     dir.finish().await;
 }
@@ -687,20 +707,38 @@ fn player_config_values_follow_live_controls(#[by_ref] worker_owner: &WorkerOwne
     assert!(queue.control().is_muted());
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(miri, tokio)]
 async fn remove_all_items_releases_output_state_and_allows_fresh_playback(
     #[by_ref] worker_owner: &WorkerOwner,
 ) {
     let (mut queue, first, _, mut rig, dir) =
         crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
-    assert!(queue.control().is_playing());
-    assert!(queue.active_current_index().is_some());
+    assert!(
+        queue.control().is_playing(),
+        "the loaded first item is playing"
+    );
+    assert!(
+        queue.active_current_index().is_some(),
+        "the playing item owns an active slot"
+    );
     apply(&mut queue, &mut rig, QueueCommand::RemoveAll).expect("remove all");
     crate::mock::finish(&mut queue, &mut rig);
-    assert!(!queue.control().is_playing());
-    assert!(queue.active_current_index().is_none());
-    assert!(queue.control().current_abr_handle().is_none());
-    assert!((queue.control().rate() - 0.0).abs() < f32::EPSILON);
+    assert!(
+        !queue.control().is_playing(),
+        "clearing the queue stops playback"
+    );
+    assert!(
+        queue.active_current_index().is_none(),
+        "clearing the queue releases the active slot"
+    );
+    assert!(
+        queue.control().current_abr_handle().is_none(),
+        "clearing releases ABR ownership"
+    );
+    assert!(
+        (queue.control().rate() - 0.0).abs() < f32::EPSILON,
+        "clearing publishes a stopped rate"
+    );
     apply(
         &mut queue,
         &mut rig,
@@ -714,8 +752,14 @@ async fn remove_all_items_releases_output_state_and_allows_fresh_playback(
     apply(&mut queue, &mut rig, QueueCommand::Play { at: When::Next }).expect("fresh playback");
     answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
-    assert!(queue.control().is_playing());
-    assert!(queue.active_current_index().is_some());
+    assert!(
+        queue.control().is_playing(),
+        "the fresh load restarts playback"
+    );
+    assert!(
+        queue.active_current_index().is_some(),
+        "the fresh load owns a new active slot"
+    );
     apply(&mut queue, &mut rig, QueueCommand::RemoveAll).expect("final clear");
     drop((queue, rig));
     dir.finish().await;

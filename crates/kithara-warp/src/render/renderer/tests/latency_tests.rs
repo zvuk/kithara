@@ -9,6 +9,8 @@ use kithara_stretch::{
     ElasticCapabilities, ElasticConfig, ElasticDrain, ElasticEngine, ElasticError, ElasticRequest,
 };
 use kithara_sync::SpeedCurve;
+use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
 use super::*;
 use crate::{
@@ -241,4 +243,121 @@ fn latency_receipt_uses_the_prepared_replacement(#[case] backend: StretchKind) {
     assert!(!renderer.transition_pending());
     assert_eq!(latency, FrameCount::new(0));
     assert_eq!(renderer.engine_latency(), latency);
+}
+
+/// Switching keylock off at unity retires the engine into a crossfade that
+/// fades its retained tail into the passthrough source by the linear law and
+/// then passes the source through bit-identical.
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+#[kithara::hang_watchdog]
+fn keylock_off_at_unity_crossfades_the_retained_tail_by_the_linear_law(
+    #[case] backend: StretchKind,
+) {
+    let mut renderer = active_renderer(backend);
+    renderer
+        .set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("unity speed");
+    renderer.set_keylock(false);
+    assert_eq!(
+        renderer
+            .prepare_engine_latency(renderer.spec)
+            .expect("the engine retires at the switch moment"),
+        FrameCount::new(0)
+    );
+    assert!(!renderer.transition_pending());
+    let resident = renderer
+        .residency
+        .as_ref()
+        .expect("the retired engine leaves its tail");
+    let decoded_end = resident.end.expect("the engine consumed decoded source");
+    let replacement = resident.replacement.to_vec();
+    assert!(
+        replacement
+            .windows(2)
+            .any(|pair| pair[0].to_bits() != pair[1].to_bits()),
+        "the retained engine tail must vary"
+    );
+    let channels = usize::from(renderer.spec.channels);
+    let fade_frames = replacement.len() / channels;
+    // The fixture fed a constant 0.25 before `decoded_end`; a varying signal
+    // follows so a misplaced frame cannot pass.
+    let source = |frame: u64| {
+        if frame < decoded_end {
+            0.25
+        } else {
+            (frame.to_f32().expect("fixture frame fits") * 0.137).sin() * 0.3
+        }
+    };
+    let mut output = Vec::new();
+    let mut first_source = None;
+    let mut fed = decoded_end;
+    while output.len() < (fade_frames + 64) * channels {
+        hang_tick!();
+        let meta = AudioChunkInfo {
+            spec: renderer.spec,
+            frame_offset: fed,
+            ..AudioChunkInfo::default()
+        };
+        let window = renderer
+            .prepare_source_window(meta, 4096, usize::MAX)
+            .expect("decoded source continues into the unity window")
+            .get();
+        let samples: Vec<f32> = (fed..fed + u64::try_from(window).expect("window fits u64"))
+            .flat_map(|frame| [source(frame); 2])
+            .collect();
+        let quantum = renderer
+            .render_quantum(AudioChunk::new(
+                AudioChunkInfo {
+                    frames: u32::try_from(window).expect("window fits u32"),
+                    ..meta
+                },
+                sample_buffer(&renderer.pools, &samples),
+            ))
+            .continue_value()
+            .expect("prepared quantum")
+            .expect("unity emits the crossfaded source");
+        let span = quantum
+            .meta
+            .source_span
+            .expect("unity publishes its mapping");
+        if first_source.is_none() {
+            first_source = Some(span.start());
+        }
+        assert_eq!(
+            span.start(),
+            first_source.expect("first quantum")
+                + u64::try_from(output.len() / channels).expect("frames fit u64"),
+            "unity quanta are source-contiguous"
+        );
+        output.extend_from_slice(&quantum.samples);
+        fed += u64::try_from(window).expect("window fits u64");
+        drop(quantum);
+        renderer.prepare(renderer.spec);
+        hang_reset!();
+    }
+    let first_source = first_source.expect("at least one quantum");
+    for (index, &got) in output.iter().enumerate() {
+        let frame = index / channels;
+        let input = source(first_source + u64::try_from(frame).expect("frame fits u64"));
+        if index >= replacement.len() {
+            assert_eq!(got.to_bits(), input.to_bits(), "passthrough sample={index}");
+            continue;
+        }
+        let gain =
+            (frame + 1).to_f32().expect("frame fits") / fade_frames.to_f32().expect("fade fits");
+        let old = replacement[index] * (1.0 - gain);
+        let new = input * gain;
+        let expected = replacement[index].mul_add(1.0 - gain, new);
+        let larger = old.abs().max(new.abs());
+        let ulp = larger.next_up() - larger;
+        assert!(
+            (f64::from(got) - f64::from(expected)).abs() <= f64::from(ulp),
+            "linear law: sample={index}, got={got}, expected={expected}"
+        );
+    }
 }

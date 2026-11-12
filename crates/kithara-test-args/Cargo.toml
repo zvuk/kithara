@@ -1,0 +1,14 @@
+[package]
+name = "kithara-test-args"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Shared argument parser for Kithara test attributes and tooling."
+
+[dependencies]
+proc-macro2 = { workspace = true }
+syn = { workspace = true }
+
+[lints]
+workspace = true

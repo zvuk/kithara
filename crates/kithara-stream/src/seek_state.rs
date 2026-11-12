@@ -11,7 +11,7 @@ mod tests {
         assert!(!s.is_playing());
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn set_playing_true_is_visible_across_arc_clones() {
         let mut writer = ActivityWriter::new();
         let s = Arc::new(writer.reader());

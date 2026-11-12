@@ -1,3 +1,4 @@
+use kithara_test_args::TestArgs;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Attribute, Ident};
@@ -5,7 +6,6 @@ use syn::{Attribute, Ident};
 use super::{
     expand_async::{emit_async_runtime_test, emit_async_timeout_test},
     fixture_args::Preamble,
-    parse::TestArgs,
     shared::{
         finalize_body, make_ambient_stmt, make_serial_attr, make_test_setup,
         make_wasm_serial_guard, wrap_with_model, wrap_with_sync_participation, wrap_with_timeout,

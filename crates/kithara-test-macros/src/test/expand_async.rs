@@ -1,10 +1,10 @@
+use kithara_test_args::TestArgs;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Attribute, Ident};
 
 use super::{
     fixture_args::Preamble,
-    parse::TestArgs,
     shared::{
         finalize_body, make_ambient_stmt, make_clock_measurement_stmt,
         make_dedicated_worker_config, make_hang_budget, make_hard_timeout_watchdog,

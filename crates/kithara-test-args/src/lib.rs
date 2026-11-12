@@ -4,28 +4,30 @@ use syn::{
     parse::{Parse, ParseStream},
 };
 
+/// Arguments accepted by the shared Kithara test attribute.
 #[derive(Default)]
-pub(crate) struct TestArgs {
+pub struct TestArgs {
     /// `flash(true|false)`; `None` defaults to `true` at expansion. `true` runs
     /// ambient and active flash mode for the test body; `false` keeps both off.
-    pub(crate) flash: Option<bool>,
+    pub flash: Option<bool>,
     /// `hang_timeout_secs(N)`: the liveness budget `#[kithara::hang_watchdog]`
     /// arms with inside this test. Shortens the REAL wait a watchdog park costs
     /// on the flash-off lane, where the ambient budget is spent in wall time.
-    pub(crate) hang_timeout_secs: Option<u64>,
-    pub(crate) timeout: Option<Expr>,
-    pub(crate) tracing_filter: Option<String>,
+    pub hang_timeout_secs: Option<u64>,
+    pub timeout: Option<Expr>,
+    pub tracing_filter: Option<String>,
     /// Substring patterns for soft-fail: if a panic message contains any of
     /// these (case-insensitive), the test prints a warning instead of failing.
-    pub(crate) soft_fail_patterns: Vec<String>,
-    pub(crate) is_browser: bool,
-    pub(crate) is_loom: bool,
-    pub(crate) is_multi_thread: bool,
-    pub(crate) is_native_only: bool,
-    pub(crate) is_selenium: bool,
-    pub(crate) is_serial: bool,
-    pub(crate) is_tokio: bool,
-    pub(crate) is_wasm_only: bool,
+    pub soft_fail_patterns: Vec<String>,
+    pub is_browser: bool,
+    pub is_loom: bool,
+    pub is_miri: bool,
+    pub is_multi_thread: bool,
+    pub is_native_only: bool,
+    pub is_selenium: bool,
+    pub is_serial: bool,
+    pub is_tokio: bool,
+    pub is_wasm_only: bool,
 }
 
 impl TestArgs {
@@ -81,7 +83,7 @@ impl TestArgs {
     }
 }
 
-pub(crate) fn parse_comma_separated<T>(
+fn parse_comma_separated<T>(
     input: ParseStream<'_>,
     mut parse_item: impl FnMut(ParseStream<'_>) -> syn::Result<T>,
 ) -> syn::Result<Vec<T>> {
@@ -109,6 +111,7 @@ impl Parse for TestArgs {
                 "native" => args.is_native_only = true,
                 "browser" => args.is_browser = true,
                 "loom" => args.is_loom = true,
+                "miri" => args.is_miri = true,
                 "serial" => args.is_serial = true,
                 "selenium" => args.is_selenium = true,
                 "multi_thread" => args.is_multi_thread = true,
