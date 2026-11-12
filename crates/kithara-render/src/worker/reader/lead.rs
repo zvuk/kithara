@@ -8,10 +8,12 @@ use std::{collections::VecDeque, num::NonZeroUsize};
 /// packet it took before is spent, whether or not it ever hands that one back.
 /// The latest packet it took is spent once every packet taken has come back,
 /// and otherwise has at least one frame behind the read mark, so the lead past
-/// that mark never reaches `(chunks + 1)` quanta. The ring gives each quantum
-/// of the lead two slots, one for a full packet and one for the short packet a
-/// boundary cuts in front of it. Packet weights are kept from admission, since
-/// a reader may trim or keep a packet it takes.
+/// that mark never reaches `(chunks + 1)` quanta. The ring has `chunks + 1`
+/// slots: the frame bound queues at most `chunks` whole quanta, which leaves
+/// one slot for the short packet a boundary cuts in front of them, and a source
+/// whose packets stay below the quantum queues as many packets as before the
+/// lead was counted in frames, plus that one. Packet weights are kept from
+/// admission, since a reader may trim or keep a packet it takes.
 pub(in crate::worker) struct PcmLead {
     limit: usize,
     quantum: usize,
@@ -26,21 +28,20 @@ impl PcmLead {
     /// `chunks` quanta queued behind the packet the reader holds.
     pub(in crate::worker) fn new(chunks: NonZeroUsize, quantum: NonZeroUsize) -> Self {
         let quanta = chunks.get().saturating_add(1);
-        let slots = quanta.saturating_mul(2);
         Self {
             limit: quanta.saturating_mul(quantum.get()).saturating_sub(1),
             quantum: quantum.get(),
             quanta,
             frames: 0,
-            weights: VecDeque::with_capacity(slots.saturating_add(2)),
+            weights: VecDeque::with_capacity(quanta.saturating_add(2)),
             admitted: 0,
             returned: 0,
         }
     }
 
-    /// Forward ring slots: two per quantum of lead.
+    /// Forward ring slots: one per quantum of lead.
     pub(in crate::worker) const fn slots(&self) -> usize {
-        self.quanta.saturating_mul(2)
+        self.quanta
     }
 
     /// The lead while `queued` packets still wait in the forward ring.

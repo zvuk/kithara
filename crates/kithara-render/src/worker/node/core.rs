@@ -516,6 +516,30 @@ mod tests {
         );
     }
 
+    /// A source whose packets stay below the render quantum, such as a decoder
+    /// emitting its own chunk size at unity speed, queues the configured
+    /// `chunks` packets and one more slot, never twice that many.
+    #[kithara::test(tokio)]
+    async fn packets_below_the_quantum_queue_one_slot_past_the_configured_chunks() {
+        const CHUNKS: usize = 3;
+        const QUANTUM: usize = 480;
+        const PACKET: usize = 120;
+        let mut fixture = NodeFixture::framed(CHUNKS, QUANTUM);
+        let mut queued = 0;
+        loop {
+            fixture.stage(PcmPacket::Chunk(Box::new(chunk(
+                SegmentId::FIRST,
+                &[0.25; PACKET],
+            ))));
+            match fixture.node.admit() {
+                TickResult::Progress => queued += 1,
+                TickResult::Backpressured => break,
+                other => panic!("an unread lane either queues or backpressures, got {other:?}"),
+            }
+        }
+        assert_eq!(queued, CHUNKS + 1);
+    }
+
     /// The lead past the reader's mark stays below `chunks + 1` quanta, the
     /// ring depth commands are scheduled against: a packet the reader spent
     /// and returned frees its frames, and a packet it still holds has frames
@@ -555,9 +579,12 @@ mod tests {
     /// back; the lead still releases everything the packet took.
     #[kithara::test(tokio)]
     async fn a_trimmed_return_releases_the_whole_packet() {
+        const CHUNKS: usize = 3;
         const QUANTUM: usize = 512;
-        const PART: usize = 256;
-        let mut fixture = NodeFixture::framed(1, QUANTUM);
+        // Four parts fit the empty lead of `(CHUNKS + 1) * QUANTUM - 1`
+        // frames; three would if the trimmed packet kept its unread frames.
+        const PART: usize = 448;
+        let mut fixture = NodeFixture::framed(CHUNKS, QUANTUM);
         let admit = |fixture: &mut NodeFixture, frames: usize| {
             fixture.stage(PcmPacket::Chunk(Box::new(chunk(
                 SegmentId::FIRST,
@@ -576,11 +603,11 @@ mod tests {
             .expect("the trimmed packet goes back");
         fixture.node.recycle();
 
-        for part in 0..3 {
+        for part in 0..4 {
             assert_eq!(
                 admit(&mut fixture, PART),
                 TickResult::Progress,
-                "part {part} of an empty one-quantum lead"
+                "part {part} of an empty lead"
             );
         }
         assert_eq!(admit(&mut fixture, PART), TickResult::Backpressured);
