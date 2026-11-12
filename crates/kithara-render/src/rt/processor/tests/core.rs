@@ -96,7 +96,11 @@ fn a_constructed_deck_retains_scope_state_until_its_first_render() {
     assert_eq!(snapshot.sample_rate, RATE);
     assert_eq!(snapshot.blocks, 1);
     assert_eq!(snapshot.slots, initial.slots);
-    assert_eq!(snapshot.eq, initial.eq);
+    let binding = snapshot.eq.binding();
+    assert!(binding.is_some(), "a rendered deck publishes its EQ axis");
+    let mut eq = initial.eq.clone();
+    eq.set_binding(binding);
+    assert_eq!(snapshot.eq, eq);
     assert_eq!(snapshot.metrics, initial.metrics);
 }
 
