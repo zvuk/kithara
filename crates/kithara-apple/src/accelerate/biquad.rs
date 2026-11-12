@@ -88,6 +88,20 @@ impl MultichannelBiquad {
             .chunks_exact_mut(span)
             .nth(section)
             .ok_or(BiquadError::Shape)?;
+        // vDSP re-arms a section even for equal coefficients, which shifts later
+        // frames; keeping retunes bit-neutral makes output independent of call pattern.
+        if block
+            .as_chunks::<{ consts::SECTION }>()
+            .0
+            .iter()
+            .all(|slot| {
+                slot.iter()
+                    .zip(coefficients)
+                    .all(|(&old, new)| old == f64::from(new))
+            })
+        {
+            return Ok(());
+        }
         for slot in block.as_chunks_mut::<{ consts::SECTION }>().0 {
             for (target, value) in slot.iter_mut().zip(coefficients) {
                 *target = f64::from(value);
