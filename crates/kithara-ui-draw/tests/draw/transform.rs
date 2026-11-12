@@ -39,3 +39,20 @@ fn the_other_order_lands_somewhere_else() {
 fn the_identity_is_what_default_gives() {
     assert!(Transform::default().is_identity());
 }
+
+#[kithara::test]
+#[case::identity(Transform::IDENTITY, true)]
+#[case::moved(Transform::translate(Pt { x: 40.0, y: -3.0 }), true)]
+#[case::turned(Transform::rotate(0.5), true)]
+#[case::squashed(Transform::scale(Pt { x: 3.0, y: 0.25 }), true)]
+#[case::flattened_onto_a_line(Transform::scale(Pt { x: 0.0, y: 1.0 }), false)]
+#[case::collapsed_to_a_point(Transform::scale(Pt { x: 0.0, y: 0.0 }), false)]
+#[case::sheared_flat(Transform { xx: 1.0, xy: 2.0, yx: 0.5, yy: 1.0, dx: 0.0, dy: 0.0 }, false)]
+#[case::not_a_number(Transform::scale(Pt { x: f32::NAN, y: 1.0 }), false)]
+#[case::thrown_to_infinity(Transform::translate(Pt { x: f32::INFINITY, y: 0.0 }), false)]
+fn only_a_transform_that_loses_no_point_is_invertible(
+    #[case] transform: Transform,
+    #[case] invertible: bool,
+) {
+    assert_eq!(transform.is_invertible(), invertible);
+}

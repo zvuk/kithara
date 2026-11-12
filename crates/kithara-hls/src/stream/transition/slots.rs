@@ -20,6 +20,7 @@ use super::super::{
     coord::{HlsCoord, variant_switch_target_time},
     session::HlsSession,
 };
+use crate::variant::HlsVariant;
 pub(in crate::stream) struct SessionSlots<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
@@ -167,6 +168,48 @@ where
         self.discard_incoming(&mut state, false);
     }
 
+    /// Drops an incoming slot left by another claim or transition; the intent is
+    /// aborted only when the slot belonged to a different claim.
+    pub(super) fn discard_other_incoming(
+        &self,
+        state: &mut TransitionState<S>,
+        claim: PendingAbrDecision,
+    ) {
+        if let Some(abort_intent) = state.incoming.as_ref().map(|slot| slot.claim != claim) {
+            self.discard_incoming(state, abort_intent);
+        }
+    }
+
+    /// The variant a transition switches to; a missing one aborts the claim.
+    pub(super) fn incoming_target(
+        &self,
+        transition: VariantTransition,
+        claim: PendingAbrDecision,
+    ) -> StreamResult<&Arc<HlsVariant<S>>> {
+        self.variants
+            .get(transition.incoming_variant().get())
+            .ok_or_else(|| {
+                let _ = self.abr_state.abort_pending(claim.ticket());
+                StreamError::Source(SourceError::VariantNotFound(format!(
+                    "incoming variant {}",
+                    transition.incoming_variant().get()
+                )))
+            })
+    }
+
+    /// The claim is still the pending one and the active variant has not moved.
+    pub(super) fn claim_still_current(
+        &self,
+        claim: PendingAbrDecision,
+        transition: VariantTransition,
+    ) -> bool {
+        let pending = match self.abr.pending_claim() {
+            PendingAbrClaim::Ready(current) | PendingAbrClaim::Locked(current) => current == claim,
+            _ => false,
+        };
+        pending && self.variant_index() == transition.active_variant().get()
+    }
+
     /// Logging here is the only witness that a variant switch ended via `abort_intent` without ever
     /// committing, since no tick source re-derives that pending decision afterward.
     #[kithara::probe(abort_intent)]
@@ -297,27 +340,11 @@ where
                 slot.landing_time,
             )));
         }
-        if state.incoming.is_some() {
-            let abort_intent = state
-                .incoming
-                .as_ref()
-                .is_some_and(|slot| slot.claim != claim);
-            self.discard_incoming(&mut state, abort_intent);
-        }
+        self.discard_other_incoming(&mut state, claim);
         drop(state);
 
-        let Some(target) = self.variants.get(transition.incoming_variant().get()) else {
-            let _ = self.abr_state.abort_pending(claim.ticket());
-            return Err(StreamError::Source(SourceError::VariantNotFound(format!(
-                "incoming variant {}",
-                transition.incoming_variant().get()
-            ))));
-        };
-        let claim_matches = match self.abr.pending_claim() {
-            PendingAbrClaim::Ready(current) | PendingAbrClaim::Locked(current) => current == claim,
-            _ => false,
-        };
-        if !claim_matches || self.variant_index() != transition.active_variant().get() {
+        let target = self.incoming_target(transition, claim)?;
+        if !self.claim_still_current(claim, transition) {
             let _ = self.abr_state.abort_pending(claim.ticket());
             return Ok(None);
         }

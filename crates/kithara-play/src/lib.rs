@@ -21,7 +21,7 @@ pub mod wasm;
 pub mod mock;
 
 pub use api::{
-    BpmInfo, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemRole, ItemStatus, MediaTime,
+    BpmInfo, DjEvent, EngineEvent, InterruptionKind, ItemRole, ItemStatus, MediaTime,
     PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
     RouteDescription, SessionBeat, SessionDuckingMode, SessionEvent, SessionTransportSnapshot,
     SlotId, StretchBackendKind, SyncUnavailable, Tempo, TempoError, TimeControlStatus, TimeRange,
@@ -30,18 +30,25 @@ pub use api::{
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
-pub use kithara_effects::{GainDb, eq::EqBandConfig};
+pub use kithara_effects::{
+    GainDb,
+    eq::EqBandConfig,
+    filter::{
+        Cutoff, FilterParameter, FilterSettings, FilterSettingsChange, Kind as FilterKind, Q,
+    },
+};
 pub use kithara_net::Headers;
 pub use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError,
     DispatcherProtocol, EngineLoad, EngineLoadSnapshot, InvalidCrossfade, LaneId, LoadRefusal,
     PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
     bridge::{
-        CrossfaderGain, CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckFxChange,
-        DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot,
-        EqSnapshot, FadeDir, FxMix, MixTapWriter, ParameterCurveError, ParameterKnot,
-        PlaybackFault, Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot,
-        SlotSnapshot, TrackClock, Trim,
+        CrossfaderGain, CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckFilterChange,
+        DeckFxChange, DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal,
+        DeckSnapshot, EqBinding, EqGainProgram, EqSnapshot, FadeDir, FilterBinding, FilterProgram,
+        FilterSnapshot, FxMix, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault,
+        Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
+        TrackClock, Trim,
     },
     dispatch,
     rt::{

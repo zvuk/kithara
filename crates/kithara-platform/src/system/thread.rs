@@ -165,6 +165,15 @@ where
     spawn_named_uncounted(name, counted(f))
 }
 
+/// Spawn a reusable pool thread; individual jobs use [`wrap_pool_task`].
+pub fn spawn_pool_thread<F, T, N: Into<String>>(name: N, f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    spawn_named_uncounted(name, f)
+}
+
 /// Block the current thread for at least `duration` (real OS sleep).
 #[inline]
 #[track_caller]

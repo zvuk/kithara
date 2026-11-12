@@ -10,7 +10,6 @@ use kithara_render::{
 };
 use kithara_signal::{OutputContext, SessionFrame};
 use kithara_test_utils::kithara;
-use kithara_warp::RenderContext;
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
@@ -122,13 +121,12 @@ impl AudioNodeProcessor for SessionTransportProcessor {
     }
 }
 
-fn build(info: &ProcInfo, transport: &TransportFrame) -> Option<RenderContext> {
+fn build(info: &ProcInfo, transport: &TransportFrame) -> Option<OutputContext> {
     let output_frames = info.clock_samples_range();
-    let output = OutputContext::new(
+    OutputContext::new(
         SessionFrame::new(output_frames.start.0)..SessionFrame::new(output_frames.end.0),
         info.sample_rate,
         transport.session_epoch,
         Some(transport.transport_revision),
-    )?;
-    RenderContext::new(output, Some(transport.trajectory))
+    )
 }

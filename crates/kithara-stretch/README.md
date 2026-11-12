@@ -14,39 +14,17 @@
 
 # kithara-stretch
 
-Pure time-stretch DSP contracts and backend adapters for Kithara.
+Time-stretch engines behind one `ElasticEngine` contract. Each engine reports
+its frame limits, latency, and whether it supports rate change and key lock
+(`ElasticCapabilities`, `BackendCapabilities`), so callers plan against
+capabilities rather than a library name.
 
-This crate owns the `ElasticEngine` exact-span and stream-lifecycle contract,
-the backend selector and factory, and the native C++ adapters that implement it.
-Backend features depend downward on `kithara-bufpool` for scratch storage, and
-native builds include `kithara-workspace-hack`. `kithara-warp` owns the
-synchronous renderer and temporal controls, `kithara-play` supplies the shared
-pool region and composes post-Warp effects, decoded-audio values and audio-chunk
-metadata belong to `kithara-signal`, and decoder sample-rate conversion remains
-in the decode/audio seam.
+- `stretch-signalsmith` (default) — Signalsmith Stretch, key lock, native only.
+- `stretch-bungee` — Bungee, key lock, native only.
+- `stretch-glide` — pure-Rust varispeed (pitch follows tempo), also on wasm.
+- `stretch-identity` — copies samples at unity rate.
 
-Every engine reports its prepared frame limits and latency through
-`ElasticCapabilities`, so callers plan against capabilities rather than against
-a named library. Conformance cases exercise the operations those capabilities
-allow.
+With key lock off, `build_varispeed_engine` changes duration and pitch together
+through the Glide resampler.
 
-Feature flags select the compiled backends:
-
-- `stretch-signalsmith` enables `signalsmith-stretch` and is the default.
-- `stretch-bungee` enables the private `bungee-sys` adapter as an opt-in backend.
-- `stretch-glide` enables the pure-Rust Glide varispeed backend, including on Wasm.
-- `stretch-identity` enables unity-rate sample copy without rate or keylock support.
-
-Keylock-off rendering uses `build_varispeed_engine` with the existing Glide
-resampler when the selected backend supports rate changes: exact source/output
-spans change both duration and pitch. Identity remains a unity-rate copy in both
-factories and allocates no pooled scratch. Keylock-on uses the selected native
-engine. All engines share `ElasticEngine`; physical
-input admission and the source advance represented by audible output are
-explicit frame counts on `ElasticRequest`.
-
-The two keylock backends are native-only. `BackendCapabilities` reports rate and
-keylock support for each compiled backend; configuration intersects the requested
-rate policy with those capabilities and the prepared frame limits. Identity-only
-builds do not depend on the Glide resampler. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-stretch)
-for the backend contract and wasm notes.
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-stretch) for the backend contract and wasm notes.

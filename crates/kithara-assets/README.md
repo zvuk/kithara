@@ -67,7 +67,7 @@ The public storage contract is `AssetStore<S>` plus the source/resource/layout/k
 ## Features
 
 - `client-reqwest` / `client-wreq` and `tls-rustls` / `tls-native` — forward network backend selection to storage/test-utils dependencies.
-- `probe` — enables USDT probes for tracing.
+- `usdt` — USDT probes for tracing.
 - `mock` — enables generated mocks for tests.
 
 ## Integration

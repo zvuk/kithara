@@ -706,6 +706,11 @@ opt-level = 3
 [profile.release.package.kithara-dsp]
 opt-level = 3
 
+# The source kernel of time-stretch and varispeed runs once per output frame;
+# at "z" its window and tap bookkeeping outline and stay scalar.
+[profile.release.package.kithara-warp]
+opt-level = 3
+
 # Best-of-both-worlds profile for maximum testing speed.
 # Combines release-grade runtime performance (opt-level 3) with fast
 # parallel compilation (codegen-units 16, LTO off).

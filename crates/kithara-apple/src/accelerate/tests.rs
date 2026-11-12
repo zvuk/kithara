@@ -1,6 +1,9 @@
 use std::num::NonZeroUsize;
 
-use kithara_test_fixtures::unit_fixtures::{accelerate_ramp, accelerate_wave};
+use kithara_test_fixtures::{
+    portable::sine_440,
+    unit_fixtures::{accelerate_ramp, accelerate_wave},
+};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -167,12 +170,108 @@ fn multichannel_biquad_rejects_a_shape_it_was_not_built_for() {
 }
 
 #[kithara::test(native)]
+fn multichannel_biquad_keeps_a_finite_prefix_before_a_future_nan() {
+    let mut filter =
+        MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
+    filter
+        .set_section(0, [1.0, 0.0, 0.0, -0.5, 0.0])
+        .expect("one section");
+    let mut plane = vec![1.0, 0.0, f32::NAN, 1.0e-10, 1.0];
+    filter
+        .process(&mut [plane.as_mut_slice()], 0..5)
+        .expect("whole stream");
+    assert_eq!(bits([plane[0], plane[1]]), bits([1.0, 0.5]));
+    assert!(plane[2..].iter().all(|sample| sample.is_nan()));
+}
+
+#[kithara::test(native)]
+fn multichannel_biquad_reapplying_equal_coefficients_is_bit_neutral() {
+    // RBJ low-pass, 800 Hz at 44.1 kHz, Q = 1/sqrt(2).
+    let w = std::f32::consts::TAU * 800.0 / 44_100.0;
+    let alpha = w.sin() * std::f32::consts::FRAC_1_SQRT_2;
+    let a0 = 1.0 + alpha;
+    let b = (1.0 - w.cos()) / 2.0 / a0;
+    let section = [b, 2.0 * b, b, -2.0 * w.cos() / a0, (1.0 - alpha) / a0];
+    let mut once =
+        MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
+    let mut repeated =
+        MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
+    once.set_section(0, section).expect("one section");
+    repeated.set_section(0, section).expect("one section");
+    let input: Vec<f32> = (0_u16..256)
+        .map(|frame| (f32::from(frame) * 0.142_5).sin())
+        .collect();
+    let mut expected = input.clone();
+    let frames = expected.len();
+    once.process(&mut [expected.as_mut_slice()], 0..frames)
+        .expect("whole stream");
+    let mut actual = input;
+    for frame in 0..actual.len() {
+        repeated.set_section(0, section).expect("same section");
+        repeated
+            .process(&mut [actual.as_mut_slice()], frame..frame + 1)
+            .expect("one frame");
+    }
+    assert_eq!(
+        actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+        expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+    );
+}
+
+#[kithara::test(native)]
+fn multichannel_biquad_refuses_the_entire_shape_without_advancing_history() {
+    let mut filter =
+        MultichannelBiquad::new(NonZeroUsize::MIN.saturating_add(1), NonZeroUsize::MIN)
+            .expect("native setup");
+    filter
+        .set_section(0, [1.0, 0.0, 0.0, -0.5, 0.0])
+        .expect("one section");
+    let mut short = [vec![1.0, 0.0, 0.0], vec![0.0]];
+    let before = short.clone();
+    assert_eq!(filter.process(&mut short, 0..3), Err(BiquadError::Shape));
+    assert_eq!(short, before);
+    let mut probe = [vec![0.0; 3], vec![0.0; 3]];
+    filter.process(&mut probe, 0..3).expect("complete planes");
+    assert_eq!(probe, [vec![0.0; 3], vec![0.0; 3]]);
+}
+
+#[kithara::test(native)]
 fn max_magnitude_reads_the_largest_absolute_value() {
     assert_eq!(
         max_magnitude_f32(&[0.5, -2.0, 1.0]).to_bits(),
         2.0_f32.to_bits()
     );
     assert_eq!(max_magnitude_f32(&[]).to_bits(), 0.0_f32.to_bits());
+    // NaNs and subnormals have backend-specific maximum ordering.
+    let specials = [
+        0.0,
+        -0.0,
+        f32::MIN_POSITIVE,
+        f32::MAX,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    for len in [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 63, 64, 66, 258, 1023, 4096,
+    ] {
+        let sine = &sine_440()[..len];
+        let with_specials: Vec<f32> = specials
+            .iter()
+            .copied()
+            .chain(sine.iter().copied())
+            .take(len)
+            .collect();
+        for samples in [sine, with_specials.as_slice()] {
+            let expected = samples
+                .iter()
+                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+            assert_eq!(
+                max_magnitude_f32(samples).to_bits(),
+                expected.to_bits(),
+                "native peak at {len}"
+            );
+        }
+    }
 }
 
 #[kithara::test(native)]

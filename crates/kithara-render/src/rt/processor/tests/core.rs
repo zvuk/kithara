@@ -13,7 +13,6 @@ pub(super) use kithara_signal::{
     AudioSpec, OutputContext, SessionEpoch, SessionFrame, TransportRevision,
 };
 pub(super) use kithara_test_fixtures::integration_fixtures::constant_half;
-pub(super) use kithara_warp::RenderContext;
 pub(super) use num_traits::{ToPrimitive, cast};
 
 use super::*;
@@ -141,17 +140,13 @@ fn session_processors_read_the_same_host_context() {
         .expect("invariant: fixture installs one context slot");
     super::super::super::publish_render_context(
         &mut store,
-        RenderContext::new_linear(
-            OutputContext::new(
-                SessionFrame::new(0)..SessionFrame::new(512),
-                NonZeroU32::new(RATE).expect("static sample rate"),
-                SessionEpoch::new(3),
-                Some(TransportRevision::first()),
-            )
-            .expect("invariant: fixture output range is ordered"),
-            None,
+        OutputContext::new(
+            SessionFrame::new(0)..SessionFrame::new(512),
+            NonZeroU32::new(RATE).expect("static sample rate"),
+            SessionEpoch::new(3),
+            Some(TransportRevision::first()),
         )
-        .expect("invariant: fixture context is valid"),
+        .expect("invariant: fixture output range is ordered"),
     )
     .expect("invariant: fixture context slot exists");
     let info = proc_info();
@@ -159,11 +154,8 @@ fn session_processors_read_the_same_host_context() {
     let right = read_render_context(&store, &info).expect("session context");
 
     assert!(std::ptr::eq(left, right));
-    assert_eq!(left.output().session_epoch(), SessionEpoch::new(3));
-    assert_eq!(
-        left.output().transport_revision(),
-        Some(TransportRevision::first())
-    );
+    assert_eq!(left.session_epoch(), SessionEpoch::new(3));
+    assert_eq!(left.transport_revision(), Some(TransportRevision::first()));
 }
 
 pub(super) fn pcm(constant_half: &'static [u8], src: &str, seconds: f64) -> Box<PlayerResource> {
@@ -208,17 +200,13 @@ pub(super) fn render_frames(mixer: &mut TestMixer, start: usize, frames: usize) 
     };
     mixer.inbox.0.drain();
     let level = mixer.inbox.scope(mixer.mixer.scope).expect("live scope");
-    let context = RenderContext::new_linear(
-        OutputContext::new(
-            frame_at(start)..frame_at(start + frames),
-            shape().sample_rate,
-            SessionEpoch::new(0),
-            None,
-        )
-        .expect("output range"),
+    let context = OutputContext::new(
+        frame_at(start)..frame_at(start + frames),
+        shape().sample_rate,
+        SessionEpoch::new(0),
         None,
     )
-    .expect("context");
+    .expect("output range");
     mixer.mixer.render_block(
         Some(level),
         Some(&context),

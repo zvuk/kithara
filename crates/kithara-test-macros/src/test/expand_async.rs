@@ -3,6 +3,7 @@ use quote::quote;
 use syn::{Attribute, Ident};
 
 use super::{
+    fixture_args::Preamble,
     parse::TestArgs,
     shared::{
         finalize_body, make_ambient_stmt, make_clock_measurement_stmt,
@@ -25,7 +26,7 @@ pub(crate) fn emit_async_runtime_test(
     vis: &syn::Visibility,
     ret_type: &syn::ReturnType,
     remaining_attrs: &[&Attribute],
-    body: &TokenStream2,
+    body: &Preamble,
     args: &TestArgs,
     serial_attr: &TokenStream2,
 ) -> TokenStream2 {
@@ -35,6 +36,8 @@ pub(crate) fn emit_async_runtime_test(
     let runtime_builder = make_runtime_builder(args);
     let flash = args.flash.unwrap_or(true);
     let fn_name_str = fn_name.to_string();
+    let scoped = body.scoped(true);
+    let body = &body.body;
     let inner_body = if !args.soft_fail_patterns.is_empty() {
         wrap_with_soft_fail(
             &quote! { { #body } },
@@ -57,6 +60,7 @@ pub(crate) fn emit_async_runtime_test(
         {
             #test_setup
             let __rt = #runtime_builder;
+            #scoped
             __rt.block_on(
                 ::kithara_test_utils::kithara_platform::flash::participate(
                     ::kithara_test_utils::kithara_platform::flash::with_ambient(
@@ -114,7 +118,7 @@ pub(crate) fn emit_async_timeout_test(
     vis: &syn::Visibility,
     ret_type: &syn::ReturnType,
     remaining_attrs: &[&Attribute],
-    body: &TokenStream2,
+    body: &Preamble,
     args: &TestArgs,
     serial_attr: &TokenStream2,
 ) -> TokenStream2 {
@@ -123,6 +127,8 @@ pub(crate) fn emit_async_timeout_test(
         .as_ref()
         .expect("BUG: caller checks `args.timeout.is_some()` before this fn");
     let fn_name_str = fn_name.to_string();
+    let scoped = body.scoped(true);
+    let body = &body.body;
     let timeout_panic_arm = if args.soft_fail_patterns.is_empty() {
         quote! {
             Err(__payload) => ::std::panic::resume_unwind(__payload),
@@ -182,6 +188,7 @@ pub(crate) fn emit_async_timeout_test(
             let __rt = #runtime_builder;
             let __result = ::std::panic::catch_unwind(
                 ::std::panic::AssertUnwindSafe(|| {
+                    #scoped
                     __rt.block_on(
                         ::kithara_test_utils::kithara_platform::flash::participate(
                             async {
@@ -270,7 +277,7 @@ pub(crate) fn emit_browser_test(
     ret_type: &syn::ReturnType,
     remaining_attrs: &[&Attribute],
     is_async: bool,
-    preamble: &TokenStream2,
+    preamble: &Preamble,
     body_stmts: &[syn::Stmt],
     args: &TestArgs,
     browser_only: bool,
@@ -284,10 +291,13 @@ pub(crate) fn emit_browser_test(
     // wasm emission: no per-poll `with_ambient`, the body-held scope is the
     // sole ambient writer — KEEP it (same for the native sync branch below).
     let ambient = make_ambient_stmt(args);
+    let scoped = preamble.scoped(false);
+    let bindings = &preamble.body;
     let wasm_body = quote! {
         #test_setup
         ::kithara_test_utils::kithara_platform::tokio::ensure_thread_pool().await;
-        #preamble
+        #scoped
+        #bindings
         #ambient
         #(#body_stmts)*
     };
@@ -309,7 +319,7 @@ pub(crate) fn emit_browser_test(
         // Plain body for the async-native branches: their sole ambient holder
         // is the per-poll `with_ambient` inside the emitted runtime wrapper.
         // Tracing is not set up here — see `emit_async_runtime_test`.
-        let native_body = quote! { #preamble #(#body_stmts)* };
+        let native_body = preamble.with_body(body_stmts);
 
         if native_is_async && args.timeout.is_some() {
             output.extend(emit_async_timeout_test(
@@ -334,7 +344,7 @@ pub(crate) fn emit_browser_test(
         } else {
             let sync_body =
                 super::shared::wrap_with_sync_participation(&quote! { #(#body_stmts)* }, args);
-            let native_body_held = quote! { #test_setup #preamble #ambient #sync_body };
+            let native_body_held = quote! { #test_setup #scoped #bindings #ambient #sync_body };
             let native_with_timeout =
                 wrap_with_timeout(&native_body_held, &args.timeout, false, fn_name);
             let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, false);
@@ -354,10 +364,10 @@ pub(crate) fn emit_browser_test(
 #[cfg(test)]
 mod tests {
     use proc_macro2::TokenStream as TokenStream2;
-    use quote::quote;
     use syn::{Ident, ReturnType, Visibility, parse_quote};
 
     use super::{TestArgs, emit_async_timeout_test};
+    use crate::test::fixture_args::make_preamble;
 
     #[test]
     fn native_timeout_emitter_records_wall_and_hard_hangs() -> syn::Result<()> {
@@ -367,7 +377,7 @@ mod tests {
         let visibility = Visibility::Inherited;
         let return_type = ReturnType::Default;
         let attributes = [];
-        let body = quote!({});
+        let body = make_preamble(&[], None);
         let serial = TokenStream2::new();
 
         let expanded = emit_async_timeout_test(

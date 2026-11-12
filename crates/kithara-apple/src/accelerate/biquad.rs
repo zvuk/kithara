@@ -88,6 +88,20 @@ impl MultichannelBiquad {
             .chunks_exact_mut(span)
             .nth(section)
             .ok_or(BiquadError::Shape)?;
+        // vDSP re-arms a section even for equal coefficients, which shifts later
+        // frames; keeping retunes bit-neutral makes output independent of call pattern.
+        if block
+            .as_chunks::<{ consts::SECTION }>()
+            .0
+            .iter()
+            .all(|slot| {
+                slot.iter()
+                    .zip(coefficients)
+                    .all(|(&old, new)| old == f64::from(new))
+            })
+        {
+            return Ok(());
+        }
         for slot in block.as_chunks_mut::<{ consts::SECTION }>().0 {
             for (target, value) in slot.iter_mut().zip(coefficients) {
                 *target = f64::from(value);
@@ -125,25 +139,25 @@ impl MultichannelBiquad {
         {
             return Err(BiquadError::Shape);
         }
-        if range.is_empty() {
-            return Ok(());
-        }
-        for (slot, plane) in self.planes.iter_mut().zip(planes.iter_mut()) {
-            *slot = plane[range.clone()].as_mut_ptr();
-        }
-        let table = self.planes.as_mut_ptr();
-        // SAFETY: setup is live and was created for self.channels channels.
-        // SAFETY: table holds one pointer per channel to range.len() writable f32 values.
-        // SAFETY: X and Y name the same table, the in-place form of vDSP_biquadm.
-        unsafe {
-            vDSP_biquadm(
-                self.setup.as_ptr(),
-                table.cast::<*const f32>(),
-                1,
-                table,
-                1,
-                range.len(),
-            );
+        // A fixed native call size preserves stream prefixes across caller chunks.
+        for frame in range {
+            for (slot, plane) in self.planes.iter_mut().zip(planes.iter_mut()) {
+                *slot = plane[frame..].as_mut_ptr();
+            }
+            let table = self.planes.as_mut_ptr();
+            // SAFETY: setup is live and was created for self.channels channels.
+            // SAFETY: every validated plane has one writable sample at frame.
+            // SAFETY: X and Y name the same table, the in-place form of vDSP_biquadm.
+            unsafe {
+                vDSP_biquadm(
+                    self.setup.as_ptr(),
+                    table.cast::<*const f32>(),
+                    1,
+                    table,
+                    1,
+                    1,
+                );
+            }
         }
         Ok(())
     }

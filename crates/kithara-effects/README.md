@@ -19,6 +19,14 @@ and the DJ isolator, the stereo equaliser a deck runs, the peak limiter, and the
 Firewheel node that puts the limiter on a session bus. It does not decode
 audio, own player or session state, or reach the network.
 
+`filter::FilterEffect` prepares a high-pass, low-pass, low-shelf or high-shelf
+response from `FilterConfig`, using the DSP owner's biquad. Cutoff and Q use
+f64 manual smoothing; explicit trajectory points apply without another smoothing
+pass. Planar processing retains history across calls, and reset clears history
+and completes the current targets. The deck runs the filter after FX units and
+before its output fader; preparation and displaced-resource destruction stay
+off the audio thread.
+
 ## Usage
 
 ```rust
@@ -51,7 +59,7 @@ fn boost_low_band<S: HasPool<f32>>(config: &EqConfig<S>, sample_rate: NonZeroU32
 
 <tr><td><code>IsolatorEq</code></td><td>DJ isolator built on crossover filters</td></tr>
 
-<tr><td><code>PeakLimiter</code></td><td>Zero-lookahead linked peak limiter holding a ceiling</td></tr>
+<tr><td><code>PeakLimiter</code></td><td>Linked peak limiter holding a ceiling; a lookahead delays its output by the frames it reports</td></tr>
 
 <tr><td><code>GainDb</code></td><td>Band gain in dB, clamped to a fixed range</td></tr>
 

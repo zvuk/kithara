@@ -39,7 +39,6 @@ use kithara_test_utils::{
     bufpool::{TestPools, pools},
     kithara,
 };
-use kithara_warp::RenderContext;
 
 #[global_allocator]
 static ALLOCATOR: AllocDisabler = AllocDisabler;
@@ -161,17 +160,13 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
     };
     publish_render_context(
         &mut extra.store,
-        RenderContext::new_linear(
-            OutputContext::new(
-                SessionFrame::new(0)..SessionFrame::new(i64::from(BLOCK.get())),
-                SAMPLE_RATE,
-                SessionEpoch::new(0),
-                None,
-            )
-            .expect("output block"),
+        OutputContext::new(
+            SessionFrame::new(0)..SessionFrame::new(i64::from(BLOCK.get())),
+            SAMPLE_RATE,
+            SessionEpoch::new(0),
             None,
         )
-        .expect("host context"),
+        .expect("output block"),
     )
     .expect("publish host context");
 
@@ -241,18 +236,14 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
         Duration::from_secs_f64(f64::from(BLOCK.get()) / f64::from(SAMPLE_RATE.get()));
     publish_render_context(
         &mut extra.store,
-        RenderContext::new_linear(
-            OutputContext::new(
-                SessionFrame::new(i64::from(BLOCK.get()))
-                    ..SessionFrame::new(i64::from(BLOCK.get()) * 2),
-                SAMPLE_RATE,
-                SessionEpoch::new(0),
-                None,
-            )
-            .expect("next output block"),
+        OutputContext::new(
+            SessionFrame::new(i64::from(BLOCK.get()))
+                ..SessionFrame::new(i64::from(BLOCK.get()) * 2),
+            SAMPLE_RATE,
+            SessionEpoch::new(0),
             None,
         )
-        .expect("host context"),
+        .expect("next output block"),
     )
     .expect("publish next host context");
     let dispatch = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());

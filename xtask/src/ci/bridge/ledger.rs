@@ -111,17 +111,20 @@ impl Ledger {
 
     /// The base of the verification of this head that changed last, whatever
     /// its scope or state. Equal timestamps choose the later ledger key.
-    pub(super) fn latest_base(&self, head_sha: &str) -> Result<Option<String>> {
+    pub(super) fn latest_base(
+        &self,
+        head_sha: &str,
+    ) -> Result<Option<(String, VerificationState)>> {
         self.with_locked_data(|data| {
             Ok(data
                 .verifications
                 .iter()
                 .filter_map(|(key, entry)| {
                     let (head, base) = key.split_once(':')?;
-                    (head == head_sha).then_some((entry.updated_at, key, base))
+                    (head == head_sha).then_some((entry.updated_at, key, base, entry.state))
                 })
-                .max_by_key(|(updated_at, key, _)| (*updated_at, *key))
-                .map(|(_, _, base)| base.to_owned()))
+                .max_by_key(|(updated_at, key, _, _)| (*updated_at, *key))
+                .map(|(_, _, base, state)| (base.to_owned(), state)))
         })
     }
 
@@ -573,7 +576,10 @@ mod tests {
         ledger.reserve("head", "base-one", Scope::Draft).unwrap();
         ledger.reserve("other", "base-two", Scope::Draft).unwrap();
 
-        assert_eq!(ledger.latest_base("head").unwrap(), Some("base-one".into()));
+        assert_eq!(
+            ledger.latest_base("head").unwrap(),
+            Some(("base-one".into(), VerificationState::Testing))
+        );
     }
 
     #[test]

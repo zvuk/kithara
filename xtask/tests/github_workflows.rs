@@ -1971,6 +1971,16 @@ fn timeout_seconds(expression: &Expr, constants: &BTreeMap<String, u64>) -> Opti
                 .and_then(|argument| integer_seconds(argument, constants))
         }
         Expr::Call(call)
+            if call_name(call).as_deref() == Some("from_millis") && call.args.len() == 1 =>
+        {
+            let segments = call_path(call)?;
+            (segments.iter().rev().nth(1).map(String::as_str) == Some("Duration"))
+                .then(|| call.args.first())
+                .flatten()
+                .and_then(|argument| integer_seconds(argument, constants))
+                .map(|millis| millis.div_ceil(1000))
+        }
+        Expr::Call(call)
             if call_name(call).as_deref() == Some("browser_timeout") && call.args.len() == 2 =>
         {
             call.args

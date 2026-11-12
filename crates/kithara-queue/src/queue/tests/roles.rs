@@ -15,6 +15,7 @@ use super::super::slots::Role;
 use crate::{
     ActionAtItemEnd, Queue, QueueCommand, TrackSource, Transition,
     mock::{TestPools, fixture_uri, pending_selection, with_outbox},
+    queue::{WorkerOwner, worker_owner},
 };
 
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
@@ -194,8 +195,8 @@ fn select_successor(
 }
 
 #[kithara::test(tokio)]
-async fn track_state_is_leading() {
-    let (mut queue, first, second, mut rig, dir) = pending_selection();
+async fn track_state_is_leading(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, first, second, mut rig, dir) = pending_selection(&worker_owner.0);
     queue.config.action_at_item_end = ActionAtItemEnd::None;
     let mut priorities = Vec::new();
     let mut sources = Vec::new();
@@ -294,6 +295,8 @@ async fn track_state_is_leading() {
             .current_track()
             .is_some_and(|track| track.snapshot().item == second)
     );
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -303,8 +306,12 @@ async fn track_state_is_leading() {
 #[case("preloading", ServiceClass::Warm)]
 #[case("finished", ServiceClass::Idle)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn track_state_maps_to_service_class(#[case] phase: &str, #[case] expected: ServiceClass) {
-    let (mut queue, first, second, mut rig, dir) = pending_selection();
+async fn track_state_maps_to_service_class(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] phase: &str,
+    #[case] expected: ServiceClass,
+) {
+    let (mut queue, first, second, mut rig, dir) = pending_selection(&worker_owner.0);
     queue.config.action_at_item_end = ActionAtItemEnd::None;
     let mut priorities = Vec::new();
     let mut sources = Vec::new();
@@ -416,4 +423,6 @@ async fn track_state_maps_to_service_class(#[case] phase: &str, #[case] expected
         Some(expected),
         "actual {phase} lifecycle must prioritize its own lane"
     );
+    drop((queue, rig));
+    dir.finish().await;
 }

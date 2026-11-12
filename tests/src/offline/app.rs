@@ -97,7 +97,7 @@ pub async fn insecure_app_queue() -> AppQueueFixture {
 pub async fn app_queue(document: Config) -> AppQueueFixture {
     let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
-    let client = HttpClient::new(net, pools.clone(), CancelToken::never());
+    let client = crate::test_server::TestServerHelper::shared_client(net, CancelToken::never());
     let downloader = Downloader::new({
         let config = DownloaderConfig::for_client(client.clone());
         #[cfg(not(target_arch = "wasm32"))]

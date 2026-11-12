@@ -3,8 +3,8 @@ use kithara_command::{Refused, Ticket, When};
 use kithara_events::TrackId;
 use kithara_platform::time::{Duration, Instant};
 use kithara_play::{
-    CrossfadeSettings, CrossfaderGain, DeckFxChange, EqBandConfig, InterruptionKind, PlayError,
-    Position, TrackSettingsChange, Trim,
+    CrossfadeSettings, CrossfaderGain, DeckFilterChange, DeckFxChange, EqBandConfig,
+    FilterSettings, InterruptionKind, PlayError, Position, TrackSettingsChange, Trim,
 };
 use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
@@ -253,6 +253,35 @@ where
     /// Returns the host's refusal or a closed mailbox.
     pub fn fx(&self, at: When<SessionFrame>, changes: Vec<DeckFxChange>) -> Result<(), QueueError> {
         self.call(QueueCommand::Fx { at, changes })
+    }
+
+    /// Forward one operation of the deck's filter.
+    /// # Errors
+    /// Returns the host's refusal or a closed mailbox.
+    pub fn filter(
+        &self,
+        at: When<SessionFrame>,
+        change: DeckFilterChange,
+    ) -> Result<(), QueueError> {
+        self.call(QueueCommand::Filter { at, change })
+    }
+
+    /// Prepare and install a filter at the observed output rate.
+    /// # Errors
+    /// Returns preparation, delivery or mailbox refusal.
+    pub fn install_filter(
+        &self,
+        at: When<SessionFrame>,
+        settings: FilterSettings,
+    ) -> Result<(), QueueError> {
+        self.call(QueueCommand::InstallFilter { at, settings })
+    }
+
+    /// Forward an immutable trajectory of one installed Filter field.
+    /// # Errors
+    /// Returns preparation, delivery or mailbox refusal.
+    pub fn filter_program(&self, program: kithara_play::FilterProgram) -> Result<(), QueueError> {
+        self.call(QueueCommand::FilterProgram(program))
     }
 
     /// Forwards mute to the host owner.

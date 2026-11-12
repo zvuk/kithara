@@ -55,7 +55,7 @@ pub(crate) enum AppCmd {
     Shutdown,
 }
 
-#[cfg(all(test, not(feature = "broadcast")))]
+#[cfg(test)]
 mod tests {
     use std::convert::Infallible;
 

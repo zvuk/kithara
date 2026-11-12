@@ -3,6 +3,13 @@ use kithara_platform::{CancelScope, sync::Arc, tokio::runtime::Handle};
 use crate::{Dispatcher, DispatcherConfig, WorkerConfig, compute::ComputeRuntime};
 
 /// Cloneable owner of shared worker runtime resources.
+///
+/// Keep an application-owned clone while players use the worker. The last
+/// clone shuts down on drop. Inside a runtime context, or with a configured
+/// runtime, that drop hands the join to the runtime's blocking pool, which the
+/// runtime owner waits for; elsewhere it joins in place. A thread cannot join
+/// itself, so a release on one of the worker's own threads joins every other
+/// worker thread.
 #[derive(Clone)]
 pub struct Worker {
     inner: Arc<WorkerInner>,
@@ -12,11 +19,19 @@ impl Worker {
     /// Create a worker from one complete configuration.
     #[must_use]
     pub fn new(config: WorkerConfig) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let threads = Arc::new(crate::threads::Threads::default());
         Self {
             inner: Arc::new(WorkerInner {
                 runtime: config.runtime.clone(),
                 scope: CancelScope::new(config.cancel.clone()),
-                compute: Arc::new(ComputeRuntime::new(config)),
+                compute: Arc::new(ComputeRuntime::new(
+                    config,
+                    #[cfg(not(target_arch = "wasm32"))]
+                    Arc::clone(&threads),
+                )),
+                #[cfg(not(target_arch = "wasm32"))]
+                threads,
             }),
         }
     }
@@ -29,7 +44,20 @@ impl Worker {
             self.inner.scope.token().child(),
             Arc::clone(&self.inner.compute),
             self.inner.runtime.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
+            &self.inner.threads,
         )
+    }
+
+    /// Cancel tasks and synchronously join native worker-owned threads.
+    /// Supplied compute pools remain owned by their caller.
+    ///
+    /// Called on one of the worker's own threads, it joins every other one.
+    ///
+    /// # Panics
+    /// Panics when blocking is forbidden in an async poll.
+    pub fn shutdown(&self) {
+        self.inner.shutdown();
     }
 
     delegate::delegate! {
@@ -47,11 +75,41 @@ struct WorkerInner {
     compute: Arc<ComputeRuntime>,
     scope: CancelScope,
     runtime: Option<Handle>,
+    #[cfg(not(target_arch = "wasm32"))]
+    threads: Arc<crate::threads::Threads>,
+}
+
+impl WorkerInner {
+    fn stop(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.threads.close();
+            self.compute.stop();
+        }
+        self.scope.cancel();
+    }
+
+    fn shutdown(&self) {
+        self.stop();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.threads.join();
+    }
 }
 
 impl Drop for WorkerInner {
     fn drop(&mut self) {
-        self.scope.cancel();
+        self.stop();
+        #[cfg(not(target_arch = "wasm32"))]
+        match Handle::try_current().ok().or_else(|| self.runtime.clone()) {
+            Some(runtime) => {
+                let threads = Arc::clone(&self.threads);
+                drop(kithara_platform::tokio::task::spawn_blocking_on(
+                    &runtime,
+                    move || threads.join(),
+                ));
+            }
+            None => self.threads.join(),
+        }
     }
 }
 
@@ -125,16 +183,11 @@ mod tests {
             )
         );
         assert!(received.try_recv().is_err());
-        let built = worker
-            .inner
-            .compute
-            .pool()
-            .owned
-            .get()
-            .expect("pool must be initialized")
-            .as_ref()
-            .expect("pool build must succeed");
-        assert_eq!(built.current_num_threads(), 1);
+        let threads = match &*worker.inner.compute.pool().owned.lock() {
+            crate::compute::PoolState::Running(built) => Some(built.current_num_threads()),
+            _ => None,
+        };
+        assert_eq!(threads, Some(1), "pool build must succeed");
     }
 
     #[kithara::test(native, flash(false))]

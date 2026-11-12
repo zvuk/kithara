@@ -3,9 +3,9 @@ use std::ptr;
 use kithara_platform::sync::Arc;
 
 use super::{
-    block::{DynBlock, RcBlock},
+    block::DynBlock,
     ns::{
-        NSData, NSError, NSHTTPURLResponse, NSMutableURLRequest, NSOperationQueue, NSString,
+        NSData, NSError, NSHTTPURLResponse, NSOperationQueue, NSString,
         NSURLAuthenticationChallenge, NSURLAuthenticationMethodServerTrust, NSURLCredential,
         NSURLProtectionSpace, NSURLResponse, NSURLSession, NSURLSessionAuthChallengeDisposition,
         NSURLSessionConfiguration, NSURLSessionDataDelegate, NSURLSessionDataTask,
@@ -68,40 +68,6 @@ pub trait UrlSessionEvents: Send + Sync + 'static {
     fn did_receive_data(&self, task_id: TaskId, data: &NSData);
 
     fn did_receive_response(&self, task_id: TaskId, response: &NSURLResponse);
-}
-
-pub trait DataTaskCompletion: Send + Sync + 'static {
-    fn complete(&self, completion: DataCompletion<'_>);
-}
-
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
-pub struct DataCompletion<'a> {
-    #[field(get)]
-    data: Option<&'a NSData>,
-    #[field(get)]
-    error: Option<&'a NSError>,
-    response: Option<&'a NSURLResponse>,
-}
-
-impl<'a> DataCompletion<'a> {
-    fn new(data: *mut NSData, response: *mut NSURLResponse, error: *mut NSError) -> Self {
-        // SAFETY: NSURLSession owns callback pointers for this callback.
-        let error = unsafe { error.as_ref() };
-        // SAFETY: NSURLSession owns callback pointers for this callback.
-        let data = unsafe { data.as_ref() };
-        // SAFETY: NSURLSession owns callback pointers for this callback.
-        let response = unsafe { response.as_ref() };
-        Self {
-            data,
-            error,
-            response,
-        }
-    }
-
-    pub fn response_parts(&self) -> Option<ResponseParts> {
-        self.response.and_then(response_parts)
-    }
 }
 
 pub struct DelegateIvars {
@@ -251,20 +217,6 @@ impl UrlSessionDelegate {
             ptr::null_mut(),
         ));
     }
-}
-
-pub fn data_task_with_completion(
-    session: &NSURLSession,
-    request: &NSMutableURLRequest,
-    completion: Arc<dyn DataTaskCompletion>,
-) -> Retained<NSURLSessionDataTask> {
-    let completion = RcBlock::new(
-        move |data: *mut NSData, response: *mut NSURLResponse, error: *mut NSError| {
-            completion.complete(DataCompletion::new(data, response, error));
-        },
-    );
-    // SAFETY: NSURLSession copies the block before returning the task.
-    unsafe { session.dataTaskWithRequest_completionHandler(request, &completion) }
 }
 
 pub fn session_with_delegate(

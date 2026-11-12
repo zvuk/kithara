@@ -12,7 +12,6 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioSpec, FaderValue, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_fixtures::integration_fixtures::{constant_half, constant_quarter};
 use kithara_test_utils::kithara;
-use kithara_warp::RenderContext;
 
 use super::{TestEnds, TestMixer, frame_at, mixer_with_shape, send as send_batch};
 use crate::{
@@ -149,17 +148,13 @@ fn block_from(processor: &mut TestMixer, start: SessionFrame) -> (Vec<f32>, bool
         .0
         .scope(processor.mixer.scope)
         .expect("scope");
-    let context = RenderContext::new_linear(
-        OutputContext::new(
-            start..SessionFrame::new(i64::from(start) + 128),
-            spec().sample_rate,
-            SessionEpoch::new(0),
-            None,
-        )
-        .expect("output"),
+    let context = OutputContext::new(
+        start..SessionFrame::new(i64::from(start) + 128),
+        spec().sample_rate,
+        SessionEpoch::new(0),
         None,
     )
-    .expect("context");
+    .expect("output");
     let read = processor.mixer.render_block(
         Some(level),
         Some(&context),

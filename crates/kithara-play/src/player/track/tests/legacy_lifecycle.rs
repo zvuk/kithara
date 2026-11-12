@@ -7,7 +7,7 @@ fn idle_phase_has_no_slot_or_handle() {
     assert!(!snapshot.attached);
     assert!(snapshot.abr.is_none());
     assert!(player.loading.is_none());
-    assert!(player.attaching.is_none());
+    assert!(player.seat.attaching().is_none());
     assert!(player.lane.is_none());
     assert_eq!(snapshot.status, TrackStatus::Idle);
 }

@@ -44,7 +44,7 @@ impl Github {
         self.source_entries(
             repository,
             sha,
-            &format!("commits/{sha}/check-runs?filter=all&per_page=100"),
+            &format!("commits/{sha}/check-runs?filter=latest&per_page=100"),
             Some("check_runs"),
         )
     }
@@ -68,29 +68,6 @@ impl Github {
                 )
             },
             field,
-        )
-    }
-
-    pub(in crate::ci::bridge) fn workflow_jobs(
-        &self,
-        repository: &str,
-        run_id: u64,
-        attempt: u64,
-    ) -> Result<Vec<Value>> {
-        if !simple_repository(repository) {
-            bail!("invalid GitHub workflow repository");
-        }
-        paginated(
-            |page| {
-                self.request(
-                    &Method::GET,
-                    &format!(
-                        "/repos/{repository}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page={page}"
-                    ),
-                    None,
-                )
-            },
-            Some("jobs"),
         )
     }
 }

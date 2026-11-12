@@ -175,10 +175,10 @@ where
     GraphSession::new(start)
 }
 
-pub(crate) fn state_for<T, F, S>(
+pub(crate) fn state_for<T, F>(
     sample_rate: NonZeroU32,
     mut start_stream_fn: F,
-) -> SessionState<T, S>
+) -> SessionState<T, TestPools>
 where
     F: FnMut(&mut SessionGraph, u32, &mut [DeckNode]) -> Result<SessionStream<T>, String>
         + Send
@@ -190,9 +190,9 @@ where
         root,
         root_view,
         super::super::state::SessionBufferConfig::default(),
-        SessionOutput::new(LimiterConfig::default()),
+        SessionOutput::new(LimiterConfig::default(), pools()),
         Live::new(settings).expect("fixture settings"),
-        crate::HostConfig::<S>::builder()
+        crate::HostConfig::builder(pools())
             .settings(settings)
             .build()
             .channel_config(),

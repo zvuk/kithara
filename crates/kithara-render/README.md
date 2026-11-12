@@ -15,11 +15,12 @@
 # kithara-render
 
 The render stages of Kithara playback. On the producer side a decoded audio
-source passes through its Warp renderer and effect chain, one render quantum at
-a time, before the result enters the play output ring. On the audio thread a
-deck mixes the tracks it holds, applying each command batch at the session
-frame it is due on. Enable `mock` to drive a deck's audio-thread end from a
-test in place of a `DeckMixer`.
+source passes through its Warp renderer, one render quantum at a time, before
+the result enters the play output ring. On the audio thread a deck mixes its
+tracks, then runs EQ, FX units and the prepared Filter before its output fader.
+Command batches and prepared parameter programmes execute on session frames;
+manual parameter changes revoke only their addressed programme. Enable `mock`
+to drive a deck's audio-thread end from a test in place of a `DeckMixer`.
 
 ## Usage
 

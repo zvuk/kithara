@@ -60,7 +60,6 @@ let outcome = resource.wait_range(0..1024)?;
 ## Features
 
 - `client-reqwest` / `client-wreq` and `tls-rustls` / `tls-native` — forward network backend selection for standalone test-utils builds.
-- `probe` — enables USDT probes for tracing.
 - `mock` — enables generated mocks for tests.
 - `perf` — enables `hotpath` instrumentation.
 

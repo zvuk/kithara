@@ -6,8 +6,11 @@ use super::*;
 use crate::{Transition, mock::fixture_uri};
 
 #[kithara::test(tokio)]
-async fn admission_fills_unset_metadata_from_the_decoder(cancel_token: CancelToken) {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn admission_fills_unset_metadata_from_the_decoder(
+    #[by_ref] worker_owner: &WorkerOwner,
+    cancel_token: CancelToken,
+) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let mut append = |title: Option<&str>| {
         let id = TrackId::allocate();
         let config = ResourceConfig::for_src(
@@ -81,4 +84,6 @@ async fn admission_fills_unset_metadata_from_the_decoder(cancel_token: CancelTok
         HostedDeck::close(queue, out)
     })
     .expect("close the queue before deferred loads run");
+    drop((queue, rig));
+    dir.finish().await;
 }

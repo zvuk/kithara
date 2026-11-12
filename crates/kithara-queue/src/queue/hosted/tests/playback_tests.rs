@@ -5,8 +5,8 @@ use super::*;
 use crate::{Transition, mock::fixture_uri, queue::state::tests::wait_for_queue_event};
 
 #[kithara::test(tokio)]
-async fn spurious_item_did_play_to_end_is_filtered() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn spurious_item_did_play_to_end_is_filtered(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     with_outbox(&mut queue, &mut rig, |queue, out| {
         for _ in 0..2 {
             Player::apply(
@@ -29,11 +29,15 @@ async fn spurious_item_did_play_to_end_is_filtered() {
         .expect("spurious terminal event");
     tick_fixture(&mut queue, &mut rig);
     assert_eq!(queue.current, None, "navigation must not have advanced");
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn eof_after_queue_end_does_not_restart_from_first_track() {
-    let (mut queue, _first, second, mut rig, dir) = crate::mock::selected().await;
+async fn eof_after_queue_end_does_not_restart_from_first_track(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, _first, second, mut rig, dir) = crate::mock::selected(&worker_owner.0).await;
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
             queue,
@@ -68,15 +72,19 @@ async fn eof_after_queue_end_does_not_restart_from_first_track() {
     let saw_ended =
         wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 200).await;
     assert!(!saw_ended, "stale EOF must not duplicate QueueEnded");
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[case(false)]
 #[case(true)]
 async fn replay_after_queue_end_restores_current_and_reports_the_next_end(
+    #[by_ref] worker_owner: &WorkerOwner,
     #[case] seek_first: bool,
 ) {
-    let (mut queue, first, second, mut rig, _dir) = crate::mock::selected().await;
+    let (mut queue, first, second, mut rig, fixture_directory) =
+        crate::mock::selected(&worker_owner.0).await;
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(queue, QueueCommand::Remove(second), out)
     })
@@ -183,12 +191,16 @@ async fn replay_after_queue_end_restores_current_and_reports_the_next_end(
         std::iter::from_fn(|| events.try_recv().ok())
             .all(|envelope| !matches!(envelope.event, QueueEvent::QueueEnded))
     );
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::flash(io)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn play_retries_the_current_track_after_its_prefetch_failed() {
+async fn play_retries_the_current_track_after_its_prefetch_failed(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
     use std::{future::Future, task::Poll};
 
     use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, channel};
@@ -196,7 +208,7 @@ async fn play_retries_the_current_track_after_its_prefetch_failed() {
     use kithara_render::{Dispatched, DispatcherCommand, LoadRefusal};
     use kithara_signal::AudioSpec;
 
-    let (mut queue, mut rig, dir) = empty_queue();
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let id = TrackId::allocate();
     let source = fixture_uri(dir.path(), "retry.wav");
     let store = queue.config.store.as_ref().expect("fixture store").clone();
@@ -335,12 +347,14 @@ async fn play_retries_the_current_track_after_its_prefetch_failed() {
         TrackStatus::Consumed
     );
     assert!(queue.target.is_none());
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn play_promotes_the_initial_pending_prefetch() {
+async fn play_promotes_the_initial_pending_prefetch(#[by_ref] worker_owner: &WorkerOwner) {
     for insert in [false, true] {
-        let (mut queue, mut rig, dir) = empty_queue();
+        let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
         let id = TrackId::allocate();
         let source = TrackSource::Uri(fixture_uri(dir.path(), "entry.wav"));
         with_outbox(&mut queue, &mut rig, |queue, out| {
@@ -366,6 +380,8 @@ async fn play_promotes_the_initial_pending_prefetch() {
         })
         .expect("promote initial prefetch");
         assert!(attempt_selected(&queue, id));
+        drop((queue, rig));
+        dir.finish().await;
     }
 }
 

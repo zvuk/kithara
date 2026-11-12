@@ -60,51 +60,20 @@ let activity_writer = audio.take_activity_writer();
 
 ## Features
 
-<table>
-
-<tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
-
-<tr><td><code>default</code></td><td>yes</td><td><code>symphonia</code> + <code>resample-rubato</code> + <code>client-reqwest</code> + <code>tls-rustls</code></td></tr>
-
-<tr><td><code>symphonia</code></td><td>yes</td><td>Symphonia software decoder path via <code>kithara-decode/symphonia</code></td></tr>
-
-<tr><td><code>resample-rubato</code></td><td>yes</td><td>Rubato sample-rate conversion via <code>kithara-resampler/resample-rubato</code>; <code>resample-glide</code> selects the Glide backend instead</td></tr>
-
-<tr><td><code>client-reqwest</code></td><td>yes</td><td>Forward the default HTTP backend selection to network-reaching deps</td></tr>
-
-<tr><td><code>tls-rustls</code></td><td>yes</td><td>Forward rustls TLS selection to network-reaching deps</td></tr>
-
-<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox hardware decoder via <code>kithara-decode/apple</code></td></tr>
-
-<tr><td><code>android</code></td><td>no</td><td>Android <code>MediaExtractor</code>/<code>MediaCodec</code> via <code>kithara-decode/android</code></td></tr>
-
-<tr><td><code>fdk-aac</code></td><td>no</td><td>Enable libfdk-aac HE-AAC v1/v2 decode in the software path</td></tr>
-
-<tr><td><code>client-wreq</code></td><td>no</td><td>Forward the native <code>wreq</code> HTTP backend selection to network-reaching deps</td></tr>
-
-<tr><td><code>tls-native</code></td><td>no</td><td>Forward native TLS selection to network-reaching deps</td></tr>
-
-<tr><td><code>probe</code></td><td>no</td><td>USDT probes for tracing</td></tr>
-
-<tr><td><code>mock</code></td><td>no</td><td>Generated mocks for tests</td></tr>
-
-<tr><td><code>perf</code></td><td>no</td><td>Hotpath timing instrumentation</td></tr>
-
-<tr><td><code>memprof</code></td><td>no</td><td>Allocation tracking for profiling examples</td></tr>
-
-</table>
+- `symphonia` (default), `apple`, `apple-fused-src`, `android`, `webcodecs`,
+  `fdk-aac` — decoders, forwarded to `kithara-decode`.
+- `resample-rubato` (default), `resample-glide` — sample-rate converters.
+- `client-reqwest` (default), `client-wreq`, `tls-rustls` (default),
+  `tls-native` — HTTP and TLS, forwarded to network crates.
+- `mock`, `usdt`, `perf`, `memprof` — test mocks, USDT probes, `hotpath`
+  timing, allocation tracking for profiling examples.
 
 ## Integration
 
-`kithara-audio` sits between `kithara-decode` and playback consumers. The
-downloader lives in `kithara-stream`; audio consumes stream/storage contracts
-without reconstructing protocol policy. `kithara-signal` owns `AudioSpec`,
-`AudioChunkInfo`, `AudioChunk`, and pure sample/time math, while
-`kithara-bufpool` owns their pooled sample storage. This crate owns the runtime
-`AudioReader` and `AudioSource` protocols around those values. `kithara-play` composes the prepared
-source with `kithara-warp` and `kithara-stretch`; none of those playback
-transforms are owned here. `kithara-analysis` consumes this crate's decoded
-source and observer protocols; analysis itself is not owned here.
+Sits between `kithara-decode` and the player: it consumes `kithara-stream`
+sources and produces decoded chunks whose types come from `kithara-signal`.
+Tempo, effects, and output belong to `kithara-play` and below; waveform and
+beat analysis to `kithara-analysis`, which reads this crate's decoded source.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-audio) for detailed threading, seek/recreate, and
 prepared-source contracts. Source analysis contracts are in

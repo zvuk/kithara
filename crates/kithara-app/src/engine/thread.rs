@@ -14,9 +14,8 @@ pub(crate) struct Driver {
 }
 
 impl Driver {
-    pub(crate) fn finish(self, root: &CancelToken) -> Result<(), EngineError> {
+    pub(crate) fn finish(self) -> Result<(), EngineError> {
         let joined = self.thread.join();
-        root.cancel();
         joined.map_err(|_| EngineError::Panicked)
     }
 }
@@ -32,12 +31,14 @@ pub(crate) fn spawn(
     let thread = thread::spawn_named("kithara-app-engine", move || {
         driven.block_on(serve(build, built_tx, commands, cancel));
     });
-    match runtime.block_on(built) {
-        Ok(Ok(())) => Ok(Driver { thread }),
-        Ok(Err(error)) => {
+    match runtime
+        .block_on(built)
+        .unwrap_or(Err(EngineError::Panicked))
+    {
+        Ok(()) => Ok(Driver { thread }),
+        Err(error) => {
             thread.join().map_err(|_| EngineError::Panicked)?;
             Err(error)
         }
-        Err(_) => Err(EngineError::Panicked),
     }
 }

@@ -26,7 +26,7 @@ use kithara::{
     download::{Downloader, DownloaderConfig},
     events::{EventBus, EventReceiver, TrackId},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{
         CancelToken,
         time::{self, Duration, sleep},
@@ -355,9 +355,8 @@ async fn build_queue(
     .await
     .expect("create product offline queue");
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools,
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())
@@ -954,7 +953,13 @@ async fn concurrent_completion_race_does_not_barge_in(
             observe_completion_order(&mut rx, snapshot, fast_id, slow_id, consts::RACE_OBSERVE)
                 .await
         {
-            failures.push(format!("[iter {iter}] {error}"));
+            failures.push(format!(
+                "[iter {iter}] {error}; current={:?}, fast_status={:?}, slow_status={:?}, playing={}",
+                queue.current().map(|entry| (entry.id, entry.status)),
+                queue.track(fast_id).map(|entry| entry.status),
+                queue.track(slow_id).map(|entry| entry.status),
+                queue.is_playing(),
+            ));
         }
         queue.close().await;
         hang_reset!();

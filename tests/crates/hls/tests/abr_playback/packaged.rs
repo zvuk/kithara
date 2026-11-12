@@ -8,7 +8,7 @@ use kithara::{
     events::{EventBus, EventReceiver},
     hls::{AbrMode, Hls, HlsConfig},
     host::{HostConfig, HostSettings},
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{
         CancelToken,
         thread::paced_backoff,
@@ -94,9 +94,8 @@ async fn open_packaged_hls_audio(
 ) -> LaneAudio<Stream<Hls<TestPools>>, TestPools> {
     let cancel = CancelToken::never();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             cancel.child(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())
@@ -461,9 +460,8 @@ pub(crate) async fn packaged_abr_switch_keeps_player_continuity(
     .await;
     let cancel = kithara_test_utils::cancel_token();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             cancel.child(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

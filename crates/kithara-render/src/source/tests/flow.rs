@@ -1,4 +1,50 @@
+use kithara_signal::AudioChunkInfo;
+use kithara_test_utils::bufpool::sample_buffer;
+
 use super::*;
+
+#[kithara::test]
+#[case::zero_channels(0, false)]
+#[case::zero_channels_final(0, true)]
+#[case::incomplete_stereo(2, false)]
+#[case::incomplete_stereo_final(2, true)]
+fn malformed_pcm_is_a_terminal_render_failure_before_it_enters_the_deck(
+    #[case] channels: u16,
+    #[case] end_of_track: bool,
+) {
+    let pools = pools();
+    let rate = NonZeroU32::new(44_100).expect("rate");
+    let invalid = AudioChunk::new(
+        AudioChunkInfo {
+            spec: AudioSpec::new(channels, rate),
+            frames: 3,
+            frame_offset: 17,
+            end_of_track,
+            ..Default::default()
+        },
+        sample_buffer(&pools, &[0.25; 7]),
+    );
+    let head = Arc::new(AtomicU64::new(0));
+    let raw = RawSource {
+        head: Arc::clone(&head),
+        chunks: VecDeque::from([invalid]),
+    };
+    let mut source = source_stage(&pools, raw, AudioSpec::new(2, rate));
+    flush_deferred(&mut source);
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Failed(TrackFailureKind::Render)
+    ));
+    assert_eq!(
+        head.load(Ordering::Acquire),
+        20,
+        "the malformed packet was pulled"
+    );
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Failed(TrackFailureKind::Render)
+    ));
+}
 
 #[cfg(any(
     feature = "stretch-identity",

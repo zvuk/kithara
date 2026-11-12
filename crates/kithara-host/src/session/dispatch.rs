@@ -9,11 +9,11 @@ use tracing::{debug, trace, warn};
 
 use super::{
     context::GraphError,
-    protocol::{HostMailbox, SessionError, SessionSampleRate},
-    state::SessionState,
+    protocol::{HostMailbox, SessionError, SessionSampleRate, StartStreamFn},
+    state::{DeckNode, SessionState, SessionStream},
     transport::{self, RouteRestartStatus},
 };
-use crate::{DeckId, HostOwner, HostSettled, session::context::SessionGraph};
+use crate::{DeckId, HostOwner, HostSettled, consts, session::context::SessionGraph};
 
 pub(crate) fn run_host_cmd<S, O: HostOwner<S>>(
     owner: &mut O,
@@ -226,8 +226,13 @@ pub(super) fn restart_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(),
         ctx.output_ready()
             .map_err(|error| SessionError::StreamStart(error.to_string()))?;
         let previous = state.stream.take();
-        let stream = (state.start_stream_fn)(ctx, sample_rate, &mut state.deck_nodes, previous)
-            .map_err(SessionError::StreamStart)?;
+        let stream = start_stream(
+            &mut state.start_stream_fn,
+            ctx,
+            sample_rate,
+            &mut state.deck_nodes,
+            previous,
+        )?;
         state.stream = Some(stream);
         if !ctx
             .output_ready()
@@ -246,8 +251,13 @@ pub(super) fn restart_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(),
         return Ok(());
     }
     let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-    let stream = (state.start_stream_fn)(fw_ctx, sample_rate, &mut state.deck_nodes, None)
-        .map_err(SessionError::StreamStart)?;
+    let stream = start_stream(
+        &mut state.start_stream_fn,
+        fw_ctx,
+        sample_rate,
+        &mut state.deck_nodes,
+        None,
+    )?;
     state.stream = Some(stream);
     #[cfg(target_arch = "wasm32")]
     let starting = fw_ctx.output_starting();
@@ -264,6 +274,30 @@ pub(super) fn restart_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(),
         "[KITHARA-ROUTE] firewheel stream restart complete"
     );
     Ok(())
+}
+
+/// Starts the output on `ctx` at `sample_rate` and refuses a stream the device
+/// runs faster than [`consts::MAX_SAMPLE_RATE`]: the output chain holds its
+/// lookahead for no faster rate, so that stream stops before the session counts
+/// on it.
+pub(super) fn start_stream<T>(
+    start: &mut StartStreamFn<T>,
+    ctx: &mut SessionGraph,
+    sample_rate: u32,
+    decks: &mut [DeckNode],
+    previous: Option<SessionStream<T>>,
+) -> Result<SessionStream<T>, SessionError> {
+    let stream = start(ctx, sample_rate, decks, previous).map_err(SessionError::StreamStart)?;
+    if let Some(shape) = ctx.negotiated_shape()
+        && shape.sample_rate > consts::MAX_SAMPLE_RATE
+    {
+        return Err(SessionError::StreamStart(format!(
+            "the output runs at {} Hz, above the {} Hz a session serves",
+            shape.sample_rate,
+            consts::MAX_SAMPLE_RATE
+        )));
+    }
+    Ok(stream)
 }
 
 pub(super) fn trace_stream_info<T, S>(state: &SessionState<T, S>, context: &'static str) {

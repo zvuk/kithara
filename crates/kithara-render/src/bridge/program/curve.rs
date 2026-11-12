@@ -1,4 +1,4 @@
-use kithara_dsp::param::CurveShape;
+use kithara_dsp::curve::CurveShape;
 use kithara_signal::SessionFrame;
 use num_traits::ToPrimitive;
 
@@ -97,6 +97,27 @@ impl ParameterCurve {
             (low.min(knot.value), high.max(knot.value))
         });
         low..=high
+    }
+
+    pub(crate) fn shape_at(&self, elapsed: u64) -> CurveShape {
+        let start = self.start();
+        let index = self.knots.partition_point(|knot| {
+            knot.at
+                .frames_since(start)
+                .is_some_and(|offset| offset <= elapsed)
+        });
+        self.knots[index.saturating_sub(1)].shape
+    }
+
+    pub(crate) fn remaining_points(
+        &self,
+        elapsed: u64,
+    ) -> impl Iterator<Item = (u64, f64, CurveShape)> + '_ {
+        let start = self.start();
+        self.knots.iter().filter_map(move |knot| {
+            let offset = knot.at.frames_since(start)?.checked_sub(elapsed)?;
+            (offset > 0).then_some((offset, knot.value, knot.shape))
+        })
     }
 
     /// Values bracketing `elapsed` and their normalized progression.
