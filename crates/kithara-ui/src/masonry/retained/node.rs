@@ -7,7 +7,7 @@ use masonry::{
         AccessCtx, AllowRawMut, BoxConstraints, ChildrenIds, ComposeCtx, CursorIcon, EventCtx,
         LayoutCtx, PaintCtx, PointerButton as MasonryPointerButton, PointerEvent, PropertiesMut,
         PropertiesRef, QueryCtx, RegisterCtx, TextEvent, Update, UpdateCtx, Widget, WidgetId,
-        WidgetPod,
+        WidgetMut, WidgetPod,
     },
     kurbo::{Point, Size as MasonrySize},
     vello::Scene,
@@ -32,10 +32,10 @@ use crate::{
         vis::VisFrame,
     },
     interact::{
-        CursorShape, Hit, Input, MOUSE, PointerInput, PointerOwnership, PointerPhase,
+        CursorShape, Hit, Input, PointerInput, PointerOwnership, PointerPhase,
         masonry::{
-            cursor_icon, pointer_button, pointer_position, portable_modifiers, portable_scroll,
-            portable_text_input,
+            cursor_icon, pointer_button, pointer_info, pointer_position, portable_modifiers,
+            portable_pointer_id, portable_scroll, portable_text_input,
         },
     },
     layout::{FrameCorners, FrameSides},
@@ -321,18 +321,7 @@ impl Node {
             return false;
         };
         let size = ctx.size();
-        let outcome = leaf.input(
-            input,
-            Hit::new(
-                None,
-                Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    w: size.width.as_(),
-                    h: size.height.as_(),
-                },
-            ),
-        );
+        let outcome = leaf.input(input, Hit::new(None, own_box(size)));
         if !matches!(leaf.repaint(), Repaint::None) {
             ctx.request_anim_frame();
             ctx.request_paint_only();
@@ -463,25 +452,45 @@ impl Node {
             self.pointer.unzip()
         };
         let size = ctx.size();
-        let hit = Hit::new(
-            local,
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                w: size.width.as_(),
-                h: size.height.as_(),
-            },
-        );
+        let hit = Hit::new(local, own_box(size));
         let input = match (pointer, event) {
-            (Some((phase, button, clicks)), _) => {
-                Input::Pointer(PointerInput::new(MOUSE, button, phase, window, clicks))
-            }
+            (Some((phase, button, clicks)), _) => Input::Pointer(PointerInput::new(
+                portable_pointer_id(event),
+                button,
+                phase,
+                window,
+                clicks,
+            )),
             (None, PointerEvent::Scroll(scroll)) => {
                 Input::Wheel(portable_scroll(scroll.delta, ctx.get_scale_factor())?)
             }
             (None, _) => return None,
         };
         Some((input, hit))
+    }
+
+    /// A pose with no inverse leaves no point of this node's picture under
+    /// the pointer, so the leaf is handed none. A gesture it was holding ends
+    /// as cancelled, the one thing it can still be told truthfully.
+    fn refuse_pointer(&mut self, ctx: &mut EventCtx<'_>, event: &PointerEvent) {
+        tracing::warn!(
+            widget = ctx.widget_id().to_raw(),
+            "pointer input refused: the pose has no inverse"
+        );
+        if !self.leaf_holds {
+            return;
+        }
+        let cancel = PointerEvent::Cancel(pointer_info(event).clone());
+        let input = Input::Pointer(PointerInput::new(
+            portable_pointer_id(event),
+            None,
+            PointerPhase::Cancel,
+            None,
+            0,
+        ));
+        let size = ctx.size();
+        let area = own_box(size);
+        self.leaf_input(ctx, &cancel, input, Hit::new(None, area));
     }
 
     fn queue_pointer(&self, ctx: &mut EventCtx<'_>, event: &PointerEvent) {
@@ -517,12 +526,7 @@ impl Node {
             .as_mut()
             .filter(|detent| detent.surface.editing())
             .is_some_and(|detent| {
-                let area = Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    w: size.width.as_(),
-                    h: size.height.as_(),
-                };
+                let area = own_box(size);
                 detent.step(ctx, input, &Hit::new(None, area))
             })
     }
@@ -633,6 +637,21 @@ impl Node {
 /// only callers are the tree builder and the render root; keeping them apart
 /// from the widget's behaviour is what says so.
 impl Node {
+    /// Repaints the node for state only the application can see, and keeps
+    /// framing its leaf while the leaf asks for frames.
+    pub(crate) fn invalidate(mut widget: WidgetMut<'_, dyn Widget>) {
+        let mut node = widget.downcast::<Self>();
+        node.ctx.request_paint_only();
+        if node
+            .widget
+            .layout
+            .leaf()
+            .is_some_and(|leaf| leaf.repaint() != Repaint::None)
+        {
+            node.ctx.request_anim_frame();
+        }
+    }
+
     /// Whether this node is something the host has to declare: a leaf that
     /// draws through a pass of its own rather than into the scene, or a custom
     /// widget whose pictures may live on the device.
@@ -649,9 +668,10 @@ impl Node {
         self.spot.as_mut().is_some_and(|spot| spot.move_to(at))
     }
 
-    /// Puts this node where the document now says it is, and answers whether
-    /// that moved it. A pose only changes what the node paints, so a node that
-    /// moved needs repainting and nothing else re-measured.
+    /// Records the pose the document now gives this node, and answers whether
+    /// that moved it. The caller hands the same pose to Masonry as the node's
+    /// transform; the node keeps it to refuse the pointer while it has no
+    /// inverse. A pose changes nothing the layout measured.
     pub(crate) fn place(&mut self, transform: Transform) -> bool {
         let moved = self.transform != transform;
         self.transform = transform;
@@ -761,12 +781,7 @@ impl Widget for Node {
                 x: local.x.as_(),
                 y: local.y.as_(),
             }),
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                w: size.width.as_(),
-                h: size.height.as_(),
-            },
+            own_box(size),
         );
         if let Some(spot) = &self.spot
             && spot.grips()
@@ -840,6 +855,10 @@ impl Widget for Node {
         _props: &mut PropertiesMut<'_>,
         event: &PointerEvent,
     ) {
+        if !self.transform.is_invertible() {
+            self.refuse_pointer(ctx, event);
+            return;
+        }
         let Some((input, hit)) = self.pointer_input(ctx, event) else {
             self.queue_pointer(ctx, event);
             return;
@@ -890,17 +909,12 @@ impl Widget for Node {
 
     fn paint(&mut self, ctx: &mut PaintCtx<'_>, _props: &PropertiesRef<'_>, scene: &mut Scene) {
         let size = ctx.size();
-        let bounds = Rect {
-            h: size.height.as_(),
-            w: size.width.as_(),
-            x: 0.0,
-            y: 0.0,
-        };
+        let bounds = own_box(size);
         let mut list = DrawListBuilder::default();
         self.paint_background(bounds, &mut list);
         replay(&list.finish(), &mut VelloBackend::new(scene));
         if let Some(leaf) = self.layout.leaf() {
-            leaf.paint(bounds, self.transform, scene);
+            leaf.paint(bounds, scene);
         }
     }
 
@@ -917,12 +931,7 @@ impl Widget for Node {
     ) {
         let size = ctx.size();
         let mut list = DrawListBuilder::default();
-        let bounds = Rect {
-            h: size.height.as_(),
-            w: size.width.as_(),
-            x: 0.0,
-            y: 0.0,
-        };
+        let bounds = own_box(size);
         self.layout.indicate(bounds, &mut list);
         if let Some(detent) = &self.detent {
             detent.paint(bounds, &mut list);
@@ -959,6 +968,16 @@ impl Widget for Node {
         {
             ctx.request_paint_only();
         }
+    }
+}
+
+/// The node's own box in its local space: origin at zero, the size layout gave it.
+fn own_box(size: MasonrySize) -> Rect {
+    Rect {
+        x: 0.0,
+        y: 0.0,
+        w: size.width.as_(),
+        h: size.height.as_(),
     }
 }
 

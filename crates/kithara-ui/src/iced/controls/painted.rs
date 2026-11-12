@@ -901,7 +901,7 @@ mod tests {
                     bounds,
                     iced_state.index.visual(),
                 ),
-                masonry.draw_list(bounds, Transform::IDENTITY)
+                masonry.draw_list(bounds)
             );
         }
 
@@ -934,7 +934,7 @@ mod tests {
             immediate
                 .paint
                 .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
-            masonry.draw_list(bounds, Transform::IDENTITY)
+            masonry.draw_list(bounds)
         );
 
         let first = bounds.w / 4.0;
@@ -952,7 +952,7 @@ mod tests {
             immediate
                 .paint
                 .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
-            masonry.draw_list(bounds, Transform::IDENTITY)
+            masonry.draw_list(bounds)
         );
 
         let second = bounds.w * 3.0 / 4.0;
@@ -968,7 +968,7 @@ mod tests {
             immediate
                 .paint
                 .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
-            masonry.draw_list(bounds, Transform::IDENTITY)
+            masonry.draw_list(bounds)
         );
 
         let _ = immediate.on_input(
@@ -984,7 +984,7 @@ mod tests {
             immediate
                 .paint
                 .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
-            masonry.draw_list(bounds, Transform::IDENTITY)
+            masonry.draw_list(bounds)
         );
 
         let _ = immediate.on_input(
@@ -998,7 +998,7 @@ mod tests {
             immediate
                 .paint
                 .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
-            masonry.draw_list(bounds, Transform::IDENTITY)
+            masonry.draw_list(bounds)
         );
     }
 
@@ -1026,10 +1026,7 @@ mod tests {
                 &DrawBuffers::default(),
             );
 
-            assert_eq!(
-                iced,
-                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
-            );
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
         }
     }
 
@@ -1069,7 +1066,7 @@ mod tests {
 
                 assert_eq!(
                     iced,
-                    MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY),
+                    MasonryControl::draw_list(&mut masonry, bounds),
                     "the two hosts must record the same {name}"
                 );
             }
@@ -1093,10 +1090,7 @@ mod tests {
             let mut masonry =
                 Painted::pooled(Meter::new(skin), level, skin, &DrawBuffers::default());
 
-            assert_eq!(
-                iced,
-                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
-            );
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
         }
     }
 
@@ -1120,10 +1114,7 @@ mod tests {
                 let mut masonry =
                     Painted::pooled(Cell::new(skin), data(), skin, &DrawBuffers::default());
 
-                assert_eq!(
-                    iced,
-                    MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
-                );
+                assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
             }
         }
     }
@@ -1152,10 +1143,7 @@ mod tests {
                 &DrawBuffers::default(),
             );
 
-            assert_eq!(
-                iced,
-                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
-            );
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
         }
     }
 
@@ -1190,10 +1178,7 @@ mod tests {
                 &DrawBuffers::default(),
             );
 
-            assert_eq!(
-                iced,
-                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
-            );
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
         }
     }
 
@@ -1233,10 +1218,7 @@ mod tests {
                     &DrawBuffers::default(),
                 );
 
-                assert_eq!(
-                    iced,
-                    MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
-                );
+                assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
                 assert!(
                     iced.commands().len() >= 4,
                     "{icon:?} must draw its icon alongside the rest"
@@ -1289,7 +1271,7 @@ mod tests {
 
                 assert_eq!(
                     iced,
-                    MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY),
+                    MasonryControl::draw_list(&mut masonry, bounds),
                     "the two hosts must record the same {style:?} button"
                 );
             }
@@ -1315,10 +1297,7 @@ mod tests {
             let mut masonry =
                 Painted::pooled(TabLarge::new(skin), data(), skin, &DrawBuffers::default());
 
-            assert_eq!(
-                iced,
-                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
-            );
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
         }
     }
 
@@ -1355,10 +1334,7 @@ mod tests {
                     .draw_list(&PaintState::default(), bounds, VisualState::Idle);
                 let mut masonry = Painted::pooled(painter(), data(), skin, &DrawBuffers::default());
 
-                assert_eq!(
-                    iced,
-                    MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
-                );
+                assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
             }
         }
     }
@@ -1400,7 +1376,7 @@ mod tests {
 
             assert_eq!(
                 iced,
-                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY),
+                MasonryControl::draw_list(&mut masonry, bounds),
                 "the two hosts must record the same {style:?} fader with caption {label:?}"
             );
         }
@@ -1430,10 +1406,7 @@ mod tests {
                 &DrawBuffers::default(),
             );
 
-            assert_eq!(
-                iced,
-                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
-            );
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
         }
     }
 
@@ -1459,10 +1432,7 @@ mod tests {
             let mut masonry =
                 Painted::pooled(Knob::new(skin), data(), skin, &DrawBuffers::default());
 
-            assert_eq!(
-                iced,
-                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
-            );
+            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
         }
     }
 
@@ -1489,10 +1459,7 @@ mod tests {
             &DrawBuffers::default(),
         );
 
-        assert_eq!(
-            iced,
-            MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
-        );
+        assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
     }
 }
 

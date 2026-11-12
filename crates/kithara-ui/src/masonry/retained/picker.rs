@@ -20,8 +20,8 @@ use crate::{
         hosted::{HostedControlPlan, SearchPlan, TablePlan, TreePlan},
     },
     interact::{
-        CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase,
-        masonry::{pointer_button, portable_scroll},
+        CursorShape, Input, Outcome, PointerInput, PointerPhase,
+        masonry::{pointer_button, portable_pointer_id, portable_scroll},
     },
     masonry::{
         event::engine_value,
@@ -524,7 +524,13 @@ pub(crate) fn pointing(
     let at = at(event);
     match (pointer, event) {
         (Some((phase, button, clicks)), _) => Some((
-            Input::Pointer(PointerInput::new(MOUSE, button, phase, at, clicks)),
+            Input::Pointer(PointerInput::new(
+                portable_pointer_id(event),
+                button,
+                phase,
+                at,
+                clicks,
+            )),
             at,
         )),
         (None, PointerEvent::Scroll(scroll)) => {

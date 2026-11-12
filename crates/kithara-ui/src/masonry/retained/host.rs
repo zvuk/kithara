@@ -232,6 +232,20 @@ where
         )
     }
 
+    /// The content the application installed at `path`, mounted where the
+    /// document's control would have stood and kept findable by that path so
+    /// the application can say when the state it shows changed.
+    fn installed(
+        &self,
+        widget: Box<dyn CustomWidget<Action = HostAction>>,
+        path: &str,
+        declared: Size<Length>,
+    ) -> MasonryNode<Action> {
+        let mut output = self.custom_leaf(widget, None, declared);
+        output.watch_custom(path);
+        output
+    }
+
     /// One flow's children, split into the layout each asks for and the node
     /// it is, with the state of every block among them collected on the way.
     fn flow(
@@ -559,9 +573,9 @@ where
                     }
                 )
             },
-            |widget| self.custom_leaf(widget, None, declared),
+            |widget| self.installed(widget, path, declared),
         );
-        output.place(transform);
+        output.place(path, transform);
         if self.ctx.ui.driven {
             output.watch_placement(path_id);
         }

@@ -11,6 +11,7 @@ use super::{
     spot::Spot,
 };
 use crate::{
+    backends::affine,
     draw::{Pt, Rgba, Transform},
     expand::Binding,
     hosts::{hosted::HostedControlPlan, solve},
@@ -23,7 +24,7 @@ use crate::{
             menu::PickerLayer,
             node::{Detent, Face, Faces, Node},
             picker::{EngineTarget, HostedEngine},
-            popover::PopoverState,
+            popover::{PopoverState, SurfaceKind},
         },
     },
     render::{Published, Skin},
@@ -275,6 +276,12 @@ pub(crate) enum Watched {
     Lit {
         id: WidgetId,
         flag: Binding,
+    },
+    /// Content the application installed at a path, repainted when the
+    /// application says the state it shows changed.
+    Custom {
+        id: WidgetId,
+        path: String,
     },
     Zone {
         id: WidgetId,
@@ -615,6 +622,20 @@ impl<Action> MasonryNode<Action> {
         self.widget.id()
     }
 
+    /// Stands the mounted leaf in every enclosing object's pose. The pose is
+    /// the node's Masonry transform, so what the leaf draws and the region
+    /// that answers the pointer move as one, and a press lands in the leaf's
+    /// own space through the inverse of the very transform it was painted
+    /// with. A pose with no inverse is reported here: such a leaf still
+    /// paints, but the node refuses every pointer it is offered.
+    pub(crate) fn place(&mut self, path: &str, transform: Transform) {
+        if !transform.is_invertible() {
+            tracing::warn!(%path, "`{path}` will not take the pointer: its pose has no inverse");
+        }
+        self.widget.options.transform = affine(transform);
+        self.widget.widget.place(transform);
+    }
+
     delegate::delegate! {
         to self.widget.widget {
             /// What this node runs when pressed, and with the other button.
@@ -623,10 +644,6 @@ impl<Action> MasonryNode<Action> {
                 primary: Option<Box<dyn Fn() -> HostAction>>,
                 secondary: Option<Box<dyn Fn() -> HostAction>>,
             );
-            /// Offsets everything the mounted leaf draws, without moving the
-            /// box the layout gave it or the region that answers the pointer.
-            /// Nothing is standing yet at mount, so the answer is discarded.
-            pub(crate) fn place(&mut self, transform: Transform) -> bool;
             /// The stepping surface this flow carries over itself.
             pub(crate) fn set_detent(&mut self, detent: Detent);
             /// Where this placement of a stage stands, and what carries it.
@@ -669,6 +686,12 @@ impl<Action> MasonryNode<Action> {
         let id = self.widget.id();
         let binding = binding.clone();
         self.registrations.watch(Watched::Read { id, binding });
+    }
+
+    pub(crate) fn watch_custom(&mut self, path: &str) {
+        let id = self.widget.id();
+        let path = path.to_owned();
+        self.registrations.watch(Watched::Custom { id, path });
     }
 
     pub(crate) fn watch_placement(&mut self, path: InternId) {
@@ -729,4 +752,37 @@ fn merge_window(
         (Some(window), None) | (None, Some(window)) => Some(window),
         (None, None) => None,
     }
+}
+
+/// Stacks every modal above the other surfaces and layers, under only the
+/// window's own layer, whatever its place in the document: the layer order is
+/// the paint order, and the surface order is the order input finds them in.
+pub(crate) fn stack_modals_on_top(
+    layers: &mut [NewWidget<dyn Widget>],
+    popovers: &mut [Within<PopoverRegistration>],
+    window: Option<&WindowTracker>,
+) {
+    popovers.sort_by_key(|popover| matches!(popover.item.state.kind(), SurfaceKind::Modal));
+    let modals: Vec<WidgetId> = popovers
+        .iter()
+        .filter(|popover| matches!(popover.item.state.kind(), SurfaceKind::Modal))
+        .map(|popover| popover.item.layer)
+        .collect();
+    let edges = window.and_then(|window| window.layer);
+    layers.sort_by_key(|layer| {
+        let id = layer.id();
+        (Some(id) == edges, modals.contains(&id))
+    });
+}
+
+/// The widgets the application installed its own content in at `path`; the
+/// branches of an adaptive block can mount one path more than once.
+pub(crate) fn installed_at(watched: &[Within<Watched>], path: &str) -> Vec<WidgetId> {
+    watched
+        .iter()
+        .filter_map(|watched| match &watched.item {
+            Watched::Custom { id, path: at } if at == path => Some(*id),
+            _ => None,
+        })
+        .collect()
 }

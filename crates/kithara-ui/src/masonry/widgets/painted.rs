@@ -4,7 +4,7 @@ use kithara_platform::time::Instant;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    draw::{DrawBuffers, DrawList, DrawListBuilder, Rect, Transform},
+    draw::{DrawBuffers, DrawList, DrawListBuilder, Rect},
     hosts::{
         controls::{Drag, Grip, IndexEvent, IndexPress, Indexing, Press, Span},
         event::{control_event, span_event},
@@ -255,7 +255,7 @@ where
             })
     }
 
-    fn draw_list(&mut self, bounds: Rect, transform: Transform) -> DrawList {
+    fn draw_list(&mut self, bounds: Rect) -> DrawList {
         self.repaint = false;
         let mut list = self
             .pools
@@ -267,25 +267,23 @@ where
                 .map(|interaction| &interaction.recognize),
             Some(Recognize::Index { .. })
         );
-        list.transformed(transform, |list| {
-            if indexed {
-                self.painter.draw_indexed(
-                    list,
-                    &mut self.text,
-                    &self.data,
-                    bounds,
-                    self.index.visual(),
-                );
-            } else {
-                self.painter.draw(
-                    list,
-                    &mut self.text,
-                    &self.data,
-                    bounds,
-                    self.press.visual(),
-                );
-            }
-        });
+        if indexed {
+            self.painter.draw_indexed(
+                &mut list,
+                &mut self.text,
+                &self.data,
+                bounds,
+                self.index.visual(),
+            );
+        } else {
+            self.painter.draw(
+                &mut list,
+                &mut self.text,
+                &self.data,
+                bounds,
+                self.press.visual(),
+            );
+        }
         list.finish()
     }
     fn hover(&mut self, hovered: bool) -> bool {

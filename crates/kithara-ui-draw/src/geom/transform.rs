@@ -37,6 +37,17 @@ impl Transform {
         }
     }
 
+    /// Whether every point this lands on came from exactly one point, so a
+    /// point on screen names one point of what was drawn.
+    ///
+    /// A transform that flattens onto a line or a point, or that carries a
+    /// non-finite coefficient, has no inverse to answer with.
+    #[must_use]
+    pub fn is_invertible(self) -> bool {
+        self.xx.mul_add(self.yy, -(self.xy * self.yx)).is_normal()
+            && [self.dx, self.dy].iter().all(|offset| offset.is_finite())
+    }
+
     /// Whether this keeps the axes where they are, so an axis-aligned
     /// rectangle stays one.
     #[must_use]
