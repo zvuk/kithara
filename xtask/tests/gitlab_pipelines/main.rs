@@ -844,6 +844,7 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         "apple:ios-test",
         "apple:lint",
         "apple:msrv",
+        "apple:pr-tests",
         "apple:safari",
         "apple:swift-test",
         "apple:test",

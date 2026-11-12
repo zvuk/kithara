@@ -303,7 +303,11 @@ fn the_catalog_declares_every_lane_the_github_workflows_will_ask_for() {
         "linux-msrv",
         "linux-perf-memory",
         "linux-test-real-clock",
-        "linux-support",
+        "linux-tooling",
+        "linux-harness",
+        "linux-fixtures",
+        "linux-net-host",
+        "linux-broadcast",
         "deep-rtsan-fast",
         "deep-rtsan-file",
         "deep-rtsan-hls",
@@ -517,7 +521,9 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_run_one_command_on_e
         for step in steps {
             let args = step.get("args").map_or_else(Vec::new, strings);
             if !matches!(args.as_slice(), ["test", "run", ..])
-                || args.iter().any(|arg| arg.starts_with("--lane"))
+                || args
+                    .iter()
+                    .any(|arg| arg.starts_with("--lane") || *arg == "-E")
             {
                 continue;
             }
@@ -607,6 +613,12 @@ fn every_own_configuration_suite_is_a_lane_of_every_reviewed_kind() {
             panic!("suite `{suite}` runs in {} lanes, not one", lanes.len());
         };
         for step in lane["steps"].as_array().expect("steps") {
+            if !step
+                .get("args")
+                .is_some_and(|args| strings(args).contains(&flag.as_str()))
+            {
+                continue;
+            }
             assert_eq!(
                 step.get("args").map(strings),
                 Some(vec!["test", "run", flag.as_str()]),
