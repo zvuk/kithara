@@ -33,7 +33,9 @@ pub use kithara_audio::SeekOutcome;
 pub use kithara_effects::{
     GainDb,
     eq::EqBandConfig,
-    filter::{Cutoff, FilterSettings, FilterSettingsChange, Kind as FilterKind, Q},
+    filter::{
+        Cutoff, FilterParameter, FilterSettings, FilterSettingsChange, Kind as FilterKind, Q,
+    },
 };
 pub use kithara_net::Headers;
 pub use kithara_render::{
@@ -43,10 +45,10 @@ pub use kithara_render::{
     bridge::{
         CrossfaderGain, CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckFilterChange,
         DeckFxChange, DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal,
-        DeckSnapshot, EqBinding, EqGainProgram, EqSnapshot, FadeDir, FilterBinding, FilterSnapshot,
-        FxMix, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault, Returned,
-        RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot, TrackClock,
-        Trim,
+        DeckSnapshot, EqBinding, EqGainProgram, EqSnapshot, FadeDir, FilterBinding, FilterProgram,
+        FilterSnapshot, FxMix, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault,
+        Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
+        TrackClock, Trim,
     },
     dispatch,
     rt::{

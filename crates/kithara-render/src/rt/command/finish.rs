@@ -18,19 +18,18 @@ impl Deck {
             i64::from(start).saturating_add(i64::try_from(range.start).expect("prepared frame")),
         );
         let animated = {
-            let curves = self.eq_programs.curves(level);
-            let animated = curves.iter().any(Option::is_some);
+            let eq = self.eq_programs.curves(level);
+            let filter = self.filter_programs.curves(level);
+            let animated = eq.iter().any(Option::is_some) || filter.iter().any(Option::is_some);
             if let Some([left, right]) = input {
                 if animated {
-                    self.render.finish_curves(left, right, at, &curves);
+                    self.render.finish_curves(left, right, at, &eq, &filter);
                 } else {
                     self.render.finish(left, right);
                 }
             } else {
-                if animated {
-                    self.render.advance_curves(at, range.len(), &curves);
-                } else {
-                    self.render.advance_filter(range.len());
+                if animated || self.render.filter_settings().is_some() {
+                    self.render.advance_curves(at, range.len(), &eq, &filter);
                 }
                 self.render.idle();
             }
@@ -45,6 +44,7 @@ impl Deck {
         let at = SessionFrame::new(
             i64::from(start).saturating_add(i64::try_from(last).expect("prepared frame")),
         );
+        self.finish_filter_programs(level, at);
         self.finish_eq_programs(level, at);
     }
 }

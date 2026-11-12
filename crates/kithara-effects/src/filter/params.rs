@@ -1,6 +1,8 @@
 use kithara_derive::Ranged;
+use num_traits::ToPrimitive;
 
 use super::FilterSettingsChange;
+use crate::GainDb;
 
 /// Filter cutoff in Hz; preparation also requires it to be below Nyquist.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Ranged)]
@@ -35,6 +37,22 @@ impl FilterParameter {
             Self::CutoffHz => 0,
             Self::Q => 1,
             Self::GainDb => 2,
+        }
+    }
+
+    #[must_use]
+    pub fn change(self, value: f64) -> Option<FilterSettingsChange> {
+        match self {
+            Self::CutoffHz => Cutoff::checked(value).map(FilterSettingsChange::CutoffHz),
+            Self::Q => Q::checked(value).map(FilterSettingsChange::Q),
+            Self::GainDb => {
+                if !(f64::from(f32::from(GainDb::MIN))..=f64::from(f32::from(GainDb::MAX)))
+                    .contains(&value)
+                {
+                    return None;
+                }
+                GainDb::checked(value.to_f32()?).map(FilterSettingsChange::GainDb)
+            }
         }
     }
 

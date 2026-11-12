@@ -21,7 +21,8 @@ audio, own player or session state, or reach the network.
 
 `filter::FilterEffect` prepares a high-pass, low-pass, low-shelf or high-shelf
 response from `FilterConfig`, using the DSP owner's biquad. Cutoff and Q use
-f64 manual smoothing. Planar processing retains history across calls, and reset clears history
+f64 manual smoothing; explicit trajectory points apply without another smoothing
+pass. Planar processing retains history across calls, and reset clears history
 and completes the current targets. The deck runs the filter after FX units and
 before its output fader; preparation and displaced-resource destruction stay
 off the audio thread.

@@ -173,7 +173,12 @@ async fn run_multi(kinds: PreparedTracks, actions: Vec<Action>) {
 /// and auto-advance. HLS cases are exercised under every ABR mode so
 /// the same `seek_forward_unbuffered` path hits Auto's switch-decision
 /// arm AND Manual's no-switch arm.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    tokio,
+    multi_thread,
+    timeout(Duration::from_secs(60)),
+    tracing("warn,kithara_integration_tests::user_sim::harness=debug")
+)]
 #[case::mp3_file(track_mp3_file().await, AbrMode::Auto(None))]
 #[case::mp3_streamhq(track_mp3_stream_hq().await, AbrMode::Auto(None))]
 #[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]

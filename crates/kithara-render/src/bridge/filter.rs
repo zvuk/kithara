@@ -1,7 +1,10 @@
 use std::fmt;
 
+use kithara_command::Seq;
 use kithara_config::ConfigOwner;
-use kithara_effects::filter::{FilterEffect, FilterSettings, FilterSettingsChange};
+use kithara_effects::filter::{
+    FilterEffect, FilterParameter, FilterSettings, FilterSettingsChange,
+};
 
 use super::FilterBinding;
 
@@ -32,9 +35,33 @@ pub struct FilterSnapshot {
     settings: Option<FilterSettings>,
     #[field(get, copy)]
     binding: Option<FilterBinding>,
+    #[field(skip)]
+    programs: [Option<Seq>; 3],
+    #[field(skip)]
+    authorities: [Option<Seq>; 3],
 }
 
 impl FilterSnapshot {
+    #[must_use]
+    pub fn program(&self, field: FilterParameter) -> Option<Seq> {
+        self.programs[field.index()]
+    }
+
+    #[must_use]
+    pub fn authority(&self, field: FilterParameter) -> Option<Seq> {
+        self.authorities[field.index()]
+    }
+
+    pub(crate) fn publish_program(
+        &mut self,
+        field: FilterParameter,
+        program: Option<Seq>,
+        authority: Option<Seq>,
+    ) {
+        self.programs[field.index()] = program;
+        self.authorities[field.index()] = authority;
+    }
+
     pub(crate) fn publish(
         &mut self,
         settings: Option<FilterSettings>,

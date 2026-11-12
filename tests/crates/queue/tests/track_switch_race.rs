@@ -953,7 +953,13 @@ async fn concurrent_completion_race_does_not_barge_in(
             observe_completion_order(&mut rx, snapshot, fast_id, slow_id, consts::RACE_OBSERVE)
                 .await
         {
-            failures.push(format!("[iter {iter}] {error}"));
+            failures.push(format!(
+                "[iter {iter}] {error}; current={:?}, fast_status={:?}, slow_status={:?}, playing={}",
+                queue.current().map(|entry| (entry.id, entry.status)),
+                queue.track(fast_id).map(|entry| entry.status),
+                queue.track(slow_id).map(|entry| entry.status),
+                queue.is_playing(),
+            ));
         }
         queue.close().await;
         hang_reset!();

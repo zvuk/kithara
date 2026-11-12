@@ -7,12 +7,12 @@ use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 use kithara_effects::{
     DeckEffect, FxParamChange, GainDb,
     eq::{EqConfig, EqLayout, StereoEq, generate_log_spaced_bands},
-    filter::{FilterEffect, FilterSettings, PrepareError},
+    filter::{FilterEffect, FilterMotion, FilterSettings, FilterSettingsChange, PrepareError},
 };
 use kithara_signal::{AudioSpec, SessionEpoch, SessionFrame};
 
 use super::{
-    command::{EqCurves, gain_at},
+    command::{EqCurves, FilterCurves, gain_at},
     processor::StreamShape,
 };
 use crate::{
@@ -105,7 +105,7 @@ impl RenderPass {
     pub(crate) fn finish(&mut self, left: &mut [f32], right: &mut [f32]) {
         apply_gain(&mut self.trim, left, right);
         self.eq.process(left, right);
-        self.finish_output(left, right);
+        self.finish_output(left, right, None);
     }
 
     pub(crate) fn finish_curves(
@@ -114,6 +114,7 @@ impl RenderPass {
         right: &mut [f32],
         start: SessionFrame,
         curves: &EqCurves<'_>,
+        filter_curves: &FilterCurves<'_>,
     ) {
         apply_gain(&mut self.trim, left, right);
         if curves.iter().any(Option::is_some) {
@@ -125,7 +126,14 @@ impl RenderPass {
         } else {
             self.eq.process(left, right);
         }
-        self.finish_output(left, right);
+        self.finish_output(
+            left,
+            right,
+            filter_curves
+                .iter()
+                .any(Option::is_some)
+                .then_some((start, filter_curves)),
+        );
     }
 
     pub(crate) fn advance_curves(
@@ -133,16 +141,14 @@ impl RenderPass {
         start: SessionFrame,
         frames: usize,
         curves: &EqCurves<'_>,
+        filter_curves: &FilterCurves<'_>,
     ) {
         for frame in 0..frames {
             self.apply_eq_curves(curves, frame_at(start, frame));
-        }
-        self.advance_filter(frames);
-    }
-
-    pub(crate) fn advance_filter(&mut self, frames: usize) {
-        if let Some(filter) = &mut self.filter {
-            filter.advance(frames);
+            if let Some(filter) = &mut self.filter {
+                apply_filter_curves(filter, filter_curves, frame_at(start, frame));
+                filter.advance(1);
+            }
         }
     }
 
@@ -152,15 +158,32 @@ impl RenderPass {
         }
     }
 
-    fn finish_output(&mut self, left: &mut [f32], right: &mut [f32]) {
+    fn finish_output(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        curves: Option<(SessionFrame, &FilterCurves<'_>)>,
+    ) {
         for unit in &mut self.units {
             unit.process(left, right, &mut self.wet);
         }
         if let Some(filter) = &mut self.filter {
-            let frames = left.len();
-            filter
-                .process(&mut [&mut *left, &mut *right], 0..frames)
-                .expect("deck admission validates every stereo plane before processing");
+            if let Some((start, curves)) = curves {
+                for (frame, (left, right)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
+                    apply_filter_curves(filter, curves, frame_at(start, frame));
+                    filter
+                        .process(
+                            &mut [core::slice::from_mut(left), core::slice::from_mut(right)],
+                            0..1,
+                        )
+                        .expect("admitted stereo frame");
+                }
+            } else {
+                let frames = left.len();
+                filter
+                    .process(&mut [&mut *left, &mut *right], 0..frames)
+                    .expect("deck admission validates every stereo plane before processing");
+            }
         }
         apply_gain(&mut self.output, left, right);
     }
@@ -199,11 +222,77 @@ impl RenderPass {
         self.filter.as_ref().map(|filter| *filter.config())
     }
 
-    pub(crate) fn prepare_filter(&mut self, rate: NonZeroU32) -> Result<(), PrepareError> {
+    pub(crate) fn prepare_filter(
+        &mut self,
+        rate: NonZeroU32,
+        curves: &FilterCurves<'_>,
+    ) -> Result<(), PrepareError> {
         if let Some(filter) = &mut self.filter {
+            if filter.accepts_spec(AudioSpec::new(2, rate)) {
+                return Ok(());
+            }
+            let mut motions = filter.motions(rate)?;
+            for program in curves.iter().flatten() {
+                motions[program.parameter().index()] =
+                    program.motion_after(program.start(), rate)?;
+            }
+            filter.admit_trajectory(rate, &motions)?;
             filter.update_sample_rate(rate)?;
         }
         Ok(())
+    }
+
+    pub(crate) fn filter_ready(&self, rate: NonZeroU32) -> bool {
+        self.filter
+            .as_ref()
+            .is_some_and(|filter| filter.accepts_spec(AudioSpec::new(2, rate)))
+    }
+
+    pub(crate) fn filter_motions(
+        &self,
+        rate: NonZeroU32,
+    ) -> Result<[FilterMotion; 3], DeckRefusal> {
+        self.filter
+            .as_ref()
+            .ok_or(DeckRefusal::FilterShape)?
+            .motions(rate)
+            .map_err(DeckRefusal::Filter)
+    }
+
+    pub(crate) fn filter_change_motion(
+        &self,
+        rate: NonZeroU32,
+        change: FilterSettingsChange,
+        prior: Option<FilterSettingsChange>,
+    ) -> Result<FilterMotion, DeckRefusal> {
+        self.filter
+            .as_ref()
+            .ok_or(DeckRefusal::FilterShape)?
+            .change_motion(rate, change, prior)
+            .map_err(DeckRefusal::Filter)
+    }
+
+    pub(crate) fn admit_filter_motions(
+        &self,
+        rate: NonZeroU32,
+        motions: &[FilterMotion; 3],
+    ) -> Result<(), DeckRefusal> {
+        let filter = self
+            .filter
+            .as_ref()
+            .filter(|filter| filter.accepts_spec(AudioSpec::new(2, rate)))
+            .ok_or(DeckRefusal::FilterShape)?;
+        filter
+            .admit_trajectory(rate, motions)
+            .map_err(DeckRefusal::Filter)
+    }
+
+    pub(crate) fn set_filter_explicit(&mut self, change: FilterSettingsChange) {
+        self.filter
+            .as_mut()
+            .expect("admitted installed Filter")
+            .set_explicit(change)
+            .expect("admitted combined Filter trajectories");
     }
 
     pub(crate) fn change_filter(
@@ -450,6 +539,14 @@ fn apply_gain(gain: &mut SmoothedParam, left: &mut [f32], right: &mut [f32]) {
     gain.settle();
 }
 
+fn apply_filter_curves(filter: &mut FilterEffect, curves: &FilterCurves<'_>, at: SessionFrame) {
+    for program in curves.iter().flatten() {
+        filter
+            .set_explicit(program.change_at(at))
+            .expect("admitted combined Filter trajectories");
+    }
+}
+
 fn frame_at(start: SessionFrame, frame: usize) -> SessionFrame {
     SessionFrame::new(
         i64::from(start).saturating_add(i64::try_from(frame).expect("prepared frame count")),
@@ -626,7 +723,7 @@ mod tests {
         let mut curves = [None; EqGainProgram::MAX_ACTIVE];
         curves[0] = Some((0, program.curve()));
         let (mut left, mut right) = ([0.125; 4], [-0.5; 4]);
-        render.finish_curves(&mut left, &mut right, start, &curves);
+        render.finish_curves(&mut left, &mut right, start, &curves, &[None; 3]);
         assert_eq!(left.map(f32::to_bits), [0.125_f32.to_bits(); 4]);
         assert_eq!(right.map(f32::to_bits), [0.125_f32.to_bits(); 4]);
         let mut gains = [GainDb::DEFAULT];

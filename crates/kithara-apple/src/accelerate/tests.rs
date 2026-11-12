@@ -185,6 +185,40 @@ fn multichannel_biquad_keeps_a_finite_prefix_before_a_future_nan() {
 }
 
 #[kithara::test(native)]
+fn multichannel_biquad_reapplying_equal_coefficients_is_bit_neutral() {
+    // RBJ low-pass, 800 Hz at 44.1 kHz, Q = 1/sqrt(2).
+    let w = std::f32::consts::TAU * 800.0 / 44_100.0;
+    let alpha = w.sin() * std::f32::consts::FRAC_1_SQRT_2;
+    let a0 = 1.0 + alpha;
+    let b = (1.0 - w.cos()) / 2.0 / a0;
+    let section = [b, 2.0 * b, b, -2.0 * w.cos() / a0, (1.0 - alpha) / a0];
+    let mut once =
+        MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
+    let mut repeated =
+        MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
+    once.set_section(0, section).expect("one section");
+    repeated.set_section(0, section).expect("one section");
+    let input: Vec<f32> = (0_u16..256)
+        .map(|frame| (f32::from(frame) * 0.142_5).sin())
+        .collect();
+    let mut expected = input.clone();
+    let frames = expected.len();
+    once.process(&mut [expected.as_mut_slice()], 0..frames)
+        .expect("whole stream");
+    let mut actual = input;
+    for frame in 0..actual.len() {
+        repeated.set_section(0, section).expect("same section");
+        repeated
+            .process(&mut [actual.as_mut_slice()], frame..frame + 1)
+            .expect("one frame");
+    }
+    assert_eq!(
+        actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+        expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+    );
+}
+
+#[kithara::test(native)]
 fn multichannel_biquad_refuses_the_entire_shape_without_advancing_history() {
     let mut filter =
         MultichannelBiquad::new(NonZeroUsize::MIN.saturating_add(1), NonZeroUsize::MIN)

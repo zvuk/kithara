@@ -41,11 +41,12 @@ impl Deck {
         context_valid: bool,
         wait_for_pcm: bool,
     ) {
-        if due
-            .commands()
-            .iter()
-            .any(|part| matches!(part, DeckPart::Filter { .. }))
-        {
+        if due.commands().iter().any(|part| {
+            matches!(
+                part,
+                DeckPart::Filter { .. } | DeckPart::FilterProgram { .. }
+            )
+        }) {
             self.take_filter_due(due, context_valid);
             return;
         }
@@ -280,6 +281,7 @@ impl Deck {
                 | DeckPart::GainProgram { .. }
                 | DeckPart::EqProgram { .. }
                 | DeckPart::Filter { .. }
+                | DeckPart::FilterProgram { .. }
                 | DeckPart::Returned(_) => {}
             }
         }
