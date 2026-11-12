@@ -632,10 +632,22 @@ pub struct DeckRig<S> {
     pub dispatcher: Sender<DispatcherProtocol<ResourceLoad<S>>>,
     pub opens: Inbox<DispatcherProtocol<ResourceLoad<S>>>,
     fixture_dispatcher: Option<FixtureDispatcher<S>>,
-    fixture_lanes: Vec<Sender<kithara_render::LaneProtocol>>,
-    held_lanes: Vec<Inbox<kithara_render::LaneProtocol>>,
+    lanes: Vec<HeldLane>,
     now: SessionFrame,
     observation: kithara_render::bridge::DeckSnapshot,
+}
+
+/// The end of a lane channel the rig keeps open for its lifetime, as a deck
+/// keeps a lane live while it plays.
+enum HeldLane {
+    /// The rig opened the lane; the worker holds its inbox.
+    Sender {
+        _sender: Sender<kithara_render::LaneProtocol>,
+    },
+    /// The owner opened the lane; the rig holds its inbox in place of a running lane.
+    Inbox {
+        _inbox: Inbox<kithara_render::LaneProtocol>,
+    },
 }
 
 struct FixtureDispatcher<S> {
@@ -665,8 +677,7 @@ impl<S> DeckRig<S> {
             mixer: MockDeck::new(inputs),
             events: ends.events,
             fixture_dispatcher: None,
-            fixture_lanes: Vec::new(),
-            held_lanes: Vec::new(),
+            lanes: Vec::new(),
             now: SessionFrame::new(0),
             observation,
         })
@@ -762,7 +773,7 @@ impl<S> DeckRig<S> {
     /// Keeps a lane inbox open for the rig's lifetime, as a running lane keeps
     /// the one its load request carried.
     pub fn hold_lane(&mut self, inbox: Inbox<kithara_render::LaneProtocol>) {
-        self.held_lanes.push(inbox);
+        self.lanes.push(HeldLane::Inbox { _inbox: inbox });
     }
 
     /// The queues a player sends to, lent for one pass.
@@ -819,7 +830,9 @@ where
                 },
             )
             .await?;
-        self.fixture_lanes.push(lane_sender);
+        self.lanes.push(HeldLane::Sender {
+            _sender: lane_sender,
+        });
         Ok(loaded)
     }
 
