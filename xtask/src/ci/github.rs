@@ -73,9 +73,6 @@ fn required(results: &str, lanes: &str, ready_ui: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// The info string that marks a pull request's test block.
-const PR_TESTS_INFO: &str = "kithara-tests";
-
 /// The contents of the one fenced block a pull request description marks
 /// `kithara-tests`, or none when it carries no such block.
 ///
@@ -90,7 +87,7 @@ pub fn pr_tests_block(body: &str) -> io::Result<Option<String>> {
         let Some(info) = line.trim_start().strip_prefix("```") else {
             continue;
         };
-        let opened_here = info.trim() == PR_TESTS_INFO;
+        let opened_here = info.trim() == "kithara-tests";
         let mut contents = Vec::new();
         let mut closed = false;
         for inner in lines.by_ref() {

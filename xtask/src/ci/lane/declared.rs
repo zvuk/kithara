@@ -89,7 +89,7 @@ pub(crate) fn run(
                 args.insert(at, format!("--narrow={filterset}"));
             }
             if drafted {
-                args.insert(at, DRAFT_FLAG.to_owned());
+                args.insert(at, consts::DRAFT_FLAG.to_owned());
             }
         } else if let Some(filterset) = narrow
             && step.miri_request(lane, declared).is_some()
@@ -156,7 +156,7 @@ pub(crate) fn runs_anything(
             return Ok(true);
         };
         let request: Vec<String> = drafted
-            .then(|| DRAFT_FLAG.to_owned())
+            .then(|| consts::DRAFT_FLAG.to_owned())
             .into_iter()
             .chain(request.iter().cloned())
             .collect();
@@ -166,10 +166,6 @@ pub(crate) fn runs_anything(
     }
     Ok(false)
 }
-
-/// What a draft pipeline adds to a test suite: run only the lane's share of
-/// the required packages and the tests the pull request names.
-const DRAFT_FLAG: &str = "--draft";
 
 /// Refuses what the lane declines before anything runs: a pipeline kind it
 /// declines, or a filterset it has no test suite to narrow.
