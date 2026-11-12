@@ -255,92 +255,163 @@ fn a_speed_change_within_a_tail_fade_fades_from_what_sounds() {
     }
 }
 
-/// A keylock engine that changes speed on lane frame X renders from X on
-/// what an engine started at X's source frame with the new speed renders:
-/// the change lands on its frame and the source does not jump. The old
-/// engine's tail fades out within `SETTLE` frames.
+/// A keylock engine that changes speed on lane frame X changes it there for
+/// the listener: the quantum on X starts on X's source frame, a kick sounds
+/// where the speeds on either side of X put it, and a tone keeps its level
+/// through X.
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
-fn a_keylock_speed_change_renders_on_as_an_engine_started_on_its_frame() {
-    for backend in keylock_backends() {
-        const ENGAGE: u64 = 1_024;
-        /// At 0.8 the 3075 frames from ENGAGE play 2460 source frames whole.
-        const AT: u64 = 4_099;
-        const SETTLE: u64 = 16_384;
-        const WINDOW: usize = 4_096;
-        const REACH: usize = 2_048;
-        let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
-        let pools = pools();
-        let (mut changed, mut lane) = stretch_lane(&pools, (backend, true), &signal);
-        lane.send(
-            When::At(LaneFrame {
-                segment: SegmentId::FIRST,
-                frame: ENGAGE,
-            }),
-            speed_batch(0.8),
-        )
-        .expect("the lane has room for the engaging batch");
-        lane.send(
+fn a_keylock_speed_change_sounds_on_its_frame_at_its_level() {
+    /// At 0.8 the 30000 frames before the change play 24000 source frames whole.
+    const AT: u64 = 30_000;
+    const CUE: u64 = AT * 4 / 5;
+    const ONSET_TOLERANCE: f64 = 240.0;
+    let chunks = |signal: &[f32]| {
+        u32::try_from(signal.len() / (2 * consts::LANE_CHUNK_FRAMES as usize))
+            .expect("test chunk count fits u32")
+    };
+    let change = || {
+        (
             When::At(LaneFrame {
                 segment: SegmentId::FIRST,
                 frame: AT,
             }),
             speed_batch(1.25),
         )
-        .expect("the lane has room for the change");
-        let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
-        let cue = ENGAGE + (AT - ENGAGE) * 4 / 5;
+    };
+    for backend in keylock_backends() {
+        let signal = kicks();
+        let pools = pools();
+        let (mut source, mut lane) = lane_over(
+            &pools,
+            chunks(&signal),
+            |index| &signal[index as usize * 2 * consts::LANE_CHUNK_FRAMES as usize..],
+            0.8,
+            (backend, true),
+        );
+        let (when, batch) = change();
+        lane.send(when, batch)
+            .expect("the lane has room for the change");
+        let emitted = emit(&mut source, 0, 2 * AT);
         assert_eq!(
             emitted
                 .iter()
                 .find(|chunk| chunk.lane_start == AT)
                 .map(|chunk| chunk.source_start),
-            Some(cue),
+            Some(CUE),
             "the speed change starts on its exact lane and source frame",
         );
+        let struck: Vec<f32> = signal.iter().step_by(2).copied().collect();
+        let rendered = lane_pcm(&emitted);
+        let (at, cue): (f64, f64) = (AT.as_(), CUE.as_());
+        for kick in [4_800.0, 28_800.0, 52_800.0] {
+            let source = kick_onset(&struck, kick);
+            let expected = if source < cue {
+                source / 0.8
+            } else {
+                at + (source - cue) / 1.25
+            };
+            let actual = kick_onset(&rendered, expected);
+            assert!(
+                (actual - expected).abs() <= ONSET_TOLERANCE,
+                "{backend:?}: the kick at source frame {source} sounds at lane frame {actual}, \
+                 not {expected:.0}"
+            );
+        }
 
-        let (mut started, mut fresh) = stretch_lane(&pools, (backend, false), &signal);
-        fresh
-            .send(
-                When::At(LaneFrame {
-                    segment: SegmentId::FIRST,
-                    frame: ENGAGE,
-                }),
-                speed_batch(0.8),
-            )
-            .expect("the lane has room for the reference history");
-        let mut start = speed_batch(1.25);
-        start.commands.push(LaneCommand::SetKeylock(true));
-        fresh
-            .send(
-                When::At(LaneFrame {
-                    segment: SegmentId::FIRST,
-                    frame: AT,
-                }),
-                start,
-            )
-            .expect("the lane has room for the start");
-        let reference = emit(&mut started, 0, AT + SETTLE + (WINDOW + REACH) as u64);
-        assert_eq!(
-            reference
-                .iter()
-                .find(|chunk| chunk.lane_start == AT)
-                .map(|chunk| chunk.source_start),
-            Some(cue),
-            "the fresh engine starts on the same lane and source frame",
+        let signal = sine(12 * consts::LANE_CHUNK_FRAMES as usize);
+        let (mut source, mut lane) = lane_over(
+            &pools,
+            chunks(&signal),
+            |index| &signal[index as usize * 2 * consts::LANE_CHUNK_FRAMES as usize..],
+            0.8,
+            (backend, true),
         );
-
-        let rendered = &lane_pcm(&emitted)[pcm_index(AT + SETTLE)..][..WINDOW];
-        let (offset, correlation) = alignment(
-            rendered,
-            &lane_pcm(&reference),
-            pcm_index(AT + SETTLE),
-            REACH,
-        );
+        let (when, batch) = change();
+        lane.send(when, batch)
+            .expect("the lane has room for the change");
+        let rendered = lane_pcm(&emit(&mut source, 0, AT + 8_192));
+        let level = tone_level_db(&rendered[pcm_index(AT - 4_096)..], &signal);
         assert!(
-            offset == 0 && correlation > 0.95,
-            "{backend:?}: after the change at lane frame {AT} (source {cue}) the lane \
-             renders {offset} frames off a fresh engine, correlation {correlation:.3}"
+            level.abs() <= consts::TONE_LEVEL_DB,
+            "{backend:?}: the tone's level moves {level:.2} dB around its speed change"
+        );
+    }
+}
+
+/// Keylock speed changes that each reach the lane one engine latency ahead
+/// never retire the engine. A retired engine's tail fades against its
+/// re-primed successor, which moves a tone's level; here the tone holds it
+/// through every change, and each change still applies on its frame under
+/// its own revision.
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+#[kithara::test]
+fn keylock_speed_changes_known_a_latency_ahead_keep_the_engine() {
+    const SPEEDS: [f32; 3] = [1.25, 0.8, 1.1];
+    for backend in keylock_backends() {
+        let signal = sine(12 * consts::LANE_CHUNK_FRAMES as usize);
+        let pools = pools();
+        let chunks = signal.len() / (2 * consts::LANE_CHUNK_FRAMES as usize);
+        let (mut source, mut lane) = lane_over(
+            &pools,
+            u32::try_from(chunks).expect("test chunk count fits u32"),
+            |index| &signal[index as usize * 2 * consts::LANE_CHUNK_FRAMES as usize..],
+            0.8,
+            (backend, true),
+        );
+        let mut emitted = emit(&mut source, 0, 256);
+        let latency =
+            u64::try_from(source.engine_latency().get()).expect("engine latency fits u64");
+        let spacing = latency + 512;
+        let changes: Vec<_> = (1_u64..)
+            .zip(SPEEDS)
+            .map(|(index, speed)| {
+                let frame = index * spacing;
+                let seq = lane
+                    .send(
+                        When::At(LaneFrame {
+                            segment: SegmentId::FIRST,
+                            frame,
+                        }),
+                        speed_batch(speed),
+                    )
+                    .expect("the lane has room for each change");
+                (frame, seq)
+            })
+            .collect();
+        let end = spacing * (1 + u64::try_from(SPEEDS.len()).expect("change count"));
+        emitted.extend(emit(&mut source, 256, end));
+
+        let rendered = lane_pcm(&emitted);
+        let level = tone_level_db(&rendered[pcm_index(spacing)..pcm_index(end)], &signal);
+        assert!(
+            level.abs() <= consts::TONE_LEVEL_DB,
+            "{backend:?}: the tone's level moves {level:.2} dB through its speed changes"
+        );
+        for (index, &(frame, seq)) in changes.iter().enumerate() {
+            let until = changes.get(index + 1).map_or(end, |&(next, _)| next);
+            assert!(
+                emitted.iter().any(|chunk| chunk.lane_start == frame),
+                "{backend:?}: a quantum starts on the change at lane frame {frame}"
+            );
+            assert!(
+                emitted
+                    .iter()
+                    .filter(|chunk| (frame..until).contains(&chunk.lane_start))
+                    .all(|chunk| chunk.revision == seq.get()),
+                "{backend:?}: frames from lane frame {frame} on render under its batch"
+            );
+        }
+        let applied: Vec<_> = lane
+            .receipts()
+            .filter_map(|receipt| match receipt.outcome() {
+                Outcome::Applied { at, .. } => Some((at.frame, receipt.seq())),
+                Outcome::Rejected(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            applied, changes,
+            "{backend:?}: each change applies on its frame"
         );
     }
 }

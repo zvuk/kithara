@@ -2,7 +2,7 @@ use kithara::{
     abr::AbrMode,
     assets::AssetStore,
     download::{Downloader, DownloaderConfig},
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{
         CancelToken,
         time::Duration,
@@ -48,9 +48,8 @@ async fn a_queue_item_recovers_from_three_withheld_segments_and_keeps_its_transp
     .await;
     let pools = harness.worker().pools().clone();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             cancel_token.child(),
         ))
         .runtime(Handle::current())

@@ -63,6 +63,8 @@ async fn notification_changed_carries_src() {
         panic!("changed identity must retain a URI source");
     };
     assert_eq!(source, expected_source);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -172,4 +174,6 @@ async fn notification_clone() {
         panic!("cloned stopped identity must retain a URI source");
     };
     assert_eq!(source, expected_source);
+    drop((queue, rig));
+    dir.finish().await;
 }

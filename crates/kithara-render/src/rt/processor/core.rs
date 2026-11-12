@@ -8,9 +8,8 @@ use kithara_audio::TrackFailureKind;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_command::{LevelInbox, ScopeId, Target};
 use kithara_dsp::param::SmootherConfig;
-use kithara_signal::{FrameCount, SegmentId, SessionEpoch, SessionFrame};
+use kithara_signal::{FrameCount, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
-use kithara_warp::RenderContext;
 use ringbuf::HeapProd;
 use triple_buffer::Input;
 
@@ -204,7 +203,7 @@ impl<E: SessionInbox> DeckMixer<E> {
     pub(super) fn render_block(
         &mut self,
         level: Option<LevelInbox<'_, DeckProtocol>>,
-        context: Option<&RenderContext>,
+        context: Option<&OutputContext>,
         start: SessionFrame,
         buffers: &mut ProcBuffers,
         frames: usize,
@@ -241,7 +240,7 @@ impl<E: SessionInbox> DeckMixer<E> {
     pub(super) fn render_block_in(
         &mut self,
         level: &mut LevelInbox<'_, DeckProtocol>,
-        context: Option<&RenderContext>,
+        context: Option<&OutputContext>,
         start: SessionFrame,
         buffers: &mut ProcBuffers,
         frames: usize,
@@ -249,7 +248,7 @@ impl<E: SessionInbox> DeckMixer<E> {
         self.deck.recycle.fill(self.recycle_per_block);
         if let Some(context) = context {
             self.deck
-                .observe_output_epoch(level, context.output().session_epoch(), start);
+                .observe_output_epoch(level, context.session_epoch(), start);
         }
         self.deck.arrivals(level);
         let mut sounded = false;
@@ -435,7 +434,7 @@ impl Deck {
 
     fn render_range(
         &mut self,
-        context: Option<&RenderContext>,
+        context: Option<&OutputContext>,
         buffers: &mut ProcBuffers,
         scratch: &mut [SampleBuffer; crate::consts::MIN_STEREO],
         range: Range<usize>,

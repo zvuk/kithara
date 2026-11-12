@@ -108,7 +108,15 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     }
 }
 
+/// Create a test HTTP client with default options that serves the shared
+/// fixture server in memory, so its requests stay on the test clock.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn create_test_net() -> HttpClient {
+    crate::test_server::TestServerHelper::shared_client(NetOptions::default(), CancelToken::never())
+}
+
 /// Create test HTTP client with default options
+#[cfg(target_arch = "wasm32")]
 pub fn create_test_net() -> HttpClient {
     HttpClient::new(NetOptions::default(), pools(), CancelToken::never())
 }
@@ -124,7 +132,7 @@ pub fn create_test_downloader() -> Downloader {
 }
 
 /// Create a private test [`PeerHandle`] via `Downloader::register`.
-fn create_test_peer_handle(pools: &Pools) -> PeerHandle {
+fn create_test_peer_handle() -> PeerHandle {
     struct TestPeer {
         cancel: CancelToken,
     }
@@ -135,7 +143,7 @@ fn create_test_peer_handle(pools: &Pools) -> PeerHandle {
     }
     impl Peer for TestPeer {}
     let cancel = CancelToken::never();
-    let client = HttpClient::new(NetOptions::default(), pools.clone(), CancelToken::never());
+    let client = create_test_net();
     let dl = Downloader::new({
         let config = DownloaderConfig::for_client(client).cancel(cancel.child());
         #[cfg(not(target_arch = "wasm32"))]
@@ -155,7 +163,7 @@ fn create_test_peer_handle(pools: &Pools) -> PeerHandle {
 pub fn test_playlist_cache(assets: &TestAssets, _net: HttpClient) -> PlaylistCache<TestPools> {
     PlaylistCache::new(
         assets.scope(),
-        create_test_peer_handle(assets.pools()),
+        create_test_peer_handle(),
         assets.pools().clone(),
     )
 }
@@ -168,7 +176,7 @@ pub fn test_key_store(
     key_registry: Option<kithara::drm::KeyProcessorRegistry>,
 ) -> KeyStore<TestPools> {
     KeyStore::new(
-        create_test_peer_handle(assets.pools()),
+        create_test_peer_handle(),
         assets.scope(),
         kithara::events::EventBus::new(8),
         None,

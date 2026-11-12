@@ -12,22 +12,34 @@
 
 # kithara-app
 
-Workspace application crate (`publish = false`) that wires demo binaries around shared engine/UI crates.
+The desktop DJ demo built on the engine: two decks with waveforms, BPM and
+beat sync, a mixer with EQ and crossfader, tempo with key lock, and a track
+library. It also builds for the browser (WebGPU).
+
+<p align="center">
+
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/docs/assets/kithara-app.webp" alt="kithara-app: two decks with waveforms, mixer, and library" width="100%">
+
+</p>
 
 ## Usage
 
-### Binary
-
-Single binary `kithara` — the desktop DJ app.
-
-### Run
-
 ```bash
-cargo run -p kithara-app -- <TRACK_URL_1> <TRACK_URL_2>
+cargo run -p kithara-app --release -- <FILE_OR_URL> [<FILE_OR_URL> ...]
+cargo run -p kithara-app --release -- --help
 ```
 
-If no tracks are provided, the app loads built-in defaults that include MP3, HLS,
-and DRM-HLS examples.
+Without arguments the app plays the playlist from its configuration.
+
+### Configuration
+
+The configuration is `app.yaml`, embedded at build time. A `kithara.yaml`
+beside the executable, or a file passed with `--config`, is laid over it:
+mappings merge key by key, other values replace what they cover.
+`--dump-config` prints the result. Values written as `$KITHARA_...` are read
+from the environment or from `.env` in the workspace root at build time. A
+DRM provider whose values are missing is turned off with a warning; any other
+missing value stops startup.
 
 ### Browser
 
@@ -37,43 +49,27 @@ just platform wasm build --package kithara-app
 
 Builds `dist/` for a WebGPU browser. Serve it with cross-origin isolation
 (`Cross-Origin-Opener-Policy: same-origin`,
-`Cross-Origin-Embedder-Policy: require-corp`); `dist/_headers` names both for
-hosts that read it. The browser build carries `app.web.yaml` over `app.yaml`:
-no DRM providers and a playlist of cross-origin streams.
-The public browser configuration carries no catalogue account.
+`Cross-Origin-Embedder-Policy: require-corp`); `dist/_headers` sets both on
+hosts that read it. The browser build lays `app.web.yaml` over `app.yaml`: no
+DRM providers, no catalogue account, and a playlist of cross-origin streams.
 
 ## Features
 
-- `gui` — desktop GUI player (iced).
-- `zvuk` — Zvuk catalogue search, liked tracks and playlists, disabled by default.
-- `lib-only` — build as a plain library (used by integration tests).
-- `beat-nn` — NN beat/downbeat detection.
-- `stretch-signalsmith` / `stretch-bungee` / `stretch-all` — time-stretch backends.
-- `client-reqwest` / `client-wreq` — HTTP backend forwarding.
-- `tls-rustls` / `tls-native` — TLS backend forwarding.
-
-Defaults: `gui` + `beat-nn` + `stretch-signalsmith`.
+- `gui` (default) — the iced desktop UI; `masonry` adds the retained host
+  (`--host retained`).
+- `analysis-waveform` (default), `beat-nn-small` (default), `beat-nn-full`,
+  `beat-nn-full-int8`, `beat-dsp` — waveform and beat detection.
+- `stretch-signalsmith` (default), `stretch-bungee`, `stretch-identity`,
+  `stretch-all` — time-stretch engines.
+- `zvuk` — Zvuk catalogue: search, liked tracks, playlists; `keystore` keeps
+  its token in the OS keychain.
+- `broadcast` — serve the master output as a live HLS stream.
+- `client-reqwest` / `client-wreq`, `tls-rustls` / `tls-native` — HTTP and TLS.
 
 ## Integration
 
-- Depends on `kithara` with `file` + `hls` features.
-- The GUI frontend is gated by the `gui` Cargo feature.
-
-### Architecture
-
-```mermaid
-flowchart LR
-    cli["kithara binary"] --> gui["kithara-app::gui"]
-    gui --> core["kithara::PlayerImpl"]
-```
-
-### Track Analysis Cache
-
-The app memoizes whole-track waveform and beat/BPM analysis in memory and on
-disk. Runtime freshness is guarded by `TrackId`; cross-session cache identity is
-owned by `AnalysisTarget`. The app owns the `AssetStore` cache I/O and policy;
-the pure analysis snapshot/codec comes from `kithara-analysis`. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-app)
-for the key spaces, disk-tier lifecycle, and codec-version invalidation
-contract.
-
-See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-app) for detailed contracts, invariants, and internals.
+The app only composes and sends commands; playback, mixing, and analysis are
+engine features. It caches waveform and beat analysis in memory and on disk
+through the shared `AssetStore`. See
+[crate contracts](https://github.com/zvuk/kithara/wiki/kithara-app) for the
+cache keys and invalidation rules.

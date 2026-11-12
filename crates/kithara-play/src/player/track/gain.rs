@@ -10,7 +10,7 @@ impl<S> PlayerImpl<S> {
         program: SlotGainProgram,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        if self.releasing
+        if self.seat.releasing()
             || self.preparation_closed()
             || !self.attached()
             || self.ready != Some(self.segment)

@@ -14,19 +14,17 @@
 
 # kithara-queue
 
-AVQueuePlayer-analogue orchestration layer on top of `kithara-play`. Owns
-the queue (ordered tracks), an async track loader with a configurable
-parallelism cap, navigation (shuffle / repeat / history), and
-crossfade-aware track selection. Replaces the bespoke queue / controller
-code previously duplicated across `kithara-app` and future iOS / Android
-SDK surfaces.
+A playlist deck in the style of `AVQueuePlayer`. A `Queue` drives a
+`kithara-play` player: it loads tracks ahead in the background, moves through
+them in order or shuffled, repeats, and crossfades from one track into the
+next.
 
 ## Usage
 
 ```rust
-use kithara_bufpool::{OverallBudget, PoolConfig, PoolError, pool_schema};
-use kithara_platform::sync::Arc;
-use kithara_play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl};
+use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
+use kithara_host::{Host, HostConfig};
+use kithara_play::{PlayWorker, PlayWorkerConfig, ResourcePrep};
 use kithara_queue::{Queue, QueueConfig, Transition};
 
 pool_schema! {
@@ -36,86 +34,41 @@ pool_schema! {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), PoolError> {
-    let config = || PoolConfig::builder().max_buffers(128).build();
-    let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
-        .bytes(config())
-        .samples(config())
-        .build()?;
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let player = PlayerImpl::new(
-        PlayerConfig::builder().worker(worker).build(),
-    );
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder().player(player).build(),
-    ));
-    queue.set_tracks(["https://example.com/a.mp3", "https://example.com/b.mp3"]);
+let pool = || PoolConfig::builder().max_buffers(128).build();
+let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
+    .bytes(pool())
+    .samples(pool())
+    .build()?;
+let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
 
-    // Caller explicitly picks the first track to play. Queue autoplays
-    // only when built with `should_autoplay(true)`; otherwise the UI (or
-    // any other caller) calls `select` / `play` when the user is ready.
-    if let Some(first) = queue.tracks().first() {
-        let _ = queue.select(first.id, Transition::None);
-    }
-
-    let mut rx = queue.subscribe();
-    while let Ok(event) = rx.recv().await {
-        println!("{event:?}");
-    }
-    Ok(())
-}
+let mut host = Host::new(HostConfig::builder().build())?;
+let queue = host.insert(Queue::new(
+    QueueConfig::builder()
+        .prep(ResourcePrep::builder().worker(worker).build())
+        .build(),
+))?;
+queue.set_tracks(["https://example.com/a.mp3", "https://example.com/b.m3u8"])?;
+let first = queue.tracks()[0].id;
+queue.select(first, Transition::None)?;
+queue.play();
 ```
 
-`Queue<S>`, `QueueConfig<S>`, and `TrackSource<S>` require the schema to
-provide both `HasPool<u8>` and `HasPool<f32>`. The queue never constructs a
-pool region. When no store is supplied, it builds the store from the exact
-`PoolRegion<S>` already owned by the player, preserving the shared hard budget.
-
-`Queue::set_tracks` must run inside an active tokio runtime because the
-loader uses `tokio::spawn`.
-
-Use `QueueControl::append_at(source, Position::from_secs(32))` to load an item
-at an initial media position, including background preload. The entry keeps
-that position for fresh loads; seeking or resuming an already opened track
-continues to use its current playback position.
-
-`QueueConfig` owns the initial playback order, item-end action, and complete
-crossfade profile. Their runtime setters update that same queue-owned state;
-repeat remains a separate automatic-EOF rule, and `should_autoplay` applies
-only to the first load.
+`set_tracks` and `append` must run inside a tokio runtime. Without
+`should_autoplay(true)` the queue waits for `select` before playing.
+`append_at(source, position)` starts a track at a given position.
 
 ## Key Types
 
-[`Queue<S>`] owns a `PlayerImpl<S>` (from `kithara-play`) and composes it with:
-
-- an ordered `Vec<TrackEntry>` indexed by stable [`TrackId`]s,
-- an async [`Loader`] (internal) that caps in-flight `Resource::new`
-  calls via a `tokio::sync::Semaphore`,
-- [`NavigationState`] for stable-ID sequential or shuffle traversal, repeat,
-  and actual selection history,
-- a `pending_select` slot so `Queue::select(id)` can be called before the
-  track has finished loading.
-
-[`Queue`] emits [`QueueEvent`] on the shared `EventBus` from
-`kithara-events`, so subscribers receive queue-level signals and the
-underlying player / audio / hls / file events through a single stream.
-
-- [`Queue::new(QueueConfig)`] - the orchestrator, generic over the player's
-  registered pool schema: CRUD (`append`,
-  `insert`, `remove`, `clear`, `set_tracks`), navigation (`select`,
-  `next`, `previous`, typed playback order / repeat / item-end action / `seek`),
-  playback controls delegated to `PlayerImpl`, and `tick()` to drive the
-  player and drain engine events.
-- [`CrossfadeSettings`] — duration, linear or equal-power curve, blend depth,
-  and temporal crossover pivot. Linear controls amplitude and can dip perceived
-  power for unrelated tracks; equal-power approximately preserves uncorrelated
-  power and can raise correlated material.
-- [`TrackSource<S>`] - input to `append` / `insert` / `set_tracks`, either a
-  `Uri(String)` (Queue builds a default `ResourceConfig`) or a
-  `Config(Box<ResourceConfig>)` (caller-built, for DRM keys / headers /
-  format hints).
-- [`QueueEvent`] — queue-level signals delivered via [`Queue::subscribe`]
-  alongside the underlying player / audio / hls / file events.
+- `Queue` / `QueueConfig` — the deck and its builder: playback order, repeat,
+  action at item end, crossfade, preload lead, concurrent loads.
+- `QueueControl` — the handle `Host::insert` returns: add and remove tracks,
+  `select`, `next`, `previous`, `seek`, `play`, `pause`, rate, volume.
+- `TrackSource` — a URL, or a full `ResourceConfig` for headers, DRM keys, or
+  format hints.
+- `TrackId` — stable identity of a queue entry.
+- `CrossfadeSettings` — duration, curve (linear or equal-power), and shape of
+  a crossfade.
+- `QueueEvent` — queue events, delivered on the same `EventBus` as player,
+  audio, and network events.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-queue) for detailed contracts, invariants, and internals.

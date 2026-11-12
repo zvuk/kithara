@@ -10,7 +10,7 @@ use kithara::{
     download::{Downloader, DownloaderConfig},
     events::EventReceiver,
     host::{HostConfig, HostSettings},
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{
         CancelScope, CancelToken,
         time::{Duration, Instant, sleep, timeout},
@@ -279,9 +279,8 @@ async fn hls_seek_middle_repeated_seeks_long_stress(
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools(),
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())
@@ -385,7 +384,6 @@ async fn hls_seek_middle_repeated_seeks_long_stress(
 #[kithara::test(
     tokio,
     multi_thread,
-    flash(false),
     timeout(Duration::from_secs(120)),
     hang_timeout_secs(10)
 )]
@@ -429,9 +427,8 @@ async fn hls_rate_seek_stress_keeps_playback_live(
             .build(),
     );
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             shutdown_token.child(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

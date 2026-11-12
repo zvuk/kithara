@@ -26,9 +26,8 @@ use kithara_app::{
     pools::{AppPools, AppResourceConfig, AppStore, AppWorker, PoolsSection, build},
     waveform::TrackAnalysisRunner,
 };
-use kithara_integration_tests::{hls_fixture::create_test_downloader, mock::LaneAudio};
+use kithara_integration_tests::{ModeledServer, mock::LaneAudio};
 use kithara_test_fixtures::integration_fixtures::audio_wav_44100;
-use kithara_test_utils::TestHttpServer;
 
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
@@ -72,7 +71,7 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
             gets: Arc::clone(&gets),
             wav: Arc::clone(&wav),
         });
-    let server = TestHttpServer::new(app).await;
+    let server = ModeledServer::new(app);
     let url = server.url("/audio.wav");
 
     let pools = build(&PoolsSection::default()).expect("valid app pool policy");
@@ -84,7 +83,7 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
     // Waveform analysis consumer (whole-file) of the shared store.
     let waveform_cfg =
         AppResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("waveform url"))
-            .downloader(create_test_downloader())
+            .downloader(server.downloader())
             .store(store.clone())
             .worker(worker.clone())
             .build();
@@ -95,7 +94,7 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
     let player_cfg = kithara::play::TrackConfig::for_audio(
         AudioConfig::<File<AppPools>>::for_stream(
             FileConfig::for_src(FileSrc::Remote(url.clone()))
-                .downloader(create_test_downloader())
+                .downloader(server.downloader())
                 .store(store)
                 .build(),
         )

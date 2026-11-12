@@ -4,4 +4,4 @@ mod playback;
 mod resource;
 mod settings;
 
-pub(crate) use core::{Inner, NativeInner, PeakBitrate};
+pub(crate) use core::{Inner, NativeInner};

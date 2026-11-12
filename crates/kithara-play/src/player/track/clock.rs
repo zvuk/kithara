@@ -24,10 +24,10 @@ impl<S> PlayerImpl<S> {
     /// Sends a changed clock to the RT track the deck has already seated; a
     /// seat still in flight carries it itself.
     pub(super) fn sync_clock(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
-        let Some(slot) = self.slot else {
+        let Some(slot) = self.seat.slot() else {
             return Ok(None);
         };
-        if self.clock == self.seated_clock || self.attaching.is_some() || self.attach_at.is_none() {
+        if self.clock == self.seated_clock || self.seat.attached_at().is_none() {
             return Ok(None);
         }
         let sent = out.deck(

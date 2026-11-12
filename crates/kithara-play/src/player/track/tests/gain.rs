@@ -64,7 +64,7 @@ fn prepared_outputs() -> PreparedOutputs {
     let (mut dispatcher, _dispatch_inbox) = channel(ChannelConfig::builder().build());
     let (first, first_lane) = prepared_track();
     let (mut second, second_lane) = prepared_track();
-    second.slot = Some(B);
+    second.seat = seated(B);
     let mut tracks = [first, second];
     for ((track, slot), sample) in tracks.iter().zip([A, B]).zip([0.5, -0.25]) {
         mixer

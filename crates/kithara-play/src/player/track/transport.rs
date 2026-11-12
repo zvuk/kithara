@@ -55,12 +55,13 @@ impl<S> PlayerImpl<S> {
             return Ok(None);
         }
         if self
-            .attaching
+            .seat
+            .attaching()
             .is_some_and(|attach| attach.replacement && attach.seq.is_some())
         {
-            if !self.releasing {
+            if !self.seat.releasing() {
                 out.supersede(self.seat()?)?;
-                self.releasing = true;
+                self.seat.release_on_landing();
             }
             return Ok(None);
         }
@@ -72,7 +73,6 @@ impl<S> PlayerImpl<S> {
             );
         }
         self.status = TrackStatus::Released;
-        self.releasing = false;
         self.release_lane(out)?;
         Ok(None)
     }
@@ -248,7 +248,7 @@ impl<S> PlayerImpl<S> {
                     .and_then(|(_, basis)| *basis);
             }
         }
-        if let Some(attach) = self.attaching.as_mut()
+        if let Some(attach) = self.seat.attaching_mut()
             && attach.seq.is_some()
             && attach.seq == basis
         {

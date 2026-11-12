@@ -10,8 +10,8 @@ use kithara::{
     sync::{SessionAnchor, SessionBeat, SpeedCurve},
     warp::{
         AssetAxis, AssetExtent, Beat, BeatAlignment, BeatGridId, BeatGridQuery, BeatGridRevision,
-        BeatGridSnapshot, GridSegment, MapPoint, PresentationFrontier, RegionPlan, RegionPlanError,
-        RenderContext, Warp, WarpConfig, WarpMap, WarpMapRevision, mock::asset_grid,
+        BeatGridSnapshot, GridSegment, MapPoint, RegionPlan, RegionPlanError, Warp, WarpConfig,
+        WarpMap, WarpMapRevision, mock::asset_grid,
     },
 };
 use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_nominal_clicks, warp_sine};
@@ -24,4 +24,4 @@ mod core;
 mod projected;
 mod tempo_perf;
 use core::*;
-pub(crate) use core::{CH, Presented, Projection, Timeline, render_configured_grid_with_updates};
+pub(crate) use core::{CH, Presented, Projection, render_configured_grid_with_updates};

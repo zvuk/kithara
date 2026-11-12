@@ -16,7 +16,7 @@ use super::{
     super::trajectory::{Fraction, Trajectory},
     target::PreparedTarget,
 };
-use crate::{ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, WarpConfig, WarpRenderError};
+use crate::{ActiveRegion, RegionPlan, WarpConfig, WarpRenderError};
 
 /// The speed a renderer renders at and the revision that set it.
 #[derive(Clone, Copy, Debug)]
@@ -70,7 +70,6 @@ pub struct WarpRenderer<S> {
     /// Speed the last [`Self::set_speed`] set, with the revision stamped on
     /// every chunk rendered toward it.
     pub(in crate::render) rate: RateTarget,
-    pub(in crate::render) committed: Option<RenderSnapshot>,
     /// Consumed input retained until the scheduler shell can resize or recycle
     /// it outside the checked render core.
     pub(in crate::render) deferred_scratch: Option<SampleBuffer>,
@@ -106,7 +105,6 @@ pub struct WarpRenderer<S> {
     /// chunk takes this buffer; the consumed input becomes its replacement.
     pub(in crate::render) scratch: Option<SampleBuffer>,
     pub(in crate::render) pools: PoolRegion<S>,
-    pub(in crate::render) context: RenderReader,
     /// Engine kind currently prepared by the scheduler shell.
     pub(in crate::render) current_kind: StretchKind,
     /// Backend the lane last asked for; the scheduler shell prepares its engine.
@@ -123,6 +121,8 @@ pub struct WarpRenderer<S> {
     pub(in crate::render) stateless_tail_owed: Option<Trajectory>,
     /// Retired control metadata awaiting scheduler-side destruction.
     pub(in crate::render) deferred_trajectory: Option<Trajectory>,
+    /// Speed the law holds up to a step taken ahead of its lane frame.
+    pub(in crate::render) speed_ahead: Option<f32>,
     /// Source frame the engine reads next while it trails the decoded frontier
     /// after a prime; the residency holds every frame from it on.
     pub(in crate::render) resident_feed: Option<u64>,
@@ -150,12 +150,7 @@ where
     pub(in crate::render) const MAX_OUTPUT_FRAMES: usize = 163_840;
     pub(in crate::render) const OUTPUT_ROUNDING_MARGIN: f64 = 0.5;
     /// Build the slot at the source `spec` from the construction values of `config`.
-    pub(crate) fn new(
-        config: &WarpConfig,
-        context: RenderReader,
-        spec: AudioSpec,
-        pools: PoolRegion<S>,
-    ) -> Self {
+    pub(crate) fn new(config: &WarpConfig, spec: AudioSpec, pools: PoolRegion<S>) -> Self {
         let requested_kind = config.backend();
         let requested_keylock = config.keylock();
         let (current_kind, current_keylock) = Self::stretch_for(requested_kind, requested_keylock);
@@ -191,9 +186,7 @@ where
             mapped_render: false,
             terminal_source_end: None,
             projection: target.projection,
-            context,
             residency: target.residency,
-            committed: None,
             backends: config.backends(),
             engine: target.engine,
             retired_engine: None,
@@ -205,6 +198,7 @@ where
             reprime_pending: false,
             stateless_tail_owed: None,
             deferred_trajectory: None,
+            speed_ahead: None,
             resident_feed: None,
             pools,
             spec,
@@ -411,38 +405,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
     }
 
-    /// The single place a render becomes the committed one, so every committed
-    /// render publishes the session axis it fixed regardless of the path that
-    /// produced it.
-    pub(in crate::render) fn commit(
-        &mut self,
-        committed: RenderSnapshot,
-        output_start: i64,
-        source_start: u64,
-    ) {
-        kithara::probe_event!(
-            render_committed,
-            session_epoch = u64::from(committed.context().output().session_epoch()),
-            transport_revision = committed
-                .context()
-                .output()
-                .transport_revision()
-                .map_or(0, u64::from),
-            output_start,
-            source_start,
-            source_end = committed.frontier().source()
-        );
-        self.committed = Some(committed);
-    }
-
-    pub(in crate::render) fn commit_rate_render(
-        &mut self,
-        snapshot: Option<RenderSnapshot>,
-        output: &AudioChunk,
-        applied_rate: f32,
-    ) {
-        let output_frames = output.frames();
-        let request_revision = output.meta.render_revision;
+    /// Reports the rate a rendered chunk applied, measured from its source
+    /// mapping when it has one.
+    pub(in crate::render) fn report_rate_render(&self, output: &AudioChunk, applied_rate: f32) {
         let applied_rate: f32 = if let Some(span) = output.meta.source_span {
             let rate = span
                 .source_ratio_at(0)
@@ -467,57 +432,16 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         } else {
             applied_rate
         };
-        let Some(snapshot) = snapshot else {
-            return;
-        };
-        let snapshot = snapshot.bind_output_identity(
-            output
-                .meta
-                .mapping_revision
-                .map(crate::WarpMapRevision::from),
-        );
-        let Some((committed, session_frame, source_start, source_end)) =
-            self.next_render_snapshot(snapshot, output_frames)
-        else {
-            return;
-        };
         kithara::probe_event!(
             rate_smoothed,
-            frames = output_frames,
+            frames = output.frames(),
             multiplier_bits = self.rate.speed().to_bits()
         );
         kithara::probe_event!(
             rate_applied,
-            request_revision,
-            applied_rate_bits = applied_rate.to_bits(),
-            session_frame,
-            source_start,
-            source_end
+            request_revision = output.meta.render_revision,
+            applied_rate_bits = applied_rate.to_bits()
         );
-        self.commit(committed, session_frame, source_start);
-    }
-
-    pub(in crate::render) fn commit_render(
-        &mut self,
-        snapshot: Option<RenderSnapshot>,
-        output: &AudioChunk,
-    ) {
-        let output_frames = output.frames();
-        let Some(snapshot) = snapshot else {
-            return;
-        };
-        let snapshot = snapshot.bind_output_identity(
-            output
-                .meta
-                .mapping_revision
-                .map(crate::WarpMapRevision::from),
-        );
-        let Some((committed, output_start, source_start, _)) =
-            self.next_render_snapshot(snapshot, output_frames)
-        else {
-            return;
-        };
-        self.commit(committed, output_start, source_start);
     }
 
     pub(in crate::render) fn defer_scratch(&mut self, replacement: Option<SampleBuffer>) {
@@ -589,33 +513,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             start.source_bytes = 0;
         }
         Ok(start)
-    }
-
-    pub(super) fn next_render_snapshot(
-        &self,
-        snapshot: RenderSnapshot,
-        output_frames: usize,
-    ) -> Option<(RenderSnapshot, i64, u64, u64)> {
-        if !self.context.is_current(&snapshot) {
-            return None;
-        }
-        let (source_end, _) = self.rendered_source_end?;
-        let source_start = self
-            .committed
-            .as_ref()
-            .filter(|previous| {
-                previous.context().output().session_epoch()
-                    == snapshot.context().output().session_epoch()
-            })
-            .map_or_else(
-                || snapshot.frontier().source(),
-                |previous| previous.frontier().source(),
-            )
-            .max(snapshot.frontier().source());
-        let committed = snapshot.advance(self.committed.as_ref(), source_end, output_frames)?;
-        let output_frames = i64::try_from(output_frames).ok()?;
-        let output_start = i64::from(committed.frontier().output()).checked_sub(output_frames)?;
-        Some((committed, output_start, source_start, source_end))
     }
 
     pub(in crate::render) fn pending_frames(&self, channels: usize) -> usize {
@@ -781,6 +678,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .get_or_insert_with(|| self.trajectory.clone());
         }
         self.trajectory = trajectory;
+        self.speed_ahead = None;
         let leaves_unity = was_unity && !self.keylocked_unity();
         let needs_reprime = (self.active || leaves_unity)
             && (self.mapped_render || !self.unity_passthrough(target.speed()))
@@ -797,6 +695,15 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.rate = target;
         self.prepared_quantum = None;
         Ok(())
+    }
+
+    /// Returns the law to the speed it held before a step taken ahead of its
+    /// lane frame; the batch that brings the step applies it there.
+    pub(super) fn withdraw_speed_ahead(&mut self) {
+        if let Some(held) = self.speed_ahead.take() {
+            self.trajectory = Trajectory::new(held);
+            self.rate = RateTarget::new(held, self.rate.revision());
+        }
     }
 
     /// Revision of the current speed law stamped on produced output.
