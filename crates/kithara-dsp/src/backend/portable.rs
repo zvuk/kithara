@@ -14,6 +14,13 @@ mod consts {
     pub(super) const PAIR_MEAN: f32 = 0.5;
 }
 
+pub(crate) fn svf_gains<S: Simd>(simd: S, cutoffs: &[f64], rate: f64, gains: &mut [f64]) {
+    let len = super::svf::cutoff_angles(simd, cutoffs, rate, gains);
+    for gain in gains.iter_mut().take(len) {
+        *gain = gain.tan();
+    }
+}
+
 pub(crate) fn multiply_in_place(samples: &mut [f32], gains: &[f32]) -> usize {
     dispatch!(Level::new(), simd => multiply_in_place_kernel(simd, samples, gains))
 }
