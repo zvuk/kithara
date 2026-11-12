@@ -113,20 +113,25 @@ fn steps(mono: &[f32]) -> impl Iterator<Item = f32> + '_ {
 
 /// From the step into the first press on, every step stays within the
 /// steepest steady side's step plus the gain slope of the shortest keylock
-/// fade across both sides. The sides are every backend, keylock state and
-/// speed of the script.
+/// fade across both sides. The sides are every distinct backend, keylock
+/// state and speed of the script; equal sides render equal twins.
 fn assert_continuous(tone: &[f32], scenario: &Scenario) {
     let mut backends = vec![scenario.backend];
     let mut speeds = vec![scenario.speed];
+    let mut add_speed = |speed: f32| {
+        if !speeds.iter().any(|side| side.to_bits() == speed.to_bits()) {
+            speeds.push(speed);
+        }
+    };
     for control in scenario.presses.iter().flat_map(|press| &press.batch) {
         match *control {
-            Backend(kind) => backends.push(kind),
-            Speed(speed) => speeds.push(speed),
+            Backend(kind) if !backends.contains(&kind) => backends.push(kind),
+            Speed(speed) => add_speed(speed),
             Curve(curve) => {
-                speeds.push(curve.initial().to_f32().expect("initial speed fits f32"));
-                speeds.push(curve.target().to_f32().expect("target speed fits f32"));
+                add_speed(curve.initial().to_f32().expect("initial speed fits f32"));
+                add_speed(curve.target().to_f32().expect("target speed fits f32"));
             }
-            Keylock(_) => {}
+            Backend(_) | Keylock(_) => {}
         }
     }
     let sides: Vec<WarpConfig> = backends
