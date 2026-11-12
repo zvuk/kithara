@@ -38,8 +38,8 @@ use crate::{ActionAtItemEnd, QueueError, QueueEvent, TrackStatus};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{
     mock::{
-        QueueFixture, answer_deck, answer_load, answer_loaded, empty_queue, loaded_fixture,
-        pending_selection, queue_with_load_settings, tick_fixture, with_outbox,
+        FixtureSource, QueueFixture, answer_deck, answer_load, answer_loaded, empty_queue,
+        loaded_fixture, pending_selection, queue_with_load_settings, tick_fixture, with_outbox,
     },
     queue::{WorkerOwner, worker_owner},
 };

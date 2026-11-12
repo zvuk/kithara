@@ -41,6 +41,17 @@ pub fn take_batches(
     batches
 }
 
+/// The dispatcher's answer to load `seq`: `opened` on the lane it admits, with no
+/// engine latency.
+#[must_use]
+pub fn loaded<O>(seq: Seq, opened: O) -> crate::Loaded<O> {
+    crate::Loaded {
+        lane: crate::LaneId::admitted(seq),
+        opened,
+        engine_latency: kithara_signal::FrameCount::new(0),
+    }
+}
+
 /// Report `event` to the deck's owner as the mixer does.
 ///
 /// # Errors

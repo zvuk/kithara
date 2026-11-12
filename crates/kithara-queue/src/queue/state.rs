@@ -791,7 +791,8 @@ pub(crate) mod tests {
                 QueueCommand::SetRepeat(RepeatMode::All),
             )
             .expect("repeat");
-            crate::mock::answer_load(&mut queue, &mut rig, &dir).await;
+            crate::mock::answer_load(&mut queue, &mut rig, crate::mock::FixtureSource::Synthetic)
+                .await;
             crate::mock::finish(&mut queue, &mut rig);
 
             for press in 0..3 {
@@ -804,7 +805,12 @@ pub(crate) mod tests {
                     QueueCommand::Next(super::super::Transition::None),
                 )
                 .expect("next");
-                crate::mock::answer_load(&mut queue, &mut rig, &dir).await;
+                crate::mock::answer_load(
+                    &mut queue,
+                    &mut rig,
+                    crate::mock::FixtureSource::Synthetic,
+                )
+                .await;
                 crate::mock::finish(&mut queue, &mut rig);
 
                 assert_eq!(
@@ -824,7 +830,8 @@ pub(crate) mod tests {
     async fn turning_repeat_on_announces_the_new_upcoming_track(
         #[by_ref] worker_owner: &WorkerOwner,
     ) {
-        let (mut queue, first, second, mut rig, dir) = crate::mock::selected(&worker_owner.0).await;
+        let (mut queue, first, second, mut rig, dir) =
+            crate::mock::selected(&worker_owner.0, crate::mock::FixtureSource::Synthetic).await;
         let control = queue.control();
         apply(
             &mut queue,
@@ -832,7 +839,7 @@ pub(crate) mod tests {
             QueueCommand::Next(super::super::Transition::None),
         )
         .expect("next");
-        crate::mock::answer_load(&mut queue, &mut rig, &dir).await;
+        crate::mock::answer_load(&mut queue, &mut rig, crate::mock::FixtureSource::Synthetic).await;
         crate::mock::finish(&mut queue, &mut rig);
         assert_eq!(queue.current, Some(second));
         assert_eq!(control.upcoming(), None, "the last track ends the queue");
