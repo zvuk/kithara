@@ -500,9 +500,10 @@ fn entering_a_unity_grid_preserves_the_next_source_samples(
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
     let first_frames = 32;
-    let first = render_serviced(&mut renderer, chunk(&pools, &warp_sine[..first_frames * 2]))
-        .expect("initial passthrough renders");
-    assert_eq!(&first.samples[..], &warp_sine[..first_frames * 2]);
+    let mut feed = LaneFeed::default();
+    let mut first = feed.feed(&mut renderer, chunk(&pools, &warp_sine[..first_frames * 2]));
+    first.extend(feed.end(&mut renderer));
+    assert_eq!(samples(&first), &warp_sine[..first_frames * 2]);
     renderer
         .set_speed(SpeedCurve::Constant(1.0), 1)
         .expect("unity trajectory");
@@ -562,11 +563,17 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
     let initial_frames = 4_096;
-    render_serviced(
+    let mut feed = LaneFeed::default();
+    let mut initial = feed.feed(
         &mut renderer,
         chunk(&pools, &warp_sine[..initial_frames * 2]),
-    )
-    .expect("initial unity PCM renders");
+    );
+    initial.extend(feed.end(&mut renderer));
+    assert_eq!(
+        samples(&initial),
+        &warp_sine[..initial_frames * 2],
+        "initial unity PCM renders"
+    );
     renderer
         .set_speed(SpeedCurve::Steps(Arc::from([(40_128 - 4_096, 1.0)])), 1)
         .expect("distant output-frame boundary");
@@ -687,8 +694,11 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
 fn projected_activation_refuses_uncommitted_manual_source_before_consumption() {
     let mut renderer = planned_renderer(&WarpConfig::builder().speed(4.0).keylock(false).build());
     let input = chunk(&renderer.pools, &[0.25, 0.25]);
-    assert!(render_serviced(&mut renderer, input).is_none());
-    assert_eq!(renderer.pending_frames(2), 1);
+    assert!(LaneFeed::default().feed(&mut renderer, input).is_empty());
+    let held = renderer
+        .prepared_quantum
+        .map(|quantum| quantum.source_start);
+    assert_eq!(held, Some(0), "the manual frame waits for its window");
     renderer.prepare(spec());
     let mut input = chunk(&renderer.pools, &[0.5, 0.5]);
     input.meta.frame_offset = 1;
@@ -703,8 +713,13 @@ fn projected_activation_refuses_uncommitted_manual_source_before_consumption() {
         .break_value()
         .expect("source is not admitted");
     assert_eq!(retained.samples.as_ptr(), pointer);
-    assert_eq!(renderer.pending_frames(2), 1);
-    assert!(renderer.prepared_quantum.is_none());
+    assert_eq!(
+        renderer
+            .prepared_quantum
+            .map(|quantum| quantum.source_start),
+        held
+    );
+    assert!(renderer.rendered_source_end().is_none());
     assert_eq!(renderer.rate.speed(), 4.0);
     assert_eq!(renderer.rate.revision(), 0);
 }
@@ -1017,13 +1032,17 @@ fn partial_manual_history_after_seek_keeps_the_reset_prime_contract(
         let mut renderer = Warp::new((), &config).renderer(spec(), pools());
         renderer.reset();
         renderer.prepare(spec());
+        let mut feed = LaneFeed::default();
+        let mut history_outputs = Vec::new();
         for start in [0_usize, 17] {
             let source = &warp_sine[start * 2..(start + 17) * 2];
             let mut history = chunk(&renderer.pools, source);
             history.meta.frame_offset = origin + u64::try_from(start).expect("source offset");
-            let output = render_serviced(&mut renderer, history).expect("unity history");
-            assert_eq!(&*output.samples, source);
+            history_outputs.extend(feed.feed(&mut renderer, history));
         }
+        history_outputs.extend(feed.end(&mut renderer));
+        assert_eq!(samples(&history_outputs), &warp_sine[..68], "unity history");
+        drop(history_outputs);
         let resident = renderer.residency.as_ref().expect("resident source");
         let range = resident
             .range(
@@ -1044,6 +1063,10 @@ fn partial_manual_history_after_seek_keeps_the_reset_prime_contract(
         renderer
             .set_speed(SpeedCurve::Constant(2.0), 1)
             .expect("valid speed");
+        renderer.prepare(spec());
+        renderer
+            .prepare_engine_latency(spec())
+            .expect("activation service");
         let cue = origin + 34;
         let meta = AudioChunkInfo {
             spec: spec(),

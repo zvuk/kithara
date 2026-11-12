@@ -3,17 +3,7 @@
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
-use kithara_platform::time::Duration;
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use kithara_signal::AudioChunk;
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
 use kithara_stretch::StretchKind;
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use kithara_test_fixtures::unit_fixtures::warp_constant;
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
@@ -34,172 +24,15 @@ use {
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use super::flush_serviced;
-use super::{WarpRenderer, f64_of};
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
-use super::{chunk, render_serviced, renderer, spec};
+use super::{LaneFeed, chunk, renderer, samples, spec};
+use super::{WarpRenderer, f64_of};
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use crate::Warp;
-
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-fn finish_unity_transition(
-    renderer: &mut WarpRenderer,
-    first: AudioChunk,
-) -> (Vec<f32>, AudioChunk, Vec<usize>) {
-    let mut tail = Vec::new();
-    let mut quanta = Vec::new();
-    let mut output = first;
-    for _ in 1..64 {
-        if !renderer.transition_pending() {
-            return (tail, output, quanta);
-        }
-        assert!(
-            renderer.rendered_source_end().expect("tail frontier").0
-                <= renderer
-                    .pending_unity_meta
-                    .expect("queued unity")
-                    .frame_offset,
-            "the source frontier excludes queued unity throughout the tail drain"
-        );
-        assert!(output.frames() > 0, "a tail quantum contains real samples");
-        quanta.push(output.frames());
-        tail.extend_from_slice(&output.samples);
-        assert!(
-            renderer.transition_pending(),
-            "queued unity remains owned after a tail quantum"
-        );
-        output = flush_serviced(renderer).expect("the next transition quantum emits samples");
-    }
-    panic!("active-to-unity transition must converge");
-}
-
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-fn assert_queued_unity_tail(backend: StretchKind, source: &[f32]) {
-    const ACTIVE_FRAMES: usize = 4096;
-    const UNITY_FRAMES: usize = 1024;
-
-    let source = &source[..(ACTIVE_FRAMES + UNITY_FRAMES) * usize::from(consts::CH)];
-    let split = ACTIVE_FRAMES * usize::from(consts::CH);
-    let config = WarpConfig::builder()
-        .speed(0.5)
-        .keylock(true)
-        .backend(backend)
-        .build();
-    let mut reference = renderer(&config);
-    let pools = reference.pools.clone();
-    let reference_active = render_serviced(&mut reference, chunk(&pools, &source[..split]))
-        .expect("non-unity span emits samples");
-    let held_frontier = reference
-        .rendered_source_end()
-        .expect("active source frontier");
-    assert!(
-        held_frontier.0 < ACTIVE_FRAMES as u64,
-        "active backend retains declared source latency"
-    );
-    let mut reference_tail = Vec::new();
-    let mut reference_quanta = Vec::new();
-    while let Some(tail) = flush_serviced(&mut reference) {
-        reference_quanta.push(tail.frames());
-        reference_tail.extend_from_slice(&tail.samples);
-        assert!(reference_quanta.len() < 64, "terminal drain must converge");
-    }
-    assert!(
-        !reference_quanta.is_empty(),
-        "active backend exposes a terminal tail"
-    );
-    assert!(
-        !reference_tail.is_empty(),
-        "active backend tail contains samples"
-    );
-    assert_eq!(
-        reference.rendered_source_end(),
-        Some((ACTIVE_FRAMES as u64, spec().sample_rate)),
-        "completed tail releases the held source frontier"
-    );
-    reference
-        .set_speed(SpeedCurve::Constant(1.0), 1)
-        .expect("unity command");
-    let mut reference_unity = chunk(&pools, &source[split..]);
-    reference_unity.meta.frame_offset = ACTIVE_FRAMES as u64;
-    let reference_unity =
-        render_serviced(&mut reference, reference_unity).expect("unity follows the drained tail");
-    assert_eq!(&reference_unity.samples[..], &source[split..]);
-
-    let mut live = Warp::new((), &config).renderer(spec(), pools.clone());
-    let live_active = render_serviced(&mut live, chunk(&pools, &source[..split]))
-        .expect("non-unity span emits samples");
-    assert_eq!(live_active.frames(), reference_active.frames());
-    assert_eq!(live.rendered_source_end(), Some(held_frontier));
-    live.set_speed(SpeedCurve::Constant(1.0), 1)
-        .expect("unity command");
-    let mut live_unity = chunk(&pools, &source[split..]);
-    live_unity.meta.frame_offset = ACTIVE_FRAMES as u64;
-    let unity_ptr = live_unity.samples.as_ptr();
-    let first_tail = render_serviced(&mut live, live_unity)
-        .expect("live transition emits its first retained tail quantum");
-    assert!(
-        live.transition_pending(),
-        "unity remains queued after the first tail quantum"
-    );
-    assert!(
-        live.rendered_source_end().expect("tail frontier").0 <= ACTIVE_FRAMES as u64,
-        "queued unity does not advance the source frontier"
-    );
-    let (live_tail, live_unity, tail_quanta) = finish_unity_transition(&mut live, first_tail);
-    assert_eq!(
-        tail_quanta, reference_quanta,
-        "live transition preserves explicit per-quantum progression"
-    );
-    assert!(
-        live_tail.iter().any(|sample| sample.abs() > f32::EPSILON),
-        "the retained backend tail contains audible samples"
-    );
-    assert!(
-        live_tail.iter().all(|sample| sample.is_finite()),
-        "the retained backend tail contains only finite samples"
-    );
-    assert_eq!(live_tail.len(), reference_tail.len());
-    #[cfg(feature = "stretch-bungee")]
-    if backend == StretchKind::Bungee {
-        assert_eq!(
-            live_tail, reference_tail,
-            "Bungee incremental live drain equals an explicit drain exactly"
-        );
-    }
-    let peak = live_tail
-        .iter()
-        .map(|sample| sample.abs())
-        .fold(0.0_f32, f32::max);
-    let energy = live_tail
-        .iter()
-        .map(|sample| f64::from(*sample).powi(2))
-        .sum::<f64>()
-        / f64_of(live_tail.len());
-    assert!(
-        energy > 0.0 && energy <= 1.0,
-        "live tail energy stays finite and normalized: {energy}"
-    );
-    assert!(peak <= 1.0, "live tail remains normalized: {peak}");
-    assert_eq!(
-        &live_unity.samples[..],
-        &source[split..],
-        "unity samples follow the retained tail byte-for-byte"
-    );
-    assert_eq!(
-        live_unity.samples.as_ptr(),
-        unity_ptr,
-        "queued unity samples return without copying"
-    );
-    assert_eq!(
-        live.rendered_source_end(),
-        Some(((ACTIVE_FRAMES + UNITY_FRAMES) as u64, spec().sample_rate)),
-        "the source frontier advances only after tail and unity samples are emitted"
-    );
-    assert!(flush_serviced(&mut live).is_none());
-}
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 fn assert_identity_quantum(
@@ -387,186 +220,10 @@ fn exact_output_frames_do_not_drift_across_partitions() {
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn sub_frame_outputs_accumulate_into_one_portable_request(
-    #[case] backend: StretchKind,
-    warp_sine: Vec<f32>,
-) {
-    let mut fx = renderer(
-        &WarpConfig::builder()
-            .speed(4.0)
-            .keylock(true)
-            .backend(backend)
-            .build(),
-    );
-    let pools = fx.pools.clone();
-    let source = warp_sine[..(4) * 2].to_vec();
-
-    for frame in 0..3_u64 {
-        let start = usize::try_from(frame).unwrap_or_default() * usize::from(consts::CH);
-        let mut input = chunk(&pools, &source[start..start + usize::from(consts::CH)]);
-        input.meta.frame_offset = frame;
-        assert!(render_serviced(&mut fx, input).is_none());
-    }
-
-    let mut input = chunk(&pools, &source[3 * usize::from(consts::CH)..]);
-    input.meta.frame_offset = 3;
-    let output = render_serviced(&mut fx, input)
-        .expect("the fourth source frame completes one output frame");
-    assert_eq!(output.frames(), 1);
-    assert_eq!(output.meta.frame_offset, 0);
-    let mut tail_chunks = 0;
-    while let Some(tail) = flush_serviced(&mut fx) {
-        assert!(tail.frames() > 0, "a flush chunk contains real frames");
-        assert_eq!(tail.spec(), spec());
-        tail_chunks += 1;
-        assert!(tail_chunks < 32, "terminal drain must converge");
-    }
-    assert!(
-        tail_chunks > 0,
-        "an active engine exposes its terminal tail"
-    );
-}
-
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn pending_span_uses_earliest_start_and_latest_frontier(
-    #[case] backend: StretchKind,
-    warp_sine: Vec<f32>,
-) {
-    let mut fx = renderer(
-        &WarpConfig::builder()
-            .speed(4.0)
-            .keylock(true)
-            .backend(backend)
-            .build(),
-    );
-    let pools = fx.pools.clone();
-    let source = warp_sine[..8 * 2].to_vec();
-    let mut lead = chunk(&pools, &source[..4 * usize::from(consts::CH)]);
-    lead.meta.end_timestamp = Duration::from_millis(10);
-    let lead_output = render_serviced(&mut fx, lead).expect("four frames render one frame");
-
-    let mut first = chunk(
-        &pools,
-        &source[4 * usize::from(consts::CH)..6 * usize::from(consts::CH)],
-    );
-    first.meta.frame_offset = 4;
-    first.meta.timestamp = spec().duration_for(4).expect("test timestamp fits");
-    first.meta.end_timestamp = Duration::from_millis(20);
-    first.meta.segment_index = Some(1);
-    first.meta.variant_index = Some(1);
-    first.meta.segment = lead_output.meta.segment.next();
-    first.meta.source_byte_offset = Some(10);
-    first.meta.source_bytes = 20;
-    assert!(render_serviced(&mut fx, first).is_none());
-
-    let mut second = chunk(&pools, &source[6 * usize::from(consts::CH)..]);
-    second.meta.frame_offset = 6;
-    second.meta.timestamp = Duration::from_millis(20);
-    second.meta.end_timestamp = Duration::from_millis(30);
-    second.meta.segment_index = Some(2);
-    second.meta.variant_index = Some(2);
-    second.meta.segment = lead_output.meta.segment.next().next();
-    second.meta.source_byte_offset = Some(30);
-    second.meta.source_bytes = 10;
-    let second_output =
-        render_serviced(&mut fx, second).expect("pending span completes on the next chunk");
-
-    assert!(lead_output.meta.end_timestamp < second_output.meta.end_timestamp);
-    assert_eq!(second_output.meta.frame_offset, 4);
-    assert_eq!(
-        second_output.meta.timestamp,
-        spec().duration_for(4).expect("test timestamp fits")
-    );
-    assert_eq!(second_output.meta.end_timestamp, Duration::from_millis(30));
-    assert_eq!(second_output.meta.segment_index, Some(2));
-    assert_eq!(second_output.meta.variant_index, Some(2));
-    assert_eq!(second_output.meta.segment.get(), 2);
-    assert_eq!(second_output.meta.source_byte_offset, None);
-    assert_eq!(second_output.meta.source_bytes, 0);
-}
-
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn pending_span_is_committed_before_live_unity_passthrough(
-    #[case] backend: StretchKind,
-    warp_sine: Vec<f32>,
-) {
-    let mut fx = renderer(
-        &WarpConfig::builder()
-            .speed(1.0 / 0.75)
-            .keylock(true)
-            .backend(backend)
-            .build(),
-    );
-    let pools = fx.pools.clone();
-    let source = warp_sine[..(3) * 2].to_vec();
-    let mut pending = chunk(&pools, &source[..usize::from(consts::CH)]);
-    pending.meta.end_timestamp = Duration::from_millis(10);
-    assert!(render_serviced(&mut fx, pending).is_none());
-
-    fx.set_speed(SpeedCurve::Constant(1.0), 1)
-        .expect("valid speed");
-    let mut unity = chunk(
-        &pools,
-        &source[usize::from(consts::CH)..2 * usize::from(consts::CH)],
-    );
-    unity.meta.frame_offset = 1;
-    unity.meta.timestamp = Duration::from_millis(10);
-    unity.meta.end_timestamp = Duration::from_millis(20);
-    let transition =
-        render_serviced(&mut fx, unity).expect("rounded pending frame precedes the unity frame");
-    assert!(fx.transition_pending());
-    assert!(transition.frames() > 1, "pending frame starts the tail");
-    assert_eq!(transition.meta.frame_offset, 0);
-    let (tail, unity, tail_quanta) = finish_unity_transition(&mut fx, transition);
-    assert!(
-        !tail_quanta.is_empty(),
-        "the backend emits at least one retained tail quantum"
-    );
-    assert!(
-        !tail.is_empty(),
-        "the pending frame and backend tail emit samples"
-    );
-    assert_eq!(
-        &unity.samples[..],
-        &source[usize::from(consts::CH)..2 * usize::from(consts::CH)],
-        "unity frame follows the complete backend tail byte-for-byte"
-    );
-    assert_eq!(unity.meta.frame_offset, 1);
-    assert_eq!(unity.meta.end_timestamp, Duration::from_millis(20));
-
-    let mut next = chunk(&pools, &source[2 * usize::from(consts::CH)..]);
-    next.meta.frame_offset = 2;
-    let next_samples = next.samples.to_vec();
-    let passthrough = render_serviced(&mut fx, next).expect("unity remains zero-copy");
-    assert_eq!(&passthrough.samples[..], &next_samples);
-    assert!(flush_serviced(&mut fx).is_none());
-}
-
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn live_unity_transition_drains_active_backend_tail(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
-    warp_constant: Vec<f32>,
 ) {
-    assert_queued_unity_tail(backend, &warp_constant);
     let config = WarpConfig::builder()
         .speed(0.5)
         .keylock(true)
@@ -862,21 +519,30 @@ fn reset_discards_pending_span_before_new_timeline(
             .build(),
     );
     let pools = fx.pools.clone();
-    let source = warp_sine[..(2) * 2].to_vec();
-    assert!(render_serviced(&mut fx, chunk(&pools, &source[..usize::from(consts::CH)])).is_none());
+    const HELD: usize = 65_536;
+    let source = warp_sine[..(HELD + 1) * 2].to_vec();
+    let held = LaneFeed::default().feed(&mut fx, chunk(&pools, &source[..HELD * 2]));
+    assert!(
+        !held.is_empty() && fx.active,
+        "the engine holds a running span"
+    );
+    drop(held);
 
     fx.reset();
     fx.set_speed(SpeedCurve::Constant(1.0), 1)
         .expect("valid speed");
     fx.prepare(spec());
-    let mut landed = chunk(&pools, &source[usize::from(consts::CH)..]);
+    let mut landed = chunk(&pools, &source[HELD * 2..]);
     landed.meta.frame_offset = 100;
-    landed.meta.timestamp = Duration::from_secs(1);
-    landed.meta.end_timestamp = Duration::from_millis(1_010);
+    let landed_at = spec().duration_for(100).expect("landed timestamp fits");
+    landed.meta.timestamp = landed_at;
     let expected = landed.samples.to_vec();
-    let output = render_serviced(&mut fx, landed).expect("post-seek unity passes through");
+    let outputs = LaneFeed::default().feed(&mut fx, landed);
+    let [output] = outputs.as_slice() else {
+        panic!("post-seek unity passes through as one quantum");
+    };
     assert_eq!(output.meta.frame_offset, 100);
-    assert_eq!(output.meta.timestamp, Duration::from_secs(1));
+    assert_eq!(output.meta.timestamp, landed_at);
     assert_eq!(&output.samples[..], &expected);
 }
 
@@ -899,32 +565,36 @@ fn a_deferred_reset_renders_like_a_fresh_renderer(
         .backend(backend)
         .build();
     let channels = usize::from(consts::CH);
-    let render_at = |fx: &mut WarpRenderer, frame: usize| {
+    let render_at = |fx: &mut WarpRenderer, feed: &mut LaneFeed, frame: usize| {
         let start = frame * channels;
         let mut input = chunk(
             &fx.pools,
             &warp_sine[start..start + BLOCK_FRAMES * channels],
         );
         input.meta.frame_offset = u64::try_from(frame).expect("source frame fits u64");
-        render_serviced(fx, input)
+        samples(&feed.feed(fx, input))
     };
 
     let mut seeked = renderer(&config);
+    let mut feed = LaneFeed::default();
     for frame in (0..4).map(|block| block * BLOCK_FRAMES) {
-        render_at(&mut seeked, frame);
+        render_at(&mut seeked, &mut feed, frame);
     }
     seeked.reset();
     seeked.prepare(spec());
-    let after_reset =
-        render_at(&mut seeked, SEEK_FRAME).expect("the first block after the seek renders");
-    let fresh = render_at(&mut renderer(&config), SEEK_FRAME)
-        .expect("a fresh renderer renders the same block");
+    let mut feed = LaneFeed::default();
+    let mut after_reset = render_at(&mut seeked, &mut feed, SEEK_FRAME);
+    after_reset.extend(samples(&feed.end(&mut seeked)));
+    let mut fresh_renderer = renderer(&config);
+    let mut feed = LaneFeed::default();
+    let mut fresh = render_at(&mut fresh_renderer, &mut feed, SEEK_FRAME);
+    fresh.extend(samples(&feed.end(&mut fresh_renderer)));
 
-    assert_eq!(after_reset.frames(), fresh.frames());
+    assert!(!fresh.is_empty(), "the first block after the seek renders");
+    assert_eq!(after_reset.len(), fresh.len());
     let mismatch = after_reset
-        .samples
         .iter()
-        .zip(fresh.samples.iter())
+        .zip(fresh.iter())
         .position(|(actual, expected)| actual.to_bits() != expected.to_bits());
     assert_eq!(
         mismatch, None,
@@ -1037,4 +707,187 @@ fn a_prepared_smoothed_quantum_keeps_the_identity_of_its_request() {
     assert_eq!(prepared.rate.speed(), 1.0);
     assert_eq!(prepared.speed, expected_speed);
     assert!(prepared.speed < 1.25);
+}
+
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+struct UnityQuantum {
+    output: kithara_signal::AudioChunk,
+    input: Vec<f32>,
+    input_ptr: *const f32,
+    was_active: bool,
+}
+
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+fn varispeed_quantum(
+    fx: &mut WarpRenderer,
+    source: &mut u64,
+    signal: impl Fn(u64) -> f32,
+) -> UnityQuantum {
+    fx.prepare(spec());
+    fx.prepare_engine_latency(spec()).expect("renderer service");
+    let meta = kithara_signal::AudioChunkInfo {
+        spec: spec(),
+        frame_offset: *source,
+        timestamp: spec().duration_for(*source).expect("source timestamp"),
+        ..Default::default()
+    };
+    let frames = fx
+        .prepare_source_window(meta, 4096, usize::MAX)
+        .expect("source window")
+        .get();
+    let input: Vec<f32> = (0..frames)
+        .flat_map(|offset| [signal(*source + offset as u64); 2])
+        .collect();
+    let mut chunk = chunk(&fx.pools, &input);
+    chunk.meta = kithara_signal::AudioChunkInfo {
+        frames: u32::try_from(frames).expect("window fits u32"),
+        ..meta
+    };
+    let input_ptr = chunk.samples.as_ptr();
+    let was_active = fx.active;
+    *source += u64::try_from(frames).expect("window fits u64");
+    let output = fx
+        .render_quantum(chunk)
+        .continue_value()
+        .expect("prepared quantum")
+        .expect("quantum PCM");
+    UnityQuantum {
+        output,
+        input,
+        input_ptr,
+        was_active,
+    }
+}
+
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+fn hand_over_to_unity(
+    fx: &mut WarpRenderer,
+    source: &mut u64,
+    signal: impl Fn(u64) -> f32 + Copy,
+) -> Vec<UnityQuantum> {
+    for _ in 0..16 {
+        drop(varispeed_quantum(fx, source, signal));
+    }
+    assert!(fx.active, "the varispeed run drives the engine");
+    fx.set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("unity command");
+    let mut quanta = Vec::new();
+    for _ in 0..4 {
+        let quantum = varispeed_quantum(fx, source, signal);
+        let handed_over = !fx.active;
+        quanta.push(quantum);
+        if handed_over {
+            return quanta;
+        }
+    }
+    panic!("an active varispeed run must hand over to unity");
+}
+
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn an_active_varispeed_run_hands_its_queued_unity_quantum_over_without_a_copy(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
+    let config = WarpConfig::builder()
+        .speed(0.5)
+        .keylock(false)
+        .backend(backend)
+        .build();
+    let signal = |frame: u64| {
+        let frame = usize::try_from(frame).expect("test source frame fits usize");
+        warp_sine[frame * 2 % warp_sine.len()]
+    };
+    let mut fx = renderer(&config);
+    let mut source = 0;
+    let quanta = hand_over_to_unity(&mut fx, &mut source, signal);
+    let unity = quanta.last().expect("hand-over quantum");
+    assert!(unity.was_active, "unity is queued behind the active engine");
+    assert_eq!(
+        &unity.output.samples[..],
+        &unity.input[..],
+        "unity samples follow the drained varispeed tail byte-for-byte"
+    );
+    assert_eq!(
+        unity.output.samples.as_ptr(),
+        unity.input_ptr,
+        "queued unity samples return without copying"
+    );
+    assert!(!fx.transition_pending());
+    assert_eq!(
+        fx.rendered_source_end(),
+        Some((source, spec().sample_rate)),
+        "the source frontier advances only after tail and unity samples are emitted"
+    );
+    assert!(flush_serviced(&mut fx).is_none());
+}
+
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn rendered_source_is_committed_before_live_unity_passthrough(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
+    let mut fx = renderer(
+        &WarpConfig::builder()
+            .speed(1.5)
+            .keylock(false)
+            .backend(backend)
+            .build(),
+    );
+    let signal = |frame: u64| {
+        let frame = usize::try_from(frame).expect("test source frame fits usize");
+        warp_sine[frame * 2 % warp_sine.len()]
+    };
+    let mut source = 0;
+    for _ in 0..16 {
+        drop(varispeed_quantum(&mut fx, &mut source, signal));
+    }
+    fx.set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("unity command");
+    let mut committed = fx.rendered_source_end().expect("active frontier").0;
+    let mut handed_over = false;
+    for _ in 0..4 {
+        let quantum = varispeed_quantum(&mut fx, &mut source, signal);
+        let span = quantum.output.meta.source_span.expect("published mapping");
+        assert_eq!(
+            span.start(),
+            committed,
+            "each quantum starts at the source the previous one committed"
+        );
+        assert_eq!(
+            quantum.output.meta.timestamp,
+            span.position_at(0).expect("span start")
+        );
+        committed = span.end();
+        if quantum.was_active && !fx.active {
+            assert_eq!(&quantum.output.samples[..], &quantum.input[..]);
+            handed_over = true;
+            break;
+        }
+    }
+    assert!(handed_over, "the active run hands over to unity");
+    let passthrough = varispeed_quantum(&mut fx, &mut source, signal);
+    assert_eq!(passthrough.output.samples.as_ptr(), passthrough.input_ptr);
+    assert_eq!(&passthrough.output.samples[..], &passthrough.input[..]);
+    assert_eq!(
+        passthrough
+            .output
+            .meta
+            .source_span
+            .expect("unity mapping")
+            .start(),
+        committed
+    );
+    assert!(flush_serviced(&mut fx).is_none());
 }

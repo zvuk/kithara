@@ -26,16 +26,12 @@ fn renderer() -> (WarpRenderer<TestPools>, AudioChunkInfo) {
 fn a_renderer_without_an_entered_plan_names_no_entry_source() {
     let (mut renderer, meta) = renderer();
     renderer.prepare(meta.spec);
-    assert_eq!(
-        renderer
-            .prepare_quantum(meta, 16, 16)
-            .expect("an unlinked renderer admits its ordinary source"),
-        FrameCount::new(16)
-    );
-    let span = renderer
-        .prepared_quantum
-        .expect("ordinary quantum")
-        .source_span;
+    renderer
+        .prepare_source_window(meta, 16, 16)
+        .expect("an unlinked renderer admits its ordinary source");
+    let prepared = renderer.prepared_quantum.expect("ordinary quantum");
+    assert_eq!(prepared.active_frames, 16);
+    let span = prepared.source_span;
     assert_eq!(span.start(), 0);
     assert_eq!(span.end(), 16);
     let nonlinear = kithara_signal::SourceSpan::approaching(
@@ -179,10 +175,10 @@ fn a_short_decoder_suffix_requests_the_next_mapped_source_frame() {
         .set_speed(SpeedCurve::Constant(2.0), 1)
         .expect("mapped speed");
     renderer.prepare(meta.spec);
-    let requested = renderer
-        .prepare_quantum(meta, 1, 1)
+    let window = renderer
+        .prepare_source_window(meta, 1, 1)
         .expect("one mapped output frame spans decoder chunks");
-    assert_eq!(requested.get(), 2);
+    assert_eq!(window.get(), 17);
     let prepared = renderer.prepared_quantum.expect("prepared request");
     assert_eq!(prepared.active_frames, 2);
     assert_eq!(prepared.frames, 17);
@@ -218,13 +214,13 @@ fn terminal_projection_recomputes_both_endpoints_and_keeps_the_selected_rate() {
         .expect("mapped speed");
     renderer.prepare(meta.spec);
     hang_tick!();
-    let requested = renderer
-        .prepare_quantum(meta, 4096, usize::MAX)
+    let window = renderer
+        .prepare_source_window(meta, 4096, usize::MAX)
         .expect("initial quantum resolves");
     hang_reset!();
     let prepared = renderer.prepared_quantum.expect("prepared quantum");
     let rate = prepared.rate;
-    assert_eq!(requested.get(), 192);
+    assert_eq!(window.get(), 208);
     assert_eq!(prepared.active_frames, 192);
     assert_eq!(prepared.frames, 208);
     assert_eq!(

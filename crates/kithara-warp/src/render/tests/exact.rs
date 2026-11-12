@@ -7,7 +7,7 @@ use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::{WarpRenderer, chunk, renderer, spec};
+use super::{WarpRenderer, chunk, fixtures::LaneFeed, renderer, spec};
 use crate::WarpConfig;
 
 #[kithara::test]
@@ -195,11 +195,9 @@ fn a_large_drain_limit_is_only_an_upper_bound(#[case] backend: StretchKind) {
             .build(),
     );
     let input = chunk(&renderer.pools, &vec![0.25; 4096 * 2]);
-    renderer
-        .render(input)
-        .continue_value()
-        .expect("complete source");
-    renderer.prepare(spec());
+    let mut feed = LaneFeed::default();
+    drop(feed.feed(&mut renderer, input));
+    drop(feed.end(&mut renderer));
     let capability = renderer
         .engine
         .as_ref()

@@ -85,6 +85,43 @@ fn make_chunk_at(
     AudioChunk::new(meta, pcm)
 }
 
+/// Services `effect` and prepares its next source window at `source` the way
+/// the render lane does, then decodes exactly that window from `input`.
+fn lane_quantum(
+    effect: &mut WarpRenderer<TestPools>,
+    pools: &Pools,
+    spec: AudioSpec,
+    source: &mut u64,
+    input: &[f32],
+) -> AudioChunk {
+    let channels = usize::from(spec.channels);
+    effect.prepare(spec);
+    effect
+        .prepare_engine_latency(spec)
+        .expect("renderer service");
+    let meta = AudioChunkInfo {
+        spec,
+        frame_offset: *source,
+        ..Default::default()
+    };
+    let frames = effect
+        .prepare_source_window(meta, input.len() / channels, usize::MAX)
+        .expect("prepared source must be admitted")
+        .get();
+    let start = usize::try_from(*source).expect("source frame fits usize") * channels;
+    let window: Vec<f32> = input
+        .iter()
+        .cycle()
+        .skip(start)
+        .take(frames * channels)
+        .copied()
+        .collect();
+    let mut chunk = make_chunk(pools, frames, spec.channels, &window);
+    chunk.meta.frame_offset = *source;
+    *source += u64::try_from(frames).expect("source frames fit u64");
+    chunk
+}
+
 #[kithara::test]
 fn test_pool_get_put_allocation_free() {
     let pools = eager_pools(16, 4_096);
@@ -314,41 +351,29 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(
     allocation_ramp: Vec<f32>,
     #[case] kind: StretchKind,
 ) {
-    const FRAMES: usize = 8_192;
     let _detached = detach_recorder();
     let pools = make_pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
-    let (mut effect, first, second) = permit_alloc(|| {
-        let mut effect = warp_renderer(0.5, kind, spec, pools.clone());
-        effect.prepare(spec);
-        let first = make_chunk(&pools, FRAMES, 2, &allocation_ramp);
-        let second = make_chunk(&pools, FRAMES, 2, &allocation_ramp);
-        (effect, first, second)
-    });
-
-    let first_output = assert_no_alloc(|| {
-        effect
-            .render(first)
-            .continue_value()
-            .expect("prepared source must be admitted")
-            .unwrap_or_else(|| panic!("active stretch must render"))
-    });
-    permit_alloc(|| {
-        effect.prepare(spec);
-        drop(first_output);
-    });
-
-    let second_output = assert_no_alloc(|| {
-        effect
-            .render(second)
-            .continue_value()
-            .expect("prepared source must be admitted")
-            .unwrap_or_else(|| panic!("serviced stretch must render again"))
-    });
-    permit_alloc(|| {
-        effect.prepare(spec);
-        drop(second_output);
-    });
+    let mut source = 0;
+    let mut effect = permit_alloc(|| warp_renderer(0.5, kind, spec, pools.clone()));
+    for expectation in [
+        "active stretch must render",
+        "serviced stretch must render again",
+    ] {
+        let input =
+            permit_alloc(|| lane_quantum(&mut effect, &pools, spec, &mut source, &allocation_ramp));
+        let output = assert_no_alloc(|| {
+            effect
+                .render_quantum(input)
+                .continue_value()
+                .expect("prepared source must be admitted")
+                .unwrap_or_else(|| panic!("{expectation}"))
+        });
+        permit_alloc(|| {
+            effect.prepare(spec);
+            drop(output);
+        });
+    }
 
     loop {
         let terminal = assert_no_alloc(|| effect.drain(8_192).expect("prepared terminal drain"));
@@ -372,55 +397,36 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(
     ),
     case(StretchKind::Bungee)
 )]
-fn timestretch_pending_and_maximum_output_are_allocation_free(
+fn timestretch_maximum_output_is_allocation_free(
     allocation_ramp: Vec<f32>,
     #[case] kind: StretchKind,
 ) {
-    const FRAMES: usize = 8_192;
     let _detached = detach_recorder();
     let pools = make_pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+    const MAXIMUM_OUTPUT: usize = 163_840;
     let (mut maximum, input) = permit_alloc(|| {
-        let mut maximum = warp_renderer(0.05, kind, spec, pools.clone());
-        maximum.prepare(spec);
-        let input = make_chunk(&pools, FRAMES, 2, &allocation_ramp);
+        let config = WarpConfig::builder()
+            .speed(0.05)
+            .backend(kind)
+            .keylock(true)
+            .source_block_frames(NonZeroUsize::new(MAXIMUM_OUTPUT).expect("source block"))
+            .build();
+        let mut maximum = Warp::new((), &config).renderer(spec, pools.clone());
+        let decoded = allocation_ramp.repeat(MAXIMUM_OUTPUT * 2 / allocation_ramp.len());
+        let input = lane_quantum(&mut maximum, &pools, spec, &mut 0, &decoded);
         (maximum, input)
     });
     let maximum_output = assert_no_alloc(|| {
         maximum
-            .render(input)
+            .render_quantum(input)
             .continue_value()
             .expect("prepared source must be admitted")
             .unwrap_or_else(|| panic!("maximum prepared output must render"))
     });
-    assert_eq!(maximum_output.frames(), 163_840);
+    assert_eq!(maximum_output.frames(), MAXIMUM_OUTPUT);
     permit_alloc(|| {
         maximum.prepare(spec);
         drop(maximum_output);
-    });
-
-    let (mut pending, input) = permit_alloc(|| {
-        let mut pending = warp_renderer(2.0, kind, spec, pools.clone());
-        pending.prepare(spec);
-        let input = make_chunk(&pools, 1, 2, &allocation_ramp);
-        (pending, input)
-    });
-    assert_no_alloc(|| {
-        assert!(matches!(
-            pending.render(input),
-            std::ops::ControlFlow::Continue(None)
-        ));
-    });
-    permit_alloc(|| pending.prepare(spec));
-
-    let terminal = assert_no_alloc(|| {
-        pending
-            .drain(8_192)
-            .expect("prepared terminal drain")
-            .unwrap_or_else(|| panic!("pending frame plus terminal tail must render"))
-    });
-    permit_alloc(|| {
-        pending.prepare(spec);
-        drop(terminal);
     });
 }

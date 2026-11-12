@@ -13,6 +13,7 @@ use kithara_sync::SpeedCurve;
 use super::*;
 use crate::{
     Warp, WarpRenderError,
+    render::tests::fixtures::LaneFeed,
     test_pools::{pools, sample_buffer},
 };
 
@@ -31,7 +32,7 @@ fn prepared_renderer(backend: StretchKind) -> WarpRenderer<crate::test_pools::Te
 
 fn active_renderer(backend: StretchKind) -> WarpRenderer<crate::test_pools::TestPools> {
     let mut renderer = prepared_renderer(backend);
-    let frames = renderer.source_block_frames.get().min(4096);
+    let frames = 16_384;
     let samples = vec![0.25; frames * usize::from(renderer.spec.channels)];
     let input = AudioChunk::new(
         AudioChunkInfo {
@@ -41,13 +42,7 @@ fn active_renderer(backend: StretchKind) -> WarpRenderer<crate::test_pools::Test
         },
         sample_buffer(&renderer.pools, &samples),
     );
-    drop(
-        renderer
-            .render(input)
-            .continue_value()
-            .expect("fixture fits one source span"),
-    );
-    renderer.prepare(renderer.spec);
+    assert!(!LaneFeed::default().feed(&mut renderer, input).is_empty());
     assert!(renderer.active);
     renderer
 }

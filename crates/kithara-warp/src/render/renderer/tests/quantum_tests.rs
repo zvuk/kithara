@@ -41,9 +41,12 @@ fn prepared_frames(backend: StretchKind, chunk: usize, output_limit: usize) -> u
     let mut renderer = unity_renderer(backend);
     let meta = chunk_meta(&renderer, chunk);
     renderer
-        .prepare_quantum(meta, chunk, output_limit)
-        .expect("unity quantum")
-        .get()
+        .prepare_source_window(meta, chunk, output_limit)
+        .expect("unity quantum");
+    renderer
+        .prepared_quantum
+        .expect("prepared unity quantum")
+        .active_frames
 }
 
 #[kithara::test]

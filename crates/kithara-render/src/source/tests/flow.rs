@@ -331,52 +331,33 @@ fn unity_warp_preserves_samples_and_meta_across_discontinuity(
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 #[kithara::test]
-fn live_warp_drain_holds_the_source_and_seek_discards_stale_unity(
+fn live_unity_hands_over_within_its_quantum_and_a_seek_discards_the_held_source(
     half: Vec<f32>,
     quarter: Vec<f32>,
     three_quarter: Vec<f32>,
 ) {
-    fn feed_whole_chunk(source: &mut WarpSource<RawSource, TestPools>) -> TrackStep<AudioChunk> {
-        let TrackStep::Produced(Fetch::Data { data, .. }) = source.source.step_track() else {
-            panic!("fixture provides a whole decoded chunk");
-        };
-        source.warp.prepare(source.spec);
-        let output = source
-            .warp
-            .render(data)
-            .continue_value()
-            .expect("whole source span");
-        if source.warp.transition_pending() {
-            source.drain_state = DrainState::LiveWarp;
-        }
-        output
-            .and_then(|data| source.emit_output(data, None))
-            .map_or(TrackStep::StateChanged, TrackStep::Produced)
-    }
-
     for backend in keylock_backends() {
         const ACTIVE_FRAMES: u32 = 4096;
-        const UNITY_FRAMES: u32 = 4096;
-        // One whole lane packet (the default source block), so the post-seek
-        // chunk renders as itself, without a copy.
-        const SENTINEL_FRAMES: u32 = 8192;
+        const UNITY_FRAMES: u32 = 8192;
+        const HELD_FRAMES: u32 = 2048;
+        // One whole lane packet (the render quantum), so the post-seek chunk
+        // renders as itself, without a copy.
+        const SENTINEL_FRAMES: u32 = 4096;
 
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let pools = pools();
-        let first_active_end = u64::from(ACTIVE_FRAMES);
-        let first_unity_end = first_active_end.saturating_add(u64::from(UNITY_FRAMES));
-        let sentinel_end = first_unity_end.saturating_add(u64::from(SENTINEL_FRAMES));
+        let active_end = u64::from(ACTIVE_FRAMES);
+        let unity_end = active_end.saturating_add(u64::from(UNITY_FRAMES));
+        let held_end = unity_end.saturating_add(u64::from(HELD_FRAMES));
+        let sentinel_end = held_end.saturating_add(u64::from(SENTINEL_FRAMES));
 
-        let first_active = chunk_with_frames(&pools, spec, 0, ACTIVE_FRAMES, &quarter);
-        let first_unity = chunk_with_frames(&pools, spec, first_active_end, UNITY_FRAMES, &half);
+        let active = chunk_with_frames(&pools, spec, 0, ACTIVE_FRAMES, &quarter);
+        let unity_input = half.repeat(2);
+        let unity = chunk_with_frames(&pools, spec, active_end, UNITY_FRAMES, &unity_input);
+        let held = chunk_with_frames(&pools, spec, unity_end, HELD_FRAMES, &half);
         let sentinel_input = three_quarter.repeat(2);
-        let mut sentinel = chunk_with_frames(
-            &pools,
-            spec,
-            first_unity_end,
-            SENTINEL_FRAMES,
-            &sentinel_input,
-        );
+        let mut sentinel =
+            chunk_with_frames(&pools, spec, held_end, SENTINEL_FRAMES, &sentinel_input);
         let sentinel_origin = 44_100;
         sentinel.meta.source_span = SourceSpan::new(
             sentinel_origin,
@@ -389,19 +370,16 @@ fn live_warp_drain_holds_the_source_and_seek_discards_stale_unity(
 
         let head = Arc::new(AtomicU64::new(0));
         let raw = RawSource {
-            chunks: VecDeque::from([first_active, first_unity, sentinel]),
+            chunks: VecDeque::from([active, unity, held, sentinel]),
             head: Arc::clone(&head),
         };
-        let render_quantum_frames = usize::try_from(ACTIVE_FRAMES)
-            .expect("test quantum fits usize")
-            .saturating_mul(2)
-            .saturating_add(1);
         let config = kithara_warp::WarpConfig::builder()
             .speed(0.5)
-            .keylock(true)
+            .keylock(false)
             .backend(backend)
             .render_quantum_frames(
-                NonZeroUsize::new(render_quantum_frames).expect("test quantum is non-zero"),
+                NonZeroUsize::new(usize::try_from(ACTIVE_FRAMES).expect("quantum fits usize"))
+                    .expect("test quantum is non-zero"),
             )
             .build();
         let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
@@ -418,38 +396,41 @@ fn live_warp_drain_holds_the_source_and_seek_discards_stale_unity(
             },
         );
 
-        let initial = feed_whole_chunk(&mut source);
-        assert!(matches!(
-            &initial,
-            TrackStep::Produced(_) | TrackStep::StateChanged
-        ));
-        assert_eq!(head.load(Ordering::Acquire), first_active_end);
-        flush_deferred(&mut source);
-        if matches!(&initial, TrackStep::StateChanged) {
-            let TrackStep::Produced(_) = source.step_track() else {
-                panic!("the first active quantum must render");
-            };
+        let mut unity_rate = false;
+        let mut passthrough = false;
+        for _ in 0..32 {
+            if head.load(Ordering::Acquire) == held_end {
+                break;
+            }
             flush_deferred(&mut source);
-        }
-
-        source
-            .warp
-            .set_speed(SpeedCurve::Constant(1.0), 1)
-            .expect("unity command");
-        let transition = feed_whole_chunk(&mut source);
-        assert!(matches!(
-            &transition,
-            TrackStep::Produced(_) | TrackStep::StateChanged
-        ));
-        assert_eq!(head.load(Ordering::Acquire), first_unity_end);
-        flush_deferred(&mut source);
-        if matches!(&transition, TrackStep::StateChanged) {
-            let TrackStep::Produced(_) = source.step_track() else {
-                panic!("active-to-unity transition must emit its first tail quantum");
+            let step = source.step_track();
+            assert!(
+                !source.warp.transition_pending(),
+                "queued unity hands over within the quantum that queued it"
+            );
+            let TrackStep::Produced(Fetch::Data { data, .. }) = step else {
+                continue;
             };
+            let span = data.meta.source_span.expect("published mapping");
+            passthrough |= unity_rate
+                && u64::try_from(data.frames())
+                    .is_ok_and(|frames| span.end() - span.start() == frames);
+            if !unity_rate {
+                lane.send(When::Next, speed_batch(1.0))
+                    .expect("unity batch");
+                unity_rate = true;
+            }
         }
-        assert_eq!(head.load(Ordering::Acquire), first_unity_end);
-        assert!(source.warp.transition_pending());
+        assert!(passthrough, "the active varispeed run hands over to unity");
+        assert_eq!(head.load(Ordering::Acquire), held_end);
+        assert!(
+            source.pending_input.is_some()
+                || source
+                    .render_input
+                    .as_ref()
+                    .is_some_and(|input| !input.is_empty()),
+            "the lane holds decoded source for its next window"
+        );
 
         lane.send(
             When::Next,
@@ -462,12 +443,17 @@ fn live_warp_drain_holds_the_source_and_seek_discards_stale_unity(
         .expect("segment batch");
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         assert_eq!(source.cursor().segment, SegmentId::FIRST.next());
-        assert_eq!(head.load(Ordering::Acquire), first_unity_end);
-        assert!(!source.warp.transition_pending());
+        assert_eq!(head.load(Ordering::Acquire), held_end);
+        assert!(source.pending_input.is_none());
+        assert!(
+            source
+                .render_input
+                .as_ref()
+                .is_none_or(|input| input.is_empty())
+        );
 
         flush_deferred(&mut source);
-        let resumed = source.step_track();
-        let resumed = match resumed {
+        let resumed = match source.step_track() {
             TrackStep::Produced(fetch) => fetch,
             TrackStep::StateChanged => {
                 flush_deferred(&mut source);

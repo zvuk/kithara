@@ -6,6 +6,7 @@ use kithara_test_utils::kithara;
 use super::*;
 use crate::{
     Warp,
+    render::tests::fixtures::LaneFeed,
     test_pools::{TestPools, pools, sample_buffer},
 };
 
@@ -140,21 +141,27 @@ fn complete_unity_chunks_advance_the_next_prepared_mapping() {
     let mut renderer = Warp::new((), &config).renderer(spec, pools());
     let mut source = 0;
     quantum(&mut renderer, &mut source);
+    let mut feed = LaneFeed::default();
     for _ in 0..64 {
-        renderer.prepare(spec);
         let mut chunk = input(&renderer, source, 4096);
         let span = kithara_signal::SourceSpan::new(source, source + 4096, spec.sample_rate, 4096)
             .expect("producer mapping")
             .with_render_revision(7);
         chunk.meta.source_span = Some(span);
         source += 4096;
-        let output = renderer
-            .render(chunk)
-            .continue_value()
-            .expect("complete unity input")
-            .expect("unity audio");
-        assert!(output.samples.iter().all(|sample| *sample == 0.25));
-        assert_eq!(output.meta.source_span, Some(span));
+        let mut published = 0;
+        for output in feed.feed(&mut renderer, chunk) {
+            assert!(output.samples.iter().all(|sample| *sample == 0.25));
+            let frames = u64::try_from(output.frames()).expect("output frames");
+            assert_eq!(
+                output.meta.source_span,
+                span.for_output_range(published..published + frames)
+                    .map(|span| span.with_render_revision(output.meta.render_revision)),
+                "unity publishes the producer mapping at the renderer's revision"
+            );
+            published += frames;
+        }
+        assert_eq!(published, 4096, "a complete unity chunk is rendered whole");
     }
     renderer
         .set_speed(SpeedCurve::Constant(1.25), 1)
@@ -224,16 +231,15 @@ fn lost_source_history_terminates_until_an_explicit_reset(#[case] start: u64) {
     let mut renderer = Warp::new((), &config).renderer(spec, pools());
     let mut source = 0;
     quantum(&mut renderer, &mut source);
+    let mut feed = LaneFeed::default();
     for _ in 0..64 {
         hang_tick!();
         let chunk = input(&renderer, source, 4096);
-        renderer
-            .render(chunk)
-            .continue_value()
-            .expect("whole input");
+        drop(feed.feed(&mut renderer, chunk));
         source += 4096;
         hang_reset!();
     }
+    drop(feed.end(&mut renderer));
     renderer
         .set_speed(SpeedCurve::Constant(1.25), 1)
         .expect("speed");
