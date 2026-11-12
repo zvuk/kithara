@@ -26,7 +26,7 @@ use kithara::{
     download::{Downloader, DownloaderConfig},
     events::{EventBus, EventReceiver, TrackId},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{
         CancelToken,
         time::{self, Duration, sleep},
@@ -355,9 +355,8 @@ async fn build_queue(
     .await
     .expect("create product offline queue");
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools,
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

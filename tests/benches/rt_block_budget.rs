@@ -19,7 +19,7 @@ use firewheel::{
 };
 use kithara::{
     audio::{AudioConfig, mock::TestPcmReader},
-    effects::{LimiterConfig, node::LimiterNode},
+    effects::{LimiterConfig, LookaheadMs, node::LimiterNode},
     file::{File, FileConfig, FileSrc},
     platform::{
         sync::Arc,
@@ -29,7 +29,7 @@ use kithara::{
     queue::TrackSource,
     signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame, TransportRevision},
     sync::SpeedCurve,
-    warp::{RenderContext, StretchKind},
+    warp::StretchKind,
 };
 use kithara_command::{
     Batch, ChannelConfig, LevelInbox, Port, ScopeId, ScopedConfig, ScopedInbox, ScopedSender,
@@ -62,6 +62,12 @@ mod consts {
     pub(super) const CROSSFADE_SECONDS: f32 = 120.0;
     pub(super) const CROSSFADE_DEPTH: f32 = 0.7;
     pub(super) const CROSSFADE_POSITION: f32 = 0.3;
+    /// The highest rate a Host accepts. Its master limiter reserves the
+    /// lookahead line for this rate, so the bench limiter does as well.
+    pub(super) const HOST_RATE_BOUND: u32 = 768_000;
+    /// Each lane and track count is measured at these lookaheads in turn: none,
+    /// which builds no delay line, and 5 ms, 240 frames at 48 kHz.
+    pub(super) const LOOKAHEAD_MS: [f32; 2] = [0.0, 5.0];
     pub(super) const MEASURED_BLOCKS: usize = 20_000;
     pub(super) const SAMPLE_RATE: u32 = 48_000;
     pub(super) const TRACK_COUNTS: [usize; 3] = [1, 2, 4];
@@ -108,6 +114,7 @@ impl Lane {
 struct Measurement {
     durations: Vec<Duration>,
     lane: Lane,
+    lookahead_frames: usize,
     peak: f32,
     tracks: usize,
 }
@@ -154,7 +161,7 @@ struct BenchMixer {
 }
 
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn processor(count: usize, lane: Lane) -> BenchMixer {
+async fn processor(count: usize, lane: Lane, limiter: LimiterConfig) -> BenchMixer {
     let config = DeckMixerConfig::default();
     let (mut control, inbox) = scoped_channel(
         ScopedConfig::builder()
@@ -275,12 +282,16 @@ async fn processor(count: usize, lane: Lane) -> BenchMixer {
         ..StreamInfo::default()
     };
     let mut state = None;
-    let limiter = LimiterNode::new(LimiterConfig::default())
-        .construct_processor(
-            &EmptyConfig,
-            ConstructProcessorContext::new(NodeID::DANGLING, &stream, &mut state),
-        )
-        .expect("bench master limiter");
+    let limiter = LimiterNode::new(
+        limiter,
+        non_zero(consts::HOST_RATE_BOUND, "Host rate bound"),
+        pools,
+    )
+    .construct_processor(
+        &EmptyConfig,
+        ConstructProcessorContext::new(NodeID::DANGLING, &stream, &mut state),
+    )
+    .expect("bench master limiter");
     BenchMixer {
         processor,
         limiter: Box::new(limiter),
@@ -318,17 +329,13 @@ fn render_block(mixer: &mut BenchMixer, out_l: &mut [f32], out_r: &mut [f32]) ->
     let end = mixer.frame + i64::try_from(frames).expect("bench frames fit i64");
     publish_render_context(
         &mut mixer.extra.store,
-        RenderContext::new_linear(
-            OutputContext::new(
-                SessionFrame::new(mixer.frame)..SessionFrame::new(end),
-                non_zero(consts::SAMPLE_RATE, "sample rate"),
-                SessionEpoch::new(0),
-                Some(TransportRevision::first()),
-            )
-            .expect("bench output range"),
-            None,
+        OutputContext::new(
+            SessionFrame::new(mixer.frame)..SessionFrame::new(end),
+            non_zero(consts::SAMPLE_RATE, "sample rate"),
+            SessionEpoch::new(0),
+            Some(TransportRevision::first()),
         )
-        .expect("bench linear context"),
+        .expect("bench output range"),
     )
     .expect("bench context slot");
     let info = ProcInfo {
@@ -394,9 +401,9 @@ fn every_slot_fading(mixer: &mut BenchMixer) -> bool {
         .all(|slot| slot.gain > 0.0 && slot.gain < 1.0)
 }
 
-fn measure(tracks: usize, lane: Lane) -> Measurement {
+fn measure(tracks: usize, lane: Lane, limiter: LimiterConfig) -> Measurement {
     let runtime = tokio::runtime::Runtime::new().expect("bench runtime");
-    let mut processor = runtime.block_on(processor(tracks, lane));
+    let mut processor = runtime.block_on(processor(tracks, lane, limiter));
     let _runtime = runtime.enter();
 
     let frames = block_frames();
@@ -456,6 +463,7 @@ fn measure(tracks: usize, lane: Lane) -> Measurement {
     Measurement {
         durations,
         lane,
+        lookahead_frames: limiter.latency_frames(non_zero(consts::SAMPLE_RATE, "sample rate")),
         peak,
         tracks,
     }
@@ -494,19 +502,24 @@ fn main() {
         consts::WARMUP_BLOCKS,
     );
     println!(
-        "{:>16}  {:>7}  {:>22}  {:>22}  {:>22}",
-        "lane", "tracks", "p50", "p99", "max"
+        "{:>16}  {:>7}  {:>9}  {:>22}  {:>22}  {:>22}",
+        "lane", "tracks", "lookahead", "p50", "p99", "max"
     );
 
-    for (lane, count) in [Lane::Settled, Lane::Gain, Lane::Crossfade]
+    for ((lane, count), lookahead) in [Lane::Settled, Lane::Gain, Lane::Crossfade]
         .into_iter()
         .flat_map(|lane| consts::TRACK_COUNTS.map(|count| (lane, count)))
+        .flat_map(|row| consts::LOOKAHEAD_MS.map(|ms| (row, ms)))
     {
-        let measurement = measure(count, lane);
+        let limiter = LimiterConfig::builder()
+            .lookahead_ms(LookaheadMs::try_from(lookahead).expect("bench lookahead in range"))
+            .build();
+        let measurement = measure(count, lane, limiter);
         println!(
-            "{:>16}  {:>7}  {:>22}  {:>22}  {:>22}",
+            "{:>16}  {:>7}  {:>9}  {:>22}  {:>22}  {:>22}",
             measurement.lane.label(),
             measurement.tracks,
+            measurement.lookahead_frames,
             cell(measurement.percentile(50), budget),
             cell(measurement.percentile(99), budget),
             cell(measurement.max(), budget),

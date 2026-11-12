@@ -87,7 +87,7 @@ fn lay_mix(cmd: MixCmd, drawn: &mut EngineSnapshot) {
     }
 }
 
-#[cfg(all(test, not(feature = "broadcast")))]
+#[cfg(test)]
 mod tests {
     use std::convert::Infallible;
 

@@ -745,6 +745,7 @@ fn bench_limiter_detector(c: &mut Criterion) {
     group.sample_size(20);
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(3));
+    let pools = pools();
     for (frames, tail) in [
         (1, 0),
         (7, 0),
@@ -765,14 +766,21 @@ fn bench_limiter_detector(c: &mut Criterion) {
                     .map(|sample| sample * amplitude)
                     .collect()
             });
-            let mut limiter = PeakLimiter::new(
-                NonZeroU32::new(48_000).expect("bench rate"),
-                NonZeroUsize::new(2).expect("stereo"),
-                LimiterConfig::default(),
-            )
-            .expect("stereo detector");
-            let [mut left, mut right] = input.clone();
-            limiter.process_planar(&mut [&mut left, &mut right]);
+            let primed = || {
+                let rate = NonZeroU32::new(48_000).expect("bench rate");
+                let mut limiter = PeakLimiter::new(
+                    rate,
+                    rate,
+                    NonZeroUsize::new(2).expect("stereo"),
+                    LimiterConfig::default(),
+                    &pools,
+                )
+                .expect("stereo detector");
+                let [mut left, mut right] = input.clone();
+                limiter.process_planar(&mut [&mut left, &mut right]);
+                (limiter, [left, right])
+            };
+            let (_, [left, right]) = primed();
             let reduced = [&left, &right]
                 .into_iter()
                 .zip(&input)
@@ -799,7 +807,7 @@ fn bench_limiter_detector(c: &mut Criterion) {
             };
             group.bench_function(BenchmarkId::new(label, shape), |b| {
                 b.iter_batched_ref(
-                    || (limiter.clone(), input.clone()),
+                    || (primed().0, input.clone()),
                     |(limiter, [left, right])| {
                         limiter.process_planar(&mut [
                             black_box(left.as_mut_slice()),

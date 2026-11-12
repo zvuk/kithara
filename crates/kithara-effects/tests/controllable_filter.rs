@@ -80,24 +80,26 @@ fn manual_cutoff_follows_the_f64_smoothing_law_across_odd_blocks(eq_sine_1000: V
     let b1 = ratio.powf((f64::from(smoothing.smooth_seconds) * 44_100.0).recip());
     let mut cutoff = 1_000.0;
     for frame in 0..expected.len() {
+        // Coefficients are applied only while the cutoff moves, as the effect does:
+        // re-applying equal coefficients is not bit-neutral on every backend.
         if cutoff != 200.0 {
             cutoff = 200.0 * (1.0 - b1) + cutoff * b1;
             if (cutoff - 200.0).abs() < 800.0 * ratio {
                 cutoff = 200.0;
             }
-        }
-        reference
-            .retune(
-                0,
-                Coefficients::from_params(
-                    Type::LowPass,
-                    Hertz::from_hz(44_100.0).expect("reference rate"),
-                    Hertz::from_hz(cutoff).expect("smoothed positive cutoff"),
-                    std::f64::consts::FRAC_1_SQRT_2,
+            reference
+                .retune(
+                    0,
+                    Coefficients::from_params(
+                        Type::LowPass,
+                        Hertz::from_hz(44_100.0).expect("reference rate"),
+                        Hertz::from_hz(cutoff).expect("smoothed positive cutoff"),
+                        std::f64::consts::FRAC_1_SQRT_2,
+                    )
+                    .expect("reference coefficients"),
                 )
-                .expect("reference coefficients"),
-            )
-            .expect("stable reference section");
+                .expect("stable reference section");
+        }
         reference
             .process(&mut [expected.as_mut_slice()], frame..frame + 1)
             .expect("reference frame");

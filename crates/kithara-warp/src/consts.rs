@@ -36,13 +36,13 @@ pub(crate) const EOF_FRAME: f64 = 48_000.0;
 #[cfg(test)]
 pub(crate) const FRAME_COUNT: u64 = 48_000;
 
-#[cfg(test)]
-pub(crate) const BLOCK_FRAMES: usize = 480;
-
 #[cfg(feature = "render")]
 pub(crate) const NATIVE_PACKET_FRAMES: usize = 480;
 #[cfg(feature = "render")]
 pub(crate) const NATIVE_CONTROL_PACKET_FRAMES: usize = 64;
+/// Largest stretch the engines render directly. Past it the Signalsmith
+/// backend randomises phases (its `maxCleanStretch`): tones lose 16-35 dB of
+/// purity and clicks smear, so slower speeds go through the pitch projection.
 #[cfg(feature = "render")]
 pub(crate) const MAX_NATIVE_STRETCH: f64 = 2.0;
 
@@ -81,3 +81,6 @@ pub(crate) const SR: u32 = 44_100;
 
 #[cfg(feature = "render")]
 pub(crate) const SOURCE_RADIUS: usize = 16;
+
+#[cfg(feature = "render")]
+pub(crate) const SOURCE_TAPS: usize = 2 * SOURCE_RADIUS + 1;

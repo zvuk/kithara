@@ -20,7 +20,7 @@ use kithara::{
     queue::TrackSource,
     signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame},
     sync::SpeedCurve,
-    warp::{RenderContext, StretchKind},
+    warp::StretchKind,
 };
 use kithara_command::{Batch, Outcome, ScopedReceipt, Seq, When};
 use kithara_dsp::param::{DEFAULT_SMOOTH_SECONDS, MIN_SETTLE_RATIO, SmoothedParam, SmootherConfig};
@@ -157,17 +157,13 @@ impl DeckFixture {
         let end = self.frame + i64::try_from(frames).expect("frames");
         publish_render_context(
             &mut self.extra.store,
-            RenderContext::new_linear(
-                OutputContext::new(
-                    SessionFrame::new(self.frame)..SessionFrame::new(end),
-                    rate(),
-                    SessionEpoch::new(0),
-                    None,
-                )
-                .expect("output"),
+            OutputContext::new(
+                SessionFrame::new(self.frame)..SessionFrame::new(end),
+                rate(),
+                SessionEpoch::new(0),
                 None,
             )
-            .expect("context"),
+            .expect("output"),
         )
         .expect("publish");
         let info = ProcInfo {

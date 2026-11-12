@@ -4,6 +4,7 @@ use syn::{Attribute, Ident};
 
 use super::{
     expand_async::{emit_async_runtime_test, emit_async_timeout_test},
+    fixture_args::Preamble,
     parse::TestArgs,
     shared::{
         finalize_body, make_ambient_stmt, make_serial_attr, make_test_setup,
@@ -19,7 +20,7 @@ pub(crate) fn emit_one_test(
     remaining_attrs: &[&Attribute],
     test_attrs: &TokenStream2,
     is_async: bool,
-    preamble: &TokenStream2,
+    preamble: &Preamble,
     body_stmts: &[syn::Stmt],
     args: &TestArgs,
 ) -> TokenStream2 {
@@ -27,14 +28,16 @@ pub(crate) fn emit_one_test(
     let ambient = make_ambient_stmt(args);
     // Async-native emissions install mode per poll; wasm and sync emissions
     // hold both ambient and active scopes in the body.
-    let full_plain = quote! { #preamble #(#body_stmts)* };
+    let full_plain = preamble.with_body(body_stmts);
+    let scoped = preamble.scoped(false);
+    let preamble = &preamble.body;
     let body = quote! { #(#body_stmts)* };
     let held_body = if is_async {
         body
     } else {
         wrap_with_sync_participation(&body, args)
     };
-    let full_held = quote! { #test_setup #preamble #ambient #held_body };
+    let full_held = quote! { #test_setup #scoped #preamble #ambient #held_body };
     let serial_attr = make_serial_attr(args);
     let wasm_serial_guard = make_wasm_serial_guard(args);
 
@@ -122,7 +125,7 @@ pub(crate) fn emit_one_test(
 pub(crate) fn emit_native_only_one(
     ctx: &super::entry::GenCtx<'_>,
     name: &Ident,
-    full_plain: &TokenStream2,
+    full_plain: &Preamble,
     full_held: &TokenStream2,
     serial_attr: &TokenStream2,
     native_is_async: bool,

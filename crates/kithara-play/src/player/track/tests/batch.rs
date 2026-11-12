@@ -22,14 +22,19 @@ async fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(
         track.cue(position, curve.clone(), out)
     })
     .expect("cue");
-    let segment = track.segment;
+    let segment = track.segment.id;
     let bound = Bound::AtOrAfter(frame(128));
-    assert_eq!(track.ready, None);
+    assert!(!track.segment.ready);
     assert_eq!(track.entry(bound), None);
     track.status = TrackStatus::Loading;
     assert_eq!(track.entry(bound), None);
     assert_ne!(
-        track.lane_commands.last().expect("segment command").segment,
+        track
+            .lane_history
+            .commands
+            .last()
+            .expect("segment command")
+            .segment,
         segment
     );
     assert_eq!(track.prepared_speed(), Some(&curve));
@@ -61,7 +66,7 @@ async fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(
         applied
     );
     assert_eq!(track.prepared_speed(), applied.then_some(&curve));
-    assert_eq!(track.ready, applied.then_some(segment));
+    assert_eq!(track.segment.ready, applied);
     assert_eq!(track.entry(bound), applied.then_some(frame(128)));
     track.status = TrackStatus::Loaded;
     assert_eq!(track.entry(bound), applied.then_some(frame(128)));
@@ -105,7 +110,7 @@ fn pause_prepared_track(track: &mut Track, rig: &mut Rig) {
     let stopped_mark = SlotMark {
         session: frame(0),
         lane: LaneFrame {
-            segment: track.segment,
+            segment: track.segment.id,
             frame: 0,
         },
         position: Duration::ZERO,
@@ -135,7 +140,7 @@ async fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reser
     let (mut track, mut inbox) = if reserved || initial == TrackStatus::Loading {
         let mut track = track(A);
         if reserved {
-            track.slot = None;
+            track.seat = Seat::Unseated;
         }
         load(&mut track, &mut rig, Duration::ZERO);
         let opened = opened_fixture(&mut rig, "refused-preparation").await;
@@ -167,10 +172,15 @@ async fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reser
             TrackCommand::Seek { to: Duration::ZERO }
         },
     );
-    let segment = track.segment;
+    let segment = track.segment.id;
     command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::Next });
     assert_eq!(track.play, Some(When::Next));
-    let prepared = track.lane_commands.last().expect("native preparation").seq;
+    let prepared = track
+        .lane_history
+        .commands
+        .last()
+        .expect("native preparation")
+        .seq;
     let later = track
         .send_lane(LaneCommand::SetSpeed(SpeedCurve::Constant(1.0)), When::Next)
         .expect("later native control");
@@ -201,13 +211,13 @@ async fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reser
     assert_eq!(track.status(), failed);
     assert_eq!(track.snapshot().status, failed);
     assert_eq!(track.play, None);
-    assert_eq!(track.ready, None);
-    if let Some(attaching) = track.attaching {
+    assert!(!track.segment.ready);
+    if let Some(attaching) = track.seat.attaching() {
         assert_eq!(attaching.play, None);
     }
-    let receipts = track.adopting.len()
+    let receipts = track.adoptions.inflight.len()
         + track.playback_commands.len()
-        + usize::from(track.attaching.is_some());
+        + usize::from(track.seat.attaching().is_some());
     for _ in 0..receipts {
         let receipt = answer_next(&mut rig, Ok(()));
         answer_track(&mut track, &mut rig, receipt);
@@ -238,8 +248,13 @@ fn assert_obsolete_preparation_refusal(host_rate: bool) {
             TrackCommand::Seek { to: Duration::ZERO }
         },
     );
-    let current = track.segment;
-    let obsolete = track.lane_commands.last().expect("first preparation").seq;
+    let current = track.segment.id;
+    let obsolete = track
+        .lane_history
+        .commands
+        .last()
+        .expect("first preparation")
+        .seq;
     let replacement = track
         .send_lane(
             if host_rate {
@@ -260,7 +275,8 @@ fn assert_obsolete_preparation_refusal(host_rate: bool) {
     assert_ne!(obsolete, replacement);
     assert!(
         track
-            .lane_commands
+            .lane_history
+            .commands
             .iter()
             .all(|operation| matches!(operation.command,
         LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. } if id == current))
@@ -404,7 +420,7 @@ fn assert_incumbent_survives_release(
         }
     }
     assert!(!newcomer.attached());
-    assert!(!newcomer.releasing);
+    assert!(!newcomer.seat.releasing());
 }
 
 fn settle_refused_replacement(
@@ -443,8 +459,8 @@ fn settle_refused_replacement(
     }
     assert!(refused);
     assert!(!newcomer.attached());
-    assert_eq!(newcomer.attach_at, None);
-    assert!(!newcomer.releasing);
+    assert!(newcomer.seat.attached_at().is_none());
+    assert!(!newcomer.seat.releasing());
 }
 
 async fn assert_failed_replacement_keeps_incumbent(
@@ -455,7 +471,7 @@ async fn assert_failed_replacement_keeps_incumbent(
     let mut support = rig();
     let (mut mixer, mut pcm) = playing_incumbent(&mut support).await;
     let mut newcomer = track(A);
-    newcomer.slot = None;
+    newcomer.seat = Seat::Unseated;
     load(&mut newcomer, &mut support, Duration::ZERO);
     let opened = opened_fixture(&mut support, "failed-replacement-newcomer").await;
     let receipt = support.open(Ok(opened)).expect("native newcomer open");
@@ -492,7 +508,7 @@ async fn assert_failed_replacement_keeps_incumbent(
             panic!("replacement admission: {error}");
         }
     };
-    let segment = newcomer.segment;
+    let segment = newcomer.segment.id;
     let source = newcomer
         .send_lane(
             if host_rate {
@@ -588,12 +604,13 @@ async fn assert_terminal_adoption_refusal(cancelled: bool, outdated: bool) {
                 },
             )
             .expect("native adoption");
-            let segment = track.segment;
+            let segment = track.segment.id;
             if cancelled {
                 command_at_zero(&mut track, &mut rig, TrackCommand::Supersede);
                 assert!(
                     track
-                        .adopting
+                        .adoptions
+                        .inflight
                         .iter()
                         .any(|adoption| adoption.cancelled && adoption.parked.is_some())
                 );
@@ -651,7 +668,7 @@ async fn assert_terminal_adoption_refusal(cancelled: bool, outdated: bool) {
                 assert_eq!(track.status(), TrackStatus::Released);
                 assert!(!track.attached());
             }
-            let lane_count = track.lane_commands.len();
+            let lane_count = track.lane_history.commands.len();
             in_pass(&mut rig, frame(192), |out| {
                 track.settle(
                     TrackReceipt::Deck {
@@ -662,14 +679,14 @@ async fn assert_terminal_adoption_refusal(cancelled: bool, outdated: bool) {
                     out,
                 )
             });
-            assert!(track.adopting.is_empty());
-            assert_eq!(track.newest_epoch_pending, None);
-            assert_eq!(track.segment, segment);
-            assert_eq!(track.lane_commands.len(), lane_count);
+            assert!(track.adoptions.inflight.is_empty());
+            assert_eq!(track.adoptions.newest_epoch, None);
+            assert_eq!(track.segment.id, segment);
+            assert_eq!(track.lane_history.commands.len(), lane_count);
             in_pass(&mut rig, frame(256), |out| track.tick(frame(256), out));
-            assert_eq!(track.segment, segment);
-            assert_eq!(track.lane_commands.len(), lane_count);
-            assert_eq!(track.newest_epoch_pending, None);
+            assert_eq!(track.segment.id, segment);
+            assert_eq!(track.lane_history.commands.len(), lane_count);
+            assert_eq!(track.adoptions.newest_epoch, None);
             if release_before_receipt {
                 assert_eq!(track.status(), TrackStatus::Released);
             } else {
@@ -706,7 +723,7 @@ fn a_later_speed_does_not_replace_the_prepared_origin_law() {
         track.cue(Duration::ZERO, curve.clone(), out)
     })
     .expect("cue");
-    let segment = track.segment;
+    let segment = track.segment.id;
     inbox.drain();
     inbox
         .next_due(LaneFrame { segment, frame: 0 }, 1)
@@ -769,7 +786,7 @@ fn a_replay_entry_waits_for_native_adoption_after_lane_readiness() {
         track.cue(Duration::ZERO, curve.clone(), out)
     })
     .expect("replay cue");
-    let segment = track.segment;
+    let segment = track.segment.id;
     inbox.drain();
     inbox
         .next_due(LaneFrame { segment, frame: 0 }, 1)
@@ -785,7 +802,7 @@ fn a_replay_entry_waits_for_native_adoption_after_lane_readiness() {
         .expect("adoption pending")
     );
     assert_eq!(
-        track.lane_commands.len(),
+        track.lane_history.commands.len(),
         1,
         "lane readiness cannot reopen the replay again"
     );
@@ -798,7 +815,7 @@ fn a_replay_entry_waits_for_native_adoption_after_lane_readiness() {
         .expect("adopted replay")
     );
     assert_eq!(track.prepared_speed(), Some(&curve));
-    assert_eq!(track.lane_commands.len(), 1);
+    assert_eq!(track.lane_history.commands.len(), 1);
 }
 
 #[kithara::test]
@@ -809,7 +826,7 @@ fn an_older_native_ready_receipt_cannot_admit_the_replacement_segment() {
         track.cue(Duration::ZERO, SpeedCurve::Constant(1.0), out)
     })
     .expect("first cue");
-    let old = track.segment;
+    let old = track.segment.id;
     let curve = SpeedCurve::Approach(
         kithara_signal::ExponentialApproach::new(1.0, 0.9, 220.5).expect("replacement law"),
     );
@@ -817,9 +834,9 @@ fn an_older_native_ready_receipt_cannot_admit_the_replacement_segment() {
         track.cue(Duration::ZERO, curve.clone(), out)
     })
     .expect("replacement cue");
-    let current = track.segment;
+    let current = track.segment.id;
     let bound = Bound::AtOrAfter(frame(128));
-    assert_eq!(track.ready, None);
+    assert!(!track.segment.ready);
     assert_eq!(track.entry(bound), None);
     track.status = TrackStatus::Loading;
     assert_eq!(track.entry(bound), None);
@@ -844,7 +861,7 @@ fn an_older_native_ready_receipt_cannot_admit_the_replacement_segment() {
             .prepare_entry(frame(128), out))
         .expect("old receipt intake")
     );
-    assert_eq!(track.ready, Some(old));
+    assert!(!track.segment.ready);
     assert_eq!(track.entry(bound), None);
     track.status = TrackStatus::Loaded;
     assert_eq!(track.entry(bound), None);
@@ -870,7 +887,8 @@ fn an_older_native_ready_receipt_cannot_admit_the_replacement_segment() {
             .prepare_entry(frame(128), out))
         .expect("current receipt intake")
     );
-    assert_eq!(track.ready, Some(current));
+    assert!(track.segment.ready);
+    assert_eq!(track.segment.id, current);
     assert_eq!(track.entry(bound), Some(frame(128)));
     track.status = TrackStatus::Loaded;
     assert_eq!(track.entry(bound), Some(frame(128)));
@@ -930,7 +948,7 @@ fn a_ready_paused_segment_keeps_its_cue_over_an_old_slot_snapshot() {
     track.status = TrackStatus::Paused { at: Position::ZERO };
     let to = Duration::from_secs(2);
     let _ = command_at_zero(&mut track, &mut rig, TrackCommand::Seek { to });
-    let segment = track.segment;
+    let segment = track.segment.id;
     inbox.drain();
     inbox
         .next_due(LaneFrame { segment, frame: 0 }, 1)
@@ -973,7 +991,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
             .build(),
     );
     track.lane = Some(sender);
-    track.declick = FrameCount::new(32);
+    track.geometry.declick = FrameCount::new(32);
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
         session: frame(0),
@@ -984,7 +1002,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
         position: Duration::ZERO,
     });
     let to = Duration::from_secs(2);
-    let landing = frame(i64::try_from(track.declick.get()).expect("declick fits"));
+    let landing = frame(i64::try_from(track.geometry.declick.get()).expect("declick fits"));
     let seq = command_at_zero(
         &mut track,
         &mut rig,
@@ -1018,10 +1036,11 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
     }
     assert!(inbox.next_due(at, 1).is_none());
     track.settle_lane();
-    assert_eq!(track.lane_commands.len(), 2);
+    assert_eq!(track.lane_history.commands.len(), 2);
     assert!(
         track
-            .lane_commands
+            .lane_history
+            .commands
             .iter()
             .all(|operation| operation.seq == seq && operation.applied() == Some(applied))
     );

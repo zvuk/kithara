@@ -1,4 +1,8 @@
-use std::num::{NonZeroU32, NonZeroU64, NonZeroU128};
+use std::{
+    cell::Cell,
+    collections::VecDeque,
+    num::{NonZeroU32, NonZeroU64, NonZeroU128},
+};
 
 use kithara_abr::AbrHandle;
 use kithara_audio::TrackFailureKind;
@@ -7,14 +11,15 @@ use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
-    CrossfadeSettings, LaneCommand, LaneFrame,
+    CrossfadeSettings, LaneCommand, LaneFrame, LaneId,
     bridge::{FadeDir, PlaybackFault, Slot, SlotMark, TrackClock},
+    rt::track::PlayerResource,
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
 
 use super::super::settings::TrackSettingsChange;
-use crate::{OpenedTrack, PlayError, ResourceLoad};
+use crate::{PlayError, ResourceLoad};
 
 /// A position in a track's media.
 pub type Position = Duration;
@@ -164,28 +169,51 @@ impl AsRef<Self> for TrackSnapshot {
     }
 }
 
+/// Where the track's media lies on its source's raw clock.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Extent {
+    /// End of the track on the media clock.
+    pub(super) duration: Option<Duration>,
+    /// Raw source time of content zero.
+    pub(super) media_origin: Option<Duration>,
+}
+
+impl Extent {
+    pub(super) fn of(source: Option<AudioChunkInfo>) -> Self {
+        Self {
+            duration: source.and_then(|info| info.media_end),
+            media_origin: source.and_then(|info| info.media_origin),
+        }
+    }
+}
+
+/// The track's lane as the dispatcher knows it.
+#[derive(Clone, Copy)]
+pub(super) enum Registration {
+    /// The dispatcher holds no lane of this track.
+    None,
+    Registered(LaneId),
+    /// The release `seq` is in flight; a refusal leaves the lane registered.
+    Releasing {
+        lane: LaneId,
+        seq: Seq,
+    },
+}
+
+impl Registration {
+    pub(super) fn lane(self) -> Option<LaneId> {
+        match self {
+            Self::None => None,
+            Self::Registered(lane) | Self::Releasing { lane, .. } => Some(lane),
+        }
+    }
+}
+
 pub(super) struct Loading {
     pub(super) seq: Seq,
-    pub(super) opened: Option<OpenedTrack>,
+    /// The opened source's consumer, until a deck batch takes it.
+    pub(super) opened: Option<Box<PlayerResource>>,
     pub(super) speed: Option<(SpeedCurve, f32)>,
-}
-
-pub(super) struct Adoption {
-    pub(super) seq: Seq,
-    pub(super) caller: Seq,
-    pub(super) segment: SegmentId,
-    pub(super) parked: Option<(SegmentId, Position)>,
-    pub(super) cancelled: bool,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct Attaching {
-    pub(super) seq: Option<Seq>,
-    pub(super) caller: Seq,
-    pub(super) at: When<SessionFrame>,
-    pub(super) replacement: bool,
-    pub(super) play: Option<When<SessionFrame>>,
-    pub(super) obsolete: bool,
 }
 
 pub(super) struct LaneOperation {
@@ -263,6 +291,34 @@ pub(super) struct SpeedProjection {
     pub(super) initial_bits: u32,
     pub(super) declick: FrameCount,
     pub(super) speed: f32,
+}
+
+/// Every lane command a track has sent, with the lane's verdicts.
+///
+/// `speed_projection` is derived from `commands`, so the history changes only
+/// through `submit` and `answered`, which both drop it. `speed_answers` holds
+/// the settled speed commands until their callers collect them.
+#[derive(Default)]
+pub(super) struct LaneHistory {
+    pub(super) commands: Vec<LaneOperation>,
+    pub(super) speed_answers: VecDeque<SpeedAnswer>,
+    /// Entries name every projection input other than `commands`.
+    pub(super) speed_projection: Cell<Option<SpeedProjection>>,
+}
+
+impl LaneHistory {
+    pub(super) fn submit(&mut self, operations: impl IntoIterator<Item = LaneOperation>) {
+        self.speed_projection.set(None);
+        self.commands.extend(operations);
+    }
+
+    /// The operations one lane receipt answers, for their verdict.
+    pub(super) fn answered(&mut self, seq: Seq) -> impl Iterator<Item = &mut LaneOperation> {
+        self.speed_projection.set(None);
+        self.commands
+            .iter_mut()
+            .filter(move |operation| operation.seq == seq)
+    }
 }
 
 pub(super) enum PlannedChange<'a> {

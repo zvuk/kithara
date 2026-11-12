@@ -333,7 +333,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "broadcast"))]
     mod writes {
         use std::convert::Infallible;
 

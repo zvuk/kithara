@@ -76,19 +76,21 @@ emits the same probe records through `tracing`.
 
 <tr><td><code>hang</code></td><td>yes</td><td>Real hang-watchdog implementation (otherwise no-op)</td></tr>
 
+<tr><td><code>http-server</code></td><td>no</td><td>Local axum HTTP server for tests (native only)</td></tr>
+
+<tr><td><code>temp-dir</code></td><td>no</td><td>Temporary-directory fixtures</td></tr>
+
+<tr><td><code>load</code></td><td>no</td><td>One spinning thread per CPU during every <code>#[kithara::test]</code> body; enabled by <code>just test run --load=on</code></td></tr>
+
+<tr><td><code>no-block</code></td><td>no</td><td>Forward the blocking-call detector to <code>kithara-platform</code></td></tr>
+
 <tr><td><code>mock</code></td><td>no</td><td>Pulls <code>unimock</code> into the dependency graph; enables real <code>kithara::mock</code> expansion</td></tr>
 
 <tr><td><code>subscriber</code></td><td>no</td><td>The test log subscriber on <code>wasm32</code>, where <code>setup_tracing</code> and its siblings exist only with it; native builds always carry it</td></tr>
 
 <tr><td><code>usdt</code></td><td>no</td><td>Enables USDT probe emission: native DTrace on macOS and <code>tracing</code> on other targets (otherwise no-op)</td></tr>
 
-<tr><td><code>client-reqwest</code></td><td>no</td><td>Empty compatibility feature; selects no HTTP or TLS dependencies</td></tr>
-
-<tr><td><code>client-wreq</code></td><td>no</td><td>Empty compatibility feature; selects no HTTP or TLS dependencies</td></tr>
-
-<tr><td><code>tls-rustls</code></td><td>no</td><td>Empty compatibility feature; selects no HTTP or TLS dependencies</td></tr>
-
-<tr><td><code>tls-native</code></td><td>no</td><td>Empty compatibility feature; selects no HTTP or TLS dependencies</td></tr>
+<tr><td><code>client-reqwest</code>, <code>client-wreq</code>, <code>tls-rustls</code>, <code>tls-native</code></td><td>no</td><td>Empty compatibility features; select no HTTP or TLS dependencies</td></tr>
 
 </table>
 
@@ -125,20 +127,12 @@ is a separate timeout mechanism; it does not prove an active hang watchdog.
 `hang_timeout_secs(N)` sets the budget for watchdog helpers called inside the
 test. With `usdt` disabled, native consumers need no DTrace or USDT tooling.
 
-The [standalone tests](../../xtask/tests/fixtures/test_utils.rs) run in a temporary
-workspace outside the checkout. The runner creates its manifest from the root
-dependency versions and reuses one lockfile throughout the matrix. Its minimal,
-mock, multithread, hang, and config/derive modes run separately from the product
-workspace. The negative watchdog test runs only in a child process with an
-independent deadline. All temporary sources, build output and diagnostic files
-are removed when the command exits; results and failures appear in its normal
-log output. Wasm wrapper checks establish compilation only.
-
-Run `just test test-utils` for the full matrix. To verify a published git
-revision, set `KITHARA_TEST_UTILS_REV` to its full SHA and
-`KITHARA_TEST_UTILS_GIT_URL` to its repository URL without credentials.
-The runner prepares dependencies, then repeats tests with locked offline resolution.
-CI pins the tests to the checked-out revision automatically.
+The [standalone tests](../../xtask/tests/fixtures/test_utils.rs) build these
+modes (minimal, mock, multithread, hang, config/derive) in a temporary workspace
+outside the checkout; wasm wrapper checks establish compilation only. Run
+`just test test-utils` for the matrix. To verify a published git revision, set
+`KITHARA_TEST_UTILS_REV` to its full SHA and `KITHARA_TEST_UTILS_GIT_URL` to its
+repository URL without credentials.
 
 ### Integration tests live elsewhere
 

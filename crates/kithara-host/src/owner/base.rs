@@ -6,10 +6,15 @@ use kithara_command::{
 };
 use kithara_config::ConfigOwner;
 use kithara_play::{
-    DeckControl, DeckPass, HostedDeck, Outbox, PlayError, ResourceLoad, TrackReceipt,
+    DeckControl, DeckPass, HostedDeck, Outbox, OutputSnapshot, PlayError, ResourceLoad,
+    TrackReceipt,
 };
-use kithara_render::{DispatcherProtocol, PlayWorker, bridge::DeckPart};
+use kithara_render::{
+    DispatcherProtocol, PlayWorker,
+    bridge::{DeckEvents, DeckPart, DeckProtocol},
+};
 use kithara_signal::SessionFrame;
+use kithara_sync::TempoTrajectory;
 use kithara_worker::TaskHandle;
 
 use super::{DeckId, HostCommand, HostOwner, HostRegistration, HostSettled, PassClock};
@@ -287,40 +292,24 @@ where
         visit: &mut dyn FnMut(DeckId, &mut D, &mut Outbox<'_, S>, DeckPass<'_>),
     ) {
         let timed = self.clock();
-        let clock = timed.unwrap_or_default();
         let output = self.session.root_view.output.get();
+        let planned_tempo = self.session.timeline.trajectory();
         let Some(channel) = &mut self.session.channel else {
             return;
         };
         for (id, record) in &mut self.decks.0 {
-            let suspended = record
-                .suspended_at
-                .is_some_and(|at| record.snapshot.read().blocks <= at.saturating_add(1));
-            let pass = DeckPass {
-                mix: *record.mix.config(),
-                suspended,
-                now: clock.now,
-                delivery: clock.delivery,
-                deck_delivery: clock.deck_delivery,
-                output: &output,
-                deck: record.snapshot.read(),
-                planned_tempo: self.session.timeline.trajectory(),
-            };
             let Some(mut port) = channel.scope(record.scope) else {
                 continue;
             };
-            let mut out = Outbox::new(&mut port, &mut self.dispatcher)
-                .lend_mix(&mut record.mix)
-                .lend_session(
-                    &mut record.suspended_at,
-                    &record.session_bus,
-                    pass.deck.blocks,
-                )
-                .track_dispatches(&mut record.dispatches);
-            if timed.is_some() {
-                out = out.in_pass(pass);
-            }
-            visit(*id, &mut record.deck, &mut out, pass);
+            let mut deck = DeckVisit::open(
+                record,
+                &mut port,
+                &mut self.dispatcher,
+                timed,
+                &output,
+                planned_tempo,
+            );
+            visit(*id, deck.deck, &mut deck.out, deck.pass);
         }
     }
 
@@ -331,22 +320,8 @@ where
     ) -> Result<(), PlayError> {
         let index = self.decks.index(id)?;
         let timed = self.clock();
-        let clock = timed.unwrap_or_default();
         let output = self.session.root_view.output.get();
         let record = &mut self.decks.0[index].1;
-        let suspended = record
-            .suspended_at
-            .is_some_and(|at| record.snapshot.read().blocks <= at.saturating_add(1));
-        let pass = DeckPass {
-            mix: *record.mix.config(),
-            suspended,
-            now: clock.now,
-            delivery: clock.delivery,
-            deck_delivery: clock.deck_delivery,
-            output: &output,
-            deck: record.snapshot.read(),
-            planned_tempo: self.session.timeline.trajectory(),
-        };
         let mut port = self
             .session
             .channel
@@ -354,18 +329,15 @@ where
             .ok_or(PlayError::Closed)?
             .scope(record.scope)
             .ok_or(PlayError::Closed)?;
-        let mut out = Outbox::new(&mut port, &mut self.dispatcher)
-            .lend_mix(&mut record.mix)
-            .lend_session(
-                &mut record.suspended_at,
-                &record.session_bus,
-                pass.deck.blocks,
-            )
-            .track_dispatches(&mut record.dispatches);
-        if timed.is_some() {
-            out = out.in_pass(pass);
-        }
-        visit(&mut record.deck, &mut out, pass);
+        let mut deck = DeckVisit::open(
+            record,
+            &mut port,
+            &mut self.dispatcher,
+            timed,
+            &output,
+            self.session.timeline.trajectory(),
+        );
+        visit(deck.deck, &mut deck.out, deck.pass);
         Ok(())
     }
 
@@ -461,7 +433,7 @@ where
 
     fn begin_pass(&mut self) {
         self.session.begin_iteration();
-        let clock = self.clock().unwrap_or_default();
+        let timed = self.clock();
         let output = self.session.root_view.output.get();
         loop {
             let receipt = {
@@ -497,39 +469,22 @@ where
             };
             let record = &mut self.decks.0[index].1;
             record.dispatches.retain(|seq| *seq != receipt.seq());
-            let suspended = record
-                .suspended_at
-                .is_some_and(|at| record.snapshot.read().blocks <= at.saturating_add(1));
-            let pass = DeckPass {
-                mix: *record.mix.config(),
-                suspended,
-                now: clock.now,
-                delivery: clock.delivery,
-                deck_delivery: clock.deck_delivery,
-                output: &output,
-                deck: record.snapshot.read(),
-                planned_tempo: self.session.timeline.trajectory(),
-            };
             if let Some(mut port) = self
                 .session
                 .channel
                 .as_mut()
                 .and_then(|channel| channel.scope(record.scope))
             {
-                let mut out = Outbox::new(&mut port, &mut self.dispatcher)
-                    .lend_mix(&mut record.mix)
-                    .lend_session(
-                        &mut record.suspended_at,
-                        &record.session_bus,
-                        pass.deck.blocks,
-                    )
-                    .track_dispatches(&mut record.dispatches);
-                if self.session.iteration_clock.is_some() {
-                    out = out.in_pass(pass);
-                }
-                record
-                    .deck
-                    .settle(TrackReceipt::Loaded(receipt), pass, &mut out);
+                let mut deck = DeckVisit::open(
+                    record,
+                    &mut port,
+                    &mut self.dispatcher,
+                    timed,
+                    &output,
+                    self.session.timeline.trajectory(),
+                );
+                deck.deck
+                    .settle(TrackReceipt::Loaded(receipt), deck.pass, &mut deck.out);
             }
         }
         while self.dispatcher.available() != 0 {
@@ -554,7 +509,7 @@ where
             }
         }
         self.retire_stopped_scopes();
-        self.route_receipts(clock);
+        self.route_receipts(timed);
         self.poll_events();
     }
 
@@ -564,8 +519,7 @@ where
         }
         self.session.publish_staged();
         self.retire_stopped_scopes();
-        let clock = self.clock().unwrap_or_default();
-        self.route_receipts(clock);
+        self.route_receipts(self.clock());
         if self.session.stream.is_none()
             && self.decks.0.is_empty()
             && let Err(error) = graph::drop_idle_context(&mut self.session)
@@ -604,7 +558,7 @@ where
         }
     }
 
-    fn route_receipts(&mut self, clock: PassClock) {
+    fn route_receipts(&mut self, clock: Option<PassClock>) {
         let output = self.session.root_view.output.get();
         let mut moved = Vec::new();
         loop {
@@ -661,38 +615,22 @@ where
                     {
                         let seq = receipt.seq();
                         let (outcome, mut batch) = receipt.into();
-                        let suspended = record.suspended_at.is_some_and(|at| {
-                            record.snapshot.read().blocks <= at.saturating_add(1)
-                        });
-                        let pass = DeckPass {
-                            mix: *record.mix.config(),
-                            suspended,
-                            now: clock.now,
-                            delivery: clock.delivery,
-                            deck_delivery: clock.deck_delivery,
-                            output: &output,
-                            deck: record.snapshot.read(),
-                            planned_tempo: self.session.timeline.trajectory(),
-                        };
-                        let mut out = Outbox::new(&mut port, &mut self.dispatcher)
-                            .lend_mix(&mut record.mix)
-                            .lend_session(
-                                &mut record.suspended_at,
-                                &record.session_bus,
-                                pass.deck.blocks,
-                            )
-                            .track_dispatches(&mut record.dispatches);
-                        if self.session.iteration_clock.is_some() {
-                            out = out.in_pass(pass);
-                        }
-                        record.deck.settle(
+                        let mut deck = DeckVisit::open(
+                            record,
+                            &mut port,
+                            &mut self.dispatcher,
+                            clock,
+                            &output,
+                            self.session.timeline.trajectory(),
+                        );
+                        deck.deck.settle(
                             TrackReceipt::Deck {
                                 seq,
                                 outcome: &outcome,
                                 batch: &mut batch,
                             },
-                            pass,
-                            &mut out,
+                            deck.pass,
+                            &mut deck.out,
                         );
                     }
                 }
@@ -724,41 +662,87 @@ where
 
     fn poll_events(&mut self) {
         let output = self.session.root_view.output.get();
+        let planned_tempo = self.session.timeline.trajectory();
         if let Some(clock) = self.session.iteration_clock
             && let Some(channel) = &mut self.session.channel
         {
             for (_, record) in &mut self.decks.0 {
-                let suspended = record
-                    .suspended_at
-                    .is_some_and(|at| record.snapshot.read().blocks <= at.saturating_add(1));
-                let pass = DeckPass {
-                    mix: *record.mix.config(),
-                    suspended,
-                    now: clock.now,
-                    delivery: clock.delivery,
-                    deck_delivery: clock.deck_delivery,
-                    output: &output,
-                    deck: record.snapshot.read(),
-                    planned_tempo: self.session.timeline.trajectory(),
-                };
                 let Some(mut port) = channel.scope(record.scope) else {
                     continue;
                 };
-                let mut out = Outbox::new(&mut port, &mut self.dispatcher)
-                    .in_pass(pass)
-                    .lend_mix(&mut record.mix)
-                    .lend_session(
-                        &mut record.suspended_at,
-                        &record.session_bus,
-                        pass.deck.blocks,
-                    )
-                    .track_dispatches(&mut record.dispatches);
-                for event in record.receipts.drain() {
-                    record
-                        .deck
-                        .settle(TrackReceipt::Event(event), pass, &mut out);
+                let deck = DeckVisit::open(
+                    record,
+                    &mut port,
+                    &mut self.dispatcher,
+                    Some(clock),
+                    &output,
+                    planned_tempo,
+                );
+                let DeckVisit {
+                    deck,
+                    receipts,
+                    mut out,
+                    pass,
+                } = deck;
+                for event in receipts.drain() {
+                    deck.settle(TrackReceipt::Event(event), pass, &mut out);
                 }
             }
+        }
+    }
+}
+
+/// A deck record split into what one pass lends.
+struct DeckVisit<'a, S, D: ?Sized> {
+    deck: &'a mut D,
+    receipts: &'a mut DeckEvents,
+    out: Outbox<'a, S>,
+    pass: DeckPass<'a>,
+}
+
+impl<'a, S, D: ?Sized> DeckVisit<'a, S, D> {
+    /// Splits `record` into what the pass lends. A pass on the session clock
+    /// also carries its view in the outbox.
+    fn open(
+        record: &'a mut Deck<S, D>,
+        port: &'a mut dyn Port<DeckProtocol>,
+        dispatcher: &'a mut Sender<DispatcherProtocol<ResourceLoad<S>>>,
+        clock: Option<PassClock>,
+        output: &'a OutputSnapshot,
+        planned_tempo: &'a TempoTrajectory,
+    ) -> Self {
+        let timed = clock.is_some();
+        let clock = clock.unwrap_or_default();
+        // One read: the suspension test and the pass view see the same snapshot.
+        let snapshot = record.snapshot.read();
+        let pass = DeckPass {
+            mix: *record.mix.config(),
+            suspended: record
+                .suspended_at
+                .is_some_and(|at| snapshot.blocks <= at.saturating_add(1)),
+            now: clock.now,
+            delivery: clock.delivery,
+            deck_delivery: clock.deck_delivery,
+            output,
+            deck: snapshot,
+            planned_tempo,
+        };
+        let mut out = Outbox::new(port, dispatcher)
+            .lend_mix(&mut record.mix)
+            .lend_session(
+                &mut record.suspended_at,
+                &record.session_bus,
+                snapshot.blocks,
+            )
+            .track_dispatches(&mut record.dispatches);
+        if timed {
+            out = out.in_pass(pass);
+        }
+        Self {
+            deck: &mut record.deck,
+            receipts: &mut record.receipts,
+            out,
+            pass,
         }
     }
 }
@@ -873,6 +857,8 @@ impl<S: 'static, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
             }
         }
         self.retire_stopped_scopes();
-        self.route_receipts(PassClock::default());
+        // Closing settles on a zero clock; the pass view rides along only
+        // inside an iteration.
+        self.route_receipts(self.session.iteration_clock.map(|_| PassClock::default()));
     }
 }

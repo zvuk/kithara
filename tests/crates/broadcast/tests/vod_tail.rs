@@ -5,14 +5,19 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
     decode::DecoderBackend,
+    download::{Downloader, DownloaderConfig},
     hls::{Hls, HlsConfig},
-    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
+    net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        time::Duration,
+        tokio::{runtime::Handle, task::spawn_blocking},
+    },
     play::{PlayWorker, PlayWorkerConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
-    hls_fixture::create_test_downloader,
     mock::LaneAudio,
 };
 use kithara_test_fixtures::integration_fixtures::origin_tone;
@@ -42,8 +47,14 @@ async fn the_production_client_plays_the_stopped_broadcast(origin_tone: Vec<f32>
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
         .build();
     let master = Url::parse(origin.handle.url()).expect("the handle reports a URL");
+    let client = HttpClient::new(NetOptions::default(), pools.clone(), CancelToken::never());
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(client)
+            .runtime(Handle::current())
+            .build(),
+    );
     let hls_config = HlsConfig::for_url(master)
-        .downloader(create_test_downloader())
+        .downloader(downloader)
         .store(store)
         .pools(pools.clone())
         .cancel(CancelToken::never())

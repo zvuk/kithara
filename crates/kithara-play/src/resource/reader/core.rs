@@ -171,12 +171,21 @@ pub(super) fn geometry(
         .ok_or_else(|| PlayError::Internal("lane ring frame depth overflow".into()))
 }
 
+/// The lane sizes a source's configuration fixes before it opens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LaneGeometry {
+    /// Maximum rendered lead, including the held packet.
+    pub(crate) ring_depth: FrameCount,
+    /// Length of the lane's Jump ramp.
+    pub(crate) declick: FrameCount,
+}
+
 /// A single-use source open and its preparation-owned lane wiring.
 pub struct ResourceLoad<S, B = PlaybackResamplerBackend> {
     pub(super) opener: Box<ResourceOpener>,
     pub(super) channel: Option<Box<dyn Fn() -> LaneChannel + Send>>,
     pub(super) cancel: Option<CancelToken>,
-    pub(super) geometry: Result<(FrameCount, FrameCount), PlayError>,
+    pub(super) geometry: Result<LaneGeometry, PlayError>,
     pub(super) marker: PhantomData<ResourceMarker<S, B>>,
 }
 
@@ -199,8 +208,7 @@ impl<S, B> ResourceLoad<S, B> {
         Ok(channel())
     }
 
-    /// Maximum rendered lead, including the held packet, and the lane's Jump ramp.
-    pub(crate) fn lane_geometry(&self) -> Result<(FrameCount, FrameCount), PlayError> {
+    pub(crate) fn lane_geometry(&self) -> Result<LaneGeometry, PlayError> {
         self.geometry.clone()
     }
 }
@@ -229,9 +237,7 @@ where
         }
     }
 
-    fn config_geometry(
-        config: &ResourceConfig<S, B>,
-    ) -> Result<(FrameCount, FrameCount), PlayError> {
+    fn config_geometry(config: &ResourceConfig<S, B>) -> Result<LaneGeometry, PlayError> {
         config.worker.as_ref().ok_or_else(|| {
             PlayError::Internal("ResourceConfig requires an explicit PlayWorker".into())
         })?;
@@ -241,7 +247,10 @@ where
         let rate = config.host_sample_rate.ok_or_else(|| {
             PlayError::Internal("lane geometry requires the prepared host sample rate".into())
         })?;
-        Ok((ring_depth, track.declick_frames(rate)))
+        Ok(LaneGeometry {
+            ring_depth,
+            declick: track.declick_frames(rate),
+        })
     }
 
     async fn load(
@@ -475,7 +484,10 @@ mod tests {
         .build();
         let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
 
-        let (ring_depth, _) = load.lane_geometry().expect("bounded lane geometry");
+        let ring_depth = load
+            .lane_geometry()
+            .expect("bounded lane geometry")
+            .ring_depth;
 
         assert_eq!(ring_depth, FrameCount::new(expected_frames));
     }

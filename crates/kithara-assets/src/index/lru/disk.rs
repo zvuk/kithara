@@ -1,30 +1,19 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    path::PathBuf,
-    sync::{
-        OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::path::PathBuf;
 
 use kithara_bufpool::ByteBuffer;
 use kithara_platform::sync::{Arc, Mutex};
-use kithara_storage::StorageError;
 use rkyv::rancor::Error;
 
-use super::{core::LruIndex, inner::LruInner, state::LruState};
+use super::{core::LruIndex, state::LruState};
 use crate::{
-    error::{AssetsError, AssetsResult},
-    index::persistence::{IndexFile, schema::LruIndexFile},
+    error::AssetsResult,
+    index::{
+        persistence::{IndexCell, IndexFile, read_archived, schema::LruIndexFile, write_record},
+        schema::ArchivedLruIndexFile,
+    },
 };
-
-pub(super) struct LruPersist {
-    file: IndexFile,
-    /// One writer at a time for `lru.bin`: the snapshot and the atomic
-    /// rename that publishes it are one step.
-    writing: Mutex<()>,
-}
 
 impl LruIndex {
     /// Construct a disk-backed index rooted at `path`.
@@ -38,55 +27,24 @@ impl LruIndex {
             tracing::debug!("read existing lru.bin failed: {e}");
             LruState::default()
         });
+        let inner = IndexCell::new(Mutex::new(initial));
+        inner.persist_to(file, write_state);
         Self {
-            inner: Arc::new(LruInner {
-                state: Mutex::new(initial),
-                persist: Some(LruPersist {
-                    file,
-                    writing: Mutex::new(()),
-                }),
-                hub: OnceLock::new(),
-                dirty: AtomicBool::new(false),
-            }),
+            inner: Arc::new(inner),
         }
-    }
-}
-
-impl LruInner {
-    pub(super) fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
-        let Some(persist) = self.persist.as_ref() else {
-            self.dirty.store(false, Ordering::Release);
-            return Ok(());
-        };
-        let _writing = persist.writing.lock();
-        let snapshot = self.state.lock().clone();
-        write_state(&persist.file, &snapshot, durable)?;
-        self.dirty.store(false, Ordering::Release);
-        Ok(())
     }
 }
 
 fn read_state(file: &IndexFile, buf: &mut ByteBuffer) -> AssetsResult<LruState> {
-    file.read_into(buf)?;
-    if buf.is_empty() {
+    let Some(archived) = read_archived::<ArchivedLruIndexFile>(file, buf)? else {
         return Ok(LruState::default());
-    }
-
-    let index = match rkyv::access::<crate::index::schema::ArchivedLruIndexFile, Error>(buf) {
-        Ok(archived) => rkyv::deserialize::<LruIndexFile, Error>(archived)
-            .expect("BUG: LRU archived → owned deserialize"),
-        Err(e) => {
-            tracing::debug!("Failed to deserialize lru index: {}", e);
-            return Ok(LruState::default());
-        }
     };
-
+    let index = rkyv::deserialize::<LruIndexFile, Error>(archived)
+        .expect("BUG: LRU archived → owned deserialize");
     Ok(LruState::from(index))
 }
 
-fn write_state(file: &IndexFile, state: &LruState, durable: bool) -> AssetsResult<()> {
-    let index = LruIndexFile::from(state);
-    let bytes = rkyv::to_bytes::<Error>(&index)
-        .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
-    file.write(&bytes, durable)
+fn write_state(state: &Mutex<LruState>, file: &IndexFile, durable: bool) -> AssetsResult<()> {
+    let state = state.lock().clone();
+    write_record(file, &LruIndexFile::from(&state), durable)
 }

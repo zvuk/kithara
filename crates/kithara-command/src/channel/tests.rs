@@ -155,6 +155,29 @@ fn the_next_moment_bounds_a_block_the_executor_sizes() {
     assert_eq!(inbox.frames_until_due(Frame(4)), Some(0));
 }
 
+#[kithara::test]
+fn the_next_timed_batch_shows_its_moment_and_commands_untaken() {
+    let (mut sender, mut inbox) = pair(8, 0);
+    assert!(inbox.next_timed().is_none());
+    send(&mut sender, When::At(Frame(40)), batch(1, &[]));
+    let near = send(&mut sender, When::At(Frame(10)), batch(2, &[]));
+    send(&mut sender, When::Deferred, batch(3, &[]));
+    inbox.drain();
+
+    let timed = inbox.next_timed().expect("a batch waits for frame 10");
+    assert_eq!((timed.at(), timed.commands()), (Frame(10), &[2][..]));
+    assert_eq!(run_block(&mut inbox, 0, BLOCK), [(10, 2), (40, 1)]);
+    assert_eq!(outcomes(&mut sender)[0], (near, applied(10)));
+
+    send(&mut sender, When::At(Frame(90)), batch(4, &[]));
+    send(&mut sender, When::Next, batch(5, &[]));
+    inbox.drain();
+    assert!(
+        inbox.next_timed().is_none(),
+        "a batch for the next block runs before any frame of the clock"
+    );
+}
+
 /// What an executor saw while it rendered one block through its inbox.
 #[derive(Debug, PartialEq, Eq)]
 enum Seen {

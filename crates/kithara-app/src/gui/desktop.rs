@@ -1,9 +1,13 @@
 use std::path::Path;
 
 use arc_swap::ArcSwap;
-use kithara::platform::{
-    sync::Arc,
-    tokio::{runtime::Handle, sync::mpsc},
+use kithara::{
+    platform::{
+        CancelToken,
+        sync::Arc,
+        tokio::{runtime::Handle, sync::mpsc},
+    },
+    worker::Worker,
 };
 use kithara_app_library::Registration;
 
@@ -32,6 +36,20 @@ pub enum Host {
     Retained,
 }
 
+struct AppOwner {
+    worker: Option<Worker>,
+    shutdown: CancelToken,
+}
+
+impl Drop for AppOwner {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+        if let Some(worker) = &self.worker {
+            worker.shutdown();
+        }
+    }
+}
+
 /// Builds the engine over `audio` on its own thread, then runs the studio in
 /// `host` until the application exits.
 ///
@@ -46,6 +64,10 @@ pub fn run(
     audio: AppHost,
     runtime: &Handle,
 ) -> Result<(), FrontendError> {
+    let owner = AppOwner {
+        worker: config.base_worker.clone(),
+        shutdown: config.shutdown.clone(),
+    };
     let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
     let (commands, receiver) = mpsc::unbounded_channel();
     let boot = Boot::builder()
@@ -72,8 +94,98 @@ pub fn run(
         Host::Retained => retained(boot),
     };
 
-    let finished = driver.finish(&shutdown);
+    if result.is_err() {
+        owner.shutdown.cancel();
+    }
+    let finished = driver.finish();
     result?;
     finished?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use ::kithara::{
+        platform::{
+            CancelScope,
+            sync::mpsc,
+            thread,
+            time::{Duration, Instant},
+        },
+        worker::{DispatcherConfig, Event, Observer, TaskConfig, TaskError, WorkerConfig},
+    };
+    use kithara_test_utils::kithara;
+
+    use super::{AppOwner, Worker};
+
+    struct HeldCleanup {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl Observer for HeldCleanup {
+        fn on_event(&mut self, _: Event) {}
+    }
+
+    impl Drop for HeldCleanup {
+        fn drop(&mut self) {
+            self.entered.send(()).ok();
+            self.release.recv().ok();
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    #[case::normal(false)]
+    #[case::error(true)]
+    fn the_app_owner_joins_shared_worker_cleanup_on_every_return(#[case] fail: bool) {
+        let scope = CancelScope::new(None);
+        let shutdown = scope.token();
+        let worker = Worker::new(WorkerConfig::new().with_cancel(shutdown.child()));
+        let (entered, entered_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let dispatcher = worker.dispatcher(
+            DispatcherConfig::builder()
+                .name("app-owner-cleanup")
+                .observer(HeldCleanup {
+                    entered,
+                    release: release_rx,
+                })
+                .build(),
+        );
+        let owner = AppOwner {
+            worker: Some(worker.clone()),
+            shutdown: shutdown.clone(),
+        };
+        let (returned, returned_rx) = mpsc::channel();
+        let closer = thread::spawn(move || {
+            let run = move || {
+                let _owner = owner;
+                if fail { Err(()) } else { Ok(()) }
+            };
+            returned.send(run()).expect("application returned");
+        });
+
+        let entered = entered_rx.recv_timeout(Instant::now() + Duration::from_secs(2));
+        let premature = returned_rx.recv_timeout(Instant::now() + Duration::from_millis(50));
+        drop(release);
+        closer.join().expect("application owner exits");
+
+        entered.expect("dispatcher cleanup started");
+        assert!(
+            premature.is_err(),
+            "application return must wait for its worker"
+        );
+        assert_eq!(
+            returned_rx
+                .try_recv()
+                .expect("application returned after cleanup"),
+            if fail { Err(()) } else { Ok(()) }
+        );
+        assert!(shutdown.is_cancelled());
+        assert!(worker.is_cancelled());
+        assert!(matches!(
+            dispatcher.reserve(TaskConfig::new()),
+            Err(TaskError::Stopped)
+        ));
+    }
 }

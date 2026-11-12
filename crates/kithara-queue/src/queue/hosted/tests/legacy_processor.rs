@@ -1,4 +1,5 @@
 use kithara_render::bridge::SlotState;
+use kithara_worker::Worker;
 use num_traits::ToPrimitive;
 
 use super::*;
@@ -34,7 +35,13 @@ struct ThresholdRig {
 
 impl ThresholdRig {
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    async fn playing(duration: f64, fade: f32, lead: f32, frames: Option<usize>) -> Self {
+    async fn playing(
+        worker: &Worker,
+        duration: f64,
+        fade: f32,
+        lead: f32,
+        frames: Option<usize>,
+    ) -> Self {
         use kithara_render::{Dispatched, DispatcherCommand, PcmPacket};
         use kithara_signal::AudioChunk;
 
@@ -61,7 +68,11 @@ impl ThresholdRig {
             mock::SAMPLE_RATE,
         );
         let prep = ResourcePrep::builder()
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools())
+                    .worker(worker.clone())
+                    .build(),
+            ))
             .block_on_underrun(true)
             .build();
         let (fixture_dispatcher, fixture_inbox) =
@@ -547,8 +558,10 @@ impl ThresholdRig {
 }
 
 #[kithara::test(tokio)]
-async fn handover_emits_once_when_position_crosses_fade_threshold() {
-    let mut rig = ThresholdRig::playing(10.0, 0.2, 3.5, None).await;
+async fn handover_emits_once_when_position_crosses_fade_threshold(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = ThresholdRig::playing(&worker_owner.0, 10.0, 0.2, 3.5, None).await;
     rig.seek(9.79).await;
     rig.until(4, false).await;
     assert_eq!(rig.handovers, 1);
@@ -565,10 +578,10 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn prefetch_fires_before_handover() {
+async fn prefetch_fires_before_handover(#[by_ref] worker_owner: &WorkerOwner) {
     for (duration, lead, seek) in [(10.0, 2.0, Some(8.5)), (0.5, 5.0, None)] {
         hang_tick!();
-        let mut rig = ThresholdRig::playing(duration, 0.0, lead, None).await;
+        let mut rig = ThresholdRig::playing(&worker_owner.0, duration, 0.0, lead, None).await;
         if let Some(position) = seek {
             rig.seek(position).await;
         }
@@ -586,8 +599,10 @@ async fn prefetch_fires_before_handover() {
 }
 
 #[kithara::test(tokio)]
-async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
-    let mut rig = ThresholdRig::playing(10.0, 0.2, 2.0, None).await;
+async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = ThresholdRig::playing(&worker_owner.0, 10.0, 0.2, 2.0, None).await;
     rig.seek(8.5).await;
     rig.read(THRESHOLD_BLOCK).await;
     assert_eq!(rig.prefetches, 1);
@@ -606,8 +621,10 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
 }
 
 #[kithara::test(tokio)]
-async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
-    let mut rig = ThresholdRig::playing(10.0, 0.2, 0.0, None).await;
+async fn prefetch_and_handover_both_fire_when_thresholds_coincide(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = ThresholdRig::playing(&worker_owner.0, 10.0, 0.2, 0.0, None).await;
     rig.seek(5.0).await;
     rig.read(THRESHOLD_BLOCK).await;
     assert_eq!(rig.prefetches, 0);
@@ -619,8 +636,10 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
 }
 
 #[kithara::test(tokio)]
-async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
-    let mut rig = ThresholdRig::playing(0.01, 0.0, 3.5, None).await;
+async fn handover_backstops_eof_when_threshold_was_not_reached_earlier(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = ThresholdRig::playing(&worker_owner.0, 0.01, 0.0, 3.5, None).await;
     rig.read(THRESHOLD_BLOCK).await;
     let slot = &rig
         .mixer
@@ -652,8 +671,10 @@ async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
 }
 
 #[kithara::test(tokio)]
-async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
-    let mut rig = ThresholdRig::playing(5.0, 0.2, 3.5, None).await;
+async fn handover_is_not_duplicated_at_eof_after_early_trigger(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = ThresholdRig::playing(&worker_owner.0, 5.0, 0.2, 3.5, None).await;
     rig.until(600, true).await;
     assert_eq!(rig.handovers, 1);
     assert_eq!(rig.ends, 1);
@@ -661,8 +682,10 @@ async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
 }
 
 #[kithara::test(tokio)]
-async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
-    let mut rig = ThresholdRig::playing(10.0, 0.0, 3.5, Some(900)).await;
+async fn handover_uses_buffered_eof_when_duration_is_overestimated(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = ThresholdRig::playing(&worker_owner.0, 10.0, 0.0, 3.5, Some(900)).await;
     let pcm = rig.read(THRESHOLD_BLOCK).await;
     let observed = rig
         .mixer
@@ -830,8 +853,10 @@ fn block(queue: &mut Queue<TestPools>, rig: &mut mock::DeckRig<TestPools>, at: i
 }
 
 #[kithara::test(tokio)]
-async fn a_fade_in_makes_its_track_leading_and_a_preload_does_not() {
-    let (mut queue, _, second, mut rig, dir) = pending_selection();
+async fn a_fade_in_makes_its_track_leading_and_a_preload_does_not(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, _, second, mut rig, dir) = pending_selection(&worker_owner.0);
     let leading_source = answer_duration(&mut queue, &mut rig, &dir, 64.0).await;
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.control().duration_seconds(), Some(64.0));
@@ -858,18 +883,25 @@ async fn a_fade_in_makes_its_track_leading_and_a_preload_does_not() {
     assert_eq!(queue.control().position_seconds(), Some(0.0));
     assert_eq!(queue.control().duration_seconds(), Some(162.0));
     drop((leading_source, successor_source));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[case::stitched_in(0.01, Some(SlotState::Playing))]
 #[case::still_preloading(60.0, None)]
 async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
+    #[by_ref] worker_owner: &WorkerOwner,
     #[case] leading_secs: f64,
     #[case] after_cancel: Option<SlotState>,
 ) {
     let dir = TestTempDir::new();
     let prep = ResourcePrep::builder()
-        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::builder(pools())
+                .worker(worker_owner.0.clone())
+                .build(),
+        ))
         .build();
     let mut queue = Queue::new(
         QueueConfig::builder()

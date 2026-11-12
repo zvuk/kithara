@@ -45,7 +45,7 @@ where
 }
 
 fn create_file_symphonia_universal<B, S>(
-    mut source: BoxedSource,
+    source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
     config: DecoderConfig<B, S>,
@@ -56,8 +56,7 @@ where
 {
     use crate::{
         demuxer::Demuxer,
-        gapless::scoped_probe,
-        symphonia::{FileOpen, SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
+        symphonia::{SymphoniaCodec, SymphoniaConfig},
     };
 
     tracing::debug!(
@@ -65,6 +64,34 @@ where
         ?container,
         "file-symphonia: dispatching to ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec>"
     );
+
+    let demuxer = open_file_demuxer(source, codec, container, &config)?;
+    let symphonia_config = SymphoniaConfig::builder().gapless(config.gapless).build();
+    let codec_impl = if SymphoniaCodec::supports(codec) {
+        SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)?
+    } else {
+        SymphoniaCodec::open_native(&demuxer.native_params)?
+    };
+    finish(demuxer, codec_impl, config)
+}
+
+/// Opens a file through `SymphoniaDemuxer` with the container's encoder trim
+/// and MP4 edit-list presentation applied. Every codec that decodes the
+/// demuxer's packets shares this, so the decoded timeline does not depend on
+/// the codec.
+pub(super) fn open_file_demuxer<B, S>(
+    mut source: BoxedSource,
+    codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    config: &DecoderConfig<B, S>,
+) -> DecodeResult<crate::symphonia::SymphoniaDemuxer>
+where
+    S: HasPool<u8>,
+{
+    use crate::{
+        gapless::scoped_probe,
+        symphonia::{FileOpen, SymphoniaDemuxer},
+    };
 
     let probed_gapless = if config.gapless && container != Some(ContainerFormat::Mp4) {
         scoped_probe(&mut *source, codec, &config.pools)?
@@ -94,13 +121,7 @@ where
         demuxer.set_gapless(probed_gapless);
     }
     demuxer.set_mp4_presentations(presentations, config.gapless);
-    let symphonia_config = SymphoniaConfig::builder().gapless(config.gapless).build();
-    let codec_impl = if SymphoniaCodec::supports(codec) {
-        SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)?
-    } else {
-        SymphoniaCodec::open_native(&demuxer.native_params)?
-    };
-    finish(demuxer, codec_impl, config)
+    Ok(demuxer)
 }
 
 pub(super) fn create_segment<B, S>(
@@ -170,5 +191,41 @@ mod tests {
         assert_eq!(first.meta.timestamp, kithara_platform::time::Duration::ZERO);
         assert_eq!(first.meta.frame_offset, 0);
         assert_eq!(first.meta.media_origin, Some(origin));
+    }
+
+    #[kithara::test]
+    fn file_demuxer_places_mp4_media_by_its_edit_list() {
+        use std::num::NonZeroU32;
+
+        use kithara_signal::AudioSpec;
+        use kithara_stream::{AudioCodec, ContainerFormat};
+        use kithara_test_fixtures::assets::signal_profile_m4a_aac_44100_2ch;
+
+        use crate::demuxer::Demuxer;
+
+        let bytes = signal_profile_m4a_aac_44100_2ch().bytes().to_vec();
+        let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
+            DecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .pools(pools())
+                .build();
+        let demuxer = super::open_file_demuxer(
+            Box::new(Cursor::new(bytes)),
+            AudioCodec::AacLc,
+            Some(ContainerFormat::Mp4),
+            &config,
+        )
+        .expect("the AAC M4A fixture opens through the shared file demuxer");
+
+        let rate = NonZeroU32::new(44_100).expect("non-zero rate");
+        let priming = AudioSpec::new(2, rate)
+            .duration_for(1024)
+            .expect("AAC priming duration");
+        assert_eq!(demuxer.media_origin(), Some(priming));
+        assert!(matches!(
+            demuxer.track_info().duration,
+            Some(crate::DecoderDuration::MediaEnd(end))
+                if end == kithara_platform::time::Duration::from_secs(6)
+        ));
     }
 }

@@ -131,10 +131,21 @@ impl<S> PlayWorker<S> {
         &self.0.pools
     }
 
-    /// Longest park duration before the render dispatcher checks for new work.
-    #[must_use]
-    pub fn wake_allowance(&self) -> Duration {
-        self.0.dispatcher.wake_allowance()
+    delegate::delegate! {
+        to self.0.dispatcher {
+            /// Longest park duration before the render dispatcher checks for new work.
+            #[must_use]
+            pub fn wake_allowance(&self) -> Duration;
+            /// Stop this playback scheduler and wait for native thread and TLS teardown.
+            ///
+            /// Call from a non-realtime thread after releasing its players. A shared base
+            /// worker and sibling dispatchers remain running.
+            ///
+            /// # Errors
+            /// Returns an error when called on this scheduler or when its thread panicked.
+            #[cfg(not(target_arch = "wasm32"))]
+            pub fn shutdown_and_join(&self) -> Result<(), kithara_worker::ShutdownError>;
+        }
     }
 
     pub fn wake(&self) {
@@ -231,7 +242,7 @@ where
                 end_timestamp: position,
                 ..AudioChunkInfo::default()
             };
-            let (mut receiver, port) = PcmReceiver::new(
+            let (receiver, port) = PcmReceiver::new(
                 audio_buffer_chunks,
                 block_on_underrun,
                 wake,
@@ -239,11 +250,10 @@ where
                 position,
             );
             let activity = audio.take_activity_writer();
-            let mut warp = Warp::new(
+            let warp = Warp::new(
                 (),
                 &warp.starting_at(warp.speed(), start.keylock, start.backend),
             );
-            receiver.render_publisher = warp.take_publisher();
             let pools = self.pools().clone();
             let dispatch = tracing::dispatcher::get_default(Clone::clone);
             let span = tracing::Span::current();

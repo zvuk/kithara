@@ -66,7 +66,7 @@ pub(crate) struct OfflineTaskConfig<S> {
     #[config(skip = "applied to the offline backend")]
     pub(crate) declared_latency: Duration,
     #[config(skip = "transferred to session output")]
-    pub(crate) output: SessionOutput,
+    pub(crate) output: SessionOutput<S>,
     #[config(skip = "transferred to session state")]
     pub(crate) settings: Live<HostSettings, HostProtocol>,
     #[config(skip = "transferred to session state")]

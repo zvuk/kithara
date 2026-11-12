@@ -12,6 +12,8 @@ use kithara_platform::sync::{
 };
 use kithara_signal::AudioChunkInfo;
 use kithara_sync::SpeedCurve;
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use kithara_test_fixtures::signal::{mean_abs, rms};
 use kithara_test_utils::{bufpool::TestPools, kithara};
 use kithara_warp::{StretchKind, WarpCapabilities};
 
@@ -477,6 +479,52 @@ pub(in crate::source) fn alignment(
                 if next.1 > best.1 { next } else { best }
             },
         )
+}
+
+/// A stereo train of kicks 24000 frames apart, the first on frame 4800, in
+/// silence: each kick sounds on the lane frame its source frame renders on.
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+pub(in crate::source) fn kicks() -> Vec<f32> {
+    kithara_test_fixtures::unit_fixtures::stretch_kick_body()
+}
+
+/// The frame near `expected` on which a kick of mono `samples` rises to half
+/// its peak level.
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+pub(in crate::source) fn kick_onset(samples: &[f32], expected: f64) -> f64 {
+    const REACH: usize = 6_000;
+    const ENVELOPE_FRAMES: usize = 32;
+    let frame: usize = expected.round().as_();
+    let start = frame.saturating_sub(REACH);
+    let mut envelope = samples[start..frame + REACH]
+        .windows(ENVELOPE_FRAMES)
+        .map(mean_abs);
+    let peak = envelope.clone().fold(0.0_f32, f32::max);
+    assert!(peak > 0.1, "the kick must survive rendering");
+    let onset = envelope
+        .position(|level| level >= peak * 0.5)
+        .expect("the kick reaches half its peak");
+    (start + onset).as_()
+}
+
+/// The widest level change, in dB, of mono `rendered` over 50 ms windows
+/// against the left channel of the stereo `tone` it renders.
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+pub(in crate::source) fn tone_level_db(rendered: &[f32], tone: &[f32]) -> f32 {
+    const WINDOW: usize = 2_205;
+    const HOP: usize = 441;
+    let reference = rms(&tone.iter().step_by(2).copied().collect::<Vec<_>>());
+    rendered
+        .windows(WINDOW)
+        .step_by(HOP)
+        .map(|window| 20.0 * (rms(window) / reference).log10())
+        .fold(0.0, |widest: f32, level| {
+            if level.abs() > widest.abs() {
+                level
+            } else {
+                widest
+            }
+        })
 }
 
 /// A stereo 440 Hz sine at half scale: a keylock engine keeps its pitch at

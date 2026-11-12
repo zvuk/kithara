@@ -13,7 +13,7 @@ mod sink;
 mod tests;
 
 pub use self::{
-    inbox::{Inbox, Step},
+    inbox::{Inbox, Step, Timed},
     level::{Deferred, Due, LevelInbox},
     port::Port,
     sender::{SendError, Sender, channel},
