@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use kithara_dsp::curve::CurveShape;
 use kithara_effects::filter::{FilterError, FilterMotion, FilterParameter, FilterSettingsChange};
 use kithara_signal::SessionFrame;
 
@@ -62,7 +63,7 @@ impl FilterProgram {
             let value = f64::from(self.parameter.change(raw).ok_or(FilterError::Parameters)?);
             if value != previous {
                 variation += FilterMotion::distance(self.parameter, rate, previous, value)?;
-                let changes = if shape == super::CurveShape::HOLD {
+                let changes = if shape == CurveShape::HOLD {
                     1
                 } else {
                     next - frame
@@ -112,7 +113,6 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::bridge::CurveShape;
 
     #[kithara::test]
     fn fields_admit_their_own_ranges_without_narrowing_cutoff_or_q() {

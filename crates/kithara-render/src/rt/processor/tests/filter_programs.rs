@@ -143,7 +143,7 @@ fn cutoff_curve_is_geometric_frame_exact_and_has_no_second_smoothing() {
                 })
                 .collect();
             assert_eq!(bits(&actual), bits(&expected));
-            assert_ne!(bits(&actual), bits(&vec![1.0; 32]));
+            assert_ne!(bits(&actual), bits(&[1.0; 32]));
             let replies = receipts(&mut ends);
             assert_eq!(replies.len(), 3);
             assert_applied_at(outcome_of(&replies, seq), origin + 5);
