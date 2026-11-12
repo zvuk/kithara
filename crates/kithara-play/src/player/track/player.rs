@@ -173,7 +173,8 @@ impl<S> Player<S> for PlayerImpl<S> {
             ring_depth: self.geometry.ring_depth,
             lane_room: self.lane.as_ref().map_or(0, Sender::available),
             pending_lane: self
-                .lane_commands
+                .lane_history
+                .commands
                 .iter()
                 .any(|operation| operation.applied().is_none())
                 || self
@@ -392,10 +393,7 @@ impl<S> PlayerImpl<S> {
             }
             self.seat.detached();
             self.mark = None;
-            self.play = None;
-            self.segment.ready = false;
-            self.playback_commands.clear();
-            self.adoptions.clear();
+            self.leave_deck();
             if let Err(error) = self.release_lane(out) {
                 warn!(%error, "lane release waits for dispatcher room");
             }

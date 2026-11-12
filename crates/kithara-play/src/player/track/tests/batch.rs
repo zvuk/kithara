@@ -29,7 +29,12 @@ async fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(
     track.status = TrackStatus::Loading;
     assert_eq!(track.entry(bound), None);
     assert_ne!(
-        track.lane_commands.last().expect("segment command").segment,
+        track
+            .lane_history
+            .commands
+            .last()
+            .expect("segment command")
+            .segment,
         segment
     );
     assert_eq!(track.prepared_speed(), Some(&curve));
@@ -170,7 +175,12 @@ async fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reser
     let segment = track.segment.id;
     command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::Next });
     assert_eq!(track.play, Some(When::Next));
-    let prepared = track.lane_commands.last().expect("native preparation").seq;
+    let prepared = track
+        .lane_history
+        .commands
+        .last()
+        .expect("native preparation")
+        .seq;
     let later = track
         .send_lane(LaneCommand::SetSpeed(SpeedCurve::Constant(1.0)), When::Next)
         .expect("later native control");
@@ -239,7 +249,12 @@ fn assert_obsolete_preparation_refusal(host_rate: bool) {
         },
     );
     let current = track.segment.id;
-    let obsolete = track.lane_commands.last().expect("first preparation").seq;
+    let obsolete = track
+        .lane_history
+        .commands
+        .last()
+        .expect("first preparation")
+        .seq;
     let replacement = track
         .send_lane(
             if host_rate {
@@ -260,7 +275,8 @@ fn assert_obsolete_preparation_refusal(host_rate: bool) {
     assert_ne!(obsolete, replacement);
     assert!(
         track
-            .lane_commands
+            .lane_history
+            .commands
             .iter()
             .all(|operation| matches!(operation.command,
         LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. } if id == current))
@@ -652,7 +668,7 @@ async fn assert_terminal_adoption_refusal(cancelled: bool, outdated: bool) {
                 assert_eq!(track.status(), TrackStatus::Released);
                 assert!(!track.attached());
             }
-            let lane_count = track.lane_commands.len();
+            let lane_count = track.lane_history.commands.len();
             in_pass(&mut rig, frame(192), |out| {
                 track.settle(
                     TrackReceipt::Deck {
@@ -666,10 +682,10 @@ async fn assert_terminal_adoption_refusal(cancelled: bool, outdated: bool) {
             assert!(track.adoptions.inflight.is_empty());
             assert_eq!(track.adoptions.newest_epoch, None);
             assert_eq!(track.segment.id, segment);
-            assert_eq!(track.lane_commands.len(), lane_count);
+            assert_eq!(track.lane_history.commands.len(), lane_count);
             in_pass(&mut rig, frame(256), |out| track.tick(frame(256), out));
             assert_eq!(track.segment.id, segment);
-            assert_eq!(track.lane_commands.len(), lane_count);
+            assert_eq!(track.lane_history.commands.len(), lane_count);
             assert_eq!(track.adoptions.newest_epoch, None);
             if release_before_receipt {
                 assert_eq!(track.status(), TrackStatus::Released);
@@ -786,7 +802,7 @@ fn a_replay_entry_waits_for_native_adoption_after_lane_readiness() {
         .expect("adoption pending")
     );
     assert_eq!(
-        track.lane_commands.len(),
+        track.lane_history.commands.len(),
         1,
         "lane readiness cannot reopen the replay again"
     );
@@ -799,7 +815,7 @@ fn a_replay_entry_waits_for_native_adoption_after_lane_readiness() {
         .expect("adopted replay")
     );
     assert_eq!(track.prepared_speed(), Some(&curve));
-    assert_eq!(track.lane_commands.len(), 1);
+    assert_eq!(track.lane_history.commands.len(), 1);
 }
 
 #[kithara::test]
@@ -1020,10 +1036,11 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
     }
     assert!(inbox.next_due(at, 1).is_none());
     track.settle_lane();
-    assert_eq!(track.lane_commands.len(), 2);
+    assert_eq!(track.lane_history.commands.len(), 2);
     assert!(
         track
-            .lane_commands
+            .lane_history
+            .commands
             .iter()
             .all(|operation| operation.seq == seq && operation.applied() == Some(applied))
     );

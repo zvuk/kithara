@@ -204,7 +204,7 @@ fn assert_quiet_curve_projection(
             if seq == predecessor && at == frame(0))
     );
     assert!(track.speed_receipt().is_none());
-    assert!(track.speed_answers.is_empty());
+    assert!(track.lane_history.speed_answers.is_empty());
     track.status = TrackStatus::Paused {
         at: consumed.position,
     };
@@ -220,14 +220,20 @@ fn assert_quiet_curve_projection(
         },
     );
     let segment = track.segment.id;
-    let seq = track.lane_commands.last().expect("native Segment").seq;
+    let seq = track
+        .lane_history
+        .commands
+        .last()
+        .expect("native Segment")
+        .seq;
     assert_eq!(
         track.lane.as_ref().expect("real lane").available() + 1,
         available
     );
     assert!(
         track
-            .lane_commands
+            .lane_history
+            .commands
             .iter()
             .rev()
             .take_while(|operation| operation.seq == seq)
@@ -262,13 +268,15 @@ fn assert_quiet_curve_projection(
     assert_eq!(track.segment.id, segment);
     assert!(
         track
-            .lane_commands
+            .lane_history
+            .commands
             .iter()
             .filter(|operation| operation.seq == seq)
             .all(|operation| operation.applied() == Some(true))
     );
     assert!(
         track
+            .lane_history
             .speed_answers
             .iter()
             .all(|(answered, _)| *answered != seq)

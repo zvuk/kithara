@@ -151,7 +151,8 @@ impl<S> PlayerImpl<S> {
         if resume.lane.segment != self.segment.id {
             return None;
         }
-        self.lane_commands
+        self.lane_history
+            .commands
             .iter()
             .filter(|operation| operation.applied() != Some(false))
             .find(|operation| match operation.when {
@@ -296,7 +297,7 @@ impl<S> PlayerImpl<S> {
                 .loading
                 .as_ref()
                 .is_none_or(|loading| loading.speed.is_none())
-            && !self.lane_commands.iter().any(|operation| {
+            && !self.lane_history.commands.iter().any(|operation| {
                 operation.applied().is_none()
                     && match operation.command {
                         LaneCommand::SetSpeed(_) => operation.segment == self.segment.id,
@@ -305,7 +306,8 @@ impl<S> PlayerImpl<S> {
                     }
             })
             && self
-                .lane_commands
+                .lane_history
+                .commands
                 .iter()
                 .filter(|operation| {
                     operation.applied() == Some(true)
@@ -422,7 +424,7 @@ impl<S> PlayerImpl<S> {
         {
             return Some(failure);
         }
-        let operation = self.lane_commands.iter().rev().find(|operation| {
+        let operation = self.lane_history.commands.iter().rev().find(|operation| {
             matches!(operation.command,
                 LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. }
                 if id == self.segment.id)

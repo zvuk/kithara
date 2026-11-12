@@ -247,10 +247,7 @@ impl<S> PlayerImpl<S> {
         {
             self.status = TrackStatus::Released;
         }
-        self.segment.ready = false;
-        self.play = None;
-        self.playback_commands.clear();
-        self.adoptions.clear();
+        self.leave_deck();
         if let Err(error) = self.release_lane(out) {
             warn!(%error, "refused attachment waits for lane release room");
         }
@@ -299,14 +296,19 @@ impl<S> PlayerImpl<S> {
         self.status = TrackStatus::Paused { at: self.position };
     }
 
+    /// Drops what the track holds only while its deck plays it.
+    pub(super) fn leave_deck(&mut self) {
+        self.segment.ready = false;
+        self.play = None;
+        self.playback_commands.clear();
+        self.adoptions.clear();
+    }
+
     fn released(&mut self, out: &mut Outbox<'_, S>) {
         self.status = TrackStatus::Released;
         self.seat.detached();
         self.mark = None;
-        self.play = None;
-        self.segment.ready = false;
-        self.playback_commands.clear();
-        self.adoptions.clear();
+        self.leave_deck();
         if let Err(error) = self.release_lane(out) {
             warn!(%error, "lane release waits for dispatcher room");
         }
@@ -383,11 +385,7 @@ impl<S> PlayerImpl<S> {
     }
 
     fn apply_lane(&mut self, seq: Seq, at: LaneFrame, data: &LaneApplied, segment: bool) {
-        self.speed_projection.set(None);
-        let operations = self
-            .lane_commands
-            .iter_mut()
-            .filter(|operation| operation.seq == seq);
+        let operations = self.lane_history.answered(seq);
         let mut speed_session = None;
         for operation in operations {
             tracing::debug!(
@@ -427,7 +425,9 @@ impl<S> PlayerImpl<S> {
         if let Some(session) = speed_session
             && !segment
         {
-            self.speed_answers.push_back((seq, Ok((at, session))));
+            self.lane_history
+                .speed_answers
+                .push_back((seq, Ok((at, session))));
         }
         self.accept_ready(seq, data);
     }
@@ -446,18 +446,13 @@ impl<S> PlayerImpl<S> {
             if let Outcome::Applied { at, data } = receipt.outcome() {
                 self.apply_lane(receipt.seq(), *at, data, segment);
             } else if let Outcome::Rejected(reason) = receipt.outcome() {
-                self.speed_projection.set(None);
                 let mut speed = false;
-                for operation in self
-                    .lane_commands
-                    .iter_mut()
-                    .filter(|operation| operation.seq == receipt.seq())
-                {
+                for operation in self.lane_history.answered(receipt.seq()) {
                     operation.verdict = Some(Err(*reason));
                     speed |= matches!(operation.command, LaneCommand::SetSpeed(_));
                 }
                 if speed && !segment {
-                    self.speed_answers.push_back((
+                    self.lane_history.speed_answers.push_back((
                         receipt.seq(),
                         Err(rejection(reason, |failure| PlayError::Lane(*failure))),
                     ));
