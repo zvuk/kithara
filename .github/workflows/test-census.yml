@@ -1,0 +1,99 @@
+name: Test census
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Base commit whose tests are being split.
+        required: true
+        type: string
+      before_packages:
+        description: Space-separated base package names.
+        required: true
+        type: string
+      after_packages:
+        description: Space-separated successor package names.
+        required: true
+        type: string
+      before_features:
+        description: Base features needed to list every test binary.
+        default: ""
+        type: string
+      after_features:
+        description: Equivalent candidate features.
+        default: ""
+        type: string
+      renames:
+        description: Candidate TOML binary rename table.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: 2
+
+jobs:
+  inventory:
+    if: github.actor == github.repository_owner && vars.KITHARA_RUNNER_LABELS != ''
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - side: before
+            revision: ${{ inputs.base }}
+            packages: ${{ inputs.before_packages }}
+            features: ${{ inputs.before_features }}
+          - side: after
+            revision: ${{ github.sha }}
+            packages: ${{ inputs.after_packages }}
+            features: ${{ inputs.after_features }}
+    env:
+      CARGO_TARGET_DIR: /cache/target/lane-test-census-${{ matrix.side }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.revision }}
+          persist-credentials: false
+      - name: List all tests without executing them
+        env:
+          PACKAGES: ${{ matrix.packages }}
+          FEATURES: ${{ matrix.features }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-artifacts/census
+          git rev-parse HEAD > .ci-artifacts/census/revision.txt
+          read -r -a packages <<< "$PACKAGES"
+          args=(nextest list --locked --cargo-profile test-release --ignore-default-filter --run-ignored=all --message-format=json)
+          for package in "${packages[@]}"; do args+=(--package "$package"); done
+          [[ -z "$FEATURES" ]] || args+=(--features "$FEATURES")
+          just ci cache-exec test-census /usr/bin/time -p -o .ci-artifacts/census/time.txt cargo "${args[@]}" > .ci-artifacts/census/inventory.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: census-${{ matrix.side }}
+          path: .ci-artifacts/census
+          include-hidden-files: true
+
+  compare:
+    needs: inventory
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_DIR: /cache/target/lane-test-census-compare
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: census-*
+          path: .ci-artifacts/census
+      - name: Compare the native inventories
+        env:
+          RENAMES: ${{ inputs.renames }}
+        run: just test census --before .ci-artifacts/census/census-before/inventory.json --after .ci-artifacts/census/census-after/inventory.json --renames "$RENAMES"

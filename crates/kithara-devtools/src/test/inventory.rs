@@ -271,7 +271,37 @@ pub(crate) fn parse_inventory(json: &str) -> Result<BTreeSet<TestId>> {
 }
 
 fn decode_inventory(json: &str) -> Result<Inventory> {
-    serde_json::from_str(json).context("parse stress inventory JSON")
+    serde_json::from_str(json).context("parse nextest inventory JSON")
+}
+
+pub(super) fn complete_inventory(json: &str) -> Result<BTreeMap<String, BTreeMap<String, bool>>> {
+    let inventory = decode_inventory(json)?;
+    let mut binaries = BTreeMap::new();
+    let mut count = 0usize;
+    for (binary, suite) in inventory.rust_suites {
+        if binary.trim().is_empty() || binary != suite.binary_id {
+            bail!("census inventory contains an empty or mismatched binary identity");
+        }
+        if suite.status != "listed" {
+            bail!("census binary `{binary}` was not fully listed; use --ignore-default-filter");
+        }
+        let mut tests = BTreeMap::new();
+        for (name, case) in suite.testcases {
+            count = count.saturating_add(1);
+            validate_inventory_case_count(count)?;
+            if name.trim().is_empty() {
+                bail!("census binary `{binary}` contains an empty test identity");
+            }
+            if case.filter_match.status != "matches" {
+                bail!(
+                    "census test `{binary}\t{name}` was filtered; list every test, including ignored tests"
+                );
+            }
+            tests.insert(name, case.ignored);
+        }
+        binaries.insert(binary, tests);
+    }
+    Ok(binaries)
 }
 
 fn selected_inventory(inventory: Inventory) -> Result<BTreeSet<TestId>> {

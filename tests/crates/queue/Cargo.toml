@@ -17,14 +17,11 @@ flash = ["kithara/flash", "kithara-integration-tests/flash"]
 load = ["kithara-integration-tests/load"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
-network = ["kithara-app/zvuk"]
-network-manual = []
 
 [dependencies]
 kithara = { workspace = true, features = ["usdt", "backend-cpal", "download", "mock", "offline", "queue", "resample-rubato", "signal", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
 kithara-command = { workspace = true }
 kithara-integration-tests = { workspace = true, features = ["all", "link"] }
-kithara-render = { workspace = true }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["hls", "signal", "wav"] }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "temp-dir"] }
@@ -32,7 +29,6 @@ kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "te
 aes = { workspace = true }
 bytes = { workspace = true }
 num-traits = { workspace = true }
-reqwest = { workspace = true, features = ["rustls", "stream"] }
 serde_json = { workspace = true }
 serial_test = { workspace = true }
 tracing = { workspace = true }
@@ -52,13 +48,3 @@ workspace = true
 [[test]]
 name = "queue"
 path = "tests/suite.rs"
-
-[[test]]
-name = "network"
-path = "tests/network.rs"
-required-features = ["network"]
-
-[[test]]
-name = "network_manual"
-path = "tests/network_manual.rs"
-required-features = ["network-manual"]

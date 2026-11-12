@@ -1,0 +1,52 @@
+[package]
+name = "kithara-queue-network-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[features]
+default = ["client-reqwest", "tls-rustls", "usdt"]
+client-reqwest = ["kithara/client-reqwest"]
+client-wreq = ["kithara/client-wreq"]
+tls-rustls = ["kithara/tls-rustls"]
+tls-native = ["kithara/tls-native"]
+flash = ["kithara/flash", "kithara-integration-tests/flash"]
+load = ["kithara-integration-tests/load"]
+no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
+usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
+network = ["kithara-app/zvuk"]
+network-manual = []
+
+[dependencies]
+kithara = { workspace = true, features = ["usdt", "backend-cpal", "download", "mock", "offline", "queue", "resample-rubato", "signal", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
+kithara-integration-tests = { workspace = true, features = ["all", "link"] }
+kithara-render = { workspace = true }
+kithara-test-dylib = { workspace = true }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["hls", "signal", "wav"] }
+kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "temp-dir"] }
+
+tracing = { workspace = true }
+url = { workspace = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+kithara = { workspace = true, features = ["download", "apple", "client-wreq"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+kithara = { workspace = true, features = ["full", "symphonia", "fdk-aac"] }
+kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "network"
+path = "tests/network.rs"
+required-features = ["network"]
+
+[[test]]
+name = "network_manual"
+path = "tests/network_manual.rs"
+required-features = ["network-manual"]
