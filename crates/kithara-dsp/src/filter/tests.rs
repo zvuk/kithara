@@ -577,12 +577,12 @@ fn state_variable_blocks_are_bit_identical_under_any_partition() {
         if start == frames {
             break;
         }
-        let end = (start + length).min(frames);
+        let end = start.saturating_add(length).min(frames);
         filter
             .process(
                 &mut split,
                 start..end,
-                &cutoffs[start..end],
+                cutoffs.get(start..end).expect("block cutoffs"),
                 SVF_RATE,
                 Q,
                 Response::HighPass,

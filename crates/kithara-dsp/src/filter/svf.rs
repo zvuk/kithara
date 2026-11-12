@@ -83,16 +83,14 @@ impl StateVariableFilter {
             return Err(FilterError::Parameters);
         }
         let damping = q.recip();
-        let mut start = range.start;
+        let mut frames = range;
         for chunk in cutoffs.chunks(self.gains.len()) {
             for (gain, cutoff) in self.gains.iter_mut().zip(chunk) {
                 *gain = (PI * cutoff / rate).tan();
             }
-            for offset in 0..chunk.len() {
-                let gain = self.gains[offset];
-                self.frame(planes, start + offset, gain, damping, response);
+            for (offset, frame) in frames.by_ref().take(chunk.len()).enumerate() {
+                self.frame(planes, frame, offset, damping, response);
             }
-            start += chunk.len();
         }
         Ok(())
     }
@@ -101,20 +99,26 @@ impl StateVariableFilter {
         &mut self,
         planes: &mut [P],
         frame: usize,
-        gain: f64,
+        offset: usize,
         damping: f64,
         response: Response,
     ) {
-        if self.reset_state && planes.iter().all(|plane| plane[frame].to_bits() == 0) {
+        if self.reset_state
+            && planes
+                .iter()
+                .all(|plane| plane.get(frame).expect("validated frame").to_bits() == 0)
+        {
             self.count(true);
             return;
         }
+        let gain = *self.gains.get(offset).expect("chunk fits the gain scratch");
         let a1 = (1.0 + gain * (gain + damping)).recip();
         let a2 = gain * a1;
         let a3 = gain * a2;
         let mut frame_quiet = true;
         for (plane, state) in planes.iter_mut().zip(self.state.iter_mut()) {
-            let input = plane[frame];
+            let sample = plane.get_mut(frame).expect("validated frame");
+            let input = *sample;
             let x = f64::from(input);
             let [s1, s2] = *state;
             let v3 = x - s2;
@@ -128,7 +132,7 @@ impl StateVariableFilter {
             let output = output.to_f32().unwrap_or(f32::NAN);
             frame_quiet &=
                 input.abs() <= consts::SILENT_PEAK && output.abs() <= consts::SILENT_PEAK;
-            plane[frame] = output;
+            *sample = output;
         }
         self.reset_state = false;
         self.count(frame_quiet);

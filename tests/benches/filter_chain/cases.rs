@@ -3,18 +3,17 @@ use std::{hint::black_box, num::NonZeroU32};
 use criterion::{BatchSize, Criterion};
 use kithara::{
     bufpool::SampleBuffer,
-    effects::filter::{Cutoff, FilterConfig, FilterEffect, Kind},
+    effects::filter::{FilterEffect, FilterKnob, FilterSettings},
     signal::AudioSpec,
 };
 use kithara_test_utils::bufpool::{Pools, pools, sample_buffer};
 
-fn prepared_filter(pools: &Pools, spec: AudioSpec) -> FilterEffect {
-    let config = FilterConfig::builder(pools.clone())
-        .kind(Kind::LowPass)
-        .cutoff_hz(Cutoff::checked(1_000.0).expect("admitted cutoff"))
-        .build()
-        .expect("admitted settings");
-    FilterEffect::new(spec, config).expect("prepared filter")
+/// The deck filter held in its low-pass half, where every frame is filtered.
+fn prepared_filter(spec: AudioSpec) -> FilterEffect {
+    let mut filter = FilterEffect::new(spec, FilterSettings::default()).expect("prepared filter");
+    filter.configure(FilterKnob::checked(-0.5).expect("low-pass knob"));
+    filter.reset();
+    filter
 }
 
 fn input_planes(pools: &Pools, spec: AudioSpec, input: &[f32]) -> Vec<SampleBuffer> {
@@ -48,7 +47,7 @@ pub(crate) fn bench(c: &mut Criterion) {
     ] {
         let spec = AudioSpec::new(channels, rate);
         let fixture = crate::make_pcm(frames, usize::from(channels));
-        let mut filter = prepared_filter(&pools, spec);
+        let mut filter = prepared_filter(spec);
         group.bench_function(name, |b| {
             b.iter_batched_ref(
                 || input_planes(&pools, spec, &fixture),
@@ -62,7 +61,7 @@ pub(crate) fn bench(c: &mut Criterion) {
         });
     }
     let spec = AudioSpec::new(2, rate);
-    let mut filter = prepared_filter(&pools, spec);
+    let mut filter = prepared_filter(spec);
     let mut burst = vec![0.0; 514];
     burst[..64].fill(0.25);
     let silence = vec![0.0; 514];

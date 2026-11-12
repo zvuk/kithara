@@ -3,6 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_dsp::param::SmootherConfig;
+use kithara_effects::filter::FilterSettings;
 use kithara_signal::FrameCount;
 use num_traits::ToPrimitive;
 
@@ -38,6 +39,9 @@ pub struct DeckMixerConfig {
     /// Maximum obsolete packets recycled by each slot in one block.
     #[config(builder(default = crate::consts::CAPACITY))]
     recycle_per_block: NonZeroUsize,
+    /// Sweep ranges and resonance of the deck filter knob.
+    #[config(builder(default), patch(skip))]
+    filter: FilterSettings,
     /// How loud the deck sounds before its owner changes it.
     #[config(builder(default), patch(nested))]
     mix: DeckMixSettings,

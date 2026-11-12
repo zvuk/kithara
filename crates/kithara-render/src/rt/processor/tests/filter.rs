@@ -1,12 +1,9 @@
 use kithara_command::Target;
-use kithara_config::ConfigOwner;
-use kithara_effects::filter::{
-    Cutoff, FilterConfig, FilterEffect, FilterError, FilterSettingsChange, Kind,
-};
+use kithara_effects::filter::{FilterEffect, FilterKnob, FilterSettings};
 
 use super::*;
 use crate::{
-    bridge::{DeckFilterChange, FilterBinding, PlaybackFault},
+    bridge::{DeckMixSettings, DeckMixSettingsChange, FilterBinding},
     worker::packet_tests::{PacketRing, chunk},
 };
 
@@ -44,20 +41,21 @@ pub(super) fn prepared() -> (TestMixer, TestEnds) {
     (mixer, ends)
 }
 
-pub(super) fn filter(cutoff: f64) -> FilterEffect {
-    FilterEffect::new(
-        AudioSpec::new(2, shape().sample_rate),
-        FilterConfig::builder(pools())
-            .kind(Kind::LowPass)
-            .cutoff_hz(Cutoff::checked(cutoff).expect("cutoff"))
-            .build()
-            .expect("settings"),
-    )
-    .expect("prepared filter")
+pub(super) fn knob(value: f64) -> FilterKnob {
+    FilterKnob::checked(value).expect("knob position")
 }
 
-pub(super) fn part(binding: FilterBinding, change: DeckFilterChange) -> DeckPart {
-    DeckPart::Filter { binding, change }
+/// The deck filter at `rate`, moved to `start` at once.
+pub(super) fn reference(rate: NonZeroU32, start: FilterKnob) -> FilterEffect {
+    let mut filter = FilterEffect::new(AudioSpec::new(2, rate), FilterSettings::default())
+        .expect("stereo filter");
+    filter.configure(start);
+    filter.reset();
+    filter
+}
+
+pub(super) fn turn(value: f64) -> DeckPart {
+    DeckPart::Mix(DeckMixSettingsChange::Filter(knob(value)))
 }
 
 pub(super) fn binding(ends: &mut TestEnds) -> FilterBinding {
@@ -137,16 +135,9 @@ fn source_format_changes_preserve_pcm_metadata_and_the_deck_filter_rate(
             },
         ],
     );
-    let empty = binding(&mut ends);
-    let installed = send(
-        &mut ends,
-        at(1),
-        vec![part(
-            empty,
-            DeckFilterChange::Install(Box::new(filter(1_000.0))),
-        )],
-    );
-    let mut reference = filter(1_000.0);
+    let turned = send(&mut ends, at(1), vec![turn(-0.5)]);
+    let mut reference = reference(initial.sample_rate, FilterKnob::DEFAULT);
+    reference.configure(knob(-0.5));
     for (index, (meta, value)) in metadata
         .iter()
         .copied()
@@ -179,154 +170,68 @@ fn source_format_changes_preserve_pcm_metadata_and_the_deck_filter_rate(
             Some(metadata.get(index + 1).copied().unwrap_or(meta))
         );
         assert_eq!(snapshot.sample_rate, initial.sample_rate.get());
-        assert_eq!(snapshot.filter.settings(), Some(*reference.config()));
-        assert_eq!(
-            snapshot.filter.binding().expect("installed").instance(),
-            Some(installed)
-        );
+        assert_eq!(snapshot.filter.knob().to_bits(), reference.knob().to_bits());
         assert_eq!(snapshot.metrics.underruns(), 0);
         assert_eq!(snapshot.metrics.event_overflows(), 0);
     }
     let replies = receipts(&mut ends);
     assert_eq!(replies.len(), 2);
     assert_applied_at(outcome_of(&replies, attached), 1);
-    assert_applied_at(outcome_of(&replies, installed), 1);
+    assert_applied_at(outcome_of(&replies, turned), 1);
     assert!(ends.deck.events.drain().next().is_none());
 }
 
 #[kithara::test]
-fn filter_install_is_frame_exact_and_refusal_preserves_settings_and_history() {
+fn a_knob_turn_is_frame_exact_after_a_bit_transparent_center() {
     let (mut mixer, mut ends) = prepared();
-    let empty = binding(&mut ends);
-    let mut reference = filter(1_000.0);
-    let settings = *reference.config();
-    let installed = send(
-        &mut ends,
-        at(BLOCK + 5),
-        vec![part(
-            empty,
-            DeckFilterChange::Install(Box::new(filter(1_000.0))),
-        )],
-    );
+    let turned = send(&mut ends, at(BLOCK + 5), vec![turn(0.75)]);
     let pcm = render_frames(&mut mixer, BLOCK, 32);
+    let mut filter = reference(shape().sample_rate, FilterKnob::DEFAULT);
+    filter.configure(knob(0.75));
     let mut planes = [vec![1.0; 27], vec![1.0; 27]];
-    reference
-        .process(&mut planes, 0..27)
-        .expect("reference prefix");
+    filter.process(&mut planes, 0..27).expect("reference turn");
     let mut expected = vec![1.0; 5];
     expected.extend_from_slice(&planes[0]);
     assert_eq!(bits(&pcm), bits(&expected));
-    assert_ne!(bits(&pcm), bits(&[1.0; 32]));
+    assert_ne!(bits(&pcm[5..]), bits(&[1.0; 27]));
     let replies = receipts(&mut ends);
-    assert_applied_at(outcome_of(&replies, installed), BLOCK + 5);
-    assert!(matches!(
-        &replies[0].2[..],
-        [DeckPart::Returned(Returned::Filter(None))]
-    ));
-    let current = binding(&mut ends);
-    let refused = send(
-        &mut ends,
-        at(BLOCK + 32),
-        vec![part(
-            current,
-            DeckFilterChange::Configure(FilterSettingsChange::GainDb(GainDb::MAX)),
-        )],
-    );
-    let stale = send(
-        &mut ends,
-        at(BLOCK + 32),
-        vec![part(empty, DeckFilterChange::Clear)],
-    );
-    let pcm = render_frames(&mut mixer, BLOCK + 32, 29);
-    let mut planes = [vec![1.0; 29], vec![1.0; 29]];
-    reference
-        .process(&mut planes, 0..29)
-        .expect("reference continuation");
-    assert_eq!(bits(&pcm), bits(&planes[0]));
-    let replies = receipts(&mut ends);
-    assert!(matches!(
-        outcome_of(&replies, refused),
-        Outcome::Rejected(Rejection::Refused(DeckRefusal::Filter(
-            FilterError::Parameters
-        )))
-    ));
-    assert!(matches!(
-        outcome_of(&replies, stale),
-        Outcome::Rejected(Rejection::Refused(DeckRefusal::FilterOutdated))
-    ));
+    assert_applied_at(outcome_of(&replies, turned), BLOCK + 5);
     let snapshot = ends.deck.snapshot.read();
-    assert_eq!(snapshot.filter.settings(), Some(settings));
-    assert_eq!(snapshot.filter.binding(), Some(current));
-    assert_eq!(snapshot.metrics.underruns(), 0);
-}
-
-#[kithara::test]
-fn clearing_returns_resident_filter_and_advances_instance_identity() {
-    let (mut mixer, mut ends) = prepared();
-    let empty = binding(&mut ends);
-    send(
-        &mut ends,
-        at(BLOCK),
-        vec![part(
-            empty,
-            DeckFilterChange::Install(Box::new(filter(1_000.0))),
-        )],
-    );
-    render_frames(&mut mixer, BLOCK, 3);
-    assert_eq!(receipts(&mut ends).len(), 1);
-    let installed = binding(&mut ends);
-    let cleared = send(
-        &mut ends,
-        at(BLOCK + 3),
-        vec![part(installed, DeckFilterChange::Clear)],
-    );
-    assert_eq!(render_frames(&mut mixer, BLOCK + 3, 7), vec![1.0; 7]);
-    let replies = receipts(&mut ends);
-    assert_applied_at(outcome_of(&replies, cleared), BLOCK + 3);
-    assert!(
-        matches!(&replies[0].2[..], [DeckPart::Returned(Returned::Filter(Some(filter)))] if f64::from(filter.config().cutoff_hz()) == 1_000.0)
-    );
-    let snapshot = ends.deck.snapshot.read();
-    assert_eq!(snapshot.filter.settings(), None);
+    assert_eq!(snapshot.filter.authority(), Some(turned));
+    assert_eq!(snapshot.filter.program(), None);
+    assert_eq!(snapshot.filter.knob().to_bits(), filter.knob().to_bits());
     assert_eq!(
-        snapshot
-            .filter
-            .binding()
-            .expect("cleared instance")
-            .instance(),
-        Some(cleared)
+        snapshot.filter.binding().map(|binding| binding.instance()),
+        Some(None)
     );
-    assert_ne!(snapshot.filter.binding(), Some(empty));
-    assert_ne!(snapshot.filter.binding(), Some(installed));
 }
 
+/// The knob map holds the cutoff below Nyquist, so no output rate stops the
+/// deck or moves its knob.
 #[kithara::test]
-fn unsupported_new_nyquist_is_a_visible_terminal_render_failure() {
-    let (mut mixer, mut ends) = prepared();
-    let empty = binding(&mut ends);
-    let expected = *filter(18_000.0).config();
-    send(
-        &mut ends,
-        at(BLOCK),
-        vec![part(
-            empty,
-            DeckFilterChange::Install(Box::new(filter(18_000.0))),
-        )],
-    );
-    render_frames(&mut mixer, BLOCK, 3);
-    assert_eq!(receipts(&mut ends).len(), 1);
-    mixer
-        .mixer
-        .update_sample_rate(NonZeroU32::new(32_000).expect("new output rate"));
-    assert_eq!(render_frames(&mut mixer, BLOCK + 3, 7), vec![0.0; 7]);
-    let events: Vec<_> = ends.deck.events.drain().collect();
-    assert!(
-        matches!(&events[..], [DeckEvent::Failed { slot, at, fault: PlaybackFault::Source(kithara_audio::TrackFailureKind::Render) }] if *slot == A && *at == frame_at(BLOCK + 3))
-    );
-    let snapshot = ends.deck.snapshot.read();
-    assert_eq!(snapshot.slots[A.index()].state, SlotState::Ended);
-    assert_eq!(snapshot.filter.settings(), Some(expected));
-    assert_eq!(snapshot.sample_rate, 32_000);
-    assert_eq!(snapshot.metrics.underruns(), 0);
-    assert_eq!(snapshot.metrics.event_overflows(), 0);
+#[case::rate_32k(32_000)]
+#[case::rate_1k(1_000)]
+fn low_output_rates_keep_the_deck_playing_at_every_knob_position(#[case] rate: u32) {
+    for position in [-1.0, 0.0, 1.0] {
+        let mix = DeckMixSettings::builder().filter(knob(position)).build();
+        let (mut mixer, mut ends) =
+            mixer_with_config(DeckMixerConfig::builder().mix(mix).build(), 32);
+        start_dc(&mut mixer, &mut ends, &[A]);
+        mixer
+            .mixer
+            .update_sample_rate(NonZeroU32::new(rate).expect("output rate"));
+        let pcm = render_frames(&mut mixer, BLOCK, BLOCK);
+        assert!(
+            pcm.iter().all(|sample| sample.is_finite()),
+            "knob {position} at {rate} Hz"
+        );
+        if position == 0.0 {
+            assert_eq!(bits(&pcm), bits(&[1.0; BLOCK]), "transparent center");
+        }
+        assert!(ends.deck.events.drain().next().is_none());
+        let snapshot = ends.deck.snapshot.read();
+        assert_eq!(snapshot.slots[A.index()].state, SlotState::Playing);
+        assert_eq!(snapshot.sample_rate, rate);
+        assert_eq!(snapshot.filter.knob(), position);
+    }
 }

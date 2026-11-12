@@ -236,7 +236,7 @@ impl Stage {
             while end < limit {
                 match settings.response(rate, knobs[end]) {
                     Some((kind, cutoff)) if Some(kind) == side => {
-                        self.cutoffs[end - offset] = cutoff
+                        self.cutoffs[end - offset] = cutoff;
                     }
                     None if side.is_none() => {}
                     _ => break,

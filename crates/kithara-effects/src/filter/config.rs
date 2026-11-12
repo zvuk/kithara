@@ -5,10 +5,7 @@ use kithara_config::Config;
 use kithara_dsp::filter::FilterError;
 
 use super::{Cutoff, Q};
-
-/// Highest cutoff the knob map gives, as a share of the sample rate: below
-/// Nyquist with margin, and above every default cutoff at 44.1 kHz and up.
-const NYQUIST_SHARE: f64 = 0.45;
+use crate::consts;
 
 /// The pass response the knob selects on one side of its center.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,11 +79,11 @@ impl FilterSettings {
 
     /// The response a knob position asks for at `rate`, `None` at the center.
     ///
-    /// The cutoff never exceeds [`NYQUIST_SHARE`] of `rate`: near the
+    /// The cutoff never exceeds 0.45 of `rate`: near the
     /// configured edges the map holds a plateau instead of reaching Nyquist.
     #[must_use]
     pub fn response(&self, rate: NonZeroU32, knob: f64) -> Option<(Kind, f64)> {
-        let limit = NYQUIST_SHARE * f64::from(rate.get());
+        let limit = consts::NYQUIST_SHARE * f64::from(rate.get());
         let side = if knob < 0.0 {
             Kind::LowPass
         } else if knob > 0.0 {

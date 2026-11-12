@@ -6,6 +6,10 @@ use kithara_dsp::param::{MIN_SETTLE_RATIO, SmootherConfig};
 pub(crate) const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
 pub(crate) const NYQUIST_FACTOR: f32 = 2.0;
 pub(crate) const FILTER_BLOCK_FRAMES: usize = 256;
+/// Highest cutoff the deck filter knob map gives, as a share of the sample
+/// rate: below Nyquist with margin, and above every default cutoff at 44.1 kHz
+/// and up.
+pub(crate) const NYQUIST_SHARE: f64 = 0.45;
 
 pub(crate) const PASSTHROUGH: Coefficients<f32> = Coefficients {
     a1: 0.0,
