@@ -14,7 +14,7 @@ use super::{
     command::BridgeConfig,
     control::{ControlChange, classify},
 };
-use crate::{config::CiProjectConfig, consts};
+use crate::consts;
 
 pub(super) struct GitRepo {
     root: PathBuf,
@@ -144,10 +144,12 @@ impl GitRepo {
             .get("ext")
             .and_then(|ext| ext.get("ci"))
             .context("PR target xtask config has no [ext.ci]")?;
-        let config: CiProjectConfig = ci.clone().try_into().context("parse PR target [ext.ci]")?;
-        let limit = config
-            .pr_review_line_limit
-            .context("PR target must set ext.ci.pr_review_line_limit")?;
+        let limit: NonZeroU64 = ci
+            .get("pr_review_line_limit")
+            .context("PR target must set ext.ci.pr_review_line_limit")?
+            .clone()
+            .try_into()
+            .context("parse PR target ext.ci.pr_review_line_limit")?;
         Ok((self.review_lines(target, head)?, limit))
     }
 
@@ -789,7 +791,7 @@ mod tests {
         let work = state.path().join("work");
         fs::write(
             work.join(".config/xtask.toml"),
-            "[ext.ci]\npr_review_line_limit = 7\n[ext.ci.lanes.x]\ntest_packages = ['future-package']\n",
+            "[ext.ci]\npr_review_line_limit = 7\n[ext.ci.lanes.x]\ntest_packages = ['future-package']\nfuture_lane_option = true\n",
         )
         .unwrap();
         let target = commit_review(&repo, &work);
