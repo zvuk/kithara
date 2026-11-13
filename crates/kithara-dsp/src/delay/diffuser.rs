@@ -3,6 +3,7 @@ use std::ops::{DerefMut, Range};
 use num_traits::ToPrimitive;
 
 use super::{DelayError, DelayLine, DiffuserError, Tap};
+use crate::backend;
 
 const SCRATCH_FRAMES: usize = 128;
 
@@ -46,8 +47,8 @@ impl<const CHANNELS: usize> DelayDiffuser<CHANNELS> {
 
     /// Replaces `range` of every plane with its diffused signal, without allocation.
     ///
-    /// Reads precede writes in spans no longer than the delay. Sample arithmetic
-    /// keeps the same order across block partitions, without fused operations.
+    /// Reads precede writes in spans no longer than the delay. Backend kernels
+    /// preserve the operation order across block partitions.
     ///
     /// # Errors
     /// [`DelayError::Shape`] when the channel count or plane coverage does not
@@ -65,23 +66,26 @@ impl<const CHANNELS: usize> DelayDiffuser<CHANNELS> {
             return Err(DelayError::Shape.into());
         }
         let mut scratch = [[0.0; SCRATCH_FRAMES]; CHANNELS];
+        let mut writes = [[0.0; SCRATCH_FRAMES]; CHANNELS];
         let span = self.tap.whole().min(SCRATCH_FRAMES);
         let mut start = range.start;
         while start < range.end {
             let end = start.saturating_add(span).min(range.end);
             let len = end.wrapping_sub(start);
-            for (channel, (plane, history)) in planes.iter_mut().zip(&mut scratch).enumerate() {
+            for (channel, ((plane, history), writes)) in planes
+                .iter_mut()
+                .zip(&mut scratch)
+                .zip(&mut writes)
+                .enumerate()
+            {
                 let history = history.get_mut(..len).ok_or(DelayError::Shape)?;
                 self.line.read(channel, self.tap, history)?;
                 let samples = plane.get_mut(start..end).ok_or(DelayError::Shape)?;
-                for (sample, delayed) in samples.iter_mut().zip(history) {
-                    let input = *sample;
-                    *sample = *delayed - input;
-                    *delayed = input + self.feedback * *delayed;
-                }
+                let writes = writes.get_mut(..len).ok_or(DelayError::Shape)?;
+                backend::delay_diffuse(samples, history, self.feedback, writes);
             }
             self.line
-                .write(&scratch.each_ref().map(|plane| plane.as_slice()), 0..len)?;
+                .write(&writes.each_ref().map(|plane| plane.as_slice()), 0..len)?;
             start = end;
         }
         Ok(())

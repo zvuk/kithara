@@ -1,4 +1,34 @@
-use super::ffi::{vDSP_vlint, vDSP_vqint};
+use std::ptr;
+
+use super::ffi::{vDSP_vlint, vDSP_vqint, vDSP_vsma, vDSP_vsub};
+
+/// `output = fraction * (older - newer) + newer` over the common prefix.
+/// The subtraction rounds before the fused multiply-add; returns the prefix length.
+#[must_use]
+pub fn linear_blend_f32(newer: &[f32], older: &[f32], fraction: f32, output: &mut [f32]) -> usize {
+    let len = newer.len().min(older.len()).min(output.len());
+    if len == 0 {
+        return 0;
+    }
+    let target = output.as_mut_ptr();
+    // SAFETY: every vector covers len floats at stride one and the exclusive
+    // output cannot overlap either input. vDSP supports its result as an input
+    // to the following in-place multiply-add; fraction lives through the call.
+    unsafe {
+        vDSP_vsub(newer.as_ptr(), 1, older.as_ptr(), 1, target, 1, len);
+        vDSP_vsma(
+            target.cast_const(),
+            1,
+            ptr::from_ref(&fraction),
+            newer.as_ptr(),
+            1,
+            target,
+            1,
+            len,
+        );
+    }
+    len
+}
 
 mod consts {
     /// Positions are `f32`: every frame index below `2²⁴` is exact.

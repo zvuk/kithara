@@ -10,7 +10,7 @@ use num_traits::ToPrimitive;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::accelerate;
-use super::{cascade, fade, platform, portable, simd, strided};
+use super::{cascade, delay, fade, platform, portable, simd, strided};
 use crate::{
     fade::FadeCurve,
     filter::{Coefficients, Hertz, Type},
@@ -71,6 +71,139 @@ fn scalar_gain_matches_ieee_multiplication_at_every_level() {
                             .all(|(got, want)| got.to_bits() == want.to_bits())
                     );
                 }
+            }
+        }
+    }
+}
+
+type Diffuse = fn(&mut [f32], &mut [f32], f32, &mut [f32]) -> usize;
+type DelayBlend = fn(&[f32], &[f32], f32, &mut [f32]) -> usize;
+
+fn delay_kernels() -> [(&'static str, Diffuse, DelayBlend); 3] {
+    [
+        ("platform", delay::diffuse, delay::blend),
+        (
+            "portable-native",
+            |x, d, g, w| dispatch!(Level::new(), simd => delay::diffuse_kernel(simd, x, d, g, w)),
+            |x, d, f, y| dispatch!(Level::new(), simd => delay::blend_kernel(simd, x, d, f, y)),
+        ),
+        (
+            "portable-fallback",
+            |x, d, g, w| dispatch!(Level::fallback(), simd => delay::diffuse_kernel(simd, x, d, g, w)),
+            |x, d, f, y| dispatch!(Level::fallback(), simd => delay::blend_kernel(simd, x, d, f, y)),
+        ),
+    ]
+}
+
+fn assert_delay_bits(name: &str, actual: &[f32], expected: &[f32]) {
+    assert_eq!(actual.len(), expected.len());
+    for (frame, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        assert_eq!(
+            actual.to_bits(),
+            expected.to_bits(),
+            "{name}, frame {frame}: {actual} != {expected}"
+        );
+    }
+}
+
+#[kithara::test]
+fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
+    for (name, diffuse, _) in delay_kernels() {
+        for frames in SIZES {
+            let input: Vec<_> = [0.3, -0.7, -0.0, 0.125, -1.000_488_3]
+                .into_iter()
+                .cycle()
+                .take(frames)
+                .collect();
+            let history: Vec<_> = [0.731, -0.5, 0.0, -0.125, 1.000_244_1]
+                .into_iter()
+                .cycle()
+                .take(frames)
+                .collect();
+            let mut whole = input.clone();
+            let mut whole_history = history.clone();
+            let mut writes = vec![0.0; frames];
+            assert_eq!(
+                diffuse(&mut whole, &mut whole_history, 0.731, &mut writes),
+                frames
+            );
+            let expected: Vec<_> = history.iter().zip(&input).map(|(d, x)| d - x).collect();
+            let expected_writes: Vec<_> = history
+                .iter()
+                .zip(&input)
+                .map(|(d, x)| d.mul_add(0.731, *x))
+                .collect();
+            assert_delay_bits(name, &whole, &expected);
+            assert_delay_bits(name, &whole_history, &expected);
+            assert_delay_bits(name, &writes, &expected_writes);
+            let mut split = input;
+            let mut split_history = history;
+            let mut split_writes = vec![0.0; frames];
+            let mut start = 0;
+            for count in [0, 1, 3, 127, 2, 257].into_iter().cycle() {
+                let end = (start + count).min(frames);
+                assert_eq!(
+                    diffuse(
+                        &mut split[start..end],
+                        &mut split_history[start..end],
+                        0.731,
+                        &mut split_writes[start..end]
+                    ),
+                    end - start
+                );
+                start = end;
+                if start == frames {
+                    break;
+                }
+            }
+            assert_delay_bits(name, &split, &whole);
+            assert_delay_bits(name, &split_writes, &writes);
+        }
+    }
+}
+
+#[kithara::test]
+fn delay_fraction_native_and_fallback_preserve_fused_scalar_bits() {
+    for (name, _, blend) in delay_kernels() {
+        for fraction in [0.0_f32, 0.1, 0.25, 0.731, 0.999_999_94] {
+            for frames in SIZES {
+                let newer: Vec<_> = [0.3, -0.7, -0.0, 0.125, -1.000_488_3]
+                    .into_iter()
+                    .cycle()
+                    .take(frames)
+                    .collect();
+                let older: Vec<_> = [0.731, -0.5, 0.0, -0.125, 1.000_244_1]
+                    .into_iter()
+                    .cycle()
+                    .take(frames)
+                    .collect();
+                let expected: Vec<_> = newer
+                    .iter()
+                    .zip(&older)
+                    .map(|(n, o)| fraction.mul_add(o - n, *n))
+                    .collect();
+                let mut whole = vec![0.0; frames];
+                assert_eq!(blend(&newer, &older, fraction, &mut whole), frames);
+                assert_delay_bits(name, &whole, &expected);
+                let mut split = vec![0.0; frames];
+                let mut start = 0;
+                for count in [0, 1, 3, 127, 2, 257].into_iter().cycle() {
+                    let end = (start + count).min(frames);
+                    assert_eq!(
+                        blend(
+                            &newer[start..end],
+                            &older[start..end],
+                            fraction,
+                            &mut split[start..end]
+                        ),
+                        end - start
+                    );
+                    start = end;
+                    if start == frames {
+                        break;
+                    }
+                }
+                assert_delay_bits(name, &split, &whole);
             }
         }
     }

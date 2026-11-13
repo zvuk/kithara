@@ -1,9 +1,11 @@
 mod cascade;
+mod delay;
 mod interpolate;
 #[cfg(feature = "spectrum")]
 mod spectrum;
 mod svf;
 
+pub(crate) use delay::{blend as delay_blend, diffuse as delay_diffuse};
 pub(crate) use kithara_apple::accelerate::{
     add_f32 as add, affine_f32 as affine, deinterleave_pair_f32 as deinterleave_pair,
     downmix_pair_f32 as downmix_pair, interleave_pair_f32 as interleave_pair,

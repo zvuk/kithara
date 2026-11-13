@@ -4,6 +4,7 @@ pub(crate) mod accelerate;
 mod bins;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 mod cascade;
+mod delay;
 mod envelope;
 mod fade;
 mod fir;
@@ -25,6 +26,7 @@ mod tests;
 pub(crate) use accelerate as platform;
 #[cfg(feature = "spectrum")]
 pub(crate) use bins::prediction_difference;
+pub(crate) use delay::{diffuse as delay_diffuse, read as delay_read};
 pub(crate) use envelope::attack_release;
 pub(crate) use fade::gains;
 pub use fir::Fir;
