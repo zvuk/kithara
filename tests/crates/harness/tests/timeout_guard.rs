@@ -6,6 +6,16 @@ use kithara::platform::{
 };
 use kithara_test_utils::test::wall_sleep;
 
+#[kithara::test(native, flash(false))]
+#[kithara::hang_watchdog]
+fn sync_timeout_preserves_watchdog_progress_and_result() -> Result<(), &'static str> {
+    hang_reset!();
+    hang_tick!();
+    let value = "42".parse::<u32>().map_err(|_| "invalid integer")?;
+    assert_eq!(value, 42);
+    Ok(())
+}
+
 #[kithara::test(native)]
 #[should_panic(expected = "timed out after 1s")]
 fn default_flash_budget_bounds_wall_time() {

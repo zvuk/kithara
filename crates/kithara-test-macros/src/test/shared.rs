@@ -262,12 +262,13 @@ pub(crate) fn wrap_with_timeout(
             {
                 #prekill_guard
                 let __timeout_dur: ::std::time::Duration = #dur;
+                // Consume the closure at its call site so FnMut needs no mutable binding.
                 let __body = move || { #body };
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let (tx, rx) = ::std::sync::mpsc::channel();
                     let handle = ::std::thread::spawn(move || {
-                        tx.send(__body()).ok();
+                        tx.send(({ __body })()).ok();
                     });
                     match rx.recv_timeout(__timeout_dur) {
                         Ok(v) => {
@@ -296,7 +297,7 @@ pub(crate) fn wrap_with_timeout(
                 #[cfg(target_arch = "wasm32")]
                 {
                     let __started = ::kithara_test_utils::kithara_platform::time::WallInstant::now();
-                    let __result = __body();
+                    let __result = ({ __body })();
                     if __started.elapsed() > __timeout_dur {
                         let __diagnostic = format!(
                             "test `{}` timed out after {:?}",
