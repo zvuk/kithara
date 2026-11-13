@@ -139,51 +139,37 @@ async fn a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched() {
     }
     let cancelled = ids[1];
     let selected = ids[2];
-    let deadline = time::Instant::now() + Duration::from_secs(10);
-    let mut reference = 0.0;
     {
         let _real_io = kithara::platform::flash::real_io();
-        let mut observed = harness.control().position_seconds();
+        hang_tick!(String::from("one-slot successor loads before F"));
+        wait_for_loader_done(&harness, cancelled, Duration::from_secs(10))
+            .await
+            .expect("replacement loads before advancing the incumbent");
         hang_reset!();
-        loop {
-            hang_tick!(format!(
-                "one-slot successor loads before F: position={observed:?}, status={:?}",
-                harness.control().track(cancelled).map(|track| track.status)
-            ));
-            assert!(
-                time::Instant::now() < deadline,
-                "replacement must arm before F"
-            );
-            let pcm = harness.render(128).await;
-            let control = harness.control();
-            let position = control.position_seconds();
-            if position != observed {
-                observed = position;
-                hang_reset!();
-            }
-            if control.current().is_some_and(|track| track.id == first)
-                && control
-                    .position_seconds()
-                    .is_some_and(|position| position > 0.1)
-            {
-                reference = mean_abs(&pcm);
-            }
-            if control
-                .track(cancelled)
-                .is_some_and(|track| track.status == TrackStatus::Loaded)
-            {
-                assert!(
-                    control
-                        .position_seconds()
-                        .is_some_and(|position| position < 0.9)
-                );
-                assert!(reference > 0.1, "first track is audible");
-                break;
-            }
-            sleep(Duration::from_millis(1)).await;
-        }
+        harness
+            .run(QueueControl::tick)
+            .await
+            .expect("arm the loaded replacement before F");
+        assert_eq!(
+            harness.control().track(cancelled).map(|track| track.status),
+            Some(TrackStatus::Loaded)
+        );
+        assert!(
+            harness
+                .control()
+                .position_seconds()
+                .is_some_and(|position| position < 0.9)
+        );
     }
-    let _ = harness.render(128).await;
+    let pcm = harness.render(128).await;
+    let reference = mean_abs(&pcm);
+    assert!(reference > 0.1, "first track is audible");
+    assert!(
+        harness
+            .control()
+            .position_seconds()
+            .is_some_and(|position| position > 0.1)
+    );
     assert_eq!(
         harness.control().current().map(|track| track.id),
         Some(first)
