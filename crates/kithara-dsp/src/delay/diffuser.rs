@@ -84,8 +84,10 @@ impl<const CHANNELS: usize> DelayDiffuser<CHANNELS> {
                 let writes = writes.get_mut(..len).ok_or(DelayError::Shape)?;
                 platform::delay_diffuse(samples, history, self.feedback, writes);
             }
-            self.line
-                .write(&writes.each_ref().map(|plane| plane.as_slice()), 0..len)?;
+            self.line.write(
+                &writes.each_ref().map(<[f32; SCRATCH_FRAMES]>::as_slice),
+                0..len,
+            )?;
             start = end;
         }
         Ok(())

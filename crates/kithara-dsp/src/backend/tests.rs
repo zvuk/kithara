@@ -139,17 +139,17 @@ fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
             let mut split = input;
             let mut split_history = history;
             let mut split_writes = vec![0.0; frames];
-            let mut start = 0;
+            let mut start = 0_usize;
             for count in [0, 1, 3, 127, 2, 257].into_iter().cycle() {
-                let end = (start + count).min(frames);
+                let end = start.saturating_add(count).min(frames);
                 assert_eq!(
                     diffuse(
-                        &mut split[start..end],
-                        &mut split_history[start..end],
+                        split.get_mut(start..end).unwrap(),
+                        split_history.get_mut(start..end).unwrap(),
                         0.731,
-                        &mut split_writes[start..end]
+                        split_writes.get_mut(start..end).unwrap()
                     ),
-                    end - start
+                    end.wrapping_sub(start)
                 );
                 start = end;
                 if start == frames {
@@ -186,17 +186,17 @@ fn delay_fraction_native_and_fallback_preserve_fused_scalar_bits() {
                 assert_eq!(blend(&newer, &older, fraction, &mut whole), frames);
                 assert_delay_bits(name, &whole, &expected);
                 let mut split = vec![0.0; frames];
-                let mut start = 0;
+                let mut start = 0_usize;
                 for count in [0, 1, 3, 127, 2, 257].into_iter().cycle() {
-                    let end = (start + count).min(frames);
+                    let end = start.saturating_add(count).min(frames);
                     assert_eq!(
                         blend(
-                            &newer[start..end],
-                            &older[start..end],
+                            newer.get(start..end).unwrap(),
+                            older.get(start..end).unwrap(),
                             fraction,
-                            &mut split[start..end]
+                            split.get_mut(start..end).unwrap()
                         ),
-                        end - start
+                        end.wrapping_sub(start)
                     );
                     start = end;
                     if start == frames {
