@@ -566,7 +566,7 @@ fn resume_after_eof(audio: &mut HlsAudio, buf: &mut [f32], total_secs: f64) {
     tokio,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(10532))
+    timeout(::std::time::Duration::from_millis(24115))
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

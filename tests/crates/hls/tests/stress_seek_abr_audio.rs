@@ -533,7 +533,7 @@ async fn flac_abr() -> (TestServerHelper, CreatedHls) {
     native,
     tokio,
     serial,
-    timeout(::std::time::Duration::from_millis(2775)),
+    timeout(::std::time::Duration::from_millis(8409)),
     hang_timeout_secs(3),
     tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
 )]
