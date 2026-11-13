@@ -9,13 +9,10 @@ use ringbuf::{
     traits::{Consumer, Split},
 };
 
-use super::super::{
-    PcmConsumer, PlayerResource, PlayerTrack, RtSink, TrackBuffers, TrackReadOutcome,
-};
+use super::super::{PlayerResource, PlayerTrack, RtSink, TrackBuffers, TrackReadOutcome};
 use crate::{
     bridge::{DeckEvent, Fade, RtMetrics, Slot, TrackClock},
     mock::pcm_fixture::{PcmFixture, chunk},
-    test_pools::pools,
     worker::PcmPacket,
 };
 
@@ -33,11 +30,9 @@ impl Rig {
     async fn new(clock: TrackClock) -> Self {
         let mut fixture = PcmFixture::new(8, false).await;
         let resource = PlayerResource::new(
-            PcmConsumer::new(fixture.receiver.take().expect("receiver")),
+            fixture.receiver.take().expect("receiver"),
             Arc::from("dropout-clock"),
-            &pools(),
-        )
-        .expect("resource");
+        );
         let rate = NonZeroU32::new(48_000).expect("rate");
         let mut track = PlayerTrack::builder()
             .item_id(kithara_events::TrackId::allocate())

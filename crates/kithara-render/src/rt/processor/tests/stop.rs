@@ -19,14 +19,10 @@ fn fade_frames(frames: usize) -> CrossfadeSettings {
 fn empty_slot(mixer: &mut TestMixer, ends: &mut TestEnds, playing: bool) -> PacketRing {
     let spec = AudioSpec::new(2, shape().sample_rate);
     let mut packets = PacketRing::new(spec, Duration::from_secs(1), 2);
-    let resource = Box::new(
-        PlayerResource::new(
-            PcmConsumer::new(packets.receiver.take().expect("receiver")),
-            Arc::from("empty live lane"),
-            &pools(),
-        )
-        .expect("resource"),
-    );
+    let resource = Box::new(PlayerResource::new(
+        packets.receiver.take().expect("receiver"),
+        Arc::from("empty live lane"),
+    ));
     let mut commands = vec![DeckPart::Attach {
         item_id: kithara_events::TrackId::allocate(),
         slot: A,

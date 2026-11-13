@@ -1,7 +1,6 @@
 use std::ops::Range;
 
 use kithara_audio::FailureSource;
-use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc, time::Duration};
 use kithara_signal::{
     AudioChunk, AudioChunkInfo, OutputContext, SegmentId, SessionFrame, SourceSpan,
@@ -9,15 +8,18 @@ use kithara_signal::{
 };
 use kithara_test_macros as kithara;
 
-use super::PcmConsumer;
-use crate::{LaneFrame, bridge::SlotMark, worker::PcmPacket};
+use crate::{
+    LaneFrame,
+    bridge::SlotMark,
+    worker::{PcmPacket, PcmReceiver},
+};
 
 /// Owns at most one popped packet, including a packet the reverse ring refused.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct PlayerResource {
     src: Arc<str>,
-    pub(super) consumer: WasmSend<PcmConsumer>,
+    pub(super) receiver: WasmSend<PcmReceiver>,
     pub(super) packet: Option<PcmPacket>,
     pub(super) offset: usize,
     pub(super) lane: LaneFrame,
@@ -41,25 +43,15 @@ pub enum ReadOutcome {
 
 impl PlayerResource {
     /// Wraps a prepared packet receiver without calling its source.
-    ///
-    /// # Errors
-    /// The resource signature shares the pool error boundary with deck construction.
-    pub fn new<S>(
-        consumer: PcmConsumer,
-        src: Arc<str>,
-        _pools: &PoolRegion<S>,
-    ) -> Result<Self, PoolError>
-    where
-        S: HasPool<f32>,
-    {
-        let observed = consumer
-            .receiver
+    #[must_use]
+    pub fn new(receiver: PcmReceiver, src: Arc<str>) -> Self {
+        let observed = receiver
             .next_chunk_info()
             .filter(|info| info.segment == SegmentId::FIRST);
         let position = observed.and_then(|info| info.source_span?.for_output_range(0..0));
-        Ok(Self {
+        Self {
             src,
-            consumer: WasmSend::new(consumer),
+            receiver: WasmSend::new(receiver),
             packet: None,
             offset: 0,
             lane: LaneFrame {
@@ -72,7 +64,7 @@ impl PlayerResource {
             awaiting_segment: false,
             eof: false,
             failed: None,
-        })
+        }
     }
 
     #[must_use]
@@ -103,7 +95,7 @@ impl PlayerResource {
         let mut observed = self
             .observed
             .filter(|info| info.segment == self.lane.segment)?;
-        if let Some(terminal) = self.consumer.get().receiver.terminal_info()
+        if let Some(terminal) = self.receiver.get().terminal_info()
             && terminal.segment == observed.segment
             && terminal.source_revision == observed.source_revision
         {
@@ -113,7 +105,7 @@ impl PlayerResource {
     }
 
     pub(super) fn set_playing(&mut self, playing: bool) {
-        self.consumer.get_mut().receiver.set_playing(playing);
+        self.receiver.get_mut().set_playing(playing);
     }
 
     pub(super) fn mark(&self, session: SessionFrame) -> Option<SlotMark> {
@@ -137,7 +129,7 @@ impl PlayerResource {
         let Some(packet) = self.packet.take() else {
             return true;
         };
-        match self.consumer.get_mut().receiver.recycle(packet) {
+        match self.receiver.get_mut().recycle(packet) {
             Ok(()) => {
                 self.offset = 0;
                 true
@@ -180,7 +172,7 @@ impl PlayerResource {
                     return;
                 }
             }
-            let receiver = &mut self.consumer.get_mut().receiver;
+            let receiver = self.receiver.get_mut();
             let Some(next) = receiver.peek() else {
                 return;
             };
@@ -209,7 +201,7 @@ impl PlayerResource {
         if self.packet.is_some() {
             return None;
         }
-        let receiver = &mut self.consumer.get_mut().receiver;
+        let receiver = self.receiver.get_mut();
         if wait_for_pcm {
             receiver.wait_for_packet();
         }
@@ -256,7 +248,7 @@ impl PlayerResource {
         self.recycle_obsolete(budget);
         let (next, offset) = match self.packet.as_ref() {
             Some(packet) => (Some(packet), self.offset),
-            None => (self.consumer.get().receiver.peek(), 0),
+            None => (self.receiver.get().peek(), 0),
         };
         if let Some(PcmPacket::Chunk(chunk)) = next
             && chunk.meta.segment == self.lane.segment
@@ -278,12 +270,12 @@ impl PlayerResource {
         if self.mapped
             && let Some(position) = self.position.and_then(|point| point.position_at(0))
         {
-            self.consumer.get_mut().receiver.set_position(position);
+            self.receiver.get_mut().set_position(position);
         }
     }
 
     pub(in crate::rt) fn waits_offline(&self) -> bool {
-        self.consumer.get().receiver.waits_offline()
+        self.receiver.get().waits_offline()
     }
 
     pub(super) fn prepare_offline(&mut self) -> bool {
@@ -296,7 +288,7 @@ impl PlayerResource {
             if self.packet.is_some() || self.eof || self.failed.is_some() {
                 break;
             }
-            let receiver = &self.consumer.get().receiver;
+            let receiver = self.receiver.get();
             receiver.wait_for_packet();
             if !matches!(receiver.peek(), Some(PcmPacket::Chunk(chunk)) if chunk.meta.segment < self.lane.segment)
             {
@@ -379,7 +371,7 @@ impl PlayerResource {
                 };
             }
             if self.packet.is_none() {
-                let receiver = &mut self.consumer.get_mut().receiver;
+                let receiver = self.receiver.get_mut();
                 let next = receiver.peek();
                 if !next.is_some_and(|packet| {
                     matches!(packet, PcmPacket::Chunk(chunk) if chunk.meta.segment == self.lane.segment && chunk.frames() > 0)
@@ -441,7 +433,7 @@ impl PlayerResource {
         if self.mapped
             && let Some(position) = self.position.and_then(|point| point.position_at(0))
         {
-            self.consumer.get_mut().receiver.set_position(position);
+            self.receiver.get_mut().set_position(position);
         }
         ReadOutcome::Full { frames: written }
     }

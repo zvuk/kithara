@@ -319,8 +319,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use crate::{
-        rt::track::{PcmConsumer, PlayerResource},
-        test_pools::pools,
+        rt::track::PlayerResource,
         worker::{
             PcmPacket,
             packet_tests::{PacketRing, chunk},
@@ -350,11 +349,9 @@ mod tests {
             &[0.5; 2],
         ))));
         let mut resource = PlayerResource::new(
-            PcmConsumer::new(ring.receiver.take().expect("receiver")),
+            ring.receiver.take().expect("receiver"),
             Arc::from("publication"),
-            &pools(),
-        )
-        .expect("resource");
+        );
         resource.refresh_mark(&mut 1);
         let frontier = resource
             .mark(context.output_frames().start)

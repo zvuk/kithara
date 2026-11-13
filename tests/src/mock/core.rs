@@ -6,6 +6,7 @@ use std::{
 };
 
 use kithara::{
+    abr::AbrHandle,
     audio::{
         Audio, AudioConfig, AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome,
         FailureSource, PendingReason, ReadOutcome, ResamplerBackend, SeekOutcome, TrackFailureKind,
@@ -163,6 +164,8 @@ pub struct LaneAudio<T, S> {
     block_on_underrun: bool,
     sender: Sender<LaneProtocol>,
     pcm: PcmReceiver,
+    metadata: TrackMetadata,
+    abr: Option<AbrHandle>,
     bus: EventBus,
     #[field(get, copy)]
     segment: SegmentId,
@@ -296,7 +299,9 @@ where
             }),
             block_on_underrun,
             sender,
-            pcm: loaded.opened,
+            pcm: loaded.opened.receiver,
+            metadata: loaded.opened.metadata,
+            abr: loaded.opened.abr,
             bus,
             segment: SegmentId::FIRST,
             speed,
@@ -668,9 +673,15 @@ impl<T, S> AudioSession for LaneAudio<T, S> {
     delegate::delegate! {
         to self.pcm {
             fn duration(&self) -> Option<Duration>;
-            fn metadata(&self) -> &TrackMetadata;
-            fn abr_handle(&self) -> Option<kithara::abr::AbrHandle>;
         }
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        &self.metadata
+    }
+
+    fn abr_handle(&self) -> Option<AbrHandle> {
+        self.abr.clone()
     }
 
     fn event_bus(&self) -> &EventBus {

@@ -36,7 +36,7 @@ use kithara_render::{
     mock::{PacketRing, TestEnds, TestMixer, TestSessionInbox, chunk, mixer_with_shape, send},
     rt::{
         DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context,
-        track::{PcmConsumer, PlayerResource},
+        track::PlayerResource,
     },
 };
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
@@ -128,11 +128,9 @@ impl DeckFixture {
             ))));
         }
         let resource = PlayerResource::new(
-            PcmConsumer::new(ring.receiver.take().expect("receiver")),
+            ring.receiver.take().expect("receiver"),
             Arc::from("render-buffer-admission"),
-            &pools(),
-        )
-        .expect("prepared resource");
+        );
         self._packets.push(ring);
         Box::new(resource)
     }
@@ -346,7 +344,7 @@ async fn jump_fixture() -> JumpFixture {
     .build();
     let config = kithara::play::TrackConfig::for_audio(audio).build();
     let (mut sender, inbox) = worker.lane_channel();
-    let (mut receiver, lane, _) = worker
+    let (opened, lane, _) = worker
         .load(
             config,
             Duration::ZERO,
@@ -359,6 +357,7 @@ async fn jump_fixture() -> JumpFixture {
         )
         .await
         .expect("prepared actual worker");
+    let mut receiver = opened.receiver;
     let mut start = 0;
     while let Some(packet) = receiver.pop() {
         if let PcmPacket::Chunk(chunk) = &packet {

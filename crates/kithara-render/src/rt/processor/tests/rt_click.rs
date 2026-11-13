@@ -19,9 +19,8 @@ use crate::{
     bridge::{DeckMixSettingsChange, DeckPart, DeckProtocol, Fade, FadeDir, Returned, Slot},
     rt::{
         DeckMixerConfig, StreamShape,
-        track::{PcmConsumer, PlayerResource, PlayerTrack},
+        track::{PlayerResource, PlayerTrack},
     },
-    test_pools::pools,
     worker::{
         PcmPacket,
         packet_tests::{PacketRing, chunk},
@@ -85,14 +84,10 @@ fn load(control: &mut ClickControl, src: &str, input: &'static [u8]) -> Slot {
         0,
         &samples(input, 160_000),
     ))));
-    let pcm = Box::new(
-        PlayerResource::new(
-            PcmConsumer::new(packets.receiver.take().expect("receiver")),
-            Arc::from(src),
-            &pools(),
-        )
-        .expect("resource"),
-    );
+    let pcm = Box::new(PlayerResource::new(
+        packets.receiver.take().expect("receiver"),
+        Arc::from(src),
+    ));
     control.packets.push(packets);
     push(
         control,

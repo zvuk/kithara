@@ -7,7 +7,7 @@ use kithara_command::Inbox;
 use kithara_decode::DecodeError;
 use kithara_events::EventBus;
 use kithara_platform::{maybe_send::BoxFuture, sync::Arc, time::Duration};
-use kithara_render::{LaneProtocol, LaneStart, LoadRefusal, PcmReceiver, TrackConfig};
+use kithara_render::{LaneProtocol, LaneStart, LoadRefusal, OpenedPcm, TrackConfig};
 use kithara_signal::FrameCount;
 use kithara_stream::StreamType;
 
@@ -21,7 +21,7 @@ type ResourceTrack<S> = Either<
     TrackConfig<kithara_file::File<S>, PlaybackResamplerBackend>,
     TrackConfig<kithara_hls::Hls<S>, PlaybackResamplerBackend>,
 >;
-type OpenedLane<L> = Result<(PcmReceiver, L, FrameCount), LoadRefusal>;
+type OpenedLane<L> = Result<(OpenedPcm, L, FrameCount), LoadRefusal>;
 
 pub fn resource_tracks<S>(
     config: &ResourceConfig<S>,
@@ -78,11 +78,9 @@ where
     ResourceLoad {
         opener: Box::new(move |position, start, inbox| {
             Box::pin(async move {
-                let pools = worker.pools().clone();
                 let cancel = config.audio().cancel().cloned();
-                let (receiver, lane, latency) =
-                    open(worker, config, position, start, inbox).await?;
-                let opened = OpenedTrack::new(receiver, src, &pools).map_err(LoadRefusal::Pool)?;
+                let (opened, lane, latency) = open(worker, config, position, start, inbox).await?;
+                let opened = OpenedTrack::new(opened, src);
                 Ok((opened, ResourceLane::new(lane, cancel, None), latency))
             })
         }),

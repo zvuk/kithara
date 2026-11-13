@@ -10,11 +10,7 @@ use super::{TestEnds, TestMixer, mixer_with_shape, send};
 use crate::{
     CrossfadeSettings,
     bridge::{DeckPart, Fade, Slot},
-    rt::{
-        DeckMixerConfig, StreamShape,
-        track::{PcmConsumer, PlayerResource},
-    },
-    test_pools::pools,
+    rt::{DeckMixerConfig, StreamShape, track::PlayerResource},
     worker::{
         PcmPacket,
         packet_tests::{PacketRing, chunk},
@@ -83,12 +79,7 @@ pub(in crate::rt) fn resource(
 }
 
 pub(in crate::rt) fn from_packets(src: &str, mut packets: PacketRing) -> Resource {
-    let pcm = PlayerResource::new(
-        PcmConsumer::new(packets.receiver.take().expect("receiver")),
-        Arc::from(src),
-        &pools(),
-    )
-    .expect("resource pools");
+    let pcm = PlayerResource::new(packets.receiver.take().expect("receiver"), Arc::from(src));
     (Box::new(pcm), packets)
 }
 

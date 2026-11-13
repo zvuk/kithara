@@ -1,4 +1,3 @@
-mod consumer;
 mod core;
 mod fade;
 mod feeder;
@@ -13,7 +12,6 @@ mod legacy_tests;
 
 pub use core::PlayerTrack;
 
-pub use consumer::PcmConsumer;
 pub use feeder::{PlayerResource, ReadOutcome};
 pub(crate) use read::TrackBuffers;
 pub use read::TrackReadOutcome;

@@ -252,8 +252,7 @@ mod tests {
     use super::*;
     use crate::{
         bridge::{Fade, scope_channels},
-        rt::{DeckMixerConfig, track::PcmConsumer},
-        test_pools::pools,
+        rt::DeckMixerConfig,
         worker::packet_tests::PacketRing,
     };
 
@@ -314,14 +313,10 @@ mod tests {
     fn pcm(src: &str) -> Box<PlayerResource> {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
         let mut packets = PacketRing::new(spec, Duration::from_secs(1), 1);
-        Box::new(
-            PlayerResource::new(
-                PcmConsumer::new(packets.receiver.take().expect("receiver")),
-                Arc::from(src),
-                &pools(),
-            )
-            .expect("resource"),
-        )
+        Box::new(PlayerResource::new(
+            packets.receiver.take().expect("receiver"),
+            Arc::from(src),
+        ))
     }
 
     #[kithara::test]

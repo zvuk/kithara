@@ -53,7 +53,7 @@ use kithara_render::{
     },
     rt::{
         DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context,
-        track::{PcmConsumer, PlayerResource},
+        track::PlayerResource,
     },
 };
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
@@ -255,14 +255,10 @@ async fn processor(count: usize, lane: Lane, limiter: LimiterConfig) -> BenchMix
         commands.push(DeckPart::Attach {
             item_id: kithara_events::TrackId::allocate(),
             slot,
-            pcm: Box::new(
-                PlayerResource::new(
-                    PcmConsumer::new(pcm),
-                    Arc::from(format!("bench-track-{index}")),
-                    &pools,
-                )
-                .expect("bench player resource fits the pool budget"),
-            ),
+            pcm: Box::new(PlayerResource::new(
+                pcm.receiver,
+                Arc::from(format!("bench-track-{index}")),
+            )),
             segment: SegmentId::FIRST,
         });
         commands.push(DeckPart::Start {

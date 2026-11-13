@@ -110,11 +110,9 @@ fn source_format_changes_preserve_pcm_metadata_and_the_deck_filter_rate(
         ring.push(PcmPacket::Chunk(Box::new(packet)));
     }
     let resource = PlayerResource::new(
-        PcmConsumer::new(ring.receiver.take().expect("receiver")),
+        ring.receiver.take().expect("receiver"),
         Arc::from("source format"),
-        &pools(),
-    )
-    .expect("resource");
+    );
     let attached = send(
         &mut ends,
         at(1),

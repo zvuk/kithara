@@ -11,14 +11,13 @@ use kithara_audio::{
     Audio, AudioObserver, AudioReadError, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend,
     SeekOutcome,
 };
-use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_bufpool::HasPool;
 use kithara_command::{Inbox, Sender};
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{CancelToken, maybe_send::BoxFuture, sync::Arc, time::Duration};
 use kithara_render::{
-    LaneProtocol, LaneStart, LoadRefusal, Open, PcmReceiver,
-    rt::track::{PcmConsumer, PlayerResource},
+    LaneProtocol, LaneStart, LoadRefusal, Open, OpenedPcm, rt::track::PlayerResource,
 };
 use kithara_signal::{AudioSpec, FrameCount};
 use tracing::warn;
@@ -264,13 +263,13 @@ where
         })?;
         let cancel_link = config.cancel_link.clone();
         let cancel = config.cancel.clone();
-        let (receiver, lane, latency) = match source_type {
+        let (opened, lane, latency) = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
                 let audio = config.clone().build_file_config(Some(observer));
                 let track = config.build_track_config(audio);
-                let (receiver, lane, latency) = worker.load(track, position, start, inbox).await?;
+                let (opened, lane, latency) = worker.load(track, position, start, inbox).await?;
                 (
-                    receiver,
+                    opened,
                     ResourceLane::new(lane, cancel, cancel_link),
                     latency,
                 )
@@ -278,19 +277,15 @@ where
             SourceType::HlsStream(_) => {
                 let audio = config.clone().build_hls_config(&worker, Some(observer))?;
                 let track = config.build_track_config(audio);
-                let (receiver, lane, latency) = worker.load(track, position, start, inbox).await?;
+                let (opened, lane, latency) = worker.load(track, position, start, inbox).await?;
                 (
-                    receiver,
+                    opened,
                     ResourceLane::new(lane, cancel, cancel_link),
                     latency,
                 )
             }
         };
-        Ok((
-            OpenedTrack::new(receiver, src, worker.pools())?,
-            lane,
-            latency,
-        ))
+        Ok((OpenedTrack::new(opened, src), lane, latency))
     }
 }
 
@@ -311,18 +306,14 @@ impl Debug for OpenedTrack {
 }
 
 impl OpenedTrack {
-    pub(super) fn new<S>(
-        receiver: PcmReceiver,
-        src: Arc<str>,
-        pools: &PoolRegion<S>,
-    ) -> Result<Self, PoolError>
-    where
-        S: HasPool<f32>,
-    {
-        let abr = receiver.abr_handle();
-        let metadata = receiver.metadata().clone();
-        let pcm = Box::new(PlayerResource::new(PcmConsumer::new(receiver), src, pools)?);
-        Ok(Self { pcm, abr, metadata })
+    pub(super) fn new(opened: OpenedPcm, src: Arc<str>) -> Self {
+        let OpenedPcm {
+            receiver,
+            metadata,
+            abr,
+        } = opened;
+        let pcm = Box::new(PlayerResource::new(receiver, src));
+        Self { pcm, abr, metadata }
     }
 }
 
@@ -405,6 +396,42 @@ mod tests {
         PlayWorker, PlayWorkerConfig, ResourceSrc, consts,
         test_pools::{TestPools, pools},
     };
+
+    #[kithara::test]
+    fn opened_source_facts_can_be_released_while_pcm_remains_live() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("source rate"));
+        let mut ring = kithara_render::mock::PacketRing::new(spec, Duration::from_secs(1), 2);
+        let artwork = Arc::new(vec![1, 2, 3]);
+        let released = Arc::downgrade(&artwork);
+        let metadata = TrackMetadata {
+            album: Some("album".into()),
+            artist: Some("artist".into()),
+            title: Some("title".into()),
+            artwork: Some(artwork),
+        };
+        let opened = OpenedTrack::new(
+            OpenedPcm {
+                receiver: ring.receiver.take().expect("PCM receiver"),
+                metadata,
+                abr: None,
+            },
+            Arc::from("source"),
+        );
+        assert_eq!(opened.metadata.album.as_deref(), Some("album"));
+        assert_eq!(opened.metadata.artist.as_deref(), Some("artist"));
+        assert_eq!(opened.metadata.title.as_deref(), Some("title"));
+        assert_eq!(
+            opened.metadata.artwork.as_deref().map(Vec::as_slice),
+            Some([1, 2, 3].as_slice())
+        );
+        assert!(opened.abr.is_none());
+
+        drop(opened.metadata);
+
+        assert!(released.upgrade().is_none());
+        assert_eq!(opened.pcm.spec(), spec);
+        assert_eq!(opened.pcm.src().as_ref(), "source");
+    }
 
     #[kithara::test(tokio)]
     #[kithara::hang_watchdog(ctx = String)]

@@ -6,7 +6,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SegmentId, SourceSpan};
 use kithara_test_utils::kithara;
 
-use super::super::{PcmConsumer, PlayerResource, ReadOutcome};
+use super::super::{PlayerResource, ReadOutcome};
 use crate::{
     mock::pcm_fixture::{PcmFixture, chunk},
     test_pools::{pools, sample_buffer},
@@ -46,9 +46,7 @@ async fn scratch_holds_200ms_of_frames(#[case] sample_rate: u32, #[case] expecte
         .push(PcmPacket::Chunk(Box::new(packet)))
         .expect("200 ms packet fits the ring");
     let receiver = fixture.receiver.take().expect("packet receiver");
-    let mut resource =
-        PlayerResource::new(PcmConsumer::new(receiver), Arc::from("200ms"), &pools())
-            .expect("packet-backed resource");
+    let mut resource = PlayerResource::new(receiver, Arc::from("200ms"));
     let mut left = vec![0.0; expected];
     let mut right = vec![0.0; expected];
     let split = expected / 2;
@@ -77,8 +75,7 @@ async fn scratch_holds_200ms_of_frames(#[case] sample_rate: u32, #[case] expecte
 async fn epoch_validator_keeps_matching_chunks() {
     let mut fixture = PcmFixture::new(4, false).await;
     let receiver = fixture.receiver.take().expect("packet receiver");
-    let mut resource = PlayerResource::new(PcmConsumer::new(receiver), Arc::from("test"), &pools())
-        .expect("player resource");
+    let mut resource = PlayerResource::new(receiver, Arc::from("test"));
     let segment = SegmentId::FIRST.next();
     resource.select_segment(segment);
     fixture
@@ -97,8 +94,7 @@ async fn epoch_validator_keeps_matching_chunks() {
 async fn epoch_validator_rejects_stale_chunks_after_seek() {
     let mut fixture = PcmFixture::new(4, false).await;
     let receiver = fixture.receiver.take().expect("packet receiver");
-    let mut resource = PlayerResource::new(PcmConsumer::new(receiver), Arc::from("test"), &pools())
-        .expect("player resource");
+    let mut resource = PlayerResource::new(receiver, Arc::from("test"));
     let old = SegmentId::FIRST;
     let current = old.next();
     fixture
@@ -208,11 +204,9 @@ fn read_packet_sequence(delayed: bool, base: i64) -> (Vec<f32>, Vec<AudioChunkIn
         ring.push(fractional_packet(spec, 2, &[0.75; 5]));
     }
     let mut resource = PlayerResource::new(
-        PcmConsumer::new(ring.receiver.take().expect("receiver")),
+        ring.receiver.take().expect("receiver"),
         Arc::from("one-one-long"),
-        &pools(),
-    )
-    .expect("resource");
+    );
     let mut budget = 8;
     resource.refresh_mark(&mut budget);
     let mut snapshots = vec![resource.source_info().expect("initial packet")];

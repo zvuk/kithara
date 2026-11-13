@@ -17,7 +17,7 @@ use super::*;
 use crate::{
     PcmPacket, PcmReceiver,
     bridge::{DeckEvent, Fade, PlaybackFault, RtMetrics, Slot},
-    rt::track::{PcmConsumer, PlayerResource, PlayerTrack, RtSink},
+    rt::track::{PlayerResource, PlayerTrack, RtSink},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -160,12 +160,7 @@ fn consume_pcm(receiver: &mut PcmReceiver) -> (u64, u64) {
 fn assert_failed(receiver: PcmReceiver) {
     assert!(receiver.is_closed(), "failed producer closes its PCM ring");
     let spec = receiver.spec();
-    let resource = PlayerResource::new(
-        PcmConsumer::new(receiver),
-        Arc::from("panic.wav"),
-        &crate::test_pools::pools(),
-    )
-    .expect("failed lane resource");
+    let resource = PlayerResource::new(receiver, Arc::from("panic.wav"));
     let mut track = PlayerTrack::builder()
         .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec.sample_rate)
