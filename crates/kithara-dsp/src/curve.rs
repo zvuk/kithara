@@ -4,7 +4,7 @@
 pub struct CurveShape(Progression);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Progression {
+pub(crate) enum Progression {
     Hold,
     Linear,
     Cubic { first: f64, second: f64 },
@@ -35,25 +35,17 @@ impl CurveShape {
         }
     }
 
+    /// Interpolate normalized positions in place, copying exact endpoints outside zero to one.
+    pub fn process(self, positions: &mut [f64], endpoints: [f64; 2]) {
+        crate::backend::curve::interpolate(self.0, positions, endpoints);
+    }
+
     /// Evaluate normalized time in f64; exact endpoints are copied directly.
     #[must_use]
     pub fn progress(self, time: f64) -> f64 {
-        if time <= 0.0 {
-            return 0.0;
-        }
-        if time >= 1.0 {
-            return 1.0;
-        }
-        match self.0 {
-            Progression::Hold => 0.0,
-            Progression::Linear => time,
-            Progression::Cubic { first, second } => {
-                let remaining = 1.0 - time;
-                let left = 3.0 * remaining * remaining * time * first;
-                let right = 3.0 * remaining * time * time * second;
-                ((left + right) + time * time * time).clamp(0.0, 1.0)
-            }
-        }
+        let mut value = [time];
+        self.process(&mut value, [0.0, 1.0]);
+        value[0]
     }
 }
 

@@ -89,3 +89,14 @@ pub fn crossfade_linear(
 pub fn multiply_in_place(samples: &mut [f32], gains: &[f32]) -> usize {
     platform::multiply_in_place(samples, gains)
 }
+
+/// Write `(first + i) / divisor`, forming the saturating integer numerator before f64 conversion.
+/// Division is correctly rounded; the output length is returned.
+pub fn ratio_ramp(output: &mut [f64], first: u64, divisor: std::num::NonZeroU64) -> usize {
+    backend::precision::ratio_ramp(output, first, divisor)
+}
+
+/// Round f64 values to f32 over the common prefix, leaving the output tail untouched.
+pub fn narrow_f64(input: &[f64], output: &mut [f32]) -> usize {
+    platform::narrow_f64(input, output)
+}

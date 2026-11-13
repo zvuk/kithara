@@ -62,8 +62,7 @@ where
         item: TrackId,
         program: kithara_play::SlotGainProgram,
     },
-    EqGainProgram(kithara_play::EqGainProgram),
-    FilterProgram(kithara_play::FilterProgram),
+    DeckPrograms(Vec<kithara_play::DeckProgram>),
     ConfigureQueue(QueueSettingsChange, When<SessionFrame>),
     SetActionAtItemEnd(ActionAtItemEnd),
     SetPlaybackOrder(PlaybackOrder),
@@ -207,10 +206,7 @@ where
                     .apply(TrackCommand::GainProgram(program), out)
                     .map_err(Into::into)
             }
-            QueueCommand::EqGainProgram(program) => {
-                out.eq_gain_program(program).map_err(Into::into)
-            }
-            QueueCommand::FilterProgram(program) => out.filter_program(program).map_err(Into::into),
+            QueueCommand::DeckPrograms(programs) => out.deck_programs(programs).map_err(Into::into),
             QueueCommand::NotifyInterruption(kind) => {
                 self.deck.suspended = out.notify_interruption(kind)?;
                 Ok(None)

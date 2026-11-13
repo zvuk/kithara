@@ -3,7 +3,7 @@ use std::hint::black_box;
 use criterion::{BatchSize, Criterion};
 use kithara::{
     effects::filter::{FilterEffect, FilterKnob, FilterSettings},
-    play::{CurveShape, FilterProgram, ParameterKnot},
+    play::{CurveShape, DeckParameter, DeckProgram, ParameterKnot},
     signal::SessionFrame,
 };
 use kithara_command::When;
@@ -50,23 +50,26 @@ async fn prepare(harness: &OfflinePlayer) {
 async fn submit(harness: &OfflinePlayer, shape: CurveShape, frames: usize) {
     let start = harness.host().position() + u64::try_from(PRELUDE).expect("prelude");
     let end = start + u64::try_from(frames).expect("curve length");
-    let program = FilterProgram::new(vec![
-        ParameterKnot::new(
-            SessionFrame::new(i64::try_from(start).expect("start")),
-            START,
-            shape,
-        )
-        .expect("left"),
-        ParameterKnot::new(
-            SessionFrame::new(i64::try_from(end).expect("end")),
-            END,
-            CurveShape::HOLD,
-        )
-        .expect("right"),
-    ])
+    let program = DeckProgram::new(
+        DeckParameter::Filter,
+        vec![
+            ParameterKnot::new(
+                SessionFrame::new(i64::try_from(start).expect("start")),
+                START,
+                shape,
+            )
+            .expect("left"),
+            ParameterKnot::new(
+                SessionFrame::new(i64::try_from(end).expect("end")),
+                END,
+                CurveShape::HOLD,
+            )
+            .expect("right"),
+        ],
+    )
     .expect("prepared knob trajectory");
     harness
-        .with_queue(move |queue| queue.filter_program(program))
+        .with_queue(move |queue| queue.deck_program(program))
         .await
         .expect("public curve submission");
 }

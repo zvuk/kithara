@@ -299,3 +299,85 @@ fn a_foreign_deck_refusal_does_not_cancel_a_known_decks_pending_level() {
     assert_applied(settle_block(&mut state, &mut 0), [valid]);
     assert_eq!(mix_level(&mut state, known), 0.2);
 }
+
+#[kithara::test]
+fn a_program_admitted_from_a_stale_snapshot_returns_its_late_owner_receipt() {
+    use kithara_command::{ChannelConfig, Rejection, channel};
+    use kithara_play::{CurveShape, DeckParameter, DeckPass, DeckProgram, Outbox, ParameterKnot};
+    use kithara_signal::FrameCount;
+
+    let mut state = test_state(start_route_loss_stream);
+    let id = insert(&mut state);
+    let mut clock = 0;
+    settle_block(&mut state, &mut clock);
+    let mut observed = None;
+    state
+        .owner
+        .with_deck(id, &mut |_, _, pass| {
+            observed = Some((pass.deck.clone(), pass.mix));
+        })
+        .expect("registered deck");
+    let (snapshot, mix) = observed.expect("observed deck");
+    let scope = snapshot.eq.layout().expect("mixer scope").scope();
+    let first = snapshot.at;
+    settle_block(&mut state, &mut clock);
+    state
+        .owner
+        .with_deck(id, &mut |_, _, pass| {
+            assert!(
+                pass.deck.at > first,
+                "audio has advanced beyond the retained snapshot"
+            );
+        })
+        .expect("advanced deck");
+    let program = DeckProgram::new(
+        DeckParameter::Trim,
+        vec![ParameterKnot::new(first, 0.5, CurveShape::HOLD).expect("native value")],
+    )
+    .expect("program on the observed frontier");
+    let output = state.root_view.output.get();
+    let tempo = state.timeline.trajectory().clone();
+    let (mut dispatcher, _dispatcher_inbox) = channel(ChannelConfig::builder().build());
+    let seq = {
+        let mut port = state
+            .channel
+            .as_mut()
+            .expect("session channel")
+            .scope(scope)
+            .expect("same deck scope");
+        let pass = DeckPass {
+            mix,
+            suspended: false,
+            now: first,
+            delivery: FrameCount::new(128),
+            deck_delivery: FrameCount::new(128),
+            output: &output,
+            deck: &snapshot,
+            planned_tempo: &tempo,
+        };
+        Outbox::<TestPools>::new(&mut port, &mut dispatcher)
+            .in_pass(pass)
+            .deck_programs(vec![program])
+            .expect("synchronous admission uses the published frontier")
+            .expect("sent batch")
+    };
+    let receipts = settle_block(&mut state, &mut clock);
+    let late = receipts.iter().any(|receipt| {
+        matches!(receipt,
+            crate::HostSettled::Batch { seq: named, outcome: Err(Rejection::Late) } if *named == seq
+        )
+    });
+    state
+        .owner
+        .with_deck(id, &mut |_, _, pass| {
+            let trim = pass.deck.parameter(DeckParameter::Trim).expect("trim");
+            assert_eq!(trim.value(), 1.0);
+            assert_eq!(trim.program(), None);
+        })
+        .expect("unchanged deck");
+    drop(state);
+    assert!(
+        late,
+        "the owner must return the exact refused program receipt"
+    );
+}

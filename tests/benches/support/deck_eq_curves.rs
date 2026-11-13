@@ -2,7 +2,7 @@ use std::hint::black_box;
 
 use criterion::{BatchSize, Criterion};
 use kithara::{
-    play::{CurveShape, EqBandConfig, EqGainProgram, GainDb, ParameterKnot},
+    play::{CurveShape, DeckParameter, DeckProgram, EqBandConfig, GainDb, ParameterKnot},
     signal::SessionFrame,
 };
 use kithara_integration_tests::offline::OfflinePlayer;
@@ -34,8 +34,11 @@ async fn reset(harness: &OfflinePlayer) {
 async fn submit(harness: &OfflinePlayer, shape: CurveShape, frames: usize) {
     let start = harness.host().position() + u64::try_from(PRELUDE).expect("prelude");
     let end = start + u64::try_from(frames).expect("curve length");
-    let program = EqGainProgram::new(
-        0,
+    let program = DeckProgram::new(
+        DeckParameter::EqBand {
+            band: 0,
+            layout: harness.deck_snapshot().eq.layout().expect("EQ layout"),
+        },
         vec![
             ParameterKnot::new(
                 SessionFrame::new(i64::try_from(start).expect("start")),
@@ -53,7 +56,7 @@ async fn submit(harness: &OfflinePlayer, shape: CurveShape, frames: usize) {
     )
     .expect("EQ curve");
     harness
-        .with_queue(move |queue| queue.eq_gain_program(program))
+        .with_queue(move |queue| queue.deck_program(program))
         .await
         .expect("curve submission");
 }

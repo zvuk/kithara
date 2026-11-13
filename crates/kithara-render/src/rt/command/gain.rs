@@ -75,8 +75,7 @@ impl Deck {
     }
 
     pub(in crate::rt) fn output_finished(&self, commands: &[DeckPart], seq: Seq) -> bool {
-        !self.eq_programs.has_seq(seq)
-            && !self.filter_programs.has_seq(seq)
+        !self.programs.has_seq(seq)
             && !self
                 .tracks
                 .slots()
@@ -153,8 +152,7 @@ impl Deck {
         if self.epoch == Some(epoch) {
             return;
         }
-        self.cancel_eq_epoch(level);
-        self.cancel_filter_epoch(level);
+        self.cancel_program_epoch(level);
         for slot in self.tracks.slots() {
             let previous = self
                 .tracks

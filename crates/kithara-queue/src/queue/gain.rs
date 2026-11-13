@@ -1,6 +1,6 @@
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
-use kithara_play::{EqGainProgram, SlotGainProgram};
+use kithara_play::{DeckProgram, SlotGainProgram};
 
 use super::{QueueCommand, QueueControl};
 use crate::QueueError;
@@ -16,10 +16,16 @@ where
         self.call(QueueCommand::GainProgram { item, program })
     }
 
-    /// Submit a prepared gain trajectory for one band of this deck's EQ.
+    /// Submit a prepared gain trajectory for one control of this deck.
     /// # Errors
     /// Refuses unavailable/full control delivery; the owner checks layout and clock identity.
-    pub fn eq_gain_program(&self, program: EqGainProgram) -> Result<(), QueueError> {
-        self.call(QueueCommand::EqGainProgram(program))
+    pub fn deck_program(&self, program: DeckProgram) -> Result<(), QueueError> {
+        self.deck_programs(vec![program])
+    }
+    /// Submit programs together; a refusal changes none of the addressed controls.
+    /// # Errors
+    /// Returns preparation or delivery refusal from the deck owner.
+    pub fn deck_programs(&self, programs: Vec<DeckProgram>) -> Result<(), QueueError> {
+        self.call(QueueCommand::DeckPrograms(programs))
     }
 }

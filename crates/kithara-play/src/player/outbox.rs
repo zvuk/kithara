@@ -178,51 +178,40 @@ impl<'a, S> Outbox<'a, S> {
         self.deck(When::Next, parts.into_iter().map(DeckPart::Eq).collect())
     }
 
-    /// Submit a filter knob program against the observed output stream and knob authority.
+    /// Sends channel programs as one atomic batch on the observed mixer axis.
     /// # Errors
-    /// Refuses unavailable output state, insufficient delivery lead or command capacity.
-    pub fn filter_program(
+    /// Refuses unavailable parameters or output axes, late starts and full delivery.
+    pub fn deck_programs(
         &mut self,
-        program: crate::FilterProgram,
+        programs: Vec<crate::DeckProgram>,
     ) -> Result<Option<Seq>, PlayError> {
+        let Some(at) = programs.first().map(crate::DeckProgram::start) else {
+            return Ok(None);
+        };
         let pass = self.pass.ok_or(PlayError::NotReady)?;
-        let binding = pass.deck.filter.binding().ok_or(PlayError::NotReady)?;
-        let authority = pass.deck.filter.authority();
-        self.deck(
-            When::At(program.start()),
-            vec![DeckPart::FilterProgram {
-                binding,
-                authority,
+        let epoch = pass.deck.epoch.ok_or(PlayError::NotReady)?;
+        let mut parts = Vec::with_capacity(programs.len());
+        for program in programs {
+            if let crate::DeckParameter::EqBand { band, .. } = program.parameter() {
+                if band >= pass.deck.eq.bands() {
+                    return Err(PlayError::EqBandOutOfRange {
+                        band,
+                        bands: pass.deck.eq.bands(),
+                    });
+                }
+            }
+            let field = pass
+                .deck
+                .parameter(program.parameter())
+                .ok_or(PlayError::NotReady)?;
+            parts.push(DeckPart::Program {
+                epoch,
+                authority: field.authority(),
                 program,
-            }],
-        )
-    }
-
-    /// Send an EQ trajectory on the layout and authority last observed by this pass.
-    /// # Errors
-    /// Refuses an unavailable band/layout/clock or insufficient command delivery lead.
-    pub fn eq_gain_program(
-        &mut self,
-        program: crate::EqGainProgram,
-    ) -> Result<Option<Seq>, PlayError> {
-        let pass = self.pass.ok_or(PlayError::NotReady)?;
-        let band = program.band();
-        if band >= pass.deck.eq.bands() {
-            return Err(PlayError::EqBandOutOfRange {
-                band,
-                bands: pass.deck.eq.bands(),
             });
         }
-        let binding = pass.deck.eq.binding().ok_or(PlayError::NotReady)?;
-        let authority = pass.deck.eq.authority(band);
-        self.deck(
-            When::At(program.start()),
-            vec![DeckPart::EqProgram {
-                binding,
-                authority,
-                program,
-            }],
-        )
+        self.deck_owned(When::At(at), parts)
+            .map_err(|(error, _parts)| error)
     }
 
     pub fn eq_layout(
@@ -275,10 +264,10 @@ impl<'a, S> Outbox<'a, S> {
         self.dispatcher.available()
     }
 
-    fn check_when(&self, at: When<SessionFrame>) -> Result<(), PlayError> {
+    pub(super) fn check_when(&self, at: When<SessionFrame>) -> Result<(), PlayError> {
         if let When::At(frame) = at {
             let pass = self.pass.ok_or(PlayError::Untimed)?;
-            if frame < pass.deck_earliest() {
+            if frame < pass.deck.at {
                 return Err(PlayError::Late);
             }
         }
@@ -514,8 +503,7 @@ pub(crate) fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
         | DeckPart::Mix(_)
         | DeckPart::Eq(_)
         | DeckPart::Fx(_)
-        | DeckPart::FilterProgram { .. }
-        | DeckPart::EqProgram { .. }
+        | DeckPart::Program { .. }
         | DeckPart::GainProgram { .. }
         | DeckPart::Returned(_) => (None, None),
     };

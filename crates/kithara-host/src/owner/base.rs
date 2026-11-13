@@ -590,8 +590,8 @@ where
                         matches!(
                             part,
                             DeckPart::Eq(_)
-                                | DeckPart::EqProgram { .. }
-                                | DeckPart::FilterProgram { .. }
+                                | DeckPart::Program { .. }
+                                | DeckPart::Returned(kithara_render::bridge::Returned::Program(_))
                                 | DeckPart::Returned(kithara_render::bridge::Returned::Eq(_))
                         )
                     });

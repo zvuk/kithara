@@ -47,9 +47,9 @@ use kithara_integration_tests::{
 use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, LaneProtocol, LaneStart, LaneTask,
     bridge::{
-        CrossfaderGain, CurveShape, DeckEnds, DeckEqChange, DeckMixSettingsChange, DeckPart,
-        DeckProtocol, EqGainProgram, Fade, FilterProgram, ParameterKnot, SessionInbox, Slot,
-        SlotState, scope_channels,
+        CrossfaderGain, CurveShape, DeckEnds, DeckEqChange, DeckMixSettingsChange, DeckParameter,
+        DeckPart, DeckProgram, DeckProtocol, Fade, ParameterKnot, SessionInbox, Slot, SlotState,
+        scope_channels,
     },
     rt::{
         DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context,
@@ -460,22 +460,25 @@ fn automate(
     let blocks = consts::WARMUP_BLOCKS + consts::MEASURED_BLOCKS + consts::SETTLE_BLOCKS;
     let end = start + block * i64::try_from(blocks).expect("bench blocks fit i64");
     let snapshot = mixer.deck.snapshot.read();
-    let filter_binding = snapshot.filter.binding().expect("observed output stream");
-    let eq_binding = snapshot.eq.binding().expect("installed EQ layout");
+    let epoch = snapshot.epoch.expect("observed output stream");
+    let layout = snapshot.eq.layout().expect("installed EQ layout");
     let mut parts: Vec<DeckPart> = (0..filter)
-        .map(|_| DeckPart::FilterProgram {
-            binding: filter_binding,
+        .map(|_| DeckPart::Program {
+            epoch,
             authority: snapshot.filter.authority(),
-            program: FilterProgram::new(linear(start, end, -1.0, -0.1))
+            program: DeckProgram::new(DeckParameter::Filter, linear(start, end, -1.0, -0.1))
                 .expect("bench filter program"),
         })
         .collect();
     for band in 0..eq {
-        parts.push(DeckPart::EqProgram {
-            binding: eq_binding,
+        parts.push(DeckPart::Program {
+            epoch,
             authority: snapshot.eq.authority(band),
-            program: EqGainProgram::new(band, linear(start, end, -24.0, 6.0))
-                .expect("bench EQ program"),
+            program: DeckProgram::new(
+                DeckParameter::EqBand { band, layout },
+                linear(start, end, -24.0, 6.0),
+            )
+            .expect("bench EQ program"),
         });
     }
     // A program's batch is due on its first knot.

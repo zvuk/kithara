@@ -2,23 +2,26 @@ use kithara_command::Target;
 use kithara_effects::filter::{FilterEffect, FilterKnob};
 
 use super::{
-    filter::{binding, bits, knob, prepared, reference, turn},
+    filter::{bits, knob, prepared, reference, turn},
     *,
 };
-use crate::bridge::{CurveShape, FilterProgram, ParameterKnot};
+use crate::bridge::{CurveShape, DeckParameter, DeckProgram, ParameterKnot};
 
-fn linear(start: usize, end: usize, left: f64, right: f64) -> FilterProgram {
-    FilterProgram::new(vec![
-        ParameterKnot::new(frame_at(start), left, CurveShape::LINEAR).expect("left"),
-        ParameterKnot::new(frame_at(end), right, CurveShape::HOLD).expect("right"),
-    ])
+fn linear(start: usize, end: usize, left: f64, right: f64) -> DeckProgram {
+    DeckProgram::new(
+        DeckParameter::Filter,
+        vec![
+            ParameterKnot::new(frame_at(start), left, CurveShape::LINEAR).expect("left"),
+            ParameterKnot::new(frame_at(end), right, CurveShape::HOLD).expect("right"),
+        ],
+    )
     .expect("program")
 }
 
-fn program_part(ends: &mut TestEnds, program: FilterProgram) -> DeckPart {
+fn program_part(ends: &mut TestEnds, program: DeckProgram) -> DeckPart {
     let snapshot = ends.deck.snapshot.read();
-    DeckPart::FilterProgram {
-        binding: snapshot.filter.binding().expect("observed output stream"),
+    DeckPart::Program {
+        epoch: snapshot.epoch.expect("observed output stream"),
         authority: snapshot.filter.authority(),
         program,
     }
@@ -76,7 +79,9 @@ fn a_knob_program_is_frame_exact_in_any_block_partition(#[case] block: usize) {
     assert_applied_at(outcome_of(&replies, seq), origin + 5);
     assert!(matches!(
         outcome_of(&replies, refused_clock),
-        Outcome::Rejected(Rejection::Refused(DeckRefusal::FilterProgramClock))
+        Outcome::Rejected(Rejection::Refused(DeckRefusal::ProgramClock {
+            parameter: DeckParameter::Filter
+        }))
     ));
     let returned = &replies
         .iter()
@@ -84,7 +89,7 @@ fn a_knob_program_is_frame_exact_in_any_block_partition(#[case] block: usize) {
         .expect("sweep receipt")
         .2;
     assert!(
-        matches!(&returned[..], [DeckPart::FilterProgram { program, .. }] if program.start() == frame_at(origin + 5) && program.end() == frame_at(origin + 21))
+        matches!(&returned[..], [DeckPart::Returned(Returned::Program(program))] if program.start() == frame_at(origin + 5) && program.end() == frame_at(origin + 21))
     );
     let snapshot = ends.deck.snapshot.read();
     assert_eq!(snapshot.filter.program(), Some(seq));
@@ -128,7 +133,9 @@ fn a_manual_turn_takes_over_from_the_last_applied_position() {
         if manual_first {
             assert!(matches!(
                 outcome_of(&replies, replacement_seq),
-                Outcome::Rejected(Rejection::Refused(DeckRefusal::FilterOutdated))
+                Outcome::Rejected(Rejection::Refused(DeckRefusal::ParameterOutdated {
+                    parameter: DeckParameter::Filter
+                }))
             ));
         } else {
             assert_applied_at(outcome_of(&replies, replacement_seq), origin + 10);
@@ -137,7 +144,6 @@ fn a_manual_turn_takes_over_from_the_last_applied_position() {
         assert_eq!(snapshot.filter.authority(), Some(manual_seq));
         assert_eq!(snapshot.filter.program(), None);
         assert_eq!(snapshot.filter.knob().to_bits(), filter.knob().to_bits());
-        assert_eq!(binding(&mut ends).instance(), None);
         outputs.push(actual);
     }
     assert_eq!(
@@ -151,7 +157,7 @@ fn a_manual_turn_takes_over_from_the_last_applied_position() {
 #[kithara::test]
 fn a_program_switching_between_the_knob_ends_is_admitted_and_stays_finite() {
     const PERIOD: usize = 552;
-    const CYCLES: usize = FilterProgram::MAX_KNOTS / 2;
+    const CYCLES: usize = DeckProgram::MAX_KNOTS / 2;
     const TAKE: usize = PERIOD * CYCLES;
     let (mut mixer, mut ends) = mixer_with_config(DeckMixerConfig::default(), 32);
     render_frames(&mut mixer, 0, 1);
@@ -191,7 +197,7 @@ fn a_program_switching_between_the_knob_ends_is_admitted_and_stays_finite() {
                 .expect("high end"),
         );
     }
-    let program = FilterProgram::new(knots).expect("knob positions");
+    let program = DeckProgram::new(DeckParameter::Filter, knots).expect("knob positions");
     let command = program_part(&mut ends, program);
     let seq = send(&mut ends, at(origin), vec![command]);
     for offset in (0..TAKE).step_by(BLOCK) {

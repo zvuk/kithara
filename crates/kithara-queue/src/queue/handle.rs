@@ -262,13 +262,6 @@ where
         self.call(QueueCommand::Filter { at, knob })
     }
 
-    /// Forward a program of the deck filter knob.
-    /// # Errors
-    /// Returns preparation, delivery or mailbox refusal.
-    pub fn filter_program(&self, program: kithara_play::FilterProgram) -> Result<(), QueueError> {
-        self.call(QueueCommand::FilterProgram(program))
-    }
-
     /// Forwards mute to the host owner.
     /// # Errors
     /// Returns the host's refusal or a closed mailbox.

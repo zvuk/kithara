@@ -4,8 +4,8 @@ use kithara::{
     assets::AssetStore,
     host::Tap,
     play::{
-        CurveShape, EqBandConfig, EqGainProgram, GainDb, ParameterKnot, PlayError, ResourceConfig,
-        ResourceSrc, SlotGainProgram,
+        CurveShape, DeckParameter, DeckProgram, EqBandConfig, GainDb, ParameterKnot, PlayError,
+        ResourceConfig, ResourceSrc, SlotGainProgram,
     },
     queue::{QueueError, TrackSource},
     signal::SessionFrame,
@@ -55,8 +55,15 @@ async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] 
     let start = harness.host().position();
     let target = start.saturating_add(529);
     let terminal = target.saturating_add(128);
-    let program = EqGainProgram::new(
-        0,
+    let program = DeckProgram::new(
+        DeckParameter::EqBand {
+            band: 0,
+            layout: harness
+                .deck_snapshot()
+                .eq
+                .layout()
+                .expect("observed EQ layout"),
+        },
         vec![
             ParameterKnot::new(
                 SessionFrame::new(i64::try_from(target).expect("target frame")),
@@ -74,16 +81,23 @@ async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] 
     )
     .expect("prepared EQ gain program");
     harness
-        .with_queue(move |queue| queue.eq_gain_program(program))
+        .with_queue(move |queue| queue.deck_program(program))
         .await
         .expect("public EQ control");
     assert_eq!(harness.deck_snapshot().eq.gain(0), Some(GainDb::DEFAULT));
     assert_eq!(harness.deck_snapshot().eq.program(0), None);
-    let late = EqGainProgram::new(
-        0,
+    let late = DeckProgram::new(
+        DeckParameter::EqBand {
+            band: 0,
+            layout: harness
+                .deck_snapshot()
+                .eq
+                .layout()
+                .expect("observed EQ layout"),
+        },
         vec![
             ParameterKnot::new(
-                SessionFrame::new(i64::try_from(start).expect("past frame")),
+                SessionFrame::new(i64::from(harness.deck_snapshot().at).saturating_sub(1)),
                 6.0,
                 CurveShape::HOLD,
             )
@@ -91,12 +105,14 @@ async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] 
         ],
     )
     .expect("prepared late program");
-    assert!(matches!(
-        harness
-            .with_queue(move |queue| queue.eq_gain_program(late))
-            .await,
-        Err(QueueError::Play(PlayError::Late))
-    ));
+    let late_result = harness
+        .with_queue(move |queue| queue.deck_program(late))
+        .await;
+    assert!(
+        matches!(late_result, Err(QueueError::Play(PlayError::Late))),
+        "result {late_result:?}, first knot {start}, mixer frontier {:?}",
+        harness.deck_snapshot().at
+    );
     if muted {
         let output = SlotGainProgram::new(vec![
             ParameterKnot::new(
@@ -151,8 +167,15 @@ async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] 
         assert!(slot.output.program().is_some());
     }
     let future = harness.host().position() + 529;
-    let held = EqGainProgram::new(
-        0,
+    let held = DeckProgram::new(
+        DeckParameter::EqBand {
+            band: 0,
+            layout: harness
+                .deck_snapshot()
+                .eq
+                .layout()
+                .expect("observed EQ layout"),
+        },
         [future, future + 1024]
             .into_iter()
             .map(|at| {
@@ -167,7 +190,7 @@ async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] 
     )
     .expect("prepared held curve");
     harness
-        .with_queue(move |queue| queue.eq_gain_program(held))
+        .with_queue(move |queue| queue.deck_program(held))
         .await
         .expect("reachable held curve");
     let _ = render_effect_window(&harness, 640).await;
@@ -187,8 +210,15 @@ async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] 
         .await
         .expect("remove EQ layout");
     let _ = render_effect_window(&harness, 4096).await;
-    let unavailable = EqGainProgram::new(
-        0,
+    let unavailable = DeckProgram::new(
+        DeckParameter::EqBand {
+            band: 0,
+            layout: harness
+                .deck_snapshot()
+                .eq
+                .layout()
+                .expect("observed EQ layout"),
+        },
         vec![
             ParameterKnot::new(
                 SessionFrame::new(
@@ -203,7 +233,7 @@ async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] 
     .expect("prepared unavailable program");
     assert!(matches!(
         harness
-            .with_queue(move |queue| queue.eq_gain_program(unavailable))
+            .with_queue(move |queue| queue.deck_program(unavailable))
             .await,
         Err(QueueError::Play(PlayError::EqBandOutOfRange {
             band: 0,

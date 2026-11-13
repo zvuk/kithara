@@ -5,6 +5,7 @@ use kithara_dsp::{
     fade::FadeCurve,
     param::{Mix, MixDSP},
 };
+use num_traits::AsPrimitive;
 
 use super::{EqBandConfig, EqConfig, IsolatorEq};
 use crate::GainDb;
@@ -49,7 +50,9 @@ impl EqLayout {
 
     delegate::delegate! {
         to self.left {
-            fn band_count(&self) -> usize;
+            /// Number of bands prepared in this layout.
+            #[must_use]
+            pub fn band_count(&self) -> usize;
             fn target_gain(&self, band: usize) -> Option<GainDb>;
         }
     }
@@ -205,6 +208,16 @@ impl StereoEq {
     /// Runs both channels through the sounding layout in place, crossing over from the layout
     /// it replaced until the crossover settles.
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.process_with_gains(left, right, std::iter::empty());
+    }
+
+    /// Apply prepared dB values on the corresponding frames while preserving filter history.
+    pub fn process_with_gains<'a>(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        gains: impl Iterator<Item = (usize, &'a [f64])> + Clone,
+    ) {
         self.advance();
         if let Some(active) = self.active.as_deref_mut() {
             render_stereo(
@@ -213,6 +226,7 @@ impl StereoEq {
                 &mut self.crossover,
                 left,
                 right,
+                gains,
             );
         }
     }
@@ -235,14 +249,20 @@ impl StereoEq {
     }
 }
 
-fn render_stereo(
+fn render_stereo<'a>(
     active: &mut EqLayout,
     mut retiring: Option<&mut EqLayout>,
     crossover: &mut MixDSP,
     left: &mut [f32],
     right: &mut [f32],
+    gains: impl Iterator<Item = (usize, &'a [f64])> + Clone,
 ) {
-    for (left, right) in left.iter_mut().zip(right.iter_mut()) {
+    for (frame, (left, right)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
+        for (band, values) in gains.clone() {
+            if let Some(value) = values.get(frame) {
+                active.set_explicit(band, GainDb::from(AsPrimitive::<f32>::as_(*value)));
+            }
+        }
         let (dry_left, dry_right) = (*left, *right);
         let mut wet_left = [active.left.process_sample(dry_left)];
         let mut wet_right = [active.right.process_sample(dry_right)];

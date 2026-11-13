@@ -14,7 +14,7 @@ use triple_buffer::Input;
 
 use super::{
     super::{
-        command::{Armed, EqPrograms, FilterPrograms, answer_stop, output_curve},
+        command::{Armed, DeckPrograms, answer_stop, output_curve},
         context::read_render_context,
         tail::SlotTail,
         track::{PlayerTrack, RtSink, TrackBuffers},
@@ -52,8 +52,7 @@ pub(in crate::rt) struct Deck {
     pub(in crate::rt) evict_frames: usize,
     pub(in crate::rt) mix: DeckMixSettings,
     pub(in crate::rt) render: RenderPass,
-    pub(in crate::rt) eq_programs: EqPrograms,
-    pub(in crate::rt) filter_programs: FilterPrograms,
+    pub(in crate::rt) programs: DeckPrograms,
     events: HeapProd<DeckEvent>,
     pub(in crate::rt) metrics: RtMetrics,
     pub(in crate::rt) sample_rate: NonZeroU32,
@@ -111,8 +110,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                 declick_frames,
                 evict_frames,
                 render: RenderPass::new(pools, shape, config)?,
-                eq_programs: EqPrograms::new(scope, config.eq_bands()),
-                filter_programs: FilterPrograms::new(scope),
+                programs: DeckPrograms::new(scope, config.eq_bands(), config.fx_units(), capacity),
                 mix,
                 events,
                 metrics: RtMetrics::default(),
@@ -215,8 +213,7 @@ impl<E: SessionInbox> DeckMixer<E> {
             if let Some(mut level) = level {
                 sounded = self.render_block_in(&mut level, context, start, buffers, frames);
                 if level.is_closing() && self.deck.tails_quiet() {
-                    self.deck.cancel_eq_epoch(&mut level);
-                    self.deck.cancel_filter_epoch(&mut level);
+                    self.deck.cancel_program_epoch(&mut level);
                     level.retire();
                     self.retired = true;
                 }
@@ -316,18 +313,16 @@ impl<E: SessionInbox> DeckMixer<E> {
                     })
             };
         }
+        snapshot.at = at;
         snapshot.sample_rate = self.deck.sample_rate.get();
         snapshot.blocks = self.blocks;
         snapshot.metrics = self.deck.metrics.snapshot();
         let bands = self.deck.render.read_eq(snapshot.eq.gains_mut());
         snapshot.eq.set_bands(bands);
-        self.deck.eq_programs.publish(
-            &mut snapshot.eq,
+        self.deck.programs.publish(
+            snapshot,
             if self.retired { None } else { self.deck.epoch },
-        );
-        self.deck.filter_programs.publish(
-            &mut snapshot.filter,
-            if self.retired { None } else { self.deck.epoch },
+            self.deck.render.control_values(),
             self.deck.render.filter_knob(),
         );
         self.snapshot.publish();

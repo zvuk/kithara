@@ -4,12 +4,14 @@ pub(crate) mod accelerate;
 mod bins;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 mod cascade;
+pub(crate) mod curve;
 mod envelope;
 mod fade;
 mod fir;
 mod interpolate;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) mod portable;
+pub(crate) mod precision;
 mod simd;
 #[cfg(all(
     feature = "spectrum",

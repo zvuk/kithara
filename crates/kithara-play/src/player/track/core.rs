@@ -192,15 +192,8 @@ impl<S> PlayerImpl<S> {
         at: When<SessionFrame>,
         out: &Outbox<'_, S>,
     ) -> Result<(), PlayError> {
-        if let When::At(frame) = at {
-            let pass = out.pass().ok_or(PlayError::Untimed)?;
-            let origin = self
-                .seat
-                .attached_at()
-                .map_or(pass.now, |attach| attach.max(pass.now));
-            if frame < origin + pass.deck_delivery {
-                return Err(PlayError::Late);
-            }
+        out.check_when(at)?;
+        if let When::At(_) = at {
             if self.seat.attached_at().is_none() {
                 return Err(PlayError::Untimed);
             }

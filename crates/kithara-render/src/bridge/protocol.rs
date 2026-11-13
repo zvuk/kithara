@@ -9,8 +9,7 @@ use kithara_platform::time::Duration;
 use kithara_signal::{SegmentId, SessionFrame};
 
 use super::{
-    DeckMixSettingsChange, EqBinding, EqGainProgram, FilterBinding, FilterProgram, SlotBinding,
-    SlotGainProgram, SlotMark,
+    DeckMixSettingsChange, DeckParameter, DeckProgram, SlotBinding, SlotGainProgram, SlotMark,
 };
 use crate::{CrossfadeSettings, rt::track::PlayerResource};
 
@@ -75,19 +74,16 @@ pub enum DeckRefusal {
     RefusedFxParam {
         unit: usize,
     },
-    EqOutdated {
-        band: usize,
+    EqLayoutCapacity,
+    ParameterOutdated {
+        parameter: DeckParameter,
     },
-    EqUnavailable {
-        band: usize,
+    ParameterUnavailable {
+        parameter: DeckParameter,
     },
-    EqProgramClock {
-        band: usize,
+    ProgramClock {
+        parameter: DeckParameter,
     },
-    EqProgramCapacity,
-    FilterOutdated,
-    FilterProgramClock,
-    FilterProgramCapacity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -159,15 +155,10 @@ pub enum DeckPart {
     Mix(DeckMixSettingsChange),
     Eq(DeckEqChange),
     Fx(DeckFxChange),
-    FilterProgram {
-        binding: FilterBinding,
+    Program {
+        epoch: kithara_signal::SessionEpoch,
         authority: Option<Seq>,
-        program: FilterProgram,
-    },
-    EqProgram {
-        binding: EqBinding,
-        authority: Option<Seq>,
-        program: EqGainProgram,
+        program: DeckProgram,
     },
     GainProgram {
         slot: Slot,
@@ -180,6 +171,7 @@ pub enum DeckPart {
 
 /// Owning values travel back in their receipt, never dropped by the mixer.
 pub enum Returned {
+    Program(DeckProgram),
     Pcm {
         slot: Slot,
         pcm: Box<PlayerResource>,
@@ -338,23 +330,13 @@ impl fmt::Debug for DeckPart {
             Self::Mix(change) => formatter.debug_tuple("Mix").field(change).finish(),
             Self::Eq(change) => formatter.debug_tuple("Eq").field(change).finish(),
             Self::Fx(change) => formatter.debug_tuple("Fx").field(change).finish(),
-            Self::FilterProgram {
-                binding,
+            Self::Program {
+                epoch,
                 authority,
                 program,
             } => formatter
-                .debug_struct("FilterProgram")
-                .field("binding", binding)
-                .field("authority", authority)
-                .field("program", program)
-                .finish(),
-            Self::EqProgram {
-                binding,
-                authority,
-                program,
-            } => formatter
-                .debug_struct("EqProgram")
-                .field("binding", binding)
+                .debug_struct("Program")
+                .field("epoch", epoch)
                 .field("authority", authority)
                 .field("program", program)
                 .finish(),
@@ -384,6 +366,7 @@ impl fmt::Debug for Returned {
                 .field("src", pcm.src())
                 .finish(),
             Self::Eq(_) => formatter.write_str("Eq"),
+            Self::Program(program) => formatter.debug_tuple("Program").field(program).finish(),
             Self::Stopped { slot, resume } => formatter
                 .debug_struct("Stopped")
                 .field("slot", slot)

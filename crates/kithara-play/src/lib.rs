@@ -42,9 +42,9 @@ pub use kithara_render::{
     PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
     bridge::{
         CrossfaderGain, CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckFxChange,
-        DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot,
-        EqBinding, EqGainProgram, EqSnapshot, FadeDir, FilterBinding, FilterProgram,
-        FilterSnapshot, FxMix, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault,
+        DeckMixSettings, DeckMixSettingsChange, DeckParameter, DeckPart, DeckProgram, DeckProtocol,
+        DeckRefusal, DeckSnapshot, EqSnapshot, FadeDir, FilterSnapshot, FxMix, LayoutRevision,
+        MixTapWriter, ParameterCurveError, ParameterKnot, ParameterSnapshot, PlaybackFault,
         Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
         TrackClock, Trim,
     },
