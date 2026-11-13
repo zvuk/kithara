@@ -259,7 +259,7 @@ struct InventoryMatch {
 /// the project's `default-filter` excluded it or the lane's own filter never reached its binary;
 /// the suite is dropped whole rather than filtered case by case.
 pub(crate) fn parse_inventory(json: &str) -> Result<BTreeSet<TestId>> {
-    let inventory: Inventory = serde_json::from_str(json).context("parse stress inventory JSON")?;
+    let inventory = decode_inventory(json).context("parse stress inventory JSON")?;
     if inventory.rust_suites.is_empty() {
         bail!("stress inventory contains no Rust test suites");
     }
@@ -270,9 +270,12 @@ pub(crate) fn parse_inventory(json: &str) -> Result<BTreeSet<TestId>> {
     Ok(tests)
 }
 
+fn decode_inventory(json: &str) -> Result<Inventory> {
+    serde_json::from_str(json).context("parse nextest inventory JSON")
+}
+
 pub(super) fn complete_inventory(json: &str) -> Result<BTreeMap<String, BTreeMap<String, bool>>> {
-    let inventory: Inventory =
-        serde_json::from_str(json).context("parse nextest inventory JSON")?;
+    let inventory = decode_inventory(json)?;
     let mut binaries = BTreeMap::new();
     let mut count = 0usize;
     for (binary, suite) in inventory.rust_suites {
