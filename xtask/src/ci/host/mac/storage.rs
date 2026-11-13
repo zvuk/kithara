@@ -324,7 +324,7 @@ impl<'a> HostStorage<'a> {
             &self.build_root.join("workspaces/gitlab"),
             &self.host_root.join("cache"),
         )?;
-        build_cache::enforce_budget(&roots, self.config.host.build_cache_budget_bytes()?, &[])?;
+        build_cache::enforce_budget(&roots, self.config.host.build_cache_budget_bytes()?)?;
         Ok(roots)
     }
 
