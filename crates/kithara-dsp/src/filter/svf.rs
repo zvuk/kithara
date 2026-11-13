@@ -96,14 +96,26 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
         {
             return Err(FilterError::Parameters);
         }
+        let mut planes = planes.iter_mut();
+        let mut ranges: [Option<&mut [f32]>; CHANNELS] =
+            std::array::from_fn(|_| planes.next().and_then(|plane| plane.get_mut(range.clone())));
+        if ranges.iter().any(Option::is_none) {
+            return Err(FilterError::Shape);
+        }
         let damping = q.recip();
         dispatch!(Level::new(), simd => {
             let mut gains = [0.0; SVF_CHUNK_FRAMES];
-            let mut frames = range;
+            let mut planes = ranges.each_mut().map(|range| {
+                range.as_deref_mut().unwrap_or_default().chunks_mut(SVF_CHUNK_FRAMES)
+            });
             for chunk in cutoffs.chunks(SVF_CHUNK_FRAMES) {
                 platform::svf_gains(simd, chunk, rate, &mut gains);
-                for (gain, frame) in gains.iter().zip(frames.by_ref().take(chunk.len())) {
-                    self.frame(simd, planes, frame, *gain, damping, response);
+                let mut frames = planes.each_mut().map(|plane| {
+                    plane.next().unwrap_or_default().iter_mut()
+                });
+                for gain in gains.iter().take(chunk.len()) {
+                    let mut samples = frames.each_mut().map(Iterator::next);
+                    self.frame_samples(simd, &mut samples, *gain, damping, response);
                 }
             }
         });
@@ -111,19 +123,18 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
     }
 
     #[inline(always)]
-    fn frame<S: Simd, P: DerefMut<Target = [f32]>>(
+    fn frame_samples<S: Simd>(
         &mut self,
         simd: S,
-        planes: &mut [P],
-        frame: usize,
+        samples: &mut [Option<&mut f32>],
         gain: f64,
         damping: f64,
         response: Response,
     ) {
         if self.reset_state
-            && planes
+            && samples
                 .iter()
-                .all(|plane| plane.get(frame).expect("validated frame").to_bits() == 0)
+                .all(|sample| sample.as_deref().is_none_or(|sample| sample.to_bits() == 0))
         {
             self.count(true);
             return;
@@ -133,7 +144,7 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
         let a3 = gain * a2;
         let mut frame_quiet = true;
         let [memory1, memory2] = &mut self.state;
-        for ((planes, memory1), memory2) in planes
+        for ((samples, memory1), memory2) in samples
             .chunks_mut(2)
             .zip(memory1.chunks_mut(2))
             .zip(memory2.chunks_mut(2))
@@ -141,9 +152,11 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
             let s1 = f64x2::from_fn(simd, |lane| memory1.get(lane).copied().unwrap_or(0.0));
             let s2 = f64x2::from_fn(simd, |lane| memory2.get(lane).copied().unwrap_or(0.0));
             let x = f64x2::from_fn(simd, |lane| {
-                planes.get(lane).map_or(0.0, |plane| {
-                    f64::from(*plane.get(frame).expect("validated frame"))
-                })
+                samples
+                    .get(lane)
+                    .and_then(Option::as_deref)
+                    .copied()
+                    .map_or(0.0, f64::from)
             });
             let ([next1, next2], output) =
                 svf_step(simd, x, [s1, s2], [a1, a2, a3], damping, response);
@@ -153,16 +166,33 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
             for (memory, value) in memory2.iter_mut().zip(next2.as_slice()) {
                 *memory = *value;
             }
-            for (plane, output) in planes.iter_mut().zip(output.as_slice()) {
-                let sample = plane.get_mut(frame).expect("validated frame");
-                let output = output.to_f32().unwrap_or(f32::NAN);
-                frame_quiet &=
-                    sample.abs() <= consts::SILENT_PEAK && output.abs() <= consts::SILENT_PEAK;
-                *sample = output;
+            for (sample, output) in samples.iter_mut().zip(output.as_slice()) {
+                if let Some(sample) = sample.as_deref_mut() {
+                    let output = output.to_f32().unwrap_or(f32::NAN);
+                    frame_quiet &=
+                        sample.abs() <= consts::SILENT_PEAK && output.abs() <= consts::SILENT_PEAK;
+                    *sample = output;
+                }
             }
         }
         self.reset_state = false;
         self.count(frame_quiet);
+    }
+
+    #[cfg(test)]
+    fn frame<S: Simd, P: DerefMut<Target = [f32]>>(
+        &mut self,
+        simd: S,
+        planes: &mut [P],
+        frame: usize,
+        gain: f64,
+        damping: f64,
+        response: Response,
+    ) {
+        let mut planes = planes.iter_mut();
+        let mut samples: [Option<&mut f32>; CHANNELS] =
+            std::array::from_fn(|_| planes.next().and_then(|plane| plane.get_mut(frame)));
+        self.frame_samples(simd, &mut samples, gain, damping, response);
     }
 
     fn count(&mut self, frame_quiet: bool) {

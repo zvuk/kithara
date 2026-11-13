@@ -15,8 +15,7 @@ mod consts {
 }
 
 pub(crate) fn svf_gains<S: Simd>(simd: S, cutoffs: &[f64], rate: f64, gains: &mut [f64]) {
-    let len = super::svf::cutoff_angles(simd, cutoffs, rate, gains);
-    for gain in gains.iter_mut().take(len) {
+    for gain in super::svf::cutoff_angles(simd, cutoffs, rate, gains) {
         *gain = gain.tan();
     }
 }

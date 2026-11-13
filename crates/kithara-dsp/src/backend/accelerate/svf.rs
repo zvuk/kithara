@@ -9,8 +9,7 @@ pub(crate) fn svf_gains<S: Simd>(simd: S, cutoffs: &[f64], rate: f64, gains: &mu
         .chunks(SVF_CHUNK_FRAMES)
         .zip(gains.chunks_mut(SVF_CHUNK_FRAMES))
     {
-        let len = cutoff_angles(simd, cutoffs, rate, &mut angles);
-        let angles = angles.get(..len).expect("cutoff chunk fits scratch");
+        let angles = cutoff_angles(simd, cutoffs, rate, &mut angles);
         let _ = tangent_f64(angles, gains);
     }
 }

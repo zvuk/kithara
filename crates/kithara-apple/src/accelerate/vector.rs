@@ -23,9 +23,11 @@ pub fn tangent_f64(input: &[f64], output: &mut [f64]) -> usize {
 }
 
 fn tangent_vforce(input: &[f64], output: &mut [f64]) {
-    let maximum = usize::try_from(i32::MAX).expect("Apple usize holds i32::MAX");
-    for (input, output) in input.chunks(maximum).zip(output.chunks_mut(maximum)) {
-        let count = i32::try_from(input.len()).expect("vForce chunk fits i32");
+    const MAXIMUM: usize = 2_147_483_647;
+    for (input, output) in input.chunks(MAXIMUM).zip(output.chunks_mut(MAXIMUM)) {
+        let Ok(count) = i32::try_from(input.len()) else {
+            return;
+        };
         // SAFETY: both nonoverlapping slices hold count doubles; vForce is synchronous.
         unsafe { vvtan(output.as_mut_ptr(), input.as_ptr(), ptr::from_ref(&count)) };
     }

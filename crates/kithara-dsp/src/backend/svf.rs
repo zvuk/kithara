@@ -31,13 +31,16 @@ pub(crate) fn step<S: Simd>(
 }
 
 #[inline(always)]
-pub(super) fn cutoff_angles<S: Simd>(
+pub(super) fn cutoff_angles<'a, S: Simd>(
     simd: S,
     cutoffs: &[f64],
     rate: f64,
-    angles: &mut [f64],
-) -> usize {
+    angles: &'a mut [f64],
+) -> &'a mut [f64] {
     let len = cutoffs.len().min(angles.len());
+    let Some((angles, _)) = angles.split_at_mut_checked(len) else {
+        return &mut [];
+    };
     let pi = f64x2::splat(simd, PI);
     let rate = f64x2::splat(simd, rate);
     for (cutoffs, angles) in cutoffs.chunks(2).zip(angles.chunks_mut(2)) {
@@ -47,7 +50,7 @@ pub(super) fn cutoff_angles<S: Simd>(
             *angle = *value;
         }
     }
-    len
+    angles
 }
 
 #[cfg(test)]
@@ -57,6 +60,10 @@ mod tests {
 
     use super::*;
     use crate::backend::{platform, portable};
+
+    fn cutoff_angles<S: Simd>(simd: S, cutoffs: &[f64], rate: f64, angles: &mut [f64]) -> usize {
+        super::cutoff_angles(simd, cutoffs, rate, angles).len()
+    }
 
     #[kithara::test]
     fn cutoff_angles_and_portable_tangents_keep_scalar_order_and_prefix() {
