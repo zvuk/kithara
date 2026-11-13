@@ -4,6 +4,7 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 use kithara_effects::{
     DeckEffect, FxParamChange, GainDb,
+    /// The deck's equaliser, after its trim.
     eq::{EqConfig, EqLayout, GainShapeError, StereoEq, generate_log_spaced_bands},
     filter::{FilterEffect, FilterKnob},
 };
@@ -20,15 +21,21 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct RenderPass {
+    /// Values most recently emitted by the control buffers, for the applied snapshot.
     #[field(#[must_use] get(copy), vis = "pub(crate)")]
     control_values: [f64; DeckParameter::CHANNELS],
+    /// The deck's trim, fader and crossfader, each ramped to its new target
+    /// from the frame it is set on.
     controls: [SmoothedParam; DeckParameter::CHANNELS],
     control_buffers: [SampleBuffer; DeckParameter::CHANNELS],
     eq: StereoEq,
+    /// The deck's FX units, after its equaliser.
     units: Box<[FxUnit]>,
     /// The deck filter, after the FX units; transparent at its center.
     filter: FilterEffect,
+    /// The wet signal of the unit running now.
     wet: [SampleBuffer; crate::consts::MIN_STEREO],
+    /// Mutes fader times crossfader after the units, so it cuts their tails too.
     muted: bool,
     /// Set until the first range renders, which moves every ramp to its target at once.
     priming: bool,
@@ -126,6 +133,7 @@ impl RenderPass {
         self.run(left, right, Some(programs))
     }
 
+    /// Pass a stereo chunk through the chain under the values prepared for this chunk.
     fn run(
         &mut self,
         left: &mut [f32],

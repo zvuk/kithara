@@ -27,6 +27,7 @@ impl LayoutRevision {
     }
 }
 
+/// A continuous channel control, or one band in its observed EQ layout.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeckParameter {
     Trim,
@@ -72,6 +73,7 @@ impl DeckProgram {
 
     pub const MAX_KNOTS: usize = ParameterCurve::MAX_KNOTS;
 
+    /// Checks ordered knots and the addressed control's native range off the audio thread.
     /// # Errors
     /// Refuses malformed knots and nonfinite or out-of-range values.
     pub fn new(
@@ -95,6 +97,7 @@ impl DeckProgram {
 
     delegate::delegate! {
         to self.curve {
+            /// First addressed session frame.
             #[must_use]
             pub fn start(&self) -> SessionFrame;
             /// Last knot, whose value is held afterward.
