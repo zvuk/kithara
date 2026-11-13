@@ -329,7 +329,7 @@ mod tests {
         )))
     }
 
-    #[kithara::test(tokio)]
+    #[kithara::test(miri, tokio)]
     async fn handle_observes_legacy_publication_from_the_state_owner() {
         let controller = AbrController::with_estimator(
             settings_fast(),
@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(state.current_variant_index(), VariantIndex::new(2));
     }
 
-    #[kithara::test(tokio)]
+    #[kithara::test(miri, tokio)]
     async fn handle_observes_exact_publication_from_the_state_owner() {
         let controller = AbrController::with_estimator(
             settings_fast(),

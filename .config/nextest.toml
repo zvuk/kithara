@@ -81,11 +81,12 @@ path = "junit.xml"
 default-filter = 'all()'
 fail-fast = false
 retries = 0
-slow-timeout = { period = "60s" }
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 [profile.miri.junit]
 path = "junit.xml"
 store-failure-output = true
+report-skipped = "ignored"
 
 # Android runs a whole binary behind the first nextest request. The adapter
 # owns its one-hour process deadline and preserves partial libtest results.

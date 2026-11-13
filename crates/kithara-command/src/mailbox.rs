@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(commands(&mut mailbox), [1]);
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn a_post_wakes_the_holder() {
         let (postbox, mut mailbox) = mailbox::<u32, ()>();
         let (waker, wakes) = waker();
@@ -333,7 +333,7 @@ mod tests {
         assert_eq!(commands(&mut mailbox), [1]);
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn a_dropped_mailbox_leaves_its_posts_unanswered_and_closes_its_postboxes() {
         let (postbox, mailbox) = mailbox::<u32, ()>();
         let ticket = postbox.post(1).expect("an open mailbox takes the post");

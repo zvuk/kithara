@@ -135,6 +135,31 @@ mod tests {
         }))
     }
 
+    #[cfg(feature = "zvuk")]
+    #[kithara::test(native, flash(false))]
+    fn the_stock_document_registers_zvuk_and_its_account(cancel_token: CancelToken) {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime builds");
+        let pools = pools::build(&PoolsSection::default()).expect("valid app pool policy");
+        let net = HttpClient::new(NetOptions::builder().build(), pools, cancel_token.child());
+        let environment =
+            Environment::new(runtime.handle().clone(), net, Secrets::new(Store::new()));
+        let document = Config::load(None, None).expect("the stock document loads");
+        let registered =
+            mount(&document, &environment, &cancel_token).expect("stock sources register");
+        assert_eq!(registered.len(), 1);
+        let page = registered[0].page();
+        assert_eq!(page.id, "zvuk");
+        assert!(
+            page.endpoints
+                .iter()
+                .any(|endpoint| endpoint.name == "account_connect")
+        );
+        assert!(registered[0].granted().is_some());
+    }
+
     #[kithara::test]
     fn configured_entries_register_with_cancellations_of_their_own(cancel_token: CancelToken) {
         let runtime = Builder::new_current_thread()
