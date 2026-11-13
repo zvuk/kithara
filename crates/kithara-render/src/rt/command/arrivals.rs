@@ -267,11 +267,9 @@ impl Deck {
                         return Err(DeckRefusal::MissingFxUnit { unit });
                     }
                     if let DeckFxChange::Param { change, .. } = change
-                        && !self.render.accepts_fx(
-                            unit,
-                            *change,
-                            commands.get(..part_index).expect("preceding batch parts"),
-                        )
+                        && !commands.get(..part_index).is_some_and(|preceding| {
+                            self.render.accepts_fx(unit, *change, preceding)
+                        })
                     {
                         return Err(DeckRefusal::RefusedFxParam { unit });
                     }
