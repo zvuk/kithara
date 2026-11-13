@@ -24,7 +24,7 @@ use super::{
 const BLOCKS: usize = 20;
 const CHANNELS: usize = 2;
 
-/// What graph_out plays over [`BLOCKS`] blocks from the deck's first, under
+/// What `graph_out` plays over [`BLOCKS`] blocks from the deck's first, under
 /// `limiter`, once the master tap has shown it carries the same samples.
 async fn take(limiter: LimiterConfig) -> Vec<f32> {
     let rate = NonZeroU32::new(SAMPLE_RATE).expect("nonzero fixture rate");
