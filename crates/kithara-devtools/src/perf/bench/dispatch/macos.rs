@@ -14,16 +14,11 @@ struct Gitlab {
 }
 
 impl Gitlab {
-    fn new(config: &Deployment) -> Result<Self> {
-        let url = Url::parse(&config.gitlab_project)?;
-        ensure!(
-            url.scheme() == "https" && url.username().is_empty() && url.password().is_none(),
-            "invalid GitLab project URL"
-        );
-        Ok(Self {
-            host: url.host_str().context("GitLab host")?.into(),
-            project: format!("projects/{}", encoded(url.path().trim_matches('/'))),
-        })
+    fn new(config: &Deployment) -> Self {
+        Self {
+            host: config.gitlab_host.clone(),
+            project: format!("projects/{}", encoded(&config.gitlab_project)),
+        }
     }
 
     fn api(&self, ctx: &Ctx, suffix: &str, body: Option<&Value>) -> Result<Value> {
@@ -81,17 +76,9 @@ fn controller(ctx: &Ctx, gitlab: &Gitlab, repository: &str) -> Result<Controller
     if base["id"].as_str() == Some(&sha) {
         return Ok(Controller::DefaultBranch(default.into()));
     }
-    let repo = gh(ctx, &format!("repos/{repository}"))?;
-    let canonical = if repo["fork"].as_bool() == Some(true) {
-        repo["parent"]["full_name"]
-            .as_str()
-            .context("fork parent")?
-    } else {
-        repository
-    };
     let statuses = gh(
         ctx,
-        &format!("repos/{canonical}/commits/{sha}/status?per_page=100"),
+        &format!("repos/{repository}/commits/{sha}/status?per_page=100"),
     )?;
     let target = statuses["statuses"]
         .as_array()
@@ -151,14 +138,9 @@ fn manual_job(jobs: &Value) -> Result<u64> {
     job["id"].as_u64().context("native benchmark job id")
 }
 
-pub(super) fn run(
-    ctx: &Ctx,
-    config: &Deployment,
-    repository: &str,
-    request: &Request,
-) -> Result<()> {
-    let gitlab = Gitlab::new(config)?;
-    let controller = controller(ctx, &gitlab, repository)?;
+pub(super) fn run(ctx: &Ctx, config: &Deployment, request: &Request) -> Result<()> {
+    let gitlab = Gitlab::new(config);
+    let controller = controller(ctx, &gitlab, &config.github_repo)?;
     let mut values: Vec<_> = request
         .parameters()
         .into_iter()

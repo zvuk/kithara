@@ -7,8 +7,9 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use cargo_metadata::{Metadata, MetadataCommand};
 use tempfile::{Builder, TempDir};
+use toml::Value;
 
-use super::{Deployment, Log, Request};
+use super::{Log, Request};
 use crate::Ctx;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -90,7 +91,17 @@ impl Sources {
         let repository = if request.head.is_empty() && request.base.is_empty() {
             None
         } else {
-            Some(Deployment::load(ctx)?.repository)
+            let manifest: Value =
+                toml::from_str(&fs::read_to_string(ctx.root.join("Cargo.toml"))?)?;
+            Some(
+                manifest
+                    .get("workspace")
+                    .and_then(|value| value.get("package"))
+                    .and_then(|value| value.get("repository"))
+                    .and_then(Value::as_str)
+                    .context("source refs require workspace.package.repository")?
+                    .to_owned(),
+            )
         };
         let head = if request.head.is_empty() {
             ctx.root.clone()

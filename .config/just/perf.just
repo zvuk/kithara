@@ -55,8 +55,8 @@ suite *ARGS:
 compare *ARGS:
     just _xtask perf-compare "$@"
 
-# Linux: just perf bench dispatch linux --bench-target kithara-dsp:kernels:spectrum --bench-filter '^biquad/' --bench-ref codex/dsp-top10/dsp-crossover-eq --bench-base-ref main
-# Mac: just perf bench dispatch macos --bench-target kithara-dsp:kernels:spectrum --bench-filter '^biquad/' --bench-ref codex/dsp-top10/dsp-crossover-eq --bench-base-ref main
+# Linux: just perf bench dispatch linux --bench-target kithara-dsp:kernels:spectrum --bench-filter '<filter>' --bench-ref '<branch>' --bench-base-ref main
+# Mac: just perf bench dispatch macos --bench-target kithara-dsp:kernels:spectrum --bench-filter '<filter>' --bench-ref '<branch>' --bench-base-ref main
 [positional-arguments]
 bench MODE="build" *ARGS:
     just _xtask perf bench "$@"

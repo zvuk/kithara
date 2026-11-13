@@ -65,17 +65,17 @@ impl Request {
 
 #[derive(Deserialize)]
 pub(super) struct Deployment {
+    pub(super) github_repo: String,
+    pub(super) gitlab_host: String,
     pub(super) gitlab_project: String,
-    pub(super) repository: String,
 }
 
 impl Deployment {
     pub(super) fn load(ctx: &Ctx) -> Result<Self> {
         ctx.config
             .ext
-            .get("perf")
-            .and_then(|perf| perf.get("bench"))
-            .context("configure ext.perf.bench for benchmark dispatch/source refs")?
+            .get("release")
+            .context("configure existing ext.release repository settings for benchmark dispatch")?
             .clone()
             .try_into()
             .context("parse benchmark deployment")
@@ -188,7 +188,7 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool) -> Result<()> {
         return log
             .line("==> benchmark execution skipped (set RUN_BENCHMARKS=1 in ci mode to execute)");
     }
-    let parent = ctx.root.join(".ci-artifacts/bench");
+    let parent = ctx.root.join("bench-results");
     fs::create_dir_all(&parent)?;
     let results = Builder::new().prefix("bench-").tempdir_in(parent)?.keep();
     let data = results.join("criterion");

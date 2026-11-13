@@ -71,7 +71,7 @@ deep:bench:
     paths:
       - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - bench-results.txt
-      - .ci-artifacts/bench/
+      - bench-results/
 
 .deps-job:
   extends:

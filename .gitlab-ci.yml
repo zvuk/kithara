@@ -31,7 +31,7 @@ workflow:
     # the run would only repeat what a push already does.
     - if: $CI_PIPELINE_SOURCE == "web" && $KITHARA_PLATFORMS
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_PLATFORMS
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && $BENCH_TARGET && $RUN_BENCHMARKS == "1"
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $BENCH_TARGET && $RUN_BENCHMARKS == "1"
     - when: never
 
 .dispatch:
@@ -54,7 +54,7 @@ dispatch:bench:
     KITHARA_CACHE_TRUST: review
     KITHARA_PIPELINE_KIND: bench
   rules:
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && $BENCH_TARGET && $RUN_BENCHMARKS == "1"
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $BENCH_TARGET && $RUN_BENCHMARKS == "1"
 
 dispatch:merge-request:
   extends: .dispatch

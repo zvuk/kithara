@@ -75,14 +75,17 @@ pub(super) fn encoded(value: &str) -> String {
     byte_serialize(value.as_bytes()).collect()
 }
 
-fn github_repository(config: &Deployment) -> Result<String> {
-    let url = Url::parse(&config.repository)?;
+fn github_repository(remote: &str) -> Result<String> {
+    let normalized = remote.strip_prefix("git@github.com:").map_or_else(
+        || remote.to_owned(),
+        |path| format!("https://github.com/{path}"),
+    );
+    let url = Url::parse(&normalized)?;
     ensure!(
-        url.scheme() == "https"
-            && url.host_str() == Some("github.com")
-            && url.username().is_empty()
+        matches!(url.scheme(), "https" | "ssh")
+            && matches!(url.host_str(), Some("github.com" | "ssh.github.com"))
             && url.password().is_none(),
-        "benchmark dispatch repository must be an HTTPS GitHub repository"
+        "benchmark dispatch needs a GitHub origin remote"
     );
     Ok(url
         .path()
@@ -111,7 +114,7 @@ pub(in crate::perf::bench) fn run(args: &DispatchArgs, ctx: &Ctx) -> Result<()> 
         "dispatch requires --bench-target"
     );
     let config = Deployment::load(ctx)?;
-    let repository = github_repository(&config)?;
+    let repository = github_repository(&git(ctx, &["remote", "get-url", "origin"])?)?;
     let controller = git(ctx, &["branch", "--show-current"])?;
     ensure!(
         !controller.is_empty(),
@@ -126,11 +129,11 @@ pub(in crate::perf::bench) fn run(args: &DispatchArgs, ctx: &Ctx) -> Result<()> 
     let base = if args.request.base.is_empty() {
         String::new()
     } else {
-        resolve(ctx, &repository, &args.request.base)?
+        resolve(ctx, &config.github_repo, &args.request.base)?
     };
     println!(
-        "Benchmark source {head_ref} -> {head}; base {} -> {base}",
-        args.request.base
+        "Benchmark source {repository}:{head_ref} -> {head}; base {}:{} -> {base}",
+        config.github_repo, args.request.base
     );
     let request = Request {
         base,
@@ -139,7 +142,7 @@ pub(in crate::perf::bench) fn run(args: &DispatchArgs, ctx: &Ctx) -> Result<()> 
     };
     match args.host {
         Host::Linux => linux(ctx, &repository, &controller, &request),
-        Host::Macos => macos::run(ctx, &config, &repository, &request),
+        Host::Macos => macos::run(ctx, &config, &request),
     }
 }
 
@@ -168,4 +171,21 @@ fn linux(ctx: &Ctx, repository: &str, controller: &str, request: &Request) -> Re
     print!("{}", output(ctx, "gh", &args, None)?);
     println!("https://github.com/{repository}/actions/workflows/dispatch.yml");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bench_source_repository_comes_from_existing_git_remotes() {
+        for remote in [
+            "https://github.com/owner/repo.git",
+            "git@github.com:owner/repo.git",
+            "ssh://git@ssh.github.com:443/owner/repo.git",
+        ] {
+            assert_eq!(github_repository(remote).unwrap(), "owner/repo");
+        }
+        assert!(github_repository("https://gitlab.example/owner/repo").is_err());
+    }
 }

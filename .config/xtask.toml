@@ -658,6 +658,7 @@ cargo.exclude = [
   "kithara-devtools",
   "kithara-devtools-trace-format",
   "xtask",
+  "kithara-test-args",
   "kithara-test-utils",
   "kithara-test-macros",
   "kithara-ffi-web-tests",
@@ -1807,7 +1808,7 @@ role = "deep"
 kinds = ["nightly", "bench", "branch", "merge-request", "quarantine"]
 kinds_github = ["nightly", "bench"]
 timeout_minutes = 120
-artifact = { name = "bench-results", path = "bench-results.txt\n.ci-artifacts/bench/", when = "always" }
+artifact = { name = "bench-results", path = "bench-results.txt\nbench-results/", when = "always" }
 
 # A shader that stopped reading what Rust writes it looks identical from the
 # outside until a frame is rendered and read back, so this is the one suite
@@ -1834,6 +1835,16 @@ timeout_minutes = 120
 # forbid `unsafe` themselves. The interpreter runs a program hundreds of times
 # slower than the machine does, so this stays weekly rather than nightly.
 [ext.ci.lanes.deep-miri]
+test_packages = [
+  "kithara-abr",
+  "kithara-bufpool",
+  "kithara-command",
+  "kithara-download",
+  "kithara-events",
+  "kithara-queue",
+  "kithara-ring",
+  "kithara-stream",
+]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -1844,7 +1855,7 @@ role = "deep"
 kinds = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
-timeout_minutes = 240
+timeout_minutes = 60
 artifact = { name = "miri-junit", path = "target/nextest/miri/junit.xml", when = "always" }
 
 # libFuzzer needs the nightly sanitizer flags, so the targets build on the
@@ -2974,6 +2985,34 @@ new_crate_interval_secs = 610
 http_timeout_secs = 20
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
 
+[ext.ci.lanes.release-app]
+cache_group = "host"
+label = "macOS application"
+os = "macos"
+tools = [
+  "cargo",
+  "just",
+  "security",
+  "codesign",
+  "lipo",
+  "otool",
+  "strip",
+  "sips",
+  "iconutil",
+  "ditto",
+]
+program = "just"
+steps = [
+  { args = [
+    "release",
+    "app",
+  ], label = "Signed universal macOS application" },
+]
+role = "release"
+kinds = ["nightly", "release"]
+kinds_github = []
+timeout_minutes = 180
+
 [ext.release]
 # Release flow: the `release:*` CI jobs build every artifact, and
 # `release:publish` tags, publishes and deploys them (`just ci run
@@ -2989,7 +3028,11 @@ gitlab_package = "kithara"
 nightly_tag = "nightly"
 core_asset = "KitharaFFIInternal.xcframework.zip"
 merged_asset = "Kithara.xcframework.zip"
-platform_assets = ["kithara.aar", "kithara-okhttp.aar"]
+platform_assets = [
+  "kithara.aar",
+  "kithara-okhttp.aar",
+  "Kithara-macos-universal.zip",
+]
 http_timeout_secs = 60
 upload_timeout_secs = 600
 # WebAssembly channel: trunk dist (`just platform wasm build`) zipped and served
@@ -3396,7 +3439,3 @@ scan_all_rules = [
   "perf.no-local-test-pools",
   "style.no-items-in-lib-or-mod-rs",
 ]
-
-[ext.perf.bench]
-repository = "https://github.com/gerasim13/kithara.git"
-gitlab_project = "https://gitlab.zvq.me/disrupt/kithara"

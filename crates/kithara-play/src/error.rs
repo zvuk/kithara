@@ -1,6 +1,5 @@
 use kithara_audio::TrackFailureKind;
 use kithara_bufpool::PoolError;
-use kithara_effects::filter::{FilterError, PrepareError as FilterPrepareError};
 use kithara_platform::time::Duration;
 use kithara_render::{InvalidCrossfade, bridge::DeckRefusal, rt::BufferGeometryError};
 
@@ -120,12 +119,6 @@ pub enum PlayError {
     #[error("playback buffer allocation failed: {0}")]
     Pool(#[from] PoolError),
 
-    #[error("unsupported filter geometry")]
-    FilterShape,
-
-    #[error(transparent)]
-    Filter(#[from] FilterError),
-
     #[error("audio session is gone: {reason}")]
     SessionGone { reason: &'static str },
 
@@ -134,16 +127,6 @@ pub enum PlayError {
 
     #[error("{0}")]
     Internal(String),
-}
-
-impl From<FilterPrepareError> for PlayError {
-    fn from(error: FilterPrepareError) -> Self {
-        match error {
-            FilterPrepareError::Shape => Self::FilterShape,
-            FilterPrepareError::Filter(error) => Self::Filter(error),
-            FilterPrepareError::Pool(error) => Self::Pool(error),
-        }
-    }
 }
 
 impl From<BufferGeometryError> for PlayError {

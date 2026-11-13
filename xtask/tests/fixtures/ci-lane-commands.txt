@@ -2819,6 +2819,42 @@
   refused: ReleaseAndroid produces artifacts and is not a command lane
 # release-android / release
   refused: ReleaseAndroid produces artifacts and is not a command lane
+# release-app / bench
+  <require os> macos
+  <require tools> cargo just security codesign lipo otool strip sips iconutil ditto
+  just release app
+# release-app / branch
+  <require os> macos
+  <require tools> cargo just security codesign lipo otool strip sips iconutil ditto
+  just release app
+# release-app / platforms
+  <require os> macos
+  <require tools> cargo just security codesign lipo otool strip sips iconutil ditto
+  just release app
+# release-app / merge-request
+  <require os> macos
+  <require tools> cargo just security codesign lipo otool strip sips iconutil ditto
+  just release app
+# release-app / quarantine
+  <require os> macos
+  <require tools> cargo just security codesign lipo otool strip sips iconutil ditto
+  just release app
+# release-app / main
+  <require os> macos
+  <require tools> cargo just security codesign lipo otool strip sips iconutil ditto
+  just release app
+# release-app / nightly
+  <require os> macos
+  <require tools> cargo just security codesign lipo otool strip sips iconutil ditto
+  just release app
+# release-app / weekly
+  <require os> macos
+  <require tools> cargo just security codesign lipo otool strip sips iconutil ditto
+  just release app
+# release-app / release
+  <require os> macos
+  <require tools> cargo just security codesign lipo otool strip sips iconutil ditto
+  just release app
 # release-docs / bench
   refused: ReleaseDocs produces artifacts and is not a command lane
 # release-docs / branch

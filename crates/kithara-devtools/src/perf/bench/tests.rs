@@ -74,11 +74,20 @@ fn main() {
         .replace("EVENTS", &events),
     )
     .unwrap();
-    let config = format!(
-        "[ext.perf.bench]\nrepository = {:?}\ngitlab_project = ''\n[tools.critcmp]\nprogram = 'missing-benchmark-comparison-tool'\n",
-        root.to_str().unwrap()
-    );
+    let config = "[tools.critcmp]\nprogram = 'missing-benchmark-comparison-tool'\n";
     fs::write(root.join(".config/xtask.toml"), config).unwrap();
+    let manifest = root.join("Cargo.toml");
+    fs::write(
+        &manifest,
+        fs::read_to_string(&manifest).unwrap().replace(
+            "[workspace]",
+            &format!(
+                "[workspace]\n[workspace.package]\nrepository = {:?}",
+                root.to_str().unwrap()
+            ),
+        ),
+    )
+    .unwrap();
     fs::write(root.join("arm"), "base").unwrap();
     fs::write(root.join("ids"), base_ids).unwrap();
     command(&root, "cargo", &["generate-lockfile", "--offline"]);

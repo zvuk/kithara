@@ -215,6 +215,10 @@ pub(crate) const SLICE_TARGETS: &[(&str, &[&str])] = &[
 /// `crates/kithara-ffi/.cargo/config.toml` for every release slice.
 pub(crate) const RELEASE_CARGO_ARGS: &[&str] = &["+nightly"];
 
+pub(crate) const MACOS_APP_ARCHIVE: &str = "Kithara-macos-universal.zip";
+pub(crate) const MACOS_APP_MINIMUM_OS: &str = "13.0";
+pub(crate) const MACOS_APP_TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
+
 /// Slice subdirectories inside the `*.xcframework` we expect to find.
 pub(crate) const XCFRAMEWORK_SLICES: &[&str] =
     &["ios-arm64", IOS_SIMULATOR_SLICE, "macos-arm64_x86_64"];

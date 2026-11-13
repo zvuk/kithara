@@ -99,7 +99,7 @@ pub(crate) fn run(
         let vars = step_vars(step, process, pins)?;
         let mut command = process.command(&program);
         command.args(&args).envs(&vars);
-        let _bench_tools = bench::prepare(
+        bench::prepare(
             process,
             pins,
             tools.program("cargo"),
