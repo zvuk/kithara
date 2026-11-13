@@ -10,6 +10,10 @@ use kithara_test_utils::test::wall_sleep;
 #[case::first("sync_timeout_preserves_the_harness_thread_name_first")]
 #[case::second("sync_timeout_preserves_the_harness_thread_name_second")]
 fn sync_timeout_preserves_the_harness_thread_name(#[case] expected: &str) {
+    let expected = format!("{}::{expected}", module_path!());
+    let (_, expected) = expected
+        .split_once("::")
+        .expect("crate-qualified test name");
     assert_eq!(std::thread::current().name(), Some(expected));
 }
 
