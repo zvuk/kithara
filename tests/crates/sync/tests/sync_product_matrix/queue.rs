@@ -750,6 +750,33 @@ struct CapturedMusic {
     supplied_grid_shift_rejected: bool,
 }
 
+fn cue_preparations_settled(observation: &LinkObservation) -> bool {
+    observation
+        .cue_curves
+        .iter()
+        .filter(|cue| {
+            cue.before.attached
+                && cue.native.is_none()
+                && observation
+                    .ready_cues
+                    .iter()
+                    .any(|(item, seq)| *item == cue.item && seq.get() < cue.seq.get())
+        })
+        .all(|cue| {
+            observation.ready_cues.contains(&(cue.item, cue.seq))
+                || observation
+                    .placement_receipts
+                    .iter()
+                    .any(|(owner, origin, receipt)| {
+                        *owner == cue.item
+                            && *origin == LinkReceiptOrigin::Lane
+                            && matches!(receipt,
+                            kithara::play::Settled::Rejected { seq, .. }
+                            if *seq == cue.seq)
+                    })
+        })
+}
+
 impl QueueMusic {
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     async fn new(kind: MusicCase, track: TrackSettings) -> Self {
@@ -1451,7 +1478,7 @@ impl QueueMusic {
         self.deck.read_snapshot().await;
         kithara_test_utils::wait_until(Duration::from_secs(5), "Queue Lane outcomes", || {
             let settled = self.deck.observe(|o| {
-                o.speeds.iter().all(|speed| {
+                cue_preparations_settled(o) && o.speeds.iter().all(|speed| {
                     !matches!(
                         speed.before.status,
                         kithara::play::TrackStatus::Playing { .. }
@@ -1498,8 +1525,8 @@ impl QueueMusic {
                     .as_ref()
                     .map(|capture| (&capture.fades, &capture.faded, &capture.ended));
                 format!(
-                    "frame={now:?}; receipts={:?}; speeds={speeds:?}; fades={fades:?}; consumed={:?}",
-                    observation.placement_receipts, observation.consumed,
+                    "frame={now:?}; receipts={:?}; speeds={speeds:?}; fades={fades:?}; consumed={:?}; cues={:?}; ready={:?}",
+                    observation.placement_receipts, observation.consumed, observation.cues, observation.ready_cues,
                 )
             });
             panic!(
@@ -1511,7 +1538,16 @@ impl QueueMusic {
             position,
             "Lane settlement renders no PCM"
         );
-        self.deck.read_snapshot().await
+        let snapshot = self.deck.read_snapshot().await;
+        self.deck.observe(|observation| {
+            assert!(
+                cue_preparations_settled(observation),
+                "offline PCM cannot advance past pending silent cue preparation: cues={:?}; ready={:?}",
+                observation.cues,
+                observation.ready_cues,
+            );
+        });
+        snapshot
     }
 
     fn inspect_bindings(
