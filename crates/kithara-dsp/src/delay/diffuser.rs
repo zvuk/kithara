@@ -3,7 +3,7 @@ use std::ops::{DerefMut, Range};
 use num_traits::ToPrimitive;
 
 use super::{DelayError, DelayLine, DiffuserError, Tap};
-use crate::backend;
+use crate::backend::platform;
 
 const SCRATCH_FRAMES: usize = 128;
 
@@ -82,7 +82,7 @@ impl<const CHANNELS: usize> DelayDiffuser<CHANNELS> {
                 self.line.read(channel, self.tap, history)?;
                 let samples = plane.get_mut(start..end).ok_or(DelayError::Shape)?;
                 let writes = writes.get_mut(..len).ok_or(DelayError::Shape)?;
-                backend::delay_diffuse(samples, history, self.feedback, writes);
+                platform::delay_diffuse(samples, history, self.feedback, writes);
             }
             self.line
                 .write(&writes.each_ref().map(|plane| plane.as_slice()), 0..len)?;

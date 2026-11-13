@@ -2,25 +2,20 @@
 use std::ops::Sub;
 
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
-use fearless_simd::prelude::*;
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
-use fearless_simd::{Level, dispatch};
+use fearless_simd::{Level, dispatch, prelude::*};
 
+use super::platform;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 use super::simd::{blocks, store, update, vector};
 
 /// Produces `y = d - x` in samples/history and `w = x + g*d` in writes.
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) fn diffuse(
     samples: &mut [f32],
     history: &mut [f32],
     gain: f32,
     writes: &mut [f32],
 ) -> usize {
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    {
-        super::accelerate::delay_diffuse(samples, history, gain, writes)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     dispatch!(Level::new(), simd => diffuse_kernel(simd, samples, history, gain, writes))
 }
 
@@ -54,12 +49,8 @@ pub(super) fn diffuse_kernel<S: Simd>(
     len
 }
 
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) fn blend(newer: &[f32], older: &[f32], fraction: f32, output: &mut [f32]) -> usize {
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    {
-        super::accelerate::delay_blend(newer, older, fraction, output)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     dispatch!(Level::new(), simd => blend_kernel(simd, newer, older, fraction, output))
 }
 
@@ -97,7 +88,7 @@ pub(crate) fn read(
             .min(plane.len().wrapping_sub(newer))
             .min(plane.len().wrapping_sub(older));
         let next = written.wrapping_add(len);
-        blend(
+        platform::delay_blend(
             plane
                 .get(newer..newer.wrapping_add(len))
                 .unwrap_or_default(),
