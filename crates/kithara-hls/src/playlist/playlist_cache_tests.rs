@@ -13,7 +13,7 @@ use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Notify},
-    tokio::task::{spawn, yield_now},
+    tokio::task::{spawn, yield_runnable},
 };
 use kithara_test_utils::{TestHttpServer, kithara};
 use tempfile::tempdir;
@@ -75,8 +75,8 @@ async fn gated_playlist_server(
             async move {
                 if requests.fetch_add(1, Ordering::SeqCst) == 0 {
                     first_seen.notify_one();
+                    release.notified().await;
                 }
-                release.notified().await;
                 body
             }
         }),
@@ -263,7 +263,7 @@ async fn concurrent_caches_share_one_playlist_repair() {
         second_cache.master_playlist(&key, &url).await
     });
     second_polled.notified().await;
-    yield_now().await;
+    yield_runnable().await;
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     release.notify_one();
 
