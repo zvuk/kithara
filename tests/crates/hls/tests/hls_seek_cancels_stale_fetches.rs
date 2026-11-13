@@ -41,19 +41,8 @@ mod consts {
     pub(super) const MAX_CONCURRENT: usize = 3;
     /// Loader settle deadline.
     pub(super) const LOAD_DEADLINE: Duration = Duration::from_secs(20);
-    /// Give-up deadline for collecting post-seek events, so a seek that never
-    /// reaches the reader fails on the discriminating panic below instead of on
-    /// the harness timeout. It bounds diagnostics, not the contract — the
-    /// contract is bounded by this test's own `timeout(60s)`.
-    ///
-    /// Deliberately NOT derived from `SEGMENT_DELAY_MS`. That delay is served by
-    /// the fixture's own HTTP thread, which a full-suite run starves along with
-    /// everything else, so "four delay windows" stops being four windows of
-    /// anything: the healthy path lands in well under a second solo and needed
-    /// more than 3.2 s under suite contention, which is the same sequence of
-    /// states, just later. A flat deadline an order of magnitude above the
-    /// healthy latency keeps the panic precise without pinning the test to a
-    /// clock the fixture cannot hold.
+    /// Bounds event collection so the caller can report missing seek facts
+    /// before the harness timeout.
     pub(super) const POST_SEEK_OBSERVATION: Duration = Duration::from_secs(30);
     /// Allow 1 segment of HLS readahead before the `ReaderSeek` landing.
     pub(super) const WARMUP_TOLERANCE: usize = 1;
@@ -103,13 +92,8 @@ struct PostSeekObservation {
     /// resolves to a prefix segment (`segment_index < target -
     /// WARMUP_TOLERANCE`). Hard cap.
     prefix_enqueued_after_seek: HashSet<RequestId>,
-    /// Whether a new-epoch (`RequestId` Enqueued after `seek_at`) fetch was
-    /// observed to `RequestStarted` within the observation window, plus its
-    /// `wait_in_queue` (kept for the diagnostic message only — NOT asserted on,
-    /// because `wait_in_queue` is timed on the platform clock, virtual under
-    /// flash, while the real HTTP contention runs on real time, so a duration
-    /// deadline on it is incommensurate and flaky). The event-driven contract
-    /// asserts the *presence* of this start, not its timing.
+    /// A new-epoch fetch's `RequestStarted` queue wait, retained for diagnostics.
+    /// The caller requires the event, without a duration threshold.
     target_started_wait: Option<Duration>,
 }
 
@@ -352,17 +336,7 @@ async fn hls_seek_near_end_skips_prefix(
         consts::MAX_CONCURRENT,
     );
 
-    // TestEvent-driven progress contract: the new epoch must START a download
-    // (`RequestStarted`) within the bounded observation window. A seek that
-    // dropped silently, or a target left permanently starved behind stale
-    // fetches that never free a slot, would never start one. Asserting the
-    // START *event* (presence) rather than a `wait_in_queue` duration is
-    // clock-independent — `wait_in_queue` is timed on the platform clock
-    // (virtual under flash) while the real HTTP contention runs on real time,
-    // so a duration deadline is incommensurate and flaky. The "don't re-fetch
-    // the prefix on a near-end seek" half of the contract is enforced by the
-    // probe-level prefix-walk + `prefix_enqueued_after_seek` checks above; this
-    // assertion only proves the target itself made forward progress.
+    // A target starved behind stale fetches never starts a new-epoch request.
     assert!(
         observation.target_started_wait.is_some(),
         "[{backend:?}] no RequestStarted observed for any post-seek \
@@ -374,7 +348,6 @@ async fn hls_seek_near_end_skips_prefix(
     drop(probe_recorder);
 }
 
-#[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn observe_initial_progress(
     rx: &mut kithara::events::EventReceiver<TestEvent>,
@@ -410,7 +383,6 @@ async fn observe_initial_progress(
     requests
 }
 
-#[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn observe_post_seek(
     rx: &mut kithara::events::EventReceiver<TestEvent>,
@@ -426,16 +398,8 @@ async fn observe_post_seek(
     // the first post-seek SegmentReadStart — then exit immediately, picking up
     // the diagnostic-only RequestStarted on the way if it arrives first.
     //
-    // `POST_SEEK_OBSERVATION` is a give-up budget, not a measurement. It does
-    // NOT collapse on the flash clock the way an earlier revision claimed:
-    // `time::timeout` is virtual only while flash is on, and the `--flash=off`
-    // lane runs it against the wall — which is exactly the lane that can
-    // observe this test's contract at all, since flash collapses the fixture's
-    // per-segment delay and with it the queue ordering the seek path is
-    // supposed to get right. A genuinely broken seek that never populates a
-    // field still terminates here with a partial `obs`; the discriminating
-    // panics live in the caller and fire on the missing field, so this give-up
-    // never silently passes an assertion.
+    // The timeout bounds collection on the selected clock. Missing fields
+    // remain in the partial observation so the caller's assertions reject them.
     let _ = time::timeout(consts::POST_SEEK_OBSERVATION, async {
         loop {
             hang_tick!(format!(
@@ -499,10 +463,8 @@ async fn observe_post_seek(
                 Err(RecvError::Closed) => break,
             }
 
-            // Exit on the facts the assertions read. `target_started_wait` is
-            // diagnostic only, so waiting for it made termination depend on
-            // something no assertion requires — a healthy run that never
-            // produced it sat here until the deadline.
+            // The caller also checks that a new-epoch fetch started before
+            // these seek facts arrived.
             if obs.reader_seek.is_some() && obs.first_segment_read_start.is_some() {
                 break;
             }
