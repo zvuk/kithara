@@ -10,15 +10,9 @@ use num_traits::ToPrimitive;
 use super::{CombError, DelayParam, FeedbackDelayConfig, FeedbackHighPass, comb::FeedbackComb};
 use crate::{DeckEffect, FxParamChange, consts};
 
-/// Stereo feedback delay a deck FX unit holds.
-///
-/// It runs a feedback loop whose filter is a Butterworth high-pass
-/// at the cutoff: the first echo is the input unfiltered and every repeat
-/// passes the high-pass once more. The delay time is the comb's delay in
-/// frames, the feedback its gain, and a time change crosses over 20 ms. The
-/// tail counts as spent once the comb has rung out. The delay time and the
-/// capacity count frames, so a new sample rate keeps them and retunes the
-/// high-pass and the cross length.
+/// Stereo deck FX delay: unfiltered first echo, then a Butterworth high-pass on each repeat.
+/// Time/capacity count frames; time changes cross over 20 ms.
+/// Retunes keep history and requested controls; ring-out ends the tail.
 #[derive(Debug)]
 pub struct FeedbackDelay {
     comb: FeedbackComb<{ consts::STEREO.get() }>,

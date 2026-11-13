@@ -15,16 +15,9 @@ use kithara_dsp::{
 use super::CombError;
 use crate::consts;
 
-/// Feedback comb of `CHANNELS` planes over one [`DelayLine`].
-///
-/// Each read is output; history takes input plus that read passed through one
-/// LP/HP state-variable filter and scaled by gain. The caller owns loop stability.
-///
-/// A time change crosses between reads of one history; a change during a
-/// cross waits in one slot, latest wins. Nothing after construction allocates.
-///
-/// Ring-out measures quiet writes; [`rung_out`](Self::rung_out) states the
-/// floor and window.
+/// Feedback history with crossfades, one pending tap and measured ring-out.
+/// The latest pending tap wins. Loop stability belongs to the caller.
+/// All reads precede writes; processing never allocates.
 pub(super) struct FeedbackComb<const CHANNELS: usize> {
     line: DelayLine,
     cross_frames: NonZeroUsize,
@@ -45,14 +38,6 @@ struct Cross {
 }
 
 impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
-    /// A silent comb holding `capacity` frames of history taken from `pools`,
-    /// reading `delay` frames back, crossing over `cross` frames when the
-    /// delay changes, and feeding back through `design` scaled by `gain`.
-    ///
-    /// # Errors
-    /// [`CombError::Delay`] when `CHANNELS` is zero or `delay` lies outside
-    /// `1..=capacity`, [`CombError::Pool`] when the history does not fit
-    /// `pools`.
     pub(super) fn new<S: HasPool<f32>>(
         capacity: NonZeroUsize,
         delay: f64,
@@ -80,16 +65,10 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
         Ok(comb)
     }
 
-    /// A read position `frames` behind the next write of this comb's history.
-    ///
-    /// # Errors
-    /// [`DelayError::OutOfRange`] unless `frames` lies in `1..=capacity`.
     pub(super) fn tap(&self, frames: f64) -> Result<Tap, DelayError> {
         self.line.tap(frames)
     }
 
-    /// Moves the read to `delay`, crossing from the current read, or after
-    /// the running cross ends.
     pub(super) fn retime(&mut self, delay: Tap) {
         if self.cross.is_some() {
             self.pending = Some(delay);
@@ -102,13 +81,11 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
         }
     }
 
-    /// Scales every later repeat by `gain`.
     pub(super) const fn set_gain(&mut self, gain: f32) {
         self.gain = gain;
     }
 
-    /// Crosses later delay changes over `frames`; a running cross already
-    /// that far in ends here.
+    /// Ends a running cross already beyond its new length.
     pub(super) fn set_cross(&mut self, frames: NonZeroUsize) {
         self.cross_frames = frames;
         self.advance(0);
@@ -124,12 +101,7 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
         self.design = design;
     }
 
-    /// Runs `range` of `input` through the comb into the same range of
-    /// `output`, in spans no longer than either read's delay.
-    ///
-    /// # Errors
-    /// [`DelayError::Shape`] when either plane count differs from `CHANNELS`
-    /// or a plane does not cover `range`; nothing runs then.
+    /// Validates every plane before advancing history or filter state.
     pub(super) fn process<I, O>(
         &mut self,
         input: &[I],
@@ -158,8 +130,7 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
         Ok(())
     }
 
-    /// Silences the history and the loop section and lands a waiting delay
-    /// change at once; the gain and the tuning stay.
+    /// Clears delay/filter history, landing pending time and retaining controls.
     pub(super) fn reset(&mut self) {
         self.line.reset();
         self.filter.reset();

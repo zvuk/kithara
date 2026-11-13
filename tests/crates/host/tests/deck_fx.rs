@@ -46,9 +46,7 @@ const CROSSFADE_TAKE: usize = 49_152;
 const DRY_AT: usize = LEAD + 1000 + 37;
 /// The frame it turns the unit wet again, long after the dry ramp settled.
 const WET_AT: usize = DRY_AT + 4096;
-/// Frames the test delay echoes its input after.
 const DELAY: usize = 256;
-/// Frames of history the test delay holds.
 const DELAY_CAPACITY: usize = 2 * DELAY;
 /// The -120 dBFS floor at or under which a sample counts as silent.
 const FLOOR: f32 = 1e-6;
@@ -179,7 +177,6 @@ impl DeckEffect for Clock {
     fn update_sample_rate(&mut self, _: NonZeroU32) {}
 }
 
-/// A delay of `frames` frames.
 pub(super) fn delay_time(frames: usize) -> DelayTime {
     DelayTime::checked(f64::from(
         u32::try_from(frames).expect("a test delay fits u32"),
@@ -199,8 +196,6 @@ fn delay_window() -> usize {
     DELAY_CAPACITY + decay.to_usize().expect("a whole count of frames")
 }
 
-/// A delay of `frames` frames in twice that history, feeding half of each
-/// echo back through the lowest high-pass.
 pub(super) fn feedback_delay(frames: usize) -> FeedbackDelay {
     FeedbackDelay::new(
         FeedbackDelayConfig::builder()
