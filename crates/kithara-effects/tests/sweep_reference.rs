@@ -103,7 +103,7 @@ fn transient(samples: &[f32]) -> (usize, f64) {
 // two fixed Pedalboard endpoint filters, including _pb_process warmup.
 // Pedalboard 0.9.25 / numpy 2.5.3; target values use an independent f64 RBJ
 // moving-coefficient recurrence. Zero-phase band-RMS analysis is not this renderer.
-#[kithara::test(timeout(::std::time::Duration::from_millis(1212)))]
+#[kithara::test]
 #[case(Kind::LowPass, 200.0, 800.0,
     [-0.03803016519091928, -0.31243755661981026, -3.0085296596782913, -12.300977704316743, -16.039312948646973, -28.072866590148898, -59.25390793766275],
     [-0.13939988314240614, -1.840902541980701, -3.8608760187858646, -6.704284122147302, -7.913987553168983, -12.661464126395778, -27.702016598032053],

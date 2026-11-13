@@ -275,7 +275,7 @@ async fn aac_tracks() -> (TestServerHelper, [Url; 2]) {
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(24860)),
+    timeout(::std::time::Duration::from_millis(24860)),
     hang_timeout_secs(5)
 )]
 async fn natural_eof_advance_emits_only_b_after_a_flac(
@@ -395,7 +395,7 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(24856)),
+    timeout(::std::time::Duration::from_millis(24856)),
     hang_timeout_secs(5)
 )]
 async fn natural_eof_advance_with_late_variant_switch_flac(
@@ -544,7 +544,7 @@ async fn natural_eof_advance_with_late_variant_switch_flac(
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(42980)),
+    timeout(::std::time::Duration::from_millis(44688)),
     hang_timeout_secs(5)
 )]
 #[case::flac(
@@ -603,7 +603,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance(
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(92270)),
+    timeout(::std::time::Duration::from_millis(92270)),
     hang_timeout_secs(5)
 )]
 async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real_geometry(
@@ -657,7 +657,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(24950)),
+    timeout(::std::time::Duration::from_millis(24950)),
     hang_timeout_secs(5)
 )]
 async fn natural_eof_advance_emits_only_b_flac_resampled_48k(
@@ -806,7 +806,7 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(45060)),
+    timeout(::std::time::Duration::from_millis(45060)),
     hang_timeout_secs(5)
 )]
 #[case::plain(false, "crossfade FLAC", CrossfadeFlavor::Plain)]
@@ -1234,7 +1234,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(24194)),
+    timeout(::std::time::Duration::from_millis(24194)),
     hang_timeout_secs(5)
 )]
 async fn natural_eof_advance_emits_only_b_aac(

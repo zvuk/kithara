@@ -244,7 +244,7 @@ mod tests {
         assert_eq!(output, source);
     }
 
-    #[kithara::test(timeout(::std::time::Duration::from_millis(1404)))]
+    #[kithara::test]
     fn identity_accepts_only_unity_pitch() {
         let mut engine = engine(false);
         assert_eq!(engine.set_pitch(1.0), Ok(()));

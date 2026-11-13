@@ -18,7 +18,7 @@ use kithara_test_fixtures::{
 };
 use reqwest::Client;
 
-#[kithara::test(native, tokio, hang_timeout_secs(1))]
+#[kithara::test(native, tokio, hang_timeout_secs(1), timeout(Short))]
 #[case(SignalAsset::MP3_SAW_1S, "audio/mpeg", None)]
 #[case(SignalAsset::FLAC_SAW_1S, "audio/flac", Some(44100))]
 #[case(SignalAsset::AAC_SAW_1S, "audio/aac", None)]
@@ -274,7 +274,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(1302)),
+    timeout(::std::time::Duration::from_millis(1302)),
     hang_timeout_secs(1)
 )]
 #[case::aac("aac", AudioCodec::AacLc)]
@@ -394,7 +394,7 @@ async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(1172)),
+    timeout(::std::time::Duration::from_millis(1172)),
     hang_timeout_secs(1)
 )]
 #[cfg_attr(not(target_os = "android"), case::aac_lc_symphonia("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::Symphonia, aac_fragment().await))]
@@ -550,7 +550,7 @@ fn run_packaged_fmp4_decoder_check(
     assert_eq!(chunk.spec().channels, 2);
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(58064)))]
+#[kithara::test]
 fn embedded_mp3_contains_data(tone_mp3: &'static [u8]) {
     assert!(!tone_mp3.is_empty());
 }

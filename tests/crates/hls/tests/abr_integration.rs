@@ -73,7 +73,7 @@ fn test_manual_selector_different_indices(
     let _ = AbrMode::manual(selector_index);
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(60348)))]
+#[kithara::test]
 fn test_abr_controller_no_selector(
     abr_settings_default: AbrSettings,
     variants_from_parsed_playlist: Vec<VariantInfo>,

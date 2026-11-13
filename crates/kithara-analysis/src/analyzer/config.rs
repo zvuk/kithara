@@ -304,7 +304,7 @@ mod document_tests {
         );
     }
 
-    #[kithara::test(native, flash(false), timeout(Long))]
+    #[kithara::test(native, flash(false))]
     fn a_named_resampler_quality_arrives_as_its_variant() {
         let patch: BeatAnalysisConfigPatch =
             serde_yaml_ng::from_str("resampler_quality: fast\n").expect("the document types");

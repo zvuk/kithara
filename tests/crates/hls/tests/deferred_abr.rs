@@ -2,20 +2,12 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
-use kithara::platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
+use kithara::platform::{CancelToken, tokio::task::spawn_blocking};
 use kithara_integration_tests::{
     CreatedHls, hls_fixture::HlsStreamBuilder, hls_server::test_pattern_hls,
 };
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tracing::info;
-
-fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
-    if cfg!(target_arch = "wasm32") {
-        Duration::from_secs(wasm_secs)
-    } else {
-        Duration::from_secs(native_secs)
-    }
-}
 
 /// Get variant from data by parsing prefix "V{n}-SEG-".
 fn variant_from_data(data: &[u8]) -> Option<usize> {

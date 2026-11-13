@@ -30,7 +30,7 @@ impl Bounded {
     }
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(1118)))]
+#[kithara::test]
 fn a_judged_builder_refuses_what_its_check_refuses() {
     assert!(Bounded::builder().level(5).build().is_err());
     let bounded = Bounded::builder()

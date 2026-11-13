@@ -154,7 +154,7 @@ fn a_change_passes_only_its_own_field_check() {
     ));
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(1516)))]
+#[kithara::test]
 fn a_change_assigns_exactly_its_field() {
     let mut gauge = Gauge { level: 2, limit: 7 };
     gauge.apply_change(GaugeChange::Level(3));

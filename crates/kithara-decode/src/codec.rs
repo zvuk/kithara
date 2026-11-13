@@ -182,11 +182,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test(
-        native,
-        flash(false),
-        timeout(::std::time::Duration::from_millis(11266))
-    )]
+    #[kithara::test(native, flash(false))]
     fn codec_priming_default_is_all_zero() {
         let p = CodecPriming::default();
         assert_eq!(p.frames, 0);

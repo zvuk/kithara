@@ -208,7 +208,7 @@ fn planned_segment_gap_is_not_treated_as_phase_error() {
     ));
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(1042)))]
+#[kithara::test]
 fn a_fifth_span_is_rejected_before_inline_storage_can_spill() {
     let spans = [
         span(0.0, 10.0, 10),

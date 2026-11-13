@@ -554,7 +554,7 @@ fn mk_cfg(
 /// the supersede path → `slow` marked `Cancelled`), release `slow`'s init so
 /// its loader completes and skips on the cancelled status, then assert `slow`
 /// never becomes `current()` — including after `fast` plays out.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_millis(3880)))]
+#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(3880)))]
 async fn supersede_while_loading_cancels_slow_track(
     #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
 ) {
@@ -897,7 +897,11 @@ async fn completion_observer_keeps_current_changes_in_bus_order(
 // order the completion before the select and dissolve the contended window this
 // gate exists to probe. It therefore has no state-wait equivalent and is left
 // as a timer on purpose.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_millis(63950)))]
+#[kithara::test(
+    tokio,
+    multi_thread,
+    timeout(::std::time::Duration::from_millis(63950))
+)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn concurrent_completion_race_does_not_barge_in(
     #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),

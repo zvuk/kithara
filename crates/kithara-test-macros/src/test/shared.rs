@@ -267,9 +267,15 @@ pub(crate) fn wrap_with_timeout(
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let (tx, rx) = ::std::sync::mpsc::channel();
-                    let handle = ::std::thread::spawn(move || {
-                        tx.send(({ __body })()).ok();
-                    });
+                    let mut __thread_builder = ::std::thread::Builder::new();
+                    if let Some(__thread_name) = ::std::thread::current().name() {
+                        __thread_builder = __thread_builder.name(__thread_name.to_owned());
+                    }
+                    let handle = __thread_builder
+                        .spawn(move || {
+                            tx.send(({ __body })()).ok();
+                        })
+                        .expect("kithara sync test thread");
                     match rx.recv_timeout(__timeout_dur) {
                         Ok(v) => {
                             handle.join().ok();

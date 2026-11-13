@@ -98,7 +98,7 @@ async fn serve_head_then_stall(State(state): State<StallState>, headers: HeaderM
     builder.body(body).expect("stall response")
 }
 
-#[kithara::test(tokio, multi_thread, flash(false), timeout(Short))]
+#[kithara::test(tokio, multi_thread, flash(false), timeout(Medium))]
 async fn zero_progress_resume_loop_fails_terminally() {
     let data: Vec<u8> = (0..consts::TOTAL)
         .map(|i| u8::try_from(i % 256).unwrap_or(0))

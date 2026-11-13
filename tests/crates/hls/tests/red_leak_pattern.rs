@@ -115,7 +115,7 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(2208)),
+    timeout(::std::time::Duration::from_millis(2208)),
     hang_timeout_secs(10)
 )]
 async fn red_hls_source_drop_leaks_peer(

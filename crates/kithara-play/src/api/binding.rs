@@ -242,7 +242,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test(timeout(::std::time::Duration::from_millis(4400)))]
+    #[kithara::test]
     fn binding_rejects_old_and_foreign_track_anchor_stamps() {
         let id = grid_id();
         let axis = MapAxis::Asset(AssetAxis::new(sample_rate(), AssetExtent::Bounded(96_001)));

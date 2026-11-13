@@ -56,7 +56,7 @@ impl Drop for NetworkRestore<'_> {
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_millis(2190)))]
+#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(2190)))]
 async fn transient_failure_does_not_kill_the_track(
     temp_dir: TestTempDir,
     #[future(awt)] transient_sources: (PrivateTestServer, Url, Url, SegmentGateHandle),

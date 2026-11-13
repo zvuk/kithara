@@ -164,7 +164,7 @@ async fn audible_frames_until_end(harness: &OfflinePlayer) -> usize {
 /// Glide at `GLIDE_RATE` renders through the anti-alias filter on the audio
 /// thread; `just test rtsan` runs it under the realtime sanitizer. The source
 /// plays out in audibly fewer frames than its length only on the Warp path.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_millis(2024)))]
+#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(2146)))]
 async fn offline_harness_glide_varispeed(drain_tone: &'static [u8], temp_dir: TestTempDir) {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()

@@ -747,7 +747,7 @@ async fn ducking_set_for_a_frame_inside_a_block_leaves_the_frames_before_it_alon
 /// Ducking lowers the whole session output to its share, `Soft` 16 dB and
 /// `Hard` 28 dB down, under the Host metronome, and `Off` restores the
 /// undocked level on a playing session.
-#[kithara::test(native, tokio, timeout(Duration::from_millis(38662)))]
+#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(38662)))]
 async fn ducking_lowers_and_restores_the_session_output(sine_440_long: Vec<f32>) {
     let segment_samples = TAKE_BLOCKS * BLOCK_FRAMES * CHANNELS;
     let tone: Vec<f32> = sine_440_long.into_iter().step_by(CHANNELS).collect();

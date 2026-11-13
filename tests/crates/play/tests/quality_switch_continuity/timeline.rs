@@ -205,7 +205,7 @@ fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) ->
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_millis(10406)),
+    timeout(::std::time::Duration::from_millis(10406)),
     hang_timeout_secs(3)
 )]
 #[cfg_attr(
@@ -359,7 +359,7 @@ async fn sweep_source() -> (TestServerHelper, CreatedHls) {
     (server, created)
 }
 
-#[kithara::test(native)]
+#[kithara::test(native, timeout(::std::time::Duration::from_millis(1102)))]
 fn fft_correlation_numerical_equivalence() {
     let frames = 16_384usize;
     let channels = usize::from(CHANNELS);

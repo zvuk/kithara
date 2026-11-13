@@ -287,7 +287,7 @@ fn resampler_process_is_allocation_free(
 
 /// Leaving passthrough settles the filter; `1.25` and `0.8` retune it on
 /// both sides of unity.
-#[kithara::test(timeout(::std::time::Duration::from_millis(6928)))]
+#[kithara::test]
 fn glide_resampler_process_is_allocation_free(allocation_planar: Vec<f32>) {
     let pools = eager_pools(64, 16_384);
 

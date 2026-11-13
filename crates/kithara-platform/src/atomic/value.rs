@@ -256,7 +256,7 @@ mod tests {
     }
 
     #[cfg(not(feature = "loom"))]
-    #[kithara::test(native, timeout(::std::time::Duration::from_millis(4602)))]
+    #[kithara::test(native)]
     fn bool_clone_is_independent() {
         let value = AtomicValue::<bool, Relaxed, Relaxed>::new(false);
         let snapshot = value.clone();

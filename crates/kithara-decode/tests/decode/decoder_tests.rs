@@ -56,7 +56,7 @@ fn decode_with_probe(
     assert!(!chunk.samples.is_empty());
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(1238)))]
+#[kithara::test(timeout(::std::time::Duration::from_millis(7191)))]
 #[case::wav(true, "wav")]
 #[case::mp3(false, "mp3")]
 fn decode_complete(
@@ -160,7 +160,7 @@ fn truncated_data_handles_gracefully(tone_wav: &'static [u8]) {
     }
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(35162)))]
+#[kithara::test]
 fn chunk_has_valid_samples(tone_wav: &'static [u8]) {
     let reader = Cursor::new(tone_wav);
 

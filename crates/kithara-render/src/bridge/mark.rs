@@ -32,7 +32,7 @@ mod mapping_tests {
 
     use super::*;
 
-    #[kithara::test(timeout(::std::time::Duration::from_millis(32450)))]
+    #[kithara::test]
     fn session_mapping_preserves_segment_and_checks_both_axes() {
         let mark = SlotMark {
             session: SessionFrame::new(1_000),

@@ -8,7 +8,7 @@ use kithara_platform::{
 use kithara_test_utils::kithara;
 use kithara_worker::{DispatcherConfig, OwnedPoolConfig, TaskConfig, Worker, WorkerConfig};
 
-#[kithara::test(native, flash(false), timeout(Short))]
+#[kithara::test(native, flash(false))]
 fn final_worker_drop_joins_compute_even_with_retained_task_handles() {
     let worker = Worker::new(WorkerConfig::new().with_owned_pool(OwnedPoolConfig::new(
         NonZeroUsize::new(2).expect("two compute threads"),

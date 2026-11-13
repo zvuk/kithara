@@ -46,7 +46,7 @@ const AUDIBLE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(1242)),
+    timeout(::std::time::Duration::from_millis(1242)),
     hang_timeout_secs(1)
 )]
 #[case(GaplessMode::MediaOnly)]

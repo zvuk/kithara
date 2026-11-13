@@ -195,7 +195,12 @@ async fn mp3_track_ends_rather_than_fails(
 
 /// Without a crossfade the queue hands over on the render-block grid alone,
 /// which is the tightest a seam ever gets.
-#[kithara::test(native, tokio, timeout(Medium), hang_timeout_secs(30))]
+#[kithara::test(
+    native,
+    tokio,
+    timeout(::std::time::Duration::from_millis(2640)),
+    hang_timeout_secs(30)
+)]
 #[case::without_a_crossfade(NO_CROSSFADE_SECS, 0)]
 #[case::with_a_crossfade(CROSSFADE_SECS, 1)]
 async fn a_streamed_mp3_ends_its_track(

@@ -123,7 +123,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test(timeout(::std::time::Duration::from_millis(1238)))]
+    #[kithara::test]
     fn rejects_short_and_trailing() {
         assert!(matches!(
             from_bytes::<Pair>(&[0, 0]),

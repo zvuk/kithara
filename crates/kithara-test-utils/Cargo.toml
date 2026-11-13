@@ -67,6 +67,7 @@ usdt = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-test-utils = { path = ".", default-features = false }
+serde_json = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

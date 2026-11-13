@@ -11,7 +11,10 @@ use num_traits::AsPrimitive;
 
 use crate::common::test_defaults::SawWav;
 
-#[kithara::test(timeout(Duration::from_millis(1246)), hang_timeout_secs(1))]
+#[kithara::test(
+    timeout(::std::time::Duration::from_millis(1246)),
+    hang_timeout_secs(1)
+)]
 fn stress_seeks_preserve_timeline_integrity(stress_wav: &'static [u8]) {
     const SEEK_ITERATIONS: usize = 200;
     const CHUNKS_PER_BURST: usize = 5;

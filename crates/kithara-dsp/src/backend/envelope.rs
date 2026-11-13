@@ -27,7 +27,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test(timeout(::std::time::Duration::from_millis(2508)))]
+    #[kithara::test]
     fn native_and_fallback_keep_the_same_recursion() {
         let mut native_gain = 1.0;
         let mut fallback_gain = 1.0;

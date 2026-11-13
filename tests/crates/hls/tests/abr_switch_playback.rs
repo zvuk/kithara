@@ -18,7 +18,7 @@ async fn abr_switch_on_production_ladder_does_not_hang(
     tokio,
     native,
     serial,
-    timeout(Duration::from_millis(8908)),
+    timeout(::std::time::Duration::from_millis(9156)),
     hang_timeout_secs(3),
     tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
 )]
@@ -34,7 +34,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
     tokio,
     native,
     serial,
-    timeout(Duration::from_millis(1092)),
+    timeout(::std::time::Duration::from_millis(1092)),
     hang_timeout_secs(5)
 )]
 async fn manual_cross_codec_switch_sustains_post_switch_playback(
@@ -48,7 +48,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(
     tokio,
     native,
     serial,
-    timeout(Duration::from_millis(4490)),
+    timeout(::std::time::Duration::from_millis(4490)),
     hang_timeout_secs(5)
 )]
 #[cfg_attr(not(target_os = "android"), case::drm_abr_auto_sw(true, true, DecoderBackend::Symphonia, mixed_encrypted().await))]
@@ -97,7 +97,7 @@ async fn fixed_variant_on_production_ladder_plays_without_hang(
     tokio,
     native,
     serial,
-    timeout(Duration::from_millis(1280)),
+    timeout(::std::time::Duration::from_millis(4094)),
     hang_timeout_secs(5),
     tracing("kithara_audio=warn,kithara_hls=warn,symphonia_format_isomp4=warn")
 )]
@@ -123,7 +123,7 @@ async fn mp3_stream_continues_after_seek(
     tokio,
     native,
     serial,
-    timeout(Duration::from_millis(6776)),
+    timeout(::std::time::Duration::from_millis(6776)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info")
 )]

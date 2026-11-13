@@ -3,18 +3,9 @@
 use kithara::{
     assets::{AssetResource, ResourceKey},
     hls::{HlsError, HlsResult, VariantId},
-    platform::time::Duration,
 };
 use kithara_integration_tests::{hls_fixture::*, hls_server::*};
 use url::Url;
-
-fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
-    if cfg!(target_arch = "wasm32") {
-        Duration::from_secs(wasm_secs)
-    } else {
-        Duration::from_secs(native_secs)
-    }
-}
 
 fn key_for(assets: &TestAssets, url: &Url) -> ResourceKey {
     assets

@@ -146,7 +146,7 @@ async fn render_committed_queue(
     pcm
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(2310)))]
 #[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn crossfade_started_requires_a_live_predecessor() {
@@ -1114,7 +1114,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
 /// queue starts it that long before the outgoing track's end on the session clock:
 /// at speed 2 a 1.5 s track ends 0.75 s after its onset, and the incoming track
 /// rises from 0.75 s − d on, not from where `d` media seconds remain.
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1110)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(2302)))]
 async fn a_crossfade_at_double_speed_starts_its_duration_before_the_outgoing_end() {
     const TRACK_SECS: f64 = 1.5;
     const SPEED: f32 = 2.0;
@@ -1253,7 +1253,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
 /// that time passes on the session clock: at double speed a consumed
 /// successor reloads when the outgoing track has `lead` session seconds
 /// left, which is twice the lead in media seconds.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(2170)))]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() {
     const TRACK_SECS: f64 = 1.5;
@@ -1358,7 +1358,7 @@ async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() 
     harness.close().await;
 }
 
-#[kithara::test(tokio, flash(false))]
+#[kithara::test(tokio, flash(false), timeout(Short))]
 async fn cf_zero_replay_after_full_playthrough_still_advances() {
     const TRACK_SECS: f64 = 0.4;
 

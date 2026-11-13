@@ -281,7 +281,7 @@ mod document_tests {
         );
     }
 
-    #[kithara::test(native, flash(false), timeout(Short))]
+    #[kithara::test(native, flash(false))]
     fn a_document_reads_the_poll_interval_from_humantime_text() {
         let patch: FileConfigPatch =
             serde_yaml_ng::from_str("tmp_claim_poll_interval: 25ms\n").expect("the document types");

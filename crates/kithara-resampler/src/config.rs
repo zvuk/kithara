@@ -343,7 +343,7 @@ mod document_tests {
         assert_eq!(quality, ResamplerQuality::High);
     }
 
-    #[kithara::test(native, flash(false), timeout(Short))]
+    #[kithara::test(native, flash(false))]
     fn a_partial_options_document_leaves_the_rest_at_default() {
         let options: ResamplerOptions =
             serde_yaml_ng::from_str("chunk_size: 1024\n").expect("the document types");

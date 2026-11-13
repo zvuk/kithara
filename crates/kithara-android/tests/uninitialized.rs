@@ -6,7 +6,7 @@
 
 use kithara_test_utils::{hang::suppress_expected_panic_dumps, kithara};
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native, flash(false), timeout(Short))]
 fn attach_reports_the_missing_initialization() {
     // The reader turns the platform global's panic into a variant, so the
     // panic this test drives is its contract, not evidence of a hang.

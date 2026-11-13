@@ -245,7 +245,7 @@ fn downmix_is_the_channel_mean_of_every_whole_frame() {
     }
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(1216)))]
+#[kithara::test]
 fn a_short_mono_bounds_the_downmix() {
     const U: f32 = UNWRITTEN;
     let mut mono = [U; 2];

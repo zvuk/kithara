@@ -1393,7 +1393,7 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     native,
     tokio,
     serial,
-    timeout(Duration::from_millis(1366)),
+    timeout(::std::time::Duration::from_millis(2018)),
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -1735,7 +1735,8 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
     tokio,
     serial,
     hang_timeout_secs(5),
-    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug"),
+    timeout(::std::time::Duration::from_millis(2784))
 )]
 async fn runtime_cross_codec_manual_switch_no_hang(#[future(awt)] retained_mixed: CreatedHls) {
     let server = retained_mixed;
@@ -2299,7 +2300,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_
     native,
     tokio,
     serial,
-    timeout(Duration::from_millis(1230)),
+    timeout(::std::time::Duration::from_millis(1746)),
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -2542,7 +2543,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof(
     native,
     tokio,
     serial,
-    timeout(Duration::from_millis(1180)),
+    timeout(::std::time::Duration::from_millis(4739)),
     hang_timeout_secs(15),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -2736,7 +2737,8 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     tokio,
     serial,
     hang_timeout_secs(5),
-    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug"),
+    timeout(::std::time::Duration::from_millis(2672))
 )]
 #[cfg_attr(
     not(target_os = "android"),

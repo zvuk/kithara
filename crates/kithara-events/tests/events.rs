@@ -10,7 +10,7 @@ enum TestEvent {
     Bus(BusEvent),
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(1026)))]
+#[kithara::test]
 fn test_event_bus_publish_subscribe() {
     let bus = EventBus::new(32);
     let mut rx = bus.subscribe();

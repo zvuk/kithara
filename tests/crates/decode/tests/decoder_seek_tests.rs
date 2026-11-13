@@ -1600,7 +1600,12 @@ async fn read_until_decoded(
 /// chunks exactly under the same identity (native rate: the re-decode is
 /// sample-exact) or decodes them under a new revision (decoder-side
 /// resampling restarts its output clock on a fractional source phase).
-#[kithara::test(tokio, native, timeout(Short), hang_timeout_secs(1))]
+#[kithara::test(
+    tokio,
+    native,
+    timeout(::std::time::Duration::from_millis(1716)),
+    hang_timeout_secs(1)
+)]
 #[cfg_attr(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case(SignalAsset::MP3_SAW_6S, DecoderBackend::Symphonia, None)

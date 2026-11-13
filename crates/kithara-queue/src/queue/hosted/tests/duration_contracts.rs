@@ -306,7 +306,7 @@ async fn changing_the_crossfade_duration_mid_fade_keeps_the_running_fade(
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 async fn a_changed_crossfade_duration_applies_to_the_next_fade(
     #[by_ref] worker_owner: &WorkerOwner,
 ) {

@@ -103,7 +103,11 @@ async fn runner_silent_wav_yields_all_zero_envelope(
     );
 }
 
-#[kithara::test(tokio, hang_timeout_secs(2))]
+#[kithara::test(
+    tokio,
+    hang_timeout_secs(2),
+    timeout(::std::time::Duration::from_millis(1028))
+)]
 async fn runner_returns_nothing_when_cancelled_upfront(
     #[future(awt)] served_silence: (TestServerHelper, Url),
 ) {

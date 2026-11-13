@@ -52,7 +52,7 @@ fn settle(
     .expect("live deck scope");
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Medium))]
 async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     let directory = TestTempDir::new();
     let path = directory.path().join("track.wav");
@@ -849,7 +849,7 @@ async fn paused_future_command(
     (deck, rig, inbox, segment)
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Medium))]
 #[case::direct_play_speed(false, false)]
 #[case::direct_play_jump(false, true)]
 #[case::owner_preparation_speed(true, false)]

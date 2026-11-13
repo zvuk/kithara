@@ -23,7 +23,7 @@ const CHANNELS: u16 = 2;
     native,
     serial,
     hang_timeout_secs(3),
-    timeout(::std::time::Duration::from_millis(27686))
+    timeout(::std::time::Duration::from_millis(1162))
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]

@@ -437,7 +437,7 @@ mod tests {
     /// takes, so its cost climbs with the load it is already competing with
     /// — 500 spun rounds took 3.8 s to 16.5 s idle, 200 gated ones 4.2 s to
     /// 5.3 s.
-    #[kithara::test(timeout(Duration::from_millis(4972)))]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(4972)))]
     fn an_eager_unpin_is_never_resurrected_by_a_concurrent_flush() {
         use std::sync::Barrier;
 

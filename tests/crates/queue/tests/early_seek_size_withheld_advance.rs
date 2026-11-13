@@ -171,7 +171,7 @@ enum Trigger {
     tokio,
     multi_thread,
     serial,
-    timeout(Short),
+    timeout(::std::time::Duration::from_millis(1940)),
     hang_timeout_secs(1),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_audio=debug,kithara_queue=debug")
 )]

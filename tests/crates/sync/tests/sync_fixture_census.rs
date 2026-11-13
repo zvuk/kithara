@@ -65,7 +65,7 @@ fn build_reported_absent(provider: &Provider) -> bool {
     })
 }
 
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(519160)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(3932)))]
 async fn every_provider_materialises_two_sources(#[future(awt)] provider_sources: Census) {
     let (_server, entries) = provider_sources;
     for (provider, paths) in entries {

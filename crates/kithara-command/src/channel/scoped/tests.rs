@@ -123,7 +123,7 @@ async fn sends_racing_inbox_drop_are_answered_exactly_once() {
 }
 
 #[cfg(all(panic = "unwind", not(miri)))]
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1148)))]
 fn lost_answer_negative_control_trips_the_watchdog() {
     let _real_io = kithara_platform::flash::real_io();
     let (mut sender, inbox) = crate::channel::<Test>(crate::ChannelConfig::builder().build());
@@ -250,7 +250,7 @@ fn inspecting_retained_commands_neither_executes_nor_answers_them() {
 }
 
 #[cfg(panic = "unwind")]
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1256)))]
 fn a_foreign_generation_is_answered_whole_and_never_routed() {
     let (mut sender, mut inbox) = scoped_channel::<Test, Test>(ScopedConfig::builder().build());
     let id = sender.open(0).expect("slot");

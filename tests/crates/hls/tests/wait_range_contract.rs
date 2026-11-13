@@ -27,7 +27,7 @@ mod consts {
 #[kithara::test(
     tokio,
     serial,
-    timeout(Duration::from_millis(1356)),
+    timeout(::std::time::Duration::from_millis(1356)),
     hang_timeout_secs(1)
 )]
 #[case::ephemeral(true)]

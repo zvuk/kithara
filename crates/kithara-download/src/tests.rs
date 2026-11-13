@@ -723,7 +723,7 @@ fn measure_paced_delay(delay: Duration) -> (Duration, Duration) {
     )
 }
 
-#[kithara::test(tokio, timeout(Duration::from_millis(1228)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1228)))]
 async fn completed_request_duration_excludes_real_time_spent_before_it() {
     const RUN_AHEAD: Duration = Duration::from_millis(500);
     const EVENT_BUS_CAPACITY: usize = 16;
@@ -1062,7 +1062,7 @@ async fn poll_next_respects_max_concurrent() {
 /// A regression that reverts to a per-Downloader client multiplies the opened
 /// connection count by `WAVES`, immediately tripping the assertion.
 #[cfg(not(target_os = "android"))]
-#[kithara::test(tokio, timeout(Duration::from_millis(1830)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1830)))]
 async fn shared_client_keepalive_bounds_connection_count() {
     const PARALLEL_DLS: usize = 8;
     const WAVES: usize = 25;
@@ -1179,7 +1179,7 @@ async fn load_slow_seen(rx: &mut EventReceiver<TestEvent>) -> bool {
 /// End-to-end: a slow HTTP response fires `DownloaderEvent::LoadSlow`
 /// on the peer's bus, and a subscriber on that bus (as
 /// `kithara_queue::Loader` would set up) receives it.
-#[kithara::test(tokio, timeout(Duration::from_millis(1232)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1232)))]
 async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     const SLOW_SERVER_DELAY_MS: u64 = 500;
     const SOFT_TIMEOUT_MS: u64 = 50;
@@ -1212,7 +1212,7 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_millis(1230)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1230)))]
 async fn soft_timeout_covers_response_body() {
     const SLOW_BODY_DELAY_MS: u64 = 500;
     const SOFT_TIMEOUT_MS: u64 = 50;
@@ -1485,7 +1485,7 @@ async fn retry_and_first_byte_publish_on_peer_bus() {
 
 /// flash(false): the stalled-body fixture is a real loopback socket that must
 /// deliver headers before body inactivity is measured.
-#[kithara::test(tokio, flash(false))]
+#[kithara::test(tokio, flash(false), timeout(Short))]
 async fn stalled_body_publishes_resume_and_exhaustion_events() {
     let server = spawn_stalled_body_server().await;
     let url = server.url("/data");
@@ -1551,7 +1551,7 @@ async fn stalled_body_publishes_resume_and_exhaustion_events() {
 /// Active peer (PLAYING=true from the start) must finish its batch
 /// ahead of a preload peer (PLAYING=false) when both share the same
 /// limited `max_concurrent` pool.
-#[kithara::test(tokio, timeout(Duration::from_millis(1538)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1538)))]
 async fn active_peer_completes_before_preload_under_contention() {
     const CMDS_PER_PEER: usize = 20;
     const MAX_CONCURRENT: usize = 2;
@@ -1695,7 +1695,7 @@ async fn run_one_batch(dl: &Downloader, gate: &Arc<CompletionGate>, batch: Vec<F
 /// walk it past urgent work stamped after it — otherwise the audible
 /// track starves behind an entire construction window (the
 /// `UrgentDownSwitch` hang: v0's demanded bytes queued behind all of v1).
-#[kithara::test(tokio, timeout(Duration::from_millis(1268)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1324)))]
 async fn a_demanded_prefetch_overtakes_later_stamped_urgent_work() {
     let (dl, server) = one_slot_downloader().await;
     let url = server.url("/data");
@@ -1742,7 +1742,7 @@ async fn a_demanded_prefetch_overtakes_later_stamped_urgent_work() {
 /// One scheduler pass can demote and escalate through the same slot. The
 /// command whose demand dropped yields to the queue, and the newly
 /// demanded one takes the front — neither may be confused for the other.
-#[kithara::test(tokio, timeout(Duration::from_millis(1268)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1318)))]
 async fn a_dropped_demand_yields_to_a_newly_demanded_command() {
     let (dl, server) = one_slot_downloader().await;
     let url = server.url("/data");

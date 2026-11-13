@@ -1,6 +1,9 @@
 use std::io::Write as _;
 
-use kithara_platform::flash::{self, Instant};
+use kithara_platform::{
+    flash::{self, Instant},
+    time::WallInstant,
+};
 
 /// Measures the selected clock across a generated native test entry.
 ///
@@ -11,6 +14,7 @@ use kithara_platform::flash::{self, Instant};
 pub struct ClockMeasurement {
     name: &'static str,
     started: Instant,
+    wall_started: WallInstant,
     flash: bool,
 }
 
@@ -19,10 +23,12 @@ impl ClockMeasurement {
     #[must_use]
     pub fn start(name: &'static str, on: bool) -> Option<Self> {
         std::env::var_os("KITHARA_TEST_CLOCK_MEASUREMENT").map(|_| {
+            let wall_started = WallInstant::now();
             let (flash, started) = clock_snapshot(on);
             Self {
                 name,
                 started,
+                wall_started,
                 flash,
             }
         })
@@ -32,6 +38,7 @@ impl ClockMeasurement {
 impl Drop for ClockMeasurement {
     fn drop(&mut self) {
         let pid = std::process::id();
+        let wall_elapsed_ns = self.wall_started.elapsed().as_nanos();
         let elapsed = clock_snapshot(self.flash)
             .1
             .duration_since(self.started)
@@ -39,7 +46,7 @@ impl Drop for ClockMeasurement {
         let mode = if self.flash { "flash" } else { "real" };
         let _ = writeln!(
             std::io::stderr().lock(),
-            "KITHARA_TEST_CLOCK {{\"test\":\"{}\",\"pid\":{pid},\"mode\":\"{mode}\",\"elapsed_ns\":{elapsed}}}",
+            "KITHARA_TEST_CLOCK {{\"test\":\"{}\",\"pid\":{pid},\"mode\":\"{mode}\",\"elapsed_ns\":{elapsed},\"wall_elapsed_ns\":{wall_elapsed_ns}}}",
             self.name,
         );
     }

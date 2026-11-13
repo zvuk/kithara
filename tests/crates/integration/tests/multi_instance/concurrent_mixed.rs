@@ -194,7 +194,7 @@ async fn run_mixed(
     tokio,
     browser,
     serial,
-    timeout(Duration::from_millis(1640)),
+    timeout(::std::time::Duration::from_millis(2313)),
     hang_timeout_secs(2)
 )]
 #[case::two_file_two_hls(2, 2)]

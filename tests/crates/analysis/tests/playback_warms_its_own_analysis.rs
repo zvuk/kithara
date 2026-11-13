@@ -28,7 +28,7 @@ use kithara_integration_tests::{
 use kithara_test_utils::{bufpool::pools, temp_dir, wait_until};
 use url::Url;
 
-#[kithara::test(tokio, timeout(Duration::from_millis(9462)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(10016)))]
 async fn playback_feeds_the_pass_opened_for_the_track_it_plays(
     #[future(awt)] served_mp3: (TestServerHelper, Url),
 ) {

@@ -201,7 +201,7 @@ pub(super) struct CapturedAudio {
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_millis(11016))
+    timeout(::std::time::Duration::from_millis(11016))
 )]
 #[case::mp3_one_44100(&CASES[0])]
 #[case::mp3_distinct_two_48000(&CASES[1])]

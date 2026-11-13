@@ -88,7 +88,7 @@ fn evicted_key_under_other_root_is_not_delivered() {
     );
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(1110)))]
+#[kithara::test]
 fn dropping_guard_deregisters() {
     let store = ephemeral_store(2);
     let scope = store.scope::<Test>(&source(ROOT_A)).unwrap();

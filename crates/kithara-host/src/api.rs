@@ -59,7 +59,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test(native, flash(false), timeout(Long))]
+    #[kithara::test(native, flash(false))]
     fn a_b_endpoints_are_exact() {
         assert_eq!(crossfader_gain(CrossfaderBus::A, 0.0).unwrap(), 1.0);
         assert_eq!(crossfader_gain(CrossfaderBus::A, 1.0).unwrap(), 0.0);

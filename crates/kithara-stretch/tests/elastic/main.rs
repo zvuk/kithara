@@ -464,7 +464,7 @@ fn edge_requests(capabilities: ElasticCapabilities) -> [ElasticRequest; 3] {
 mod facade;
 mod priming;
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(2694)))]
+#[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith, 208, 208)

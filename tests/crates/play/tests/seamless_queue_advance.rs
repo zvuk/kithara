@@ -60,7 +60,7 @@ const TONE_SCAN_WINDOW: usize = BLOCK_FRAMES as usize;
 #[kithara::test(
     native,
     tokio,
-    timeout(Long),
+    timeout(::std::time::Duration::from_millis(8184)),
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]

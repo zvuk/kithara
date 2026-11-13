@@ -105,7 +105,11 @@ async fn play_paced(player: &mut OfflinePlayer, windows: u64, window_secs: f64) 
 /// deadline. Detector: the `committed_ns` `write_playhead` USDT probe emitted by
 /// `PlayheadWrite::advance` — fail if the committed playhead ever jumps
 /// forward by more than [`MAX_COMMITTED_STEP_SECS`] in a single commit.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_millis(37170)))]
+#[kithara::test(
+    tokio,
+    multi_thread,
+    timeout(::std::time::Duration::from_millis(37170))
+)]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(

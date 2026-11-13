@@ -183,7 +183,7 @@ fn one_store_serves_both_none_and_processing_scopes() {
     );
 }
 
-#[kithara::test(native, timeout(::std::time::Duration::from_millis(1380)))]
+#[kithara::test(native)]
 fn multi_chunk_chaining_matches_reference() {
     let dir = tempdir().unwrap();
     let store: AssetStore<TestPools> = AssetStore::builder(support::pools())

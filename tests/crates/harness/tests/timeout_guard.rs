@@ -7,6 +7,13 @@ use kithara::platform::{
 use kithara_test_utils::test::wall_sleep;
 
 #[kithara::test(native, flash(false))]
+#[case::first("sync_timeout_preserves_the_harness_thread_name_first")]
+#[case::second("sync_timeout_preserves_the_harness_thread_name_second")]
+fn sync_timeout_preserves_the_harness_thread_name(#[case] expected: &str) {
+    assert_eq!(std::thread::current().name(), Some(expected));
+}
+
+#[kithara::test(native, flash(false))]
 #[kithara::hang_watchdog]
 fn sync_timeout_preserves_watchdog_progress_and_result() -> Result<(), &'static str> {
     hang_reset!();

@@ -10,7 +10,7 @@ use kithara_warp_tests::mock::{
 #[kithara::test(
     tokio,
     serial,
-    timeout(Duration::from_millis(17708)),
+    timeout(::std::time::Duration::from_millis(17708)),
     hang_timeout_secs(5)
 )]
 #[case(StretchKind::Signalsmith)]
@@ -31,7 +31,7 @@ async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
 #[kithara::test(
     tokio,
     serial,
-    timeout(Duration::from_millis(14454)),
+    timeout(::std::time::Duration::from_millis(14454)),
     hang_timeout_secs(5)
 )]
 #[case(StretchKind::Signalsmith)]

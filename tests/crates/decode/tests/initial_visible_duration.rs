@@ -30,7 +30,7 @@ use kithara_test_utils::kithara;
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(1120)),
+    timeout(::std::time::Duration::from_millis(1120)),
     hang_timeout_secs(1)
 )]
 #[kithara::hang_watchdog(ctx = String)]

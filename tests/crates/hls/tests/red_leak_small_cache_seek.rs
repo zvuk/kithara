@@ -102,7 +102,7 @@ async fn stable_live_thread_baseline(hls: &CreatedHls) -> usize {
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(1650)),
+    timeout(::std::time::Duration::from_millis(1650)),
     hang_timeout_secs(5)
 )]
 async fn red_small_cache_seek_stress_does_not_leak_threads(

@@ -21,7 +21,7 @@ fn the_registry_is_not_empty() {
 #[kithara::test(
     native,
     flash(false),
-    timeout(std::time::Duration::from_millis(90_858))
+    timeout(::std::time::Duration::from_millis(90858))
 )]
 fn every_manifest_entry_is_materialized_or_explicitly_unavailable() {
     let origin = std::env::var_os(store::ORIGIN_ENV);

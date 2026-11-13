@@ -25,7 +25,7 @@ async fn is_terminal_for_each_phase() {
     };
     assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
 }
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1388)))]
 async fn map_source_phase_table(route_pcm: RoutePcm) {
     for (phase, expected) in [
         (SourcePhase::Waiting, Some(WaitingReason::Waiting)),

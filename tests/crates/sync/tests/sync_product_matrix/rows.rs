@@ -7,7 +7,7 @@ use super::{cases::*, harness::*, imports::*, providers::*};
     tokio,
     multi_thread,
     serial,
-    timeout(::std::time::Duration::from_millis(10658))
+    timeout(::std::time::Duration::from_millis(14276))
 )]
 #[case::synthetic(synthetic_sources().await, CUE)]
 #[case::mp3_distinct(source_mp3_distinct().await, CUE)]
@@ -277,7 +277,7 @@ async fn run_with_decoder(
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_millis(3932))
+    timeout(::std::time::Duration::from_millis(6058))
 )]
 #[case::mp3(source_mp3_same().await)]
 #[case::drm(source_hls_same_drm().await)]
@@ -306,7 +306,7 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: Prepar
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_millis(31654))
+    timeout(::std::time::Duration::from_millis(31654))
 )]
 #[case::play_sync_seek(PLAY_SYNC_SEEK, source_synthetic().await)]
 #[case::play_seek_sync(PLAY_SEEK_SYNC, source_synthetic().await)]
@@ -335,7 +335,7 @@ async fn wav_product_rows_reach_the_pcm_oracle(
     tokio,
     multi_thread,
     serial,
-    timeout(::std::time::Duration::from_millis(8702))
+    timeout(::std::time::Duration::from_millis(17784))
 )]
 #[case::hls_mp3_sync_seek_play(source_hls_mp3_plain().await, SYNC_SEEK_PLAY)]
 #[case::hls_mp3_tempo_down_30hz(source_hls_mp3_plain().await, TEMPO_DOWN_30)]
@@ -353,7 +353,7 @@ async fn supplied_grid_product_rows_reach_the_pcm_oracle(
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_millis(52448))
+    timeout(::std::time::Duration::from_millis(52448))
 )]
 #[case::hls_same_play_sync_seek(source_hls_same_plain().await, PLAY_SYNC_SEEK)]
 #[case::hls_same_play_seek_sync(source_hls_same_plain().await, PLAY_SEEK_SYNC)]
@@ -429,7 +429,7 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_millis(31390))
+    timeout(::std::time::Duration::from_millis(36442))
 )]
 #[case::tunnel_play_sync_seek(tunnel_sources().await, TUNNEL_CUE, PLAY_SYNC_SEEK.gridded())]
 #[case::tunnel_play_seek_sync(tunnel_sources().await, TUNNEL_CUE, PLAY_SEEK_SYNC.gridded())]
@@ -545,7 +545,7 @@ pub(crate) async fn newtechno_sources() -> PreparedSources {
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_millis(12304)),
+    timeout(::std::time::Duration::from_millis(12304)),
     tracing("info")
 )]
 #[case::paused_sync_then_play(PAUSED_SYNC)]

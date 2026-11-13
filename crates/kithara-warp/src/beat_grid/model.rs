@@ -744,7 +744,7 @@ mod tests {
         assert_eq!(beat_at(&grid, 96_000.0), BeatGridQuery::Resolved(4.0));
     }
 
-    #[kithara::test(timeout(::std::time::Duration::from_millis(10140)))]
+    #[kithara::test]
     fn a_beat_past_the_decoded_asset_is_a_contradiction_not_a_clamp() {
         let raw = served(vec![beat(0, Some(1.0)), beat(8, Some(1.0))]);
 

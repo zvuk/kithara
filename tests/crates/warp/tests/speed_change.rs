@@ -342,7 +342,7 @@ fn beat_failures(onsets: &[Onset]) -> Vec<String> {
 #[kithara::test(
     tokio,
     serial,
-    timeout(Duration::from_millis(21506)),
+    timeout(::std::time::Duration::from_millis(21506)),
     hang_timeout_secs(5)
 )]
 #[case::signalsmith(StretchKind::Signalsmith, true)]

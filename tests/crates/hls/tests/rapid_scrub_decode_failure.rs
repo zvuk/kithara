@@ -404,7 +404,7 @@ async fn seek_into_cold_range_does_not_fail(
 /// mid-atom from one of the racing earlier seeks — the exact
 /// torn-cursor shape three prod tracks crashed on in `app.log
 /// @ 11:50`.
-#[kithara::test(tokio, multi_thread, timeout(Medium))]
+#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(4634)))]
 #[case::drag_mid(0.40)]
 #[case::drag_end(0.95)]
 async fn seek_drag_into_cold_range_does_not_fail(

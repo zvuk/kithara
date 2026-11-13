@@ -217,7 +217,11 @@ async fn audio_file_mp3_decodes_with_duration(
 ///
 /// The body is throttled so the reader meets the download frontier an
 /// in-memory server would otherwise hide.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_millis(20530)))]
+#[kithara::test(
+    tokio,
+    multi_thread,
+    timeout(::std::time::Duration::from_millis(20530))
+)]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
@@ -408,7 +412,7 @@ async fn mp3_duration_correct_before_decode(tone_mp3: &'static [u8], #[case] hin
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1154)))]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn audio_file_extensionless_mp3_without_hint_uses_native_probe(tone_mp3: &'static [u8]) {
     let helper = TestServerHelper::new().await;

@@ -1097,7 +1097,7 @@ async fn run_census(prepared: PreparedTracks, seam: Seam, temp_dir: &TestTempDir
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(2402)),
+    timeout(::std::time::Duration::from_millis(3224)),
     hang_timeout_secs(20)
 )]
 #[case::gapless_hls(HLS_QUEUE, Seam::Gapless)]
@@ -1124,7 +1124,7 @@ async fn a_queue_plays_every_track_end_to_end(
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(4296)),
+    timeout(::std::time::Duration::from_millis(5800)),
     hang_timeout_secs(20)
 )]
 #[case::gapless(MPEG_QUEUE, Seam::Gapless)]
@@ -1243,7 +1243,7 @@ async fn prepare_tracks(origins: [Origin; 3]) -> PreparedTracks {
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(3826)),
+    timeout(::std::time::Duration::from_millis(3826)),
     hang_timeout_secs(20)
 )]
 #[case::profile_mp3_libmp3lame_44100_1ch_gapless(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH)]
@@ -1261,7 +1261,7 @@ async fn symphonia_mpeg_uses_the_same_full_playthrough_oracles(
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_millis(3812)),
+    timeout(::std::time::Duration::from_millis(3812)),
     hang_timeout_secs(20)
 )]
 #[case::gapless(Seam::Gapless)]

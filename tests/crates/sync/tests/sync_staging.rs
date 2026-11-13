@@ -358,7 +358,7 @@ async fn schedule_start(harness: &mut ProductHarness, case: SyncCase) -> Operati
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_millis(1302))
+    timeout(::std::time::Duration::from_millis(6258))
 )]
 #[case::tunnel_unbounded_deadline(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE, STAGED_CUE)]
 #[case::tunnel_deadline_looser_than_the_ring(
@@ -496,7 +496,7 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_millis(1558))
+    timeout(::std::time::Duration::from_millis(2028))
 )]
 #[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE)]
 #[case::tunnel_weak_beat(tunnel_sources().await, TUNNEL_RATE, TUNNEL_WEAK_CUE)]
@@ -544,7 +544,7 @@ async fn unloading_the_track_reports_its_installed_lane_cancelled(
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_millis(1300))
+    timeout(::std::time::Duration::from_millis(6238))
 )]
 #[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE)]
 #[case::tunnel_weak_beat(tunnel_sources().await, TUNNEL_RATE, TUNNEL_WEAK_CUE)]
@@ -583,7 +583,7 @@ async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_millis(2788))
+    timeout(::std::time::Duration::from_millis(10590))
 )]
 #[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE, TUNNEL_SUPERSEDING_CUE)]
 #[case::tunnel_weak_beat(

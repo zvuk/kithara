@@ -2629,7 +2629,7 @@ async fn select_item_on_armed_index_promotes_armed_slot(#[by_ref] worker_owner: 
     rig.finish().await;
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 #[should_panic(expected = "promotion reuses the opened lane")]
 async fn the_promotion_reuse_check_rejects_an_additional_load(
     #[by_ref] worker_owner: &WorkerOwner,

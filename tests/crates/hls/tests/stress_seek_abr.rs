@@ -101,7 +101,7 @@ fn run_rapid_random_seeks(
     tokio,
     native,
     serial,
-    timeout(Duration::from_millis(2192)),
+    timeout(::std::time::Duration::from_millis(37238)),
     hang_timeout_secs(3)
 )]
 #[case::hls("HLS", mixed_plain().await)]

@@ -160,7 +160,7 @@ async fn decoder_readers_have_isolated_construction_gates() {
     }
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1322)))]
 async fn matching_replacement_aborts_primed_incoming_before_profile_prepare(route_pcm: RoutePcm) {
     let RebuildFixture {
         control,
@@ -400,7 +400,7 @@ async fn rebuilding_decoder_completion_installs_once() {
     assert_eq!(drops.lock().as_slice(), &[1]);
 }
 
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1310)))]
 async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source(route_pcm: RoutePcm) {
     let RouteFixture {
         control,

@@ -13279,6 +13279,7 @@ dependencies = [
  "humantime",
  "kithara-devtools",
  "kithara-test-args",
+ "kithara-test-utils",
  "nix",
  "plist",
  "proc-macro2",

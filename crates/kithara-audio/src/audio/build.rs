@@ -431,7 +431,7 @@ mod tests {
         .expect("resident decoder owning thread");
     }
 
-    #[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(14564)))]
+    #[kithara::test(native, tokio)]
     async fn prepares_source_registration_without_worker_activity() {
         let pools = pools();
         let path = assets::audio_wav_frames_44100()

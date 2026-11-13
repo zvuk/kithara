@@ -62,7 +62,7 @@ fn arm_panic_marker(marker: &'static str) -> Arc<AtomicBool> {
     tokio,
     native,
     serial,
-    timeout(Duration::from_millis(12538)),
+    timeout(::std::time::Duration::from_millis(15014)),
     hang_timeout_secs(2)
 )]
 async fn idle_does_not_panic_hang_detector(

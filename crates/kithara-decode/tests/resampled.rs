@@ -585,7 +585,7 @@ fn resampler_never_sees_a_sample_the_file_poisoned(
     drop(seen);
 }
 
-#[kithara::test(native, flash(false), timeout(Short))]
+#[kithara::test(native, flash(false))]
 fn decoder_factory_uses_configured_pool_region(resampled_wav_four: &'static [u8]) {
     let pools = default_pools();
     assert_eq!(pools.stats().allocated_bytes, 0);

@@ -564,7 +564,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(1293)))]
     #[case::mem(Backend::Mem)]
     #[case::mmap(Backend::Mmap)]
     fn concurrent_generation_rewrite_never_tears_a_read(#[case] backend: Backend) {

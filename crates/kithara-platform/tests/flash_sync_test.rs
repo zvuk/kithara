@@ -14,7 +14,7 @@ use kithara_platform::{
 use kithara_test_dylib as _;
 use kithara_test_utils::kithara;
 
-#[kithara::test(native, timeout(::std::time::Duration::from_millis(1146)))]
+#[kithara::test(native)]
 fn a_sync_test_body_holds_the_virtual_clock_while_it_works() {
     let started = Instant::now();
     let sleeper = thread::spawn(|| thread::sleep(Duration::from_secs(1)));

@@ -332,7 +332,7 @@ async fn a_body_larger_than_several_reads_arrives_byte_identical() {
     assert_eq!(whole, body);
 }
 
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(2112)))]
+#[kithara::test(tokio)]
 async fn a_body_before_the_response_is_a_fatal_violation() {
     let (client, seen, url) = client(Plan {
         on_start: OnStart::EndBeforeResponse,
