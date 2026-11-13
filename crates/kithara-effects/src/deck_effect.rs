@@ -18,11 +18,11 @@ pub enum FxParamUnit {
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct FxParamDescriptor {
-    #[field(get, vis = "pub")]
+    #[field(#[must_use] get, vis = "pub")]
     range: RangeInclusive<f64>,
-    #[field(get(copy), vis = "pub")]
+    #[field(#[must_use] get(copy), vis = "pub")]
     unit: FxParamUnit,
-    #[field(get(copy), vis = "pub")]
+    #[field(#[must_use] get(copy), vis = "pub")]
     mapping: Option<FxParamMapping>,
 }
 
