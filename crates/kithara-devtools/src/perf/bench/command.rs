@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs::{self, File},
     io::{self, Write},
     process::{Command, Output},
@@ -12,7 +13,7 @@ use tempfile::Builder;
 use super::{
     dispatch,
     executable::build,
-    source::{Sources, metadata, select, targets},
+    source::{Sources, Target, metadata, select, targets},
 };
 use crate::{Ctx, verdict::ChildFailure};
 
@@ -155,7 +156,11 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool) -> Result<()> {
     if let Some(base) = &base {
         ensure!(
             base == &head,
-            "base/head benchmark targets or required features differ"
+            "base/head benchmark targets or required features differ; {}",
+            selection_difference(
+                &base.iter().map(Target::id).collect(),
+                &head.iter().map(Target::id).collect()
+            )
         );
     }
     let mut binaries = Vec::new();
@@ -201,9 +206,11 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool) -> Result<()> {
     for (base, head) in &binaries {
         let ids = head.ids(&request.filter, &data, &mut log)?;
         if let Some(base) = base {
+            let base_ids = base.ids(&request.filter, &data, &mut log)?;
             ensure!(
-                base.ids(&request.filter, &data, &mut log)? == ids,
-                "base/head Criterion IDs do not match"
+                base_ids == ids,
+                "base/head Criterion IDs do not match; {}",
+                selection_difference(&base_ids, &ids)
             );
         }
     }
@@ -224,4 +231,12 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool) -> Result<()> {
         )?;
     }
     log.line(&format!("Criterion results: {}", results.display()))
+}
+
+fn selection_difference(base: &BTreeSet<String>, head: &BTreeSet<String>) -> String {
+    format!(
+        "only in base: {:?}; only in head: {:?}",
+        base.difference(head).collect::<Vec<_>>(),
+        head.difference(base).collect::<Vec<_>>()
+    )
 }

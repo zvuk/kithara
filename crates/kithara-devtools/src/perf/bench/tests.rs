@@ -3,7 +3,7 @@ use std::path::Path;
 use clap::Parser;
 use tempfile::TempDir;
 
-use super::{super::source, *};
+use super::*;
 
 fn command(root: &Path, program: &str, args: &[&str]) -> String {
     let output = Command::new(program)
@@ -27,8 +27,11 @@ fn fixture(base_ids: &str, head_ids: &str) -> (TempDir, Ctx, String) {
     let events = format!("{:?}", temp.path().join("events"));
     fs::write(
         root.join("Cargo.toml"),
-        r#"
+        format!(
+            r#"
 [workspace]
+[workspace.package]
+repository = {repository:?}
 [package]
 name = "fixture-bench"
 version = "0.1.0"
@@ -41,6 +44,8 @@ name = "kernel"
 harness = false
 required-features = ["spectrum", "portable"]
 "#,
+            repository = root.to_str().unwrap()
+        ),
     )
     .unwrap();
     fs::write(
@@ -76,18 +81,6 @@ fn main() {
     .unwrap();
     let config = "[tools.critcmp]\nprogram = 'missing-benchmark-comparison-tool'\n";
     fs::write(root.join(".config/xtask.toml"), config).unwrap();
-    let manifest = root.join("Cargo.toml");
-    fs::write(
-        &manifest,
-        fs::read_to_string(&manifest).unwrap().replace(
-            "[workspace]",
-            &format!(
-                "[workspace]\n[workspace.package]\nrepository = {:?}",
-                root.to_str().unwrap()
-            ),
-        ),
-    )
-    .unwrap();
     fs::write(root.join("arm"), "base").unwrap();
     fs::write(root.join("ids"), base_ids).unwrap();
     command(&root, "cargo", &["generate-lockfile", "--offline"]);
@@ -144,10 +137,7 @@ fn bench_metadata_owns_targets_and_required_features() {
     let (_temp, ctx, _) = fixture("group/a", "group/a");
     let metadata = ctx.metadata().unwrap();
     assert_eq!(
-        targets(metadata)
-            .iter()
-            .map(source::Target::id)
-            .collect::<Vec<_>>(),
+        targets(metadata).iter().map(Target::id).collect::<Vec<_>>(),
         ["fixture-bench:kernel:portable,spectrum"]
     );
     assert_eq!(
@@ -201,7 +191,13 @@ fn bench_refuses_empty_or_unpaired_ids_before_measurement() {
         ("group/a", "group/b", true),
     ] {
         let (temp, ctx, base) = fixture(base_ids, head_ids);
-        assert!(execute(&ctx, &request(if compared { &base } else { "" }), true).is_err());
+        let error = execute(&ctx, &request(if compared { &base } else { "" }), true).unwrap_err();
+        if base_ids == "group/a" && head_ids == "group/b" {
+            assert_eq!(
+                error.to_string(),
+                "base/head Criterion IDs do not match; only in base: [\"group/a\"]; only in head: [\"group/b\"]"
+            );
+        }
         let events = fs::read_to_string(temp.path().join("events")).unwrap();
         assert!(!events.contains("run:"), "{events}");
         assert!(
@@ -216,6 +212,28 @@ fn bench_refuses_empty_or_unpaired_ids_before_measurement() {
 struct Cli {
     #[command(flatten)]
     args: BenchArgs,
+}
+
+#[test]
+fn bench_target_admission_explains_manifest_feature_differences() {
+    let (temp, ctx, base) = fixture("group/a", "group/a");
+    let manifest = ctx.root.join("Cargo.toml");
+    fs::write(
+        &manifest,
+        fs::read_to_string(&manifest).unwrap().replace(
+            "required-features = [\"spectrum\", \"portable\"]",
+            "required-features = [\"portable\"]",
+        ),
+    )
+    .unwrap();
+    let mut request = request(&base);
+    request.target = "fixture-bench:kernel".into();
+    let error = execute(&ctx, &request, true).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "base/head benchmark targets or required features differ; only in base: [\"fixture-bench:kernel:portable,spectrum\"]; only in head: [\"fixture-bench:kernel:portable\"]"
+    );
+    assert!(!temp.path().join("events").exists());
 }
 
 #[test]
