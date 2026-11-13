@@ -5,10 +5,6 @@ set working-directory := "../.."
 test-utils:
     just _xtask test-utils
 
-[positional-arguments]
-ui-consumer *ARGS:
-    just _xtask ui-consumer "$@"
-
 # Run workspace tests via the xtask/nextest harness. Use `just test run ...`
 
 # when passing lane selectors, package filters, or nextest expressions.
