@@ -65,7 +65,7 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 kithara-storage = { path = ".", default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "temp-dir"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang", "temp-dir"] }
 tempfile = { workspace = true }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }

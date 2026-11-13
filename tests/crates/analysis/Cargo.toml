@@ -25,6 +25,7 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
 kithara = { workspace = true, features = [
+    "test",
     "usdt",
     "analysis",
     "audio",
@@ -37,7 +38,7 @@ kithara = { workspace = true, features = [
 kithara-integration-tests = { workspace = true, features = ["all", "analysis"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
-kithara-test-utils = { workspace = true, features = ["usdt"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt"] }
 
 url = { workspace = true }
 

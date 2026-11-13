@@ -11,6 +11,9 @@ categories = ["development-tools::testing"]
 [lib]
 proc-macro = true
 
+[features]
+test = []
+
 [dependencies]
 proc-macro2 = { workspace = true }
 quote = { workspace = true }

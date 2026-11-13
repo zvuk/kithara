@@ -41,7 +41,7 @@ kithara-apple = { workspace = true, features = ["audio-toolbox"] }
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 
 criterion = { workspace = true }
 

@@ -9,14 +9,15 @@ keywords = ["audio", "testing", "kithara", "usdt"]
 categories = ["development-tools::testing"]
 
 [features]
-default = ["hang"]
+default = ["hang", "test"]
+test = ["kithara-test-macros/test"]
 flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
 # Local axum HTTP server for tests (native only).
-http-server = ["dep:axum", "kithara-platform/tokio-net"]
+http-server = ["dep:axum", "kithara-platform/tokio-net", "test"]
 # Temporary-directory fixtures.
-temp-dir = ["dep:tempfile"]
-mock = ["dep:unimock"]
+temp-dir = ["dep:tempfile", "test"]
+mock = ["dep:unimock", "test"]
 # One spinning thread per CPU for the body of every `#[kithara::test]`;
 # enabled by `just test run --load=on`.
 load = []
@@ -66,7 +67,7 @@ tracing-wasm = { workspace = true, optional = true }
 usdt = { workspace = true, optional = true }
 
 [dev-dependencies]
-kithara-test-utils = { path = ".", default-features = false }
+kithara-test-utils = { features = ["test"], path = ".", default-features = false }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

@@ -19,6 +19,10 @@ Proc-macro crate providing unified test attributes (`#[kithara::test]`,
 emission is gated by the `usdt` feature; mock emission is gated by
 `cfg(any(test, feature = "mock"))`; flash is gated by the `flash` feature.
 
+The `test` feature enables `test`, `fixture` and `asset` macros. It is off by
+default; production instrumentation remains available without the test DSL.
+Test-utils forwards this opt-in through its own `test` feature.
+
 ## Usage
 
 ```rust
@@ -75,7 +79,7 @@ A bare `#[kithara::probe]` is a marker probe (cheap auto-fields only); parenthes
 ## Integration
 
 Use the `kithara_test_utils::kithara` re-export in independent consumers as well as
-workspace tests. With test-utils default features disabled, plain, parameterized,
+workspace tests. With test-utils defaults disabled and `test` enabled, plain, parameterized,
 fixture, serialized, and current-thread async tests need no direct Tokio or
 `serial_test` dependency.
 

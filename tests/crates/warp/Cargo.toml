@@ -32,10 +32,10 @@ no-block = ["kithara/no-block", "kithara-test-utils/no-block", "kithara-integrat
 usdt = ["kithara/usdt", "kithara-test-utils/usdt", "kithara-integration-tests?/usdt"]
 
 [dependencies]
-kithara = { workspace = true, features = ["beat", "mock", "platform", "signal", "stretch-glide", "warp"] }
+kithara = { workspace = true, features = ["test", "beat", "mock", "platform", "signal", "stretch-glide", "warp"] }
 kithara-derive = { workspace = true, optional = true }
 kithara-integration-tests = { workspace = true, optional = true, features = ["all", "analysis"] }
-kithara-test-utils = { workspace = true, features = ["temp-dir"] }
+kithara-test-utils = { workspace = true, features = ["test", "temp-dir"] }
 
 delegate = { workspace = true, optional = true }
 num-traits = { workspace = true }
@@ -43,7 +43,7 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
-kithara = { workspace = true, features = ["stretch-bungee"] }
+kithara = { workspace = true, features = ["test", "stretch-bungee"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["library", "native-fixtures"] }

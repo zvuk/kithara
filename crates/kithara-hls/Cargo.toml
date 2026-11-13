@@ -86,7 +86,7 @@ kithara-abr = { workspace = true, default-features = false, features = ["mock"] 
 kithara-bufpool = { workspace = true }
 kithara-hls = { path = ".", default-features = false, features = ["usdt"] }
 kithara-net = { workspace = true, default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "http-server"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang", "http-server"] }
 
 tempfile = { workspace = true }
 unimock = { workspace = true }

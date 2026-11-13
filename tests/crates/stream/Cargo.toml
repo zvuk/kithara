@@ -19,6 +19,7 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dev-dependencies]
 kithara = { workspace = true, default-features = false, features = [
+    "test",
     "usdt",
     "events",
     "platform",
@@ -28,7 +29,7 @@ kithara = { workspace = true, default-features = false, features = [
 ] }
 kithara-integration-tests = { workspace = true, default-features = false, features = ["stream"] }
 kithara-test-dylib = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "hang", "mock"] }
 
 delegate = { workspace = true }
 futures = { workspace = true }

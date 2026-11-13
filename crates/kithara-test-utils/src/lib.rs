@@ -17,6 +17,7 @@ pub use serial_test;
 pub use tracing;
 
 pub mod bufpool;
+#[cfg(feature = "test")]
 pub mod cancel;
 pub mod clock;
 #[cfg(not(target_arch = "wasm32"))]
@@ -39,9 +40,11 @@ pub mod rng;
 pub mod rtsan;
 #[cfg(feature = "temp-dir")]
 pub mod temp_dir;
+#[cfg(feature = "test")]
 pub mod test;
 pub mod wait;
 
+#[cfg(feature = "test")]
 pub use cancel::{cancel_token, cancel_token_cancelled};
 #[cfg(all(feature = "http-server", not(target_arch = "wasm32")))]
 pub use http_server::TestHttpServer;
@@ -54,9 +57,10 @@ pub use wait::{wait_until, wait_until_blocking};
 
 pub mod kithara {
     pub use kithara_test_macros::{
-        IntoProbeArg, Probe, allow_block, asset, fixture, hang_watchdog, measure, measure_block,
-        mock, no_block, probe, probe_event, rtsan_allow_blocking, rtsan_forbid_blocking, test,
-        test_utils_flash as flash,
+        IntoProbeArg, Probe, allow_block, hang_watchdog, measure, measure_block, mock, no_block,
+        probe, probe_event, rtsan_allow_blocking, rtsan_forbid_blocking, test_utils_flash as flash,
     };
+    #[cfg(feature = "test")]
+    pub use kithara_test_macros::{asset, fixture, test};
 }
 mod consts;

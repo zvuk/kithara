@@ -1,17 +1,12 @@
-//! `kithara-test-macros` — proc-macros for Kithara test infrastructure.
+//! Production instrumentation macros and an optional test DSL.
 //!
-//! `lib.rs` contains only the required `#[proc_macro*]` entry points
-//! (Rust requires them in the crate root) and delegates logic to per-macro modules:
-//! - [`test`] — `#[kithara::test]` (sync/async/native/wasm with case+fixture).
-//! - [`fixture`] — `#[kithara::fixture]` (rstest-fixture replacement).
-//! - [`probe`] — `#[kithara::probe]`, `kithara::probe_event!`, and
-//!   `#[derive(kithara::Probe)]`
-//!   (USDT instrumentation gated by `feature = "usdt"`).
-//! - [`mock`] — `#[kithara::mock]` (unimock forwarder, gated `cfg(any(test, feature = "mock"))`).
-//! - [`asset`] — `#[kithara::asset]` (registers one build-time audio asset
-//!   per `#[case::name(...)]`; for `kithara-test-fixtures/src/defs/` only).
+//! The `test` feature enables test, fixture and test-asset generation.
+//! Probe, measurement, Flash, watchdog and realtime annotations remain available
+//! without it; each keeps its caller's runtime feature selection.
 
+#[cfg(feature = "test")]
 mod asset;
+#[cfg(feature = "test")]
 mod fixture;
 mod flash;
 mod hang_watchdog;
@@ -21,6 +16,7 @@ mod mock;
 mod no_block;
 mod probe;
 mod rtsan;
+#[cfg(feature = "test")]
 mod test;
 
 use proc_macro::TokenStream;
@@ -31,6 +27,7 @@ use proc_macro::TokenStream;
 /// The attribute is for `kithara-test-fixtures/src/defs/` only: the emitted
 /// registration names `crate::registry::AssetDef`, which exists in that
 /// crate's build script.
+#[cfg(feature = "test")]
 #[proc_macro_attribute]
 pub fn asset(attr: TokenStream, item: TokenStream) -> TokenStream {
     asset::expand(attr, item)
@@ -38,6 +35,7 @@ pub fn asset(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// `#[kithara::test]` — unified sync/async/native/wasm test attribute.
 /// See [`test`] for argument syntax.
+#[cfg(feature = "test")]
 #[proc_macro_attribute]
 pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     test::expand(attr, item)
@@ -65,6 +63,7 @@ pub fn measure_block(input: TokenStream) -> TokenStream {
 }
 
 /// `#[kithara::fixture]` — rstest-fixture replacement.
+#[cfg(feature = "test")]
 #[proc_macro_attribute]
 pub fn fixture(attr: TokenStream, item: TokenStream) -> TokenStream {
     fixture::expand(attr, item)

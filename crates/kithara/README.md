@@ -86,9 +86,16 @@ Commonly added:
 - `fdk-aac` — HE-AAC through libfdk-aac.
 - `offline` / `record` — render without an audio device, record the output.
 - `all` — every module with one compatible backend set.
+- `test` — test and fixture macro exports with the shared test runtime; select
+  it explicitly in test consumers.
 
-With `default-features = false` the crate is empty; enable the modules you
-import. The full list is in `Cargo.toml`.
+With `default-features = false`, enable the engine modules you import.
+Production instrumentation macros remain available; test and fixture macros
+require `test`. The full feature list is in `Cargo.toml`.
+
+Consumers of `#[kithara::test]` also declare `kithara-test-utils` directly: the
+generated wrappers use that crate's runtime. Test-only projects can use its
+`kithara` macro re-export instead of the engine facade.
 
 ## Integration
 

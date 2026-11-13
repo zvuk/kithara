@@ -46,7 +46,7 @@ windows-native-keyring-store = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-net = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 
 keyring-core = { workspace = true, features = ["sample"] }
 

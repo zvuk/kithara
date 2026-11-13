@@ -2,6 +2,7 @@
 
 #[cfg(all(feature = "multithread", not(target_arch = "wasm32")))]
 use kithara_platform::tokio::task;
+#[cfg(not(feature = "facade"))]
 use kithara_test_utils::kithara;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_utils::kithara_platform::tokio::runtime::{Handle, RuntimeFlavor};

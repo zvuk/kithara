@@ -13,7 +13,7 @@ kithara-derive = { workspace = true, features = ["config", "patch"] }
 bon = { workspace = true }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 serde = { workspace = true, features = ["derive"] }
 
 [lints]

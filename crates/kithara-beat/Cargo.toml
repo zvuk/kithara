@@ -57,7 +57,7 @@ sha2 = { workspace = true }
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["temp-dir"] }
+kithara-test-utils = { workspace = true, features = ["test", "temp-dir"] }
 
 serde_json = { workspace = true }
 unimock = { workspace = true }

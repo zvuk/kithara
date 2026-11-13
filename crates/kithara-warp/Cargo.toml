@@ -55,7 +55,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "tls-rustls"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "client-reqwest", "tls-rustls"] }
 kithara-warp = { path = ".", default-features = false, features = ["usdt", "stretch-identity", "stretch-glide", "stretch-signalsmith"] }
 
 realfft = { workspace = true }

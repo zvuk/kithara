@@ -55,7 +55,7 @@ tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-platform = { workspace = true }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 
 [[test]]
 name = "draw"
