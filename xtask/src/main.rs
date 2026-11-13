@@ -8,6 +8,7 @@ mod apple_docgen;
 mod child;
 mod ci;
 mod config;
+mod consumer;
 mod job;
 #[cfg(unix)]
 mod measure_child;
@@ -26,6 +27,7 @@ mod wasm;
 use android::AndroidCommand;
 use apple::AppleCommand;
 use ci::CiArgs;
+use consumer::ConsumerArgs;
 use mutants::MutantsArgs;
 use parity::ParityArgs;
 use publish::PublishArgs;
@@ -69,6 +71,8 @@ enum Command {
     Ci(CiArgs),
     /// Verify test utilities outside workspace feature unification.
     TestUtils,
+    /// Verify public UI contracts from an external temporary consumer.
+    UiConsumer(ConsumerArgs),
     /// Measure one native child without changing its execution environment.
     #[cfg(unix)]
     MeasureChild(measure_child::MeasureChildArgs),
@@ -140,6 +144,7 @@ fn work() -> anyhow::Result<()> {
         Command::Wasm { command } => wasm::run(command, &ctx),
         Command::Ci(ref args) => ci::run(args, &ctx),
         Command::TestUtils => test_utils::run(&ctx),
+        Command::UiConsumer(ref args) => consumer::run(&ctx, args),
         #[cfg(unix)]
         Command::MeasureChild(ref args) => measure_child::run(args),
         Command::Publish(ref args) => publish::run(args, &ctx),
@@ -183,6 +188,22 @@ mod tests {
                 .command,
             Command::TestUtils
         ));
+    }
+
+    #[test]
+    fn ui_consumer_requires_its_font_and_artifact_directory() {
+        assert!(
+            Cli::try_parse_from([
+                "xtask",
+                "ui-consumer",
+                "--font",
+                "font.ttf",
+                "--artifacts",
+                "out"
+            ])
+            .is_ok()
+        );
+        assert!(Cli::try_parse_from(["xtask", "ui-consumer"]).is_err());
     }
 
     /// `.cargo/config.toml` aliases `cargo xtask` to `cargo run --package xtask`,

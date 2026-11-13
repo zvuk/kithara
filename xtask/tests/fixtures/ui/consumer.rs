@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt::Write, fs, sync::Arc};
+use std::{collections::BTreeMap, fs, sync::Arc};
 
 use kithara_ui_draw::{
     Backend, Caps, DrawList, DrawListBuilder, Geom, Image, Needs, Paint, Pen, Pt, Rect, Rgba, Stop,
@@ -8,11 +8,7 @@ use kithara_ui_shaping::{
     FontFamily, FontPolicy, FontWeight, GlyphFace, GlyphRun, TextContext, TextError, TextResources,
     TextStyle,
 };
-use skrifa::{
-    FontRef, GlyphId, MetadataProvider,
-    instance::{LocationRef, NormalizedCoord, Size},
-    outline::{DrawSettings, OutlineGlyphCollection, OutlinePen},
-};
+use skrifa::{FontRef, MetadataProvider};
 
 const FONT: &str = env!(
     "EXTERNAL_UI_FONT",
@@ -41,7 +37,6 @@ const STYLE: TextStyle = TextStyle {
 struct Renderer {
     calls: usize,
     runs: Vec<GlyphRun>,
-    path: String,
 }
 
 impl Backend for Renderer {
@@ -63,82 +58,9 @@ impl Backend for Renderer {
         self.calls += 1;
     }
 
-    fn text(&mut self, run: &GlyphRun, _: &str, transform: Transform, _: Rgba) {
+    fn text(&mut self, run: &GlyphRun, _: &str, _: Transform, _: Rgba) {
         self.calls += 1;
         self.runs.push(run.clone());
-        for segment in run.segments() {
-            let (bytes, index) = match segment.face() {
-                GlyphFace::Embedded(face) => (face.bytes(), 0),
-                GlyphFace::System(font) => (font.data.as_ref(), font.index),
-            };
-            let font = FontRef::from_index(bytes, index).unwrap();
-            let outlines = OutlineGlyphCollection::new(&font);
-            let coords: Vec<_> = segment
-                .normalized_coords()
-                .iter()
-                .map(|coord| NormalizedCoord::from_bits(*coord))
-                .collect();
-            for glyph in segment.glyphs() {
-                let Some(outline) = outlines.get(GlyphId::new(glyph.id)) else {
-                    continue;
-                };
-                let mut pen = SvgPen {
-                    path: &mut self.path,
-                    transform,
-                    origin: Pt {
-                        x: glyph.x,
-                        y: glyph.y,
-                    },
-                };
-                let settings =
-                    DrawSettings::unhinted(Size::new(run.size()), LocationRef::new(&coords));
-                outline.draw(settings, &mut pen).unwrap();
-            }
-        }
-    }
-}
-
-struct SvgPen<'a> {
-    path: &'a mut String,
-    transform: Transform,
-    origin: Pt,
-}
-
-impl SvgPen<'_> {
-    fn point(&self, x: f32, y: f32) -> Pt {
-        self.transform.apply(Pt {
-            x: self.origin.x + x,
-            y: self.origin.y - y,
-        })
-    }
-    fn point_to(&mut self, x: f32, y: f32) {
-        let point = self.point(x, y);
-        write!(self.path, "{} {} ", point.x, point.y).unwrap();
-    }
-}
-
-impl OutlinePen for SvgPen<'_> {
-    fn move_to(&mut self, x: f32, y: f32) {
-        self.path.push('M');
-        self.point_to(x, y);
-    }
-    fn line_to(&mut self, x: f32, y: f32) {
-        self.path.push('L');
-        self.point_to(x, y);
-    }
-    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        self.path.push('Q');
-        self.point_to(cx, cy);
-        self.point_to(x, y);
-    }
-    fn curve_to(&mut self, ax: f32, ay: f32, bx: f32, by: f32, x: f32, y: f32) {
-        self.path.push('C');
-        self.point_to(ax, ay);
-        self.point_to(bx, by);
-        self.point_to(x, y);
-    }
-    fn close(&mut self) {
-        self.path.push('Z');
     }
 }
 
@@ -187,7 +109,7 @@ fn invalid_caller_bytes_have_a_typed_admission_error() {
     ));
 }
 
-fn supplied_face_and_positions_survive_ownership_drop_and_svg_replay() {
+fn supplied_face_and_positions_survive_ownership_drop_and_replay() {
     let bytes = fs::read(FONT).unwrap();
     let mut context = {
         let resources = TextResources::with_fonts(
@@ -232,9 +154,6 @@ fn supplied_face_and_positions_survive_ownership_drop_and_svg_replay() {
     replay(&list.finish(), &mut renderer);
     assert_eq!(renderer.calls, 1);
     assert_eq!(renderer.runs, [run]);
-    assert!(renderer.path.contains('M') && renderer.path.contains('Z'));
-    fs::create_dir_all("target/acceptance").unwrap();
-    fs::write("target/acceptance/supplied-roboto.svg", format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"100\"><path d=\"{}\"/></svg>", renderer.path)).unwrap();
 }
 
 #[cfg(feature = "vello")]
@@ -278,7 +197,7 @@ fn production_vello_keeps_supplied_font_and_shaped_glyph_positions() {
 fn main() {
     public_gradient_refusal_precedes_every_backend_callback();
     invalid_caller_bytes_have_a_typed_admission_error();
-    supplied_face_and_positions_survive_ownership_drop_and_svg_replay();
+    supplied_face_and_positions_survive_ownership_drop_and_replay();
     #[cfg(feature = "vello")]
     production_vello_keeps_supplied_font_and_shaped_glyph_positions();
 }

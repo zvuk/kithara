@@ -57,6 +57,12 @@ policy and counters come directly from daemon IPC, avoiding blob extent scans.
 - `just fmt` formats Rust, Cargo manifests, non-Cargo TOML, and JSON/JSONC.
 - `just fmt check` checks those formatters without rewriting files.
 - `just test` runs the repository test harness.
+- `just test ui-consumer --font <font.ttf> --artifacts <directory>` checks public
+  draw/shaping and the retained UI route from a temporary consumer outside the
+  checkout. Its manifest derives paths and versions from this workspace;
+  receipts retain the generated manifest/lock, input hash, feature graphs and
+  command results. Native checks and wasm compile-only availability are recorded
+  separately. The supplied font must cover Cyrillic and differ from embedded Sans.
 - `just ci health` runs the broad local health report.
 - `just quality lab list` shows pinned heavyweight analyzers and time budgets.
 - `just quality lab run scheduled` runs the advisory scheduled profile.
