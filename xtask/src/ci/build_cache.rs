@@ -547,6 +547,16 @@ fn candidate_entries(target_dir: &Path, preserved_roots: &[PathBuf]) -> Result<C
             .iter()
             .any(|root| root.starts_with(directory))
     };
+    if preserves(target_dir)
+        && (lock_is_held(&target_dir.join(lease::FILE))
+            || heartbeat_is_fresh(&target_dir.join(lease::HEARTBEAT)))
+    {
+        let (entry, _) = inspect_entry(target_dir.to_path_buf())?;
+        return Ok(CacheContents {
+            entries: Vec::new(),
+            held: vec![entry],
+        });
+    }
     if !preserves(target_dir) && is_leased_cargo_target(target_dir) {
         let (entry, held) = inspect_entry(target_dir.to_path_buf())?;
         return Ok(if held {
@@ -1041,6 +1051,29 @@ mod tests {
         fs::create_dir_all(&profile).unwrap();
         fs::write(profile.join("artifact"), vec![0_u8; bytes]).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_lease_on_a_preserved_mount_root_keeps_its_contents() {
+        for with_xtask in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            fs::write(root.path().join(".rustc_info.json"), "{}").unwrap();
+            let profile = root.path().join("debug");
+            fs::create_dir(&profile).unwrap();
+            fs::write(profile.join("artifact"), [0_u8; 128]).unwrap();
+            if with_xtask {
+                build_dir(root.path(), consts::XTASK_BUILD, 64);
+            }
+            let held = lease::hold(root.path()).unwrap();
+            let roots = [root.path().to_path_buf()];
+
+            enforce_budget_preserving(&roots, 0, &roots).unwrap();
+            assert!(profile.join("artifact").is_file());
+            drop(held);
+            enforce_budget_preserving(&roots, 0, &roots).unwrap();
+            assert!(!profile.exists());
+            assert!(root.path().is_dir());
+        }
     }
 
     #[test]
