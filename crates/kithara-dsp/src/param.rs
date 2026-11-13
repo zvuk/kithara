@@ -1,4 +1,4 @@
-use std::{num::NonZeroU32, ops::RangeInclusive};
+use std::num::NonZeroU32;
 
 use firewheel_core::dsp::filter::smoothing_filter::MAX_SETTLE_RATIO;
 pub use firewheel_core::{
@@ -11,7 +11,6 @@ pub use firewheel_core::{
     },
     param::smoother::{DEFAULT_GAIN_SPAN, SmoothedParam, SmootherConfig},
 };
-use num_traits::ToPrimitive;
 
 /// Double-precision parameter state with the shared one-pole and settle law.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -103,100 +102,9 @@ impl SmoothedParam64 {
         self.target_times_a = self.target * (1.0 - self.b1);
     }
 
-    /// Bound values and changing frames when each step is followed by `settle`.
-    /// Returns `None` when a finite bound cannot be represented.
-    #[must_use]
-    pub fn motion_bound(&self) -> Option<(RangeInclusive<f64>, u64)> {
-        if ![
-            self.value,
-            self.target,
-            self.span,
-            self.b1,
-            self.target_times_a,
-        ]
-        .iter()
-        .all(|value| value.is_finite())
-        {
-            return None;
-        }
-        if self.has_settled() {
-            return Some((self.value..=self.value, 0));
-        }
-        let low = self.value.min(self.target);
-        let high = self.value.max(self.target);
-        let distance = (self.value - self.target).abs();
-        let threshold = self.span * self.settle_ratio;
-        if self.span == 0.0 || self.b1 == 0.0 || (self.b1 == 1.0 && distance < threshold) {
-            return Some((low..=high, 1));
-        }
-        if self.b1 == 1.0 {
-            return Some((self.value..=self.value, 0));
-        }
-        if !(0.0..1.0).contains(&self.b1) {
-            return None;
-        }
-        self.rounded_motion_bound(low..=high)
-    }
-
-    fn rounded_motion_bound(
-        &self,
-        bounds: RangeInclusive<f64>,
-    ) -> Option<(RangeInclusive<f64>, u64)> {
-        let distance = (self.value - self.target).abs();
-        let threshold = self.span * self.settle_ratio;
-        let magnitude = self
-            .value
-            .abs()
-            .max(self.target.abs())
-            .max(f64::MIN_POSITIVE);
-        let floor = 8.0 * f64::EPSILON * magnitude / (1.0 - self.b1);
-        if !floor.is_finite() || floor >= magnitude {
-            return None;
-        }
-        let goal = if threshold > 2.0 * floor {
-            threshold - floor
-        } else {
-            floor
-        };
-        let approach = decay_frames(self.b1, distance, goal)?;
-        let lower = (self.target - 2.0 * floor).next_down();
-        let upper = (self.target + 2.0 * floor).next_up();
-        if !lower.is_finite() || !upper.is_finite() {
-            return None;
-        }
-        let settling = if threshold > 2.0 * floor {
-            0
-        } else {
-            ordered_bits(upper)
-                .checked_sub(ordered_bits(lower))?
-                .checked_add(1)?
-        };
-        Some((
-            (*bounds.start()).min(lower)..=(*bounds.end()).max(upper),
-            approach.checked_add(settling)?,
-        ))
-    }
-
     fn decay(seconds: f64, ratio: f64, sample_rate: NonZeroU32) -> f64 {
         let frames = (seconds * f64::from(sample_rate.get())).max(1.0);
         ratio.powf(frames.recip())
-    }
-}
-
-fn decay_frames(decay: f64, distance: f64, goal: f64) -> Option<u64> {
-    if distance <= goal {
-        return Some(1);
-    }
-    let frames = ((goal / distance).ln() / decay.ln()).ceil();
-    frames.to_u64()?.checked_add(2)
-}
-
-fn ordered_bits(value: f64) -> u64 {
-    let bits = value.to_bits();
-    if value.is_sign_negative() {
-        !bits
-    } else {
-        bits | (1_u64 << 63)
     }
 }
 
@@ -277,28 +185,5 @@ mod tests {
         }
         assert_eq!(output, reference);
         assert_eq!(actual, expected);
-    }
-
-    #[kithara::test]
-    fn motion_bound_covers_settlement_and_a_rounded_fixed_point() {
-        let rate = NonZeroU32::new(44_100).expect("rate");
-        for (from, to) in [(1_000.0, 200.0), (20.0, 20.0_f64.next_up()), (-24.0, 0.0)] {
-            let mut value =
-                SmoothedParam64::new(from, (to - from).abs(), SmootherConfig::default(), rate);
-            value.set_value(to);
-            let (range, frames) = value.motion_bound().expect("finite changing-frame bound");
-            let mut stopped = false;
-            for _ in 0..frames {
-                let before = value.current_value();
-                value.next_smoothed();
-                value.settle();
-                assert!(range.contains(&value.current_value()));
-                if value.has_settled() || before.to_bits() == value.current_value().to_bits() {
-                    stopped = true;
-                    break;
-                }
-            }
-            assert!(stopped, "motion exceeded its bound: {from} -> {to}");
-        }
     }
 }

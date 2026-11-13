@@ -3,12 +3,12 @@
 use std::{
     f64::consts::{FRAC_1_SQRT_2, TAU},
     hint::black_box,
-    num::NonZeroUsize,
+    num::{NonZeroU32, NonZeroUsize},
 };
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::{
-    filter::{Biquad, Coefficients, Hertz, Type},
+    filter::{Biquad, Coefficients, Hertz, Response, StateVariableFilter, Type},
     interp::{Interpolation, interpolate, interpolate_frame, weighted_frames},
     spectrum::{Autocorrelation, Fft, FftLen, prediction_difference},
 };
@@ -272,6 +272,65 @@ fn biquad(c: &mut Criterion) {
     group.finish();
 }
 
+fn svf(c: &mut Criterion) {
+    let mut group = c.benchmark_group("svf");
+    let rate = NonZeroU32::new(48_000).expect("bench rate");
+    for frames in [128_usize, 1_024] {
+        let tone: Vec<f32> =
+            std::iter::successors(Some(0.0_f32), |phase| Some(phase + consts::TONE_STEP))
+                .take(frames)
+                .map(|phase| 0.25 * phase.sin())
+                .collect();
+        let template = [tone.clone(), tone];
+        let cutoffs = vec![4_000.0; frames];
+        group.throughput(Throughput::Elements(
+            u64::try_from(frames * 2).expect("stereo frame count fits u64"),
+        ));
+        for response in [Response::LowPass, Response::HighPass] {
+            let mut filter = StateVariableFilter::<2>::new();
+            let mut probe = template.clone();
+            assert!(
+                filter
+                    .process(
+                        &mut probe,
+                        0..frames,
+                        &cutoffs,
+                        rate,
+                        FRAC_1_SQRT_2,
+                        response
+                    )
+                    .is_ok()
+            );
+            assert!(probe.iter().flatten().all(|sample| sample.is_finite()));
+            assert!(probe.iter().flatten().any(|sample| *sample != 0.0));
+            filter.reset();
+            group.bench_with_input(
+                BenchmarkId::new(format!("2ch_{response:?}"), frames),
+                &frames,
+                |b, &frames| {
+                    b.iter_batched_ref(
+                        || template.clone(),
+                        |planes| {
+                            let result = filter.process(
+                                black_box(&mut *planes),
+                                0..frames,
+                                black_box(&cutoffs),
+                                rate,
+                                FRAC_1_SQRT_2,
+                                response,
+                            );
+                            black_box(result.is_ok());
+                            black_box(planes);
+                        },
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
 fn biquad_decay(c: &mut Criterion) {
     const FRAMES: usize = 1_024;
     let low_pass = low_pass();
@@ -488,6 +547,7 @@ criterion_group!(
     downmix,
     biquad,
     biquad_decay,
+    svf,
     interp,
     source_frames,
     spectrum,

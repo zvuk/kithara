@@ -26,7 +26,6 @@ default = ["all", "usdt"]
 # and enable only their helper closure below.
 all = [
     "audio",
-    "dep:kithara-config",
     "dep:kithara-encode",
     "dep:kithara-record",
     "dep:kithara-app",
@@ -129,7 +128,6 @@ usdt = ["dep:kithara", "kithara/usdt"]
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara-command = { workspace = true, optional = true }
-kithara-config = { workspace = true, optional = true }
 kithara-events = { workspace = true }
 kithara-render = { workspace = true, optional = true }
 kithara-test-utils = { workspace = true, features = ["test", "usdt", "mock", "hang", "http-server", "subscriber", "temp-dir"] }

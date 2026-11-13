@@ -525,8 +525,15 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
             target_dir.display()
         );
     }
-    let metadata = fs::symlink_metadata(target_dir)
-        .with_context(|| format!("reading build cache metadata for {}", target_dir.display()))?;
+    let mut contents = CacheContents {
+        entries: Vec::new(),
+        held: Vec::new(),
+    };
+    let Some(metadata) = still_there(fs::symlink_metadata(target_dir))
+        .with_context(|| format!("reading build cache metadata for {}", target_dir.display()))?
+    else {
+        return Ok(contents);
+    };
     if !metadata.file_type().is_dir() {
         bail!(
             "build cache path is not a directory: {}",
@@ -547,11 +554,10 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
             }
         });
     }
-    let listing = fs::read_dir(target_dir)
-        .with_context(|| format!("reading build cache {}", target_dir.display()))?;
-    let mut contents = CacheContents {
-        entries: Vec::new(),
-        held: Vec::new(),
+    let Some(listing) = still_there(fs::read_dir(target_dir))
+        .with_context(|| format!("reading build cache {}", target_dir.display()))?
+    else {
+        return Ok(contents);
     };
     for entry in listing {
         let entry = entry
@@ -1062,6 +1068,21 @@ mod tests {
             fs::read_to_string(reports.join("junit.xml")).unwrap(),
             "report"
         );
+    }
+
+    #[test]
+    fn an_absent_configured_root_does_not_block_the_shared_budget() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("absent-runner");
+        let idle = build_dir(root.path(), "idle", 4096);
+        let held = build_dir(root.path(), "held", 4096);
+        let _lease = lease::hold(&held).unwrap();
+
+        enforce_budget(&[missing.clone(), root.path().to_path_buf()], 0).unwrap();
+
+        assert!(!idle.exists());
+        assert!(held.join("debug/artifact").is_file());
+        assert!(!missing.exists());
     }
 
     fn occupied(root: &Path) -> u64 {

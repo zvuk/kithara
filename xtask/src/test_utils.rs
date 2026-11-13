@@ -68,9 +68,14 @@ impl Consumer<'_> {
             )?;
             let mut library = None;
             for message in Message::parse_stream(report.as_bytes()) {
-                if let Message::CompilerArtifact(artifact) = message?
-                    && artifact.target.name == "kithara_test_macros"
-                {
+                let Message::CompilerArtifact(artifact) = message? else {
+                    continue;
+                };
+                ensure!(
+                    artifact.target.name != "kithara_test_args",
+                    "test argument compiler reached production instrumentation"
+                );
+                if artifact.target.name == "kithara_test_macros" {
                     ensure!(library.is_none(), "multiple instrumentation macro units");
                     library = artifact.filenames.into_iter().next();
                 }

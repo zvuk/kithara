@@ -33,9 +33,7 @@ pub use kithara_audio::SeekOutcome;
 pub use kithara_effects::{
     GainDb,
     eq::EqBandConfig,
-    filter::{
-        Cutoff, FilterParameter, FilterSettings, FilterSettingsChange, Kind as FilterKind, Q,
-    },
+    filter::{Cutoff, FilterKnob, FilterSettings, Q},
 };
 pub use kithara_net::Headers;
 pub use kithara_render::{
@@ -43,9 +41,9 @@ pub use kithara_render::{
     DispatcherProtocol, EngineLoad, EngineLoadSnapshot, InvalidCrossfade, LaneId, LoadRefusal,
     PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
     bridge::{
-        CrossfaderGain, CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckFilterChange,
-        DeckFxChange, DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal,
-        DeckSnapshot, EqBinding, EqGainProgram, EqSnapshot, FadeDir, FilterBinding, FilterProgram,
+        CrossfaderGain, CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckFxChange,
+        DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot,
+        EqBinding, EqGainProgram, EqSnapshot, FadeDir, FilterBinding, FilterProgram,
         FilterSnapshot, FxMix, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault,
         Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
         TrackClock, Trim,
