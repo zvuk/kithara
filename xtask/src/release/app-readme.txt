@@ -3,8 +3,9 @@ Kithara for macOS
 Requires macOS 13 or later. This universal application contains Apple Silicon
 and Intel code. Move Kithara.app to Applications or another writable folder.
 The application includes its UI package, default skin, pictures and licenses.
-The initial library is empty: add your own audio files through the application.
-Developer credentials are not included.
+Zvuk catalogue and account connection are included. Connect your own account
+through the application's account settings; its token stays in macOS Keychain.
+Application DRM parameters use the existing intentional obfuscated embedding.
 User configuration is stored outside the signed application at
 ~/Library/Application Support/Kithara/kithara.yaml.
 

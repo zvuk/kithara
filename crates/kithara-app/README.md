@@ -50,9 +50,13 @@ CLI `--ui-package` overrides `app.ui_package` in the configuration, which
 overrides the bundled package. Paths are resolved from the executable, so
 moving the application or starting it from Finder needs no checkout.
 
-The `distribution` feature embeds `app.public.yaml`, reads no developer `.env`,
-and bakes no environment credentials. This build starts with an empty library
-and verifies TLS certificates. Its writable configuration lives at
+The release includes `zvuk` and `keystore`: the stock Zvuk catalogue and account
+connection are available, and its account token stays in macOS Keychain.
+It uses the existing `app.yaml` and build-time environment/`.env` resolution;
+application key values retain their intentional `obfstr` embedding. Set the
+referenced application parameters before building: packaging requires them
+through the existing `KITHARA_DRM_REQUIRE` check. The `.env` file is not copied
+into the application. Its writable configuration lives at
 `~/Library/Application Support/Kithara/kithara.yaml`; `--config` selects an
 explicit external file. Settings never modify the signed application.
 

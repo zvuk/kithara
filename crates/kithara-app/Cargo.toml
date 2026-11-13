@@ -17,7 +17,6 @@ path = "src/bin/kithara/main.rs"
 
 [features]
 default = ["gui", "analysis-waveform", "beat-nn-small", "stretch-signalsmith"]
-distribution = []
 # HTTP backend forwarding to every kithara-net-reaching production dep
 # (kithara facade + kithara-queue). NOT in `default`: the backend is selected
 # per target (macOS desktop pulls `apple` + `client-wreq`; other desktops

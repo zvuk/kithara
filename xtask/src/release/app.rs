@@ -118,11 +118,12 @@ fn build_slices(process: &Process) -> Result<()> {
                 "--bin",
                 "kithara",
                 "--features",
-                "distribution",
+                "zvuk,keystore",
                 "--target",
                 target,
             ])
-            .env("MACOSX_DEPLOYMENT_TARGET", consts::MACOS_APP_MINIMUM_OS);
+            .env("MACOSX_DEPLOYMENT_TARGET", consts::MACOS_APP_MINIMUM_OS)
+            .env("KITHARA_DRM_REQUIRE", "1");
         process.run_command(&mut command, "build application release slice")?;
     }
     Ok(())
@@ -149,8 +150,8 @@ fn prepare_resources(root: &Path, resources: &Path) -> Result<()> {
         fs::copy(root.join(name), resources.join(name))?;
     }
     fs::copy(
-        root.join("crates/kithara-app/app.public.yaml"),
-        resources.join("app.public.yaml"),
+        root.join("crates/kithara-app/app.yaml"),
+        resources.join("app.yaml"),
     )?;
     fs::write(resources.join("README.txt"), include_str!("app-readme.txt"))?;
     Ok(())
@@ -239,7 +240,26 @@ mod tests {
     use crate::{ci::process::Recording, config::KitharaExt};
 
     #[test]
-    fn packaging_carries_the_real_ui_and_only_public_configuration() {
+    fn release_slices_include_zvuk_and_native_credentials() {
+        let process = Process::recording(Path::new("/checkout"), Recording::default());
+        build_slices(&process).unwrap();
+        let recording = process.recorded().unwrap();
+        assert_eq!(recording.steps().len(), consts::MACOS_APP_TARGETS.len());
+        for step in recording.steps() {
+            assert!(
+                step.args
+                    .windows(2)
+                    .any(|args| args == ["--features", "zvuk,keystore"])
+            );
+            assert_eq!(
+                step.env.get("KITHARA_DRM_REQUIRE").map(String::as_str),
+                Some("1")
+            );
+        }
+    }
+
+    #[test]
+    fn packaging_carries_the_real_ui_and_stock_zvuk_configuration() {
         let root = crate::testing::workspace::root();
         let temp = tempfile::tempdir().unwrap();
         prepare_resources(&root, temp.path()).unwrap();
@@ -256,16 +276,25 @@ mod tests {
         ] {
             assert!(temp.path().join("assets/ui").join(name).is_file(), "{name}");
         }
-        let text = fs::read_to_string(temp.path().join("app.public.yaml")).unwrap();
-        assert!(!text.contains('$'));
+        let text = fs::read_to_string(temp.path().join("app.yaml")).unwrap();
+        assert_eq!(
+            text,
+            fs::read_to_string(root.join("crates/kithara-app/app.yaml")).unwrap()
+        );
         let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text).unwrap();
-        assert_eq!(config["net"]["is_insecure"].as_bool(), Some(false));
-        assert!(config["drm"]["providers"].as_sequence().unwrap().is_empty());
         assert!(
-            config["playlist"]["tracks"]
+            config["sources"]["zvuk"]["user_agent"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert!(
+            config["drm"]["providers"]
                 .as_sequence()
                 .unwrap()
-                .is_empty()
+                .iter()
+                .all(|provider| provider["cipher_key"]
+                    .as_str()
+                    .is_some_and(|value| value.starts_with("$KITHARA_")))
         );
         assert!(!temp.path().join(".env").exists());
         let project = Ctx::load().unwrap();
