@@ -4,6 +4,7 @@ use kithara::{
         GainDb,
         eq::{EqBandConfig, generate_log_spaced_bands},
     },
+    events::TrackId,
     host::{DeckId, HostOwned},
     link::LinkedHostCommand,
     platform::CancelToken,
@@ -11,10 +12,12 @@ use kithara::{
     queue::{QueueConfig, QueueError, Transition},
     warp::WarpCapabilities,
 };
+use kithara_app_library::Playable;
 use kithara_config::Configure;
 use tracing::{debug, error};
 
 use crate::{
+    catalog::Catalog,
     config::AppConfig,
     engine::{DeckCmd, DeckSnapshot},
     mix::{MixState, MixStrip},
@@ -103,6 +106,7 @@ pub struct DeckRecord {
     eq_bands: Vec<GainDb>,
     tempo: TempoPercent,
     synced: bool,
+    catalogue: Catalog,
 }
 
 impl DeckRecord {
@@ -154,6 +158,7 @@ impl DeckRecord {
             eq_bands,
             tempo: TempoPercent::DEFAULT,
             synced: false,
+            catalogue: Catalog::default(),
         })
     }
 
@@ -168,6 +173,11 @@ impl DeckRecord {
 
     pub(crate) fn refresh(&self) {
         self.controller.refresh_continuous();
+    }
+
+    pub(crate) fn load(&mut self, track: &Playable, config: &AppConfig) -> Result<(), QueueError> {
+        self.catalogue
+            .load_onto(self.queue.control(), track, config)
     }
 
     /// The SYNC state the deck shows: whether the host drives the current
@@ -200,6 +210,12 @@ impl DeckRecord {
                 .keylock(keylock)
                 .holds_pitch(holds_pitch)
                 .state(state)
+                .maybe_catalogue(
+                    state
+                        .current_track_index
+                        .and_then(|index| state.tracks.get(index))
+                        .and_then(|track| self.catalogue.get(track.id)),
+                )
                 .build()
         })
     }
@@ -283,8 +299,18 @@ impl DeckRecord {
             .is_ok()
     }
 
-    fn set_quality(&self, variant: Option<usize>) {
-        let handle = self.queue().current_abr_handle();
+    fn set_quality(&self, track: TrackId, variant: Option<usize>, config: &AppConfig) {
+        let queue = self.queue();
+        if queue.current().is_none_or(|current| current.id != track) {
+            return;
+        }
+        if self.catalogue.get(track).is_some() {
+            if let Err(error) = self.catalogue.select_quality(queue, track, variant, config) {
+                error!(%error, "source quality change refused");
+            }
+            return;
+        }
+        let handle = queue.current_abr_handle();
         let requested = variant.map_or(AbrMode::Auto(None), AbrMode::manual);
 
         if let Some(handle) = &handle
@@ -401,12 +427,12 @@ impl DeckSet {
         Ok(())
     }
 
-    pub(crate) fn record(&self, id: DeckId) -> Option<&DeckRecord> {
-        self.records.iter().find(|record| record.id() == id)
+    pub(crate) fn record_mut(&mut self, id: DeckId) -> Option<&mut DeckRecord> {
+        self.records.iter_mut().find(|record| record.id() == id)
     }
 
     /// Applies `cmd` to deck `id`.
-    pub(crate) fn apply(&mut self, id: DeckId, cmd: DeckCmd, eq_mode: EqMode) {
+    pub(crate) fn apply(&mut self, id: DeckId, cmd: DeckCmd, eq_mode: EqMode, config: &AppConfig) {
         let Some(record) = self.records.iter_mut().find(|record| record.id() == id) else {
             return;
         };
@@ -441,10 +467,12 @@ impl DeckSet {
             DeckCmd::RemoveTrack(track) => {
                 if let Err(e) = queue.remove(track) {
                     error!(?track, error = %e, "remove failed");
+                } else {
+                    record.catalogue.remove(track);
                 }
             }
             DeckCmd::SetTempo(tempo) => record.set_tempo(tempo),
-            DeckCmd::SetQuality(variant) => record.set_quality(variant),
+            DeckCmd::SetQuality { track, variant } => record.set_quality(track, variant, config),
             DeckCmd::ToggleSync => Self::toggle_sync(&self.host, record),
             DeckCmd::ToggleKeylock => record.toggle_keylock(),
         }
@@ -658,12 +686,12 @@ mod tests {
             assert_eq!(set.mix(), &before);
 
             let deck = id(set, "b");
-            let strip = set.record(deck).map(|record| record.strip);
+            let strip = set.record_mut(deck).map(|record| record.strip);
             let err = set
                 .set_trim(deck, f32::NAN)
                 .expect_err("a trim that is not a number");
             assert!(matches!(err, QueueError::Play(PlayError::MixLevel { .. })));
-            assert_eq!(set.record(deck).map(|record| record.strip), strip);
+            assert_eq!(set.record_mut(deck).map(|record| record.strip), strip);
         })
         .await;
         set.close().await;

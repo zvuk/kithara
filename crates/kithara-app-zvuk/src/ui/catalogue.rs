@@ -94,7 +94,7 @@ impl Catalogue {
         self.filter();
     }
 
-    pub(super) fn accept(&mut self, page: TrackPage, streams: Vec<MediaTrack>) {
+    pub(super) fn accept(&mut self, page: TrackPage, streams: Vec<MediaTrack>, adaptive: bool) {
         self.total = page.total;
         let streams: HashMap<_, _> = streams
             .into_iter()
@@ -105,7 +105,7 @@ impl Catalogue {
             .into_iter()
             .map(|track| {
                 let stream = streams.get(&track.id);
-                Row::new(track, stream)
+                Row::new(track, stream, adaptive)
             })
             .collect();
         self.filter();

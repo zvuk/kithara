@@ -59,7 +59,21 @@
                         ),
                     ],
                 ),
-                Include(id: "auto", source: "quality/auto.kmodule.ron", with: { "deck": "$deck" }),
+                Optional(
+                    id: "pending",
+                    hidden: Telemetry(id: "deck.stream.quality_ready", with: { "deck": "$deck" }),
+                    child: Text(id: "pending-label", style: MicroLabel, label: "@deck.stream.pending"),
+                ),
+                Optional(
+                    id: "failed",
+                    hidden: Telemetry(id: "deck.stream.error_hidden", with: { "deck": "$deck" }),
+                    child: Text(id: "failed-label", style: MicroLabel, label: "@deck.stream.failed"),
+                ),
+                Optional(
+                    id: "auto-block",
+                    hidden: Telemetry(id: "deck.stream.auto_hidden", with: { "deck": "$deck" }),
+                    child: Include(id: "auto", source: "quality/auto.kmodule.ron", with: { "deck": "$deck" }),
+                ),
                 Optional(
                     id: "variant-0-block",
                     hidden: Telemetry(id: "deck.stream.variant_hidden", with: { "deck": "$deck", "variant": "0" }),

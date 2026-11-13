@@ -3,6 +3,11 @@
     "mediaContents": [
       {
         "id": "1000",
+        "stream": {
+          "flac": "https://media.example.invalid/1000/flac.flac",
+          "high": "https://media.example.invalid/1000/high.mp3",
+          "mid": "https://media.example.invalid/1000/mid.mp3"
+        },
         "streamV3": {
           "expire": "2026-10-04T15:00:00+00:00",
           "hls": "https://media.example.invalid/1000/master.m3u8"
@@ -10,6 +15,11 @@
       },
       {
         "id": "1003",
+        "stream": {
+          "flac": "https://media.example.invalid/1003/flac.flac",
+          "high": "https://media.example.invalid/1003/high.mp3",
+          "mid": "https://media.example.invalid/1003/mid.mp3"
+        },
         "streamV3": {
           "expire": "2026-10-04T15:00:00+00:00",
           "hls": "https://media.example.invalid/1003/master.m3u8"
@@ -17,6 +27,11 @@
       },
       {
         "id": "1006",
+        "stream": {
+          "flac": "https://media.example.invalid/1006/flac.flac",
+          "high": "https://media.example.invalid/1006/high.mp3",
+          "mid": "https://media.example.invalid/1006/mid.mp3"
+        },
         "streamV3": {
           "expire": "2026-10-04T15:00:00+00:00",
           "hls": "https://media.example.invalid/1006/master.m3u8"
@@ -24,6 +39,11 @@
       },
       {
         "id": "1008",
+        "stream": {
+          "flac": "https://media.example.invalid/1008/flac.flac",
+          "high": "https://media.example.invalid/1008/high.mp3",
+          "mid": "https://media.example.invalid/1008/mid.mp3"
+        },
         "streamV3": {
           "expire": "2026-10-04T15:00:00+00:00",
           "hls": "https://media.example.invalid/1008/master.m3u8"
@@ -31,6 +51,11 @@
       },
       {
         "id": "1010",
+        "stream": {
+          "flac": "https://media.example.invalid/1010/flac.flac",
+          "high": "https://media.example.invalid/1010/high.mp3",
+          "mid": "https://media.example.invalid/1010/mid.mp3"
+        },
         "streamV3": {
           "expire": "2026-10-04T15:00:00+00:00",
           "hls": "https://media.example.invalid/1010/master.m3u8"

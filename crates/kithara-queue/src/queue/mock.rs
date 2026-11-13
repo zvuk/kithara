@@ -448,7 +448,7 @@ fn load_src(queue: &Queue<TestPools>, seq: Seq) -> String {
                 .map(|parked| parked.item)
         })
         .expect("load has a track");
-    match queue.tracks.source(id).expect("queued track source") {
+    match queue.tracks.load_spec(id).expect("queued track source").0 {
         TrackSource::Uri(uri) => ResourceSrc::parse(&uri).expect("fixture URI").to_string(),
         TrackSource::Config(config) => config.source().to_string(),
     }

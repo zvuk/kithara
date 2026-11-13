@@ -57,15 +57,20 @@ where
                 .ok_or(PlayError::NoActiveSlot)?
                 .role = Role::Current;
             self.active.activate_replacement(index);
-            self.navigation
-                .commit(self.current, id, pending.reason, &self.track_ids());
+            let source_changed = self.tracks.commit_source(id);
+            if !source_changed {
+                self.navigation
+                    .commit(self.current, id, pending.reason, &self.track_ids());
+            }
             self.current = Some(id);
             self.tracks.set_status(id, TrackStatus::Consumed);
-            self.announce(QueueEvent::CurrentTrackChanged { id: self.current });
-            self.announce(QueueEvent::CurrentTrackAdvance {
-                id: self.current,
-                reason: pending.reason,
-            });
+            if !source_changed {
+                self.announce(QueueEvent::CurrentTrackChanged { id: self.current });
+                self.announce(QueueEvent::CurrentTrackAdvance {
+                    id: self.current,
+                    reason: pending.reason,
+                });
+            }
             return Ok(());
         }
         self.enter_target(index, at, pending.reason)
@@ -133,12 +138,9 @@ where
             Settled::Applied { seq, .. } | Settled::Rejected { seq, .. } => *seq,
             Settled::Pending => return Ok(()),
         };
-        if self
-            .pending_handover
-            .is_none_or(|pending| pending.seq != seq)
-        {
+        let Some(pending) = self.pending_handover.filter(|pending| pending.seq == seq) else {
             return Ok(());
-        }
+        };
         if matches!(settled, Settled::Rejected { .. })
             && self.target.is_some_and(|target| {
                 target.reason == AdvanceReason::RemovedCurrent
@@ -150,6 +152,11 @@ where
         }
         let Some(index) = index else {
             self.pending_handover = None;
+            if self.tracks.restore_source(pending.item)
+                && self.target.is_some_and(|target| target.to == pending.item)
+            {
+                self.target = None;
+            }
             return Ok(());
         };
         if let Settled::Applied { at, .. } = settled {
@@ -159,6 +166,7 @@ where
         self.pending_handover = None;
         let item = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.item;
         if self.target.is_none_or(|target| target.to != item) {
+            self.tracks.restore_source(item);
             if self.current != Some(item)
                 && self
                     .active
@@ -235,7 +243,13 @@ where
             }
             Ok(())
         } else {
-            self.cancel_target(out).map_err(play_error)
+            let id = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.item;
+            let changing = self.tracks.is_changing_source(id);
+            self.cancel_target(out).map_err(play_error)?;
+            if changing {
+                self.tracks.fail_source(id);
+            }
+            Ok(())
         }
     }
 
@@ -271,8 +285,11 @@ where
             .ok_or(PlayError::NoActiveSlot)?
             .role = Role::Current;
         self.active.activate_replacement(index);
-        self.navigation
-            .commit(self.current, target.to, reason, &self.track_ids());
+        let source_changed = self.tracks.commit_source(target.to);
+        if !source_changed {
+            self.navigation
+                .commit(self.current, target.to, reason, &self.track_ids());
+        }
         self.current = Some(target.to);
         if crossfading && target.playing && target.settings.duration > 0.0 && !target.chained {
             self.announce(QueueEvent::CrossfadeStarted {
@@ -280,15 +297,23 @@ where
             });
         }
         self.target = None;
-        self.announce(QueueEvent::CurrentTrackChanged { id: self.current });
-        self.announce(QueueEvent::CurrentTrackAdvance {
-            id: self.current,
-            reason,
-        });
+        if !source_changed {
+            self.announce(QueueEvent::CurrentTrackChanged { id: self.current });
+            self.announce(QueueEvent::CurrentTrackAdvance {
+                id: self.current,
+                reason,
+            });
+        }
         self.tracks.set_status(target.to, TrackStatus::Consumed);
         Ok(())
     }
+}
 
+impl<S, F> Queue<S, F>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
+{
     pub(in crate::queue) fn transition_settled(
         &mut self,
         index: usize,

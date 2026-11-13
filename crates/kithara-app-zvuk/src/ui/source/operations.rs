@@ -137,7 +137,7 @@ impl<N: Net + Clone + 'static> Source<N> {
             .faults
             .record(Operation::Page, batch.streams)
             .unwrap_or_default();
-        self.catalogue.accept(batch.page, streams);
-        self.catalogue.set_adaptive(self.streaming.adaptive);
+        self.catalogue
+            .accept(batch.page, streams, self.streaming.adaptive);
     }
 }

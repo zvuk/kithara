@@ -308,15 +308,11 @@ where
         if out.dispatcher_available() == 0 {
             return Err(PlayError::Full("dispatcher").into());
         }
-        let source = self
+        let (source, initial_position) = self
             .tracks
-            .source(id)
+            .load_spec(id)
             .ok_or(QueueError::UnknownTrackId(id))?;
-        let position = held_position.unwrap_or(
-            self.tracks
-                .initial_position(id)
-                .ok_or(QueueError::UnknownTrackId(id))?,
-        );
+        let position = held_position.unwrap_or(initial_position);
         let observer = self
             .tracks
             .observer(id)
@@ -566,9 +562,9 @@ where
         let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
         let id = active.item;
         let position = active.track.snapshot().as_ref().position;
-        let source = self
+        let (source, _) = self
             .tracks
-            .source(id)
+            .load_spec(id)
             .ok_or(QueueError::UnknownTrackId(id))?;
         let observer = self
             .tracks

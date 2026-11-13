@@ -4,7 +4,6 @@ use std::{
 };
 
 use ::kithara::{
-    abr::AbrMode,
     analysis::{
         AnalysisFingerprint, AnalysisProgress, AnalysisToken, BeatArtifact, BeatGridModel,
         BeatGridState, BeatSnapshot, BeatState, Bucket, GRID_SCHEMA_VERSION, GridBeat, RangeSet,
@@ -566,8 +565,7 @@ pub(crate) fn entry(
     let AppTrackSource::Uri(url) = source else {
         panic!("fixture tracks are appended by URL");
     };
-    let config =
-        build_resource_config(&url, config, AbrMode::default()).expect("source yields a resource");
+    let config = build_resource_config(&url, config).expect("source yields a resource");
     let target = AnalysisTarget::for_config(&config).expect("source has an analysis target");
     Entry::new(target, config, queue, track_id)
 }

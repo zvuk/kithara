@@ -138,13 +138,24 @@ async fn the_accepted_default_updates_new_drags_without_changing_prior_snapshots
     )));
     let mut source = loaded_search(net.clone()).await;
     let previous = source.rows(None)[0].drag().unwrap().clone();
-    assert_eq!(previous["adaptive_streaming"], "true");
+    assert_eq!(
+        previous["source"],
+        "https://media.example.invalid/1000/master.m3u8"
+    );
     source.write("adaptive_streaming", &WriteValue::Trigger);
     assert_eq!(
-        source.rows(None)[0].drag().unwrap()["adaptive_streaming"],
-        "false"
+        source.rows(None)[0].drag().unwrap()["source"],
+        "https://media.example.invalid/1000/high.mp3"
     );
-    assert_eq!(previous["adaptive_streaming"], "true");
+    assert_eq!(
+        previous["source"],
+        "https://media.example.invalid/1000/master.m3u8"
+    );
+    assert_eq!(
+        previous["choices"],
+        source.rows(None)[0].drag().unwrap()["choices"]
+    );
+    assert_eq!(previous["identity"], "zvuk:track:1000");
     assert_eq!(source.rows(None).len(), 5);
     release(source, &net).await;
 }

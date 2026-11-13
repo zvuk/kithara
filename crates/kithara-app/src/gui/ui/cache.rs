@@ -188,10 +188,14 @@ fn format_quality(deck: &DeckSnapshot) -> String {
             .iter()
             .find(|variant| variant.index == index)
     });
-    match (stream.is_auto, rung) {
-        (true, Some(rung)) => format!("AUTO\u{b7}{}", rung.label),
+    let label = stream
+        .current_label
+        .as_deref()
+        .or_else(|| rung.map(|rung| rung.label.as_str()));
+    match (stream.is_auto, label) {
+        (true, Some(label)) => format!("AUTO\u{b7}{label}"),
         (true, None) => "AUTO".to_owned(),
-        (false, Some(rung)) => rung.label.clone(),
+        (false, Some(label)) => label.to_owned(),
         (false, None) => String::new(),
     }
 }
@@ -353,7 +357,7 @@ mod tests {
         assert_ne!(cache.wave_revision, named, "the empty run is a run too");
     }
 
-    fn shown(ui: &UiState) -> DeckSnapshot {
+    fn shown(ui: &UiState, catalogue: Option<&kithara_app_library::Playable>) -> DeckSnapshot {
         DeckSnapshot::builder()
             .id(::kithara::warp::BeatGridId::allocate().expect("a fixture deck id"))
             .letter("a")
@@ -364,6 +368,7 @@ mod tests {
             .keylock(false)
             .holds_pitch(true)
             .state(ui)
+            .maybe_catalogue(catalogue)
             .build()
     }
 
@@ -388,19 +393,72 @@ mod tests {
         ui.abr_variants = ladder();
         ui.current_variant = Some(1);
 
-        assert_eq!(format_quality(&shown(&ui)), "AUTO\u{b7}320k");
+        assert_eq!(format_quality(&shown(&ui, None)), "AUTO\u{b7}320k");
 
         ui.abr_mode = Some(AbrMode::manual(0));
         ui.current_variant = Some(0);
 
-        assert_eq!(format_quality(&shown(&ui)), "128k");
+        assert_eq!(format_quality(&shown(&ui, None)), "128k");
     }
 
     #[kithara::test]
     fn a_stream_with_no_rung_yet_still_reports_its_mode() {
         let ui = UiState::empty();
 
-        assert_eq!(format_quality(&shown(&ui)), "AUTO");
+        assert_eq!(format_quality(&shown(&ui, None)), "AUTO");
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn catalogue_quality_follows_the_accepted_source_and_available_choices() {
+        use kithara_app_library::{Playable, PlaybackChoice};
+
+        let (host, queue) = fixtures::queue_off().await;
+        fixtures::track(&host, 1, "https://media.example/high.mp3").await;
+        let mut ui = UiState::empty();
+        ui.tracks = queue.tracks();
+        ui.current_track_index = Some(0);
+        ui.abr_variants = ladder();
+        ui.current_variant = Some(1);
+        let mut catalogue = Playable::new("https://media.example/high.mp3".to_owned());
+        catalogue.identity = Some("zvuk:track:1".to_owned());
+        catalogue.choices = [
+            ("https://media.example/master.m3u8", "AUTO", true),
+            ("https://media.example/high.mp3", "MP3 High", false),
+            ("https://media.example/lossless.flac", "FLAC", false),
+        ]
+        .into_iter()
+        .map(|(source, label, adaptive)| PlaybackChoice {
+            source: source.parse().unwrap(),
+            label: label.to_owned(),
+            adaptive,
+        })
+        .collect();
+        catalogue.validate().unwrap();
+        for (index, expected) in [(0, "AUTO\u{b7}320k"), (1, "MP3 High"), (2, "FLAC")] {
+            ui.tracks[0].url = Some(catalogue.choices[index].source.to_string());
+            let deck = shown(&ui, Some(&catalogue));
+            assert_eq!(format_quality(&deck), expected);
+            assert_eq!(deck.stream.selected, (index != 0).then_some(index));
+            assert!(deck.stream.auto_available);
+            assert_eq!(
+                deck.stream
+                    .variants
+                    .iter()
+                    .map(|variant| variant.index)
+                    .collect::<Vec<_>>(),
+                [1, 2]
+            );
+        }
+        ui.tracks[0].source_changing = true;
+        let deck = shown(&ui, Some(&catalogue));
+        assert!(deck.stream.busy);
+        assert_eq!(format_quality(&deck), "FLAC");
+        ui.tracks[0].source_changing = false;
+        ui.tracks[0].source_failed = true;
+        assert!(shown(&ui, Some(&catalogue)).stream.failed);
+        catalogue.choices.remove(0);
+        assert!(!shown(&ui, Some(&catalogue)).stream.auto_available);
+        host.close().await;
     }
 
     #[kithara::test]

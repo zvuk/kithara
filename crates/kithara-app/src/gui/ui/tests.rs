@@ -2005,12 +2005,6 @@ mod answered {
             render::{Scope, WindowCommand},
         },
     };
-    #[cfg(feature = "zvuk")]
-    use keyring_core::sample::Store;
-    #[cfg(feature = "zvuk")]
-    use kithara_app_library::{Context, Environment, Secrets};
-    #[cfg(feature = "zvuk")]
-    use kithara_app_zvuk::Source;
     use kithara_test_utils::kithara;
 
     use super::*;

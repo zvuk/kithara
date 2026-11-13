@@ -30,5 +30,11 @@ Use `Registration::fill` to add a document to an app collection, and
 `Registration::key_access` to grant the source's token to key requests of one
 domain. The app builds the source after loading the text catalog.
 
+`Playable` transfers the initial media URL and catalogue tags. A source can
+also supply a stable catalogue identity and available `PlaybackChoice` URLs;
+the initial URL must name one of those choices. Drag decoding validates the
+identity, labels and HTTP URLs before the shell receives them. Sources without
+quality choices keep their ordinary URL loading behavior.
+
 See [library sources](https://github.com/zvuk/kithara/wiki/kithara-app#library-sources)
 for the source contract.

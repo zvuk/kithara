@@ -515,6 +515,24 @@ static ENDPOINTS: &[Endpoint] = &[
         scopes: Endpoint::DECK,
     },
     Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.stream.error_hidden",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.stream.quality_ready",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.stream.auto_hidden",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
         category: EndpointCategory::Model,
         id: "deck.stream.variant_active",
         value: ValueKind::Bool,

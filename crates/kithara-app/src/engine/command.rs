@@ -17,7 +17,7 @@ pub(crate) struct Envelope {
 pub(crate) enum Command {
     Deck { deck: DeckId, cmd: DeckCmd },
     Mix(MixCmd),
-    LoadOntoDeck { deck: DeckId, track: Playable },
+    LoadOntoDeck { deck: DeckId, track: Box<Playable> },
     App(AppCmd),
 }
 
@@ -35,7 +35,10 @@ pub(crate) enum DeckCmd {
     },
     RemoveTrack(TrackId),
     SetTempo(TempoPercent),
-    SetQuality(Option<usize>),
+    SetQuality {
+        track: TrackId,
+        variant: Option<usize>,
+    },
     ToggleSync,
     ToggleKeylock,
 }

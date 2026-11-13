@@ -14,7 +14,7 @@ use super::super::{
     slots::{LoadState, Role},
     types::{Continuation, SeekPosition, Target},
 };
-use crate::{AdvanceReason, QueueError, QueueEvent, RepeatMode, TrackStatus};
+use crate::{AdvanceReason, QueueError, QueueEvent, RepeatMode, TrackSource, TrackStatus};
 
 #[derive(Clone, Copy)]
 pub(in crate::queue) struct TransitionRequest {
@@ -30,6 +30,49 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
+    pub(in crate::queue) fn replace_current_source(
+        &mut self,
+        id: TrackId,
+        source: TrackSource<S>,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        if self.current != Some(id)
+            || self.pending_handover.is_some()
+            || self.tracks.is_changing_source(id)
+            || self.target.is_some_and(|target| !target.auto)
+        {
+            return Err(QueueError::NotReady(id));
+        }
+        let active = self
+            .active_current_index()
+            .and_then(|index| self.active.get(index))
+            .ok_or(QueueError::NotReady(id))?;
+        let snapshot = active.track.snapshot();
+        let position = match self.held_position {
+            Some(SeekPosition::Held(to) | SeekPosition::Pending { to, .. }) => to,
+            None => snapshot.as_ref().position,
+        };
+        let playing = matches!(snapshot.as_ref().status, PlayingStatus::Playing { .. });
+        self.cancel_auto(out)?;
+        self.tracks.stage_source(id, source, position)?;
+        let result = self.request_transition(
+            TransitionRequest {
+                id,
+                transition: Transition::None,
+                reason: AdvanceReason::UserSelect,
+                auto: false,
+                playing,
+            },
+            output,
+            out,
+        );
+        if result.is_err() {
+            self.tracks.fail_source(id);
+        }
+        result
+    }
+
     pub(in crate::queue) fn auto_bound(
         &self,
         settings: CrossfadeSettings,
@@ -98,24 +141,8 @@ where
             .settings(self.config.settings.crossfade())
             .validate()
             .map_err(PlayError::from)?;
-        let failed = self
-            .tracks
-            .records()
-            .iter()
-            .any(|record| record.id == id && matches!(record.status, TrackStatus::Failed(_)));
-        if !auto
-            && !failed
-            && self.current == Some(id)
-            && self.pending_handover.is_none_or(|pending| {
-                reason == AdvanceReason::UserSelect
-                    && self.target.is_some_and(|target| {
-                        target.auto
-                            && target.chained
-                            && target.reason == AdvanceReason::NaturalEof
-                            && target.to == pending.item
-                    })
-            })
-        {
+        let failed = matches!(self.tracks.status(id), Some(TrackStatus::Failed(_)));
+        if !auto && !failed && self.can_resume_current(id, reason) {
             if self.target.is_some_and(|target| !target.auto) {
                 self.cancel_target(out)?;
             }
@@ -137,6 +164,20 @@ where
             Some(Bound::AtOrAfter(self.earliest()?))
         };
         self.begin_transition(request, settings, bound, output, out)
+    }
+
+    fn can_resume_current(&self, id: TrackId, reason: AdvanceReason) -> bool {
+        self.current == Some(id)
+            && !self.tracks.is_changing_source(id)
+            && self.pending_handover.is_none_or(|pending| {
+                reason == AdvanceReason::UserSelect
+                    && self.target.is_some_and(|target| {
+                        target.auto
+                            && target.chained
+                            && target.reason == AdvanceReason::NaturalEof
+                            && target.to == pending.item
+                    })
+            })
     }
 
     fn retarget_request(
@@ -216,7 +257,9 @@ where
             },
             Err(error) => {
                 self.target = None;
-                self.tracks.fail(id, &error);
+                if !self.tracks.restore_source(id) {
+                    self.tracks.fail(id, &error);
+                }
                 Err(error)
             }
         }
@@ -512,6 +555,19 @@ where
     ) -> Result<(), PlayError> {
         let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
         let id = active.item;
+        if self.tracks.is_changing_source(id)
+            && let Settled::Rejected { reason, .. } = settled
+        {
+            let error = QueueError::Play(super::super::hosted::refusal(reason));
+            self.cancel_target(out).map_err(play_error)?;
+            self.tracks.fail_source(id);
+            self.announce(QueueEvent::TrackLoadFailed {
+                id,
+                reason: error.to_string(),
+                auto_skipped: false,
+            });
+            return Ok(());
+        }
         let preloaded = active.role == Role::Preloaded;
         let leaving = active.role == Role::Leaving;
         self.active

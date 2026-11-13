@@ -1,5 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
+use serde::Deserialize;
+use serde_json::{Value, json};
 use url::Url;
 
 mod consts {
@@ -8,7 +10,18 @@ mod consts {
     pub(super) const ARTIST: &str = "artist";
     pub(super) const ALBUM: &str = "album";
     pub(super) const ARTWORK: &str = "artwork";
-    pub(super) const ADAPTIVE: &str = "adaptive_streaming";
+    pub(super) const IDENTITY: &str = "identity";
+    pub(super) const CHOICES: &str = "choices";
+}
+
+/// One available source for a catalogue track's quality menu.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PlaybackChoice {
+    pub source: Url,
+    pub label: String,
+    /// This source supports automatic adaptation.
+    pub adaptive: bool,
 }
 
 /// The track a source's row hands a deck it is dropped on: what the deck
@@ -23,8 +36,10 @@ pub struct Playable {
     pub album: Option<String>,
     /// Where the track's cover image is read from.
     pub artwork: Option<Url>,
-    /// Startup adaptation policy; absent leaves the application's default.
-    pub adaptive_streaming: Option<bool>,
+    /// Provider-qualified catalogue identity, independent of expiring media URLs.
+    pub identity: Option<String>,
+    /// Available sources; `source` names the initial choice when nonempty.
+    pub choices: Vec<PlaybackChoice>,
 }
 
 impl Playable {
@@ -36,28 +51,81 @@ impl Playable {
             artist: None,
             album: None,
             artwork: None,
-            adaptive_streaming: None,
+            identity: None,
+            choices: Vec::new(),
         }
+    }
+
+    /// Check the initial source and the catalogue's available choices.
+    ///
+    /// # Errors
+    /// Returns [`InvalidPlayable`] for malformed identities, URLs or choices.
+    pub fn validate(&self) -> Result<(), InvalidPlayable> {
+        if self.source.is_empty() {
+            return Err(InvalidPlayable);
+        }
+        if self.choices.is_empty() {
+            return if self.identity.is_none() {
+                Ok(())
+            } else {
+                Err(InvalidPlayable)
+            };
+        }
+        if !self.identity.as_deref().is_some_and(visible_text) {
+            return Err(InvalidPlayable);
+        }
+        let initial = Url::parse(&self.source).map_err(|_| InvalidPlayable)?;
+        let mut sources = HashSet::new();
+        let valid = self.choices.iter().all(|choice| {
+            matches!(choice.source.scheme(), "http" | "https")
+                && visible_text(&choice.label)
+                && sources.insert(&choice.source)
+        });
+        if !valid
+            || self.choices.iter().filter(|choice| choice.adaptive).count() > 1
+            || !self.choices.iter().any(|choice| choice.source == initial)
+        {
+            return Err(InvalidPlayable);
+        }
+        Ok(())
     }
 }
 
-/// A drag record with no source or an invalid startup policy.
+fn visible_text(value: &str) -> bool {
+    !value.is_empty() && value.trim() == value && !value.chars().any(char::is_control)
+}
+
+/// A drag record with no source or invalid catalogue choices.
 #[derive(Debug, thiserror::Error)]
-#[error("the record has no source or an invalid startup policy")]
+#[error("the record has no source or invalid catalogue choices")]
 pub struct InvalidPlayable;
 
 impl From<Playable> for BTreeMap<String, String> {
     fn from(track: Playable) -> Self {
+        let choices = (!track.choices.is_empty()).then(|| {
+            Value::Array(
+                track
+                    .choices
+                    .into_iter()
+                    .map(|choice| {
+                        json!({
+                            "adaptive": choice.adaptive,
+                            "label": choice.label,
+                            "source": choice.source.as_str(),
+                        })
+                    })
+                    .collect(),
+            )
+            .to_string()
+        });
         [
             (consts::SOURCE, Some(track.source)),
             (consts::TITLE, track.title),
             (consts::ARTIST, track.artist),
             (consts::ALBUM, track.album),
             (consts::ARTWORK, track.artwork.map(String::from)),
-            (
-                consts::ADAPTIVE,
-                track.adaptive_streaming.map(|value| value.to_string()),
-            ),
+            (consts::IDENTITY, track.identity),
+            (consts::CHOICES, choices),
         ]
         .into_iter()
         .filter_map(|(key, value)| Some((key.to_owned(), value?)))
@@ -70,19 +138,24 @@ impl TryFrom<BTreeMap<String, String>> for Playable {
     type Error = InvalidPlayable;
 
     fn try_from(mut record: BTreeMap<String, String>) -> Result<Self, InvalidPlayable> {
-        let adaptive_streaming = record
-            .remove(consts::ADAPTIVE)
-            .map(|value| value.parse().map_err(|_| InvalidPlayable))
-            .transpose()?;
+        let identity = record.remove(consts::IDENTITY);
+        let choices = record
+            .remove(consts::CHOICES)
+            .map(|value| serde_json::from_str(&value).map_err(|_| InvalidPlayable))
+            .transpose()?
+            .unwrap_or_default();
         let mut take = |key: &str| record.remove(key).filter(|value| !value.is_empty());
-        Ok(Self {
+        let track = Self {
             source: take(consts::SOURCE).ok_or(InvalidPlayable)?,
             title: take(consts::TITLE),
             artist: take(consts::ARTIST),
             album: take(consts::ALBUM),
             artwork: take(consts::ARTWORK).and_then(|value| Url::parse(&value).ok()),
-            adaptive_streaming,
-        })
+            identity,
+            choices,
+        };
+        track.validate()?;
+        Ok(track)
     }
 }
 
@@ -97,6 +170,42 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    #[kithara::test]
+    fn source_choices_and_identity_survive_the_drag_record() {
+        let choices = r#"[{"adaptive":true,"label":"AUTO","source":"https://example.com/master.m3u8"},{"adaptive":false,"label":"High MP3","source":"https://example.com/high.mp3"}]"#;
+        let fields = record(&[
+            ("source", "https://example.com/high.mp3"),
+            ("identity", "zvuk:track:1000"),
+            ("choices", choices),
+        ]);
+        let track = Playable::try_from(fields.clone()).expect("a valid quality record");
+
+        assert_eq!(BTreeMap::from(track), fields);
+    }
+
+    #[kithara::test]
+    fn malformed_source_choices_are_rejected() {
+        for choices in [
+            "not json",
+            "{}",
+            r#"[{"adaptive":false,"label":"High MP3","source":"file:///private/media"}]"#,
+            r#"[{"adaptive":false,"label":"High MP3","source":"https://example.com/other.mp3"}]"#,
+            r#"[{"adaptive":false,"label":"","source":"https://example.com/high.mp3"}]"#,
+            r#"[{"adaptive":false,"label":"High MP3","source":"https://example.com/high.mp3"},{"adaptive":false,"label":"Mid MP3","source":"https://example.com/high.mp3"}]"#,
+            r#"[{"adaptive":true,"label":"AUTO","source":"https://example.com/high.mp3"},{"adaptive":true,"label":"AUTO","source":"https://example.com/master.m3u8"}]"#,
+        ] {
+            assert!(
+                Playable::try_from(record(&[
+                    ("source", "https://example.com/high.mp3"),
+                    ("identity", "zvuk:track:1000"),
+                    ("choices", choices),
+                ]))
+                .is_err(),
+                "invalid choices were accepted: {choices}"
+            );
+        }
     }
 
     #[kithara::test]
@@ -123,23 +232,40 @@ mod tests {
     }
 
     #[kithara::test]
-    fn malformed_startup_policy_is_rejected() {
+    fn catalogue_choices_require_a_valid_identity() {
+        let choices =
+            r#"[{"adaptive":false,"label":"High MP3","source":"https://example.com/high.mp3"}]"#;
+        for identity in [None, Some(""), Some(" "), Some("zvuk:track:\n1000")] {
+            let mut fields = record(&[
+                ("source", "https://example.com/high.mp3"),
+                ("choices", choices),
+            ]);
+            if let Some(identity) = identity {
+                fields.insert("identity".to_owned(), identity.to_owned());
+            }
+            assert!(Playable::try_from(fields).is_err());
+        }
         assert!(
             Playable::try_from(record(&[
-                ("source", "https://example.com/a.m3u8"),
-                ("adaptive_streaming", "sometimes"),
+                ("source", "https://example.com/high.mp3"),
+                ("identity", "zvuk:track:1000"),
+                ("choices", "[]"),
             ]))
             .is_err()
         );
     }
 
     #[kithara::test]
-    #[case(None)]
-    #[case(Some(true))]
-    #[case(Some(false))]
-    fn startup_policy_survives_the_drag_record(#[case] adaptive: Option<bool>) {
+    #[case(true)]
+    #[case(false)]
+    fn a_source_choice_survives_the_drag_record(#[case] adaptive: bool) {
         let mut track = Playable::new("https://example.com/master.m3u8".to_owned());
-        track.adaptive_streaming = adaptive;
+        track.identity = Some("zvuk:track:1000".to_owned());
+        track.choices.push(PlaybackChoice {
+            source: Url::parse(&track.source).unwrap(),
+            label: "Quality".to_owned(),
+            adaptive,
+        });
         assert_eq!(
             Playable::try_from(BTreeMap::from(track.clone())).ok(),
             Some(track)

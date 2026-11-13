@@ -287,11 +287,18 @@ fn insert_clock_endpoints(registry: &mut MapEndpoints) {
 }
 
 fn insert_stream_endpoints(registry: &mut MapEndpoints) {
-    registry.insert(
-        EndpointCategory::Telemetry,
+    for id in [
         "deck.stream.quality_hidden",
-        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
-    );
+        "deck.stream.quality_ready",
+        "deck.stream.error_hidden",
+        "deck.stream.auto_hidden",
+    ] {
+        registry.insert(
+            EndpointCategory::Telemetry,
+            id,
+            EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
+        );
+    }
     registry.insert(
         EndpointCategory::Model,
         "deck.stream.quality",

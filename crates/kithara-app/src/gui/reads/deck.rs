@@ -213,8 +213,16 @@ impl_child_node!(StreamNode<'a>, |this, segment, scope| {
     let value = match segment {
         "quality" => ReadValue::Text(&stream.cache.quality),
         "quality_hidden" => ReadValue::Bool(stream.shown.stream.variants.is_empty()),
+        "quality_ready" => ReadValue::Bool(!stream.shown.stream.busy),
+        "error_hidden" => ReadValue::Bool(!stream.shown.stream.failed),
+        "auto_hidden" => {
+            ReadValue::Bool(stream.shown.stream.busy || !stream.shown.stream.auto_available)
+        }
         "variant_active" => ReadValue::Bool(stream.active(scope.get("variant")?)),
-        "variant_hidden" => ReadValue::Bool(stream.rung(scope.get("variant")?).is_none()),
+        "variant_hidden" => {
+            let variant = scope.get("variant")?;
+            ReadValue::Bool(stream.shown.stream.busy || stream.rung(variant).is_none())
+        }
         "variant_label" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.label),
         "variant_sub" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.detail),
         _ => return None,

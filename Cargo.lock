@@ -4811,6 +4811,7 @@ dependencies = [
  "kithara-ui",
  "kithara-workspace-hack",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "url",
@@ -4823,6 +4824,7 @@ dependencies = [
 name = "kithara-app-tests"
 version = "0.0.1-alpha5"
 dependencies = [
+ "axum",
  "kithara",
  "kithara-app",
  "kithara-app-library",

@@ -75,7 +75,8 @@ impl QualityState {
         let (id, scope) = Scope::split(endpoint);
         let value = match id {
             "deck.stream.quality" => ReadValue::Text(&self.value),
-            "deck.stream.quality_hidden" => ReadValue::Bool(false),
+            "deck.stream.quality_hidden" | "deck.stream.auto_hidden" => ReadValue::Bool(false),
+            "deck.stream.quality_ready" | "deck.stream.error_hidden" => ReadValue::Bool(true),
             "deck.stream.variant_active" => ReadValue::Bool(self.active(scope.get("variant")?)?),
             "deck.stream.variant_hidden" => {
                 ReadValue::Bool(index(scope.get("variant")?)? >= consts::VARIANTS.len())
