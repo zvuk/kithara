@@ -6,7 +6,7 @@ use tracing::info;
 use super::{
     container::{Container, container},
     profile::LinuxHost,
-    services::cpuset,
+    services::cpusets,
 };
 use crate::{ci::config::CiPins, consts};
 
@@ -75,8 +75,9 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
     }
     writeln!(yaml, "\nservices:")?;
 
-    for (index, runner) in host.runners.iter().enumerate() {
-        let unit = container(host, runner, cpuset(index, runner.cpus, cores), pins)?;
+    let sets = cpusets(host.runners.iter().map(|runner| runner.cpus), cores);
+    for (runner, cpuset) in host.runners.iter().zip(sets) {
+        let unit = container(host, runner, cpuset, pins)?;
         writeln!(
             yaml,
             "  {name}:\n    \

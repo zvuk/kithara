@@ -40,7 +40,8 @@ pub(super) fn install(
     let cores = std::thread::available_parallelism()
         .context("reading this machine's core count")?
         .get();
-    for (index, runner) in host.runners.iter().enumerate() {
+    let sets = cpusets(host.runners.iter().map(|runner| runner.cpus), cores);
+    for (runner, cpuset) in host.runners.iter().zip(sets) {
         client_environment(&runner.sccache_s3_env_file).with_context(|| {
             format!(
                 "validating S3 cache environment for Linux runner {}",
@@ -48,7 +49,6 @@ pub(super) fn install(
             )
         })?;
         let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(runner.service());
-        let cpuset = cpuset(index, runner.cpus, cores);
         std::fs::write(
             &path,
             unit(host, runner, &cpuset, pins, consts::SERVICE_EXECUTABLE)?,
@@ -326,7 +326,17 @@ fn install_renewal_timer(root: &Path) -> Result<()> {
 /// the set, so Cargo starts that many compilations rather than one per host
 /// core. Sharing a core between two runners costs throughput; misreporting the
 /// count costs memory, and memory is what the kernel kills for.
-pub(super) fn cpuset(index: usize, cpus: u32, cores: usize) -> String {
+pub(super) fn cpusets(
+    widths: impl IntoIterator<Item = u32>,
+    cores: usize,
+) -> impl Iterator<Item = String> {
+    widths
+        .into_iter()
+        .enumerate()
+        .map(move |(index, cpus)| cpuset(index, cpus, cores))
+}
+
+fn cpuset(index: usize, cpus: u32, cores: usize) -> String {
     let cores = u32::try_from(cores).unwrap_or(u32::MAX).max(1);
     let cpus = cpus.clamp(1, cores);
     let first = u32::try_from(index).unwrap_or(0).saturating_mul(cpus) % cores;
@@ -554,6 +564,33 @@ mod tests {
                 3,
                 "index {index} repeats a core: {set}"
             );
+        }
+    }
+
+    #[test]
+    fn runner_cpu_sets_do_not_overlap_when_their_widths_fit() {
+        for cores in 1_u32..=8 {
+            let mut pending = vec![Vec::<u32>::new()];
+            while let Some(widths) = pending.pop() {
+                let mut assigned = std::collections::BTreeSet::new();
+                for set in cpusets(
+                    widths.iter().copied(),
+                    usize::try_from(cores).expect("small core count"),
+                ) {
+                    for cpu in set.split(',') {
+                        assert!(
+                            assigned.insert(cpu.to_owned()),
+                            "overlapping CPU {cpu}: cores={cores}, widths={widths:?}"
+                        );
+                    }
+                }
+                let used: u32 = widths.iter().sum();
+                for width in 1..=cores - used {
+                    let mut next = widths.clone();
+                    next.push(width);
+                    pending.push(next);
+                }
+            }
         }
     }
 
