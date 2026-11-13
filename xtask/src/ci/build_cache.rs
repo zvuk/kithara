@@ -57,7 +57,11 @@ fn eviction_order(mut entries: Vec<CacheEntry>) -> Vec<CacheEntry> {
 /// at `Aggressive` and jobs were already being refused. A directory an active
 /// job holds cannot be evicted, but the room it occupies is still spent, so it
 /// is charged against the ceiling rather than excused from it.
-pub(crate) fn enforce_budget(target_dirs: &[PathBuf], budget_bytes: u64) -> Result<()> {
+pub(crate) fn enforce_budget(
+    target_dirs: &[PathBuf],
+    budget_bytes: u64,
+    _preserved_roots: &[PathBuf],
+) -> Result<()> {
     let (candidates, held_bytes) = collect(target_dirs)?;
     evict_to_budget(candidates, held_bytes, budget_bytes);
     Ok(())
@@ -1024,6 +1028,36 @@ mod tests {
     }
 
     #[test]
+    fn a_preserved_mount_root_survives_its_last_build() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join(".rustc_info.json"), "{}").unwrap();
+        fs::write(root.path().join(lease::FILE), "").unwrap();
+        let build = build_dir(root.path(), consts::XTASK_BUILD, 128);
+        let held = lease::hold(&build).unwrap();
+        let roots = [root.path().to_path_buf()];
+        #[cfg(unix)]
+        let identity = {
+            let metadata = fs::metadata(root.path()).unwrap();
+            (metadata.dev(), metadata.ino())
+        };
+
+        enforce_budget(&roots, 0, &roots).unwrap();
+        assert!(build.join("debug/artifact").is_file());
+        drop(held);
+        enforce_budget(&roots, 0, &roots).unwrap();
+        assert!(!build.exists());
+        enforce_budget(&roots, 0, &roots).unwrap();
+        assert!(root.path().is_dir(), "cleanup must preserve the mount root");
+        assert!(root.path().join(".rustc_info.json").is_file());
+        assert!(root.path().join(lease::FILE).is_file());
+        #[cfg(unix)]
+        {
+            let metadata = fs::metadata(root.path()).unwrap();
+            assert_eq!((metadata.dev(), metadata.ino()), identity);
+        }
+    }
+
+    #[test]
     fn checkout_builds_share_the_host_budget_without_removing_sources_or_reports() {
         let workspace = tempfile::tempdir().unwrap();
         let checkout = workspace.path().join("runner/repository/subject");
@@ -1046,10 +1080,10 @@ mod tests {
 
         let roots = build_roots(workspace.path()).unwrap();
         assert_eq!(roots, std::slice::from_ref(&build));
-        enforce_budget(&roots, 0).unwrap();
+        enforce_budget(&roots, 0, &[]).unwrap();
         assert!(build.join("debug/artifact").is_file());
         drop(held);
-        enforce_budget(&roots, 0).unwrap();
+        enforce_budget(&roots, 0, &[]).unwrap();
 
         assert!(!build.exists());
         assert!(checkout.join("Cargo.toml").is_file());
@@ -1110,7 +1144,7 @@ mod tests {
         std::os::unix::fs::symlink(&build, &alias).unwrap();
 
         let roots = build_roots(&alias).unwrap();
-        enforce_budget(&roots, 0).unwrap();
+        enforce_budget(&roots, 0, &[]).unwrap();
 
         assert!(roots.is_empty(), "aliases are not independent build roots");
         assert!(build.join("debug/artifact").exists());
@@ -1133,7 +1167,7 @@ mod tests {
         );
 
         let roots = previous_build_roots(cache.path()).unwrap();
-        enforce_budget(&roots, 0).unwrap();
+        enforce_budget(&roots, 0, &[]).unwrap();
 
         assert_eq!(fs::read(store.join("index")).unwrap(), b"compiler index");
         assert_eq!(fs::read(store.join("blob")).unwrap(), b"compiler artifact");
@@ -1190,7 +1224,7 @@ mod tests {
         let _claim = locked(&root.path().join("review-lane-lint-0.lock"));
         drop(locked(&root.path().join("review-lane-lint-1.lock")));
 
-        enforce_budget(&[root.path().to_path_buf()], 0).unwrap();
+        enforce_budget(&[root.path().to_path_buf()], 0, &[]).unwrap();
 
         assert!(taken.exists(), "a taken slot was evicted");
         assert!(!idle.exists(), "an idle slot was kept");
@@ -1213,7 +1247,7 @@ mod tests {
         let _bootstrap = locked(&triple.join(".cargo-lock"));
         drop(locked(&idle.join("debug/.cargo-lock")));
 
-        enforce_budget(&[root.path().to_path_buf()], 0).unwrap();
+        enforce_budget(&[root.path().to_path_buf()], 0, &[]).unwrap();
 
         assert!(network.exists(), "a build Cargo runs in was evicted");
         assert!(
@@ -1241,7 +1275,7 @@ mod tests {
                 .unwrap();
         }
 
-        enforce_budget(&[root.path().to_path_buf()], occupied(root.path()) - 1).unwrap();
+        enforce_budget(&[root.path().to_path_buf()], occupied(root.path()) - 1, &[]).unwrap();
 
         assert!(recent.exists(), "the slot used last was evicted");
         assert!(!stale.exists(), "the slot used first was kept");
@@ -1254,7 +1288,7 @@ mod tests {
         let slot = build_dir(root.path(), "review-lane-lint-0", 4096);
         let _lease = lease::hold(&slot.join("cargo")).unwrap();
 
-        enforce_budget(&[root.path().to_path_buf()], 0).unwrap();
+        enforce_budget(&[root.path().to_path_buf()], 0, &[]).unwrap();
 
         assert!(slot.exists(), "a slot a job builds in was evicted");
     }
@@ -1348,7 +1382,7 @@ mod tests {
                 fs::metadata(long.join("debug/artifact")).unwrap().len(),
                 fs::metadata(short.join("debug/artifact")).unwrap().len()
             );
-            enforce_budget(&[root.path().to_path_buf()], occupied(root.path()) - 1).unwrap();
+            enforce_budget(&[root.path().to_path_buf()], occupied(root.path()) - 1, &[]).unwrap();
 
             assert!(long.exists(), "the job finishing last lost its cache");
             assert!(!short.exists(), "the earlier completed cache survived");
@@ -1436,7 +1470,7 @@ mod tests {
         let lint = build_dir(root.path(), "lint", 4096);
         let usdt = build_dir(root.path(), "usdt", 4096);
 
-        enforce_budget(&[root.path().to_path_buf()], occupied(root.path())).unwrap();
+        enforce_budget(&[root.path().to_path_buf()], occupied(root.path()), &[]).unwrap();
 
         assert!(lint.exists());
         assert!(usdt.exists());
@@ -1460,7 +1494,7 @@ mod tests {
         let oldest = build_dir(root.path(), "a-oldest", 4096);
         let newest = build_dir(root.path(), "b-newest", 4096);
 
-        enforce_budget(&[root.path().to_path_buf()], occupied(root.path()) - 1).unwrap();
+        enforce_budget(&[root.path().to_path_buf()], occupied(root.path()) - 1, &[]).unwrap();
 
         assert!(!oldest.exists());
         assert!(newest.exists());
@@ -1483,7 +1517,7 @@ mod tests {
         fs::write(sources.join("lib.rs"), vec![0_u8; 100_000]).unwrap();
         let lane = build_dir(&target, "lint", 100_000);
 
-        enforce_budget(std::slice::from_ref(&target), 0).unwrap();
+        enforce_budget(std::slice::from_ref(&target), 0, &[]).unwrap();
 
         assert!(sources.join("lib.rs").is_file());
         assert!(!lane.exists());
@@ -1501,7 +1535,7 @@ mod tests {
         let budget = 150_000;
         assert!(occupied(&first) < budget, "each root is under the budget");
 
-        enforce_budget(&[first.clone(), second.clone()], budget).unwrap();
+        enforce_budget(&[first.clone(), second.clone()], budget, &[]).unwrap();
 
         assert!(occupied(&first) + occupied(&second) <= budget);
     }
@@ -1520,7 +1554,7 @@ mod tests {
         build_dir(&second, "lint", 100_000);
         let roots = [first.clone(), second.clone()];
         let before = occupied(&first) + occupied(&second);
-        enforce_budget(&roots, before * 2).unwrap();
+        enforce_budget(&roots, before * 2, &[]).unwrap();
         assert_eq!(
             occupied(&first) + occupied(&second),
             before,
@@ -1552,7 +1586,7 @@ mod tests {
 
         let budget =
             occupied(root.path()) + total_bytes(&candidate_entries(root.path()).unwrap().held);
-        enforce_budget(&[root.path().to_path_buf()], budget - 1).unwrap();
+        enforce_budget(&[root.path().to_path_buf()], budget - 1, &[]).unwrap();
 
         assert!(
             running.join("debug/artifact").exists(),
@@ -1632,7 +1666,7 @@ mod tests {
         fs::write(left.join("debug/artifact"), b"half removed").unwrap();
         fs::write(left.join(lease::FILE), b"").unwrap();
 
-        enforce_budget(&[root.path().to_path_buf()], u64::MAX).unwrap();
+        enforce_budget(&[root.path().to_path_buf()], u64::MAX, &[]).unwrap();
 
         assert!(!left.exists());
     }
@@ -1658,9 +1692,9 @@ mod tests {
         let lint = build_dir(root.path(), "lint", 1);
         drop(lease::hold(&lint).unwrap());
 
-        enforce_budget(&roots, 0).unwrap();
+        enforce_budget(&roots, 0, &[]).unwrap();
         let usdt = build_dir(root.path(), "usdt", 1);
-        enforce_budget(&roots, 0).unwrap();
+        enforce_budget(&roots, 0, &[]).unwrap();
 
         assert!(!lint.exists(), "{} outlived the pass", lint.display());
         assert!(!usdt.exists(), "{} outlived the pass", usdt.display());
@@ -1680,7 +1714,7 @@ mod tests {
         fs::create_dir_all(left.join("debug")).unwrap();
         let removing = lease::evict(&left).unwrap().expect("nobody holds it");
 
-        enforce_budget(&[root.path().to_path_buf()], u64::MAX).unwrap();
+        enforce_budget(&[root.path().to_path_buf()], u64::MAX, &[]).unwrap();
 
         assert!(left.join("debug").exists());
         drop(removing);

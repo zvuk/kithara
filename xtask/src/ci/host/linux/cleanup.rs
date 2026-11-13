@@ -133,7 +133,7 @@ fn reclaim_volumes(process: &Process) -> Result<()> {
 }
 
 fn hold_build_caches(host: &LinuxHost) -> Result<()> {
-    build_cache::enforce_budget(&target_dirs(host)?, host.build_cache_budget_bytes()?)
+    build_cache::enforce_budget(&target_dirs(host)?, host.build_cache_budget_bytes()?, &[])
 }
 
 // Automatic GC protects recent imports for six hours above the size limit.
