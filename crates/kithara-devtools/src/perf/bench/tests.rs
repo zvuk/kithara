@@ -1,0 +1,248 @@
+use std::path::Path;
+
+use clap::Parser;
+use tempfile::TempDir;
+
+use super::{super::source, *};
+
+fn command(root: &Path, program: &str, args: &[&str]) -> String {
+    let output = Command::new(program)
+        .args(args)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+fn fixture(base_ids: &str, head_ids: &str) -> (TempDir, Ctx, String) {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("repository");
+    fs::create_dir_all(root.join("benches")).unwrap();
+    fs::create_dir(root.join(".config")).unwrap();
+    let events = format!("{:?}", temp.path().join("events"));
+    fs::write(
+        root.join("Cargo.toml"),
+        r#"
+[workspace]
+[package]
+name = "fixture-bench"
+version = "0.1.0"
+edition = "2024"
+[features]
+spectrum = []
+portable = []
+[[bench]]
+name = "kernel"
+harness = false
+required-features = ["spectrum", "portable"]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("build.rs"),
+        r#"
+use std::{fs::OpenOptions, io::Write};
+fn main() {
+    println!("cargo:rerun-if-changed=arm");
+    let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
+    writeln!(events, "build:{}", include_str!("arm").trim()).unwrap();
+}
+"#
+        .replace("EVENTS", &events),
+    )
+    .unwrap();
+    fs::write(
+        root.join("benches/kernel.rs"),
+        r#"
+use std::{env, fs::OpenOptions, io::Write};
+fn main() {
+    let args: Vec<_> = env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--list") {
+        for id in include_str!("../ids").lines() { println!("{id}: benchmark"); }
+        return;
+    }
+    let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
+    writeln!(events, "run:{}", include_str!("../arm").trim()).unwrap();
+    println!("{args:?}");
+}
+"#
+        .replace("EVENTS", &events),
+    )
+    .unwrap();
+    let config = format!(
+        "[ext.perf.bench]\nrepository = {:?}\ngitlab_project = ''\n[tools.critcmp]\nprogram = 'missing-benchmark-comparison-tool'\n",
+        root.to_str().unwrap()
+    );
+    fs::write(root.join(".config/xtask.toml"), config).unwrap();
+    fs::write(root.join("arm"), "base").unwrap();
+    fs::write(root.join("ids"), base_ids).unwrap();
+    command(&root, "cargo", &["generate-lockfile", "--offline"]);
+    command(&root, "git", &["init", "--quiet"]);
+    command(&root, "git", &["config", "user.name", "bench fixture"]);
+    command(
+        &root,
+        "git",
+        &["config", "user.email", "bench@example.invalid"],
+    );
+    command(&root, "git", &["add", "."]);
+    command(
+        &root,
+        "git",
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "--quiet",
+            "-m",
+            "base",
+        ],
+    );
+    let base = command(&root, "git", &["rev-parse", "HEAD"]);
+    fs::write(root.join("arm"), "head").unwrap();
+    fs::write(root.join("ids"), head_ids).unwrap();
+    command(&root, "git", &["add", "."]);
+    command(
+        &root,
+        "git",
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "--quiet",
+            "-m",
+            "head",
+        ],
+    );
+    let ctx = Ctx::load_from_manifest(&root.join("Cargo.toml")).unwrap();
+    (temp, ctx, base)
+}
+
+fn request(base: &str) -> Request {
+    Request {
+        target: "fixture-bench:kernel:portable,spectrum".into(),
+        base: base.into(),
+        ..Request::default()
+    }
+}
+
+#[test]
+fn bench_metadata_owns_targets_and_required_features() {
+    let (_temp, ctx, _) = fixture("group/a", "group/a");
+    let metadata = ctx.metadata().unwrap();
+    assert_eq!(
+        targets(metadata)
+            .iter()
+            .map(source::Target::id)
+            .collect::<Vec<_>>(),
+        ["fixture-bench:kernel:portable,spectrum"]
+    );
+    assert_eq!(
+        select(metadata, "fixture-bench:kernel:spectrum,portable").unwrap(),
+        targets(metadata)
+    );
+    for invalid in [
+        "fixture-bench",
+        "other:kernel",
+        "fixture-bench:kernel:spectrum",
+        "fixture-bench:kernel:unknown",
+    ] {
+        assert!(select(metadata, invalid).is_err(), "{invalid}");
+    }
+}
+
+#[test]
+fn bench_builds_precede_measurements_and_head_only_needs_no_critcmp() {
+    let (temp, ctx, base) = fixture("group/a", "group/a");
+    let filter = "group/.*(a|b)$; $(false)";
+    let mut head = request("");
+    head.filter = filter.into();
+    execute(&ctx, &head, true).unwrap();
+    assert_eq!(
+        fs::read_to_string(temp.path().join("events")).unwrap(),
+        "build:head\nrun:head\n"
+    );
+    let log = fs::read_to_string(ctx.root.join("bench-results.txt")).unwrap();
+    assert!(!log.contains("missing-benchmark-comparison-tool"));
+    assert!(log.contains(&format!("{:?}", filter)));
+
+    fs::write(temp.path().join("events"), "").unwrap();
+    let error = execute(&ctx, &request(&base), true).unwrap_err();
+    assert_eq!(error.to_string(), "start benchmark command");
+    assert_eq!(
+        fs::read_to_string(temp.path().join("events")).unwrap(),
+        "build:base\nbuild:head\nrun:base\nrun:head\n"
+    );
+    assert!(
+        fs::read_to_string(ctx.root.join("bench-results.txt"))
+            .unwrap()
+            .contains("missing-benchmark-comparison-tool")
+    );
+}
+
+#[test]
+fn bench_refuses_empty_or_unpaired_ids_before_measurement() {
+    for (base_ids, head_ids, compared) in [
+        ("group/a", "", false),
+        ("", "group/a", true),
+        ("group/a", "group/b", true),
+    ] {
+        let (temp, ctx, base) = fixture(base_ids, head_ids);
+        assert!(execute(&ctx, &request(if compared { &base } else { "" }), true).is_err());
+        let events = fs::read_to_string(temp.path().join("events")).unwrap();
+        assert!(!events.contains("run:"), "{events}");
+        assert!(
+            !fs::read_to_string(ctx.root.join("bench-results.txt"))
+                .unwrap()
+                .contains("missing-benchmark-comparison-tool")
+        );
+    }
+}
+
+#[derive(Parser)]
+struct Cli {
+    #[command(flatten)]
+    args: BenchArgs,
+}
+
+#[test]
+fn bench_cli_preserves_all_four_parameters() {
+    let cli = Cli::try_parse_from([
+        "bench",
+        "run",
+        "--bench-target",
+        "p:b:f",
+        "--bench-filter",
+        "group/(a|b)$",
+        "--bench-ref",
+        "feature/branch",
+        "--bench-base-ref",
+        "main",
+    ])
+    .unwrap();
+    let BenchCommand::Run(request) = cli.args.command else {
+        panic!("run command")
+    };
+    assert_eq!(
+        (
+            request.target.as_str(),
+            request.filter.as_str(),
+            request.head.as_str(),
+            request.base.as_str()
+        ),
+        ("p:b:f", "group/(a|b)$", "feature/branch", "main")
+    );
+    assert_eq!(
+        request.parameters(),
+        [
+            ("BENCH_TARGET", "p:b:f"),
+            ("BENCH_FILTER", "group/(a|b)$"),
+            ("BENCH_REF", "feature/branch"),
+            ("BENCH_BASE_REF", "main")
+        ]
+    );
+}

@@ -25,6 +25,8 @@ pub struct PerfArgs {
 
 #[derive(Debug, Subcommand)]
 enum PerfCommand {
+    /// Build, select or dispatch workspace Criterion benchmarks.
+    Bench(super::bench::BenchArgs),
     /// Run the full suite across feature lanes, saving `JUnit` + metadata.
     Matrix(MatrixCli),
     /// Profile every slow-list test in isolation under samply.
@@ -121,6 +123,7 @@ struct TraceCli {
 
 pub(crate) fn run(args: &PerfArgs, ctx: &Ctx) -> Result<()> {
     match &args.command {
+        PerfCommand::Bench(args) => super::bench::run(args, ctx),
         PerfCommand::Matrix(cli) => {
             let run_id = match &cli.run_id {
                 Some(id) => id.clone(),

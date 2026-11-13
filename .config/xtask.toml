@@ -1797,15 +1797,17 @@ kinds = ["nightly"]
 timeout_minutes = 90
 
 [ext.ci.lanes.deep-bench]
-cache_group = "macos"
-label = "deep Apple"
-os = "macos"
+cache_group = "host"
+label = "benchmarks"
+os = ["linux", "macos"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["perf", "bench", "ci"], label = "benchmark suite" }]
 role = "deep"
-kinds = ["nightly"]
+kinds = ["nightly", "bench", "branch", "merge-request", "quarantine"]
+kinds_github = ["nightly", "bench"]
 timeout_minutes = 120
+artifact = { name = "bench-results", path = "bench-results.txt\n.ci-artifacts/bench/", when = "always" }
 
 # A shader that stopped reading what Rust writes it looks identical from the
 # outside until a frame is rendered and read back, so this is the one suite
@@ -3394,3 +3396,7 @@ scan_all_rules = [
   "perf.no-local-test-pools",
   "style.no-items-in-lib-or-mod-rs",
 ]
+
+[ext.perf.bench]
+repository = "https://github.com/gerasim13/kithara.git"
+gitlab_project = "https://gitlab.zvq.me/disrupt/kithara"

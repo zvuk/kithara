@@ -154,6 +154,7 @@ impl Lane {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum PipelineKind {
+    Bench,
     Branch,
     Platforms,
     MergeRequest,
@@ -171,6 +172,7 @@ impl PipelineKind {
     /// against `PIPELINE_KINDS`.
     pub(crate) const fn name(self) -> &'static str {
         match self {
+            Self::Bench => "bench",
             Self::Branch => "branch",
             Self::Platforms => "platforms",
             Self::MergeRequest => "merge-request",

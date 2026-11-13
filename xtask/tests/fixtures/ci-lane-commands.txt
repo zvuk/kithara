@@ -1,3 +1,8 @@
+# android-build / bench
+  <require os> macos linux
+  <require tools> cargo java just sccache kache
+  just platform android clippy
+  just platform android build
 # android-build / branch
   <require os> macos linux
   <require tools> cargo java just sccache kache
@@ -38,6 +43,11 @@
   <require tools> cargo java just sccache kache
   just platform android clippy
   just platform android build
+# android-test / bench
+  <require os> macos linux
+  <require tools> cargo curl ffmpeg java just make pkg-config tar
+  just platform android clippy
+  just platform android test --avd Kithara_CI_API_36
 # android-test / branch
   <require os> macos linux
   <require tools> cargo curl ffmpeg java just make pkg-config tar
@@ -78,6 +88,13 @@
   <require tools> cargo curl ffmpeg java just make pkg-config tar
   just platform android clippy
   just platform android test --avd Kithara_CI_API_36
+# apple-ios / bench
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just platform apple ios
+    KITHARA_LOCAL_DEV=1
 # apple-ios / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
@@ -134,6 +151,22 @@
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple ios
     KITHARA_LOCAL_DEV=1
+# apple-ios-test / bench
+  <require os> macos
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  cargo build -p kithara-integration-tests --bin test_server
+  <root>/target/debug/test_server
+    TEST_SERVER_PORT=3444
+  xcrun simctl delete kithara-apple-ios-test
+  xcrun simctl create kithara-apple-ios-test com.apple.CoreSimulator.SimDeviceType.iPhone-17
+  just platform apple test --skip-build
+    KITHARA_IOS_DESTINATION=platform=iOS Simulator,id=<simulator>
+    KITHARA_LOCAL_DEV=1
+    KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun simctl delete <simulator>
+  xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / branch
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
@@ -262,6 +295,12 @@
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
   xcrun simctl delete <simulator>
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
+# apple-lint / bench
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just lint full
 # apple-lint / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
@@ -310,6 +349,13 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just lint full
+# apple-msrv / bench
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just check workspace
+    RUSTUP_TOOLCHAIN=1.95.0
 # apple-msrv / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
@@ -366,6 +412,10 @@
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
+# apple-safari / bench
+  <require os> macos
+  <require tools> cargo just
+  just test wasm safari all include
 # apple-safari / branch
   <require os> macos
   <require tools> cargo just
@@ -398,6 +448,14 @@
   <require os> macos
   <require tools> cargo just
   just test wasm safari all include
+# apple-swift-test / bench
+  <require os> macos
+  <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just platform apple xcframework --profile debug
+  swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
 # apple-swift-test / branch
   <require os> macos
   <require tools> cargo just kache sccache swift /usr/bin/xcodebuild xcodegen xcrun
@@ -462,6 +520,13 @@
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
+# apple-test / bench
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --flash=on --no-block=on --profile ci
+  just test test-utils
 # apple-test / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
@@ -513,6 +578,12 @@
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
   just test test-utils
+# apple-test-flash-off / bench
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --flash=off --profile ci
 # apple-test-flash-off / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
@@ -561,6 +632,12 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+# apple-xcframework / bench
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just platform apple xcframework --profile debug
 # apple-xcframework / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
@@ -609,6 +686,11 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just platform apple xcframework --profile debug
+# crates-publish / bench
+  <require os> macos linux
+  <require tools> cargo just sccache kache
+  just release crates --dry-run
+    CARGO_BUILD_JOBS=2
 # crates-publish / branch
   <require os> macos linux
   <require tools> cargo just sccache kache
@@ -649,38 +731,46 @@
   <require tools> cargo just sccache kache
   just release crates --dry-run
     CARGO_BUILD_JOBS=2
+# deep-bench / bench
+  <require os> linux macos
+  <require tools> cargo just
+  just perf bench ci
 # deep-bench / branch
-  <require os> macos
+  <require os> linux macos
   <require tools> cargo just
   just perf bench ci
 # deep-bench / platforms
-  <require os> macos
+  <require os> linux macos
   <require tools> cargo just
   just perf bench ci
 # deep-bench / merge-request
-  <require os> macos
+  <require os> linux macos
   <require tools> cargo just
   just perf bench ci
 # deep-bench / quarantine
-  <require os> macos
+  <require os> linux macos
   <require tools> cargo just
   just perf bench ci
 # deep-bench / main
-  <require os> macos
+  <require os> linux macos
   <require tools> cargo just
   just perf bench ci
 # deep-bench / nightly
-  <require os> macos
+  <require os> linux macos
   <require tools> cargo just
   just perf bench ci
 # deep-bench / weekly
-  <require os> macos
+  <require os> linux macos
   <require tools> cargo just
   just perf bench ci
 # deep-bench / release
-  <require os> macos
+  <require os> linux macos
   <require tools> cargo just
   just perf bench ci
+# deep-fuzz / bench
+  <require os> linux
+  <require tools> cargo cargo-fuzz just
+  just test fuzz
 # deep-fuzz / branch
   <require os> linux
   <require tools> cargo cargo-fuzz just
@@ -713,6 +803,10 @@
   <require os> linux
   <require tools> cargo cargo-fuzz just
   just test fuzz
+# deep-miri / bench
+  <require os> linux
+  <require tools> cargo cargo-nextest just
+  just test miri
 # deep-miri / branch
   <require os> linux
   <require tools> cargo cargo-nextest just
@@ -745,6 +839,10 @@
   <require os> linux
   <require tools> cargo cargo-nextest just
   just test miri
+# deep-mutants-analysis / bench
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --group analysis
 # deep-mutants-analysis / branch
   <require os> linux
   <require tools> cargo just
@@ -777,6 +875,10 @@
   <require os> linux
   <require tools> cargo just
   just test mutants run-all --jobs 4 --group analysis
+# deep-mutants-playback / bench
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --group playback
 # deep-mutants-playback / branch
   <require os> linux
   <require tools> cargo just
@@ -809,6 +911,10 @@
   <require os> linux
   <require tools> cargo just
   just test mutants run-all --jobs 4 --group playback
+# deep-mutants-stream / bench
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --group stream
 # deep-mutants-stream / branch
   <require os> linux
   <require tools> cargo just
@@ -841,6 +947,10 @@
   <require os> linux
   <require tools> cargo just
   just test mutants run-all --jobs 4 --group stream
+# deep-mutants-ui / bench
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4 --group ui
 # deep-mutants-ui / branch
   <require os> linux
   <require tools> cargo just
@@ -873,6 +983,11 @@
   <require os> linux
   <require tools> cargo just
   just test mutants run-all --jobs 4 --group ui
+# deep-perf / bench
+  <require os> macos
+  <require tools> cargo just
+  just perf memory
+  just perf
 # deep-perf / branch
   <require os> macos
   <require tools> cargo just
@@ -913,6 +1028,13 @@
   <require tools> cargo just
   just perf memory
   just perf
+# deep-rtsan / bench
+  <require os> macos
+  <require tools> cargo just
+  just test rtsan
+  just test rtsan-async
+  just test rtsan-file
+  just test rtsan-hls
 # deep-rtsan / branch
   <require os> macos
   <require tools> cargo just
@@ -969,6 +1091,11 @@
   just test rtsan-async
   just test rtsan-file
   just test rtsan-hls
+# deep-rtsan-fast / bench
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan
+    KITHARA_RTSAN_BACKEND=standalone
 # deep-rtsan-fast / branch
   <require os> linux
   <require tools> cargo just
@@ -1008,6 +1135,11 @@
   <require os> linux
   <require tools> cargo just
   just test rtsan
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-file / bench
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-file
     KITHARA_RTSAN_BACKEND=standalone
 # deep-rtsan-file / branch
   <require os> linux
@@ -1049,6 +1181,11 @@
   <require tools> cargo just
   just test rtsan-file
     KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-hls / bench
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-hls
+    KITHARA_RTSAN_BACKEND=standalone
 # deep-rtsan-hls / branch
   <require os> linux
   <require tools> cargo just
@@ -1089,6 +1226,10 @@
   <require tools> cargo just
   just test rtsan-hls
     KITHARA_RTSAN_BACKEND=standalone
+# deep-ui / bench
+  <require os> linux
+  <require tools> cargo just
+  just test ui
 # deep-ui / branch
   <require os> linux
   <require tools> cargo just
@@ -1121,6 +1262,10 @@
   <require os> linux
   <require tools> cargo just
   just test ui
+# deps-deny / bench
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny
 # deps-deny / branch
   <require os> macos linux
   <require tools> cargo just
@@ -1153,6 +1298,10 @@
   <require os> macos linux
   <require tools> cargo just
   just deps deny
+# deps-features-full / bench
+  <require os> macos linux
+  <require tools> cargo just
+  just deps hack
 # deps-features-full / branch
   <require os> macos linux
   <require tools> cargo just
@@ -1185,6 +1334,10 @@
   <require os> macos linux
   <require tools> cargo just
   just deps hack
+# deps-features-invariants / bench
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants
 # deps-features-invariants / branch
   <require os> linux
   <require tools> cargo just
@@ -1217,6 +1370,10 @@
   <require os> linux
   <require tools> cargo just
   just deps hack-invariants
+# deps-features-workspace / bench
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-workspace
 # deps-features-workspace / branch
   <require os> linux
   <require tools> cargo just
@@ -1249,6 +1406,10 @@
   <require os> linux
   <require tools> cargo just
   just deps hack-workspace
+# deps-semver / bench
+  <require os> macos linux
+  <require tools> cargo just
+  just deps semver
 # deps-semver / branch
   <require os> macos linux
   <require tools> cargo just
@@ -1281,6 +1442,10 @@
   <require os> macos linux
   <require tools> cargo just
   just deps semver
+# deps-shear / bench
+  <require os> macos linux
+  <require tools> cargo just
+  just deps shear
 # deps-shear / branch
   <require os> macos linux
   <require tools> cargo just
@@ -1313,6 +1478,10 @@
   <require os> macos linux
   <require tools> cargo just
   just deps shear
+# deps-unused / bench
+  <require os> macos linux
+  <require tools> cargo just
+  just deps machete
 # deps-unused / branch
   <require os> macos linux
   <require tools> cargo just
@@ -1345,6 +1514,10 @@
   <require os> macos linux
   <require tools> cargo just
   just deps machete
+# linux-arch / bench
+  <require os> linux
+  <require tools> cargo just
+  just lint arch
 # linux-arch / branch
   <require os> linux
   <require tools> cargo just
@@ -1377,6 +1550,11 @@
   <require os> linux
   <require tools> cargo just
   just lint arch
+# linux-broadcast / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
 # linux-broadcast / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -1417,6 +1595,10 @@
   <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
+# linux-check / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just check workspace
 # linux-check / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -1449,6 +1631,12 @@
   <require os> linux
   <require tools> cargo just sccache kache
   just check workspace
+# linux-coverage / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -1497,6 +1685,11 @@
   just test coverage
     CARGO_BUILD_JOBS=2
     COVERAGE_OUTPUT_DIR=coverage
+# linux-doc / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just test run --lane=doc
+    CARGO_BUILD_JOBS=2
 # linux-doc / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -1537,6 +1730,15 @@
   <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
+# linux-fixtures / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just test run --lane=fixtures
+    CARGO_BUILD_JOBS=2
+    RTEN_NUM_THREADS=1
+  just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+    CARGO_BUILD_JOBS=2
+    RTEN_NUM_THREADS=1
 # linux-fixtures / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -1609,6 +1811,11 @@
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
+# linux-harness / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just test run --lane=harness
+    CARGO_BUILD_JOBS=2
 # linux-harness / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -1648,6 +1855,11 @@
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=harness
+    CARGO_BUILD_JOBS=2
+# linux-integration-regressions / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
 # linux-integration-regressions / branch
   <require os> linux
@@ -1689,6 +1901,10 @@
   <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
+# linux-lint / bench
+  <require os> linux
+  <require tools> cargo just
+  just lint full
 # linux-lint / branch
   <require os> linux
   <require tools> cargo just
@@ -1721,6 +1937,11 @@
   <require os> linux
   <require tools> cargo just
   just lint full
+# linux-loom / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just test run --lane=loom
+    CARGO_BUILD_JOBS=2
 # linux-loom / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -1761,6 +1982,11 @@
   <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
+# linux-msrv / bench
+  <require os> linux
+  <require tools> cargo just
+  just check
+    RUSTUP_TOOLCHAIN=1.95.0
 # linux-msrv / branch
   <require os> linux
   <require tools> cargo just
@@ -1801,6 +2027,11 @@
   <require tools> cargo just
   just check
     RUSTUP_TOOLCHAIN=1.95.0
+# linux-net-host / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just test run --lane=net-host
+    CARGO_BUILD_JOBS=2
 # linux-net-host / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -1841,6 +2072,10 @@
   <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
+# linux-perf-memory / bench
+  <require os> linux
+  <require tools> cargo just
+  just perf memory
 # linux-perf-memory / branch
   <require os> linux
   <require tools> cargo just
@@ -1873,6 +2108,10 @@
   <require os> linux
   <require tools> cargo just
   just perf memory
+# linux-secrets / bench
+  <require os> linux
+  <require tools> gitleaks
+  gitleaks git . --config .gitleaks.toml --log-opts=--all --no-banner --redact=100 --verbose --report-format json --report-path gitleaks-report.json
 # linux-secrets / branch
   <require os> linux
   <require tools> gitleaks
@@ -1905,6 +2144,11 @@
   <require os> linux
   <require tools> gitleaks
   gitleaks git . --config .gitleaks.toml --log-opts=--all --no-banner --redact=100 --verbose --report-format json --report-path gitleaks-report.json
+# linux-selenium-firefox / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
 # linux-selenium-firefox / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -1945,6 +2189,17 @@
   <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
+# linux-test-real-clock / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just test run --flash=off --profile ci --timings
+    CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_PREKILL_SECS=110
+  just test run --flash=off --profile ci --no-run --cargo-verbose --color never
+    CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -2033,6 +2288,15 @@
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
+# linux-test-simulated-clock / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just test run --no-block=on --profile ci --timings
+    CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_PREKILL_SECS=110
+  just test test-utils
+    CARGO_BUILD_JOBS=2
 # linux-test-simulated-clock / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -2105,6 +2369,11 @@
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
+# linux-tooling / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just test run --lane=tooling
+    CARGO_BUILD_JOBS=2
 # linux-tooling / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -2144,6 +2413,19 @@
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=tooling
+    CARGO_BUILD_JOBS=2
+# linux-usdt / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just test run --lane=usdt-warp --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-render-scheduler --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-hls-stress --profile ci
+    CARGO_BUILD_JOBS=2
+  just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
 # linux-usdt / branch
   <require os> linux
@@ -2249,6 +2531,10 @@
     CARGO_BUILD_JOBS=2
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
+# linux-wasm / bench
+  <require os> linux
+  <require tools> cargo just sccache kache
+  just platform wasm
 # linux-wasm / branch
   <require os> linux
   <require tools> cargo just sccache kache
@@ -2281,6 +2567,11 @@
   <require os> linux
   <require tools> cargo just sccache kache
   just platform wasm
+# quality-architecture / bench
+  <require os> linux
+  <require tools> cargo just
+  just arch viz
+  just arch orphans --deny
 # quality-architecture / branch
   <require os> linux
   <require tools> cargo just
@@ -2321,6 +2612,10 @@
   <require tools> cargo just
   just arch viz
   just arch orphans --deny
+# quality-assess / bench
+  <require os> linux
+  <require tools> cargo just
+  just quality assess
 # quality-assess / branch
   <require os> linux
   <require tools> cargo just
@@ -2353,6 +2648,11 @@
   <require os> linux
   <require tools> cargo just
   just quality assess
+# quality-coverage-risk / bench
+  <require os> linux
+  <require tools> cargo just
+  just quality coverage-risk
+    KITHARA_HANG_DUMP_DIR=<root>/coverage/hang
 # quality-coverage-risk / branch
   <require os> linux
   <require tools> cargo just
@@ -2393,6 +2693,10 @@
   <require tools> cargo just
   just quality coverage-risk
     KITHARA_HANG_DUMP_DIR=<root>/coverage/hang
+# quality-health / bench
+  <require os> linux
+  <require tools> cargo just
+  just ci health
 # quality-health / branch
   <require os> linux
   <require tools> cargo just
@@ -2425,6 +2729,10 @@
   <require os> linux
   <require tools> cargo just
   just ci health
+# quality-report / bench
+  <require os> linux
+  <require tools> cargo just
+  just ci report --artifacts <root>/artifacts
 # quality-report / branch
   <require os> linux
   <require tools> cargo just
@@ -2457,6 +2765,10 @@
   <require os> linux
   <require tools> cargo just
   just ci report --artifacts <root>/artifacts
+# quality-similarity / bench
+  <require os> linux
+  <require tools> cargo just
+  just lint similarity
 # quality-similarity / branch
   <require os> linux
   <require tools> cargo just
@@ -2489,6 +2801,8 @@
   <require os> linux
   <require tools> cargo just
   just lint similarity
+# release-android / bench
+  refused: ReleaseAndroid produces artifacts and is not a command lane
 # release-android / branch
   refused: ReleaseAndroid produces artifacts and is not a command lane
 # release-android / platforms
@@ -2505,6 +2819,8 @@
   refused: ReleaseAndroid produces artifacts and is not a command lane
 # release-android / release
   refused: ReleaseAndroid produces artifacts and is not a command lane
+# release-docs / bench
+  refused: ReleaseDocs produces artifacts and is not a command lane
 # release-docs / branch
   refused: ReleaseDocs produces artifacts and is not a command lane
 # release-docs / platforms
@@ -2521,6 +2837,8 @@
   refused: ReleaseDocs produces artifacts and is not a command lane
 # release-docs / release
   refused: ReleaseDocs produces artifacts and is not a command lane
+# release-publish / bench
+  refused: ReleasePublish produces artifacts and is not a command lane
 # release-publish / branch
   refused: ReleasePublish produces artifacts and is not a command lane
 # release-publish / platforms
@@ -2537,6 +2855,8 @@
   refused: ReleasePublish produces artifacts and is not a command lane
 # release-publish / release
   refused: ReleasePublish produces artifacts and is not a command lane
+# release-wasm / bench
+  refused: ReleaseWasm produces artifacts and is not a command lane
 # release-wasm / branch
   refused: ReleaseWasm produces artifacts and is not a command lane
 # release-wasm / platforms
@@ -2553,6 +2873,8 @@
   refused: ReleaseWasm produces artifacts and is not a command lane
 # release-wasm / release
   refused: ReleaseWasm produces artifacts and is not a command lane
+# release-xcframework / bench
+  refused: ReleaseXcframework produces artifacts and is not a command lane
 # release-xcframework / branch
   refused: ReleaseXcframework produces artifacts and is not a command lane
 # release-xcframework / platforms
@@ -2569,6 +2891,8 @@
   refused: ReleaseXcframework produces artifacts and is not a command lane
 # release-xcframework / release
   refused: ReleaseXcframework produces artifacts and is not a command lane
+# verdict / bench
+  refused: Verdict produces artifacts and is not a command lane
 # verdict / branch
   refused: Verdict produces artifacts and is not a command lane
 # verdict / platforms
@@ -2585,6 +2909,11 @@
   refused: Verdict produces artifacts and is not a command lane
 # verdict / release
   refused: Verdict produces artifacts and is not a command lane
+# web-chromium / bench
+  <require os> linux
+  <require tools> chromium chromedriver just
+  just test wasm chrome webcodecs include
+    CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
 # web-chromium / branch
   <require os> linux
   <require tools> chromium chromedriver just
@@ -2625,6 +2954,10 @@
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+# web-firefox / bench
+  <require os> linux
+  <require tools> firefox geckodriver just
+  just test wasm firefox all include
 # web-firefox / branch
   <require os> linux
   <require tools> firefox geckodriver just
@@ -2657,6 +2990,10 @@
   <require os> linux
   <require tools> firefox geckodriver just
   just test wasm firefox all include
+# web-size / bench
+  <require os> linux
+  <require tools> cargo just
+  just platform wasm size-check
 # web-size / branch
   <require os> linux
   <require tools> cargo just
@@ -2689,6 +3026,15 @@
   <require os> linux
   <require tools> cargo just
   just platform wasm size-check
+# windows-arm64 / bench
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / branch
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
@@ -2761,6 +3107,13 @@
     CMAKE_GENERATOR=Ninja
     CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
     RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64 / bench
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / branch
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
@@ -2815,6 +3168,13 @@
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
   <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64-build / bench
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
     CMAKE_GENERATOR=Ninja
     RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64-build / branch

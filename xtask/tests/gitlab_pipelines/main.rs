@@ -577,6 +577,45 @@ fn merge_request_dispatch_is_admitted_without_duplicate_push_pipelines() {
 }
 
 #[test]
+fn bench_preview_is_optional_and_outside_the_verdict() {
+    let config = GitlabConfig::load(&workspace_root());
+    for name in ["deep:rtsan", "deep:bench"] {
+        let rules = config
+            .definition(name)
+            .get("rules")
+            .and_then(Value::as_sequence)
+            .unwrap();
+        for kind in ["branch", "merge-request", "quarantine"] {
+            let condition = format!("$KITHARA_PIPELINE_KIND == \"{kind}\"");
+            let rule = rules
+                .iter()
+                .filter_map(Value::as_mapping)
+                .find(|rule| rule.get("if").and_then(Value::as_str) == Some(condition.as_str()))
+                .unwrap();
+            assert_eq!(rule.get("when").and_then(Value::as_str), Some("manual"));
+            assert_eq!(
+                rule.get("allow_failure").and_then(Value::as_bool),
+                Some(true)
+            );
+            assert_eq!(
+                rule.get("interruptible").and_then(Value::as_bool),
+                Some(true)
+            );
+        }
+    }
+    let needs = config
+        .definition("verdict")
+        .get("needs")
+        .and_then(Value::as_sequence)
+        .unwrap();
+    assert!(
+        !needs
+            .iter()
+            .any(|need| need.get("job").and_then(Value::as_str) == Some("deep:bench"))
+    );
+}
+
+#[test]
 fn child_pipeline_includes_apple_lanes_and_the_blocking_verdict() {
     let pipeline = yaml(workspace_root().join(".gitlab/ci/pipeline.yml"));
     let pipeline = mapping(&pipeline, "the child pipeline");

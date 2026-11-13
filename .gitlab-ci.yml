@@ -31,6 +31,7 @@ workflow:
     # the run would only repeat what a push already does.
     - if: $CI_PIPELINE_SOURCE == "web" && $KITHARA_PLATFORMS
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_PLATFORMS
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && $BENCH_TARGET && $RUN_BENCHMARKS == "1"
     - when: never
 
 .dispatch:
@@ -45,6 +46,15 @@ workflow:
     # stays the literal `$NAME`, and every rule reads that as a value.
     forward:
       pipeline_variables: true
+
+dispatch:bench:
+  extends: .dispatch
+  interruptible: false
+  variables:
+    KITHARA_CACHE_TRUST: review
+    KITHARA_PIPELINE_KIND: bench
+  rules:
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && $BENCH_TARGET && $RUN_BENCHMARKS == "1"
 
 dispatch:merge-request:
   extends: .dispatch

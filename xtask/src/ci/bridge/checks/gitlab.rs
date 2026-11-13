@@ -310,31 +310,33 @@ mod tests {
 
     #[test]
     fn optional_manual_jobs_do_not_hold_a_completed_pipeline_pending() {
-        for (allowed, expected) in [(true, "success"), (false, "pending")] {
-            let observed = observe_current_pipeline(
-                Scope::Full,
-                || Ok(pipeline(2, "success")),
-                |id| {
-                    Ok(if id == 2 {
-                        vec![json!({
-                            "name": "deep:rtsan",
-                            "status": "manual",
-                            "allow_failure": allowed,
-                        })]
-                    } else {
-                        success_jobs(id)
-                    })
-                },
-            )
-            .unwrap();
-            assert_eq!(observed.statuses[0].state, expected);
-            let manual = observed
-                .statuses
-                .iter()
-                .find(|status| status.context.starts_with("GitLab / deep:rtsan ["))
+        for name in ["deep:rtsan", "deep:bench"] {
+            for (allowed, expected) in [(true, "success"), (false, "pending")] {
+                let observed = observe_current_pipeline(
+                    Scope::Full,
+                    || Ok(pipeline(2, "success")),
+                    |id| {
+                        Ok(if id == 2 {
+                            vec![json!({
+                                "name": name,
+                                "status": "manual",
+                                "allow_failure": allowed,
+                            })]
+                        } else {
+                            success_jobs(id)
+                        })
+                    },
+                )
                 .unwrap();
-            assert_eq!(manual.state, expected);
-            assert_eq!(manual.description, "manual");
+                assert_eq!(observed.statuses[0].state, expected);
+                let manual = observed
+                    .statuses
+                    .iter()
+                    .find(|status| status.context.starts_with(&format!("GitLab / {name} [")))
+                    .unwrap();
+                assert_eq!(manual.state, expected);
+                assert_eq!(manual.description, "manual");
+            }
         }
     }
 

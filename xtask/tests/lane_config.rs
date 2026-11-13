@@ -239,6 +239,7 @@ fn the_catalog_accepts_exactly_the_pipeline_kinds_the_executor_knows() {
     assert_eq!(
         listed,
         vec![
+            "bench",
             "branch",
             "platforms",
             "merge-request",
@@ -260,7 +261,7 @@ fn xtask_pipeline_kind_names() -> Vec<String> {
         .find("pub(crate) const PIPELINE_KINDS")
         .expect("PIPELINE_KINDS is declared");
     let body = &source[start..];
-    // Skip past the `: [&str; 8]` type annotation first, so the brackets found
+    // Skip past the type annotation first, so the brackets found
     // below are the array literal's, not the type's.
     let assigned = body.find('=').expect("PIPELINE_KINDS is assigned a value");
     let body = &body[assigned..];

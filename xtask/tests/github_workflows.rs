@@ -2241,6 +2241,65 @@ fn a_dispatched_narrowing_reaches_every_lane_it_runs() {
 }
 
 #[test]
+fn bench_parameters_reach_the_common_executor_as_data() {
+    let calls = local_workflow_calls();
+    let workflow = github_workflow("lane.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "run");
+    let step = named_step(job, "Run the lane");
+    let env = mapping_field(step, "env").as_mapping().unwrap();
+    let forwarding: Vec<_> = calls
+        .iter()
+        .filter(|(caller, job, callee, _)| {
+            (caller == "dispatch.yml" && callee == "run.yml" && job == "deep")
+                || (caller == "run.yml" && callee == "lane.yml")
+        })
+        .collect();
+    assert!(
+        forwarding
+            .iter()
+            .any(|(caller, _, _, _)| caller == "dispatch.yml")
+    );
+    assert!(
+        forwarding
+            .iter()
+            .any(|(caller, _, _, _)| caller == "run.yml")
+    );
+    for parameter in [
+        "bench_target",
+        "bench_filter",
+        "bench_ref",
+        "bench_base_ref",
+    ] {
+        let dispatch = github_workflow("dispatch.yml");
+        assert_eq!(
+            dispatch["on"]["workflow_dispatch"]["inputs"][parameter]["default"].as_str(),
+            Some("")
+        );
+        for (caller, job, _, with) in &forwarding {
+            let expected = if caller == "dispatch.yml" {
+                format!("${{{{ inputs.{parameter} || '' }}}}")
+            } else {
+                format!("${{{{ inputs.{parameter} }}}}")
+            };
+            assert_eq!(
+                with.get(parameter).and_then(Value::as_str),
+                Some(expected.as_str()),
+                "{caller}/{job}"
+            );
+        }
+        let expected = format!("${{{{ inputs.{parameter} }}}}");
+        assert_eq!(
+            env.get(parameter.to_ascii_uppercase())
+                .and_then(Value::as_str),
+            Some(expected.as_str())
+        );
+    }
+    let script = mapping_field(step, "run").as_str().unwrap();
+    assert!(script.contains("if [ -n \"$BENCH_TARGET\" ]; then export RUN_BENCHMARKS=1; fi"));
+    assert!(!script.contains("inputs.bench_"));
+}
+
+#[test]
 fn a_request_for_one_lane_starts_nothing_beside_it() {
     let workflow = github_workflow("dispatch.yml");
     let jobs = workflow_jobs(&workflow);
