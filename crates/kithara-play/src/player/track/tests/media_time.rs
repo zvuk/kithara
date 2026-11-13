@@ -237,7 +237,7 @@ fn assert_quiet_curve_projection(
             .iter()
             .rev()
             .take_while(|operation| operation.seq == seq)
-            .all(|operation| operation.applied().is_none())
+            .all(|operation| operation.applied.is_none())
     );
     assert!(!track.segment.ready);
     let mut spans = Vec::new();
@@ -272,7 +272,7 @@ fn assert_quiet_curve_projection(
             .commands
             .iter()
             .filter(|operation| operation.seq == seq)
-            .all(|operation| operation.applied() == Some(true))
+            .all(|operation| operation.applied == Some(true))
     );
     assert!(
         track

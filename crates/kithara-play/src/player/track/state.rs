@@ -5,7 +5,6 @@ use std::{
 };
 
 use kithara_abr::AbrHandle;
-use kithara_audio::TrackFailureKind;
 use kithara_command::{Rejection, Seq, When};
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
@@ -222,13 +221,7 @@ pub(super) struct LaneOperation {
     pub(super) segment: SegmentId,
     pub(super) session: Option<SessionFrame>,
     pub(super) command: LaneCommand,
-    pub(super) verdict: Option<Result<(), Rejection<TrackFailureKind>>>,
-}
-
-impl LaneOperation {
-    pub(super) fn applied(&self) -> Option<bool> {
-        self.verdict.map(|verdict| verdict.is_ok())
-    }
+    pub(super) applied: Option<bool>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -293,7 +286,7 @@ pub(super) struct SpeedProjection {
     pub(super) speed: f32,
 }
 
-/// Every lane command a track has sent, with the lane's verdicts.
+/// Every lane command a track has sent, with its final acceptance bit.
 ///
 /// `speed_projection` is derived from `commands`, so the history changes only
 /// through `submit` and `answered`, which both drop it. `speed_answers` holds
@@ -312,7 +305,7 @@ impl LaneHistory {
         self.commands.extend(operations);
     }
 
-    /// The operations one lane receipt answers, for their verdict.
+    /// The operations one lane receipt answers.
     pub(super) fn answered(&mut self, seq: Seq) -> impl Iterator<Item = &mut LaneOperation> {
         self.speed_projection.set(None);
         self.commands

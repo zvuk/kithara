@@ -62,7 +62,7 @@ impl<S> Track<S> for PlayerImpl<S> {
             .is_some_and(|mark| mark.lane.segment == self.segment.id && mark.lane.frame > 0);
         let mut prepared = None;
         for operation in self.lane_history.commands.iter().rev() {
-            if operation.applied() == Some(false) {
+            if operation.applied == Some(false) {
                 continue;
             }
             match &operation.command {
@@ -288,7 +288,7 @@ impl<S> Track<S> for PlayerImpl<S> {
             .commands
             .iter()
             .find(|operation| operation.seq == seq)
-            .and_then(LaneOperation::applied)
+            .and_then(|operation| operation.applied)
     }
 
     fn attached(&self) -> bool {
@@ -392,7 +392,7 @@ impl<S> PlayerImpl<S> {
         let mut commands: Vec<(u64, Seq, PlannedChange<'_>)> =
             Vec::with_capacity(self.lane_history.commands.len());
         for operation in &self.lane_history.commands {
-            if operation.applied() == Some(false) {
+            if operation.applied == Some(false) {
                 continue;
             }
             let frame = match &operation.command {
@@ -422,7 +422,7 @@ impl<S> PlayerImpl<S> {
                     let landing = frame
                         .checked_add(self.geometry.declick.get() as u64)
                         .ok_or(PlayError::Untimed)?;
-                    let superseded = self.lane_history.commands.iter().any(|next| next.seq != operation.seq && next.applied() != Some(false)
+                    let superseded = self.lane_history.commands.iter().any(|next| next.seq != operation.seq && next.applied != Some(false)
                         && matches!(next.command, LaneCommand::Jump { .. })
                         && matches!(next.when, When::At(at) if at.segment == segment && (at.frame > frame || at.frame == frame && next.seq > operation.seq) && at.frame < landing));
                     if !superseded {

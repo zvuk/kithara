@@ -98,6 +98,55 @@ async fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(
     }
 }
 
+#[kithara::test]
+#[case::segment(false)]
+#[case::host_rate(true)]
+fn a_current_preparation_refusal_outlives_its_command_record(#[case] host_rate: bool) {
+    let mut rig = rig();
+    let (mut track, mut inbox) = prepared_track();
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        if host_rate {
+            TrackCommand::SetHostRate {
+                rate: mock::SAMPLE_RATE,
+            }
+        } else {
+            TrackCommand::Seek { to: Duration::ZERO }
+        },
+    );
+    let seq = track
+        .lane_history
+        .commands
+        .last()
+        .expect("source preparation")
+        .seq;
+    let segment = track.segment.id;
+    inbox.drain();
+    inbox
+        .next_due(LaneFrame { segment, frame: 0 }, 1)
+        .expect("source preparation due")
+        .refuse(TrackFailureKind::SourceCancelled);
+    assert!(matches!(
+        in_pass(&mut rig, frame(0), |out| track
+            .prepare_entry(frame(128), out)),
+        Err(PlayError::Lane(TrackFailureKind::SourceCancelled))
+    ));
+    assert!(!matches!(track.status, TrackStatus::Failed { .. }));
+    track
+        .lane_history
+        .commands
+        .retain(|operation| operation.seq != seq);
+    assert!(
+        matches!(
+            in_pass(&mut rig, frame(0), |out| track
+                .prepare_entry(frame(128), out)),
+            Err(PlayError::Lane(TrackFailureKind::SourceCancelled))
+        ),
+        "the current preparation refusal must survive its detailed command record"
+    );
+}
+
 fn pause_prepared_track(track: &mut Track, rig: &mut Rig) {
     let status = track.snapshot().status;
     let position = track.snapshot().position;
@@ -248,38 +297,41 @@ fn assert_obsolete_preparation_refusal(host_rate: bool) {
             TrackCommand::Seek { to: Duration::ZERO }
         },
     );
-    let current = track.segment.id;
+    let obsolete_segment = track.segment.id;
     let obsolete = track
         .lane_history
         .commands
         .last()
         .expect("first preparation")
         .seq;
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        if host_rate {
+            TrackCommand::SetHostRate {
+                rate: mock::SAMPLE_RATE,
+            }
+        } else {
+            TrackCommand::Seek { to: Duration::ZERO }
+        },
+    );
+    let current = track.segment.id;
     let replacement = track
-        .send_lane(
-            if host_rate {
-                LaneCommand::SetHostRate {
-                    id: current,
-                    rate: mock::SAMPLE_RATE,
-                }
-            } else {
-                LaneCommand::Segment {
-                    id: current,
-                    from: Duration::ZERO,
-                    speed: SpeedCurve::Constant(1.0),
-                }
-            },
-            When::Next,
-        )
-        .expect("same-segment replacement");
+        .lane_history
+        .commands
+        .last()
+        .expect("replacement preparation")
+        .seq;
     assert_ne!(obsolete, replacement);
+    assert_ne!(obsolete_segment, current);
     assert!(
         track
             .lane_history
             .commands
             .iter()
             .all(|operation| matches!(operation.command,
-        LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. } if id == current))
+        LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. }
+            if id == obsolete_segment || id == current))
     );
     inbox.drain();
     let due = inbox
@@ -296,7 +348,7 @@ fn assert_obsolete_preparation_refusal(host_rate: bool) {
     assert!(
         !in_pass(&mut rig, frame(64), |out| track
             .prepare_entry(frame(128), out))
-        .expect("obsolete same-segment refusal cannot reject replacement")
+        .expect("obsolete preparation refusal cannot reject replacement")
     );
     in_pass(&mut rig, frame(64), |out| track.tick(frame(64), out));
     assert_eq!(track.snapshot().status, TrackStatus::Loaded);
@@ -480,6 +532,7 @@ async fn assert_failed_replacement_keeps_incumbent(
     });
     assert_eq!(newcomer.status(), TrackStatus::Loaded);
     assert!(!newcomer.attached());
+    assert!(newcomer.segment.ready);
     let (sender, mut inbox) = lane();
     newcomer.lane = Some(sender);
     let group = with_mixer(&mut mixer, &mut support.dispatcher, frame(64), |out| {
@@ -526,6 +579,8 @@ async fn assert_failed_replacement_keeps_incumbent(
             When::Next,
         )
         .expect("native source preparation");
+    // Model the pending source verdict without issuing another deck adoption.
+    newcomer.segment = newcomer.segment.with_request(source);
     inbox.drain();
     let due = inbox
         .next_due(LaneFrame { segment, frame: 0 }, 1)
@@ -1042,7 +1097,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
             .lane_history
             .commands
             .iter()
-            .all(|operation| operation.seq == seq && operation.applied() == Some(applied))
+            .all(|operation| operation.seq == seq && operation.applied == Some(applied))
     );
     let receipt = track.speed_receipt().expect("batch verdict");
     assert!(match receipt {

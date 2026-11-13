@@ -1,4 +1,5 @@
-use kithara_command::Seq;
+use kithara_audio::TrackFailureKind;
+use kithara_command::{Rejection, Seq};
 use kithara_signal::SegmentId;
 
 use super::state::Position;
@@ -10,6 +11,9 @@ use super::state::Position;
 /// restores its parked segment the same way. `observe` fills a missing origin
 /// from the first chunk the deck reports, and the lane's readiness report sets
 /// `ready`.
+///
+/// The selected source-changing request owns its verdict independently of
+/// retained command history.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Segment {
     pub(super) id: SegmentId,
@@ -19,6 +23,13 @@ pub(super) struct Segment {
     pub(super) speed: f32,
     /// The lane's latest readiness report names this segment.
     pub(super) ready: bool,
+    request: Option<SourceRequest>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SourceRequest {
+    seq: Seq,
+    verdict: Option<Result<(), Rejection<TrackFailureKind>>>,
 }
 
 impl Segment {
@@ -28,7 +39,27 @@ impl Segment {
             origin,
             speed,
             ready: false,
+            request: None,
         }
+    }
+
+    pub(super) fn with_request(mut self, seq: Seq) -> Self {
+        self.request = Some(SourceRequest { seq, verdict: None });
+        self
+    }
+
+    pub(super) fn answer_request(
+        &mut self,
+        seq: Seq,
+        verdict: Result<(), Rejection<TrackFailureKind>>,
+    ) {
+        if let Some(request) = self.request.as_mut().filter(|request| request.seq == seq) {
+            request.verdict = Some(verdict);
+        }
+    }
+
+    pub(super) fn request_verdict(&self) -> Option<Result<(), Rejection<TrackFailureKind>>> {
+        self.request.and_then(|request| request.verdict)
     }
 
     /// Records the lane's readiness report; a report for another segment

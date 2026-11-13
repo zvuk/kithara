@@ -3749,7 +3749,11 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
             assert!(
                 operations
                     .iter()
-                    .all(|operation| operation.verdict == Some(Err(Rejection::Unanswered)))
+                    .all(|operation| operation.applied == Some(false))
+            );
+            assert_eq!(
+                track.segment.request_verdict(),
+                Some(Err(Rejection::Unanswered))
             );
             assert!(
                 track
@@ -4240,7 +4244,7 @@ fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
         .iter_mut()
         .find(|operation| operation.seq == seq)
         .expect("accepted speed")
-        .verdict = Some(Err(Rejection::Stale));
+        .applied = Some(false);
     assert_eq!(
         track.planned_end(rate).expect("withdrawn curve"),
         Some(frame(107))

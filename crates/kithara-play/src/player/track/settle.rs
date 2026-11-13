@@ -71,7 +71,8 @@ impl<S> PlayerImpl<S> {
         if rate.is_none() {
             self.settings.track(seq, When::Next, change);
         }
-        self.segment = Segment::issued(segment, origin, starting_speed.unwrap_or(final_speed));
+        self.segment = Segment::issued(segment, origin, starting_speed.unwrap_or(final_speed))
+            .with_request(seq);
         self.observed_source = None;
         self.mark = None;
         self.resume = None;
@@ -196,7 +197,7 @@ impl<S> PlayerImpl<S> {
                 && matches!(outcome, Outcome::Rejected(Rejection::Stale))
                 && let Some((segment, position)) = adoption.parked
             {
-                if let Err(error) = self.send_lane(
+                let seq = match self.send_lane(
                     LaneCommand::Segment {
                         id: segment,
                         from: position,
@@ -204,12 +205,16 @@ impl<S> PlayerImpl<S> {
                     },
                     When::Next,
                 ) {
-                    return Some(Settled::Rejected {
-                        seq: adoption.caller,
-                        reason: Rejection::Refused(error),
-                    });
-                }
-                self.segment = Segment::issued(segment, Some(position), self.segment.speed);
+                    Ok(seq) => seq,
+                    Err(error) => {
+                        return Some(Settled::Rejected {
+                            seq: adoption.caller,
+                            reason: Rejection::Refused(error),
+                        });
+                    }
+                };
+                self.segment =
+                    Segment::issued(segment, Some(position), self.segment.speed).with_request(seq);
                 self.observed_source = None;
             }
             self.repeat = false;
@@ -385,6 +390,7 @@ impl<S> PlayerImpl<S> {
     }
 
     fn apply_lane(&mut self, seq: Seq, at: LaneFrame, data: &LaneApplied, segment: bool) {
+        self.segment.answer_request(seq, Ok(()));
         let operations = self.lane_history.answered(seq);
         let mut speed_session = None;
         for operation in operations {
@@ -406,7 +412,7 @@ impl<S> PlayerImpl<S> {
                 _ => self.mark.and_then(|mark| session_at(mark, at)),
             };
             operation.when = When::At(at);
-            operation.verdict = Some(Ok(()));
+            operation.applied = Some(true);
             if matches!(&operation.command, LaneCommand::SetSpeed(_)) {
                 speed_session = Some(session);
             }
@@ -446,9 +452,10 @@ impl<S> PlayerImpl<S> {
             if let Outcome::Applied { at, data } = receipt.outcome() {
                 self.apply_lane(receipt.seq(), *at, data, segment);
             } else if let Outcome::Rejected(reason) = receipt.outcome() {
+                self.segment.answer_request(receipt.seq(), Err(*reason));
                 let mut speed = false;
                 for operation in self.lane_history.answered(receipt.seq()) {
-                    operation.verdict = Some(Err(*reason));
+                    operation.applied = Some(false);
                     speed |= matches!(operation.command, LaneCommand::SetSpeed(_));
                 }
                 if speed && !segment {

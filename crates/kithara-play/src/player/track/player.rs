@@ -176,7 +176,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                 .lane_history
                 .commands
                 .iter()
-                .any(|operation| operation.applied().is_none())
+                .any(|operation| operation.applied.is_none())
                 || self
                     .loading
                     .as_ref()
@@ -342,7 +342,7 @@ impl<S> PlayerImpl<S> {
         };
         let parked = (self.segment.id, parked_position);
         let segment = self.issued_segment.next();
-        self.send_lane(
+        let lane_seq = self.send_lane(
             LaneCommand::Segment {
                 id: segment,
                 from: Position::ZERO,
@@ -356,7 +356,8 @@ impl<S> PlayerImpl<S> {
             segment,
             Some(Position::ZERO),
             self.settings.projected().speed(),
-        );
+        )
+        .with_request(lane_seq);
         self.playback_commands.clear();
         self.repeat = true;
         self.adoptions.inflight.push(Adoption {

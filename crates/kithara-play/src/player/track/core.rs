@@ -297,7 +297,7 @@ impl<S> PlayerImpl<S> {
                     segment: self.segment.id,
                     session,
                     command,
-                    verdict: None,
+                    applied: None,
                 }
             }));
         Ok(seq)
