@@ -49,19 +49,6 @@ required-features = ["spectrum", "portable"]
     )
     .unwrap();
     fs::write(
-        root.join("build.rs"),
-        r#"
-use std::{fs::OpenOptions, io::Write};
-fn main() {
-    println!("cargo:rerun-if-changed=arm");
-    let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
-    writeln!(events, "build:{}", include_str!("arm").trim()).unwrap();
-}
-"#
-        .replace("EVENTS", &events),
-    )
-    .unwrap();
-    fs::write(
         root.join("benches/kernel.rs"),
         r#"
 use std::{env, fs::OpenOptions, io::Write};
@@ -160,34 +147,39 @@ fn bench_builds_precede_measurements_and_head_only_needs_no_critcmp() {
     let filter = "group/.*(a|b)$; $(false)";
     let mut head = request("");
     head.filter = filter.into();
-    execute(&ctx, &head, true).unwrap();
-    assert_eq!(
-        fs::read_to_string(temp.path().join("events")).unwrap(),
-        "build:head\nrun:head\n"
-    );
-    let log = fs::read_to_string(ctx.root.join("bench-results.txt")).unwrap();
-    assert!(!log.contains("missing-benchmark-comparison-tool"));
-    assert!(log.contains(&format!("{:?}", filter)));
-
-    fs::write(temp.path().join("events"), "").unwrap();
-    execute(&ctx, &head, true).unwrap();
-    assert_eq!(
-        fs::read_to_string(temp.path().join("events")).unwrap(),
-        "build:head\nrun:head\n"
-    );
+    for _ in 0..2 {
+        fs::write(temp.path().join("events"), "").unwrap();
+        execute(&ctx, &head, true).unwrap();
+        assert_eq!(
+            fs::read_to_string(temp.path().join("events")).unwrap(),
+            "run:head\n"
+        );
+        let log = fs::read_to_string(ctx.root.join("bench-results.txt")).unwrap();
+        assert!(!log.contains("missing-benchmark-comparison-tool"));
+        assert!(log.contains(&format!("{:?}", filter)));
+        assert_builds_before_measurements(&log, 1);
+    }
 
     fs::write(temp.path().join("events"), "").unwrap();
     let error = execute(&ctx, &request(&base), true).unwrap_err();
     assert_eq!(error.to_string(), "start benchmark command");
     assert_eq!(
         fs::read_to_string(temp.path().join("events")).unwrap(),
-        "build:base\nbuild:head\nrun:base\nrun:head\n"
+        "run:base\nrun:head\n"
     );
+    let log = fs::read_to_string(ctx.root.join("bench-results.txt")).unwrap();
+    assert_builds_before_measurements(&log, 2);
     assert!(
         fs::read_to_string(ctx.root.join("bench-results.txt"))
             .unwrap()
             .contains("missing-benchmark-comparison-tool")
     );
+}
+
+fn assert_builds_before_measurements(log: &str, builds: usize) {
+    let before_measurement = log.split_once("\"--save-baseline\"").unwrap().0;
+    assert_eq!(log.matches("\"--no-run\"").count(), builds);
+    assert_eq!(before_measurement.matches("\"--no-run\"").count(), builds);
 }
 
 #[test]
@@ -205,8 +197,7 @@ fn bench_refuses_empty_or_unpaired_ids_before_measurement() {
                 "base/head Criterion IDs do not match; only in base: [\"group/a\"]; only in head: [\"group/b\"]"
             );
         }
-        let events = fs::read_to_string(temp.path().join("events")).unwrap();
-        assert!(!events.contains("run:"), "{events}");
+        assert!(!temp.path().join("events").exists());
         assert!(
             !fs::read_to_string(ctx.root.join("bench-results.txt"))
                 .unwrap()
@@ -241,6 +232,11 @@ fn bench_target_admission_explains_manifest_feature_differences() {
         "base/head benchmark targets or required features differ; only in base: [\"fixture-bench:kernel:portable,spectrum\"]; only in head: [\"fixture-bench:kernel:portable\"]"
     );
     assert!(!temp.path().join("events").exists());
+    assert!(
+        !fs::read_to_string(ctx.root.join("bench-results.txt"))
+            .unwrap()
+            .contains("\"--no-run\"")
+    );
 }
 
 #[test]
