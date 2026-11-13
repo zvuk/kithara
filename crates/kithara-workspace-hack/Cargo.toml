@@ -34,8 +34,6 @@ memchr = { version = "2" }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
-proc-macro2 = { version = "1" }
-quote = { version = "1" }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
@@ -45,7 +43,6 @@ serde_core = { version = "1", default-features = false, features = ["alloc", "re
 serde_json = { version = "1", features = ["alloc"] }
 simdutf8 = { version = "0.1", default-features = false, features = ["std"] }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
-syn-7b89eefb6aaa9bf3 = { package = "syn", version = "3", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
 tracing = { version = "0.1" }
@@ -74,8 +71,6 @@ memchr = { version = "2" }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
-proc-macro2 = { version = "1" }
-quote = { version = "1" }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }

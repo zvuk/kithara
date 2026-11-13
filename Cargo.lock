@@ -6776,8 +6776,6 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "portable-atomic",
- "proc-macro2",
- "quote",
  "raw-window-handle",
  "regex",
  "regex-automata",

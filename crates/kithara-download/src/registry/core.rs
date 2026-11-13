@@ -196,6 +196,65 @@ const fn classify_progress(
     FetchProgress::Idle
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod ownership_tests {
+    use std::{num::NonZeroU64, thread};
+
+    use kithara_abr::AbrPeerId;
+    use kithara_net::NetError;
+    use kithara_platform::{CancelGroup, CancelToken, time::Instant, tokio::sync::oneshot};
+    use kithara_test_utils::{cancel_token, kithara};
+    use url::Url;
+
+    use super::Registry;
+    use crate::{
+        FetchCmd, RequestId, RequestPriority,
+        peer::{InternalCmd, ResponseTarget, SlotEntry},
+    };
+
+    #[kithara::test(miri, tokio)]
+    async fn queued_commands_wake_and_answer_across_registry_teardown(cancel_token: CancelToken) {
+        let mut registry = Registry::default();
+        let peer_cancel = cancel_token.child();
+        let (response, receiver) = oneshot::channel();
+        let answer = thread::spawn(move || receiver.blocking_recv());
+        registry.slots.enqueue(
+            0,
+            SlotEntry {
+                peer_cancel: peer_cancel.clone(),
+                cmd: InternalCmd {
+                    peer_id: AbrPeerId::new(NonZeroU64::MIN),
+                    cancel: CancelGroup::new(vec![peer_cancel.child()]),
+                    cmd: FetchCmd::get(
+                        Url::parse("http://example.test/queued").expect("source URI"),
+                    )
+                    .build(),
+                    enqueued_at: Instant::now(),
+                    bus: None,
+                    peer: None,
+                    request_id: RequestId::new(NonZeroU64::MIN),
+                    priority: RequestPriority::High,
+                    response: ResponseTarget::Channel(response),
+                },
+            },
+        );
+        registry.slots.urgent_notified().await;
+        assert_eq!(
+            registry.slots.len(),
+            1,
+            "publication wakes the queued owner"
+        );
+        drop(registry);
+        assert!(
+            matches!(
+                answer.join().expect("response thread"),
+                Ok(Err(NetError::Cancelled))
+            ),
+            "owner teardown answers the other thread instead of dropping its response"
+        );
+    }
+}
+
 #[cfg(test)]
 mod classify_progress_tests {
     use kithara_test_utils::kithara;

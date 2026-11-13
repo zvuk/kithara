@@ -61,7 +61,7 @@ impl TestArgs {
         }
     }
 
-    fn validate(&mut self) -> syn::Result<()> {
+    fn validate_exclusive_modes(&self) -> syn::Result<()> {
         self.check_exclusive(TestFlags::TOKIO, "tokio", TestFlags::WASM_ONLY, "wasm")?;
         self.check_exclusive(
             TestFlags::WASM_ONLY,
@@ -92,6 +92,12 @@ impl TestArgs {
             "multi_thread",
         )?;
         self.check_exclusive(TestFlags::LOOM, "loom", TestFlags::TOKIO, "tokio")?;
+
+        Ok(())
+    }
+
+    fn validate(&mut self) -> syn::Result<()> {
+        self.validate_exclusive_modes()?;
 
         if self.flags.contains(TestFlags::LOOM) && !self.soft_fail_patterns.is_empty() {
             return Err(Error::new(

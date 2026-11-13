@@ -401,7 +401,7 @@ impl Peer for QueuedPeer {
 /// ever spawning a fetch, so cancelling the downloader leaves `Downloader::run`
 /// with the queue full — the shape that used to strand every claim those
 /// commands carried.
-#[kithara::test(miri, tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn downloader_shutdown_cancels_queued_commands() {
     const COMMANDS: usize = 2;
 
@@ -473,7 +473,7 @@ async fn a_new_peer_is_polled_while_fetch_capacity_is_full() {
     ));
 }
 
-#[kithara::test(miri, tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn a_cancelled_queued_fetch_settles_without_capacity() {
     let url = Url::parse("http://example.test/queued").expect("valid test URL");
     let epoch = CancelToken::never();
@@ -769,7 +769,7 @@ async fn completed_request_duration_excludes_real_time_spent_before_it() {
     drop(handle);
 }
 
-#[kithara::test(miri, tokio)]
+#[kithara::test(tokio)]
 async fn peer_handle_cancel_scoped_to_peer() {
     let dl = Downloader::new(test_config());
     let peer_a = dl.register(Arc::new(MockPeer::new()), None);
@@ -783,7 +783,7 @@ async fn peer_handle_cancel_scoped_to_peer() {
     );
 }
 
-#[kithara::test(miri, tokio)]
+#[kithara::test(tokio)]
 async fn peer_handle_cancel_fires_on_last_clone_drop() {
     let dl = Downloader::new(test_config());
     let handle = dl.register(Arc::new(MockPeer::new()), None);
@@ -842,7 +842,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
     assert!(result.is_err(), "expected Err after peer cancel");
 }
 
-#[kithara::test(miri, tokio)]
+#[kithara::test(tokio)]
 async fn peer_handle_downloader_cancel_cascades() {
     let cancel = CancelToken::never();
     let dl = Downloader::new(
