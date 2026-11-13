@@ -46,7 +46,11 @@ impl FxParamDescriptor {
         {
             return None;
         }
-        Some(Self { range, unit, mapping })
+        Some(Self {
+            range,
+            unit,
+            mapping,
+        })
     }
 
     /// Whether `value` is finite, in range and integral for a stepped parameter.
@@ -133,7 +137,11 @@ mod tests {
 
     #[kithara::test]
     fn fx_param_descriptor_checks_values_and_steps() {
-        for mapping in [Some(FxParamMapping::Linear), Some(FxParamMapping::Log), None] {
+        for mapping in [
+            Some(FxParamMapping::Linear),
+            Some(FxParamMapping::Log),
+            None,
+        ] {
             let descriptor =
                 FxParamDescriptor::checked(1.0..=3.0, FxParamUnit::Ratio, mapping).unwrap();
             for value in [1.0, 2.0, 3.0] {

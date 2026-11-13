@@ -900,7 +900,8 @@ impl DeckEffect for ParameterGain {
     fn process(&mut self, input: [&[f32]; 2], wet: [&mut [f32]; 2]) {
         for (input, wet) in input.into_iter().zip(wet) {
             for (sample, out) in input.iter().zip(wet) {
-                *out = (f64::from(*sample) * self.gain).to_f32()
+                *out = (f64::from(*sample) * self.gain)
+                    .to_f32()
                     .expect("bounded gain output fits f32");
             }
         }
@@ -947,10 +948,16 @@ async fn deck_fx_mismatched_param_refuses_batch() {
         vec![(
             LEAD + 500,
             vec![
-                DeckFxChange::Install { unit: 1, effect: Box::new(ParameterGain::new()) },
+                DeckFxChange::Install {
+                    unit: 1,
+                    effect: Box::new(ParameterGain::new()),
+                },
                 DeckFxChange::Param {
                     unit: 1,
-                    change: FxParamChange { index: 0, value: 0.25 },
+                    change: FxParamChange {
+                        index: 0,
+                        value: 0.25,
+                    },
                 },
             ],
         )],
@@ -958,36 +965,67 @@ async fn deck_fx_mismatched_param_refuses_batch() {
     )
     .await;
     assert_eq!(
-        valid.iter().zip(&expected).position(|(a, b)| a != b).map(|i| i / CHANNELS),
+        valid
+            .iter()
+            .zip(&expected)
+            .position(|(a, b)| a != b)
+            .map(|i| i / CHANNELS),
         Some(LEAD + 500),
         "a declared parameter reaches its effect on its frame",
     );
     let mut timed = Vec::new();
     for (index, change) in [
-        FxParamChange { index: 1, value: 0.25 },
-        FxParamChange { index: 0, value: 2.0 },
-        FxParamChange { index: 0, value: f64::NAN },
-    ].into_iter().enumerate() {
+        FxParamChange {
+            index: 1,
+            value: 0.25,
+        },
+        FxParamChange {
+            index: 0,
+            value: 2.0,
+        },
+        FxParamChange {
+            index: 0,
+            value: f64::NAN,
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
         timed.push((
             LEAD + 500 + index * 1000,
             vec![
-                DeckFxChange::Mix { unit: 0, value: FxMix::MIN },
+                DeckFxChange::Mix {
+                    unit: 0,
+                    value: FxMix::MIN,
+                },
                 DeckFxChange::Param { unit: 1, change },
             ],
         ));
     }
     for (offset, layout) in [
         (LEAD + 3500, DeckFxChange::Clear { unit: 1 }),
-        (LEAD + 4500, DeckFxChange::Install { unit: 1, effect: Box::new(Curve(|sample| sample)) }),
+        (
+            LEAD + 4500,
+            DeckFxChange::Install {
+                unit: 1,
+                effect: Box::new(Curve(|sample| sample)),
+            },
+        ),
     ] {
         timed.push((
             offset,
             vec![
-                DeckFxChange::Mix { unit: 0, value: FxMix::MIN },
+                DeckFxChange::Mix {
+                    unit: 0,
+                    value: FxMix::MIN,
+                },
                 layout,
                 DeckFxChange::Param {
                     unit: 1,
-                    change: FxParamChange { index: 0, value: 0.25 },
+                    change: FxParamChange {
+                        index: 0,
+                        value: 0.25,
+                    },
                 },
             ],
         ));
@@ -1000,5 +1038,9 @@ async fn deck_fx_mismatched_param_refuses_batch() {
         None,
     )
     .await;
-    assert_same(&refused, &expected, "a mismatched parameter changes neither unit");
+    assert_same(
+        &refused,
+        &expected,
+        "a mismatched parameter changes neither unit",
+    );
 }

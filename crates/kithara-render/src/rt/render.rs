@@ -233,16 +233,19 @@ impl RenderPass {
         change: FxParamChange,
         preceding: &[DeckPart],
     ) -> bool {
-        let current = self.units
-            .get(unit)
-            .and_then(|unit| unit.effect.as_deref());
-        preceding.iter().rev().find_map(|part| match part {
-            DeckPart::Fx(DeckFxChange::Install { unit: target, effect }) if *target == unit => {
-                Some(Some(effect.as_ref()))
-            }
-            DeckPart::Fx(DeckFxChange::Clear { unit: target }) if *target == unit => Some(None),
-            _ => None,
-        }).unwrap_or(current)
+        let current = self.units.get(unit).and_then(|unit| unit.effect.as_deref());
+        preceding
+            .iter()
+            .rev()
+            .find_map(|part| match part {
+                DeckPart::Fx(DeckFxChange::Install {
+                    unit: target,
+                    effect,
+                }) if *target == unit => Some(Some(effect.as_ref())),
+                DeckPart::Fx(DeckFxChange::Clear { unit: target }) if *target == unit => Some(None),
+                _ => None,
+            })
+            .unwrap_or(current)
             .and_then(|effect| effect.parameters().get(change.index))
             .is_some_and(|descriptor| descriptor.contains(change.value))
     }
@@ -450,8 +453,8 @@ fn frame_at(start: SessionFrame, frame: usize) -> SessionFrame {
 
 #[cfg(test)]
 mod tests {
-    use kithara_effects::FxParamDescriptor;
     use kithara_dsp::param::DEFAULT_SMOOTH_SECONDS;
+    use kithara_effects::FxParamDescriptor;
     use kithara_platform::{
         sync::{Arc, Mutex},
         time::Duration,
