@@ -4,7 +4,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     dsp::param::DEFAULT_SMOOTH_SECONDS,
-    effects::{DeckEffect, FxParamChange},
+    effects::{DeckEffect, FxParamChange, FxParamDescriptor, FxParamMapping, FxParamUnit},
     platform::{
         sync::{Arc, Mutex},
         time::Duration,
@@ -17,6 +17,7 @@ use kithara::{
 use kithara_command::When;
 use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions, asset_source};
 use kithara_test_fixtures::{asset::Asset, assets};
+use num_traits::ToPrimitive;
 
 use crate::mix_tap::load_source;
 
@@ -50,8 +51,8 @@ impl DeckEffect for Curve {
         }
     }
 
-    fn accepts(&self, _: &FxParamChange) -> bool {
-        false
+    fn parameters(&self) -> &[FxParamDescriptor] {
+        &[]
     }
 
     fn set(&mut self, _: FxParamChange) {}
@@ -111,8 +112,8 @@ impl DeckEffect for Echo {
         }
     }
 
-    fn accepts(&self, _: &FxParamChange) -> bool {
-        false
+    fn parameters(&self) -> &[FxParamDescriptor] {
+        &[]
     }
 
     fn set(&mut self, _: FxParamChange) {}
@@ -146,8 +147,8 @@ impl DeckEffect for Clock {
         }
     }
 
-    fn accepts(&self, _: &FxParamChange) -> bool {
-        false
+    fn parameters(&self) -> &[FxParamDescriptor] {
+        &[]
     }
 
     fn set(&mut self, _: FxParamChange) {}
@@ -873,4 +874,131 @@ async fn deck_fx_missing_unit_refuses_batch() {
         &echoed,
         "a batch naming a unit the deck lacks changes no unit",
     );
+}
+
+/// A controllable wet gain with one ratio valid at every sample rate.
+struct ParameterGain {
+    parameters: [FxParamDescriptor; 1],
+    gain: f64,
+}
+
+impl ParameterGain {
+    fn new() -> Self {
+        Self {
+            parameters: [FxParamDescriptor::checked(
+                0.0..=1.0,
+                FxParamUnit::Ratio,
+                Some(FxParamMapping::Linear),
+            )
+            .expect("finite gain domain")],
+            gain: 0.75,
+        }
+    }
+}
+
+impl DeckEffect for ParameterGain {
+    fn process(&mut self, input: [&[f32]; 2], wet: [&mut [f32]; 2]) {
+        for (input, wet) in input.into_iter().zip(wet) {
+            for (sample, out) in input.iter().zip(wet) {
+                *out = (f64::from(*sample) * self.gain).to_f32()
+                    .expect("bounded gain output fits f32");
+            }
+        }
+    }
+
+    fn parameters(&self) -> &[FxParamDescriptor] {
+        &self.parameters
+    }
+
+    fn set(&mut self, change: FxParamChange) {
+        self.gain = change.value;
+    }
+
+    fn reset(&mut self) {
+        self.gain = 0.75;
+    }
+
+    fn tail_exhausted(&self) -> bool {
+        true
+    }
+
+    fn update_sample_rate(&mut self, _: NonZeroU32) {}
+}
+
+#[kithara::test(tokio)]
+async fn deck_fx_mismatched_param_refuses_batch() {
+    let setup = || {
+        let mut gain = ParameterGain::new();
+        let parameters = gain.parameters().to_vec();
+        for rate in [44_100, 96_000, 768_000] {
+            gain.update_sample_rate(NonZeroU32::new(rate).expect("test rate"));
+            assert_eq!(gain.parameters(), parameters.as_slice());
+        }
+        let mut changes = insert(0, Curve(|sample| sample * 0.5));
+        changes.extend(insert(1, gain));
+        changes
+    };
+    let asset = assets::signal_wav_sine440_1s();
+    let expected = plain_take(asset.clone(), setup()).await;
+    let valid = take(
+        deck(Some(2), DeckMixSettings::default()).await,
+        asset.clone(),
+        setup(),
+        vec![(
+            LEAD + 500,
+            vec![
+                DeckFxChange::Install { unit: 1, effect: Box::new(ParameterGain::new()) },
+                DeckFxChange::Param {
+                    unit: 1,
+                    change: FxParamChange { index: 0, value: 0.25 },
+                },
+            ],
+        )],
+        None,
+    )
+    .await;
+    assert_eq!(
+        valid.iter().zip(&expected).position(|(a, b)| a != b).map(|i| i / CHANNELS),
+        Some(LEAD + 500),
+        "a declared parameter reaches its effect on its frame",
+    );
+    let mut timed = Vec::new();
+    for (index, change) in [
+        FxParamChange { index: 1, value: 0.25 },
+        FxParamChange { index: 0, value: 2.0 },
+        FxParamChange { index: 0, value: f64::NAN },
+    ].into_iter().enumerate() {
+        timed.push((
+            LEAD + 500 + index * 1000,
+            vec![
+                DeckFxChange::Mix { unit: 0, value: FxMix::MIN },
+                DeckFxChange::Param { unit: 1, change },
+            ],
+        ));
+    }
+    for (offset, layout) in [
+        (LEAD + 3500, DeckFxChange::Clear { unit: 1 }),
+        (LEAD + 4500, DeckFxChange::Install { unit: 1, effect: Box::new(Curve(|sample| sample)) }),
+    ] {
+        timed.push((
+            offset,
+            vec![
+                DeckFxChange::Mix { unit: 0, value: FxMix::MIN },
+                layout,
+                DeckFxChange::Param {
+                    unit: 1,
+                    change: FxParamChange { index: 0, value: 0.25 },
+                },
+            ],
+        ));
+    }
+    let refused = take(
+        deck(Some(2), DeckMixSettings::default()).await,
+        asset,
+        setup(),
+        timed,
+        None,
+    )
+    .await;
+    assert_same(&refused, &expected, "a mismatched parameter changes neither unit");
 }
