@@ -235,7 +235,7 @@ fn decide_buffer_too_low_for_upswitch() {
     assert!(!d.changed());
 }
 
-#[kithara::test]
+#[kithara::test(miri)]
 fn lock_is_refcounted() {
     let state = AbrState::new(AbrMode::Auto(None));
     state.lock();
@@ -299,7 +299,7 @@ fn request_target_repeat_same_target_keeps_the_ticket() {
     assert_eq!(state.current_variant_index(), VariantIndex::new(2));
 }
 
-#[kithara::test]
+#[kithara::test(miri)]
 fn stale_claim_cannot_commit_after_same_target_aba() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
@@ -355,7 +355,7 @@ fn claim_from_old_current_cannot_commit_after_variant_changes() {
     assert_eq!(state.current_variant_index(), VariantIndex::new(2));
 }
 
-#[kithara::test]
+#[kithara::test(miri)]
 fn claim_before_lock_cannot_commit_until_reclaimed_after_unlock() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
@@ -1180,7 +1180,7 @@ async fn peer_cancel_stops_the_scheduled_min_interval_tick() {
     assert_eq!(state.pending_target(), None);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(miri, tokio)]
 async fn controller_cancel_stops_the_scheduled_min_interval_tick() {
     const INTERVAL: Duration = Duration::from_millis(100);
 
@@ -1320,7 +1320,7 @@ async fn dropping_handle_stops_only_its_scheduled_tick() {
     assert_eq!(state.pending_target(), None);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(miri, tokio)]
 async fn dropped_peer_does_not_leave_a_due_tick_deadline_spinning() {
     const INTERVAL: Duration = Duration::from_millis(20);
 

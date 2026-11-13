@@ -73,27 +73,6 @@ impl PlayerTrack {
         true
     }
 
-    pub(in crate::rt) fn fail(
-        &mut self,
-        fault: PlaybackFault,
-        offset: usize,
-        sink: &mut RtSink<'_>,
-    ) {
-        if self.state != SlotState::Playing {
-            return;
-        }
-        sink.metrics.record_decode_error();
-        self.finish_terminal(
-            DeckEvent::Failed {
-                slot: sink.slot,
-                at: sink.at(offset),
-                fault,
-            },
-            offset,
-            sink,
-        );
-    }
-
     fn finish_terminal(&mut self, event: DeckEvent, offset: usize, sink: &mut RtSink<'_>) {
         self.finish_underrun(offset, sink);
         if self.stopping() {

@@ -1,5 +1,6 @@
 mod biquad;
 mod error;
+mod svf;
 #[cfg(test)]
 mod tests;
 
@@ -8,5 +9,8 @@ mod tests;
 pub use ::biquad::{Coefficients, Errors, Hertz, Type};
 pub use error::FilterError;
 
-pub use self::biquad::{Biquad, decay_frames};
+pub use self::{
+    biquad::{Biquad, decay_frames},
+    svf::{Response, SVF_CHUNK_FRAMES, StateVariableFilter},
+};
 pub use crate::backend::Fir;

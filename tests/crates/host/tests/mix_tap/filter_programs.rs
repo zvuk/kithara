@@ -2,16 +2,11 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     assets::AssetStore,
-    effects::filter::{
-        Cutoff, FilterConfig, FilterEffect, FilterSettings, FilterSettingsChange, Kind, Q,
-    },
+    effects::filter::{FilterEffect, FilterKnob, FilterSettings},
     host::Tap,
-    play::{
-        CurveShape, DeckFilterChange, FilterParameter, FilterProgram, GainDb, ParameterKnot,
-        PlayError, ResourceConfig, ResourceSrc,
-    },
+    play::{CurveShape, FilterProgram, ParameterKnot, PlayError, ResourceConfig, ResourceSrc},
     queue::{QueueError, TrackSource},
-    signal::{AudioSpec, SessionFrame},
+    signal::SessionFrame,
     warp::WarpConfig,
 };
 use kithara_command::When;
@@ -29,12 +24,43 @@ fn point(at: u64, value: f64, shape: CurveShape) -> ParameterKnot {
     ParameterKnot::new(frame(at), value, shape).expect("finite fixture point")
 }
 
-fn cutoff_at(at: u64, start: u64) -> f64 {
-    if at >= start + 512 {
-        return 800.0;
+fn knob(value: f64) -> FilterKnob {
+    FilterKnob::checked(value).expect("knob position")
+}
+
+/// The knob of an S-shaped program from `left` at `start` to `right` after
+/// `frames`, as the deck computes it.
+fn s_curve(at: u64, start: u64, frames: u64, left: f64, right: f64) -> f64 {
+    if at >= start + frames {
+        return right;
     }
-    let t = f64::from(u32::try_from(at - start).expect("local programme frame")) / 512.0;
-    200.0 * 4.0_f64.powf(3.0 * t * t - 2.0 * t * t * t)
+    let elapsed = f64::from(u32::try_from(at - start).expect("local program frame"));
+    let t = elapsed / f64::from(u32::try_from(frames).expect("program length"));
+    left + (right - left) * (3.0 * t * t - 2.0 * t * t * t)
+}
+
+fn s_program(start: u64, frames: u64, left: f64, right: f64) -> FilterProgram {
+    FilterProgram::new(vec![
+        point(start, left, CurveShape::cubic(0.0, 1.0).expect("S shape")),
+        point(start + frames, right, CurveShape::HOLD),
+    ])
+    .expect("knob program")
+}
+
+/// One frame of the reference deck filter on a constant stereo input.
+fn tick(reference: &mut FilterEffect, input: f32, program: Option<f64>) -> [f32; 2] {
+    let (mut left, mut right) = ([input], [input]);
+    let planes = &mut [&mut left[..], &mut right[..]];
+    match program {
+        Some(position) => reference.process_program(planes, 0..1, &[position]),
+        None => reference.process(planes, 0..1),
+    }
+    .expect("reference frame");
+    [left[0], right[0]]
+}
+
+fn bits(pcm: &[f32]) -> Vec<u32> {
+    pcm.iter().map(|sample| sample.to_bits()).collect()
 }
 
 async fn loaded_filter_source(source: String) -> (OfflinePlayer, Underruns) {
@@ -66,35 +92,26 @@ async fn loaded_filter_source(source: String) -> (OfflinePlayer, Underruns) {
 )]
 #[case::inside_callback(0)]
 #[case::callback_edge(47)]
-async fn public_filter_curves_takeover_reset_and_clear_reach_the_host(#[case] phase: u64) {
+async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u64) {
     let (harness, mut underruns) =
         loaded_filter_source(asset_source(&assets::fixed_constant_wav_cd_half_44100())).await;
     let first = render_effect_window(&harness, 64).await;
     assert_eq!(first.len(), 128);
     underruns.checkpoint(harness.metrics(), true, "Filter first callback");
     assert_eq!(harness.metrics().underruns(), 0);
-    let warm = render_effect_window(&harness, 4096).await;
+    let warm = render_effect_window(&harness, 2048).await;
     assert_eq!(&warm[warm.len() - 128..], &[0.5; 128]);
-    underruns.checkpoint(harness.metrics(), true, "Filter warmup before construction");
+    underruns.checkpoint(harness.metrics(), true, "Filter warmup at the center");
     assert_eq!(harness.metrics().underruns(), 0);
     let actual_rate = harness.host().spec().await.sample_rate;
     assert_eq!(actual_rate.get(), SAMPLE_RATE);
-    let settings = FilterSettings::builder()
-        .kind(Kind::LowPass)
-        .cutoff_hz(Cutoff::checked(1_000.0).expect("cutoff"))
-        .build()
-        .expect("settings");
-    let mut reference = FilterEffect::new(
-        AudioSpec::new(2, actual_rate),
-        FilterConfig::from((harness.worker().pools().clone(), settings)),
-    )
-    .expect("independent reference state");
+    let mut reference = FilterEffect::new(actual_rate, FilterSettings::default());
     let start = harness.host().position();
-    let install = start + 529 + phase;
+    let turn = start + 529 + phase;
     harness
-        .with_queue(move |queue| queue.install_filter(When::At(frame(install)), settings))
+        .with_queue(move |queue| queue.filter(When::At(frame(turn)), knob(-0.5)))
         .await
-        .expect("public cold preparation and install");
+        .expect("public knob turn");
     let mut tap = harness
         .host()
         .attach_tap(Tap::Master, ROOMY_CAPACITY)
@@ -103,70 +120,27 @@ async fn public_filter_curves_takeover_reset_and_clear_reach_the_host(#[case] ph
     let mut take = render_effect_window(&harness, 1024).await;
     assert_eq!(tap.drain(), take);
     assert_eq!(tap.drops(), 0);
-    let installed = harness.deck_snapshot().filter;
-    assert_eq!(installed.settings(), Some(settings));
-    underruns.checkpoint(harness.metrics(), true, "Filter install");
+    let turned = harness.deck_snapshot().filter;
+    assert!(turned.binding().is_some());
+    assert!(turned.authority().is_some());
+    underruns.checkpoint(harness.metrics(), true, "Filter turn");
 
     let curve = harness.host().position() + 529 + phase;
     let manual = curve + 129;
-    let cutoff = FilterProgram::new(
-        FilterParameter::CutoffHz,
-        vec![
-            point(curve, 200.0, CurveShape::cubic(0.0, 1.0).expect("S shape")),
-            point(curve + 512, 800.0, CurveShape::HOLD),
-        ],
-    )
-    .expect("cutoff trajectory");
-    let q = FilterProgram::new(
-        FilterParameter::Q,
-        vec![
-            point(curve, 0.75, CurveShape::LINEAR),
-            point(curve + 512, 0.8, CurveShape::HOLD),
-        ],
-    )
-    .expect("Q trajectory");
     harness
-        .with_queue(move |queue| queue.filter_program(cutoff))
+        .with_queue(move |queue| queue.filter_program(s_program(curve, 512, -0.2, -0.8)))
         .await
-        .expect("public cubic cutoff");
+        .expect("public S-shaped program");
     harness
-        .with_queue(move |queue| queue.filter_program(q))
-        .await
-        .expect("public independent Q");
-    harness
-        .with_queue(move |queue| {
-            queue.filter(
-                When::At(frame(curve + 65)),
-                DeckFilterChange::Configure(FilterSettingsChange::GainDb(GainDb::MAX)),
-            )
-        })
-        .await
-        .expect("contextually refused gain submitted");
-    harness
-        .with_queue(move |queue| {
-            queue.filter(
-                When::At(frame(manual)),
-                DeckFilterChange::Configure(FilterSettingsChange::CutoffHz(
-                    Cutoff::checked(1_200.0).expect("manual cutoff"),
-                )),
-            )
-        })
+        .with_queue(move |queue| queue.filter(When::At(frame(manual)), knob(0.25)))
         .await
         .expect("public manual takeover");
-    let stale = FilterProgram::new(
-        FilterParameter::CutoffHz,
-        vec![point(curve + 256, 4_000.0, CurveShape::HOLD)],
-    )
-    .expect("queued stale sweep");
+    let stale = s_program(curve + 256, 64, 1.0, 1.0);
     harness
         .with_queue(move |queue| queue.filter_program(stale))
         .await
         .expect("stale request is queued before manual authority applies");
-    let late = FilterProgram::new(
-        FilterParameter::CutoffHz,
-        vec![point(start, 2_000.0, CurveShape::HOLD)],
-    )
-    .expect("late sweep");
+    let late = s_program(start, 64, 0.5, 0.5);
     assert!(matches!(
         harness
             .with_queue(move |queue| queue.filter_program(late))
@@ -177,106 +151,51 @@ async fn public_filter_curves_takeover_reset_and_clear_reach_the_host(#[case] ph
     assert_eq!(tap.drain(), sweep);
     take.extend(sweep);
     let snapshot = harness.deck_snapshot().filter;
-    assert_eq!(
-        f64::from(snapshot.settings().expect("settings").cutoff_hz()),
-        1_200.0
+    assert_ne!(snapshot.authority(), turned.authority());
+    assert_eq!(snapshot.program(), None);
+    assert_eq!(snapshot.binding(), turned.binding());
+    underruns.checkpoint(
+        harness.metrics(),
+        true,
+        "Filter program and manual takeover",
     );
-    assert_eq!(f64::from(snapshot.settings().expect("settings").q()), 0.8);
-    assert_eq!(
-        snapshot.settings().expect("settings").gain_db(),
-        GainDb::DEFAULT
-    );
-    assert!(snapshot.authority(FilterParameter::CutoffHz).is_some());
-    assert_eq!(snapshot.program(FilterParameter::CutoffHz), None);
-    assert!(snapshot.program(FilterParameter::Q).is_some());
-    assert_eq!(snapshot.authority(FilterParameter::Q), None);
-    underruns.checkpoint(harness.metrics(), true, "Filter curves and manual takeover");
 
-    let reset = harness.host().position() + 529 + phase;
+    let center = harness.host().position() + 529 + phase;
     harness
-        .with_queue(move |queue| queue.filter(When::At(frame(reset)), DeckFilterChange::Reset))
+        .with_queue(move |queue| queue.filter(When::At(frame(center)), FilterKnob::DEFAULT))
         .await
-        .expect("public reset");
-    let restarted = render_effect_window(&harness, 1024).await;
-    assert_eq!(tap.drain(), restarted);
-    take.extend(restarted);
+        .expect("public return to center");
+    // The manual glide to center lasts 62 ms, about 2734 frames.
+    let returned = render_effect_window(&harness, 4096).await;
+    assert_eq!(tap.drain(), returned);
     assert_eq!(
-        harness.deck_snapshot().filter.binding(),
-        installed.binding()
+        &returned[returned.len() - 256..],
+        &[0.5; 256],
+        "the center passes the source bit for bit"
     );
-    assert_eq!(
-        harness.deck_snapshot().filter.program(FilterParameter::Q),
-        None
-    );
-    let clear = harness.host().position() + 529 + phase;
-    harness
-        .with_queue(move |queue| queue.filter(When::At(frame(clear)), DeckFilterChange::Clear))
-        .await
-        .expect("public clear");
-    let cleared = render_effect_window(&harness, 1024).await;
-    assert_eq!(tap.drain(), cleared);
-    take.extend(cleared);
-    assert_eq!(harness.deck_snapshot().filter.settings(), None);
-    assert_ne!(
-        harness.deck_snapshot().filter.binding(),
-        installed.binding()
-    );
-    assert_eq!(harness.host().position(), start + 5120);
+    take.extend(returned);
+    assert_eq!(harness.host().position(), start + 7168);
+    assert_eq!(harness.deck_snapshot().filter.knob(), 0.0);
 
     let mut expected = Vec::with_capacity(take.len());
-    for offset in 0_u64..5120 {
+    for offset in 0_u64..7168 {
         let at = start + offset;
-        let mut left = [0.5];
-        let mut right = [0.5];
-        if (install..clear).contains(&at) {
-            if (curve..=manual).contains(&at) {
-                reference
-                    .set_explicit(FilterSettingsChange::CutoffHz(
-                        Cutoff::checked(cutoff_at(at, curve)).expect("curve reference cutoff"),
-                    ))
-                    .expect("curve reference");
+        for (frame, position) in [(turn, -0.5), (manual, 0.25), (center, 0.0)] {
+            if at == frame {
+                reference.configure(knob(position));
             }
-            if at == manual {
-                reference
-                    .configure(FilterSettingsChange::CutoffHz(
-                        Cutoff::checked(1_200.0).expect("manual reference"),
-                    ))
-                    .expect("manual reference law");
-            }
-            if (curve..=curve + 512).contains(&at) {
-                let t = f64::from(u32::try_from(at - curve).expect("local Q frame")) / 512.0;
-                let q = if at == curve + 512 {
-                    0.8
-                } else {
-                    0.75 + (0.8 - 0.75) * t
-                };
-                reference
-                    .set_explicit(FilterSettingsChange::Q(Q::checked(q).expect("Q reference")))
-                    .expect("independent Q reference");
-            }
-            if at == reset {
-                reference.reset();
-            }
-            reference
-                .process(&mut [&mut left[..], &mut right[..]], 0..1)
-                .expect("reference frame");
         }
-        expected.extend([left[0], right[0]]);
+        let program = (curve..manual)
+            .contains(&at)
+            .then(|| s_curve(at, curve, 512, -0.2, -0.8));
+        expected.extend(tick(&mut reference, 0.5, program));
     }
     assert_ne!(
         expected,
         vec![0.5; expected.len()],
-        "the oracle hears causal history, curves and reset"
+        "the oracle hears the turn, the program and the takeover"
     );
-    assert_eq!(
-        take.iter()
-            .map(|sample| sample.to_bits())
-            .collect::<Vec<_>>(),
-        expected
-            .iter()
-            .map(|sample| sample.to_bits())
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(bits(&take), bits(&expected));
     assert_eq!(tap.drops(), 0);
     underruns.checkpoint(harness.metrics(), true, "Filter final complete edges");
     assert_eq!(harness.metrics().underruns(), 0);
@@ -293,17 +212,12 @@ async fn filter_tail_and_programme_outlive_source_eof_and_close_while_owned() {
     assert_eq!(harness.metrics().underruns(), 0);
     let warm = render_effect_window(&harness, 2048).await;
     assert_eq!(&warm[warm.len() - 128..], &[0.5; 128]);
-    let settings = FilterSettings::builder()
-        .kind(Kind::LowPass)
-        .cutoff_hz(Cutoff::checked(1_000.0).expect("cutoff"))
-        .build()
-        .expect("settings");
     let start = harness.host().position();
-    let install = start + 529;
+    let turn = start + 529;
     harness
-        .with_queue(move |queue| queue.install_filter(When::At(frame(install)), settings))
+        .with_queue(move |queue| queue.filter(When::At(frame(turn)), knob(-0.5)))
         .await
-        .expect("install resident filter");
+        .expect("turn the knob");
     let mut tap = harness
         .host()
         .attach_tap(Tap::Master, ROOMY_CAPACITY)
@@ -331,28 +245,15 @@ async fn filter_tail_and_programme_outlive_source_eof_and_close_while_owned() {
         .expect("initial source origin");
     let source_end = source_start + 4410;
     let curve = harness.host().position() + 529;
-    let end = curve + 8192;
-    let program = FilterProgram::new(
-        FilterParameter::CutoffHz,
-        vec![
-            point(curve, 200.0, CurveShape::cubic(0.0, 1.0).expect("S shape")),
-            point(end, 800.0, CurveShape::HOLD),
-        ],
-    )
-    .expect("programme beyond EOF");
     harness
-        .with_queue(move |queue| queue.filter_program(program))
+        .with_queue(move |queue| queue.filter_program(s_program(curve, 4096, -0.2, -0.8)))
         .await
         .expect("public programme");
-    let drained = render_effect_window(&harness, 10_240).await;
+    let drained = render_effect_window(&harness, 8192).await;
     assert_eq!(tap.drain(), drained);
     take.extend(drained);
     let rate = harness.host().spec().await.sample_rate;
-    let mut reference = FilterEffect::new(
-        AudioSpec::new(2, rate),
-        FilterConfig::from((harness.worker().pools().clone(), settings)),
-    )
-    .expect("reference");
+    let mut reference = FilterEffect::new(rate, FilterSettings::default());
     let mut expected = Vec::with_capacity(take.len());
     for offset in 0..take.len() / 2 {
         let at = start + u64::try_from(offset).expect("capture frame");
@@ -361,37 +262,13 @@ async fn filter_tail_and_programme_outlive_source_eof_and_close_while_owned() {
         } else {
             0.0
         };
-        let (mut left, mut right) = ([input], [input]);
-        if at >= install {
-            if at >= curve {
-                let value = if at >= end {
-                    800.0
-                } else {
-                    let t = f64::from(u32::try_from(at - curve).expect("programme local frame"))
-                        / 8192.0;
-                    200.0 * 4.0_f64.powf(3.0 * t * t - 2.0 * t * t * t)
-                };
-                reference
-                    .set_explicit(FilterSettingsChange::CutoffHz(
-                        Cutoff::checked(value).expect("positive cutoff"),
-                    ))
-                    .expect("reference point");
-            }
-            reference
-                .process(&mut [&mut left[..], &mut right[..]], 0..1)
-                .expect("reference tail");
+        if at == turn {
+            reference.configure(knob(-0.5));
         }
-        expected.extend([left[0], right[0]]);
+        let program = (at >= curve).then(|| s_curve(at, curve, 4096, -0.2, -0.8));
+        expected.extend(tick(&mut reference, input, program));
     }
-    assert_eq!(
-        take.iter()
-            .map(|sample| sample.to_bits())
-            .collect::<Vec<_>>(),
-        expected
-            .iter()
-            .map(|sample| sample.to_bits())
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(bits(&take), bits(&expected));
     assert!(
         take[take.len() - 512..]
             .iter()
@@ -411,41 +288,17 @@ async fn filter_tail_and_programme_outlive_source_eof_and_close_while_owned() {
             .iter()
             .all(|slot| slot.state != kithara_render::bridge::SlotState::Playing)
     );
-    assert_eq!(
-        f64::from(
-            snapshot
-                .filter
-                .settings()
-                .expect("resident filter")
-                .cutoff_hz()
-        ),
-        800.0
-    );
-    assert!(snapshot.filter.program(FilterParameter::CutoffHz).is_some());
+    assert_eq!(snapshot.filter.knob(), -0.8);
+    assert!(snapshot.filter.program().is_some());
     let future = harness.host().position() + 529;
-    let held = FilterProgram::new(
-        FilterParameter::CutoffHz,
-        vec![
-            point(future, 800.0, CurveShape::HOLD),
-            point(future + 8192, 800.0, CurveShape::HOLD),
-        ],
-    )
-    .expect("owned future programme");
     harness
-        .with_queue(move |queue| queue.filter_program(held))
+        .with_queue(move |queue| queue.filter_program(s_program(future, 8192, -0.8, -0.8)))
         .await
         .expect("programme on empty deck");
     let empty = render_effect_window(&harness, 640).await;
     assert_eq!(tap.drain(), empty);
     assert!(empty.iter().all(|sample| sample.to_bits() == 0));
-    assert!(
-        harness
-            .deck_snapshot()
-            .filter
-            .program(FilterParameter::CutoffHz)
-            .is_some()
-    );
-    assert!(harness.deck_snapshot().filter.settings().is_some());
+    assert!(harness.deck_snapshot().filter.program().is_some());
     assert_eq!(tap.drops(), 0);
     underruns.checkpoint(harness.metrics(), true, "Filter EOF tail and owned close");
     assert_eq!(harness.metrics().underruns(), 0);
