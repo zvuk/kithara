@@ -179,22 +179,6 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
         self.count(frame_quiet);
     }
 
-    #[cfg(test)]
-    fn frame<S: Simd, P: DerefMut<Target = [f32]>>(
-        &mut self,
-        simd: S,
-        planes: &mut [P],
-        frame: usize,
-        gain: f64,
-        damping: f64,
-        response: Response,
-    ) {
-        let mut planes = planes.iter_mut();
-        let mut samples: [Option<&mut f32>; CHANNELS] =
-            std::array::from_fn(|_| planes.next().and_then(|plane| plane.get_mut(frame)));
-        self.frame_samples(simd, &mut samples, gain, damping, response);
-    }
-
     fn count(&mut self, frame_quiet: bool) {
         self.quiet = if frame_quiet {
             self.quiet.saturating_add(1).min(consts::SECTION_MEMORY)
@@ -226,12 +210,43 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
 
 #[cfg(test)]
 mod tests {
-    use fearless_simd::{Level, dispatch};
+    use std::ops::DerefMut;
+
+    use fearless_simd::{Level, Simd, dispatch};
     use kithara_test_utils::kithara;
     use num_traits::ToPrimitive;
 
     use super::{Response, StateVariableFilter};
     use crate::consts;
+
+    trait Frame {
+        fn frame<S: Simd, P: DerefMut<Target = [f32]>>(
+            &mut self,
+            simd: S,
+            planes: &mut [P],
+            frame: usize,
+            gain: f64,
+            damping: f64,
+            response: Response,
+        );
+    }
+
+    impl<const CHANNELS: usize> Frame for StateVariableFilter<CHANNELS> {
+        fn frame<S: Simd, P: DerefMut<Target = [f32]>>(
+            &mut self,
+            simd: S,
+            planes: &mut [P],
+            frame: usize,
+            gain: f64,
+            damping: f64,
+            response: Response,
+        ) {
+            let mut planes = planes.iter_mut();
+            let mut samples: [Option<&mut f32>; CHANNELS] =
+                std::array::from_fn(|_| planes.next().and_then(|plane| plane.get_mut(frame)));
+            self.frame_samples(simd, &mut samples, gain, damping, response);
+        }
+    }
 
     struct Scalar<const CHANNELS: usize> {
         state: [[f64; 2]; CHANNELS],
