@@ -8,6 +8,7 @@ use tracing::info;
 
 use super::{
     container::{Container, container},
+    cpu,
     profile::{LinuxHost, LinuxRunner, RunnerFlavor},
 };
 use crate::{
@@ -30,6 +31,10 @@ pub(super) fn install(
     root: &Path,
 ) -> Result<()> {
     require_pinned_images(process, host, pins)?;
+    let cores = std::thread::available_parallelism()
+        .context("reading this machine's core count")?
+        .get();
+    let cpusets = cpu::assignments(host, cores)?;
     if Path::new(executable) != Path::new(consts::SERVICE_EXECUTABLE) {
         std::fs::copy(executable, consts::SERVICE_EXECUTABLE)
             .with_context(|| format!("installing {}", consts::SERVICE_EXECUTABLE))?;
@@ -37,10 +42,7 @@ pub(super) fn install(
     super::permissions::set_mode(Path::new(consts::SERVICE_EXECUTABLE), consts::EXECUTABLE)
         .with_context(|| format!("making {} executable", consts::SERVICE_EXECUTABLE))?;
 
-    let cores = std::thread::available_parallelism()
-        .context("reading this machine's core count")?
-        .get();
-    for (index, runner) in host.runners.iter().enumerate() {
+    for (runner, cpuset) in host.runners.iter().zip(cpusets) {
         client_environment(&runner.sccache_s3_env_file).with_context(|| {
             format!(
                 "validating S3 cache environment for Linux runner {}",
@@ -48,7 +50,6 @@ pub(super) fn install(
             )
         })?;
         let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(runner.service());
-        let cpuset = cpuset(index, runner.cpus, cores);
         std::fs::write(
             &path,
             unit(host, runner, &cpuset, pins, consts::SERVICE_EXECUTABLE)?,
@@ -318,24 +319,6 @@ fn install_renewal_timer(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Which cores this runner's jobs may use.
-///
-/// Blocks are handed out in order and wrap around the machine, so runners
-/// overlap once they outnumber the cores. The overlap is deliberate: what a set
-/// buys over a share is that `nproc` inside the container reports the size of
-/// the set, so Cargo starts that many compilations rather than one per host
-/// core. Sharing a core between two runners costs throughput; misreporting the
-/// count costs memory, and memory is what the kernel kills for.
-pub(super) fn cpuset(index: usize, cpus: u32, cores: usize) -> String {
-    let cores = u32::try_from(cores).unwrap_or(u32::MAX).max(1);
-    let cpus = cpus.clamp(1, cores);
-    let first = u32::try_from(index).unwrap_or(0).saturating_mul(cpus) % cores;
-    (0..cpus)
-        .map(|offset| ((first + offset) % cores).to_string())
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 /// The runner takes one job and exits, the container goes with it, and systemd
 /// starts the next one. The runner keeps its checkout and caches; checkout
 /// cleans generated files and updates tracked files without retouching unchanged
@@ -535,25 +518,6 @@ mod tests {
                 Recording::default().with_reply(&["systemctl"], reply),
             );
             assert!(health(&process, &host).is_err(), "{reply:?}");
-        }
-    }
-
-    /// The container must see as many cores as it was given, because that
-    /// count is what Cargo turns into concurrent compilations.
-    #[test]
-    fn a_runner_is_given_exactly_the_cores_it_asked_for() {
-        for index in 0..12 {
-            let set = cpuset(index, 3, 32);
-            let cores = set.split(',').collect::<Vec<_>>();
-            assert_eq!(cores.len(), 3, "index {index}: {set}");
-            assert_eq!(
-                cores
-                    .iter()
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len(),
-                3,
-                "index {index} repeats a core: {set}"
-            );
         }
     }
 
@@ -871,17 +835,6 @@ mod tests {
             mount(&first, "/runner/_work"),
             "/var/lib/kithara-ci/workspaces/kithara-ci-octocat"
         );
-    }
-
-    /// More runners than cores is the point of the exercise: an idle listener
-    /// costs nothing, so the machine carries more of them than it has cores.
-    #[test]
-    fn the_sets_wrap_instead_of_running_out() {
-        let set = cpuset(11, 3, 32);
-        assert_eq!(set, "1,2,3", "{set}");
-        assert_eq!(cpuset(0, 4, 4), "0,1,2,3");
-        // A runner may not ask for more of the machine than it has.
-        assert_eq!(cpuset(0, 9, 4), "0,1,2,3");
     }
 
     /// A unit is a command line, and one this crate cannot parse fails only
