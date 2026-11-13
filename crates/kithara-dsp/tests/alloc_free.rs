@@ -7,6 +7,7 @@ use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 #[cfg(feature = "spectrum")]
 use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, prediction_difference};
 use kithara_dsp::{
+    delay::FeedbackComb,
     fade::{self, FadeCurve},
     filter::{Biquad, Coefficients, Hertz, Type},
     interp::{InterpError, Interpolation, interpolate, interpolate_frame, weighted_frames},
@@ -373,4 +374,33 @@ fn fir_history_peak_linking_and_envelope_never_allocate() {
         detector.reset();
         envelope.reset();
     });
+}
+
+#[kithara::test(native)]
+fn feedback_comb_process_retime_retune_and_reset_never_allocate() {
+    let section = Coefficients {
+        a1: -0.8,
+        a2: 0.0,
+        b0: 0.2,
+        b1: 0.0,
+        b2: 0.0,
+    };
+    let mut comb =
+        FeedbackComb::<2>::new(PLANE, 300.5, WINDOW, section, 0.5, &pools()).expect("comb fits");
+    let near = comb.tap(100.0).expect("tap in range");
+    let far = comb.tap(700.25).expect("tap in range");
+    let input = vec![vec![0.25_f32; FRAMES]; TWO.get()];
+    let mut output = vec![vec![0.0_f32; FRAMES]; TWO.get()];
+    assert_no_alloc(|| {
+        for tap in [near, far] {
+            comb.retime(tap);
+            comb.process(&input, &mut output, 0..FRAMES)
+                .expect("planes cover the block");
+        }
+        comb.set_gain(0.25);
+        comb.set_cross(TWO);
+        comb.retune(section).expect("stable section");
+        comb.reset();
+    });
+    assert!(comb.rung_out(), "a reset comb has rung out");
 }

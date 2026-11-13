@@ -66,6 +66,8 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>filter::Biquad</code></td><td>Biquad sections in cascade over planar channels; <code>new</code> allocates, <code>retune</code>, <code>process</code>, <code>settle</code> and <code>copy_state</code> do not, and silence resets the state</td></tr>
 
+<tr><td><code>filter::decay_frames</code></td><td>Frames the slowest pole of a biquad section takes to decay under a level</td></tr>
+
 <tr><td><code>filter::Coefficients</code></td><td>The <code>biquad</code> crate's RBJ cookbook designs (with <code>Type</code>, <code>Hertz</code> and <code>Errors</code>), re-exported as the one import path</td></tr>
 
 <tr><td><code>interp::interpolate</code></td><td>Reads a window at fractional positions with an <code>interp::Interpolation</code> method (linear, quadratic, Hermite, Watte); a position outside the window is an error and leaves the output untouched</td></tr>
@@ -85,6 +87,8 @@ assert_eq!(samples, [0.0, 0.5]);
 <tr><td><code>spectrum::Autocorrelation</code></td><td>Unbiased autocorrelation of a frame over lags <code>0..N</code>; <code>new</code> takes its zero padding from the caller's pool region, <code>process</code> does not allocate</td></tr>
 
 <tr><td><code>delay::DelayLine</code></td><td>Planar frame history with one cursor for every channel, read before each write at a <code>Tap</code> of <code>1..=capacity</code> frames, integer or as the chord toward the older frame, in spans no longer than the delay; <code>new</code> takes the history from the caller's pool region, <code>read</code>, <code>write</code> and <code>reset</code> do not allocate</td></tr>
+
+<tr><td><code>delay::FeedbackComb</code></td><td>Feedback comb over a <code>DelayLine</code>: the read at the delay is the output, and the history takes the input plus that read passed through one biquad section and scaled by the gain; a delay change crosses linearly over a set number of frames, a change during a cross waits for it, and <code>rung_out</code> reports when nothing above -120 dBFS has entered the history for the capacity plus the section's decay; <code>new</code> takes the history from the caller's pool region, nothing after it allocates</td></tr>
 
 <tr><td><code>fade::FadeCurve</code></td><td>firewheel's fade curve, re-exported as the one import path</td></tr>
 

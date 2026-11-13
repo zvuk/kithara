@@ -22,3 +22,10 @@ pub(crate) const SETTLE_FLOOR_LOG2: f64 = -24.0;
 pub(crate) const SILENT_PEAK: f32 = 1.0e-9;
 /// Consecutive stream frames required to retire a quiet biquad state.
 pub(crate) const SECTION_MEMORY: usize = 2;
+
+/// Frames a feedback comb renders per pass; its send scratch lives on the
+/// stack at this length.
+pub(crate) const COMB_CHUNK: usize = 256;
+/// Level, -120 dBFS, at or under which a sample a feedback comb writes to its
+/// history counts as silent.
+pub(crate) const COMB_FLOOR: f32 = 1e-6;
