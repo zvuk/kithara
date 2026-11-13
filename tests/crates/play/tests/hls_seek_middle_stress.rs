@@ -5,7 +5,6 @@ use std::num::NonZeroU32;
 use kithara::{
     decode::DecoderBackend,
     host::{HostConfig, HostSettings},
-    platform::time::Duration,
     play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
@@ -41,7 +40,7 @@ mod consts {
     pub(super) const SEEK_TARGETS: [f64; 5] = [9.0, 5.0, 7.5, 11.0, 8.1];
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Long))]
 #[cfg_attr(
     not(target_os = "android"),
     case::quick_symphonia(1, DecoderBackend::Symphonia)

@@ -38,7 +38,7 @@ time::sleep(time::Duration::from_millis(10)).await;
 - `thread::{spawn, spawn_named, is_main_thread, is_worker_thread, assert_main_thread, park_timeout, paced_backoff, unpark}` — thread primitives with thread-affinity helpers.
 - `tokio::task::{spawn, spawn_blocking, yield_now}` — runtime task primitives (native `tokio`, worker-aware on wasm).
 - `time::{sleep, timeout, Instant, Duration}` — timing helpers; the single timestamp source (`web_time` / `std::time` are banned outside this crate).
-- `flash::{real_io, reset}` — flash-only control helpers; inert through `flash::` when the feature is off.
+- `flash::{ENABLED, real_io, reset}` — compile-time availability and clock controls; `ENABLED` is false on wasm and when native Flash is disabled.
 - `CancelToken` — the single workspace cancellation token; `CancelScope`, `CancelGroup`, `CancelToken::{root, never, child}`.
 - `flash` — off-by-default, native, test-only cargo feature that swaps the wall clock for a deterministic virtual timeline.
 

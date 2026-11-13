@@ -36,7 +36,7 @@ async fn server() -> TestServerHelper {
     tokio,
     multi_thread,
     serial,
-    timeout(Duration::from_secs(90)),
+    timeout(Duration::from_millis(6368)),
     hang_timeout_secs(2)
 )]
 #[case::plain("/assets/hls-gapless/master.m3u8")]

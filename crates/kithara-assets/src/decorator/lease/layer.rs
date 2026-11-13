@@ -308,7 +308,6 @@ where
 mod tests {
     use std::{collections::HashSet, fs};
 
-    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -353,7 +352,7 @@ mod tests {
         drop(writer.commit(Some(len)).unwrap());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn reading_a_committed_resource_does_not_write_the_pins_index() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease(dir.path());
@@ -375,7 +374,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn reader_lease_still_guards_the_asset_against_eviction() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease(dir.path());
@@ -390,7 +389,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn pin_persists_immediately() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease(dir.path());
@@ -405,7 +404,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn drop_guard_eagerly_persists_unpin() {
         let dir = tempfile::tempdir().unwrap();
         let key = ResourceKey::relative(consts::LAYER_ROOT, "audio.mp3");
@@ -425,7 +424,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn clone_pin_persists_immediately() {
         let dir = tempfile::tempdir().unwrap();
         let key = ResourceKey::relative(consts::LAYER_ROOT, "audio.mp3");
@@ -448,7 +447,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn bypass_does_not_pin_for_absolute_key() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease(dir.path());
@@ -464,7 +463,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn bypass_still_returns_resources() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease(dir.path());

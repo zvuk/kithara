@@ -166,7 +166,7 @@ async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, labe
 /// `hls` exercises the HLS branch in the same restart shape so we catch
 /// any regression in `track_replay_after_switch.rs`-adjacent code paths
 /// when the cold-replay fix lands.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, multi_thread, timeout(Medium))]
 #[case::mp3_with_extension(mp3_with_extension().await)]
 #[case::mp3_no_extension(mp3_no_extension().await)]
 #[case::hls(hls().await)]

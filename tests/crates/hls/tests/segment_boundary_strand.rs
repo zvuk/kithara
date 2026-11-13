@@ -115,7 +115,6 @@ async fn gated_audio(
 #[kithara::test(
     tokio,
     native,
-    timeout(Duration::from_secs(30)),
     tracing("kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
 )]
 async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous(

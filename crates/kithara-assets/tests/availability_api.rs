@@ -7,14 +7,13 @@ use kithara_test_dylib as _;
 mod support;
 
 use kithara_assets::{AcquisitionResult, AssetStore, ReadSide, StorageBackend, WriteSide};
-use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use support::{Test, resource, source};
 use tempfile::tempdir;
 
 const ROOT: &str = "availability-p2";
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn disk_store_empty_aggregate_returns_empty() {
     let dir = tempdir().unwrap();
     let store = AssetStore::builder(support::pools())
@@ -34,7 +33,7 @@ fn disk_store_empty_aggregate_returns_empty() {
     assert_eq!(scope.store().final_len(&key), None);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn mem_store_empty_aggregate_returns_empty() {
     let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
@@ -47,7 +46,7 @@ fn mem_store_empty_aggregate_returns_empty() {
     assert_eq!(scope.store().final_len(&key), None);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn unknown_length_read_clears_the_destination() {
     let pools = support::pools();
     let store = AssetStore::builder(pools.clone())
@@ -69,7 +68,7 @@ fn unknown_length_read_clears_the_destination() {
     assert!(buffer.is_empty());
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn disk_store_slow_path_finds_committed_file() {
     let dir = tempdir().unwrap();
     let store = AssetStore::builder(support::pools())
@@ -97,7 +96,7 @@ fn disk_store_slow_path_finds_committed_file() {
     assert_eq!(pairs, vec![(0, 11)]);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn remove_resource_clears_aggregate_remove_call() {
     let dir = tempdir().unwrap();
     let store = AssetStore::builder(support::pools())

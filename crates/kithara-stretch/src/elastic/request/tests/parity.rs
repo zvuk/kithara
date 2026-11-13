@@ -224,7 +224,7 @@ fn misplaced_kicks(backend: StretchKind, name: &str, profile: Profile) -> Vec<St
         .collect()
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1294)))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

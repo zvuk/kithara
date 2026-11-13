@@ -152,7 +152,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test(miri, flash(false), timeout(Duration::from_secs(5)))]
+    #[kithara::test(miri, flash(false))]
     fn cancellation_at_park_publishes_a_guarded_readiness_edge() {
         for from_parent in [false, true] {
             let parent = CancelScope::new(None);
@@ -175,9 +175,11 @@ mod tests {
                     cancelling_control.cancel();
                 }
             });
-            wait_until_blocking(Duration::from_secs(1), "reader cancellation", || {
-                control.is_cancelled()
-            })
+            wait_until_blocking(
+                kithara_test_utils::TestBudget::Quick.timeout(false),
+                "reader cancellation",
+                || control.is_cancelled(),
+            )
             .expect("cancellation lands after the live predicate, before parking");
             assert!(control.is_cancelled());
 

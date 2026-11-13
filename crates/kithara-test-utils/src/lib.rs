@@ -50,6 +50,7 @@ pub use pace::pace;
 pub use rng::Xorshift64;
 #[cfg(feature = "temp-dir")]
 pub use temp_dir::{TestTempDir, temp_dir, temp_path};
+pub use test::TestBudget;
 pub use wait::{wait_until, wait_until_blocking};
 
 pub mod kithara {

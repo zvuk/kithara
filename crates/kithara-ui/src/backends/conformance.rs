@@ -324,7 +324,7 @@ fn through_vello(list: &DrawList) -> Vec<u8> {
     rasterise(&scene).unwrap_or_else(|error| panic!("vello must rasterise: {error}"))
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn vello_paints_what_a_clip_contains() {
     let rgba = through_vello(&clipped());
     assert!(
@@ -333,7 +333,7 @@ fn vello_paints_what_a_clip_contains() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn vello_leaves_the_hole_an_outline_asked_for() {
     let rgba = through_vello(&ring());
     let middle = consts::HOLE.y + consts::HOLE.h / 2.0;
@@ -364,7 +364,7 @@ fn vello_ramps_a_radial_out_from_the_centre_it_was_given() {
 /// iced has no radial gradient, so the honest answer is nothing — including the
 /// plain rectangle underneath, which it could have drawn perfectly well. Half a
 /// picture is a picture the list never described.
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 fn iced_refuses_a_list_holding_a_ramp_it_cannot_draw() {
     assert!(
         surface_is_untouched(&through_iced(&radial())),
@@ -399,7 +399,7 @@ fn vello_shapes_a_stroke_the_way_the_pen_asked() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn iced_shapes_a_stroke_the_way_the_pen_asked() {
     let flush = through_iced(&shaped(flush()));
     let reaching = through_iced(&shaped(reaching()));
@@ -419,7 +419,7 @@ fn iced_shapes_a_stroke_the_way_the_pen_asked() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn iced_runs_a_ramp_across_the_shape_it_fills() {
     assert!(
         ramp_runs_across(&through_iced(&ramped())),
@@ -427,7 +427,7 @@ fn iced_runs_a_ramp_across_the_shape_it_fills() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn iced_leaves_the_hole_an_outline_asked_for() {
     assert!(
         ring_has_a_hole(&through_iced(&ring())),
@@ -435,7 +435,7 @@ fn iced_leaves_the_hole_an_outline_asked_for() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn iced_paints_what_a_clip_contains() {
     let rgba = through_iced(&clipped());
     let x = pixel_index(consts::ORIGIN.0 + consts::INSIDE.x + consts::INSIDE.w / 2.0);

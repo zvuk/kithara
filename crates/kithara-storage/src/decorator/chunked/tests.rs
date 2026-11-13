@@ -17,7 +17,6 @@ mod kithara {
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, Weak},
-    time::Duration,
 };
 #[cfg(feature = "flash")]
 use kithara_platform::{flash, tokio::task};
@@ -63,7 +62,7 @@ fn open_chunked_result(dir: &TempDir, name: &str) -> StorageResult<AtomicChunked
     })
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn canonical_invisible_until_commit() {
     let dir = TempDir::new().unwrap();
     let (res, canonical, tmp) = open_chunked(&dir, "seg.bin");
@@ -85,7 +84,7 @@ fn canonical_invisible_until_commit() {
     assert_eq!(&bytes, b"chunk-1-chunk-2!");
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 #[case::unknown(None, 64 * 1024)]
 #[case::prefix(Some(7), 7)]
 #[case::empty(Some(0), 0)]
@@ -109,7 +108,7 @@ fn released_backing_is_published_at_the_requested_extent(
     assert_eq!(observed, bytes[..prefix_len]);
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn drop_without_commit_cleans_tmp() {
     let dir = TempDir::new().unwrap();
     let (res, canonical, tmp) = open_chunked(&dir, "abandoned.bin");
@@ -122,7 +121,7 @@ fn drop_without_commit_cleans_tmp() {
     assert!(!canonical.exists(), "canonical must never appear");
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn fail_cleans_tmp() {
     let dir = TempDir::new().unwrap();
     let (res, canonical, tmp) = open_chunked(&dir, "failed.bin");
@@ -137,7 +136,7 @@ fn fail_cleans_tmp() {
 /// A tmp nobody holds is an orphan: its owner is gone, so nothing will ever
 /// commit or clean it. Rejecting it would make the canonical path
 /// permanently unwritable — the segment stays unfetchable for good.
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn open_reclaims_a_stale_tmp_no_live_writer_holds() {
     let dir = TempDir::new().unwrap();
     let stale_tmp = make_tmp_path(&dir.path().join("survivor.bin")).unwrap();
@@ -160,7 +159,7 @@ fn open_reclaims_a_stale_tmp_no_live_writer_holds() {
 /// give that for free; the lock-based claim has to do it itself. The bytes are
 /// read through a mapping because the claim's lock refuses plain reads through
 /// any other handle on Windows.
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn a_reclaimed_tmp_carries_no_byte_of_its_dead_owner() {
     let dir = TempDir::new().unwrap();
     let stale_tmp = make_tmp_path(&dir.path().join("tail.bin")).unwrap();
@@ -186,7 +185,7 @@ fn a_reclaimed_tmp_carries_no_byte_of_its_dead_owner() {
 /// `MmapDriver::open` adopts a non-empty file whole — available `0..len`,
 /// committed, `final_len` set — so a dead owner's bytes come back as readable
 /// payload, not as residue nothing can reach.
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn a_reclaimed_tmp_offers_none_of_its_dead_owner_as_payload() {
     let dir = TempDir::new().unwrap();
     let stale_tmp = make_tmp_path(&dir.path().join("adopted.bin")).unwrap();
@@ -203,7 +202,7 @@ fn a_reclaimed_tmp_offers_none_of_its_dead_owner_as_payload() {
 /// Since the claim is a lock rather than a file, it has to be released when
 /// the writer settles — otherwise a rewrite of the same canonical path would
 /// see `TmpClaimed` from a holder that is done.
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn a_settled_claim_frees_the_tmp_for_a_successor() {
     let dir = TempDir::new().unwrap();
     let (holder, canonical, tmp) = open_chunked(&dir, "held.bin");
@@ -219,7 +218,7 @@ fn a_settled_claim_frees_the_tmp_for_a_successor() {
     assert_eq!(&fs::read(&canonical).unwrap(), b"rewritten");
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn concurrent_open_atomic_claim_returns_tmp_claimed() {
     let dir = TempDir::new().unwrap();
     let canonical = dir.path().join("contested.bin");
@@ -252,7 +251,7 @@ fn concurrent_open_atomic_claim_returns_tmp_claimed() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn read_after_commit_returns_payload_via_decorator() {
     let dir = TempDir::new().unwrap();
     let (res, _, _) = open_chunked(&dir, "post-commit-read.bin");
@@ -302,7 +301,7 @@ impl AvailabilityObserver for CommitReadback {
     fn on_write(&self, _range: Range<u64>) {}
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn a_commit_observer_reads_the_canonical_resource_before_readiness_is_published() {
     let dir = TempDir::new().unwrap();
     let observer = Arc::new(CommitReadback::default());
@@ -341,7 +340,7 @@ fn a_commit_observer_reads_the_canonical_resource_before_readiness_is_published(
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 #[case::rename(false)]
 #[case::reopen(true)]
 fn a_failed_atomic_publication_notifies_waiters_without_recording_a_commit(
@@ -388,7 +387,7 @@ fn a_failed_atomic_publication_notifies_waiters_without_recording_a_commit(
 /// The captured fresh reader's only blocking operation is this range wait,
 /// so an unfinished waiter after that yield is parked on the original core.
 #[cfg(feature = "flash")]
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 #[case::committed(false)]
 #[case::failed(true)]
 async fn atomic_publication_wakes_a_waiter_already_parked_on_the_original_core(
@@ -441,7 +440,7 @@ async fn atomic_publication_wakes_a_waiter_already_parked_on_the_original_core(
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn read_during_writes_observes_inner_state() {
     let dir = TempDir::new().unwrap();
     let (res, _, _) = open_chunked(&dir, "live.bin");
@@ -452,7 +451,7 @@ fn read_during_writes_observes_inner_state() {
     assert_eq!(&buf, b"live-bytes");
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn passthrough_for_memory_inner_has_no_tmp() {
     let pools = crate::test_pools::pools();
     let mem = crate::MemResource::new(CancelToken::never(), crate::test_pools::byte_buffer(&pools));

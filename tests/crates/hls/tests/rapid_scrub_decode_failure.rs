@@ -345,7 +345,7 @@ fn assert_not_failed(outcome: ScrubOutcome, target: f64, tag: &str) {
 /// `PLAY_BETWEEN_SCRUBS` as a safety deadline — so any post-first-seek
 /// recovery actually runs. Each case asserts no
 /// `PlayerEvent::ItemDidFail` after the final scrub.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Medium))]
 #[case::single_mid(0.40, None)]
 #[case::near_end(0.95, None)]
 #[case::fwd_then_back(0.80, Some(0.20))]
@@ -404,7 +404,7 @@ async fn seek_into_cold_range_does_not_fail(
 /// mid-atom from one of the racing earlier seeks — the exact
 /// torn-cursor shape three prod tracks crashed on in `app.log
 /// @ 11:50`.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Medium))]
 #[case::drag_mid(0.40)]
 #[case::drag_end(0.95)]
 async fn seek_drag_into_cold_range_does_not_fail(

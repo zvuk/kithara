@@ -17,7 +17,7 @@ use num_traits::ToPrimitive;
 
 use super::cases::{BLOCK_FRAMES, ROOMY_CAPACITY, SAMPLE_RATE, load_source, render_effect_window};
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 #[case::audible(false)]
 #[case::output_muted(true)]
 async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] muted: bool) {

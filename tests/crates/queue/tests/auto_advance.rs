@@ -1114,7 +1114,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
 /// queue starts it that long before the outgoing track's end on the session clock:
 /// at speed 2 a 1.5 s track ends 0.75 s after its onset, and the incoming track
 /// rises from 0.75 s − d on, not from where `d` media seconds remain.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1110)))]
 async fn a_crossfade_at_double_speed_starts_its_duration_before_the_outgoing_end() {
     const TRACK_SECS: f64 = 1.5;
     const SPEED: f32 = 2.0;
@@ -1614,7 +1614,8 @@ async fn autoplay_queue(
 /// so B is loaded first; if B preempted A the early window would carry B's level.
 #[kithara::test(
     tokio,
-    tracing("kithara_queue=debug,kithara_file=debug,kithara_storage=debug")
+    tracing("kithara_queue=debug,kithara_file=debug,kithara_storage=debug"),
+    timeout(::std::time::Duration::from_millis(1366))
 )]
 async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
     const TRACK_SECS: f64 = 0.4;

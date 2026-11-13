@@ -123,7 +123,7 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
         let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
         let full = quote! { { #test_setup #scoped #preamble #ambient #(#body_stmts)* } };
-        let with_timeout = wrap_with_timeout(&full, ctx.args.timeout(), true, name);
+        let with_timeout = wrap_with_timeout(&full, ctx.args, true, name);
         let wrapped = finalize_body(&with_timeout, ctx.args, name, true);
         let serial_guard = make_wasm_serial_guard(ctx.args);
         let remaining_attrs = ctx.remaining_attrs;
@@ -271,6 +271,34 @@ mod tests {
     use syn::visit_mut::{self, VisitMut};
 
     use super::{TestArgs, emitted_name, generate};
+
+    #[test]
+    fn every_emission_defaults_to_a_constant_quick_timeout() -> syn::Result<()> {
+        for (attrs, source) in [
+            ("", "fn contract() {}"),
+            ("", "async fn contract() {}"),
+            ("native", "fn contract() {}"),
+            ("tokio, native", "async fn contract() {}"),
+            ("wasm", "fn contract() {}"),
+            ("browser", "async fn contract() {}"),
+            ("serial", "fn contract() {}"),
+            ("loom", "fn contract() {}"),
+        ] {
+            let expanded = generate(syn::parse_str(attrs)?, syn::parse_str(source)?)?;
+            syn::parse2::<syn::File>(expanded.clone())?;
+            let text = expanded.to_string();
+            assert!(text.contains("const __TIMEOUT"), "{attrs}: {text}");
+            assert!(
+                text.contains("TestBudget :: Quick . timeout"),
+                "{attrs}: {text}"
+            );
+            assert!(
+                text.contains("time :: timeout") || text.contains("recv_timeout"),
+                "{attrs}: {text}"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn unmarked_tests_are_visible_but_ignored_under_miri() -> syn::Result<()> {

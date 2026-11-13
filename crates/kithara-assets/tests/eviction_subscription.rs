@@ -14,7 +14,7 @@ use std::num::NonZeroUsize;
 use kithara_assets::{
     AcquisitionResult, AssetScope, AssetStore, ResourceKey, StorageBackend, WriteSide,
 };
-use kithara_platform::{sync::Arc, time::Duration, tokio::sync::mpsc};
+use kithara_platform::{sync::Arc, tokio::sync::mpsc};
 use kithara_test_utils::{bufpool::TestPools, kithara};
 use support::{Test, resource, source};
 
@@ -52,7 +52,7 @@ fn fill_scope(store: &TestAssetStore, scope: &TestAssetScope, count: usize) -> V
     keys
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn evicted_key_under_subscribed_root_is_delivered() {
     let store = ephemeral_store(2);
     let scope = store.scope::<Test>(&source(ROOT_A)).unwrap();
@@ -68,7 +68,7 @@ fn evicted_key_under_subscribed_root_is_delivered() {
     assert_eq!(received, keys[0]);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn evicted_key_under_other_root_is_not_delivered() {
     const ROOT_B: &str = "asset_root_b";
 
@@ -88,7 +88,7 @@ fn evicted_key_under_other_root_is_not_delivered() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn dropping_guard_deregisters() {
     let store = ephemeral_store(2);
     let scope = store.scope::<Test>(&source(ROOT_A)).unwrap();
@@ -105,7 +105,7 @@ fn dropping_guard_deregisters() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 #[case::first(0)]
 #[case::second(1)]
 fn dropping_one_subscriber_preserves_the_other(#[case] dropped: usize) {

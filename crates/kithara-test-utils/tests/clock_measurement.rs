@@ -19,7 +19,7 @@ fn plain_sync() {
     platform::thread::sleep(STEP);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(2)))]
+#[kithara::test(native)]
 fn sync_timeout() {
     platform::thread::sleep(STEP);
 }
@@ -39,7 +39,7 @@ async fn async_early_result() -> Result<(), &'static str> {
     Err("body clock did not advance")
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(native, tokio)]
 async fn async_timeout() {
     platform::time::sleep(STEP).await;
 }
@@ -56,7 +56,7 @@ fn real_sync() {
     platform::thread::sleep(STEP);
 }
 
-#[kithara::test(native, tokio, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(native, tokio, flash(false))]
 async fn real_async() {
     platform::time::sleep(STEP).await;
 }

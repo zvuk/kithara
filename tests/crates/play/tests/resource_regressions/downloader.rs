@@ -5,7 +5,7 @@ use kithara_integration_tests::hls_server::packaged_ladder;
 
 use super::*;
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio, flash(false))]
 async fn a_remote_hls_resource_without_a_downloader_is_refused() {
     let server = TestServerHelper::new().await;
     let hls = server

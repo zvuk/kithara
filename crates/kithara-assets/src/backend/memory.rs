@@ -350,7 +350,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::time::Duration;
+
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -369,7 +369,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn acquire_creates_mem_resource() {
         let store = make_mem_store();
         let key = ResourceKey::relative("test_asset", "seg_0.m4s");
@@ -381,7 +381,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn write_commit_read_roundtrip() {
         let store = make_mem_store();
         let key = ResourceKey::relative("test_asset", "seg_0.m4s");
@@ -396,7 +396,7 @@ mod tests {
         assert_eq!(&buf, b"segment data");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn no_path_for_mem_resources() {
         let store = make_mem_store();
         let key = ResourceKey::relative("test_asset", "seg_0.m4s");

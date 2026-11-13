@@ -37,7 +37,7 @@ fn signed_out(fault: Option<&str>) -> impl Fn(&Row) -> bool {
 }
 
 /// After a refused request, Connect polls until Zvuk confirms the code.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 async fn signing_in_grants_the_token_and_reloads_the_catalogue() {
     let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes
@@ -116,7 +116,7 @@ async fn signing_in_grants_the_token_and_reloads_the_catalogue() {
 }
 
 /// Expiry, Cancel and a failing browser each end the sign-in.
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(14180)))]
 async fn a_sign_in_without_a_confirmed_code_keeps_no_token() {
     let expiring = DelayedNet::new(Unimock::new(()));
     expiring.sessions([Ok(session(3))]);
@@ -155,7 +155,7 @@ async fn a_sign_in_without_a_confirmed_code_keeps_no_token() {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 async fn signing_out_completes_before_zvuk_answers_and_clears_the_catalogue() {
     let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes
@@ -230,7 +230,7 @@ async fn signing_out_completes_before_zvuk_answers_and_clears_the_catalogue() {
 
 /// A search started under the stored token is refused only once a newer
 /// token is in place.
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 async fn a_refused_token_signs_out_and_a_stale_refusal_spares_the_newer_one() {
     let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes
@@ -336,7 +336,7 @@ async fn a_refused_token_signs_out_and_a_stale_refusal_spares_the_newer_one() {
 
 /// The refusal arrives through the stream batch of a search a newer query
 /// superseded, and ends the reaction and the listing in flight.
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 async fn a_refused_token_signs_out_and_ends_the_work_in_flight() {
     let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes
@@ -406,7 +406,7 @@ async fn a_refused_token_signs_out_and_ends_the_work_in_flight() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 async fn a_failing_store_signs_out_with_its_error_and_revokes_the_new_session() {
     let net = DelayedNet::new(Unimock::new(()));
     net.polls([poll(Some(TOKEN))]);
@@ -425,7 +425,7 @@ async fn a_failing_store_signs_out_with_its_error_and_revokes_the_new_session() 
     assert_eq!(net.requests()[2].token.as_deref(), Some(TOKEN));
 }
 
-#[kithara::test(flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(flash(false))]
 async fn cancelling_the_plugin_ends_the_account_during_a_blocked_store_read() {
     let (secrets, gate) = blocking(None);
     let linked = Linked::new(DelayedNet::new(Unimock::new(())), secrets, false);
@@ -438,7 +438,7 @@ async fn cancelling_the_plugin_ends_the_account_during_a_blocked_store_read() {
 
 /// Zvuk is asked to revoke the session while the store still deletes the
 /// token, so cancelling the plugin then cannot skip the revoke.
-#[kithara::test(flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(flash(false))]
 async fn signing_out_revokes_the_session_before_the_store_forgets_the_token() {
     let (secrets, gate) = blocking(Some(TOKEN));
     let mut linked = Linked::new(DelayedNet::new(Unimock::new(())), secrets, false);
@@ -450,9 +450,11 @@ async fn signing_out_revokes_the_session_before_the_store_forgets_the_token() {
 
     linked.press("account_disconnect");
     gate.reached().await;
-    wait_until(Duration::from_secs(1), "the logout is sent", || {
-        linked.net.paths().contains(&paths::LOGOUT.to_owned())
-    })
+    wait_until(
+        kithara_test_utils::TestBudget::Quick.timeout(false),
+        "the logout is sent",
+        || linked.net.paths().contains(&paths::LOGOUT.to_owned()),
+    )
     .await
     .expect("the revoke must not wait for the store");
 

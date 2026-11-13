@@ -60,7 +60,7 @@ const TONE_SCAN_WINDOW: usize = BLOCK_FRAMES as usize;
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_secs(30)),
+    timeout(Long),
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
@@ -146,7 +146,7 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_secs(30)),
+    timeout(Long),
     hang_timeout_secs(1),
     tracing("kithara_play=info")
 )]

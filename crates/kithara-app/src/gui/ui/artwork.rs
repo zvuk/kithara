@@ -136,10 +136,14 @@ mod tests {
                 "the old result has no receiver"
             );
             if let Some(next) = next {
-                wait_until(Duration::from_secs(2), "new cover finishes", || {
-                    cache.refresh(Some(next), &runtime);
-                    cache.pending.is_none()
-                })
+                wait_until(
+                    kithara_test_utils::TestBudget::Quick.timeout(false),
+                    "new cover finishes",
+                    || {
+                        cache.refresh(Some(next), &runtime);
+                        cache.pending.is_none()
+                    },
+                )
                 .await
                 .expect("cover decodes");
                 assert_eq!(cache.image, decode(next).expect("new cover"));
@@ -155,10 +159,14 @@ mod tests {
         let bytes = Arc::new(vec![1, 2, 3]);
         let mut cache = Artwork::default();
         cache.refresh(Some(&bytes), &runtime);
-        wait_until(Duration::from_secs(2), "invalid cover finishes", || {
-            cache.refresh(Some(&bytes), &runtime);
-            cache.pending.is_none()
-        })
+        wait_until(
+            kithara_test_utils::TestBudget::Quick.timeout(false),
+            "invalid cover finishes",
+            || {
+                cache.refresh(Some(&bytes), &runtime);
+                cache.pending.is_none()
+            },
+        )
         .await
         .expect("failure finishes");
 

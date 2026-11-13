@@ -33,7 +33,7 @@ fn variant_from_data(data: &[u8]) -> Option<usize> {
 /// Test: Manual variant switch with fixed ABR, verify data comes from correct variant.
 ///
 /// This tests the basic variant selection without ABR auto-switching.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 #[case(0)]
 #[case(1)]
 #[case(2)]
@@ -74,7 +74,7 @@ async fn manual_variant_returns_correct_data(
 ///
 /// When reading sequentially across multiple segments, all data should
 /// come from the same variant (no unexpected switches).
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 async fn sequential_read_across_segments_maintains_variant(
     #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,
@@ -135,7 +135,7 @@ async fn sequential_read_across_segments_maintains_variant(
 ///
 /// Once we seek and commit to a variant, sequential reads should
 /// continue from that variant.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 async fn after_seek_sequential_reads_maintain_variant(
     #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,
@@ -180,7 +180,7 @@ async fn after_seek_sequential_reads_maintain_variant(
 ///
 /// Rapidly seeking back and forth should maintain correct variant tracking.
 /// Note: We first read all data to ensure segments are fetched, then seek.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 async fn multiple_seeks_maintain_correct_variant(
     #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,
@@ -256,7 +256,7 @@ async fn multiple_seeks_maintain_correct_variant(
 
 /// Test: Seek to exact segment boundary reads correct segment prefix.
 /// Note: With 200KB segments, we only read the first 26 bytes to verify the segment.
-#[kithara::test(tokio, browser, timeout(browser_timeout(10, 30)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 #[case(0)]
 #[case(200_000)]
 #[cfg_attr(not(target_arch = "wasm32"), case(400_000))]

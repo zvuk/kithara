@@ -205,7 +205,7 @@ fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) ->
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_secs(20)),
+    timeout(Duration::from_millis(10406)),
     hang_timeout_secs(3)
 )]
 #[cfg_attr(

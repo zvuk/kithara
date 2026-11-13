@@ -9,7 +9,7 @@ use kithara::{
         AcquisitionResult, AssetResource, AssetSource, AssetStore, ReadSide, StorageBackend,
         WriteSide,
     },
-    platform::{CancelToken, time::Duration},
+    platform::CancelToken,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
@@ -36,7 +36,7 @@ use url::Url;
 /// `ephemeral=true` → `MemResource` (no path). `ephemeral=false` → `MmapResource`
 /// (has a file path). The disk case is native-only because wasm targets do
 /// not expose a real filesystem.
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(native, hang_timeout_secs(1))]
 #[case::ephemeral_mem(true, false)]
 #[case::disk_mmap(false, true)]
 fn resource_path_follows_storage_backend(#[case] ephemeral: bool, #[case] expect_path: bool) {
@@ -132,7 +132,6 @@ async fn audio_server(hls_sized_wav_three: Vec<u8>) -> CreatedHls {
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(10)),
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
 )]

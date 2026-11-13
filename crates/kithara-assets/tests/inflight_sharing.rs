@@ -13,7 +13,6 @@ mod support;
 use kithara_assets::{
     AcquisitionResult, AssetStore, ReadSide, RequestIdentity, StorageBackend, WriteSide,
 };
-use kithara_platform::time::Duration;
 use kithara_storage::ResourceStatus;
 use kithara_test_utils::kithara;
 use support::{Test, resource, source};
@@ -39,7 +38,7 @@ fn assert_write_unseen<R: ReadSide, E>(opened: Result<R, E>, why: &str) {
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn one_store_same_url_same_identity_shares_inner() {
     let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
@@ -63,7 +62,7 @@ fn one_store_same_url_same_identity_shares_inner() {
     assert_eq!(&buf, b"hello");
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn one_store_same_url_different_identity_yields_different_inner() {
     let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
@@ -82,7 +81,7 @@ fn one_store_same_url_different_identity_yields_different_inner() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn one_store_two_asset_roots_isolated() {
     let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
@@ -102,7 +101,7 @@ fn one_store_two_asset_roots_isolated() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn two_stores_isolated_even_with_same_identity() {
     let store_a = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
@@ -125,7 +124,7 @@ fn two_stores_isolated_even_with_same_identity() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn drop_first_leaves_second_alive() {
     let dir = tempdir().unwrap();
     let store = AssetStore::builder(support::pools())
@@ -159,7 +158,7 @@ fn drop_first_leaves_second_alive() {
 /// status on the second and a populated `final_len` on the store.
 /// Regressing this would mean shared playback+waveform stops seeing the
 /// same data.
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn shared_inner_propagates_commit_and_final_len() {
     let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
@@ -184,7 +183,7 @@ fn shared_inner_propagates_commit_and_final_len() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn request_identity_hash_stable() {
     use std::{
         collections::hash_map::DefaultHasher,
@@ -216,7 +215,7 @@ fn request_identity_hash_stable() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn request_identity_debug_leaks_no_header_values() {
     let id = RequestIdentity::from_headers([
         ("Authorization", b"Bearer supersecret".as_slice()),

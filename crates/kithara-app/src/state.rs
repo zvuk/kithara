@@ -864,7 +864,7 @@ mod tests {
 
         let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
         let tx = time::timeout(
-            Duration::from_secs(2),
+            kithara_test_utils::TestBudget::Quick.timeout(false),
             answer_subscribe(&mut requests, track_id),
         )
         .await
@@ -997,9 +997,12 @@ mod tests {
 
         host.call(move |(_, queue)| queue.remove(first_id).expect("remove test track"))
             .await;
-        let (asked, reply) = time::timeout(Duration::from_secs(2), next_subscribe(&mut requests))
-            .await
-            .expect("the deck asks for the track it moved to");
+        let (asked, reply) = time::timeout(
+            kithara_test_utils::TestBudget::Quick.timeout(false),
+            next_subscribe(&mut requests),
+        )
+        .await
+        .expect("the deck asks for the track it moved to");
         assert_eq!(asked, second_id, "the deck asks for the track it moved to");
         assert_eq!(
             first.receiver_count(),
@@ -1024,24 +1027,27 @@ mod tests {
         let (second_id, _) = track(&host, 2, &tone_mp3).await;
 
         let render_cancel = cancel.child();
-        time::timeout(Duration::from_secs(2), async {
-            let mut frame = 0;
-            while queue.current_index() != Some(0)
-                || queue
-                    .track(second_id)
-                    .is_none_or(|entry| entry.status != TrackStatus::Loaded)
-            {
-                let frames = frame..frame + 128;
-                frame += 128;
-                let render_cancel = render_cancel.clone();
-                host.call(move |(host, _)| {
-                    crate::mock::render_host(host, frames, &render_cancel)
-                        .expect("the host renders while the queue loads");
-                })
-                .await;
-                task::yield_now().await;
-            }
-        })
+        time::timeout(
+            kithara_test_utils::TestBudget::Quick.timeout(false),
+            async {
+                let mut frame = 0;
+                while queue.current_index() != Some(0)
+                    || queue
+                        .track(second_id)
+                        .is_none_or(|entry| entry.status != TrackStatus::Loaded)
+                {
+                    let frames = frame..frame + 128;
+                    frame += 128;
+                    let render_cancel = render_cancel.clone();
+                    host.call(move |(host, _)| {
+                        crate::mock::render_host(host, frames, &render_cancel)
+                            .expect("the host renders while the queue loads");
+                    })
+                    .await;
+                    task::yield_now().await;
+                }
+            },
+        )
         .await
         .expect("the queue enters its first track and loads its second");
         for _ in 0..=::kithara::events::DEFAULT_EVENT_BUS_CAPACITY {
@@ -1062,12 +1068,15 @@ mod tests {
             reply.send(second_rx).is_ok(),
             "the deck waits for the reply"
         );
-        time::timeout(Duration::from_secs(2), async {
-            while !matches!(
-                requests.recv().await,
-                Some(Request::Warm { track_ids, .. }) if track_ids.len() == 2
-            ) {}
-        })
+        time::timeout(
+            kithara_test_utils::TestBudget::Quick.timeout(false),
+            async {
+                while !matches!(
+                    requests.recv().await,
+                    Some(Request::Warm { track_ids, .. }) if track_ids.len() == 2
+                ) {}
+            },
+        )
         .await
         .expect("the deck warms the library it read back after the lag");
         let st = state.lock();

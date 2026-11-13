@@ -101,7 +101,7 @@ fn run_rapid_random_seeks(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(120)),
+    timeout(Duration::from_millis(2192)),
     hang_timeout_secs(3)
 )]
 #[case::hls("HLS", mixed_plain().await)]
@@ -188,13 +188,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
 ///
 /// Uses seek positions observed in logs and asserts that each seek
 /// still yields PCM samples (audio must stay alive).
-#[kithara::test(
-    tokio,
-    native,
-    serial,
-    timeout(Duration::from_secs(120)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, native, serial, hang_timeout_secs(5))]
 #[case::hls("HLS", mixed_plain().await)]
 #[case::drm("DRM", mixed_encrypted().await)]
 async fn seek_sequence_from_log_real_stream(

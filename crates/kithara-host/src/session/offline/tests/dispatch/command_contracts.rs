@@ -73,7 +73,7 @@ fn an_idle_host_has_no_output_or_registered_decks() {
     assert_eq!(state.deck_nodes.len(), 0);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1830)))]
 async fn a_default_deck_renders_at_unity_gain() {
     let owner = OffThread::spawn("host-default-mix", || {
         Ok::<_, ()>((test_state(start_route_loss_stream), 0_u64))

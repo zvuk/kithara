@@ -485,7 +485,7 @@ fn unrendered_frames_counts_exactly_the_output_no_span_covers() {
     multi_thread,
     serial,
     flash(false),
-    timeout(Duration::from_secs(60)),
+    timeout(Medium),
     hang_timeout_secs(5)
 )]
 #[case::signalsmith_minimum(StretchKind::Signalsmith, response_backends(), MINIMUM)]
@@ -682,13 +682,7 @@ async fn run_strict_case(
     hang_tick!();
 }
 
-#[kithara::test(
-    tokio,
-    multi_thread,
-    serial,
-    timeout(Duration::from_secs(60)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, multi_thread, serial, timeout(Medium), hang_timeout_secs(5))]
 #[case::signalsmith_default_quantum(
     StretchKind::Signalsmith,
     response_backends(),
@@ -734,13 +728,7 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
 /// The fixture submits a rate step as an explicit output-frame ramp: no block moves the multiplier
 /// further than the ramp's worst-case step for that block, the renderer
 /// applies intermediate ratios, and the ramp settles at the target.
-#[kithara::test(
-    tokio,
-    multi_thread,
-    serial,
-    timeout(Duration::from_secs(60)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, multi_thread, serial, hang_timeout_secs(5))]
 #[case::signalsmith_ramp(StretchKind::Signalsmith, response_backends(), RAMP)]
 async fn rate_multiplier_step_is_ramped_across_blocks(
     temp_dir: TestTempDir,

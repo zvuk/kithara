@@ -23,7 +23,7 @@ fn key_for(assets: &TestAssets, url: &Url) -> ResourceKey {
         .expect("valid playlist URL")
 }
 
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 #[case::v0(0)]
 #[case::v1(1)]
 async fn fetch_media_playlist_from_network(
@@ -48,7 +48,7 @@ async fn fetch_media_playlist_from_network(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 async fn fetch_manager_caching_behavior(
     #[future] test_pattern_hls: CreatedHls,
     assets_fixture: TestAssets,
@@ -73,7 +73,7 @@ async fn fetch_manager_caching_behavior(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 async fn fetch_manager_error_handling_invalid_url(
     assets_fixture: TestAssets,
     net_fixture: kithara::net::HttpClient,
@@ -91,7 +91,7 @@ async fn fetch_manager_error_handling_invalid_url(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 #[case::file("segment.ts", "/base/segment.ts")]
 #[case::current_dir("./segment.ts", "/base/segment.ts")]
 #[case::parent_dir("../segment.ts", "/segment.ts")]
@@ -118,7 +118,7 @@ async fn resolve_relative_url(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(browser_timeout(5, 30)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 async fn fetch_manager_with_different_base_urls(
     #[future] test_pattern_hls: CreatedHls,
     assets_fixture: TestAssets,

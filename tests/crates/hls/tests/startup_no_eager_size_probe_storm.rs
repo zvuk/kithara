@@ -3,7 +3,7 @@ use kithara::{
     audio::{AudioConfig, AudioRead, ReadOutcome},
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
-    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
+    platform::{CancelToken, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
@@ -63,7 +63,7 @@ impl StartupFixture {
 /// Startup must not issue eager size probes for either file-like WAV or
 /// segment-aware fMP4. Exact sizes are resolved only when a seek/read path
 /// actually needs them.
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, native, serial)]
 #[case::wav_file_like(StartupFixture::WavFileLike, wav_startup().await)]
 #[case::flac_fmp4(StartupFixture::FlacFmp4, flac_startup().await)]
 #[cfg(not(target_arch = "wasm32"))]

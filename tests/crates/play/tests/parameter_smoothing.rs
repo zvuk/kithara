@@ -2,7 +2,6 @@
 
 use kithara::{
     dsp::param::{DEFAULT_SETTLE_RATIO, DEFAULT_SMOOTH_SECONDS},
-    platform::time::Duration,
     queue::QueueControl,
 };
 use kithara_integration_tests::{
@@ -21,7 +20,7 @@ use kithara_test_fixtures::signal::peak;
 /// allows: the oracle then reports an unsmoothed step the DSP never produced.
 /// The fixture parks its reads instead, so the window its siblings measure
 /// carries no block the decoder never produced.
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, timeout(Long))]
 async fn the_observation_window_carries_no_silent_block() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
 
@@ -40,7 +39,7 @@ async fn the_observation_window_carries_no_silent_block() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, timeout(Long))]
 async fn deck_volume_step_is_ramped() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
     let before = observe(&harness, consts::OBSERVE_BLOCKS).await;
@@ -65,7 +64,7 @@ async fn deck_volume_step_is_ramped() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, timeout(Long))]
 async fn prepared_deck_preserves_play_pause_order() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
     harness

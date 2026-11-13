@@ -224,7 +224,7 @@ fn snapshot_aggregate(inner: &InnerIndex) -> AvailabilityFile {
 mod tests {
     use std::{fs, ops::Range};
 
-    use kithara_platform::{CancelToken, time::Duration};
+    use kithara_platform::CancelToken;
     use kithara_storage::{
         AtomicChunked, AvailabilityObserver, MmapDriver, MmapOptions, OpenIntent, OpenMode,
         Resource,
@@ -257,7 +257,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn atomic_commit_publishes_canonical_file_before_manifest() {
         let dir = TempDir::new().unwrap();
         let pools = crate::test_pools::pools();
@@ -307,7 +307,7 @@ mod tests {
         assert!(restored.contains_range(&key, 0..7));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     #[case::missing(false)]
     #[case::directory(true)]
     fn a_failed_file_barrier_preserves_the_previous_manifest(#[case] directory: bool) {
@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(restored.final_len(&key), Some(7));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn a_deleted_resource_has_no_manifest_barrier_obligation() {
         let dir = TempDir::new().unwrap();
         let pools = crate::test_pools::pools();
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(restored.final_len(&key), None);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn every_same_size_file_commit_requires_a_durability_barrier() {
         let dir = TempDir::new().unwrap();
         let pools = crate::test_pools::pools();
@@ -420,7 +420,7 @@ mod tests {
         .unwrap()
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     #[case::same_size(7)]
     #[case::shorter(3)]
     fn a_file_barrier_rejects_a_replaced_handle_even_at_the_same_length(#[case] final_len: usize) {
@@ -445,7 +445,7 @@ mod tests {
         assert!(sync_selected_file(opened, &canonical, Some(record)).is_err());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     #[case::empty(0)]
     #[case::shorter(3)]
     fn a_frozen_manifest_rejects_a_shrunk_resource_and_next_flush_records_its_extent(

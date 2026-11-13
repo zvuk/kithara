@@ -302,7 +302,7 @@ fn census(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4])
 /// verdict holds whatever else the runner is doing. Absolute block cost belongs
 /// to the `rt_block_budget` bench, which times this processor and asks the
 /// clock for no verdict.
-#[kithara::test(native, serial)]
+#[kithara::test(native, serial, timeout(::std::time::Duration::from_millis(7986)))]
 #[case::frames128_tracks1(128, 1)]
 #[case::frames128_tracks2(128, 2)]
 #[case::frames128_tracks4(128, 4)]

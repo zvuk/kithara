@@ -43,7 +43,6 @@ mod hls_timeline {
 
     #[kithara::test(
         tokio,
-        timeout(Duration::from_secs(10)),
         hang_timeout_secs(1),
         tracing("kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
     )]

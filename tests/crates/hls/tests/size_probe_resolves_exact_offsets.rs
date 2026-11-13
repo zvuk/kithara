@@ -5,7 +5,7 @@ use std::io::{Read, Seek, SeekFrom};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig, SizeProbeMethod},
-    platform::{time::Duration, tokio::task::spawn_blocking},
+    platform::tokio::task::spawn_blocking,
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -14,7 +14,7 @@ use kithara_integration_tests::{
     hls_fixture::create_test_downloader,
 };
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 async fn size_probe_resolves_exact_offsets() {
     let helper = TestServerHelper::new().await;
     let hls = helper

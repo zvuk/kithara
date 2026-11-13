@@ -367,7 +367,7 @@ fn phase5_revisit_seeks(audio: &mut TestAudio, seek_positions: &[f64], random_op
     tokio,
     browser,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(Duration::from_millis(1096)),
     hang_timeout_secs(1),
     tracing("kithara_audio=info,kithara_file=info")
 )]

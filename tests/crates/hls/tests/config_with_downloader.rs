@@ -20,7 +20,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
+#[kithara::test(tokio, native, hang_timeout_secs(1))]
 async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let ladder = abr_binary_ladder(false, Duration::ZERO);

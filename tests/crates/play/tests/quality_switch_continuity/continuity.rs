@@ -288,7 +288,7 @@ fn measure_cochlea(samples: &[f32]) -> (CochleaMetric, Vec<f64>) {
     (metric, onsets.times_ms)
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native, flash(false), timeout(Medium))]
 fn focused_measurements_match_full_cochlea(quality_control_a: Vec<f32>) {
     let audio = ProbeAudio {
         samples: quality_control_a.clone(),
@@ -568,7 +568,7 @@ fn the_two_baseline_oracle_still_rejects_a_click_at_the_join(
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_secs(25)),
+    timeout(Duration::from_millis(22346)),
     hang_timeout_secs(3)
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]

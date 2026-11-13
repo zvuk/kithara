@@ -35,7 +35,7 @@ use tracing::info;
 /// 4. Verify segment 1 data is readable
 ///
 /// EXPECTED: seek is processed, segment data is read correctly
-#[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(tokio, native, hang_timeout_secs(1))]
 async fn test_driver_seek_after_playlist_finished(
     #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,
@@ -102,7 +102,7 @@ async fn test_driver_seek_after_playlist_finished(
 ///
 /// This tests seek backward at the Stream<Hls> level with ABR active,
 /// without the full decoder chain.
-#[kithara::test(tokio, native, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara::test(tokio, native, hang_timeout_secs(1))]
 async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: CancelToken) {
     let hls = TestServerHelper::new()
         .await

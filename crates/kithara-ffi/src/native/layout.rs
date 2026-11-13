@@ -300,7 +300,7 @@ mod tests {
         assert_eq!(path_calls.load(Ordering::Relaxed), 1);
     }
 
-    #[kithara::test(native, timeout(kithara::platform::time::Duration::from_secs(5)))]
+    #[kithara::test(native)]
     fn foreign_layout_dictates_real_on_disk_root_and_path() {
         struct FixedLayout;
 
@@ -343,7 +343,7 @@ mod tests {
         assert!(dir.path().join("foreign-root/custom/audio.mp3").exists());
     }
 
-    #[kithara::test(native, timeout(kithara::platform::time::Duration::from_secs(5)))]
+    #[kithara::test(native)]
     #[case("../escape")]
     #[case("/absolute/path")]
     #[case("")]

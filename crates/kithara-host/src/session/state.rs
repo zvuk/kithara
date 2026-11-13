@@ -704,7 +704,7 @@ mod tests {
         decks
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Medium))]
     #[case::offline(false)]
     #[case::threaded_delivery(true)]
     fn first_registration_lends_the_real_clock_and_registered_worker_budget_in_the_same_pass(
@@ -792,7 +792,7 @@ mod tests {
             .expect("held deck");
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Medium))]
     fn a_later_registration_refreshes_delivery_without_resampling_the_live_pass_clock() {
         let mut state = test_state(crate::session::offline::mock::start);
         state.delivery_delay = Some(crate::consts::SESSION_PUMP_INTERVAL);
@@ -898,7 +898,7 @@ mod tests {
         assert_eq!(published.decks[0], id);
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Medium))]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     fn exhausted_player_identity_preserves_the_canonical_root() {
         hang_tick!();

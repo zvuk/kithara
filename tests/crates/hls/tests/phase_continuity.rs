@@ -272,7 +272,7 @@ async fn run_case_paced(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(25)),
+    timeout(Duration::from_millis(7330)),
     hang_timeout_secs(1)
 )]
 #[cfg_attr(
@@ -567,7 +567,7 @@ fn late_switches() -> Vec<(AbrMode, f64)> {
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(60)),
+    timeout(Duration::from_millis(25104)),
     hang_timeout_secs(10)
 )]
 #[cfg_attr(not(target_os = "android"), case::aac_lc_symphonia_pace1ms(

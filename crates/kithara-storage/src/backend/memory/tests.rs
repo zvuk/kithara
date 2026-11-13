@@ -89,7 +89,7 @@ fn with_bytes(data: &[u8], cancel: CancelToken) -> MemResource {
     .expect("BUG: MemDriver::open with initial_data is infallible")
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn test_create_new_resource() {
     let res = create_resource();
     assert_eq!(res.len(), None);
@@ -97,7 +97,7 @@ fn test_create_new_resource() {
     assert_eq!(res.path(), None);
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn post_commit_replacement_uses_injected_pool() {
     let pools = pools_with_budget(1024);
     let (driver, _) = MemDriver::open(
@@ -115,7 +115,7 @@ fn post_commit_replacement_uses_injected_pool() {
     assert!(pools.stats().allocated_bytes > allocated_before);
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn committed_resource_releases_working_capacity_to_the_shared_region() {
     const IDLE_BYTES: usize = 32;
     const WORKING_BYTES: usize = 64;
@@ -133,7 +133,7 @@ fn committed_resource_releases_working_capacity_to_the_shared_region() {
         .expect("committed and idle working bytes must be reclaimable by another typed slot");
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn test_write_and_read() {
     let res = create_resource();
 
@@ -146,7 +146,7 @@ fn test_write_and_read() {
     assert_eq!(&buf, b"hello world");
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn test_write_all_read_into() {
     let res = create_resource();
 
@@ -158,7 +158,7 @@ fn test_write_all_read_into() {
     assert_eq!(&buf[..], b"atomic data");
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn test_from_bytes() {
     let res = with_bytes(b"preloaded", CancelToken::never());
 
@@ -174,7 +174,7 @@ fn test_from_bytes() {
     assert_eq!(&buf[..], b"preloaded");
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn test_wait_range_ready() {
     let res = create_resource();
 
@@ -203,7 +203,7 @@ fn test_wait_range_blocks_then_ready() {
     let _writer = handle.join().unwrap();
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn test_wait_range_eof() {
     let res = create_resource();
 
@@ -283,7 +283,7 @@ fn external_cancel_wakes_waiter_without_cancelling_resource() {
     assert_eq!(&bytes, b"done");
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn test_status_transitions() {
     let res = create_resource();
 
@@ -299,7 +299,7 @@ fn test_status_transitions() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn test_status_failed() {
     let res = create_resource();
     let reader = res.reader();
@@ -311,7 +311,7 @@ fn test_status_failed() {
 /// The anti-hang stamp is what makes an abandoned resource poisonous to its
 /// successor, so `abandon` must leave none: the caller releasing this way is
 /// the one re-dispatching the write.
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn abandoned_writer_leaves_no_failure_stamp() {
     let res = create_resource();
     let reader = res.reader();
@@ -324,7 +324,7 @@ fn abandoned_writer_leaves_no_failure_stamp() {
 
 /// `abandon` is an opt-in for a caller that owns the re-dispatch. Every other
 /// release keeps the stamp, or a reader waits on bytes nobody will write.
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn dropped_writer_still_stamps_the_failure() {
     let res = create_resource();
     let reader = res.reader();
@@ -340,7 +340,7 @@ fn dropped_writer_still_stamps_the_failure() {
 
 /// `abandon` waives the stamp for the writer that owns the refill, not for the
 /// resource forever: the next write generation starts armed again.
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn reactivated_writer_is_armed_again_after_an_abandon() {
     let res = create_resource();
     res.abandon();
@@ -357,7 +357,7 @@ fn reactivated_writer_is_armed_again_after_an_abandon() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn test_reactivate() {
     let res = create_resource();
 
@@ -386,7 +386,7 @@ fn test_reactivate() {
 // `test_write_rejected_after_commit` removed: writing after commit is now a
 // compile error (`Resource<Committed, D>` has no `write_at`), not a runtime
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 #[case::sparse(100, b"sparse")]
 #[case::growable_sparse(1000, b"far away")]
 fn test_sparse_write(#[case] offset: u64, #[case] payload: &[u8]) {
@@ -405,7 +405,7 @@ fn test_sparse_write(#[case] offset: u64, #[case] payload: &[u8]) {
     assert_eq!(&zero_buf, &[0, 0, 0, 0]);
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn test_growable_write_beyond_initial_capacity() {
     let pools = pools();
     let res = MemResource::open(
@@ -426,7 +426,7 @@ fn test_growable_write_beyond_initial_capacity() {
     assert!(buf.iter().all(|b| *b == 0xAB));
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn test_growable_multiple_writes_extend() {
     let res = create_resource();
 
@@ -440,7 +440,7 @@ fn test_growable_multiple_writes_extend() {
     assert_eq!(&buf, b"aaabbbccc");
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn test_from_bytes_readable() {
     let data = b"hello growable buffer world";
     let res = with_bytes(data, CancelToken::never());
@@ -451,7 +451,7 @@ fn test_from_bytes_readable() {
     assert_eq!(&buf, data);
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test]
 fn test_backward_write_does_not_lose_data() {
     let res = create_resource();
 

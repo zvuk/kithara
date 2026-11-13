@@ -62,7 +62,8 @@ async fn loaded_filter_source(source: String) -> (OfflinePlayer, Underruns) {
     tokio,
     tracing(
         "warn,kithara_render_probe=trace,kithara_worker_probe=trace,kithara_test::host_rate_telemetry=info"
-    )
+    ),
+    timeout(Short)
 )]
 #[case::inside_callback(0)]
 #[case::callback_edge(47)]
@@ -283,7 +284,7 @@ async fn public_filter_curves_takeover_reset_and_clear_reach_the_host(#[case] ph
     harness.close().await;
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 async fn filter_tail_and_programme_outlive_source_eof_and_close_while_owned() {
     let (harness, mut underruns) =
         loaded_filter_source(asset_source(&assets::fixed_constant_wav_cd_half_4410())).await;

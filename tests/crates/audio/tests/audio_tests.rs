@@ -172,7 +172,7 @@ async fn test_audio_spec(wav_1000: NamedTempFile) {
     assert_eq!(spec.channels, 2);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(20)))]
+#[kithara::test(tokio)]
 async fn test_audio_read(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
@@ -346,7 +346,7 @@ async fn test_seek_complete_emitted_only_after_output_commit(
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 #[case::single(false)]
 #[case::idempotent(true)]
 async fn test_audio_preload(wav_1000: NamedTempFile, #[case] second_preload: bool) {
@@ -373,7 +373,7 @@ async fn test_audio_preload(wav_1000: NamedTempFile, #[case] second_preload: boo
     assert!(frames > 0, "preload must produce at least one frame");
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 async fn test_audio_preload_rearms_after_seek(wav_44100: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());

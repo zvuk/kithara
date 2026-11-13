@@ -4,7 +4,7 @@ use kithara::{
     decode::{
         DecodeResult, Decoder, DecoderBackend, DecoderConfig, DecoderFactory, GaplessTrimmer,
     },
-    platform::{time::Duration, tokio::task::spawn_blocking},
+    platform::tokio::task::spawn_blocking,
     resampler::NoResamplerBackend,
     stream::{AudioCodec as StreamAudioCodec, AudioCodec, ContainerFormat, MediaInfo},
 };
@@ -25,7 +25,7 @@ use crate::gapless_common::{
 
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, hang_timeout_secs(1))]
 async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory_paths(
     #[future(awt)] gapless_aac: (TestServerHelper, GaplessFixture),
 ) {
@@ -241,7 +241,7 @@ async fn fetch_bytes(client: &Client, url: String) -> Vec<u8> {
         .to_vec()
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, hang_timeout_secs(1))]
 #[case::mp3(SignalAsset::MP3_SINE1K_48K_1S, 48_000, gapless_mp3().await)]
 #[case::flac(SignalAsset::FLAC_SINE1K_48K_1S, 48_000, gapless_flac().await)]
 async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(

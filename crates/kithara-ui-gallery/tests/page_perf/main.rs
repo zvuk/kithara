@@ -272,7 +272,7 @@ struct Outcome<'run> {
 
 /// The cheap-page control and the stress page: is the stress page's cost its
 /// waveform buckets, or is it the page at all?
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 #[case("iced", Host::Immediate, "gallery-buttons")]
 #[case("iced", Host::Immediate, "gallery-clock")]
 #[case("iced", Host::Immediate, "gallery-table")]
@@ -306,7 +306,7 @@ fn ui_motion_perf(#[case] label: &'static str, #[case] host: Host, #[case] page:
 
 /// The visualiser and the document shader, free and fenced. A fenced run
 /// serialises the queue: its totals are their own scenario.
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 #[case("iced", Host::Immediate, "gallery-vis")]
 #[case("iced", Host::Immediate, "gallery-shader")]
 #[case("vello", Host::Retained, "gallery-vis")]
@@ -316,7 +316,7 @@ fn ui_native_perf(#[case] label: &'static str, #[case] host: Host, #[case] page:
 }
 
 /// The wheel sweeps: does a page cost more per wheel event, or per frame?
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 #[case("iced", Host::Immediate, "gallery-pivot")]
 #[case("iced", Host::Immediate, "gallery-library2")]
 #[case("iced", Host::Immediate, "gallery-tree")]

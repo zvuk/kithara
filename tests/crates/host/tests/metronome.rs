@@ -746,7 +746,7 @@ async fn ride_over(source: Asset, frames: u64) -> Ride {
     ride
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(3802)))]
 async fn the_metronome_clicks_on_every_host_beat_over_a_deck_through_a_tempo_ride(
     sine_440_long: Vec<f32>,
 ) {

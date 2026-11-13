@@ -194,11 +194,7 @@ fn read_final_tail(
     tokio,
     native,
     serial,
-    timeout(if cfg!(target_arch = "wasm32") {
-        Duration::from_secs(300)
-    } else {
-        Duration::from_secs(120)
-    }),
+    timeout(::std::time::Duration::from_millis(2848)),
     tracing("kithara_hls=debug,kithara_stream=debug")
 )]
 #[case::small(50_000, 20, 200, false, false)]

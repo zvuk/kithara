@@ -29,7 +29,7 @@ use crate::{
     host::{self, Gallery},
 };
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn every_page_paints_over_the_whole_window() {
     let width: u32 = AsPrimitive::<u32>::as_(consts::WIDTH);
     let height: u32 = AsPrimitive::<u32>::as_(consts::HEIGHT);

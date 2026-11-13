@@ -8,94 +8,10 @@ use super::{
     shared::{
         finalize_body, make_ambient_stmt, make_clock_measurement_stmt,
         make_dedicated_worker_config, make_hang_budget, make_hard_timeout_watchdog,
-        make_prekill_guard, make_runtime_builder, make_selenium_attrs, make_serial_attr,
-        make_test_setup, make_wasm_serial_guard, wrap_with_model, wrap_with_soft_fail,
-        wrap_with_timeout,
+        make_runtime_builder, make_selenium_attrs, make_serial_attr, make_test_setup,
+        make_wasm_serial_guard, wrap_with_model, wrap_with_soft_fail, wrap_with_timeout,
     },
 };
-
-/// Emit a native async test with a **manual tokio runtime** (no timeout).
-///
-/// Generates a sync `#[test]` fn that creates a `current_thread` runtime via
-/// `kithara_platform::tokio::runtime::Builder` and calls `block_on`.
-///
-/// This avoids depending on `#[tokio::test]` so consumer crates do not need
-/// `tokio` as a direct dependency.
-pub(crate) fn emit_async_runtime_test(
-    fn_name: &Ident,
-    vis: &syn::Visibility,
-    ret_type: &syn::ReturnType,
-    remaining_attrs: &[&Attribute],
-    body: &Preamble,
-    args: &TestArgs,
-    serial_attr: &TokenStream2,
-) -> TokenStream2 {
-    let hang_budget = make_hang_budget(args.hang_timeout_secs());
-    let prekill_guard = make_prekill_guard(fn_name);
-    let selenium_attr = make_selenium_attrs(args);
-    let runtime_builder = make_runtime_builder(args);
-    let flash = args.flash().unwrap_or(true);
-    let fn_name_str = fn_name.to_string();
-    let scoped = body.scoped(true);
-    let body = &body.body;
-    let inner_body = if !args.soft_fail_patterns().is_empty() {
-        wrap_with_soft_fail(
-            &quote! { { #body } },
-            fn_name,
-            true,
-            args.soft_fail_patterns(),
-        )
-    } else {
-        quote! { { #body } }
-    };
-
-    // Installing the subscriber parses filter directives and allocates. The
-    // real-time sanitizer checks every poll of the test future, and the first
-    // test to reach this — whichever it happens to be — was reported as an
-    // unsafe `malloc` in a real-time context. Process-wide setup belongs
-    // before the future exists.
-    let test_setup = make_test_setup(args, remaining_attrs);
-    let clock_measurement = make_clock_measurement_stmt(args, fn_name);
-    let runtime_body = quote! {
-        {
-            #test_setup
-            let __rt = #runtime_builder;
-            #scoped
-            __rt.block_on(
-                ::kithara_test_utils::kithara_platform::flash::participate(
-                    ::kithara_test_utils::kithara_platform::flash::with_ambient(
-                        #flash,
-                        ::kithara_test_utils::kithara_platform::flash::dynamic(
-                            #flash,
-                            ::kithara_test_utils::no_block::watch_root(
-                                #fn_name_str,
-                                async {
-                                    #inner_body
-                                },
-                            ),
-                        ),
-                    ),
-                    ::core::panic::Location::caller(),
-                ),
-            )
-        }
-    };
-    let runtime_body = wrap_with_model(&runtime_body, args, fn_name);
-
-    quote! {
-        #(#remaining_attrs)*
-        #serial_attr
-        #selenium_attr
-        #[cfg(not(target_arch = "wasm32"))]
-        #[test]
-        #vis fn #fn_name() #ret_type {
-            #hang_budget
-            #prekill_guard
-            #clock_measurement
-            #runtime_body
-        }
-    }
-}
 
 /// Emit a native async test with a timeout using a **manual tokio runtime**.
 ///
@@ -122,10 +38,7 @@ pub(crate) fn emit_async_timeout_test(
     args: &TestArgs,
     serial_attr: &TokenStream2,
 ) -> TokenStream2 {
-    let dur = args
-        .timeout()
-        .as_ref()
-        .expect("BUG: caller checks `args.timeout().is_some()` before this fn");
+    let dur = super::timeout::resolve(args);
     let fn_name_str = fn_name.to_string();
     let scoped = body.scoped(true);
     let body = &body.body;
@@ -301,7 +214,7 @@ pub(crate) fn emit_browser_test(
         #ambient
         #(#body_stmts)*
     };
-    let wasm_with_timeout = wrap_with_timeout(&wasm_body, args.timeout(), true, fn_name);
+    let wasm_with_timeout = wrap_with_timeout(&wasm_body, args, true, fn_name);
     let wasm_wrapped = finalize_body(&wasm_with_timeout, args, fn_name, true);
     let wasm_serial_guard = make_wasm_serial_guard(args);
     output.extend(quote! {
@@ -321,18 +234,8 @@ pub(crate) fn emit_browser_test(
         // Tracing is not set up here — see `emit_async_runtime_test`.
         let native_body = preamble.with_body(body_stmts);
 
-        if native_is_async && args.timeout().is_some() {
+        if native_is_async {
             output.extend(emit_async_timeout_test(
-                fn_name,
-                vis,
-                ret_type,
-                remaining_attrs,
-                &native_body,
-                args,
-                &serial_attr,
-            ));
-        } else if native_is_async {
-            output.extend(emit_async_runtime_test(
                 fn_name,
                 vis,
                 ret_type,
@@ -345,8 +248,7 @@ pub(crate) fn emit_browser_test(
             let sync_body =
                 super::shared::wrap_with_sync_participation(&quote! { #(#body_stmts)* }, args);
             let native_body_held = quote! { #test_setup #scoped #bindings #ambient #sync_body };
-            let native_with_timeout =
-                wrap_with_timeout(&native_body_held, args.timeout(), false, fn_name);
+            let native_with_timeout = wrap_with_timeout(&native_body_held, args, false, fn_name);
             let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, false);
             output.extend(quote! {
                 #(#remaining_attrs)*

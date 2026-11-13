@@ -219,7 +219,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+    #[kithara::test(native, hang_timeout_secs(1))]
     fn blocking_wait_wakes_the_peer_before_parking_on_unready_bytes() {
         let gate = Arc::new(CondvarGate::default());
         let ready = Arc::new(AtomicBool::new(false));

@@ -400,7 +400,7 @@ async fn rebuilding_decoder_completion_installs_once() {
     assert_eq!(drops.lock().as_slice(), &[1]);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source(route_pcm: RoutePcm) {
     let RouteFixture {
         control,

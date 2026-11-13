@@ -737,7 +737,7 @@ async fn stale_rebuild_completion_retires_decoder_shell_side() {
 /// A decoder factory that panics during construction must not strand the
 /// FSM in `RebuildingDecoder` forever. The rebuild port catches the panic,
 /// pushes a `SoftFailed` completion, and wakes the worker.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 async fn rebuild_factory_panic_fails_track_without_hang(route_pcm: RoutePcm) {
     let RebuildFixture { mut source, .. } = test_source(1).await;
     source.factory = DecoderFactory::new(

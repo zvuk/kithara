@@ -38,7 +38,6 @@ use tracing::info;
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_secs(10)),
     hang_timeout_secs(1),
     tracing("kithara_decode=debug,kithara_hls=debug")
 )]
@@ -153,13 +152,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
 }
 
 /// Simpler test without ABR - just verify basic multi-segment reading works
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(1),
-    tracing("info")
-)]
+#[kithara::test(native, tokio, hang_timeout_secs(1), tracing("info"))]
 async fn test_basic_multi_segment_reading(
     temp_dir: TestTempDir,
     #[future(awt)] fast_abr: CreatedHls,
@@ -224,13 +217,7 @@ async fn test_basic_multi_segment_reading(
 /// 4. Reader seeks back to offset 0 - this requires loading segment 0 from variant 2
 /// 5. BUG: `first_media_segment` stays at 2 instead of updating to 0
 /// 6. This causes gap detection or incorrect offset calculations
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(1),
-    tracing("debug")
-)]
+#[kithara::test(native, tokio, hang_timeout_secs(1), tracing("debug"))]
 async fn test_abr_variant_switch_with_seek_backward(
     temp_dir: TestTempDir,
     #[future(awt)] backward_abr: CreatedHls,

@@ -399,7 +399,7 @@ async fn reads_and_reactions_use_their_own_transports_and_a_reaction_needs_its_c
 
 /// A reaction whose reply is lost is sent once, while a lost read is resent
 /// by the transport's retries.
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_lost_reaction_is_sent_once_and_a_lost_read_is_resent() {
     let requests = Arc::new(AtomicU32::new(0));
     let counted = Arc::clone(&requests);

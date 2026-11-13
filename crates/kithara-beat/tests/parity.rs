@@ -23,7 +23,11 @@ use kithara_test_utils::{bufpool::pools, kithara};
 
 const SMALL_MIN_F: f64 = 0.99;
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(
+    native,
+    flash(false),
+    timeout(::std::time::Duration::from_millis(10714))
+)]
 fn python_parity_small_model(beat_pcm: Vec<f32>) {
     let pcm = beat_pcm;
     let config = BeatConfig::default();

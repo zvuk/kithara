@@ -45,7 +45,7 @@ mod tests {
         let shutdown = CancelToken::root();
 
         time::timeout(
-            Duration::from_secs(2),
+            kithara_test_utils::TestBudget::Quick.timeout(false),
             serve(
                 || Err(EngineError::Missing("base worker")),
                 built_tx,

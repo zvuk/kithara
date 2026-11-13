@@ -12,7 +12,7 @@ async fn unannotated_callee_now() -> Instant {
     Instant::now()
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(native, tokio)]
 async fn ordinary_now_uses_one_clock_across_calls() {
     let started = Instant::now();
     time::sleep(Duration::from_millis(10)).await;
@@ -35,7 +35,7 @@ async fn real_sleep() {
     time::sleep(Duration::from_millis(40)).await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(native, tokio)]
 async fn flash_false_region_uses_real_time() {
     let started = WallInstant::now();
     real_sleep().await;

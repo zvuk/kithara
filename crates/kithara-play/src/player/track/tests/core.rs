@@ -3125,7 +3125,7 @@ fn repeat_wav_load(
     (worker, item)
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Long))]
 #[case::short(441)]
 #[case::long(66_150)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
@@ -3589,7 +3589,7 @@ fn full_notification_ring_retries_latest_effective_rate_once() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1756)))]
 async fn an_unchanged_speed_target_still_cancels_a_ramp() {
     for sounding in [false, true] {
         let mut rig = rig();

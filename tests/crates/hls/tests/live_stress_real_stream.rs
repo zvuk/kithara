@@ -328,7 +328,6 @@ fn poll_chunk(audio: &mut LiveAudio, stage: &str) -> Poll<Option<AudioChunk>> {
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(60, 75)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
@@ -404,11 +403,7 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
     tokio,
     browser,
     serial,
-    timeout(if cfg!(target_os = "android") {
-        Duration::from_secs(120)
-    } else {
-        browser_timeout(30, 120)
-    }),
+    timeout(::std::time::Duration::from_millis(2208)),
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
@@ -602,7 +597,6 @@ async fn live_ephemeral_revisit_sequence_regression(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(90)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
@@ -667,7 +661,6 @@ async fn live_real_stream_seek_regression(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(90)),
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
@@ -752,7 +745,7 @@ async fn live_real_stream_seek_resume_native(
     tokio,
     native,
     serial,
-    timeout(browser_timeout(60, 360)),
+    timeout(::std::time::Duration::from_millis(2376)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
@@ -943,7 +936,7 @@ async fn live_stress_real_stream_seek_read_cache(
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(30, 120)),
+    timeout(::std::time::Duration::from_millis(1882)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
@@ -1029,7 +1022,6 @@ async fn live_ephemeral_small_cache_playback(
     tokio,
     native,
     serial,
-    timeout(browser_timeout(30, 120)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]

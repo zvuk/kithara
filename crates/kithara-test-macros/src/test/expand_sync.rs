@@ -4,7 +4,7 @@ use quote::quote;
 use syn::{Attribute, Ident};
 
 use super::{
-    expand_async::{emit_async_runtime_test, emit_async_timeout_test},
+    expand_async::emit_async_timeout_test,
     fixture_args::Preamble,
     shared::{
         finalize_body, make_ambient_stmt, make_serial_attr, make_test_setup,
@@ -41,7 +41,7 @@ pub(crate) fn emit_one_test(
     let serial_attr = make_serial_attr(args);
     let wasm_serial_guard = make_wasm_serial_guard(args);
 
-    if is_async && args.timeout().is_some() {
+    if is_async {
         let mut output = emit_async_timeout_test(
             fn_name,
             vis,
@@ -51,7 +51,7 @@ pub(crate) fn emit_one_test(
             args,
             &serial_attr,
         );
-        let wasm_timeout = wrap_with_timeout(&full_held, args.timeout(), true, fn_name);
+        let wasm_timeout = wrap_with_timeout(&full_held, args, true, fn_name);
         let wasm_wrapped = finalize_body(&wasm_timeout, args, fn_name, true);
         output.extend(quote! {
             #(#remaining_attrs)*
@@ -65,32 +65,8 @@ pub(crate) fn emit_one_test(
         return output;
     }
 
-    if is_async {
-        let mut output = emit_async_runtime_test(
-            fn_name,
-            vis,
-            ret_type,
-            remaining_attrs,
-            &full_plain,
-            args,
-            &serial_attr,
-        );
-        let braced = quote! { { #full_held } };
-        let wasm_wrapped = finalize_body(&braced, args, fn_name, true);
-        output.extend(quote! {
-            #(#remaining_attrs)*
-            #[cfg(target_arch = "wasm32")]
-            #[wasm_bindgen_test::wasm_bindgen_test]
-            #vis async fn #fn_name() #ret_type {
-                #wasm_serial_guard
-                #wasm_wrapped
-            }
-        });
-        return output;
-    }
-
     let modeled = wrap_with_model(&full_held, args, fn_name);
-    let with_timeout = wrap_with_timeout(&modeled, args.timeout(), false, fn_name);
+    let with_timeout = wrap_with_timeout(&modeled, args, false, fn_name);
     let wrapped = finalize_body(&with_timeout, args, fn_name, false);
 
     if args.flags().contains(TestFlags::SERIAL) {
@@ -135,7 +111,7 @@ pub(crate) fn emit_native_only_one(
     let ret_type = ctx.ret_type;
     let args = ctx.args;
 
-    if native_is_async && args.timeout().is_some() {
+    if native_is_async {
         return emit_async_timeout_test(
             name,
             vis,
@@ -146,19 +122,8 @@ pub(crate) fn emit_native_only_one(
             serial_attr,
         );
     }
-    if native_is_async {
-        return emit_async_runtime_test(
-            name,
-            vis,
-            ret_type,
-            remaining_attrs,
-            full_plain,
-            args,
-            serial_attr,
-        );
-    }
     let modeled = wrap_with_model(full_held, args, name);
-    let with_timeout = wrap_with_timeout(&modeled, args.timeout(), false, name);
+    let with_timeout = wrap_with_timeout(&modeled, args, false, name);
     let wrapped = finalize_body(&with_timeout, args, name, false);
     quote! {
         #(#remaining_attrs)*

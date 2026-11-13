@@ -859,7 +859,6 @@ async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) 
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(30)),
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -1069,7 +1068,7 @@ async fn wait_for_stalled_event(
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(Medium),
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -1227,7 +1226,6 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(45)),
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -1395,7 +1393,7 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(Duration::from_millis(1366)),
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -1583,7 +1581,6 @@ async fn abr_switch_must_not_redownload_covered_segments(
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(30)),
     hang_timeout_secs(5),
     tracing(
         "kithara_abr=debug,kithara_hls=debug,kithara_play=debug,kithara_audio=debug,suite_stress=info"
@@ -1737,7 +1734,6 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(45)),
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -1857,7 +1853,6 @@ async fn runtime_cross_codec_manual_switch_no_hang(#[future(awt)] retained_mixed
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(30)),
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -1996,7 +1991,6 @@ async fn runtime_manual_switch_works_when_all_segments_cached(
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(30)),
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -2133,7 +2127,6 @@ async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: 
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(30)),
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -2306,7 +2299,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(Duration::from_millis(1230)),
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -2549,7 +2542,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof(
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(90)),
+    timeout(Duration::from_millis(1180)),
     hang_timeout_secs(15),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -2742,7 +2735,6 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(60)),
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]

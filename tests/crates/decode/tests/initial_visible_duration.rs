@@ -27,7 +27,12 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::SignalAsset;
 use kithara_test_utils::kithara;
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_millis(1120)),
+    hang_timeout_secs(1)
+)]
 #[kithara::hang_watchdog(ctx = String)]
 #[case(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH)]
 #[case(SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH)]
@@ -379,7 +384,7 @@ async fn assert_complete_aac_presentation(asset: SignalAsset, bytes: &[u8], url:
     assert_eq!(audio.duration(), Some(endpoint));
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, hang_timeout_secs(1))]
 #[kithara::hang_watchdog(ctx = String)]
 #[case::mp3(
     SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH,

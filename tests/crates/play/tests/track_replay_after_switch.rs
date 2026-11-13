@@ -162,7 +162,7 @@ async fn wait_for_current_track(
 /// `ReadinessGate` per resource that has to be re-armed for every fresh
 /// `PlayWorker::load`. If the shortcut bypasses re-arming, the new read path
 /// observes a still-closed gate and never makes progress.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread)]
 #[case::plain(replay_plain().await)]
 #[case::aes128(replay_encrypted().await)]
 async fn replay_track_after_switch_does_not_hang_loader(
@@ -280,7 +280,7 @@ async fn wait_for_position(
 /// switch back to A. The *audio* must switch: the engine position must
 /// restart from A's head instead of continuing along B. The crossfade
 /// case mirrors the GUI Prev button (`Transition::Crossfade`, cf=5 s).
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_millis(12278)))]
 #[case::cut(0.0, Transition::None)]
 #[case::crossfade(5.0, Transition::Crossfade)]
 async fn switch_back_to_mp3_restarts_audio_not_just_ui(

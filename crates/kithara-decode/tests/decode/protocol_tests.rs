@@ -156,7 +156,7 @@ fn duration_after_create_is_consistent_across_backends(tone_mp3: &'static [u8]) 
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(2074)))]
 fn total_frames_are_consistent_across_backends(tone_mp3: &'static [u8]) {
     let frame_counts: Vec<_> = available_backends()
         .into_iter()
@@ -209,7 +209,7 @@ fn seek_then_first_chunk_timestamp_is_after_target(tone_mp3: &'static [u8]) {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(2286)))]
 fn end_of_stream_returns_none_repeatedly(tone_mp3: &'static [u8]) {
     for backend in available_backends() {
         let mut dec = backend.make_mp3(tone_mp3);
@@ -336,7 +336,7 @@ fn apple_decodes_standalone(#[case] case: StandaloneCase, standalone_audio: [&'s
 }
 
 #[cfg(feature = "apple")]
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(2184)))]
 fn full_decode_l2_norm_matches_within_tolerance(tone_mp3: &'static [u8]) {
     const TOL_REL: f64 = 0.02;
 

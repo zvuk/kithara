@@ -48,7 +48,7 @@ async fn a_query_is_debounced_and_resolves_one_batch() {
     release(source, &net).await;
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 async fn a_trailing_space_keeps_search_rows_without_another_request() {
     let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes

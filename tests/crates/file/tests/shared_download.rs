@@ -23,7 +23,6 @@ use kithara::{
     file::{File, FileConfig},
     platform::{
         sync::Arc,
-        time::Duration,
         tokio::{sync::watch, task::spawn_blocking},
     },
     stream::Stream,
@@ -104,12 +103,7 @@ fn read_to_end(mut stream: Stream<File<TestPools>>) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-#[kithara::test(
-    tokio,
-    multi_thread,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(2)
-)]
+#[kithara::test(tokio, multi_thread, hang_timeout_secs(2))]
 async fn follower_joins_active_download_without_second_get() {
     let gets = Arc::new(AtomicUsize::new(0));
     let (arrived, mut arrived_rx) = watch::channel(false);
@@ -177,12 +171,7 @@ async fn follower_joins_active_download_without_second_get() {
     );
 }
 
-#[kithara::test(
-    tokio,
-    multi_thread,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(2)
-)]
+#[kithara::test(tokio, multi_thread, hang_timeout_secs(2))]
 async fn immediate_read_exceeds_zero_look_ahead_without_stalling() {
     let gets = Arc::new(AtomicUsize::new(0));
     let (arrived, _arrived_rx) = watch::channel(false);

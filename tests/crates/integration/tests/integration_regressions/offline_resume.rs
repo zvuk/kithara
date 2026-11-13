@@ -69,7 +69,7 @@ impl Drop for NetworkRestore<'_> {
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_millis(1650)))]
 async fn playback_resumes_after_network_returns(
     temp_dir: TestTempDir,
     #[future(awt)] offline_source: (PrivateTestServer, String),
@@ -98,7 +98,7 @@ async fn playback_resumes_after_network_returns(
 /// transient — the segment is obtainable the moment the radio is back — so
 /// resumption must not depend on which one the outage produced. This test is
 /// that one with the class swapped and nothing else changed.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_millis(3014)))]
 async fn playback_resumes_after_transport_failure(
     temp_dir: TestTempDir,
     #[future(awt)] offline_source: (PrivateTestServer, String),
@@ -126,7 +126,7 @@ async fn playback_resumes_after_transport_failure(
 /// catches a handful of part-written bodies at once — the case that stranded
 /// the iOS lane, where every one of them was written off permanently and
 /// playback stopped at the first of the gaps they left.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_millis(4398)))]
 async fn playback_resumes_after_network_returns_with_paced_segments(
     temp_dir: TestTempDir,
     #[future(awt)] paced_source: (PrivateTestServer, String, Vec<BehaviorHandle>),
@@ -153,7 +153,7 @@ async fn playback_resumes_after_network_returns_with_paced_segments(
 /// lands past the buffered window, so the segments it needs are asked for while
 /// the network is down and every one of them fails. Resumption must not depend on
 /// whether a seek happened in between.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_millis(2562)))]
 async fn playback_resumes_after_seek_during_outage(
     temp_dir: TestTempDir,
     #[future(awt)] paced_source: (PrivateTestServer, String, Vec<BehaviorHandle>),

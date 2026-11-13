@@ -472,7 +472,7 @@ fn assert_no_desktop_click(switched: &[f32], control: &[f32]) {
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_secs(180)),
+    timeout(Duration::from_millis(25178)),
     hang_timeout_secs(3)
 )]
 async fn kithara_app_manual_aac_to_flac_switch_is_gapless(

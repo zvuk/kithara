@@ -17,7 +17,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::SignalAsset;
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 #[case::absent(false)]
 #[case::present(true)]
 async fn a_remote_uri_track_takes_the_queue_downloader(#[case] present: bool) {
@@ -38,7 +38,7 @@ async fn a_remote_uri_track_takes_the_queue_downloader(#[case] present: bool) {
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_caller_built_config_keeps_its_downloader() {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::MP3_SINE1K_48K_1S);

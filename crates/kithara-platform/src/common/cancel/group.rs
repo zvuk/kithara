@@ -333,7 +333,7 @@ mod tests {
             [Src::ChildOf(0), Src::ChildOf(1)], Act::Parent(1);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn cancelled_resolves_immediately_when_pre_cancelled() {
         let tok = CancelToken::never();
         tok.cancel();
@@ -344,13 +344,13 @@ mod tests {
             .expect("BUG: cancelled() must return immediately for a pre-cancelled source");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn empty_group_is_not_cancelled() {
         let group = CancelGroup::new(vec![]);
         assert!(!group.is_cancelled());
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn empty_group_cancelled_never_resolves() {
         let group = CancelGroup::new(vec![]);
         let result = crate::time::timeout(Duration::from_millis(50), group.cancelled()).await;
@@ -360,7 +360,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn clone_observes_same_cancellation() {
         let tok = CancelToken::never();
         let group = CancelGroup::new(vec![tok.clone()]);
@@ -371,7 +371,7 @@ mod tests {
         assert!(cloned.is_cancelled());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn ptr_eq_via_partial_eq() {
         // A clone shares the source array, a rebuilt group does not.
         let tok = CancelToken::never();
@@ -382,7 +382,7 @@ mod tests {
         assert_ne!(group, rebuilt);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn token_bitor_token() {
         let a = CancelToken::never();
         let b = CancelToken::never();
@@ -393,7 +393,7 @@ mod tests {
         assert!(group.is_cancelled());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn group_bitor_token() {
         let a = CancelToken::never();
         let b = CancelToken::never();
@@ -404,7 +404,7 @@ mod tests {
         assert!(group.is_cancelled());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn token_bitor_group() {
         let a = CancelToken::never();
         let b = CancelToken::never();
@@ -415,7 +415,7 @@ mod tests {
         assert!(group.is_cancelled());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn group_bitor_group() {
         let a = CancelToken::never();
         let b = CancelToken::never();
@@ -428,7 +428,7 @@ mod tests {
         assert!(merged.is_cancelled());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn chained_bitor() {
         let a = CancelToken::never();
         let b = CancelToken::never();
@@ -440,7 +440,7 @@ mod tests {
         assert!(group.is_cancelled());
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn bitor_async_cancelled() {
         use crate::tokio::task;
 
@@ -461,7 +461,7 @@ mod tests {
             .expect("BUG: spawned task awaiting cancellation must not panic");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn group_on_cancel_fires_once_for_each_source() {
         for [first, second] in [[0, 1], [1, 0]] {
             let tokens = [CancelToken::never(), CancelToken::never()];
@@ -477,7 +477,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn group_on_cancel_fires_once_for_duplicate_and_pre_cancelled_sources() {
         let duplicate = CancelToken::never();
         let duplicate_group = CancelGroup::new(vec![duplicate.clone(), duplicate.clone()]);
@@ -497,7 +497,7 @@ mod tests {
         assert_eq!(pre_cancelled_count.load(Ordering::SeqCst), 1);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn group_on_cancel_empty_and_dropped_guards_do_not_fire() {
         let (empty_count, empty_callback) = on_cancel_counter();
         let empty_guards = CancelGroup::new(vec![]).on_cancel(empty_callback);
@@ -514,7 +514,7 @@ mod tests {
         assert_eq!(dropped_count.load(Ordering::SeqCst), 0);
     }
 
-    #[kithara::test(native, timeout(Duration::from_secs(5)))]
+    #[kithara::test(native)]
     fn group_on_cancel_fires_once_when_sources_cancel_concurrently() {
         use std::sync::Barrier;
 

@@ -8,7 +8,7 @@ use std::{
 use kithara::{
     assets::{AssetStore, StorageBackend},
     file::{File, FileConfig},
-    platform::{sync::Arc, time::Duration, tokio::task::spawn_blocking},
+    platform::{sync::Arc, tokio::task::spawn_blocking},
     stream::{AudioCodec, ContainerFormat, Stream},
 };
 use kithara_integration_tests::{
@@ -64,7 +64,7 @@ fn collect_file_names(path: &std::path::Path, names: &mut Vec<String>) {
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio)]
 async fn remote_presigned_file_url_uses_bounded_cache_name(temp_dir: TestTempDir) {
     let long_query = [
         "X-Amz-Algorithm=AWS4-HMAC-SHA256",
@@ -96,7 +96,7 @@ async fn remote_presigned_file_url_uses_bounded_cache_name(temp_dir: TestTempDir
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 #[case(0, b"ID3\x04\x00")]
 #[case(5, b"\x00\x00\x00\x00T")]
 #[case(10, b"estAu")]
@@ -133,7 +133,7 @@ async fn stream_file_seek_start_reads_correct_bytes(
     assert_eq!(&result.1[..result.0], &expected_vec[..]);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 #[case::current_after_read(Some((5, b"ID3\x04\x00")), SeekFrom::Current(5), 10, b"estA")]
 #[case::end_from_fresh(None, SeekFrom::End(-5), 22, b"12345")]
 async fn stream_file_seek_reads_expected_bytes(
@@ -176,7 +176,7 @@ async fn stream_file_seek_reads_expected_bytes(
 /// false → `DecoderFactory` returns `UnsupportedCodec` and the track
 /// fails to load. Production stream URL: `cdn-edge.zvq.me/track/streamhq?id=…`
 /// served as `audio/mpeg`.
-#[kithara::test(tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 #[case("audio/mpeg", Some(AudioCodec::Mp3), ContainerFormat::MpegAudio)]
 #[case("audio/flac", Some(AudioCodec::Flac), ContainerFormat::Flac)]
 #[case("audio/wav", None, ContainerFormat::Wav)]
@@ -214,7 +214,7 @@ async fn stream_media_info_carries_container_from_content_type(
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 async fn stream_file_seek_past_eof_fails(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let url = audio_behavior(&helper, None);
@@ -231,7 +231,7 @@ async fn stream_file_seek_past_eof_fails(temp_dir: TestTempDir) {
     .unwrap();
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 async fn stream_file_multiple_seeks_work(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let url = audio_behavior(&helper, None);

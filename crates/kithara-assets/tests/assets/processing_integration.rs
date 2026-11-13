@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara_assets::{AcquisitionResult, AssetStore, ReadSide, StorageBackend, WriteSide};
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::sync::Arc;
 use kithara_test_utils::{bufpool::pools, kithara, temp_dir};
 
 use super::support::{
@@ -11,7 +11,7 @@ use super::support::{
     xor_processor,
 };
 
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(hang_timeout_secs(1))]
 fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -46,7 +46,7 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDi
     assert_eq!(buf, expected);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(hang_timeout_secs(1))]
 fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -94,7 +94,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::Te
     assert_eq!(call_count.load(Ordering::SeqCst), count_after_commit);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(hang_timeout_secs(1))]
 fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -133,7 +133,7 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTem
     assert_eq!(&buf_end[..10], &expected_end[..]);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(hang_timeout_secs(1))]
 fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -162,7 +162,7 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempD
     assert_eq!(n, 0);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(hang_timeout_secs(1))]
 fn memory_store_serves_processed_bytes_after_commit() {
     let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
@@ -188,7 +188,7 @@ fn memory_store_serves_processed_bytes_after_commit() {
     assert_eq!(read_bytes(&reader, 0, original_data.len()), expected);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(hang_timeout_secs(1))]
 fn store_without_processing_works_normally(temp_dir: kithara_test_utils::TestTempDir) {
     let scope = asset_scope(&temp_dir, "no-processing");
 

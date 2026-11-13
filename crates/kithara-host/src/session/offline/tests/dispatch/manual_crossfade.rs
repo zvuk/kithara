@@ -163,14 +163,14 @@ impl HostedDeck<TestPools> for ManualDeck {
     fn release(&mut self) {}
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(2176)))]
 async fn a_manual_four_second_batch_reaches_the_host_output_on_its_native_frame() {
     kithara_platform::tokio::task::spawn_blocking(|| manual_four_second_batch(false))
         .await
         .expect("the blocking manual Host render completes");
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(2150)))]
 async fn a_metronome_enabled_one_block_before_a_beat_sounds_from_its_applied_frame() {
     kithara_platform::tokio::task::spawn_blocking(|| manual_four_second_batch(true))
         .await

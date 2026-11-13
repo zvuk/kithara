@@ -18,7 +18,7 @@ use kithara::{
     assets::StorageBackend,
     audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
     file::{File, FileConfig, FileSrc},
-    platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
+    platform::{CancelToken, sync::Arc, tokio::task::spawn_blocking},
     play::{PlayWorkerConfig, ResourceSrc},
     stream::Stream,
 };
@@ -60,7 +60,7 @@ fn drain_to_eof(mut audio: LaneAudio<Stream<File<AppPools>>, AppPools>) -> bool 
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
+#[kithara::test(tokio, hang_timeout_secs(2))]
 async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
     // 1s stereo WAV.
     let wav = Arc::new(audio_wav_44100.to_vec());

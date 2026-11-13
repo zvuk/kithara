@@ -6,5 +6,6 @@ mod fixture_args;
 #[cfg(test)]
 mod parse_tests;
 mod shared;
+mod timeout;
 
 pub(crate) use entry::expand;

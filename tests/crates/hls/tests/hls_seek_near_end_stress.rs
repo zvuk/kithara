@@ -480,7 +480,7 @@ async fn wait_for_post_seek_advance(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_millis(51158)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia_no_sidx(DecoderBackend::Symphonia, plain_hls().await))]
 #[cfg_attr(not(target_os = "android"), case::symphonia_with_sidx(DecoderBackend::Symphonia, sidx_hls().await))]
 #[cfg_attr(

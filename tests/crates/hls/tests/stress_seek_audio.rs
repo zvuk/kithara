@@ -562,7 +562,7 @@ fn resume_after_eof(audio: &mut HlsAudio, buf: &mut [f32], total_secs: f64) {
 ///    - Level 2: continuity (consecutive frames follow a pattern)
 ///    - Level 3: position (decoded phase ≈ expected phase)
 /// 5. Final seek near the end → read to EOF
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, native, serial, timeout(Duration::from_millis(5440)))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::wav_apple_ephemeral(

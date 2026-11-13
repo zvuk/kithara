@@ -121,7 +121,7 @@ fn test_config() -> DownloaderConfig {
         .build()
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+#[kithara::test(tokio)]
 async fn downloader_loop_drives_interval_gated_abr_tick_without_fetch_work() {
     /// Arm the interval as the first tick reads the variants, so scheduling
     /// delay cannot consume the gate before the loop evaluates it.
@@ -166,7 +166,7 @@ async fn downloader_loop_drives_interval_gated_abr_tick_without_fetch_work() {
     );
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio, flash(false))]
 async fn cancelled_abr_deadline_does_not_stop_the_downloader_loop() {
     const INTERVAL: Duration = Duration::from_millis(100);
 
@@ -226,7 +226,7 @@ async fn cancelled_abr_deadline_does_not_stop_the_downloader_loop() {
     assert_eq!(second_state.pending_target(), Some(VariantIndex::new(3)));
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio, flash(false), timeout(Short))]
 async fn cancelled_abr_deadline_rearms_the_next_live_peer() {
     const INTERVAL: Duration = Duration::from_millis(500);
     const STAGGER: Duration = Duration::from_millis(50);
@@ -401,7 +401,7 @@ impl Peer for QueuedPeer {
 /// ever spawning a fetch, so cancelling the downloader leaves `Downloader::run`
 /// with the queue full — the shape that used to strand every claim those
 /// commands carried.
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 async fn downloader_shutdown_cancels_queued_commands() {
     const COMMANDS: usize = 2;
 
@@ -437,7 +437,7 @@ async fn downloader_shutdown_cancels_queued_commands() {
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 async fn a_new_peer_is_polled_while_fetch_capacity_is_full() {
     let url = Url::parse("http://example.test/queued").expect("valid test URL");
     let cancel = CancelToken::never();
@@ -473,7 +473,7 @@ async fn a_new_peer_is_polled_while_fetch_capacity_is_full() {
     ));
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 async fn a_cancelled_queued_fetch_settles_without_capacity() {
     let url = Url::parse("http://example.test/queued").expect("valid test URL");
     let epoch = CancelToken::never();
@@ -507,7 +507,7 @@ async fn a_cancelled_queued_fetch_settles_without_capacity() {
 /// A downloader with no parent cancel is shut down by its last handle: the loop
 /// must not keep itself alive, or it strands every command it still queues and
 /// keeps its client and ABR controller for the life of the runtime.
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 async fn dropping_the_last_handle_shuts_a_parentless_downloader_down() {
     const COMMANDS: usize = 2;
 
@@ -541,7 +541,7 @@ async fn dropping_the_last_handle_shuts_a_parentless_downloader_down() {
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 async fn streaming_without_writer_still_completes() {
     let app = Router::new().route("/data", get(|| async { "body" }));
     let server = TestHttpServer::new(app).await;
@@ -583,7 +583,7 @@ async fn run_real_time_ahead(by: Duration) {
     time::sleep(by).await;
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 async fn server_delay_is_part_of_streamed_request_duration() {
     const DELAY: Duration = Duration::from_millis(250);
 
@@ -659,7 +659,7 @@ async fn server_delay_is_part_of_streamed_request_duration() {
     drop(handle);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn streamed_request_duration_uses_wall_time() {
     const UNRELATED_DELAY: Duration = Duration::from_secs(2);
 
@@ -723,7 +723,7 @@ fn measure_paced_delay(delay: Duration) -> (Duration, Duration) {
     )
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Duration::from_millis(1228)))]
 async fn completed_request_duration_excludes_real_time_spent_before_it() {
     const RUN_AHEAD: Duration = Duration::from_millis(500);
     const EVENT_BUS_CAPACITY: usize = 16;
@@ -862,7 +862,7 @@ async fn peer_handle_downloader_cancel_cascades() {
 
 /// Verify that the Downloader never exceeds `max_concurrent` in-flight
 /// HTTP connections, even when many commands are submitted at once.
-#[kithara::test(tokio, timeout(Duration::from_secs(CONCURRENCY_TEST_TIMEOUT_SECS)))]
+#[kithara::test(tokio)]
 async fn max_concurrent_limits_inflight_connections() {
     const MAX_CONCURRENT: usize = 5;
     const TOTAL_REQUESTS: usize = 1000;
@@ -895,7 +895,7 @@ async fn max_concurrent_limits_inflight_connections() {
 
 /// Simulate many concurrent Downloaders (like parallel test execution).
 /// Each submits a batch of HEAD requests. Global peak must stay bounded.
-#[kithara::test(tokio, timeout(Duration::from_secs(CONCURRENCY_TEST_TIMEOUT_SECS)))]
+#[kithara::test(tokio)]
 async fn many_downloaders_global_peak_stays_bounded() {
     const NUM_DOWNLOADERS: usize = 20;
     const REQUESTS_PER_DL: usize = 30;
@@ -944,7 +944,7 @@ async fn many_downloaders_global_peak_stays_bounded() {
 
 /// Verify that `poll_next` (streaming path) also respects `max_concurrent`.
 /// A Peer produces 1000 HEAD commands via `poll_next`. Peak must stay ≤ `max_concurrent`.
-#[kithara::test(tokio, timeout(Duration::from_secs(CONCURRENCY_TEST_TIMEOUT_SECS)))]
+#[kithara::test(tokio)]
 async fn poll_next_respects_max_concurrent() {
     const MAX_CONCURRENT: usize = 5;
     const TOTAL_CMDS: usize = 1000;
@@ -1062,7 +1062,7 @@ async fn poll_next_respects_max_concurrent() {
 /// A regression that reverts to a per-Downloader client multiplies the opened
 /// connection count by `WAVES`, immediately tripping the assertion.
 #[cfg(not(target_os = "android"))]
-#[kithara::test(tokio, timeout(Duration::from_secs(PORT_STRESS_TIMEOUT_SECS)))]
+#[kithara::test(tokio, timeout(Duration::from_millis(1830)))]
 async fn shared_client_keepalive_bounds_connection_count() {
     const PARALLEL_DLS: usize = 8;
     const WAVES: usize = 25;
@@ -1179,7 +1179,7 @@ async fn load_slow_seen(rx: &mut EventReceiver<TestEvent>) -> bool {
 /// End-to-end: a slow HTTP response fires `DownloaderEvent::LoadSlow`
 /// on the peer's bus, and a subscriber on that bus (as
 /// `kithara_queue::Loader` would set up) receives it.
-#[kithara::test(tokio, timeout(Duration::from_secs(SLOW_DEADLINE_SECS + SLOW_DEADLINE_SECS)))]
+#[kithara::test(tokio, timeout(Duration::from_millis(1232)))]
 async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     const SLOW_SERVER_DELAY_MS: u64 = 500;
     const SOFT_TIMEOUT_MS: u64 = 50;
@@ -1212,7 +1212,7 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(SLOW_DEADLINE_SECS + SLOW_DEADLINE_SECS)))]
+#[kithara::test(tokio, timeout(Duration::from_millis(1230)))]
 async fn soft_timeout_covers_response_body() {
     const SLOW_BODY_DELAY_MS: u64 = 500;
     const SOFT_TIMEOUT_MS: u64 = 50;
@@ -1423,7 +1423,7 @@ async fn spawn_stalled_body_server() -> TestHttpServer {
 
 /// flash(false): this assertion depends on real localhost request progress and
 /// retries, not on virtual scheduler time.
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, flash(false))]
 async fn retry_and_first_byte_publish_on_peer_bus() {
     let server = spawn_flaky_retry_server().await;
     let url = server.url("/data");
@@ -1485,7 +1485,7 @@ async fn retry_and_first_byte_publish_on_peer_bus() {
 
 /// flash(false): the stalled-body fixture is a real loopback socket that must
 /// deliver headers before body inactivity is measured.
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, flash(false))]
 async fn stalled_body_publishes_resume_and_exhaustion_events() {
     let server = spawn_stalled_body_server().await;
     let url = server.url("/data");
@@ -1551,7 +1551,7 @@ async fn stalled_body_publishes_resume_and_exhaustion_events() {
 /// Active peer (PLAYING=true from the start) must finish its batch
 /// ahead of a preload peer (PLAYING=false) when both share the same
 /// limited `max_concurrent` pool.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, timeout(Duration::from_millis(1538)))]
 async fn active_peer_completes_before_preload_under_contention() {
     const CMDS_PER_PEER: usize = 20;
     const MAX_CONCURRENT: usize = 2;
@@ -1695,7 +1695,7 @@ async fn run_one_batch(dl: &Downloader, gate: &Arc<CompletionGate>, batch: Vec<F
 /// walk it past urgent work stamped after it — otherwise the audible
 /// track starves behind an entire construction window (the
 /// `UrgentDownSwitch` hang: v0's demanded bytes queued behind all of v1).
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, timeout(Duration::from_millis(1268)))]
 async fn a_demanded_prefetch_overtakes_later_stamped_urgent_work() {
     let (dl, server) = one_slot_downloader().await;
     let url = server.url("/data");
@@ -1742,7 +1742,7 @@ async fn a_demanded_prefetch_overtakes_later_stamped_urgent_work() {
 /// One scheduler pass can demote and escalate through the same slot. The
 /// command whose demand dropped yields to the queue, and the newly
 /// demanded one takes the front — neither may be confused for the other.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, timeout(Duration::from_millis(1268)))]
 async fn a_dropped_demand_yields_to_a_newly_demanded_command() {
     let (dl, server) = one_slot_downloader().await;
     let url = server.url("/data");
@@ -1787,7 +1787,7 @@ async fn a_dropped_demand_yields_to_a_newly_demanded_command() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio)]
 #[case::equal_priority(false)]
 #[case::later_active_peer(true)]
 async fn admission_capacity_is_shared_by_peer_priority(#[case] later_active: bool) {
@@ -1838,7 +1838,7 @@ async fn admission_capacity_is_shared_by_peer_priority(#[case] later_active: boo
 /// Downloader is free to service them in any order. The test asserts
 /// only liveness — every cmd eventually completes — so we do not lock
 /// in FIFO behaviour that the Registry is not required to uphold.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio)]
 async fn both_peers_idle_no_priority_ordering_asserted() {
     const CMDS_PER_PEER: usize = 10;
     const MAX_CONCURRENT: usize = 2;
@@ -1897,7 +1897,7 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
 /// submits a command through the public `PeerHandle::execute` path and
 /// confirms the response still flows — proving that the Registry
 /// accepts priority-tagged commands from peers with either priority.
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio)]
 async fn peer_handle_execute_respects_either_peer_priority() {
     struct FlippablePeer {
         cancel: CancelToken,
@@ -1961,7 +1961,7 @@ enum TestEvent {
     Downloader(DownloaderEvent),
 }
 
-#[kithara::test(tokio, native, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio, native, flash(false))]
 async fn a_peer_registered_outside_a_runtime_leaves_the_loop_serving() {
     let config = test_config();
     let (downloader, _idle_handle) = std::thread::scope(|scope| {

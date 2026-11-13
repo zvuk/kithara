@@ -18,7 +18,7 @@ use kithara_assets::{
     StorageBackend, WriteSide, mock::xor_processor,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::sync::Arc;
 use kithara_storage::{ResourceStatus, WaitOutcome};
 use kithara_test_utils::kithara;
 use support::{Test, resource, source};
@@ -88,7 +88,7 @@ fn encrypt_aes128_cbc(plaintext: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8
     ct.to_vec()
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
     let dir = tempdir().unwrap();
     let call_count = Arc::new(AtomicUsize::new(0));
@@ -152,7 +152,7 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
     );
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
     let dir = tempdir().unwrap();
     let call_count = Arc::new(AtomicUsize::new(0));
@@ -199,7 +199,7 @@ fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
     assert_eq!(&buf[..], expected);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes() {
     let dir = tempdir().unwrap();
     let call_count = Arc::new(AtomicUsize::new(0));
@@ -246,7 +246,7 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
     assert_eq!(buf, expected);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn reopened_large_committed_drm_processed_resource_without_ctx_reads_committed_bytes() {
     const DRM_ROOT: &str = "processed-drm-asset";
 
@@ -298,7 +298,7 @@ fn reopened_large_committed_drm_processed_resource_without_ctx_reads_committed_b
     assert_eq!(buf, plaintext);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 #[case::memory_second_ends_first(false, false)]
 #[case::memory_first_commits_first(false, true)]
 #[case::disk_second_ends_first(true, false)]
@@ -357,7 +357,7 @@ fn a_second_party_ending_leaves_the_committed_bytes_readable(
     assert_eq!(bytes, expected);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 #[case::memory_drop(false, false)]
 #[case::memory_abandon(false, true)]
 #[case::disk_drop(true, false)]

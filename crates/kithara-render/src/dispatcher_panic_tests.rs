@@ -251,7 +251,7 @@ fn assert_terminal_commands(
     assert!(next_pcm.0 >= command_pcm.1);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 #[case::tick_during_preload(PanicAt::Tick, false, false)]
 #[case::recycle_during_preload(PanicAt::Recycle, false, false)]
 #[case::tick_after_preload(PanicAt::Tick, true, false)]

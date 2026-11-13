@@ -4,7 +4,7 @@ use kithara_assets::{
     AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore, AssetsError,
     StorageBackend,
 };
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::sync::Arc;
 #[cfg(all(test, target_os = "android"))]
 use kithara_test_dylib as _;
 use kithara_test_utils::{
@@ -51,7 +51,7 @@ fn store(layout: HostileLayout) -> (tempfile::TempDir, AssetStore<TestPools>) {
     (dir, store)
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 #[case("")]
 #[case(".")]
 #[case("..")]
@@ -73,7 +73,7 @@ fn hostile_layout_root_is_rejected(#[case] hostile: &'static str) {
     assert!(matches!(err, AssetsError::InvalidKey));
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 #[case("")]
 #[case("../escape")]
 #[case("/absolute/path")]

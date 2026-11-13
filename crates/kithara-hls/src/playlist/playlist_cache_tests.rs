@@ -234,7 +234,7 @@ async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
     assert_eq!(requests.load(Ordering::SeqCst), 1);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(4056)))]
 async fn concurrent_caches_share_one_playlist_repair() {
     let (server, requests, first_seen, release) =
         gated_playlist_server(Bytes::from_static(VALID_MASTER)).await;

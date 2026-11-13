@@ -250,7 +250,7 @@ async fn wait_for_gate_request(player: &mut OfflinePlayer, gate: &SegmentGateHan
     panic!("{label}: gated segment GET was never requested before release");
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_millis(11798)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

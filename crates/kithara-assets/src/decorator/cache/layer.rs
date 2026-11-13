@@ -572,7 +572,7 @@ where
 mod tests {
     use std::{fs, path::Path};
 
-    use kithara_platform::{CancelToken, sync::Arc, thread, time::Duration, tokio::sync::mpsc};
+    use kithara_platform::{CancelToken, sync::Arc, thread, tokio::sync::mpsc};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -711,7 +711,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn cache_reads_capacity_from_its_policy_on_each_insert() {
         let dir = tempfile::tempdir().unwrap();
         let capacity = Arc::new(Mutex::new(NonZeroUsize::new(3).unwrap()));
@@ -728,7 +728,7 @@ mod tests {
         assert_eq!(cached.cache.lock().len(), 1);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn evicts_at_custom_capacity() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(3).unwrap();
@@ -764,7 +764,7 @@ mod tests {
         keys
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn durable_displacement_does_not_invalidate() {
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(DiskAssetStore::new(dir.path(), CancelToken::never()));
@@ -795,7 +795,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn volatile_displacement_invalidates() {
         let mem = Arc::new(MemAssetStore::new(
             CancelToken::never(),
@@ -822,7 +822,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn an_unread_arrival_outlives_entries_read_before_it() {
         let mem = Arc::new(MemAssetStore::new(
             CancelToken::never(),
@@ -855,7 +855,7 @@ mod tests {
         drop(readers);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn byte_limit_is_enforced_when_retained_resource_is_released() {
         let mem = Arc::new(MemAssetStore::new(
             CancelToken::never(),
@@ -884,7 +884,7 @@ mod tests {
         drop(reader);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn pinned_resources_survive_eviction() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(3).unwrap();
@@ -912,7 +912,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn release_unpins_and_allows_eviction() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(3).unwrap();
@@ -942,7 +942,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn cache_hit_returns_same_resource() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(5).unwrap();
@@ -957,7 +957,7 @@ mod tests {
         assert_eq!(writer.reader().path(), joined.path());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn concurrent_opens_do_not_block_each_other() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(5).unwrap();
@@ -972,7 +972,7 @@ mod tests {
         assert_eq!(&buf, b"hello");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn delete_asset_clears_resource_cache() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(5).unwrap();
@@ -988,7 +988,7 @@ mod tests {
         assert_eq!(cached.cache.lock().len(), 0);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn remove_resource_clears_from_cache() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(5).unwrap();
@@ -1008,7 +1008,7 @@ mod tests {
         assert_eq!(state, AssetResourceState::Missing);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn open_resource_returns_committed_entry() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(3).unwrap();
@@ -1023,7 +1023,7 @@ mod tests {
         assert_eq!(&buf, b"hello");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn context_aware_caching_separates_keys() {
         let store = ContextMemStore::default();
         let cached = CachedAssets::new(Arc::new(store), NonZeroUsize::new(5).unwrap(), None, true);
@@ -1052,7 +1052,7 @@ mod tests {
         assert_eq!(&b2, b"bbb");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn disk_lru_keeps_committed_data_on_disk() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(2).unwrap();
@@ -1072,7 +1072,7 @@ mod tests {
         assert_eq!(fs::read(&a_path).unwrap(), b"aaaa");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn open_resource_with_none_context_finds_committed() {
         let store = ContextMemStore::default();
         let cached = CachedAssets::new(Arc::new(store), NonZeroUsize::new(5).unwrap(), None, true);
@@ -1091,7 +1091,7 @@ mod tests {
         assert_eq!(&buf, b"data");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn concurrent_acquire_returns_same_resource() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(5).unwrap();

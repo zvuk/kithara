@@ -40,7 +40,7 @@ mod consts {
 #[kithara::test(
     tokio,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(Duration::from_millis(28696)),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info,suite_stress=info")
 )]
 async fn red_flaky_small_cache_hot_refetch_behind_reader(

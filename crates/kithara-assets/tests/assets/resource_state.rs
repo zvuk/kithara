@@ -3,7 +3,7 @@ use std::{collections::HashSet, num::NonZeroUsize, path::Path};
 use kithara_assets::{
     AssetResourceState, AssetStore, DiskAssetStore, ReadSide, StorageBackend, WriteSide,
 };
-use kithara_platform::{CancelToken, time::Duration};
+use kithara_platform::CancelToken;
 use kithara_test_utils::{bufpool::pools, kithara};
 use tempfile::tempdir;
 
@@ -17,7 +17,7 @@ fn load_pins(root_dir: &Path) -> HashSet<String> {
     PinsIndex::open(&disk).load()
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
     let dir = tempdir().unwrap();
     let scope = AssetStore::builder(pools())
@@ -70,7 +70,7 @@ fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
     assert!(!has_committed_resource(scope.store(), &key_failed));
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
     let dir = tempdir().unwrap();
     let scope = AssetStore::builder(pools())
@@ -103,7 +103,7 @@ fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
     );
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
     let dir = tempdir().unwrap();
     let scope = AssetStore::builder(pools())
@@ -133,7 +133,7 @@ fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
     );
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
     let dir = tempdir().unwrap();
     let scope = AssetStore::builder(pools())
@@ -176,7 +176,7 @@ fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
     let scope = AssetStore::builder(pools())
         .cache_capacity(NonZeroUsize::new(3).unwrap())
@@ -247,7 +247,7 @@ fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
     );
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     let dir = tempdir().unwrap();
 

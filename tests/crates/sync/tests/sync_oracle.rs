@@ -94,7 +94,7 @@ fn rich_rhythmic_oracle_covers_style_tempo_and_negative_controls(
     );
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native, flash(false), timeout(Long))]
 fn static_rhythmic_oracle_accepts_aligned_stems_and_rejects_one_frame_phase_error(
     deck_a: Vec<f32>,
     deck_b: Vec<f32>,
@@ -143,7 +143,7 @@ fn static_rhythmic_oracle_accepts_aligned_stems_and_rejects_one_frame_phase_erro
     );
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native, flash(false), timeout(Short))]
 #[case::missing_beat(
     Some(deck_b_missing_beat()),
     "missing static beat",

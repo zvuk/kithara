@@ -31,7 +31,7 @@ const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
 const STARTUP_CLEAR_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, hang_timeout_secs(1))]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn auto_advance_starts_next_track_without_explicit_play(
     temp_dir: TestTempDir,
