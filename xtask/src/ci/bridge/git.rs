@@ -784,6 +784,24 @@ mod tests {
     }
 
     #[test]
+    fn review_size_accepts_unknown_target_lane_fields() {
+        let (state, repo, ..) = repository();
+        let work = state.path().join("work");
+        fs::write(
+            work.join(".config/xtask.toml"),
+            "[ext.ci]\npr_review_line_limit = 7\n[ext.ci.lanes.x]\ntest_packages = ['future-package']\n",
+        )
+        .unwrap();
+        let target = commit_review(&repo, &work);
+        fs::write(work.join("added.rs"), "added\n".repeat(3)).unwrap();
+        let head = commit_review(&repo, &work);
+
+        let measured = repo.review_size(&target, &head);
+        assert!(measured.is_ok(), "target review policy: {measured:#?}");
+        assert_eq!(measured.unwrap(), (3, NonZeroU64::new(7).unwrap()));
+    }
+
+    #[test]
     fn review_size_reports_missing_or_invalid_target_policy_as_error() {
         let (state, repo, ..) = repository();
         let work = state.path().join("work");

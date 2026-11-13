@@ -55,10 +55,7 @@ fn deep_bench_keeps_one_executor_for_both_hosts() {
     assert_eq!(strings(&lane["os"]), ["linux", "macos"]);
     assert_eq!(lane["cache_group"].as_str(), Some("host"));
     assert_eq!(lane["timeout_minutes"].as_integer(), Some(120));
-    assert_eq!(
-        strings(&lane["steps"][0]["args"]),
-        ["perf", "bench", "ci"]
-    );
+    assert_eq!(strings(&lane["steps"][0]["args"]), ["perf", "bench", "ci"]);
 }
 
 #[test]
