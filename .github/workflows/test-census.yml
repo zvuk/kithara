@@ -54,8 +54,6 @@ jobs:
             revision: ${{ github.sha }}
             packages: ${{ inputs.after_packages }}
             features: ${{ inputs.after_features }}
-    env:
-      CARGO_TARGET_DIR: /cache/target/lane-test-census-${{ matrix.side }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,8 +84,6 @@ jobs:
     needs: inventory
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 30
-    env:
-      CARGO_TARGET_DIR: /cache/target/lane-test-census-compare
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

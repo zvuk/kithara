@@ -6107,15 +6107,12 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "tracing",
- "url",
 ]
 
 [[package]]
 name = "kithara-queue-tests"
 version = "0.0.1-alpha5"
 dependencies = [
- "aes 0.9.3",
- "bytes",
  "kithara",
  "kithara-app",
  "kithara-command",
@@ -6144,7 +6141,6 @@ dependencies = [
  "kithara-test-utils",
  "reqwest",
  "tracing",
- "url",
 ]
 
 [[package]]

@@ -4,7 +4,9 @@ use serde_json::{Value, json};
 
 use super::compare;
 
-fn inventory(binaries: &[(&str, &[(&str, bool)])]) -> String {
+type TestCases<'a> = &'a [(&'a str, bool)];
+
+fn inventory(binaries: &[(&str, TestCases<'_>)]) -> String {
     let mut suites = serde_json::Map::new();
     for (binary, tests) in binaries {
         let tests = tests
