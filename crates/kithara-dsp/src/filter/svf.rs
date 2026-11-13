@@ -23,6 +23,81 @@ pub enum Response {
     HighPass,
 }
 
+/// A checked LP/HP design for a fixed-cutoff state-variable filter.
+#[derive(Clone, Copy, Debug)]
+pub struct SvfDesign {
+    response: Response,
+    coefficients: [f64; 3],
+    damping: f64,
+    gain: f64,
+}
+
+impl SvfDesign {
+    /// Prepares the cutoff once, without allocating or carrying filter state.
+    ///
+    /// # Errors
+    /// [`FilterError::Parameters`] for a nonpositive/nonfinite Q, an
+    /// unrepresentable damping, or a cutoff outside `(0, rate / 2)`.
+    pub fn new(
+        rate: NonZeroU32,
+        cutoff: f64,
+        q: f64,
+        response: Response,
+    ) -> Result<Self, FilterError> {
+        let damping = q.recip();
+        if !(q.is_finite()
+            && q > 0.0
+            && damping.is_finite()
+            && cutoff > 0.0
+            && cutoff < f64::from(rate.get()) / 2.0)
+        {
+            return Err(FilterError::Parameters);
+        }
+        let mut gain = [0.0];
+        dispatch!(Level::new(), simd => platform::svf_gains(simd, &[cutoff], f64::from(rate.get()), &mut gain));
+        let [gain] = gain;
+        Ok(Self {
+            response,
+            damping,
+            gain,
+            coefficients: coefficients(gain, damping),
+        })
+    }
+}
+
+/// Frames until the fixed SVF's slowest pole decays under `floor`.
+/// A decay beyond the addressable frame count saturates at `usize::MAX`.
+#[must_use]
+pub fn decay_frames(design: SvfDesign, floor: f64) -> usize {
+    let SvfDesign { gain, damping, .. } = design;
+    let log_radius = if damping < 2.0 {
+        0.5 * (-2.0 * damping * gain / (1.0 + gain * (gain + damping))).ln_1p()
+    } else {
+        let pole = (damping + (damping * damping - 4.0).sqrt()) * 0.5;
+        [gain * pole, gain / pole]
+            .into_iter()
+            .map(|value| {
+                let loss = if value <= 1.0 {
+                    2.0 * value / (1.0 + value)
+                } else {
+                    2.0 / (1.0 + value)
+                };
+                (-loss).ln_1p()
+            })
+            .fold(f64::NEG_INFINITY, f64::max)
+    };
+    (floor.ln() / log_radius)
+        .ceil()
+        .to_usize()
+        .map_or(usize::MAX, |frames| frames.max(1))
+}
+
+fn coefficients(gain: f64, damping: f64) -> [f64; 3] {
+    let a1 = (1.0 + gain * (gain + damping)).recip();
+    let a2 = gain * a1;
+    [a1, a2, gain * a2]
+}
+
 /// Second-order TPT state-variable filter applied in place to channel planes.
 ///
 /// Trapezoidal integrators in transposed direct form II carry the cutoff gain
@@ -115,8 +190,38 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
                 });
                 for gain in gains.iter().take(chunk.len()) {
                     let mut samples = frames.each_mut().map(Iterator::next);
-                    self.frame_samples(simd, &mut samples, *gain, damping, response);
+                    self.frame_samples(simd, &mut samples, || coefficients(*gain, damping), damping, response);
                 }
+            }
+        });
+        Ok(())
+    }
+
+    /// Runs one prepared design, preserving the same state and quiet law.
+    pub(crate) fn process_fixed<P: DerefMut<Target = [f32]>>(
+        &mut self,
+        planes: &mut [P],
+        range: Range<usize>,
+        design: &SvfDesign,
+    ) -> Result<(), FilterError> {
+        if planes.len() != CHANNELS
+            || planes
+                .iter()
+                .any(|plane| plane.get(range.clone()).is_none())
+        {
+            return Err(FilterError::Shape);
+        }
+        let mut planes = planes.iter_mut();
+        let mut ranges: [Option<&mut [f32]>; CHANNELS] =
+            std::array::from_fn(|_| planes.next().and_then(|plane| plane.get_mut(range.clone())));
+        if ranges.iter().any(Option::is_none) {
+            return Err(FilterError::Shape);
+        }
+        dispatch!(Level::new(), simd => {
+            let mut frames = ranges.each_mut().map(|range| range.as_deref_mut().unwrap_or_default().iter_mut());
+            for _ in range {
+                let mut samples = frames.each_mut().map(Iterator::next);
+                self.frame_samples(simd, &mut samples, || design.coefficients, design.damping, design.response);
             }
         });
         Ok(())
@@ -127,7 +232,7 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
         &mut self,
         simd: S,
         samples: &mut [Option<&mut f32>],
-        gain: f64,
+        coefficients: impl FnOnce() -> [f64; 3],
         damping: f64,
         response: Response,
     ) {
@@ -139,9 +244,7 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
             self.count(true);
             return;
         }
-        let a1 = (1.0 + gain * (gain + damping)).recip();
-        let a2 = gain * a1;
-        let a3 = gain * a2;
+        let [a1, a2, a3] = coefficients();
         let mut frame_quiet = true;
         let [memory1, memory2] = &mut self.state;
         for ((samples, memory1), memory2) in samples
@@ -244,7 +347,13 @@ mod tests {
             let mut planes = planes.iter_mut();
             let mut samples: [Option<&mut f32>; CHANNELS] =
                 std::array::from_fn(|_| planes.next().and_then(|plane| plane.get_mut(frame)));
-            self.frame_samples(simd, &mut samples, gain, damping, response);
+            self.frame_samples(
+                simd,
+                &mut samples,
+                || super::coefficients(gain, damping),
+                damping,
+                response,
+            );
         }
     }
 

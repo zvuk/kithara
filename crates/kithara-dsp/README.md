@@ -66,7 +66,9 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>filter::Biquad</code></td><td>Biquad sections in cascade over planar channels; <code>new</code> allocates, <code>retune</code>, <code>process</code>, <code>settle</code> and <code>copy_state</code> do not, and silence resets the state</td></tr>
 
-<tr><td><code>filter::decay_frames</code></td><td>Frames the slowest pole of a biquad section takes to decay under a level</td></tr>
+<tr><td><code>filter::SvfDesign</code></td><td>Checked LP/HP fixed-cutoff design; prepares gains once without carrying filter state</td></tr>
+
+<tr><td><code>filter::decay_frames</code></td><td>Frames the slowest pole of a prepared SVF design takes to decay under a level</td></tr>
 
 <tr><td><code>filter::Coefficients</code></td><td>The <code>biquad</code> crate's RBJ cookbook designs (with <code>Type</code>, <code>Hertz</code> and <code>Errors</code>), re-exported as the one import path</td></tr>
 
@@ -88,7 +90,7 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>delay::DelayLine</code></td><td>Planar frame history with one cursor for every channel, read before each write at a <code>Tap</code> of <code>1..=capacity</code> frames, integer or as the chord toward the older frame, in spans no longer than the delay; <code>new</code> takes the history from the caller's pool region, <code>read</code>, <code>write</code> and <code>reset</code> do not allocate</td></tr>
 
-<tr><td><code>delay::FeedbackComb</code></td><td>Feedback loop over one pooled delay line, with a biquad section, bounded time changes and measured ring-out</td></tr>
+<tr><td><code>delay::FeedbackComb</code></td><td>Feedback loop over one pooled delay line, with an LP/HP state-variable filter, bounded time changes and measured ring-out</td></tr>
 
 <tr><td><code>fade::FadeCurve</code></td><td>firewheel's fade curve, re-exported as the one import path</td></tr>
 
@@ -99,9 +101,9 @@ assert_eq!(samples, [0.0, 0.5]);
 ### Feedback comb
 
 `FeedbackComb<CHANNELS>` reads its delay history into the output. The history
-takes the input plus that read passed once through one biquad section and
-scaled by the gain; every repeat passes the section once more. The caller
-owns loop stability: gain times the section's peak magnitude must stay below one.
+takes the input plus that read passed once through one LP/HP state-variable filter and
+scaled by the gain; every repeat passes the filter once more. The caller
+owns loop stability: gain times the filter's peak magnitude must stay below one.
 
 A delay change crosses linearly between two reads of that one history. A change
 during a cross waits in one slot, the latest winning, and starts on the first
@@ -109,7 +111,7 @@ frame after the cross ends. Construction takes history from the caller's pool;
 nothing after construction allocates.
 
 The comb has rung out once no sample above -120 dBFS has entered its history for
-the capacity plus the section's slowest-pole decay under that level.
+the capacity plus the filter's slowest-pole decay under that level.
 
 ## Integration
 

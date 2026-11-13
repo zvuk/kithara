@@ -10,7 +10,7 @@ pub use ::biquad::{Coefficients, Errors, Hertz, Type};
 pub use error::FilterError;
 
 pub use self::{
-    biquad::{Biquad, decay_frames},
-    svf::{Response, SVF_CHUNK_FRAMES, StateVariableFilter},
+    biquad::Biquad,
+    svf::{Response, SVF_CHUNK_FRAMES, StateVariableFilter, SvfDesign, decay_frames},
 };
 pub use crate::backend::Fir;

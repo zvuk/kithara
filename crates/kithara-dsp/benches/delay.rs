@@ -1,9 +1,15 @@
 #![forbid(unsafe_code)]
 
-use std::{hint::black_box, num::NonZeroUsize};
+use std::{
+    hint::black_box,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use kithara_dsp::delay::DelayLine;
+use kithara_dsp::{
+    delay::{DelayLine, FeedbackComb},
+    filter::{Response, SvfDesign},
+};
 use kithara_test_utils::bufpool::pools;
 
 mod consts {
@@ -56,5 +62,43 @@ fn feedback(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, feedback);
+fn feedback_comb(c: &mut Criterion) {
+    let mut group = c.benchmark_group("feedback_comb");
+    group.throughput(Throughput::Elements(
+        u64::try_from(2 * consts::BLOCK).expect("block"),
+    ));
+    let region = pools();
+    let rate = NonZeroU32::new(48_000).expect("rate");
+    for (name, response) in [
+        ("low_pass", Response::LowPass),
+        ("high_pass", Response::HighPass),
+    ] {
+        let design = SvfDesign::new(rate, 1000.0, std::f64::consts::FRAC_1_SQRT_2, response)
+            .expect("design");
+        for (path, frames) in consts::DELAYS {
+            let mut comb = FeedbackComb::<2>::new(
+                NonZeroUsize::new(consts::CAPACITY).expect("capacity"),
+                frames,
+                NonZeroUsize::new(960).expect("cross"),
+                design,
+                consts::FEEDBACK,
+                &region,
+            )
+            .expect("comb fits");
+            let mut input = [vec![0.0_f32; consts::BLOCK], vec![0.0; consts::BLOCK]];
+            input[0][0] = 1.0;
+            input[1][0] = -0.5;
+            let mut output = input.clone();
+            group.bench_function(BenchmarkId::new(format!("{name}/{path}"), frames), |b| {
+                b.iter(|| {
+                    comb.process(black_box(&input), black_box(&mut output), 0..consts::BLOCK)
+                        .expect("block")
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, feedback, feedback_comb);
 criterion_main!(benches);

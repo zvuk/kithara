@@ -1,9 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! The feedback delay a deck FX unit holds: echo positions and amplitudes in
-//! any block partition, the cross-read of a time change, the place of the
-//! feedback filter in the loop, the reported tail, a new sample rate and the
-//! refusals.
+//! Public feedback-delay contract against an independent scalar loop.
 
 use std::{
     f64::consts::{FRAC_1_SQRT_2, PI},
@@ -83,8 +80,6 @@ fn sample(value: f64) -> f32 {
     value.to_f32().expect("a test sample fits f32")
 }
 
-/// The wet signal `effect` makes of `input`, called in blocks of the sizes
-/// `blocks` cycles through, each of `changes` set on its frame.
 fn run(
     effect: &mut FeedbackDelay,
     input: &[Vec<f32>; 2],
@@ -115,9 +110,6 @@ fn run(
     wet
 }
 
-/// The wet bits and the tail report after each [`REGULAR`] block of `effect`
-/// playing `input`, `before` handed the first frame of each block and the
-/// effect ahead of it.
 fn takes(
     effect: &mut FeedbackDelay,
     input: &[Vec<f32>; 2],
@@ -157,67 +149,42 @@ fn assert_near(actual: &[f32], expected: &[f64], what: &str) {
     );
 }
 
-/// The cookbook high-pass at `cutoff` for `rate` with Butterworth Q:
-/// `[b0, b1, b2, a1, a2]`.
-fn cookbook(cutoff: f32, rate: u32) -> [f64; 5] {
-    let omega = 2.0 * PI * f64::from(cutoff) / f64::from(rate);
-    let (sin, cos) = omega.sin_cos();
-    let alpha = sin / (2.0 * FRAC_1_SQRT_2);
-    let scale = 1.0 / (1.0 + alpha);
-    [
-        (1.0 + cos) / 2.0,
-        -(1.0 + cos),
-        (1.0 + cos) / 2.0,
-        -2.0 * cos,
-        1.0 - alpha,
-    ]
-    .map(|coefficient| coefficient * scale)
+fn high_pass(cutoff: f32, rate: u32) -> [f64; 3] {
+    let g = (PI * f64::from(cutoff) / f64::from(rate)).tan();
+    let k = FRAC_1_SQRT_2.recip();
+    [g, k, (1.0 + g * (g + k)).recip()]
 }
 
-/// The [`cookbook`] high-pass rounded to `f32`, as a filter running in `f32`
-/// holds it.
-fn high_pass(cutoff: f32, rate: u32) -> [f64; 5] {
-    cookbook(cutoff, rate).map(|coefficient| f64::from(sample(coefficient)))
-}
-
-/// Frames a delay holding `capacity` frames, its high-pass at `cutoff` for
-/// `rate`, waits after its last write above the floor before reporting its
-/// tail spent: the capacity, then the frames the high-pass's slowest pole
-/// takes to decay under the floor. The two poles are a conjugate pair of
-/// radius `√a2`.
 fn tail_window(capacity: usize, cutoff: f32, rate: u32) -> usize {
-    let [.., a2] = cookbook(cutoff, rate);
-    let decay = (f64::from(FLOOR).ln() / a2.sqrt().ln()).ceil();
-    capacity + decay.to_usize().expect("a whole count of frames")
+    let [g, k, _] = high_pass(cutoff, rate);
+    let radius = ((1.0 + g * g - k * g) / (1.0 + g * g + k * g)).sqrt();
+    let decay = (f64::from(FLOOR).ln() / radius.ln()).ceil();
+    capacity + decay.to_usize().expect("whole decay frames")
 }
 
-/// A biquad in `f64`, direct form I.
 struct Section {
-    coefficients: [f64; 5],
-    state: [f64; 4],
+    coefficients: [f64; 3],
+    state: [f64; 2],
 }
 
 impl Section {
     fn new(cutoff: f32, rate: u32) -> Self {
         Self {
             coefficients: high_pass(cutoff, rate),
-            state: [0.0; 4],
+            state: [0.0; 2],
         }
     }
 
     fn step(&mut self, input: f64) -> f64 {
-        let [b0, b1, b2, a1, a2] = self.coefficients;
-        let [x1, x2, y1, y2] = self.state;
-        let output = b0 * input + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
-        self.state = [input, x1, output, y1];
-        output
+        let [g, k, scale] = self.coefficients;
+        let [s1, s2] = self.state;
+        let band = (s1 + g * (input - s2)) * scale;
+        let low = s2 + g * band;
+        self.state = [2.0 * band - s1, 2.0 * low - s2];
+        input - k * band - low
     }
 }
 
-/// The delay loop in scalar `f64`: the wet signal reads the history at the
-/// delay, crossing linearly from the previous delay over [`RAMP`] frames, and
-/// the history takes the input plus the wet signal high-passed once and
-/// scaled by the feedback.
 struct Model {
     wet: Vec<f64>,
     history: Vec<f64>,
@@ -228,7 +195,6 @@ struct Model {
 }
 
 impl Model {
-    /// The model at `settings`, holding silence.
     fn new(settings: Settings) -> Self {
         Self {
             wet: Vec::new(),
@@ -240,8 +206,6 @@ impl Model {
         }
     }
 
-    /// The model having played `input`, its delay moving to each of
-    /// `changes` on its frame.
     fn play(settings: Settings, input: &[f32], changes: &[(usize, u32)]) -> Self {
         let mut model = Self::new(settings);
         for (frame, sample) in input.iter().enumerate() {
@@ -277,8 +241,6 @@ impl Model {
     }
 }
 
-/// A unit impulse on the left and a smaller inverted one three frames later
-/// on the right, then silence.
 fn impulses(length: usize) -> [Vec<f32>; 2] {
     let mut input = [vec![0.0; length], vec![0.0; length]];
     input[0][0] = 1.0;
@@ -286,7 +248,6 @@ fn impulses(length: usize) -> [Vec<f32>; 2] {
     input
 }
 
-/// A 3 kHz sine on the left and a 2 kHz one on the right, both at half scale.
 fn sines(length: usize) -> [Vec<f32>; 2] {
     [3000.0, 2000.0].map(|frequency| {
         (0..length)

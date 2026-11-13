@@ -4,7 +4,10 @@ use kithara_test_fixtures::portable::sine_440;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::{Biquad, Coefficients, FilterError, Hertz, Response, StateVariableFilter, Type, decay_frames};
+use super::{
+    Biquad, Coefficients, FilterError, Hertz, Response, StateVariableFilter, SvfDesign, Type,
+    decay_frames,
+};
 
 const RATE: f64 = 48_000.0;
 const Q: f64 = std::f64::consts::FRAC_1_SQRT_2;
@@ -436,33 +439,26 @@ fn nan_input_is_nonquiet_under_every_partition() {
     );
 }
 
-/// A section with only a denominator, `1 + a1 z⁻¹ + a2 z⁻²`.
-fn poles(a1: f64, a2: f64) -> Coefficients<f64> {
-    Coefficients {
-        a1,
-        a2,
-        b0: 1.0,
-        b1: 0.0,
-        b2: 0.0,
-    }
-}
-
 #[kithara::test]
-#[case::conjugate_pair(poles(-1.6, 0.81), 0.9)]
-#[case::real_poles(poles(-1.3, 0.4), 0.8)]
+#[case::conjugate_pair(12_000.0, 5.0 / 6.0, 0.5)]
+#[case::real_poles(((1.0_f64 - 0.9) / (1.0 + 0.9)).atan() * 48_000.0 / std::f64::consts::PI, 0.5, 0.9)]
 fn decay_frames_counts_the_slowest_pole_down_to_the_level(
-    #[case] section: Coefficients<f64>,
+    #[case] cutoff: f64,
+    #[case] q: f64,
     #[case] radius: f64,
 ) {
-    let level = 1.0e-6;
+    let level = 1e-6;
+    let design = SvfDesign::new(SVF_RATE, cutoff, q, Response::LowPass).expect("design");
     let expected = (f64::ln(level) / radius.ln()).ceil();
-    assert_eq!(decay_frames(section, level).to_f64(), Some(expected));
+    assert_eq!(decay_frames(design, level).to_f64(), Some(expected));
+    let memoryless = SvfDesign::new(SVF_RATE, 12_000.0, 0.5, Response::HighPass).expect("design");
     assert_eq!(
-        decay_frames(poles(0.0, 0.0), level),
+        decay_frames(memoryless, level),
         1,
-        "a section without memory still counts one frame"
+        "a filter without memory counts one frame"
     );
 }
+
 const SVF_RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("nonzero rate");
 
 fn variable(response: Response, planes: &mut [Vec<f32>], cutoffs: &[f64]) {

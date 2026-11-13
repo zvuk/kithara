@@ -228,29 +228,16 @@ fn in_f32(coefficients: Coefficients<f64>) -> Result<[f32; 5], FilterError> {
     }
 }
 
-/// Frames the slowest pole of `coefficients` takes to decay under `floor`, a
-/// level below one; at least one.
-#[must_use]
-pub fn decay_frames(coefficients: Coefficients<f64>, floor: f64) -> usize {
-    frames_under(coefficients.a1, coefficients.a2, floor.log2())
-}
-
 /// Frames until the slowest pole of `values` decays below `2⁻²⁴`.
 fn decay(values: [f32; 5]) -> usize {
     let [_, _, _, a1, a2] = values.map(f64::from);
-    frames_under(a1, a2, consts::SETTLE_FLOOR_LOG2)
-}
-
-/// Frames until the slowest pole of `1 + a1 z⁻¹ + a2 z⁻²` decays below
-/// `2^floor_log2`; at least one.
-fn frames_under(a1: f64, a2: f64, floor_log2: f64) -> usize {
     let discriminant = a1.mul_add(a1, -4.0 * a2);
     let radius = if discriminant < 0.0 {
         a2.sqrt()
     } else {
         (a1.abs() + discriminant.sqrt()) * 0.5
     };
-    (floor_log2 / radius.log2())
+    (consts::SETTLE_FLOOR_LOG2 / radius.log2())
         .ceil()
         .to_usize()
         .map_or(1, |frames| frames.max(1))

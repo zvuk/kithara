@@ -6,7 +6,7 @@
 //! `spectrum` supplies Hann-windowed real FFT, complex spectral difference
 //! and autocorrelation. `delay` holds planar frame history in storage taken
 //! from the caller's buffer region and the feedback comb that loops it
-//! through a biquad section. `sum_squares` reduces energy; `downmix`
+//! through an LP/HP state-variable filter. `sum_squares` reduces energy; `downmix`
 //! averages channels.
 //! Element-wise kernels (`ramp`, `div`, `affine`, `sub`, `scale_add`,
 //! `mul_add`, `add`) and `fade::gains` compose vector fades.
@@ -29,7 +29,7 @@ pub mod delay;
 pub mod envelope;
 /// Fade curves: one lexicon for firewheel's `MixDSP` and every crossfade gain.
 pub mod fade;
-/// Biquad cascades over channel planes and the designs that feed them.
+/// Biquad and state-variable filters over channel planes and their designs.
 pub mod filter;
 /// Window interpolation at fractional positions and the rate ramps that
 /// place them.

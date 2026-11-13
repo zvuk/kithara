@@ -6,7 +6,7 @@ use std::{
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_dsp::{
     delay::{CombError, FeedbackComb},
-    filter::{Coefficients, FilterError, Hertz, Type},
+    filter::{FilterError, Response, SvfDesign},
 };
 use num_traits::ToPrimitive;
 
@@ -36,7 +36,7 @@ impl FeedbackDelay {
     /// [`CombError::Delay`] when the starting time exceeds the capacity,
     /// [`CombError::Pool`] when the history does not fit `pools`,
     /// [`CombError::Filter`] when the starting cutoff does not fit under
-    /// Nyquist or the platform refuses the filter.
+    /// Nyquist.
     pub fn new<S: HasPool<f32>>(
         config: FeedbackDelayConfig,
         pools: &PoolRegion<S>,
@@ -57,9 +57,8 @@ impl FeedbackDelay {
         })
     }
 
-    /// Tunes the feedback high-pass to `cutoff` at the current sample rate.
     fn tune(&mut self, cutoff: FeedbackHighPass) -> Result<(), FilterError> {
-        self.comb.retune(high_pass(self.sample_rate, cutoff)?)?;
+        self.comb.retune(high_pass(self.sample_rate, cutoff)?);
         self.high_pass = cutoff;
         Ok(())
     }
@@ -128,8 +127,6 @@ impl DeckEffect for FeedbackDelay {
     }
 }
 
-/// The 20 ms a time change crosses over, in frames at `sample_rate`; at
-/// least one.
 fn cross_frames(sample_rate: NonZeroU32) -> NonZeroUsize {
     (f64::from(sample_rate.get()) * consts::DELAY_RAMP_SECONDS)
         .round()
@@ -138,17 +135,11 @@ fn cross_frames(sample_rate: NonZeroU32) -> NonZeroUsize {
         .unwrap_or(NonZeroUsize::MIN)
 }
 
-/// The Butterworth high-pass at `cutoff` for `sample_rate`.
-fn high_pass(
-    sample_rate: NonZeroU32,
-    cutoff: FeedbackHighPass,
-) -> Result<Coefficients<f64>, FilterError> {
-    let hertz = |value: f64| Hertz::<f64>::from_hz(value).map_err(|_| FilterError::Parameters);
-    Coefficients::from_params(
-        Type::HighPass,
-        hertz(f64::from(sample_rate.get()))?,
-        hertz(f64::from(f32::from(cutoff)))?,
+fn high_pass(sample_rate: NonZeroU32, cutoff: FeedbackHighPass) -> Result<SvfDesign, FilterError> {
+    SvfDesign::new(
+        sample_rate,
+        f64::from(f32::from(cutoff)),
         FRAC_1_SQRT_2,
+        Response::HighPass,
     )
-    .map_err(|_| FilterError::Parameters)
 }

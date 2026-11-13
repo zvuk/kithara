@@ -411,13 +411,13 @@ fn fir_history_peak_linking_and_envelope_never_allocate() {
 
 #[kithara::test(native)]
 fn feedback_comb_process_retime_retune_and_reset_never_allocate() {
-    let section = Coefficients {
-        a1: -0.8,
-        a2: 0.0,
-        b0: 0.2,
-        b1: 0.0,
-        b2: 0.0,
-    };
+    let section = kithara_dsp::filter::SvfDesign::new(
+        NonZeroU32::new(48_000).expect("rate"),
+        1500.0,
+        0.25,
+        Response::LowPass,
+    )
+    .expect("design");
     let mut comb =
         FeedbackComb::<2>::new(PLANE, 300.5, WINDOW, section, 0.5, &pools()).expect("comb fits");
     let near = comb.tap(100.0).expect("tap in range");
@@ -432,7 +432,14 @@ fn feedback_comb_process_retime_retune_and_reset_never_allocate() {
         }
         comb.set_gain(0.25);
         comb.set_cross(TWO);
-        comb.retune(section).expect("stable section");
+        let design = kithara_dsp::filter::SvfDesign::new(
+            NonZeroU32::new(48_000).expect("rate"),
+            2300.0,
+            1.0,
+            Response::HighPass,
+        )
+        .expect("design");
+        comb.retune(design);
         comb.reset();
     });
     assert!(comb.rung_out(), "a reset comb has rung out");

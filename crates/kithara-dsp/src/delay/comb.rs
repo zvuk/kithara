@@ -9,14 +9,14 @@ use kithara_bufpool::{HasPool, PoolRegion};
 use super::{CombError, DelayError, DelayLine, Tap};
 use crate::{
     add, consts, crossfade_linear,
-    filter::{self, Biquad, Coefficients, FilterError},
+    filter::{self, StateVariableFilter, SvfDesign},
     scale_in_place,
 };
 
 /// Feedback comb of `CHANNELS` planes over one [`DelayLine`].
 ///
 /// Each read is output; history takes input plus that read passed through one
-/// biquad section and scaled by gain. The caller owns loop stability.
+/// LP/HP state-variable filter and scaled by gain. The caller owns loop stability.
 ///
 /// A time change crosses between reads of one history; a change during a
 /// cross waits in one slot, latest wins. Nothing after construction allocates.
@@ -24,19 +24,18 @@ use crate::{
 /// Ring-out measures quiet writes; [`rung_out`](Self::rung_out) states the
 /// floor and window.
 pub struct FeedbackComb<const CHANNELS: usize> {
-    filter: Biquad,
     line: DelayLine,
     cross_frames: NonZeroUsize,
     cross: Option<Cross>,
     pending: Option<Tap>,
+    filter: StateVariableFilter<CHANNELS>,
+    design: SvfDesign,
     delay: Tap,
     gain: f32,
     quiet: usize,
     window: usize,
 }
 
-/// A cross from the read at `from` toward the current delay, `done` frames
-/// in.
 #[derive(Clone, Copy, Debug)]
 struct Cross {
     from: Tap,
@@ -46,18 +45,17 @@ struct Cross {
 impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
     /// A silent comb holding `capacity` frames of history taken from `pools`,
     /// reading `delay` frames back, crossing over `cross` frames when the
-    /// delay changes, and feeding back through `section` scaled by `gain`.
+    /// delay changes, and feeding back through `design` scaled by `gain`.
     ///
     /// # Errors
     /// [`CombError::Delay`] when `CHANNELS` is zero or `delay` lies outside
     /// `1..=capacity`, [`CombError::Pool`] when the history does not fit
-    /// `pools`, [`CombError::Filter`] when `section` is unstable in `f32` or
-    /// the platform refuses the filter.
+    /// `pools`.
     pub fn new<S: HasPool<f32>>(
         capacity: NonZeroUsize,
         delay: f64,
         cross: NonZeroUsize,
-        section: Coefficients<f64>,
+        design: SvfDesign,
         gain: f32,
         pools: &PoolRegion<S>,
     ) -> Result<Self, CombError> {
@@ -68,14 +66,15 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
             line,
             gain,
             delay,
-            filter: Biquad::new(channels, NonZeroUsize::MIN)?,
+            design,
+            filter: StateVariableFilter::new(),
             cross: None,
             pending: None,
             cross_frames: cross,
             window: 0,
             quiet: usize::MAX,
         };
-        comb.retune(section)?;
+        comb.retune(design);
         Ok(comb)
     }
 
@@ -113,17 +112,14 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
         self.advance(0);
     }
 
-    /// Retunes the loop section to `section`, its state carrying over, and
-    /// sizes the ring-out window by its slowest pole.
-    ///
-    /// # Errors
-    /// [`FilterError::Parameters`] when `section` is unstable in `f32`; the
-    /// previous tuning stays then.
-    pub fn retune(&mut self, section: Coefficients<f64>) -> Result<(), FilterError> {
-        self.filter.retune(0, section)?;
-        let decay = filter::decay_frames(section, f64::from(consts::COMB_FLOOR));
-        self.window = self.line.capacity().get().saturating_add(decay);
-        Ok(())
+    /// Replaces the prepared LP/HP design without changing filter history.
+    pub fn retune(&mut self, design: SvfDesign) {
+        self.window = self
+            .line
+            .capacity()
+            .get()
+            .saturating_add(filter::decay_frames(design, f64::from(consts::COMB_FLOOR)));
+        self.design = design;
     }
 
     /// Runs `range` of `input` through the comb into the same range of
@@ -179,8 +175,6 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
         self.quiet >= self.window
     }
 
-    /// Frames the next span runs: at most `rest`, the chunk, what each read
-    /// allows and what is left of the cross.
     fn span(&self, rest: usize) -> usize {
         let span = rest.min(consts::COMB_CHUNK).min(self.delay.whole());
         self.cross.map_or(span, |cross| {
@@ -219,7 +213,8 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
             }
             send.copy_from_slice(read);
         }
-        self.filter.process(&mut sends, 0..frames)?;
+        self.filter
+            .process_fixed(&mut sends, 0..frames, &self.design)?;
         for (send, plane) in sends.iter_mut().zip(input) {
             scale_in_place(send, self.gain);
             add(plane.get(range.clone()).unwrap_or_default(), send);
@@ -242,8 +237,6 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
         }
     }
 
-    /// Counts the frames since the history last took a sample above the
-    /// floor, given the span just `written` to it.
     fn listen(&mut self, written: &[&mut [f32]]) {
         let frames = written.first().map_or(0, |plane| plane.len());
         self.quiet = written

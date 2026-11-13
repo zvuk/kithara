@@ -1,10 +1,13 @@
-use std::num::NonZeroUsize;
+use std::{
+    f64::consts::PI,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use kithara_test_utils::{bufpool::pools, kithara};
 use num_traits::ToPrimitive;
 
 use super::{CombError, DelayError, FeedbackComb};
-use crate::filter::{Coefficients, FilterError};
+use crate::filter::{FilterError, Response, SvfDesign};
 
 type Comb = FeedbackComb<2>;
 type Planes = [Vec<f32>; 2];
@@ -21,35 +24,20 @@ const MODEL: f64 = 1e-5;
 const REGULAR: [usize; 1] = [64];
 const IRREGULAR: [usize; 6] = [37, 64, 13, 50, 1, 63];
 
-/// A band-pass section whose two poles are a conjugate pair of radius 0.9;
-/// its peak gain stays near one, so [`GAIN`] keeps the loop stable.
-fn resonant() -> Coefficients<f64> {
-    let (radius, angle) = (0.9_f64, 0.3_f64);
-    Coefficients {
-        a1: -2.0 * radius * angle.cos(),
-        a2: radius * radius,
-        b0: 0.1,
-        b1: 0.0,
-        b2: -0.1,
-    }
+const RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("rate");
+
+fn high_pass() -> Section {
+    Section::new(Response::HighPass, 2300.0, 1.0)
+}
+fn low_pass() -> Section {
+    Section::new(Response::LowPass, 1500.0, 0.25)
 }
 
-/// A one-pole low-pass of unity DC gain whose pole sits at 0.8.
-fn one_pole() -> Coefficients<f64> {
-    Coefficients {
-        a1: -0.8,
-        a2: 0.0,
-        b0: 0.2,
-        b1: 0.0,
-        b2: 0.0,
-    }
+fn comb_at(delay: f64, section: Section, gain: f32) -> Comb {
+    Comb::new(CAPACITY, delay, CROSS, section.design(), gain, &pools()).expect("comb fits")
 }
 
-fn comb_at(delay: f64, section: Coefficients<f64>, gain: f32) -> Comb {
-    Comb::new(CAPACITY, delay, CROSS, section, gain, &pools()).expect("the comb fits the pools")
-}
-
-fn comb(section: Coefficients<f64>, gain: f32) -> Comb {
+fn comb(section: Section, gain: f32) -> Comb {
     comb_at(DELAY, section, gain)
 }
 
@@ -61,14 +49,10 @@ fn f32_of(value: f64) -> f32 {
     value.to_f32().expect("a test sample fits f32")
 }
 
-/// Planes of `length` frames whose frame `frame` of channel `channel` is
-/// `at(channel, frame)`.
 fn planes(length: usize, at: impl Fn(usize, usize) -> f32) -> Planes {
     [0, 1].map(|channel| (0..length).map(|frame| at(channel, frame)).collect())
 }
 
-/// A unit impulse on the left, a smaller inverted one three frames later on
-/// the right, then a short burst on both, then silence.
 fn signal(length: usize) -> Planes {
     planes(length, |channel, frame| match (channel, frame) {
         (0, 0) => 1.0,
@@ -79,22 +63,21 @@ fn signal(length: usize) -> Planes {
     })
 }
 
-/// A change `comb` takes on a frame.
 #[derive(Clone, Copy, Debug)]
 enum Change {
     Delay(f64),
     Cross(usize),
+    Filter(Section),
 }
 
 fn apply(comb: &mut Comb, change: Change) {
     match change {
         Change::Delay(frames) => comb.retime(comb.tap(frames).expect("a delay in range")),
         Change::Cross(frames) => comb.set_cross(NonZeroUsize::new(frames).expect("nonzero")),
+        Change::Filter(section) => comb.retune(section.design()),
     }
 }
 
-/// What `comb` makes of `input`, called in blocks of the sizes `blocks`
-/// cycles through, each of `changes` taken on its frame.
 fn run(comb: &mut Comb, input: &Planes, blocks: &[usize], changes: &[(usize, Change)]) -> Planes {
     let length = input[0].len();
     let mut output = planes(length, |_, _| 0.0);
@@ -122,33 +105,57 @@ fn bits(planes: &Planes) -> [Vec<u32>; 2] {
         .map(|plane| plane.iter().map(|sample| sample.to_bits()).collect())
 }
 
-/// A biquad section in `f64`, direct form I, on coefficients rounded to
-/// `f32` as the comb's section holds them.
-#[derive(Clone, Copy)]
+/// Scalar trapezoidal integrators solved together before their state advances.
+#[derive(Clone, Copy, Debug)]
 struct Section {
-    coefficients: [f64; 5],
-    state: [f64; 4],
+    response: Response,
+    cutoff: f64,
+    q: f64,
+    state: [f64; 2],
 }
 
 impl Section {
-    fn new(section: Coefficients<f64>) -> Self {
-        let Coefficients { a1, a2, b0, b1, b2 } = section;
+    fn new(response: Response, cutoff: f64, q: f64) -> Self {
         Self {
-            coefficients: [b0, b1, b2, a1, a2].map(|value| f64::from(f32_of(value))),
-            state: [0.0; 4],
+            response,
+            cutoff,
+            q,
+            state: [0.0; 2],
         }
     }
 
+    fn design(self) -> SvfDesign {
+        SvfDesign::new(RATE, self.cutoff, self.q, self.response).expect("design")
+    }
+
     fn step(&mut self, input: f64) -> f64 {
-        let [b0, b1, b2, a1, a2] = self.coefficients;
-        let [x1, x2, y1, y2] = self.state;
-        let output = b0 * input + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
-        self.state = [input, x1, output, y1];
-        output
+        let g = (PI * self.cutoff / f64::from(RATE.get())).tan();
+        let k = self.q.recip();
+        let [s1, s2] = self.state;
+        let band = (s1 + g * (input - s2)) / (1.0 + g * (g + k));
+        let low = s2 + g * band;
+        self.state = [2.0 * band - s1, 2.0 * low - s2];
+        match self.response {
+            Response::LowPass => low,
+            Response::HighPass => input - k * band - low,
+        }
+    }
+
+    fn radius(self) -> f64 {
+        let g = (PI * self.cutoff / f64::from(RATE.get())).tan();
+        let k = self.q.recip();
+        if k < 2.0 {
+            ((1.0 + g * g - k * g) / (1.0 + g * g + k * g)).sqrt()
+        } else {
+            let d = (k * k - 4.0).sqrt();
+            [(-k + d) / 2.0, (-k - d) / 2.0]
+                .map(|pole| ((1.0 + g * pole) / (1.0 - g * pole)).abs())
+                .into_iter()
+                .fold(0.0, f64::max)
+        }
     }
 }
 
-/// One channel of the comb in scalar `f64`.
 struct Channel {
     history: Vec<f64>,
     output: Vec<f64>,
@@ -156,7 +163,6 @@ struct Channel {
 }
 
 impl Channel {
-    /// The history `delay` frames back, as the chord toward the older frame.
     fn read(&self, delay: f64) -> f64 {
         let at = |back: usize| {
             self.history
@@ -173,10 +179,6 @@ impl Channel {
     }
 }
 
-/// The comb in scalar `f64`: the output reads the history at the delay,
-/// crossing linearly from the previous delay, and the history takes the input
-/// plus the output through the section scaled by the gain. A delay change
-/// during a cross waits for its end, the latest such change winning.
 struct Model {
     channels: [Channel; 2],
     gain: f64,
@@ -187,17 +189,12 @@ struct Model {
 }
 
 impl Model {
-    fn play(
-        section: Coefficients<f64>,
-        gain: f32,
-        input: &Planes,
-        changes: &[(usize, Change)],
-    ) -> Planes64 {
+    fn play(section: Section, gain: f32, input: &Planes, changes: &[(usize, Change)]) -> Planes64 {
         let mut model = Self {
             channels: [(); 2].map(|()| Channel {
                 history: Vec::new(),
                 output: Vec::new(),
-                section: Section::new(section),
+                section,
             }),
             gain: f64::from(gain),
             delay: DELAY,
@@ -213,6 +210,13 @@ impl Model {
                     Change::Cross(frames) => {
                         model.cross_frames = frames;
                         model.advance(0);
+                    }
+                    Change::Filter(section) => {
+                        for channel in &mut model.channels {
+                            channel.section.response = section.response;
+                            channel.section.cutoff = section.cutoff;
+                            channel.section.q = section.q;
+                        }
                     }
                 }
             }
@@ -278,10 +282,8 @@ fn assert_near(actual: &Planes, expected: &Planes64, what: &str) {
     }
 }
 
-/// Frames a comb waits after its last write above the floor before it has
-/// rung out: the capacity, then the frames the slowest pole of its section,
-/// of `radius`, takes to decay under the floor.
-fn window(radius: f64) -> usize {
+fn window(section: Section) -> usize {
+    let radius = section.radius();
     let decay = (f64::from(FLOOR).ln() / radius.ln()).ceil();
     CAPACITY
         .get()
@@ -291,8 +293,12 @@ fn window(radius: f64) -> usize {
 #[kithara::test]
 fn a_comb_follows_its_scalar_loop_in_any_partition() {
     let input = signal(2000);
-    let regular = run(&mut comb(resonant(), GAIN), &input, &REGULAR, &[]);
-    let irregular = run(&mut comb(resonant(), GAIN), &input, &IRREGULAR, &[]);
+    let changes = [
+        (700, Change::Filter(low_pass())),
+        (1300, Change::Filter(high_pass())),
+    ];
+    let regular = run(&mut comb(high_pass(), GAIN), &input, &REGULAR, &changes);
+    let irregular = run(&mut comb(high_pass(), GAIN), &input, &IRREGULAR, &changes);
     assert_eq!(
         bits(&regular),
         bits(&irregular),
@@ -308,7 +314,7 @@ fn a_comb_follows_its_scalar_loop_in_any_partition() {
     );
     assert_near(
         &regular,
-        &Model::play(resonant(), GAIN, &input, &[]),
+        &Model::play(high_pass(), GAIN, &input, &changes),
         "the comb",
     );
 }
@@ -322,8 +328,8 @@ fn a_delay_change_crosses_and_the_latest_waiting_change_follows_it() {
         (330, Change::Delay(120.5)),
         (600, Change::Delay(120.5)),
     ];
-    let regular = run(&mut comb(resonant(), GAIN), &input, &REGULAR, &changes);
-    let irregular = run(&mut comb(resonant(), GAIN), &input, &IRREGULAR, &changes);
+    let regular = run(&mut comb(high_pass(), GAIN), &input, &REGULAR, &changes);
+    let irregular = run(&mut comb(high_pass(), GAIN), &input, &IRREGULAR, &changes);
     assert_eq!(
         bits(&regular),
         bits(&irregular),
@@ -331,13 +337,13 @@ fn a_delay_change_crosses_and_the_latest_waiting_change_follows_it() {
     );
     assert_near(
         &regular,
-        &Model::play(resonant(), GAIN, &input, &changes),
+        &Model::play(high_pass(), GAIN, &input, &changes),
         "the crosses",
     );
     let after_the_cross = [(300, Change::Delay(200.0)), (348, Change::Delay(120.5))];
     assert_near(
         &regular,
-        &Model::play(resonant(), GAIN, &input, &after_the_cross),
+        &Model::play(high_pass(), GAIN, &input, &after_the_cross),
         "the latest waiting change starts on the frame after the cross",
     );
 }
@@ -350,10 +356,10 @@ fn a_shorter_cross_ends_a_cross_already_past_it() {
         (210, Change::Delay(100.0)),
         (230, Change::Cross(20)),
     ];
-    let output = run(&mut comb(one_pole(), GAIN), &input, &REGULAR, &changes);
+    let output = run(&mut comb(low_pass(), GAIN), &input, &REGULAR, &changes);
     assert_near(
         &output,
-        &Model::play(one_pole(), GAIN, &input, &changes),
+        &Model::play(low_pass(), GAIN, &input, &changes),
         "the cross cut short",
     );
     let cut = [
@@ -363,20 +369,17 @@ fn a_shorter_cross_ends_a_cross_already_past_it() {
     ];
     assert_near(
         &output,
-        &Model::play(one_pole(), GAIN, &input, &cut),
+        &Model::play(low_pass(), GAIN, &input, &cut),
         "the waiting change starts where the shortened cross ends",
     );
 }
 
 #[kithara::test]
-#[case::conjugate_pair(resonant(), 0.9)]
-#[case::real_pole(one_pole(), 0.8)]
-fn a_comb_rings_out_once_its_window_passes_without_a_loud_write(
-    #[case] section: Coefficients<f64>,
-    #[case] radius: f64,
-) {
+#[case::conjugate_pair(high_pass())]
+#[case::real_poles(low_pass())]
+fn a_comb_rings_out_once_its_window_passes_without_a_loud_write(#[case] section: Section) {
     const LOUD: usize = 5;
-    let window = window(radius);
+    let window = window(section);
     let length = window.saturating_add(20);
     let input = planes(length, |channel, frame| match (channel, frame) {
         (0, 1) => FLOOR,
@@ -405,7 +408,7 @@ fn a_comb_rings_out_once_its_window_passes_without_a_loud_write(
 
 #[kithara::test]
 fn a_reset_silences_the_comb_and_lands_the_waiting_change() {
-    let mut played = comb(resonant(), GAIN);
+    let mut played = comb(high_pass(), GAIN);
     let changes = [(100, Change::Delay(200.0)), (110, Change::Delay(80.0))];
     run(&mut played, &signal(120), &REGULAR, &changes);
     played.reset();
@@ -414,7 +417,7 @@ fn a_reset_silences_the_comb_and_lands_the_waiting_change() {
     assert_eq!(
         bits(&run(&mut played, &input, &IRREGULAR, &[])),
         bits(&run(
-            &mut comb_at(80.0, resonant(), GAIN),
+            &mut comb_at(80.0, high_pass(), GAIN),
             &input,
             &IRREGULAR,
             &[]
@@ -426,7 +429,7 @@ fn a_reset_silences_the_comb_and_lands_the_waiting_change() {
 #[kithara::test]
 fn a_mismatched_plane_set_is_refused_untouched() {
     let input = signal(256);
-    let mut refused = comb(resonant(), GAIN);
+    let mut refused = comb(high_pass(), GAIN);
     let [left, _] = &input;
     let mut output = planes(256, |_, _| 7.0);
     assert!(matches!(
@@ -448,31 +451,25 @@ fn a_mismatched_plane_set_is_refused_untouched() {
     );
     assert_eq!(
         bits(&run(&mut refused, &input, &REGULAR, &[])),
-        bits(&run(&mut comb(resonant(), GAIN), &input, &REGULAR, &[])),
+        bits(&run(&mut comb(high_pass(), GAIN), &input, &REGULAR, &[])),
         "a refused call leaves the comb as it was"
     );
 }
 
 #[kithara::test]
-fn an_unstable_section_or_a_delay_past_the_capacity_is_refused() {
-    let input = signal(600);
-    let mut kept = comb(resonant(), GAIN);
-    let unstable = Coefficients {
-        a2: 1.0,
-        ..resonant()
-    };
-    assert_eq!(kept.retune(unstable), Err(FilterError::Parameters));
-    assert_eq!(
-        bits(&run(&mut kept, &input, &REGULAR, &[])),
-        bits(&run(&mut comb(resonant(), GAIN), &input, &REGULAR, &[])),
-        "the comb keeps the section it had"
-    );
+fn an_invalid_cutoff_or_a_delay_past_the_capacity_is_refused() {
+    for cutoff in [f64::NAN, f64::INFINITY, -1.0, 0.0, 24_000.0] {
+        assert!(matches!(
+            SvfDesign::new(RATE, cutoff, 1.0, Response::HighPass),
+            Err(FilterError::Parameters)
+        ));
+    }
     assert!(matches!(
-        Comb::new(CAPACITY, 400.5, CROSS, resonant(), GAIN, &pools()),
+        Comb::new(CAPACITY, 400.5, CROSS, high_pass().design(), GAIN, &pools()),
         Err(CombError::Delay(DelayError::OutOfRange))
     ));
     assert!(matches!(
-        FeedbackComb::<0>::new(CAPACITY, DELAY, CROSS, resonant(), GAIN, &pools()),
+        FeedbackComb::<0>::new(CAPACITY, DELAY, CROSS, high_pass().design(), GAIN, &pools()),
         Err(CombError::Delay(DelayError::Shape))
     ));
 }
