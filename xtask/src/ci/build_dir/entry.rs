@@ -326,7 +326,7 @@ mod tests {
             panic!("the build at the alias is moved, not copied or lost: {moved:?}");
         };
         drop(build);
-        build_cache::enforce_budget(&[root.path().to_path_buf()], u64::MAX).unwrap();
+        build_cache::enforce_budget(&[root.path().to_path_buf()], u64::MAX, &[]).unwrap();
         assert!(!moved.exists(), "{} is left behind", moved.display());
     }
 
