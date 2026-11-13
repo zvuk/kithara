@@ -236,7 +236,7 @@ mod bytes_tests {
         assert_eq!(back.buckets(), wave.buckets());
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(1668)))]
     fn empty_round_trips() {
         let wave = Waveform::try_from(Vec::new()).expect("no buckets is a valid waveform");
         let bytes = to_bytes(&wave);

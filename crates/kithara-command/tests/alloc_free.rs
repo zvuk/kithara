@@ -212,7 +212,7 @@ fn draining_judging_and_answering_never_allocate() {
     assert!(outcomes.contains(&Outcome::Rejected(Rejection::Unanswered)));
 }
 
-#[kithara::test(native)]
+#[kithara::test(native, timeout(::std::time::Duration::from_millis(1024)))]
 fn deferred_resume_and_eager_scans_never_allocate_or_drop_batches() {
     let (mut sender, mut inbox) = channel::<Test>(
         ChannelConfig::builder()

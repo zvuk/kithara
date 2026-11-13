@@ -13,7 +13,7 @@ use tempfile::tempdir;
 
 const ROOT: &str = "availability-p2";
 
-#[kithara::test(native)]
+#[kithara::test(native, timeout(::std::time::Duration::from_millis(1426)))]
 fn disk_store_empty_aggregate_returns_empty() {
     let dir = tempdir().unwrap();
     let store = AssetStore::builder(support::pools())

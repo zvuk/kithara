@@ -83,7 +83,8 @@ async fn wait_for_download_terminal(rx: &mut EventReceiver<TestEvent>, within: D
 /// bytes at 700KB — proof the on-demand resume path works.
 #[kithara::test(
     tokio,
-    tracing("kithara_file=debug,kithara::stream::writer=debug,kithara_storage=debug")
+    tracing("kithara_file=debug,kithara::stream::writer=debug,kithara_storage=debug"),
+    timeout(::std::time::Duration::from_millis(2872))
 )]
 async fn file_stream_closes_early_seek_still_works() {
     let clean_temp_dir = clean_temp_dir();

@@ -28,7 +28,7 @@ fn engine_config_defaults() {
     assert_eq!(engine.output_sample_rate().output(), 44100);
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1306)))]
 fn an_engine_holds_no_slot_until_its_host_seats_it() {
     assert!(make_engine().is_empty());
 }

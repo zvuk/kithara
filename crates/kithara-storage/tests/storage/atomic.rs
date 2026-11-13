@@ -93,7 +93,10 @@ fn atomic_resource_read_missing_file(
     }
 }
 
-#[kithara::test(hang_timeout_secs(1))]
+#[kithara::test(
+    hang_timeout_secs(1),
+    timeout(::std::time::Duration::from_millis(1058))
+)]
 fn atomic_resource_cancelled_operations(
     temp_dir: TestTempDir,
     cancel_token_cancelled: CancelToken,

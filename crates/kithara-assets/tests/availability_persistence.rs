@@ -119,7 +119,7 @@ enum Deletion {
     Asset,
 }
 
-#[kithara::test(native)]
+#[kithara::test(native, timeout(::std::time::Duration::from_millis(1164)))]
 #[case::remove_resource(Deletion::Resource)]
 #[case::delete_asset(Deletion::Asset)]
 fn a_deletion_persists_in_availability_across_rebuild(#[case] deletion: Deletion) {

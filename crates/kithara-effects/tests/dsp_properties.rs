@@ -182,7 +182,7 @@ fn master_chain_maps_silence_to_exact_silence(dsp_silence: Vec<f32>) {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1898)))]
 #[case::mono_three_band(1, 3)]
 #[case::stereo_five_band(2, 5)]
 #[case::stereo_ten_band(2, 10)]

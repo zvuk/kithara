@@ -301,7 +301,7 @@ mod oracle {
         curve
     }
 
-    #[kithara::test(native)]
+    #[kithara::test(native, timeout(::std::time::Duration::from_millis(2180)))]
     fn complete_curves_follow_the_phase_law_within_its_bound(
         clicks_120_4s: Vec<f32>,
         click_silence_4s: Vec<f32>,

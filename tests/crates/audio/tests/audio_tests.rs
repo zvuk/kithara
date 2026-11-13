@@ -136,7 +136,7 @@ async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFil
 /// It polls its members in declaration order and yields the first that holds
 /// an event, so `TestEvent`'s `Audio` preempts a `Decoder` event published
 /// before it. Publication order survives only inside one topic.
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(12770)))]
 fn a_shared_receiver_prefers_its_earlier_declared_topic() {
     let bus = EventBus::new(16);
     let mut shared: EventReceiver<TestEvent> = bus.subscribe();

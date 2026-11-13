@@ -329,7 +329,7 @@ mod tests {
         (header, bytes)
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(1106)))]
     fn info_tag_reads_trim_and_frame_count() {
         let trim = Some((1_111, 1_946));
         let cases = [

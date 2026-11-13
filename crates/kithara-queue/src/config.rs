@@ -189,7 +189,7 @@ mod document_tests {
     use super::{QueueConfigPatch, tests::config};
     use crate::PlaybackOrder;
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Long))]
     fn a_document_sets_the_load_cap_and_leaves_the_history_size() {
         let patch: QueueConfigPatch =
             serde_yaml_ng::from_str("max_concurrent_loads: 5\n").expect("the document types");

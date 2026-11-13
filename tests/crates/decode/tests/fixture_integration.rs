@@ -550,7 +550,7 @@ fn run_packaged_fmp4_decoder_check(
     assert_eq!(chunk.spec().channels, 2);
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(58064)))]
 fn embedded_mp3_contains_data(tone_mp3: &'static [u8]) {
     assert!(!tone_mp3.is_empty());
 }

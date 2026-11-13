@@ -628,7 +628,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(1432)))]
     fn a_committed_segment_keeps_only_its_own_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let store = DiskAssetStore::new(dir.path().to_path_buf(), CancelToken::never());

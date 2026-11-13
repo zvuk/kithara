@@ -97,7 +97,7 @@ mod tests {
 
     use super::{byte_buffer, pools, sample_buffer};
 
-    #[kithara::test]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(6610)))]
     fn buffers_use_the_supplied_region() {
         let pools = pools();
         let samples = sample_buffer(&pools, &[1.0, 2.0]);

@@ -27,7 +27,7 @@ fn zero_time_constant_is_an_immediate_target_with_zero_initial_advance() {
     assert_eq!(curve.advance_between(7.0, 9.0), Some(6.0));
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1218)))]
 fn a_replacement_before_the_time_constant_preserves_the_reached_rate() {
     let first = ExponentialApproach::new(1.0, 3.0, 4.0).expect("first law");
     let reached = first.rate_at(2.0).expect("reached rate");

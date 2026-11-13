@@ -174,7 +174,7 @@ mod tests {
         assert_eq!(counter.current(), 8);
     }
 
-    #[kithara::test(miri)]
+    #[kithara::test(miri, timeout(::std::time::Duration::from_millis(1024)))]
     fn region_reclaims_the_exact_deficit_and_rotates_the_first_slot() {
         let budget = RegionBudget::new(1);
         let first = Arc::new(RecordingReclaimer::default());

@@ -29,7 +29,7 @@ fn browser_native_sync() {
     platform::thread::sleep(STEP);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1152)))]
 async fn async_early_result() -> Result<(), &'static str> {
     let started = platform::time::Instant::now();
     platform::time::sleep(STEP).await;

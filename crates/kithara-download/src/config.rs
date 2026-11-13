@@ -99,7 +99,12 @@ mod tests {
         );
     }
 
-    #[kithara::test(tokio, native, flash(false))]
+    #[kithara::test(
+        tokio,
+        native,
+        flash(false),
+        timeout(::std::time::Duration::from_millis(15716))
+    )]
     async fn a_nested_abr_patch_reaches_the_downloader() {
         let settings: DownloaderConfigPatch =
             serde_yaml_ng::from_str("abr_settings:\n  min_switch_interval: 45s\n")

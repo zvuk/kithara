@@ -226,7 +226,7 @@ mod tests {
         original_section(&mut filter.second, first)
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(2226)))]
     fn butterworth_lp_dc_gain_is_unity() {
         let coeffs = biquad_coeffs(Type::LowPass, 250.0, 44100.0);
         let dc_gain = (coeffs.b0 + coeffs.b1 + coeffs.b2) / (1.0 + coeffs.a1 + coeffs.a2);

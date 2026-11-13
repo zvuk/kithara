@@ -307,7 +307,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(2106)))]
     fn commit_frees_working_buffer_and_reactivate_restores_it() {
         let pools = pools();
         let (driver, _state) =

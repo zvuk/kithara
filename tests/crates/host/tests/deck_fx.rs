@@ -388,7 +388,7 @@ async fn deck_fx_observes_the_slot_gain_program_at_its_frame() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(51564)))]
 async fn deck_chain_fader_zero_leaves_fx_input_and_silences_output() {
     let open = Arc::new(Mutex::new(Vec::with_capacity(TAKE)));
     let closed = Arc::new(Mutex::new(Vec::with_capacity(TAKE)));

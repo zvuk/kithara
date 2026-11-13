@@ -699,7 +699,7 @@ fn manual_refusal_keeps_settings_smoothing_and_filter_history() {
     assert_eq!(output[0], output[1]);
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1720)))]
 fn admitted_switching_keeps_normalized_pcm_finite_or_refuses_before_mutation() {
     let pools = pools();
     let config = FilterConfig::builder(pools)

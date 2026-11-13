@@ -497,7 +497,7 @@ fn stopped_owner_explicitly_drains_and_retires_closing_scopes() {
     assert!(matches!(sender.receipt(), Some(ScopedReceipt::Closed(closed)) if closed == id));
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1068)))]
 fn axis_restart_refuses_every_at_and_preserves_other_batches_on_every_level() {
     let (mut sender, mut inbox) = pair(4, 2);
     let ids = [sender.open(0).expect("slot"), sender.open(0).expect("slot")];

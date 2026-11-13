@@ -160,7 +160,7 @@ fn truncated_data_handles_gracefully(tone_wav: &'static [u8]) {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(35162)))]
 fn chunk_has_valid_samples(tone_wav: &'static [u8]) {
     let reader = Cursor::new(tone_wav);
 

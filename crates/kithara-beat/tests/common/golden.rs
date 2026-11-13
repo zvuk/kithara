@@ -191,7 +191,7 @@ mod tests {
         assert!(s.max_matched_diff <= 0.05 + 1e-9);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     #[case::beat_outside_window(&[1.0, 2.0, 3.0], &[1.0, 2.0, 3.2])]
     #[case::extra_estimate(&[1.0, 2.0], &[1.0, 2.0, 5.0])]
     fn an_unmatched_beat_lowers_f(#[case] reference: &[f32], #[case] estimated: &[f32]) {

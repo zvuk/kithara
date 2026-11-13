@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use kithara_effects::{Ceiling, LimiterConfig, LookaheadMs, ReleaseMs};
 use kithara_test_utils::kithara;
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1112)))]
 fn ceiling_refuses_non_finite_and_out_of_range_values() {
     for value in [
         f32::NAN,

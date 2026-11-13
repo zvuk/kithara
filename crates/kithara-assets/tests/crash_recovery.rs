@@ -76,7 +76,7 @@ fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path, &TestAssetScope,
     mangle(dir, &scope, &key);
 }
 
-#[kithara::test(native)]
+#[kithara::test(native, timeout(::std::time::Duration::from_millis(1368)))]
 #[case::truncated(b"")]
 #[case::garbage(b"NOT-RKYV-PAYLOAD-AT-ALL")]
 fn a_corrupt_pins_bin_is_treated_as_empty(#[case] payload: &[u8]) {

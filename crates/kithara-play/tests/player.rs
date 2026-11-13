@@ -32,7 +32,7 @@ fn rig() -> mock::DeckRig<TestPools> {
     mock::DeckRig::new(DeckMixerConfig::default()).expect("deck scope opens")
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1090)))]
 fn an_empty_deck_rig_runs_its_mixer_block() {
     assert!(
         rig()

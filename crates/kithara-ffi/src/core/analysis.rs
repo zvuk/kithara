@@ -15,7 +15,7 @@ mod tests {
 
     use super::seconds_at;
 
-    #[kithara::test]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(2602)))]
     fn a_marker_reads_as_its_position_on_the_source_axis() {
         let rate = NonZeroU32::new(44_100).expect("nonzero rate");
 

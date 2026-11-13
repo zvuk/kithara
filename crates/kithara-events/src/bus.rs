@@ -296,7 +296,7 @@ mod tests {
     /// several of them has no cross-topic order to report: it hands back
     /// whichever member it polls first. A caller that wants to know what was
     /// published first has to subscribe to that one topic.
-    #[kithara::test(tokio)]
+    #[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1030)))]
     async fn a_receiver_over_several_topics_does_not_preserve_publication_order() {
         let bus = EventBus::new(16);
         let mut pair = bus.subscribe::<Pair>();

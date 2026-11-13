@@ -10,7 +10,7 @@ use kithara_test_utils::{bufpool::pools, kithara};
 #[global_allocator]
 static ALLOCATOR: AllocDisabler = AllocDisabler;
 
-#[kithara::test(native)]
+#[kithara::test(native, timeout(::std::time::Duration::from_millis(1114)))]
 fn limiter_process_retune_and_reset_never_allocate() {
     let mut limiter = PeakLimiter::new(
         NonZeroU32::new(48_000).unwrap(),

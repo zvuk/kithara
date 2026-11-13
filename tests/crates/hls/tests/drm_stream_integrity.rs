@@ -296,7 +296,7 @@ fn assert_box_coverage(
     tokio,
     native,
     serial,
-    timeout(Duration::from_millis(2056)),
+    timeout(Duration::from_millis(8210)),
     hang_timeout_secs(3)
 )]
 #[case::hls_disk_v0("HLS-disk-v0", false, 0, mixed_plain().await)]

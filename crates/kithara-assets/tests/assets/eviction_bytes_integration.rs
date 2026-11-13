@@ -130,7 +130,11 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     );
 }
 
-#[kithara::test(native, hang_timeout_secs(1))]
+#[kithara::test(
+    native,
+    hang_timeout_secs(1),
+    timeout(::std::time::Duration::from_millis(2282))
+)]
 #[case(100, 150)]
 #[case(50, 120)]
 #[case(200, 50)]

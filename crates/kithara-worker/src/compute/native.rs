@@ -102,7 +102,7 @@ mod tests {
         compute::{Budget, ComputeRuntime, ComputeSubmitError},
     };
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Medium))]
     fn owned_pool_failure_returns_payload_and_releases_both_permits() {
         let runtime = ComputeRuntime::new(
             WorkerConfig::new()

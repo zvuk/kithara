@@ -73,7 +73,7 @@ fn hostile_layout_root_is_rejected(#[case] hostile: &'static str) {
     assert!(matches!(err, AssetsError::InvalidKey));
 }
 
-#[kithara::test(native)]
+#[kithara::test(native, timeout(::std::time::Duration::from_millis(1008)))]
 #[case("")]
 #[case("../escape")]
 #[case("/absolute/path")]
