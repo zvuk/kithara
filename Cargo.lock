@@ -5335,6 +5335,7 @@ dependencies = [
  "assert_no_alloc",
  "biquad",
  "bon",
+ "criterion",
  "delegate",
  "derive-where",
  "fieldwork",

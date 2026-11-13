@@ -3,11 +3,14 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
+use kithara_dsp::{
+    delay::DelayError,
+    filter::{FilterError, Response, SvfDesign},
+};
 use kithara_test_utils::{bufpool::pools, kithara};
 use num_traits::ToPrimitive;
 
-use super::{CombError, DelayError, FeedbackComb};
-use crate::filter::{FilterError, Response, SvfDesign};
+use super::{CombError, comb::FeedbackComb};
 
 type Comb = FeedbackComb<2>;
 type Planes = [Vec<f32>; 2];
@@ -472,4 +475,50 @@ fn an_invalid_cutoff_or_a_delay_past_the_capacity_is_refused() {
         FeedbackComb::<0>::new(CAPACITY, DELAY, CROSS, high_pass().design(), GAIN, &pools()),
         Err(CombError::Delay(DelayError::Shape))
     ));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[global_allocator]
+static ALLOCATOR: assert_no_alloc::AllocDisabler = assert_no_alloc::AllocDisabler;
+
+#[kithara::test(native)]
+fn feedback_comb_process_retime_retune_and_reset_never_allocate() {
+    use assert_no_alloc::assert_no_alloc;
+
+    const FRAMES: usize = 1024;
+    const TWO: NonZeroUsize = NonZeroUsize::MIN.saturating_add(1);
+    const PLANE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(FRAMES + 7);
+    const WINDOW: NonZeroUsize = NonZeroUsize::MIN.saturating_add(299);
+    let section = SvfDesign::new(
+        NonZeroU32::new(48_000).expect("rate"),
+        1500.0,
+        0.25,
+        Response::LowPass,
+    )
+    .expect("design");
+    let mut comb =
+        FeedbackComb::<2>::new(PLANE, 300.5, WINDOW, section, 0.5, &pools()).expect("comb fits");
+    let near = comb.tap(100.0).expect("tap in range");
+    let far = comb.tap(700.25).expect("tap in range");
+    let input = vec![vec![0.25_f32; FRAMES]; TWO.get()];
+    let mut output = vec![vec![0.0_f32; FRAMES]; TWO.get()];
+    assert_no_alloc(|| {
+        for tap in [near, far] {
+            comb.retime(tap);
+            comb.process(&input, &mut output, 0..FRAMES)
+                .expect("planes cover the block");
+        }
+        comb.set_gain(0.25);
+        comb.set_cross(TWO);
+        let design = SvfDesign::new(
+            NonZeroU32::new(48_000).expect("rate"),
+            2300.0,
+            1.0,
+            Response::HighPass,
+        )
+        .expect("design");
+        comb.retune(design);
+        comb.reset();
+    });
+    assert!(comb.rung_out(), "a reset comb has rung out");
 }

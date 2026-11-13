@@ -5,13 +5,15 @@ use std::{
 };
 
 use kithara_bufpool::{HasPool, PoolRegion};
-
-use super::{CombError, DelayError, DelayLine, Tap};
-use crate::{
-    add, consts, crossfade_linear,
+use kithara_dsp::{
+    add, crossfade_linear,
+    delay::{DelayError, DelayLine, Tap},
     filter::{self, StateVariableFilter, SvfDesign},
-    scale_in_place,
+    last_loud, scale_in_place,
 };
+
+use super::CombError;
+use crate::consts;
 
 /// Feedback comb of `CHANNELS` planes over one [`DelayLine`].
 ///
@@ -23,7 +25,7 @@ use crate::{
 ///
 /// Ring-out measures quiet writes; [`rung_out`](Self::rung_out) states the
 /// floor and window.
-pub struct FeedbackComb<const CHANNELS: usize> {
+pub(super) struct FeedbackComb<const CHANNELS: usize> {
     line: DelayLine,
     cross_frames: NonZeroUsize,
     cross: Option<Cross>,
@@ -51,7 +53,7 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
     /// [`CombError::Delay`] when `CHANNELS` is zero or `delay` lies outside
     /// `1..=capacity`, [`CombError::Pool`] when the history does not fit
     /// `pools`.
-    pub fn new<S: HasPool<f32>>(
+    pub(super) fn new<S: HasPool<f32>>(
         capacity: NonZeroUsize,
         delay: f64,
         cross: NonZeroUsize,
@@ -82,13 +84,13 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
     ///
     /// # Errors
     /// [`DelayError::OutOfRange`] unless `frames` lies in `1..=capacity`.
-    pub fn tap(&self, frames: f64) -> Result<Tap, DelayError> {
+    pub(super) fn tap(&self, frames: f64) -> Result<Tap, DelayError> {
         self.line.tap(frames)
     }
 
     /// Moves the read to `delay`, crossing from the current read, or after
     /// the running cross ends.
-    pub fn retime(&mut self, delay: Tap) {
+    pub(super) fn retime(&mut self, delay: Tap) {
         if self.cross.is_some() {
             self.pending = Some(delay);
         } else if delay != self.delay {
@@ -101,19 +103,19 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
     }
 
     /// Scales every later repeat by `gain`.
-    pub const fn set_gain(&mut self, gain: f32) {
+    pub(super) const fn set_gain(&mut self, gain: f32) {
         self.gain = gain;
     }
 
     /// Crosses later delay changes over `frames`; a running cross already
     /// that far in ends here.
-    pub fn set_cross(&mut self, frames: NonZeroUsize) {
+    pub(super) fn set_cross(&mut self, frames: NonZeroUsize) {
         self.cross_frames = frames;
         self.advance(0);
     }
 
     /// Replaces the prepared LP/HP design without changing filter history.
-    pub fn retune(&mut self, design: SvfDesign) {
+    pub(super) fn retune(&mut self, design: SvfDesign) {
         self.window = self
             .line
             .capacity()
@@ -128,7 +130,7 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
     /// # Errors
     /// [`DelayError::Shape`] when either plane count differs from `CHANNELS`
     /// or a plane does not cover `range`; nothing runs then.
-    pub fn process<I, O>(
+    pub(super) fn process<I, O>(
         &mut self,
         input: &[I],
         output: &mut [O],
@@ -158,7 +160,7 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
 
     /// Silences the history and the loop section and lands a waiting delay
     /// change at once; the gain and the tuning stay.
-    pub fn reset(&mut self) {
+    pub(super) fn reset(&mut self) {
         self.line.reset();
         self.filter.reset();
         self.cross = None;
@@ -171,7 +173,7 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
     /// Whether nothing above -120 dBFS has entered the history over the
     /// ring-out window; a fresh or reset comb has rung out.
     #[must_use]
-    pub const fn rung_out(&self) -> bool {
+    pub(super) const fn rung_out(&self) -> bool {
         self.quiet >= self.window
     }
 
@@ -241,11 +243,7 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
         let frames = written.first().map_or(0, |plane| plane.len());
         self.quiet = written
             .iter()
-            .filter_map(|plane| {
-                plane
-                    .iter()
-                    .rposition(|sample| sample.abs() > consts::COMB_FLOOR)
-            })
+            .filter_map(|plane| last_loud(plane, consts::COMB_FLOOR))
             .max()
             .map_or_else(
                 || self.quiet.saturating_add(frames),

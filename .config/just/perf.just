@@ -63,6 +63,7 @@ bench MODE="build":
       "kithara-dsp:delay:"
       "kithara-dsp:kernels:spectrum"
       "kithara-dsp:vector_fade:"
+      "kithara-effects:feedback_delay:"
       "kithara-integration-tests:abr_estimator:"
       "kithara-integration-tests:bufpool:"
       "kithara-integration-tests:perf_audit:"

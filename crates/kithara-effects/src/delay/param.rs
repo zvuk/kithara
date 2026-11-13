@@ -16,8 +16,8 @@ pub struct Feedback(f32);
 
 /// Cutoff in Hz of the high-pass every repeat of a
 /// [`FeedbackDelay`](super::FeedbackDelay) passes on its way back into the
-/// history. A delay refuses a cutoff its sample rate cannot hold under
-/// Nyquist.
+/// history. The requested value stays; only its design saturates at the DSP
+/// cutoff ceiling for the current rate.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Ranged)]
 #[ranged(min = 20.0, max = 4000.0)]
 pub struct FeedbackHighPass(f32);

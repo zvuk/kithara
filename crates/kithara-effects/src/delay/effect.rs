@@ -4,18 +4,15 @@ use std::{
 };
 
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_dsp::{
-    delay::{CombError, FeedbackComb},
-    filter::{FilterError, Response, SvfDesign},
-};
+use kithara_dsp::filter::{Response, SvfDesign};
 use num_traits::ToPrimitive;
 
-use super::{DelayParam, FeedbackDelayConfig, FeedbackHighPass};
+use super::{CombError, DelayParam, FeedbackDelayConfig, FeedbackHighPass, comb::FeedbackComb};
 use crate::{DeckEffect, FxParamChange, consts};
 
 /// Stereo feedback delay a deck FX unit holds.
 ///
-/// It runs a [`FeedbackComb`] whose loop section is a Butterworth high-pass
+/// It runs a feedback loop whose filter is a Butterworth high-pass
 /// at the cutoff: the first echo is the input unfiltered and every repeat
 /// passes the high-pass once more. The delay time is the comb's delay in
 /// frames, the feedback its gain, and a time change crosses over 20 ms. The
@@ -30,13 +27,11 @@ pub struct FeedbackDelay {
 }
 
 impl FeedbackDelay {
-    /// Prepares the comb `config` asks for, its history taken from `pools`.
+    /// Prepares the delay `config` asks for, its history taken from `pools`.
     ///
     /// # Errors
     /// [`CombError::Delay`] when the starting time exceeds the capacity,
-    /// [`CombError::Pool`] when the history does not fit `pools`,
-    /// [`CombError::Filter`] when the starting cutoff does not fit under
-    /// Nyquist.
+    /// [`CombError::Pool`] when the history does not fit `pools`.
     pub fn new<S: HasPool<f32>>(
         config: FeedbackDelayConfig,
         pools: &PoolRegion<S>,
@@ -46,7 +41,7 @@ impl FeedbackDelay {
             config.capacity(),
             f64::from(config.time()),
             cross_frames(sample_rate),
-            high_pass(sample_rate, config.high_pass())?,
+            high_pass(sample_rate, config.high_pass()),
             f32::from(config.feedback()),
             pools,
         )?;
@@ -57,10 +52,15 @@ impl FeedbackDelay {
         })
     }
 
-    fn tune(&mut self, cutoff: FeedbackHighPass) -> Result<(), FilterError> {
-        self.comb.retune(high_pass(self.sample_rate, cutoff)?);
+    /// Requested cutoff, retained when the design saturates at a lower rate.
+    #[must_use]
+    pub fn high_pass(&self) -> FeedbackHighPass {
+        self.high_pass
+    }
+
+    fn tune(&mut self, cutoff: FeedbackHighPass) {
+        self.comb.retune(high_pass(self.sample_rate, cutoff));
         self.high_pass = cutoff;
-        Ok(())
     }
 }
 
@@ -84,7 +84,7 @@ impl DeckEffect for FeedbackDelay {
         match param {
             DelayParam::Time(time) => self.comb.tap(f64::from(*time)).is_ok(),
             DelayParam::Feedback(_) => true,
-            DelayParam::HighPass(cutoff) => high_pass(self.sample_rate, *cutoff).is_ok(),
+            DelayParam::HighPass(_) => true,
         }
     }
 
@@ -97,9 +97,7 @@ impl DeckEffect for FeedbackDelay {
                 }
             }
             DelayParam::Feedback(feedback) => self.comb.set_gain(f32::from(feedback)),
-            DelayParam::HighPass(cutoff) => {
-                self.tune(cutoff).ok();
-            }
+            DelayParam::HighPass(cutoff) => self.tune(cutoff),
         }
     }
 
@@ -115,15 +113,15 @@ impl DeckEffect for FeedbackDelay {
 
     /// Keeps the history, the delay time in frames and the feedback, and
     /// retunes the high-pass, the cross length and the tail window to
-    /// `sample_rate`; a cutoff at or past its Nyquist keeps the previous
-    /// tuning. A cross already past its new length ends here.
+    /// `sample_rate`; only the design cutoff saturates at the DSP ceiling.
+    /// A cross already past its new length ends here.
     fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
         if sample_rate == self.sample_rate {
             return;
         }
         self.sample_rate = sample_rate;
         self.comb.set_cross(cross_frames(sample_rate));
-        self.tune(self.high_pass).ok();
+        self.tune(self.high_pass);
     }
 }
 
@@ -135,11 +133,9 @@ fn cross_frames(sample_rate: NonZeroU32) -> NonZeroUsize {
         .unwrap_or(NonZeroUsize::MIN)
 }
 
-fn high_pass(sample_rate: NonZeroU32, cutoff: FeedbackHighPass) -> Result<SvfDesign, FilterError> {
-    SvfDesign::new(
-        sample_rate,
-        f64::from(f32::from(cutoff)),
-        FRAC_1_SQRT_2,
-        Response::HighPass,
-    )
+fn high_pass(sample_rate: NonZeroU32, cutoff: FeedbackHighPass) -> SvfDesign {
+    let cutoff = f64::from(f32::from(cutoff)).min(SvfDesign::max_cutoff(sample_rate));
+    // The positive ranged cutoff, DSP ceiling and fixed finite Q satisfy every design check.
+    SvfDesign::new(sample_rate, cutoff, FRAC_1_SQRT_2, Response::HighPass)
+        .expect("bounded Butterworth design")
 }

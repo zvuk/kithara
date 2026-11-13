@@ -5,8 +5,7 @@
 //! `interp` supplies fractional sampling and rate ramps, and feature-gated
 //! `spectrum` supplies Hann-windowed real FFT, complex spectral difference
 //! and autocorrelation. `delay` holds planar frame history in storage taken
-//! from the caller's buffer region and the feedback comb that loops it
-//! through an LP/HP state-variable filter. `sum_squares` reduces energy; `downmix`
+//! from the caller's buffer region. `sum_squares` reduces energy; `downmix`
 //! averages channels.
 //! Element-wise kernels (`ramp`, `div`, `affine`, `sub`, `scale_add`,
 //! `mul_add`, `add`) and `fade::gains` compose vector fades.
@@ -21,8 +20,7 @@ mod backend;
 mod consts;
 /// Clock-free parameter progression in f64.
 pub mod curve;
-/// Prepared planar frame history read before each write, and the feedback
-/// comb built on it.
+/// Prepared planar frame history read before each write.
 pub mod delay;
 /// Ordered target-gain recursion, windowed target minimum and stateless interval
 /// peak linking.
@@ -50,6 +48,6 @@ pub use layout::{
     deinterleave_channel_major, deinterleave_variable, downmix, interleave_channel_major,
 };
 pub use vector::{
-    add, affine, crossfade_linear, div, mul_add, multiply_in_place, ramp, scale_add,
+    add, affine, crossfade_linear, div, last_loud, mul_add, multiply_in_place, ramp, scale_add,
     scale_in_place, sub, sum_squares,
 };

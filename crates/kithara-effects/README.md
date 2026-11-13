@@ -56,7 +56,7 @@ fn boost_low_band<S: HasPool<f32>>(config: &EqConfig<S>, sample_rate: NonZeroU32
 
 <tr><td><code>DeckEffect</code></td><td>Contract of the effect a deck FX unit holds: planar stereo wet signal, parameter changes, reset, tail exhaustion, sample-rate retune</td></tr>
 
-<tr><td><code>FxParamChange</code></td><td>A change of one deck effect parameter; each effect's parameters join as a variant</td></tr>
+<tr><td><code>FxParamChange</code></td><td>A change of one deck effect parameter</td></tr>
 
 <tr><td><code>FeedbackDelay</code></td><td>Stereo feedback delay: maps its time, feedback and high-pass cutoff onto a <code>kithara-dsp</code> feedback comb, history taken from the pools</td></tr>
 
@@ -71,6 +71,13 @@ fn boost_low_band<S: HasPool<f32>>(config: &EqConfig<S>, sample_rate: NonZeroU32
 <tr><td><code>LimiterNode</code></td><td>Firewheel node putting the limiter on a session bus</td></tr>
 
 </table>
+
+### Feedback delay
+
+The effect owns its feedback comb, time-cross/pending policy and tail detector.
+It composes the DSP delay line, fixed SVF and vector kernels; nothing after
+construction allocates. Only the design cutoff saturates at the DSP limit:
+the requested 20..=4000 Hz setting remains readable and returns at higher rates.
 
 ## Features
 

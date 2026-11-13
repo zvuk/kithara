@@ -34,6 +34,15 @@ struct Settings {
     high_pass: f32,
 }
 
+fn settings(time: u32, capacity: usize, feedback: f32, high_pass: f32) -> Settings {
+    Settings {
+        capacity,
+        time,
+        feedback,
+        high_pass,
+    }
+}
+
 fn config(settings: Settings, rate: u32) -> FeedbackDelayConfig {
     FeedbackDelayConfig::builder()
         .sample_rate(rate_of(rate))
@@ -149,8 +158,8 @@ fn assert_near(actual: &[f32], expected: &[f64], what: &str) {
     );
 }
 
-fn high_pass(cutoff: f32, rate: u32) -> [f64; 3] {
-    let g = (PI * f64::from(cutoff) / f64::from(rate)).tan();
+fn high_pass(cutoff: impl Into<f64>, rate: u32) -> [f64; 3] {
+    let g = (PI * cutoff.into() / f64::from(rate)).tan();
     let k = FRAC_1_SQRT_2.recip();
     [g, k, (1.0 + g * (g + k)).recip()]
 }
@@ -165,6 +174,7 @@ fn tail_window(capacity: usize, cutoff: f32, rate: u32) -> usize {
 struct Section {
     coefficients: [f64; 3],
     state: [f64; 2],
+    quiet: usize,
 }
 
 impl Section {
@@ -172,6 +182,7 @@ impl Section {
         Self {
             coefficients: high_pass(cutoff, rate),
             state: [0.0; 2],
+            quiet: 0,
         }
     }
 
@@ -181,7 +192,16 @@ impl Section {
         let band = (s1 + g * (input - s2)) * scale;
         let low = s2 + g * band;
         self.state = [2.0 * band - s1, 2.0 * low - s2];
-        input - k * band - low
+        let output = input - k * band - low;
+        self.quiet = if input.abs() <= 1e-9 && output.abs() <= 1e-9 {
+            self.quiet + 1
+        } else {
+            0
+        };
+        if self.quiet >= 2 {
+            self.state = [0.0; 2];
+        }
+        output
     }
 }
 
@@ -269,12 +289,7 @@ fn largest_step(samples: impl Iterator<Item = f64> + Clone) -> f64 {
 #[kithara::test]
 fn feedback_delay_echoes_land_on_their_frames_in_any_partition() {
     const TIME: u32 = 1000;
-    let settings = Settings {
-        capacity: 1024,
-        time: TIME,
-        feedback: 0.5,
-        high_pass: f32::from(FeedbackHighPass::MIN),
-    };
+    let settings = settings(TIME, 1024, 0.5, f32::from(FeedbackHighPass::MIN));
     let time = frames(TIME);
     let input = impulses(8 * time);
     let regular = run(&mut delay(settings), &input, &REGULAR, &[]);
@@ -301,12 +316,7 @@ fn feedback_delay_echoes_land_on_their_frames_in_any_partition() {
 #[kithara::test]
 fn feedback_delay_echo_amplitudes_follow_the_feedback_law() {
     const TIME: u32 = 40;
-    let settings = Settings {
-        capacity: 64,
-        time: TIME,
-        feedback: 0.5,
-        high_pass: f32::from(FeedbackHighPass::MAX),
-    };
+    let settings = settings(TIME, 64, 0.5, f32::from(FeedbackHighPass::MAX));
     let input = impulses(12 * frames(TIME));
     for blocks in [&REGULAR[..], &IRREGULAR[..]] {
         let wet = run(&mut delay(settings), &input, blocks, &[]);
@@ -326,12 +336,7 @@ fn feedback_delay_feedback_change_takes_effect_on_its_frame() {
     /// A frame inside the third echo, the high-pass ringing.
     const CHANGE: usize = 3 * 40 + 7;
     const TO: f32 = 0.9;
-    let settings = Settings {
-        capacity: 64,
-        time: TIME,
-        feedback: 0.5,
-        high_pass: f32::from(FeedbackHighPass::MAX),
-    };
+    let settings = settings(TIME, 64, 0.5, f32::from(FeedbackHighPass::MAX));
     let input = impulses(12 * frames(TIME));
     let change = FxParamChange::Delay(DelayParam::Feedback(
         Feedback::checked(TO).expect("a feedback below unity"),
@@ -358,12 +363,7 @@ fn feedback_delay_time_change_crosses_over_within_its_ramp() {
     const FROM: u32 = 1000;
     const TO: u32 = 1007;
     const CHANGE: usize = 6000 + 37;
-    let settings = Settings {
-        capacity: 1024,
-        time: FROM,
-        feedback: 0.5,
-        high_pass: f32::from(FeedbackHighPass::MAX),
-    };
+    let settings = settings(FROM, 1024, 0.5, f32::from(FeedbackHighPass::MAX));
     let length = CHANGE + 2 * frames(RAMP) + 1000;
     let input = sines(length);
     let steady = run(&mut delay(settings), &input, &REGULAR, &[]);
@@ -428,12 +428,7 @@ fn feedback_delay_time_change_during_a_cross_waits_for_its_end() {
     const REPLACED: u32 = 1500;
     const LAST: u32 = 990;
     const CHANGE: usize = 6000 + 37;
-    let settings = Settings {
-        capacity: 2048,
-        time: FROM,
-        feedback: 0.5,
-        high_pass: f32::from(FeedbackHighPass::MAX),
-    };
+    let settings = settings(FROM, 2048, 0.5, f32::from(FeedbackHighPass::MAX));
     let during = CHANGE + frames(RAMP) / 2;
     let end = CHANGE + frames(RAMP);
     let input = sines(end + 2 * frames(RAMP) + 1000);
@@ -467,12 +462,12 @@ fn feedback_delay_filters_each_repeat_once_more() {
     const TIME: u32 = 512;
     const PULSE: usize = 64;
     const FEEDBACK: f32 = 0.8;
-    let settings = Settings {
-        capacity: frames(TIME),
-        time: TIME,
-        feedback: FEEDBACK,
-        high_pass: f32::from(FeedbackHighPass::MAX),
-    };
+    let settings = settings(
+        TIME,
+        frames(TIME),
+        FEEDBACK,
+        f32::from(FeedbackHighPass::MAX),
+    );
     let time = frames(TIME);
     let mut pulse = vec![0.0; 6 * time];
     for (frame, sample) in pulse[..PULSE].iter_mut().enumerate() {
@@ -509,12 +504,6 @@ fn feedback_delay_reports_its_tail_spent_within_the_bound() {
     const BLOCK: usize = 16;
     /// Frames after which a delay still not reporting its tail spent fails.
     const LIMIT: usize = 1 << 18;
-    let settings = |time, capacity, feedback, high_pass| Settings {
-        capacity,
-        time,
-        feedback,
-        high_pass,
-    };
     let low = f32::from(FeedbackHighPass::MIN);
     let high = f32::from(FeedbackHighPass::MAX);
     // Settings, rate, the channel the impulse enters, and a cutoff the delay
@@ -636,12 +625,7 @@ fn feedback_delay_reports_its_tail_spent_within_the_bound() {
 
 #[kithara::test]
 fn feedback_delay_refuses_a_time_beyond_its_capacity() {
-    let settings = Settings {
-        capacity: 512,
-        time: 256,
-        feedback: 0.5,
-        high_pass: f32::from(FeedbackHighPass::MIN),
-    };
+    let settings = settings(256, 512, 0.5, f32::from(FeedbackHighPass::MIN));
     assert_eq!(
         DelayTime::checked(0.0),
         None,
@@ -687,12 +671,7 @@ fn feedback_delay_refuses_a_time_beyond_its_capacity() {
 
 #[kithara::test]
 fn feedback_delay_reset_returns_to_silence_and_keeps_its_settings() {
-    let settings = Settings {
-        capacity: 512,
-        time: 300,
-        feedback: 0.5,
-        high_pass: f32::from(FeedbackHighPass::MIN),
-    };
+    let settings = settings(300, 512, 0.5, f32::from(FeedbackHighPass::MIN));
     let input = impulses(2048);
     let mut used = delay(settings);
     run(&mut used, &input, &REGULAR, &[(100, time(200.0))]);
@@ -735,12 +714,7 @@ fn feedback_delay_reset_returns_to_silence_and_keeps_its_settings() {
 fn feedback_delay_tuned_to_a_rate_plays_as_one_prepared_at_it() {
     const LENGTH: usize = 32_768;
     const CHANGE: usize = 2048;
-    let settings = Settings {
-        capacity: 1024,
-        time: 300,
-        feedback: 0.5,
-        high_pass: 1000.0,
-    };
+    let settings = settings(300, 1024, 0.5, 1000.0);
     let input = impulses(LENGTH);
     // The wet signal and the tail report of `effect`, its time crossing to 700
     // frames at `CHANGE`.
@@ -778,12 +752,7 @@ fn feedback_delay_keeps_its_history_and_time_across_a_rate_change() {
     const FEEDBACK: f32 = 0.5;
     /// Frames into the first echo when the rate changes, the high-pass ringing.
     const INTO: usize = 8;
-    let settings = Settings {
-        capacity: frames(TIME),
-        time: TIME,
-        feedback: FEEDBACK,
-        high_pass: 1000.0,
-    };
+    let settings = settings(TIME, frames(TIME), FEEDBACK, 1000.0);
     let time = frames(TIME);
     let split = time + INTO;
     let input = impulses(3 * time);
@@ -832,46 +801,48 @@ fn feedback_delay_keeps_its_history_and_time_across_a_rate_change() {
 }
 
 #[kithara::test]
-fn feedback_delay_keeps_its_tuning_when_a_new_rate_cannot_hold_its_cutoff() {
-    const LENGTH: usize = 16_384;
-    /// The rate whose Nyquist the highest cutoff reaches.
-    const LOW: u32 = 8000;
-    /// A block start inside the first echo, the high-pass ringing.
-    const CHANGE: usize = 640;
-    let settings = Settings {
-        capacity: 1024,
-        time: 620,
-        feedback: 0.5,
-        high_pass: f32::from(FeedbackHighPass::MAX),
-    };
-    let input = impulses(LENGTH);
-    let (untouched, untouched_spent) = takes(&mut delay(settings), &input, |_, _| {});
-    let mut moved = delay(settings);
-    let (wet, spent) = takes(&mut moved, &input, |start, effect| {
-        if start == CHANGE {
-            effect.update_sample_rate(rate_of(LOW));
+#[case::construction(8000, false)]
+#[case::retune(RATE, false)]
+#[case::set(8000, true)]
+fn feedback_delay_saturates_its_design_and_restores_the_requested_cutoff(
+    #[case] start: u32,
+    #[case] set: bool,
+) {
+    let settings = settings(64, 64, 0.5, f32::from(FeedbackHighPass::MAX));
+    let mut effect = delay_at(
+        Settings {
+            high_pass: if set { 20.0 } else { settings.high_pass },
+            ..settings
+        },
+        start,
+    );
+    if set {
+        effect.set(high_pass_change(settings.high_pass));
+    }
+    let input = impulses(3 * frames(settings.time));
+    let mut models = [Model::new(settings), Model::new(settings)];
+    for (rate, cutoff) in [(8000, 4000.0_f64.next_down()), (48_000, 4000.0)] {
+        effect.update_sample_rate(rate_of(rate));
+        let wet = run(&mut effect, &input, &REGULAR, &[]);
+        for ((wet, input), model) in wet.iter().zip(&input).zip(&mut models) {
+            let offset = model.wet.len();
+            model.filter.coefficients = high_pass(cutoff, rate);
+            for sample in input {
+                model.step(*sample);
+            }
+            assert_near(
+                wet,
+                &model.wet[offset..],
+                "saturated then restored TPT echo",
+            );
         }
-    });
-    assert_eq!(
-        wet, untouched,
-        "a rate the cutoff does not fit under keeps the high-pass tuned as before"
-    );
-    assert_eq!(
-        spent, untouched_spent,
-        "a rate the cutoff does not fit under keeps the tail window"
-    );
-    assert!(
-        spent.first() == Some(&false) && spent.last() == Some(&true),
-        "the take covers the tail and its report"
-    );
-    assert!(
-        !moved.accepts(&high_pass_change(f32::from(FeedbackHighPass::MAX))),
-        "a cutoff at the new Nyquist is refused"
-    );
-    assert!(
-        moved.accepts(&high_pass_change(f32::from(FeedbackHighPass::MIN))),
-        "a cutoff under the new Nyquist is taken"
-    );
+        assert_eq!(
+            effect.high_pass(),
+            FeedbackHighPass::MAX,
+            "requested cutoff"
+        );
+        assert!(effect.accepts(&high_pass_change(settings.high_pass)));
+    }
 }
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -882,12 +853,7 @@ fn feedback_delay_rate_drop_ends_a_cross_past_its_new_length() {
     /// Frames into the 20 ms cross at [`RATE`] when the rate halves: past the
     /// 441 the cross lasts at the new rate.
     const DONE: usize = 640;
-    let settings = Settings {
-        capacity: 2048,
-        time: FROM,
-        feedback: 0.0,
-        high_pass: f32::from(FeedbackHighPass::MAX),
-    };
+    let settings = settings(FROM, 2048, 0.0, f32::from(FeedbackHighPass::MAX));
     let input = sines(CHANGE + DONE + 2048);
     let split = CHANGE + DONE;
     let head = [&input[0][..split], &input[1][..split]].map(<[f32]>::to_vec);
@@ -929,12 +895,7 @@ fn feedback_delay_high_pass_boundaries_and_former_holes(#[case] retune: bool) {
         if f64::from(cutoff) >= f64::from(rate) / 2.0 {
             continue;
         }
-        let settings = Settings {
-            capacity: 8,
-            time: 1,
-            feedback: 0.5,
-            high_pass: cutoff,
-        };
+        let settings = settings(1, 8, 0.5, cutoff);
         let mut effect = delay_at(settings, if retune { RATE } else { rate });
         if retune {
             effect.update_sample_rate(rate_of(rate));

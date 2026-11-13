@@ -33,6 +33,12 @@ pub struct SvfDesign {
 }
 
 impl SvfDesign {
+    /// Largest cutoff accepted by [`Self::new`] at `rate`, in Hz.
+    #[must_use]
+    pub fn max_cutoff(rate: NonZeroU32) -> f64 {
+        (f64::from(rate.get()) / 2.0).next_down()
+    }
+
     /// Prepares the cutoff once, without allocating or carrying filter state.
     ///
     /// # Errors
@@ -49,7 +55,7 @@ impl SvfDesign {
             && q > 0.0
             && damping.is_finite()
             && cutoff > 0.0
-            && cutoff < f64::from(rate.get()) / 2.0)
+            && cutoff <= Self::max_cutoff(rate))
         {
             return Err(FilterError::Parameters);
         }
@@ -162,12 +168,12 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
         {
             return Err(FilterError::Shape);
         }
+        let maximum = SvfDesign::max_cutoff(rate);
         let rate = f64::from(rate.get());
-        let nyquist = rate / 2.0;
         if !(q.is_finite() && q > 0.0)
             || !cutoffs
                 .iter()
-                .all(|cutoff| *cutoff > 0.0 && *cutoff < nyquist)
+                .all(|cutoff| *cutoff > 0.0 && *cutoff <= maximum)
         {
             return Err(FilterError::Parameters);
         }
@@ -198,7 +204,10 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
     }
 
     /// Runs one prepared design, preserving the same state and quiet law.
-    pub(crate) fn process_fixed<P: DerefMut<Target = [f32]>>(
+    ///
+    /// # Errors
+    /// [`FilterError::Shape`] if plane count or range coverage differs from the prepared shape.
+    pub fn process_fixed<P: DerefMut<Target = [f32]>>(
         &mut self,
         planes: &mut [P],
         range: Range<usize>,
@@ -319,8 +328,24 @@ mod tests {
     use kithara_test_utils::kithara;
     use num_traits::ToPrimitive;
 
-    use super::{Response, StateVariableFilter, SvfDesign};
+    use super::{FilterError, Response, StateVariableFilter, SvfDesign};
     use crate::consts;
+
+    #[kithara::test]
+    fn state_variable_design_ceiling_is_the_last_strict_cutoff() {
+        for rate in [1, 8000, 32_000, 48_000, 768_000, u32::MAX] {
+            let rate = NonZeroU32::new(rate).expect("rate");
+            let maximum = SvfDesign::max_cutoff(rate);
+            assert_eq!(maximum.next_up(), f64::from(rate.get()) / 2.0);
+            assert!(SvfDesign::new(rate, maximum, FRAC_1_SQRT_2, Response::HighPass).is_ok());
+            for cutoff in [maximum.next_up(), f64::INFINITY, f64::NAN] {
+                assert!(matches!(
+                    SvfDesign::new(rate, cutoff, FRAC_1_SQRT_2, Response::HighPass),
+                    Err(FilterError::Parameters)
+                ));
+            }
+        }
+    }
 
     #[kithara::test]
     fn state_variable_design_has_no_holes_below_nyquist() {
@@ -331,7 +356,7 @@ mod tests {
         ] {
             let rate = NonZeroU32::new(rate).expect("host rate");
             for step in 0..=STEPS {
-                let cutoff = (20.0 * 200.0_f64.powf(f64::from(step) / f64::from(STEPS)))
+                let cutoff = (20.0 * 1000.0_f64.powf(f64::from(step) / f64::from(STEPS)))
                     .to_f32()
                     .expect("cutoff fits f32");
                 if f64::from(cutoff) < f64::from(rate.get()) / 2.0 {
