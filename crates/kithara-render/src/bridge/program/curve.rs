@@ -99,27 +99,6 @@ impl ParameterCurve {
         low..=high
     }
 
-    pub(crate) fn shape_at(&self, elapsed: u64) -> CurveShape {
-        let start = self.start();
-        let index = self.knots.partition_point(|knot| {
-            knot.at
-                .frames_since(start)
-                .is_some_and(|offset| offset <= elapsed)
-        });
-        self.knots[index.saturating_sub(1)].shape
-    }
-
-    pub(crate) fn remaining_points(
-        &self,
-        elapsed: u64,
-    ) -> impl Iterator<Item = (u64, f64, CurveShape)> + '_ {
-        let start = self.start();
-        self.knots.iter().filter_map(move |knot| {
-            let offset = knot.at.frames_since(start)?.checked_sub(elapsed)?;
-            (offset > 0).then_some((offset, knot.value, knot.shape))
-        })
-    }
-
     /// Values bracketing `elapsed` and their normalized progression.
     /// Exact knot and held values return equal endpoints, without interpolation.
     #[must_use]
@@ -148,6 +127,23 @@ impl ParameterCurve {
             .expect("u64 is finite in f64")
             / duration.to_f64().expect("u64 is finite in f64");
         (left.value, right.value, left.shape.progress(time))
+    }
+
+    /// The program's value on frame `at`, which must not precede its start.
+    /// Exact knots and held values are returned bit for bit.
+    #[must_use]
+    pub(crate) fn value_at(&self, at: SessionFrame) -> f64 {
+        let elapsed = at
+            .frames_since(self.start())
+            .expect("the program has started on this axis");
+        let (left, right, progression) = self.segment_at(elapsed);
+        if left == right || progression == 0.0 {
+            left
+        } else if progression == 1.0 {
+            right
+        } else {
+            left + (right - left) * progression
+        }
     }
 }
 

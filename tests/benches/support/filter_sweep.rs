@@ -2,91 +2,82 @@ use std::hint::black_box;
 
 use criterion::{BatchSize, Criterion};
 use kithara::{
-    effects::filter::{
-        Cutoff, FilterConfig, FilterEffect, FilterSettings, FilterSettingsChange, Kind,
-    },
-    play::{CurveShape, DeckFilterChange, FilterParameter, FilterProgram, ParameterKnot},
-    signal::{AudioSpec, SessionFrame},
+    effects::filter::{FilterEffect, FilterKnob, FilterSettings},
+    play::{CurveShape, FilterProgram, ParameterKnot},
+    signal::SessionFrame,
 };
 use kithara_command::When;
-use kithara_config::ConfigOwner;
 use kithara_integration_tests::offline::OfflinePlayer;
 use num_traits::ToPrimitive;
 
 const PRELUDE: usize = 529;
 const FILTER_WARM: usize = 64;
 
-fn settings() -> FilterSettings {
-    FilterSettings::builder()
-        .kind(Kind::LowPass)
-        .cutoff_hz(Cutoff::checked(1_000.0).expect("cutoff"))
-        .build()
-        .expect("settings")
+const START: f64 = -0.2;
+const END: f64 = -0.8;
+
+fn knob(value: f64) -> FilterKnob {
+    FilterKnob::checked(value).expect("knob position")
 }
 
+fn at(frame: u64) -> When<SessionFrame> {
+    When::At(SessionFrame::new(
+        i64::try_from(frame).expect("session frame"),
+    ))
+}
+
+/// Centers the knob, then turns it to the program's start and lets the
+/// glide settle, so every iteration starts from the same filter state.
 async fn prepare(harness: &OfflinePlayer) {
     harness
-        .with_queue(|queue| queue.filter(When::Next, DeckFilterChange::Clear))
+        .with_queue(|queue| queue.filter(When::Next, FilterKnob::DEFAULT))
         .await
-        .expect("clear previous state and programs");
+        .expect("center the knob and cancel programs");
     harness.seek(0.0).await;
     let warm = harness.render(4096).await;
     assert!(warm[warm.len() - 128..].iter().all(|sample| *sample == 0.5));
-    let install = harness.host().position() + u64::try_from(PRELUDE).expect("prelude");
+    let turn = harness.host().position() + u64::try_from(PRELUDE).expect("prelude");
     harness
-        .with_queue(move |queue| {
-            queue.install_filter(
-                When::At(SessionFrame::new(
-                    i64::try_from(install).expect("install frame"),
-                )),
-                settings(),
-            )
-        })
+        .with_queue(move |queue| queue.filter(at(turn), knob(START)))
         .await
-        .expect("cold filter install");
-    let installed = harness.render(PRELUDE + FILTER_WARM).await;
-    assert!(installed[..PRELUDE * 2].iter().all(|sample| *sample == 0.5));
-    assert_eq!(harness.deck_snapshot().filter.settings(), Some(settings()));
+        .expect("turn to the program start");
+    let turned = harness.render(PRELUDE + FILTER_WARM).await;
+    assert!(turned[..PRELUDE * 2].iter().all(|sample| *sample == 0.5));
+    assert_eq!(harness.deck_snapshot().filter.knob(), START);
     assert_eq!(harness.metrics().underruns(), 0);
 }
 
 async fn submit(harness: &OfflinePlayer, shape: CurveShape, frames: usize) {
     let start = harness.host().position() + u64::try_from(PRELUDE).expect("prelude");
     let end = start + u64::try_from(frames).expect("curve length");
-    let program = FilterProgram::new(
-        FilterParameter::CutoffHz,
-        vec![
-            ParameterKnot::new(
-                SessionFrame::new(i64::try_from(start).expect("start")),
-                200.0,
-                shape,
-            )
-            .expect("left"),
-            ParameterKnot::new(
-                SessionFrame::new(i64::try_from(end).expect("end")),
-                800.0,
-                CurveShape::HOLD,
-            )
-            .expect("right"),
-        ],
-    )
-    .expect("prepared cutoff trajectory");
+    let program = FilterProgram::new(vec![
+        ParameterKnot::new(
+            SessionFrame::new(i64::try_from(start).expect("start")),
+            START,
+            shape,
+        )
+        .expect("left"),
+        ParameterKnot::new(
+            SessionFrame::new(i64::try_from(end).expect("end")),
+            END,
+            CurveShape::HOLD,
+        )
+        .expect("right"),
+    ])
+    .expect("prepared knob trajectory");
     harness
         .with_queue(move |queue| queue.filter_program(program))
         .await
         .expect("public curve submission");
 }
 
-fn cutoff(frame: usize, frames: usize, shape: CurveShape) -> Cutoff {
-    let value = if frame >= frames {
-        800.0
-    } else {
-        200.0
-            * 4.0_f64.powf(
-                shape.progress(frame.to_f64().expect("offset") / frames.to_f64().expect("length")),
-            )
-    };
-    Cutoff::checked(value).expect("bounded positive cutoff")
+fn position(frame: usize, frames: usize, shape: CurveShape) -> f64 {
+    if frame >= frames {
+        return END;
+    }
+    START
+        + (END - START)
+            * shape.progress(frame.to_f64().expect("offset") / frames.to_f64().expect("length"))
 }
 
 async fn oracle(
@@ -94,34 +85,29 @@ async fn oracle(
     shape: CurveShape,
     frames: usize,
     prelude: usize,
-) -> (Vec<f32>, Cutoff) {
+) -> (Vec<f32>, f64) {
     let rate = harness.host().spec().await.sample_rate;
-    let mut filter = FilterEffect::new(
-        AudioSpec::new(2, rate),
-        FilterConfig::from((harness.worker().pools().clone(), settings())),
-    )
-    .expect("reference state");
+    let mut filter = FilterEffect::new(rate, FilterSettings::default());
+    filter.configure(knob(START));
     let warm = FILTER_WARM + if prelude == 0 { PRELUDE } else { 0 };
     let take = if prelude == 0 { frames } else { 1024 };
     let mut expected = Vec::with_capacity(take * 2);
     for frame in 0..warm + take {
         let output = frame.checked_sub(warm);
-        if let Some(offset) = output.and_then(|offset| offset.checked_sub(prelude)) {
-            filter
-                .set_explicit(FilterSettingsChange::CutoffHz(cutoff(
-                    offset, frames, shape,
-                )))
-                .expect("reference point without smoothing");
-        }
         let (mut left, mut right) = ([0.5], [0.5]);
-        filter
-            .process(&mut [&mut left[..], &mut right[..]], 0..1)
-            .expect("reference frame");
+        let planes = &mut [&mut left[..], &mut right[..]];
+        match output.and_then(|offset| offset.checked_sub(prelude)) {
+            Some(offset) => {
+                filter.process_program(planes, 0..1, &[position(offset, frames, shape)])
+            }
+            None => filter.process(planes, 0..1),
+        }
+        .expect("reference frame");
         if output.is_some() {
             expected.extend([left[0], right[0]]);
         }
     }
-    (expected, filter.config().cutoff_hz())
+    (expected, filter.knob())
 }
 
 pub(super) fn bench(c: &mut Criterion) {
@@ -154,22 +140,9 @@ pub(super) fn bench(c: &mut Criterion) {
                         BatchSize::PerIteration,
                     );
                     assert_eq!(last, expected);
-                    assert_eq!(
-                        harness
-                            .deck_snapshot()
-                            .filter
-                            .settings()
-                            .expect("settings")
-                            .cutoff_hz(),
-                        target
-                    );
-                    assert!(
-                        harness
-                            .deck_snapshot()
-                            .filter
-                            .program(FilterParameter::CutoffHz)
-                            .is_some()
-                    );
+                    let snapshot = harness.deck_snapshot().filter;
+                    assert_eq!(snapshot.knob().to_bits(), target.to_bits());
+                    assert!(snapshot.program().is_some());
                     assert_eq!(harness.metrics().underruns(), 0);
                 });
             }
@@ -190,22 +163,9 @@ pub(super) fn bench(c: &mut Criterion) {
                 BatchSize::PerIteration,
             );
             assert_eq!(last, expected);
-            assert_eq!(
-                harness
-                    .deck_snapshot()
-                    .filter
-                    .settings()
-                    .expect("settings")
-                    .cutoff_hz(),
-                target
-            );
-            assert!(
-                harness
-                    .deck_snapshot()
-                    .filter
-                    .program(FilterParameter::CutoffHz)
-                    .is_some()
-            );
+            let snapshot = harness.deck_snapshot().filter;
+            assert_eq!(snapshot.knob().to_bits(), target.to_bits());
+            assert!(snapshot.program().is_some());
             assert_eq!(harness.metrics().underruns(), 0);
         });
         group.finish();
