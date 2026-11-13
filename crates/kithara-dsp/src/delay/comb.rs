@@ -15,31 +15,24 @@ use crate::{
 
 /// Feedback comb of `CHANNELS` planes over one [`DelayLine`].
 ///
-/// Each frame reads the history at the delay; that read is the output. The
-/// history takes the input plus the read passed once through one biquad
-/// section and scaled by the gain, so the section sits in the loop and every
-/// repeat passes it once more. The loop is stable while the gain times the
-/// section's peak magnitude stays below one; the comb does not check it.
+/// Each read is output; history takes input plus that read passed through one
+/// biquad section and scaled by gain. The caller owns loop stability.
 ///
-/// A delay change crosses linearly from the old read to the new one over the
-/// cross length, both read from the one history. A change arriving while a
-/// cross runs waits for it to end and starts on the frame after, the latest
-/// such change winning.
+/// A time change crosses between reads of one history; a change during a
+/// cross waits in one slot, latest wins. Nothing after construction allocates.
 ///
-/// The comb has rung out once nothing above -120 dBFS has entered its history
-/// for the capacity plus the frames the section's slowest pole takes to decay
-/// under that level. Storage is taken once in [`new`](Self::new); nothing
-/// after it allocates.
+/// Ring-out measures quiet writes; [`rung_out`](Self::rung_out) states the
+/// floor and window.
 pub struct FeedbackComb<const CHANNELS: usize> {
-    line: DelayLine,
     filter: Biquad,
-    gain: f32,
-    delay: Tap,
+    line: DelayLine,
+    cross_frames: NonZeroUsize,
     cross: Option<Cross>,
     pending: Option<Tap>,
-    cross_frames: NonZeroUsize,
-    window: usize,
+    delay: Tap,
+    gain: f32,
     quiet: usize,
+    window: usize,
 }
 
 /// A cross from the read at `from` toward the current delay, `done` frames
@@ -73,9 +66,9 @@ impl<const CHANNELS: usize> FeedbackComb<CHANNELS> {
         let delay = line.tap(delay)?;
         let mut comb = Self {
             line,
-            filter: Biquad::new(channels, NonZeroUsize::MIN)?,
             gain,
             delay,
+            filter: Biquad::new(channels, NonZeroUsize::MIN)?,
             cross: None,
             pending: None,
             cross_frames: cross,

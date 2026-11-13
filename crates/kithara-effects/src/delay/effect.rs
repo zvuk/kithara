@@ -25,8 +25,8 @@ use crate::{DeckEffect, FxParamChange, consts};
 #[derive(Debug)]
 pub struct FeedbackDelay {
     comb: FeedbackComb<{ consts::STEREO.get() }>,
-    sample_rate: NonZeroU32,
     high_pass: FeedbackHighPass,
+    sample_rate: NonZeroU32,
 }
 
 impl FeedbackDelay {
@@ -104,14 +104,14 @@ impl DeckEffect for FeedbackDelay {
         }
     }
 
-    /// Silences the history and the filter and lands any time change; the
-    /// parameters set so far stay.
-    fn reset(&mut self) {
-        self.comb.reset();
-    }
-
-    fn tail_exhausted(&self) -> bool {
-        self.comb.rung_out()
+    delegate::delegate! {
+        to self.comb {
+            /// Silences the history and the filter and lands any time change; the
+            /// parameters set so far stay.
+            fn reset(&mut self);
+            #[call(rung_out)]
+            fn tail_exhausted(&self) -> bool;
+        }
     }
 
     /// Keeps the history, the delay time in frames and the feedback, and

@@ -88,13 +88,28 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>delay::DelayLine</code></td><td>Planar frame history with one cursor for every channel, read before each write at a <code>Tap</code> of <code>1..=capacity</code> frames, integer or as the chord toward the older frame, in spans no longer than the delay; <code>new</code> takes the history from the caller's pool region, <code>read</code>, <code>write</code> and <code>reset</code> do not allocate</td></tr>
 
-<tr><td><code>delay::FeedbackComb</code></td><td>Feedback comb over a <code>DelayLine</code>: the read at the delay is the output, and the history takes the input plus that read passed through one biquad section and scaled by the gain; a delay change crosses linearly over a set number of frames, a change during a cross waits for it, and <code>rung_out</code> reports when nothing above -120 dBFS has entered the history for the capacity plus the section's decay; <code>new</code> takes the history from the caller's pool region, nothing after it allocates</td></tr>
+<tr><td><code>delay::FeedbackComb</code></td><td>Feedback loop over one pooled delay line, with a biquad section, bounded time changes and measured ring-out</td></tr>
 
 <tr><td><code>fade::FadeCurve</code></td><td>firewheel's fade curve, re-exported as the one import path</td></tr>
 
 <tr><td><code>param::*</code></td><td>firewheel's parameter smoother, smoothing filter and A/B mix, re-exported as the one import path</td></tr>
 
 </table>
+
+## Feedback comb
+
+`FeedbackComb<CHANNELS>` reads its delay history into the output. The history
+takes the input plus that read passed once through one biquad section and
+scaled by the gain; every repeat passes the section once more. The caller
+owns loop stability: gain times the section's peak magnitude must stay below one.
+
+A delay change crosses linearly between two reads of that one history. A change
+during a cross waits in one slot, the latest winning, and starts on the first
+frame after the cross ends. Construction takes history from the caller's pool;
+nothing after construction allocates.
+
+The comb has rung out once no sample above -120 dBFS has entered its history for
+the capacity plus the section's slowest-pole decay under that level.
 
 ## Integration
 
