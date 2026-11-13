@@ -170,6 +170,13 @@ fn bench_builds_precede_measurements_and_head_only_needs_no_critcmp() {
     assert!(log.contains(&format!("{:?}", filter)));
 
     fs::write(temp.path().join("events"), "").unwrap();
+    execute(&ctx, &head, true).unwrap();
+    assert_eq!(
+        fs::read_to_string(temp.path().join("events")).unwrap(),
+        "build:head\nrun:head\n"
+    );
+
+    fs::write(temp.path().join("events"), "").unwrap();
     let error = execute(&ctx, &request(&base), true).unwrap_err();
     assert_eq!(error.to_string(), "start benchmark command");
     assert_eq!(
