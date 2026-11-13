@@ -1,17 +1,17 @@
 use std::{
     cell::Cell,
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     num::{NonZeroU32, NonZeroU64, NonZeroU128},
 };
 
 use kithara_abr::AbrHandle;
 use kithara_audio::TrackFailureKind;
-use kithara_command::{Rejection, Seq, When};
+use kithara_command::{Rejection, Sender, Seq, When};
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
-    CrossfadeSettings, LaneCommand, LaneFrame, LaneId,
+    CrossfadeSettings, LaneCommand, LaneFrame, LaneId, LaneProtocol, LaneTarget,
     bridge::{FadeDir, PlaybackFault, Slot, SlotMark, TrackClock},
     rt::track::PlayerResource,
 };
@@ -52,6 +52,7 @@ pub enum TrackCommand<S> {
         at: SessionFrame,
     },
     Configure(TrackSettingsChange, When<SessionFrame>),
+    /// Replaces the speed programme and retires older dependent future programmes.
     SetSpeed {
         speed: SpeedCurve,
         at: When<SessionFrame>,
@@ -218,6 +219,7 @@ pub(super) struct Loading {
 
 pub(super) struct LaneOperation {
     pub(super) seq: Seq,
+    pub(super) basis: Vec<(LaneTarget, Option<Seq>)>,
     pub(super) when: When<LaneFrame>,
     pub(super) segment: SegmentId,
     pub(super) session: Option<SessionFrame>,
@@ -318,6 +320,18 @@ impl LaneHistory {
         self.commands
             .iter_mut()
             .filter(move |operation| operation.seq == seq)
+    }
+
+    pub(super) fn projected(&self, lane: Option<&Sender<LaneProtocol>>) -> Vec<&LaneOperation> {
+        let current: HashSet<_> = lane.into_iter().flat_map(Sender::current_pending).collect();
+        self.commands
+            .iter()
+            .filter(|operation| {
+                operation.applied().unwrap_or_else(|| {
+                    operation.basis.is_empty() || current.contains(&operation.seq)
+                })
+            })
+            .collect()
     }
 }
 

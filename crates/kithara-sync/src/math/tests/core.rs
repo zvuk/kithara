@@ -177,7 +177,7 @@ fn correction_bounds_every_step_and_cancels_the_phase_integral() {
         let cue = Position::from_secs_f64(1.0 + seconds.rem_euclid(0.5));
         let error = phase_error(&host, &source_grid(&model), cue, SessionFrame::new(0))
             .expect("source phase");
-        let Some(Slew::Closes {
+        let Some(Slew::Corrects {
             curve, frames: end, ..
         }) = slew(
             &host,
@@ -185,10 +185,7 @@ fn correction_bounds_every_step_and_cancels_the_phase_integral() {
             cue,
             SessionFrame::new(0),
             epsilon,
-            SlewCause::Drift {
-                from,
-                limit: f32::INFINITY,
-            },
+            SlewCause::Drift { from },
             u64::MAX,
         )
         else {
@@ -215,10 +212,7 @@ fn correction_bounds_every_step_and_cancels_the_phase_integral() {
             Position::from_secs_f64(1.0),
             SessionFrame::new(0),
             epsilon,
-            SlewCause::Drift {
-                from: 1.0,
-                limit: 0.5,
-            },
+            SlewCause::Drift { from: 1.0 },
             u64::MAX,
         ),
         None,

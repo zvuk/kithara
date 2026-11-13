@@ -909,6 +909,7 @@ fn a_queued_speed_publishes_its_target_and_sequence_once(#[case] curve: SpeedCur
     let (sender, _inbox) = channel(
         ChannelConfig::builder()
             .capacity(NonZeroUsize::new(1).expect("one batch"))
+            .targets(1)
             .build(),
     );
     track.lane = Some(sender);
@@ -943,7 +944,7 @@ fn a_queued_speed_publishes_its_target_and_sequence_once(#[case] curve: SpeedCur
 fn a_ready_paused_segment_keeps_its_cue_over_an_old_slot_snapshot() {
     let mut rig = rig();
     let (mut track, _) = prepared_track();
-    let (sender, mut inbox) = channel(ChannelConfig::builder().build());
+    let (sender, mut inbox) = channel(ChannelConfig::builder().targets(1).build());
     track.lane = Some(sender);
     track.status = TrackStatus::Paused { at: Position::ZERO };
     let to = Duration::from_secs(2);
@@ -988,6 +989,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
     let (sender, mut inbox) = channel(
         ChannelConfig::builder()
             .capacity(NonZeroUsize::new(1).expect("one batch"))
+            .targets(1)
             .build(),
     );
     track.lane = Some(sender);

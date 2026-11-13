@@ -130,6 +130,8 @@ impl<P: Protocol> Sender<P> {
             /// Batches still available before the channel returns [`SendError::Full`].
             #[must_use]
             pub fn available(&self) -> usize;
+            /// Pending batch sequences whose declared bases remain valid.
+            pub fn current_pending(&self) -> impl Iterator<Item = Seq> + '_;
         }
     }
 

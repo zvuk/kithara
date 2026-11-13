@@ -872,6 +872,7 @@ fn basis_projection_skips_stale_pending_batches_in_moment_order() {
         batch(4, &[(Slot(0), Some(next))]),
     );
     assert_eq!(sender.basis(Slot(0), When::At(Frame(300))), Some(last));
+    assert_eq!(sender.current_pending().collect::<Vec<_>>(), [next, last]);
     assert_eq!(sender.available(), 0);
     assert!(matches!(
         sender.send(When::Next, batch(5, &[(Slot(0), Some(next))])),
@@ -889,6 +890,7 @@ fn basis_projection_skips_stale_pending_batches_in_moment_order() {
     );
     assert_eq!(run_block(&mut inbox, 250, BLOCK), [(50, 4)]);
     assert_eq!(outcomes(&mut sender), [(last, applied(300))]);
+    assert!(sender.current_pending().next().is_none());
     assert_eq!(sender.available(), 4);
 }
 

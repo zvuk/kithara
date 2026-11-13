@@ -2486,12 +2486,9 @@ impl QueueLaw {
         let cause = if commanded {
             SlewCause::Commanded
         } else {
-            SlewCause::Drift {
-                from: planned.1,
-                limit: LinkConfig::default().slew_limit(),
-            }
+            SlewCause::Drift { from: planned.1 }
         };
-        let Some(Slew::Closes {
+        let Some(Slew::Corrects {
             curve,
             frames: deadline,
             ..
@@ -4966,7 +4963,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     );
     let start = SessionFrame::new(23_998);
     let media = Duration::from_nanos(499_958_333);
-    let Some(Slew::Closes {
+    let Some(Slew::Corrects {
         curve, frames: end, ..
     }) = slew(
         &host,

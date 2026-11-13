@@ -9,6 +9,7 @@ use ::kithara::{
         HostSettingsControl,
         api::{SESSION_BEATS_PER_BAR, Tempo},
     },
+    link::LinkConfig,
     output::{RenderSink, RenderSinkError},
     platform::{
         sync::Arc,
@@ -835,10 +836,47 @@ async fn crossfade_into_the_next_track(first: String, second: String, ready: boo
     served.abort();
 }
 
-/// A synced deck sounding on a grid with its bars two beats late hears the
-/// rhythm track on the host beats and bars soon after the true grid replaces it.
+fn assert_revision_keeps_playback(rig: &mut Rig) {
+    let mut position = rig.queues[0]
+        .position_seconds()
+        .expect("the sounding deck has a position");
+    let mut speed = f64::from(rig.queues[0].rate());
+    assert!(speed > 0.0, "the revision starts on a playing track");
+    let rate = f64::from(mock::host(rig).sample_rate().get());
+    let epsilon = f64::from(LinkConfig::default().epsilon());
+    let observation = AsPrimitive::<f64>::as_(consts::BLOCK_FRAMES) / rate;
+    let pulses = consts::REVISION_ANSWER.as_nanos() / consts::PULSE.as_nanos();
+    for _ in 0..pulses {
+        let _ = capture(rig, consts::PULSE);
+        let next = rig.queues[0]
+            .position_seconds()
+            .expect("the deck keeps playing through the revision");
+        let next_speed = f64::from(rig.queues[0].rate());
+        assert!(next_speed > 0.0);
+        let low = speed.min(next_speed);
+        let high = speed.max(next_speed);
+        let roundoff = f64::from(f32::EPSILON) * high;
+        assert!(
+            (next_speed - speed).abs() <= epsilon + roundoff,
+            "analysis changes the applied speed by a bounded step: {speed} -> {next_speed}"
+        );
+        let elapsed = consts::PULSE.as_secs_f64();
+        let advance = next - position;
+        let budget = observation * high;
+        assert!(advance > 0.0, "analysis keeps playback moving forward");
+        assert!(
+            (elapsed * low - budget..=elapsed * high + budget).contains(&advance),
+            "analysis must preserve media continuity at its applied speed: {position} -> {next}, speed {speed} -> {next_speed}"
+        );
+        position = next;
+        speed = next_speed;
+    }
+}
+
+/// Revising the bar keeps playback continuous; a manual seek then lands on
+/// the revised host beat and downbeat.
 #[kithara::test(native, tokio)]
-async fn a_revision_of_the_bar_lands_on_the_host_downbeat(rhythm_a_wav: String) {
+async fn a_bar_revision_keeps_playing_and_a_seek_lands_on_the_host_downbeat(rhythm_a_wav: String) {
     let early = grid_two_beats_off_the_bar();
     let revised = watch::channel(Some(fixtures::supplied(early))).0;
     let served_grid = revised.clone();
@@ -852,7 +890,10 @@ async fn a_revision_of_the_bar_lands_on_the_host_downbeat(rhythm_a_wav: String) 
         });
         let _ = capture(rig, consts::SETTLE);
         revised.send_replace(Some(fixtures::supplied(rhythm_grid())));
-        let _ = capture(rig, consts::REVISION_ANSWER);
+        assert_revision_keeps_playback(rig);
+        rig.send("deck-a/wave", ControlAction::SetScalar(0.25));
+        rig.pump();
+        let _ = capture(rig, consts::SETTLE);
         assert_on_host_beats(rig, 124.0, consts::INCOMING_BEATS);
     })
     .await;
@@ -860,10 +901,10 @@ async fn a_revision_of_the_bar_lands_on_the_host_downbeat(rhythm_a_wav: String) 
     served.abort();
 }
 
-/// A synced deck changes to a track the analysis has heard only roughly, and
-/// the true grid arrives once that track sounds.
+/// A late grid keeps the incoming track playing continuously; a manual seek
+/// then puts its real clicks on the host beats and downbeats.
 #[kithara::test(native, tokio)]
-async fn a_track_change_into_a_track_analysed_late_ends_on_the_host_beat(
+async fn a_late_grid_keeps_the_incoming_track_playing_until_a_seek_aligns_it(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
 ) {
@@ -886,10 +927,13 @@ async fn a_track_change_into_a_track_analysed_late_ends_on_the_host_beat(
             "deck A crossfades into its next track",
             Rig::playout(bar(124.0)),
             Rig::frame,
-            |rig| rig.queues[0].current_index() == Some(1),
+            |rig| rig.queues[0].current_index() == Some(1) && rig.queues[0].is_playing(),
         );
         next.send_replace(Some(fixtures::supplied(rhythm_grid())));
-        let _ = capture(rig, consts::REVISION_ANSWER);
+        assert_revision_keeps_playback(rig);
+        rig.send("deck-a/wave", ControlAction::SetScalar(0.25));
+        rig.pump();
+        let _ = capture(rig, consts::SETTLE);
         assert_on_host_beats(rig, 124.0, consts::INCOMING_BEATS);
     })
     .await;

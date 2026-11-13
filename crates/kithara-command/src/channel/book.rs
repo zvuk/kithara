@@ -63,22 +63,41 @@ impl<P: Protocol> Book<P> {
         if target.index() >= self.targets {
             return None;
         }
-        let mut ledger = self.applied.clone();
-        for pending in &self.pending {
-            if pending.when > when {
-                break;
-            }
-            if pending
-                .basis
-                .iter()
-                .all(|&(target, basis)| ledger[target] == basis)
-            {
-                for &(target, _) in &pending.basis {
-                    ledger[target] = Some(pending.seq);
+        self.projected(when)
+            .fold(self.applied[target.index()], |basis, pending| {
+                if pending
+                    .basis
+                    .iter()
+                    .any(|&(index, _)| index == target.index())
+                {
+                    Some(pending.seq)
+                } else {
+                    basis
                 }
-            }
-        }
-        ledger[target.index()]
+            })
+    }
+
+    pub(super) fn current_pending(&self) -> impl Iterator<Item = Seq> + '_ {
+        self.projected(When::Deferred).map(|pending| pending.seq)
+    }
+
+    fn projected(&self, when: When<P::Clock>) -> impl Iterator<Item = &Pending<P>> {
+        let mut ledger = self.applied.clone();
+        self.pending
+            .iter()
+            .take_while(move |pending| pending.when <= when)
+            .filter(move |pending| {
+                let current = pending
+                    .basis
+                    .iter()
+                    .all(|&(target, basis)| ledger[target] == basis);
+                if current {
+                    for &(target, _) in &pending.basis {
+                        ledger[target] = Some(pending.seq);
+                    }
+                }
+                current
+            })
     }
 
     pub(super) fn settle(&mut self, receipt: &Receipt<P>) {

@@ -131,11 +131,10 @@ fn a_grid_waiting_sync_follows_the_live_source_into_coverage() {
         rig.run(|out| deck.sync(true, out)).expect("waiting sync"),
         None
     );
-    control.edit(|script| script.snapshot.position = position(30_000));
+    super::fixtures::sound(&control, &mut rig, 0, 30_000);
     rig.run(|out| deck.tick(SessionFrame::new(0), out));
     let commands = control.commands();
-    assert_eq!(commands.len(), 2);
-    assert_eq!(commands[0].0, commands[1].0);
+    assert!(matches!(commands.as_slice(), [(_, Command::Speed(..))]));
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
 }
 

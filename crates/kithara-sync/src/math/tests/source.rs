@@ -320,7 +320,7 @@ fn a_long_grid_is_planned_only_to_the_first_boundary_past_the_horizon() {
 }
 
 #[kithara::test]
-fn a_correction_longer_than_the_horizon_is_planned_whole_and_a_horizon_past_it() {
+fn a_long_correction_makes_bounded_progress_before_its_geometry_ends() {
     let source = jittered(100);
     let correction = Correction {
         phase: 0.02,
@@ -333,8 +333,11 @@ fn a_correction_longer_than_the_horizon_is_planned_whole_and_a_horizon_past_it()
     assert!(whole > 2 * horizon, "the correction outlasts the horizon");
 
     let (bounded, frames, coverage) = plan(&source, Some(&correction), horizon);
-    assert_eq!(frames, whole);
-    assert_cut(&bounded, coverage, &unbounded, whole + horizon);
+    assert_eq!(frames, horizon);
+    assert_eq!(coverage, Coverage::Until(horizon));
+    assert_eq!(bounded.last().map(|(at, _)| *at), Some(horizon));
+    assert_eq!(bounded.first(), unbounded.first());
+    assert!(bounded.len() < unbounded.len());
 }
 
 #[kithara::test]

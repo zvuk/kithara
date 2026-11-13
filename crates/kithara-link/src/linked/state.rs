@@ -3,9 +3,11 @@ use kithara_command::{Seq, When};
 use kithara_config::Config;
 use kithara_platform::time::Duration;
 use kithara_play::{
-    Outbox, PlayError, Player, Position, Settled, Track, TrackClock, TrackCommand, TrackSnapshot,
+    Outbox, PlayError, Player, Position, SeekBatch, Settled, Track, TrackClock, TrackCommand,
+    TrackSnapshot,
 };
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
+use kithara_sync::Coverage;
 
 use crate::{GridAnswer, LinkError, LinkedConfig, TempoTrajectory};
 
@@ -21,7 +23,7 @@ pub trait LinkedPlayer<S>: Player<S> {
 
     /// Replaces the Host trajectory, changing sounding lanes on each of `frames`,
     /// silent lanes on Next, and withdrawing and replanning any waiting start.
-    /// One call moves a sounding deck at most once.
+    /// Sounding lanes preserve their media position.
     fn retime(
         &mut self,
         trajectory: &TempoTrajectory,
@@ -61,15 +63,11 @@ pub struct LinkConfig {
     /// Maximum adjacent speed step used for inaudible phase correction.
     #[config(check = check_epsilon, builder(default = 0.001))]
     epsilon: f32,
-    /// Largest phase error, in beats, a drift correction closes by a slew; a
-    /// larger one relocates the deck. Tempo command corrections skip this limit.
-    #[config(check = check_slew_limit, builder(default = 0.05))]
-    slew_limit: f32,
     /// Time a new segment takes from its cue to ready on a silent deck.
     #[config(builder(default = Duration::from_millis(60)))]
     preparation: Duration,
-    /// Output time a sounding deck's speed plan follows the source grid past
-    /// its correction; the deck renews the plan half this time before it ends.
+    /// Output window for long corrections, or time planned past a short correction.
+    /// The deck renews the plan half this time before it ends.
     #[config(check = check_horizon, builder(default = Duration::from_secs(4)))]
     horizon: Duration,
 }
@@ -82,10 +80,6 @@ fn check_horizon(horizon: Duration) -> Result<Duration, LinkError> {
 
 fn check_epsilon(epsilon: f32) -> Result<f32, LinkError> {
     positive(epsilon, LinkError::Epsilon { epsilon })
-}
-
-fn check_slew_limit(limit: f32) -> Result<f32, LinkError> {
-    positive(limit, LinkError::SlewLimit { limit })
 }
 
 fn positive(value: f32, refusal: LinkError) -> Result<f32, LinkError> {
@@ -128,6 +122,9 @@ pub enum Waiting {
     Sync {
         required: Position,
     },
+    Align {
+        required: Position,
+    },
     Seek {
         required: Position,
     },
@@ -139,6 +136,7 @@ impl Waiting {
             Self::Load { required }
             | Self::Play { required, .. }
             | Self::Sync { required }
+            | Self::Align { required }
             | Self::Seek { required } => required,
         }
     }
@@ -151,7 +149,7 @@ impl Waiting {
                 required: position,
                 at,
             }),
-            Self::Sync { .. } => None,
+            Self::Sync { .. } | Self::Align { .. } => None,
             Self::Seek { .. } => Some(self),
         }
     }
@@ -196,22 +194,32 @@ pub struct Linked<P> {
     pub(super) paused_in_place: bool,
 }
 
-/// A refused seek on a playing deck, answered by what re-issues it.
+/// The latest accepted seek and the native batch that represents it.
 #[derive(Clone, Copy)]
 pub(super) struct Relocation {
     /// The number the seek's caller holds.
     pub(super) caller: Seq,
-    /// The re-issued batch; `None` until it goes out.
+    pub(super) required: Position,
+    /// The current batch; `None` while this request awaits placement.
     pub(super) sent: Option<Reissued>,
 }
 
-/// The batch that carries a refused seek again.
+/// The channel-specific representation currently answering a seek.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Reissued {
     /// Answered by the track's lane.
     Lane(Seq),
     /// Answered by its deck receipt.
     Deck { seq: Seq, applied: Option<bool> },
+}
+
+impl From<SeekBatch> for Reissued {
+    fn from(batch: SeekBatch) -> Self {
+        match batch {
+            SeekBatch::Lane(seq) => Self::Lane(seq),
+            SeekBatch::Deck(seq) => Self::Deck { seq, applied: None },
+        }
+    }
 }
 
 /// A silent entry waiting for its grid, and how the grid places it.
@@ -239,9 +247,9 @@ pub(super) enum CorrectionState {
 /// Why a sounding deck owes a phase correction.
 #[derive(Clone, Copy)]
 pub(super) enum Cause {
-    /// A tempo command: the slew closes any phase.
+    /// A tempo command: correction starts at the new reference speed.
     Commanded,
-    /// Phase drift: a slew closes it up to the slew limit.
+    /// Phase drift: a bounded correction starts at the current speed.
     Drift,
 }
 
@@ -250,9 +258,13 @@ pub(super) enum SpeedOperation {
         cause: Cause,
         state: CorrectionState,
     },
-    Alignment,
+    Alignment {
+        state: Option<CorrectionState>,
+        coverage: Coverage,
+    },
     Relocation {
-        to: Position,
+        state: Option<CorrectionState>,
+        coverage: Coverage,
     },
 }
 
@@ -333,10 +345,18 @@ impl<P> Linked<P> {
             .speeds
             .iter()
             .filter_map(|(seq, operation)| {
-                let SpeedOperation::Correction {
+                let (SpeedOperation::Correction {
                     state: CorrectionState::Applied(correction),
                     ..
-                } = operation
+                }
+                | SpeedOperation::Relocation {
+                    state: Some(CorrectionState::Applied(correction)),
+                    ..
+                }
+                | SpeedOperation::Alignment {
+                    state: Some(CorrectionState::Applied(correction)),
+                    ..
+                }) = operation
                 else {
                     return None;
                 };
@@ -353,8 +373,18 @@ impl<P> Linked<P> {
         }
         let active = self.correction;
         self.speeds.retain(|(seq, operation)| {
-            let SpeedOperation::Correction { state, .. } = operation else {
-                return true;
+            let state = match operation {
+                SpeedOperation::Correction { state, .. }
+                | SpeedOperation::Relocation {
+                    state: Some(state), ..
+                }
+                | SpeedOperation::Alignment {
+                    state: Some(state), ..
+                } => state,
+                SpeedOperation::Alignment { state: None, .. }
+                | SpeedOperation::Relocation { state: None, .. } => {
+                    return true;
+                }
             };
             let (CorrectionState::Pending(correction) | CorrectionState::Applied(correction)) =
                 state;
@@ -366,10 +396,11 @@ impl<P> Linked<P> {
         });
         if let Some((_, correction)) = &self.correction
             && (mark.lane.segment != correction.segment
-                || mark
-                    .session
-                    .frames_since(correction.at)
-                    .is_some_and(|elapsed| elapsed >= correction.frames.get() as u64))
+                || correction.frames.get() > 0
+                    && mark
+                        .session
+                        .frames_since(correction.at)
+                        .is_some_and(|elapsed| elapsed >= correction.frames.get() as u64))
         {
             self.correction = None;
         }
