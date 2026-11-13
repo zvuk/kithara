@@ -939,11 +939,11 @@ async fn deck_fx_mismatched_param_refuses_batch() {
         changes.extend(insert(1, gain));
         changes
     };
-    let asset = assets::signal_wav_sine440_1s();
-    let expected = plain_take(asset.clone(), setup()).await;
+    let asset = assets::signal_wav_sine440_1s;
+    let expected = plain_take(asset(), setup()).await;
     let valid = take(
         deck(Some(2), DeckMixSettings::default()).await,
-        asset.clone(),
+        asset(),
         setup(),
         vec![(
             LEAD + 500,
@@ -1032,7 +1032,7 @@ async fn deck_fx_mismatched_param_refuses_batch() {
     }
     let refused = take(
         deck(Some(2), DeckMixSettings::default()).await,
-        asset,
+        asset(),
         setup(),
         timed,
         None,
