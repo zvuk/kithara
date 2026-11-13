@@ -19,6 +19,8 @@ pub(super) struct DspSplitComplex {
 
 #[link(name = "Accelerate", kind = "framework")]
 unsafe extern "C" {
+    pub(super) fn vvtan(output: *mut f64, input: *const f64, length: *const i32);
+
     pub(super) fn vDSP_DFT_DestroySetup(setup: VdspDftSetup);
 
     pub(super) fn vDSP_DFT_Execute(

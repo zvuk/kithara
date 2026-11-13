@@ -2,61 +2,54 @@
 
 use std::num::NonZeroU32;
 
-use kithara_effects::filter::{
-    Cutoff, FilterConfig, FilterEffect, FilterMotion, FilterParameter, FilterSettingsChange, Kind,
-};
-use kithara_signal::AudioSpec;
-use kithara_test_utils::{bufpool::pools, kithara};
+use kithara_effects::filter::{Cutoff, FilterEffect, FilterSettings, Kind};
+use kithara_test_utils::kithara;
 
 const FRAMES: usize = 8192;
 const ORIGIN: usize = 4096;
 const RATE: u32 = 44_100;
 const FREQUENCIES: [f64; 7] = [40.0, 200.0, 400.0, 800.0, 1000.0, 2000.0, 10_000.0];
 
-fn sweep_impulse(kind: Kind, start: f64, end: f64) -> Vec<f32> {
-    let rate = NonZeroU32::new(RATE).expect("nonzero rate");
-    let config = FilterConfig::builder(pools())
-        .kind(kind)
-        .cutoff_hz(Cutoff::checked(start).expect("start cutoff"))
+/// Knob range whose log map spans `start..end` Hz on the side of `kind`.
+fn sweep_settings(kind: Kind, start: f64, end: f64) -> (FilterSettings, f64, f64) {
+    let cutoff = |hz| Cutoff::checked(hz).expect("sweep cutoff");
+    let (edge, extreme, sign) = match kind {
+        Kind::LowPass => (1_600.0, 100.0, -1.0),
+        Kind::HighPass => (20.0, 2_000.0, 1.0),
+    };
+    let low = kind == Kind::LowPass;
+    let settings = FilterSettings::builder()
+        .maybe_low_edge(low.then(|| cutoff(edge)))
+        .maybe_low_extreme(low.then(|| cutoff(extreme)))
+        .maybe_high_edge((!low).then(|| cutoff(edge)))
+        .maybe_high_extreme((!low).then(|| cutoff(extreme)))
         .build()
         .expect("sweep settings");
-    let mut filter = FilterEffect::new(AudioSpec::new(2, rate), config).expect("filter");
-    let mut motions = filter.motions(rate).expect("held fields");
-    motions[FilterParameter::CutoffHz.index()] = FilterMotion::new(
-        FilterParameter::CutoffHz,
-        rate,
-        start..=end,
-        start,
-        FilterMotion::distance(FilterParameter::CutoffHz, rate, start, end).expect("travel"),
-        u64::try_from(FRAMES).expect("bounded frames"),
-        u64::try_from(FRAMES - 1).expect("bounded transitions"),
-    )
-    .expect("ordered sweep");
-    filter
-        .admit_trajectory(rate, &motions)
-        .expect("admitted sweep");
+    let knob = |hz: f64| sign * (hz / edge).ln() / (extreme / edge).ln();
+    (settings, knob(start), knob(end))
+}
+
+fn sweep_impulse(kind: Kind, start: f64, end: f64) -> Vec<f32> {
+    let rate = NonZeroU32::new(RATE).expect("nonzero rate");
+    let (settings, from, to) = sweep_settings(kind, start, end);
+    let mut filter = FilterEffect::new(rate, settings);
+    let knobs: Vec<_> = (0..FRAMES)
+        .map(|frame| {
+            let progress = f64::from(u32::try_from(frame).expect("bounded frame"))
+                / f64::from(u32::try_from(FRAMES - 1).expect("bounded duration"));
+            if frame == FRAMES - 1 {
+                to
+            } else {
+                from + (to - from) * progress
+            }
+        })
+        .collect();
     let mut planes = [vec![0.0; FRAMES], vec![0.0; FRAMES]];
     planes[0][ORIGIN] = 0.25;
     planes[1][ORIGIN] = -0.125;
-    for frame in 0..FRAMES {
-        let progress = f64::from(u32::try_from(frame).expect("bounded frame"))
-            / f64::from(u32::try_from(FRAMES - 1).expect("bounded duration"));
-        let cutoff = if frame == 0 {
-            start
-        } else if frame == FRAMES - 1 {
-            end
-        } else {
-            start * (end / start).powf(progress)
-        };
-        filter
-            .set_explicit(FilterSettingsChange::CutoffHz(
-                Cutoff::checked(cutoff).expect("logarithmic cutoff"),
-            ))
-            .expect("prepared point");
-        filter
-            .process(&mut planes, frame..frame + 1)
-            .expect("frame");
-    }
+    filter
+        .process_program(&mut planes, 0..FRAMES, &knobs)
+        .expect("sweep program");
     assert!(planes.iter().flatten().all(|sample| sample.is_finite()));
     for (left, right) in planes[0].iter().zip(&planes[1]) {
         assert_eq!(-0.5 * left, *right);
