@@ -1,7 +1,9 @@
+mod diffuser;
 mod error;
 mod line;
 #[cfg(test)]
 mod tests;
 
-pub use error::DelayError;
+pub use diffuser::DelayDiffuser;
+pub use error::{DelayError, DiffuserError};
 pub use line::{DelayLine, Tap};
