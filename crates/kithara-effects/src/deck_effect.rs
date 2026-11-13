@@ -15,18 +15,32 @@ pub enum FxParamUnit {
 }
 
 /// An immutable native parameter domain; no mapping means integral steps.
-#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FxParamDescriptor {
-    #[field(#[must_use] get, vis = "pub")]
     range: RangeInclusive<f64>,
-    #[field(#[must_use] get(copy), vis = "pub")]
     unit: FxParamUnit,
-    #[field(#[must_use] get(copy), vis = "pub")]
     mapping: Option<FxParamMapping>,
 }
 
 impl FxParamDescriptor {
+    /// The inclusive domain in native units.
+    #[must_use]
+    pub fn range(&self) -> &RangeInclusive<f64> {
+        &self.range
+    }
+
+    /// The parameter's native unit.
+    #[must_use]
+    pub fn unit(&self) -> FxParamUnit {
+        self.unit
+    }
+
+    /// Continuous interpolation, or no mapping for integral steps.
+    #[must_use]
+    pub fn mapping(&self) -> Option<FxParamMapping> {
+        self.mapping
+    }
+
     /// Checks finite ordered bounds, positive log bounds and integral stepped bounds.
     #[must_use]
     pub fn checked(
