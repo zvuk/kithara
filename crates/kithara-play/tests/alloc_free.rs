@@ -109,11 +109,10 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating(
         Box::new(AudioObserverSlot::default().relay()),
     );
     let (_sender, lane_inbox) = worker.lane_channel();
-    let (opened, _lane, _latency) = {
-        // WHY: Disk preparation runs on a real worker, outside the virtual scheduler.
+    let (opened, mut lane, _latency) = {
         let _real_io = kithara_platform::flash::real_io();
         hang_tick!("allocation fixture awaits its source open".to_owned());
-        let (opened, _lane, _latency) = kithara_platform::time::timeout(
+        kithara_platform::time::timeout(
             __hang_detector.remaining(),
             load.open(
                 Duration::ZERO,
@@ -123,9 +122,13 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating(
         )
         .await
         .expect("allocation fixture opens within the watchdog budget")
-        .expect("URI source opens");
-        (opened, _lane, _latency)
+        .expect("URI source opens")
     };
+    if programs {
+        kithara_play::mock::preload_lane(&mut lane)
+            .await
+            .expect("PCM preloaded before allocation measurement");
+    }
     hang_reset!();
     let held = Slot::new(0);
     let mut store = ProcStore::with_capacity(2);
@@ -282,15 +285,9 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating(
     if programs {
         let snapshot = ends.snapshot.read();
         for band in 0..config.eq_bands() {
-            assert!(
-                snapshot.eq.program(band).is_some(),
-                "every band has an active program"
-            );
+            assert!(snapshot.eq.program(band).is_some(), "active band");
             assert_ne!(snapshot.eq.gain(band), Some(kithara_play::GainDb::DEFAULT));
         }
-        assert!(
-            out_l.iter().any(|sample| *sample != 0.0),
-            "the measured callback processes PCM"
-        );
+        assert!(out_l.iter().any(|sample| *sample != 0.0), "measured PCM");
     }
 }
