@@ -96,7 +96,7 @@ assert_eq!(samples, [0.0, 0.5]);
 
 </table>
 
-## Feedback comb
+### Feedback comb
 
 `FeedbackComb<CHANNELS>` reads its delay history into the output. The history
 takes the input plus that read passed once through one biquad section and
