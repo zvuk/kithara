@@ -35,6 +35,19 @@ apple:msrv:
   script:
     - just ci run apple-msrv
 
+# A draft's test block is checked before any suite runs it: a block the runner
+# would refuse fails the pipeline here, not inside a lane minutes in.
+apple:pr-tests:
+  extends: .macos-job
+  stage: apple
+  timeout: 10 minutes
+  interruptible: true
+  needs: []
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "branch" && $KITHARA_PR_TESTS
+  script:
+    - just ci pr-tests
+
 apple:test:
   extends:
     - .apple-job
@@ -43,6 +56,8 @@ apple:test:
     - .rules-verify-and-branch
   needs:
     - apple:lint
+    - job: apple:pr-tests
+      optional: true
   script:
     - just ci run apple-test
   artifacts:

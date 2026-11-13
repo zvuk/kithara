@@ -51,7 +51,7 @@ fn hosted_verdict_never_accepts_failed_cancelled_or_required_skipped_jobs() {
             .args(["github", "required"])
             .env("RESULTS", json!({name: {"result": result}}).to_string())
             .env("REQUIRED_LANES", lanes)
-            .env("TOUCHED_UI_REQUIRED", "false")
+            .env("READY_UI_REQUIRED", "false")
             .output()
             .unwrap();
         assert_eq!(

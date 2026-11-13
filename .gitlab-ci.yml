@@ -63,8 +63,9 @@ dispatch:branch:
     KITHARA_CACHE_TRUST: review
     KITHARA_PIPELINE_KIND: branch
   rules:
-    # A draft pull request is judged like a branch: only what it touched. It
-    # arrives from the bridge, so its cache stays in quarantine.
+    # A draft pull request is judged like a branch: only the draft scope, with
+    # the test block the bridge hands it in `KITHARA_PR_TESTS`. It arrives
+    # from the bridge, so its cache stays in quarantine.
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_QUARANTINE_SHA && $KITHARA_QUARANTINE_DRAFT == "1"
       variables:
         KITHARA_CACHE_TRUST: quarantine

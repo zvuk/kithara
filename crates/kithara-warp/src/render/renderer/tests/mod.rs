@@ -7,6 +7,8 @@ mod native_curves;
 mod native_tests;
 mod quantum_tests;
 mod residency_tests;
+#[cfg(feature = "stretch-signalsmith")]
+mod source_gap_tests;
 
 use std::num::NonZeroU32;
 

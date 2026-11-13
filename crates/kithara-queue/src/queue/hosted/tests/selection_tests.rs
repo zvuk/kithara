@@ -83,7 +83,8 @@ async fn manual_next_at_exhaustion_does_not_emit_queue_ended(#[by_ref] worker_ow
 
 #[kithara::test(tokio)]
 async fn advance_to_next_cycles_then_emits_queue_ended(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, _first, second, mut rig, dir) = crate::mock::selected(&worker_owner.0).await;
+    let (mut queue, _first, second, mut rig, dir) =
+        crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
             queue,
@@ -95,7 +96,7 @@ async fn advance_to_next_cycles_then_emits_queue_ended(#[by_ref] worker_owner: &
         )
     })
     .expect("select last track");
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
     queue.current = Some(second);
     let mut rx = queue.subscribe::<QueueEvent>();
@@ -127,7 +128,7 @@ async fn admitted_pending_successor_becomes_navigation_authority(
     #[by_ref] worker_owner: &WorkerOwner,
 ) {
     let (mut queue, first, second, mut rig, fixture_directory) =
-        crate::mock::selected(&worker_owner.0).await;
+        crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
     queue.current = Some(first);
     queue.tracks.set_status(first, TrackStatus::Consumed);
     queue.tracks.set_status(second, TrackStatus::Pending);

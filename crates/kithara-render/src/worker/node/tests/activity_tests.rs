@@ -25,20 +25,20 @@ fn request_seek(fixture: &mut NodeFixture) {
         .expect("seek command");
 }
 
-fn decoded() -> TrackStep<AudioChunk> {
+fn decoded_at(frame: u64) -> TrackStep<AudioChunk> {
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
     TrackStep::Produced(Fetch::data(chunk(
         spec,
         SegmentId::FIRST,
-        0,
-        0,
+        frame,
+        frame,
         &[0.5; 2048],
     )))
 }
 
 fn active_steps() -> [TrackStep<AudioChunk>; 5] {
     [
-        decoded(),
+        decoded_at(0),
         TrackStep::StateChanged,
         TrackStep::Blocked(WaitingReason::Waiting),
         TrackStep::Blocked(WaitingReason::WaitingMetadata),
@@ -116,7 +116,7 @@ async fn playing_matrix_covers_every_transition_endpoint() {
 
 #[kithara::test(tokio)]
 async fn no_spurious_flip_across_100_decoding_transitions() {
-    let steps = (0..100).map(|_| decoded());
+    let steps = (0..100).map(|index| decoded_at(index * 1024));
     let mut fixture = NodeFixture::with_steps(2, steps).await;
     for _ in 0..100 {
         assert_eq!(fixture.node.tick(), TickResult::Progress);

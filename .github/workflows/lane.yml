@@ -73,6 +73,12 @@ on:
           nothing; a lane with no suite refuses one.
         default: ""
         type: string
+      pr-tests:
+        description: >-
+          The draft pull request's `kithara-tests` block. A `branch` lane runs
+          it beside the required tests.
+        default: ""
+        type: string
 
 # Not inherited from the caller: a called workflow gets its own environment.
 env:
@@ -130,6 +136,7 @@ jobs:
           GITHUB_FETCH_TOKEN: ${{ github.token }}
           # A filterset is shell syntax, so it reaches the script as data.
           NARROW: ${{ inputs.narrow }}
+          KITHARA_PR_TESTS: ${{ inputs.pr-tests }}
         run: |
           # Cargo fetches into a cache outside checkout's credential scope.
           # Scope the header to the pinned dependency and RustSec database.

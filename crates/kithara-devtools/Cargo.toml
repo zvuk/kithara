@@ -27,7 +27,9 @@ derive_more = { workspace = true }
 fieldwork = { workspace = true }
 fs4 = { workspace = true }
 glob = { workspace = true }
+guppy = { workspace = true }
 hex = { workspace = true }
+nextest-filtering = { workspace = true }
 proc-macro2 = { workspace = true, features = ["span-locations"] }
 quote = { workspace = true }
 rayon = { workspace = true }

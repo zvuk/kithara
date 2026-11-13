@@ -467,7 +467,7 @@
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
-  just test run --touched --selection-output=.ci-artifacts/junit/apple-test.selection.json --flash=on --no-block=on --profile ci
+  just test run --draft --selection-output=.ci-artifacts/junit/apple-test.selection.json --flash=on --no-block=on --profile ci
   just test test-utils
 # apple-test / platforms
   <require os> macos
@@ -518,7 +518,7 @@
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
-  just test run --flash=off --profile ci
+  just test run --draft --flash=off --profile ci
 # apple-test-flash-off / platforms
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
@@ -1380,7 +1380,7 @@
 # linux-broadcast / branch
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --lane=broadcast
+  just test run --draft --lane=broadcast
     CARGO_BUILD_JOBS=2
 # linux-broadcast / platforms
   <require os> linux
@@ -1500,7 +1500,7 @@
 # linux-doc / branch
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --lane=doc
+  just test run --draft --lane=doc
     CARGO_BUILD_JOBS=2
 # linux-doc / platforms
   <require os> linux
@@ -1540,10 +1540,10 @@
 # linux-fixtures / branch
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --lane=fixtures
+  just test run --draft --lane=fixtures
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
-  just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
+  just test run --draft -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
     RTEN_NUM_THREADS=1
 # linux-fixtures / platforms
@@ -1612,7 +1612,7 @@
 # linux-harness / branch
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --lane=harness
+  just test run --draft --lane=harness
     CARGO_BUILD_JOBS=2
 # linux-harness / platforms
   <require os> linux
@@ -1652,7 +1652,7 @@
 # linux-integration-regressions / branch
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --lane=integration-regressions
+  just test run --draft --lane=integration-regressions
     CARGO_BUILD_JOBS=2
 # linux-integration-regressions / platforms
   <require os> linux
@@ -1724,7 +1724,7 @@
 # linux-loom / branch
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --lane=loom
+  just test run --draft --lane=loom
     CARGO_BUILD_JOBS=2
 # linux-loom / platforms
   <require os> linux
@@ -1804,7 +1804,7 @@
 # linux-net-host / branch
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --lane=net-host
+  just test run --draft --lane=net-host
     CARGO_BUILD_JOBS=2
 # linux-net-host / platforms
   <require os> linux
@@ -1908,7 +1908,7 @@
 # linux-selenium-firefox / branch
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --lane=selenium-firefox
+  just test run --draft --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
 # linux-selenium-firefox / platforms
   <require os> linux
@@ -1945,86 +1945,14 @@
   <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
-# linux-support / branch
-  <require os> linux
-  <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-# linux-support / platforms
-  <require os> linux
-  <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-# linux-support / merge-request
-  <require os> linux
-  <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-# linux-support / quarantine
-  <require os> linux
-  <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-# linux-support / main
-  <require os> linux
-  <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-# linux-support / nightly
-  <require os> linux
-  <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-# linux-support / weekly
-  <require os> linux
-  <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-# linux-support / release
-  <require os> linux
-  <require tools> cargo just sccache kache
-  just test run --touched --lane=tooling
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
-  just test run --touched --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
-    CARGO_BUILD_JOBS=2
-    RTEN_NUM_THREADS=1
 # linux-test-real-clock / branch
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --touched --flash=off --profile ci --timings
+  just test run --draft --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-  just test run --touched --flash=off --profile ci --no-run --cargo-verbose --color never
+  just test run --draft --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2108,7 +2036,7 @@
 # linux-test-simulated-clock / branch
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --touched --no-block=on --profile ci --timings
+  just test run --draft --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2180,7 +2108,7 @@
 # linux-tooling / branch
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --lane=tooling
+  just test run --draft --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / platforms
   <require os> linux
@@ -2220,15 +2148,15 @@
 # linux-usdt / branch
   <require os> linux
   <require tools> cargo just sccache kache
-  just test run --lane=usdt-warp --profile ci
+  just test run --draft --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-  just test run --lane=usdt-render-scheduler --profile ci
+  just test run --draft --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-  just test run --lane=usdt-hls --profile ci
+  just test run --draft --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-  just test run --lane=usdt-hls-stress --profile ci
+  just test run --draft --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-  just test run --lane=usdt-queue --profile ci
+  just test run --draft --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
 # linux-usdt / platforms
   <require os> linux

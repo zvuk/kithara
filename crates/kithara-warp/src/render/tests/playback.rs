@@ -3,23 +3,14 @@
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
-use std::{
-    collections::HashSet,
-    num::{NonZero, NonZeroUsize},
-};
+use std::num::{NonZero, NonZeroUsize};
 
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
-use kithara_platform::time::Duration;
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-use kithara_signal::{AudioChunkInfo, AudioSpec};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
@@ -35,7 +26,7 @@ use kithara_test_utils::kithara;
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
-use super::{WarpRenderer, dominant_bin, expected_bin, flush_serviced, render_serviced};
+use super::{LaneFeed, WarpRenderer, dominant_bin, drain_tail, expected_bin, samples as concat};
 use super::{chunk, renderer, spec};
 use crate::WarpConfig;
 #[cfg(any(
@@ -152,14 +143,19 @@ fn live_activation_primes_from_passthrough_history(
 
     let pools = renderer.pools.clone();
     let source = warp_sine[..(cue) * 2].to_vec();
-    let unity = render_serviced(&mut renderer, chunk(&pools, &source))
-        .expect("unity history remains byte-exact");
-    assert_eq!(&unity.samples[..], &source);
+    let mut feed = LaneFeed::default();
+    let mut unity = feed.feed(&mut renderer, chunk(&pools, &source));
+    unity.extend(feed.end(&mut renderer));
+    assert_eq!(concat(&unity), source, "unity history remains byte-exact");
 
     let revision = 1;
     renderer
         .set_speed(SpeedCurve::Constant(2.0), revision)
         .expect("valid speed");
+    renderer.prepare(spec());
+    renderer
+        .prepare_engine_latency(spec())
+        .expect("activation service");
     let mut meta = AudioChunkInfo {
         frame_offset: u64::try_from(cue).expect("cue fits u64"),
         spec: spec(),
@@ -274,13 +270,10 @@ fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
     let mut out: Vec<f32> = Vec::new();
     let mut tail_frames = 0;
     let mut source = 0;
+    let mut feed = LaneFeed::default();
     let block = 4096 * usize::from(consts::CH);
-    for data in input.chunks(block) {
-        hang_tick!();
-        let mut input = chunk(&pools, data);
-        input.meta.frame_offset = source;
-        source += u64::try_from(input.frames()).expect("source frames fit u64");
-        if let Some(c) = render_serviced(fx, input) {
+    let present = |out: &mut Vec<f32>, timeline: Vec<AudioChunk>| {
+        for c in timeline {
             assert_eq!(
                 c.spec().sample_rate.get(),
                 consts::SR,
@@ -289,9 +282,17 @@ fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
             assert_eq!(c.spec().channels, consts::CH);
             out.extend_from_slice(&c.samples);
         }
+    };
+    for data in input.chunks(block) {
+        hang_tick!();
+        let mut input = chunk(&pools, data);
+        input.meta.frame_offset = source;
+        source += u64::try_from(input.frames()).expect("source frames fit u64");
+        present(&mut out, feed.feed(fx, input));
         hang_reset!();
     }
-    while let Some(c) = flush_serviced(fx) {
+    present(&mut out, feed.end(fx));
+    for c in drain_tail(fx) {
         hang_tick!();
         // A non-empty flush chunk carries real audio, so its spec must stay
         // the source spec - never the `AudioChunkInfo::default()` sentinel (0
@@ -352,20 +353,12 @@ fn assert_half_speed_contract(
     let in_frames = usize::try_from(consts::SR).unwrap() * 2; // 2 s
     let (out, tail_frames) = run_keylocked_with_tail(warp_sine, kind, speed, in_frames);
     let out_frames = out.len() / channels;
-    let timeline_frames = out_frames - tail_frames;
 
     assert_eq!(
-        timeline_frames, expected_timeline,
-        "{kind:?}: exact timeline at speed {speed}"
+        out_frames, expected_timeline,
+        "{kind:?}: exact timeline at speed {speed}, terminal drain included"
     );
     assert!(tail_frames > 0, "{kind:?}: terminal history is drained");
-
-    // Pitch is still measured over the complete emitted stream, including
-    // the latency fill and its matching terminal drain.
-    assert!(
-        out_frames >= expected_timeline,
-        "{kind:?}: terminal drain cannot shorten the exact timeline"
-    );
 
     // Pitch preserved: dominant bin still at F0 (the load-bearing check -
     // a resampler-in-disguise would shift it).
@@ -416,7 +409,7 @@ fn rendered_source_frontier_excludes_backend_lookahead(
     warp_sine: Vec<f32>,
 ) {
     const SOURCE_START: u64 = 10_000;
-    const SOURCE_FRAMES: usize = 4096;
+    const SOURCE_FRAMES: usize = 16_384;
 
     let mut renderer = keylocked(backend, 0.5);
     let pools = renderer.pools.clone();
@@ -441,10 +434,9 @@ fn rendered_source_frontier_excludes_backend_lookahead(
         .first();
     assert!(source_latency > 0, "backend must declare source lookahead");
 
-    let output = render_serviced(&mut renderer, input).expect("half-speed render emits samples");
-    let held =
-        u64::try_from(source_latency.min(SOURCE_FRAMES)).expect("backend source latency fits u64");
-    let expected_frame = admitted.saturating_sub(held);
+    let outputs = LaneFeed::default().feed(&mut renderer, input);
+    let output = outputs.last().expect("half-speed render emits samples");
+    let expected_frame = output.meta.source_span.expect("emitted mapping").end();
 
     assert_eq!(
         renderer.rendered_source_end(),
@@ -452,13 +444,15 @@ fn rendered_source_frontier_excludes_backend_lookahead(
             expected_frame,
             NonZero::new(consts::SR).expect("test sample rate is non-zero"),
         )),
+        "rendered progress is the source end of the emitted PCM"
+    );
+    assert!(
+        expected_frame + u64::try_from(source_latency).expect("latency fits u64") <= admitted,
         "rendered progress excludes source still retained by the backend"
     );
+    let output_frames = outputs.iter().map(AudioChunk::frames).sum::<usize>();
     assert_ne!(
-        output
-            .meta
-            .frame_offset
-            .saturating_add(u64::from(output.meta.frames)),
+        SOURCE_START.saturating_add(u64::try_from(output_frames).expect("output frames fit u64")),
         expected_frame,
         "the oracle must distinguish transformed output frames from the source frontier"
     );
@@ -493,13 +487,20 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(
         .capabilities()
         .latency()
         .first();
-    let held =
-        u64::try_from(source_latency.min(source_frames)).expect("backend source latency fits u64");
-
-    render_serviced(&mut renderer, input).expect("minimum-speed render emits samples");
+    let mut feed = LaneFeed::default();
+    let mut outputs = feed.feed(&mut renderer, input);
+    outputs.extend(feed.end(&mut renderer));
+    let rendered = outputs
+        .last()
+        .expect("minimum-speed render emits samples")
+        .meta
+        .source_span
+        .expect("emitted mapping")
+        .end();
+    assert!(rendered < admitted, "the backend still holds source");
     assert_eq!(
         renderer.rendered_source_end(),
-        Some((admitted - held, spec().sample_rate))
+        Some((rendered, spec().sample_rate))
     );
 
     let mut frontiers = Vec::new();
@@ -552,31 +553,36 @@ fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind, warp_sin
     let pools = fx.pools.clone();
     let cf = 1024usize;
     let block = warp_sine[..(cf) * 2].to_vec();
-    let mut fed_ends = HashSet::new();
+    let mut feed = LaneFeed::default();
     let mut emitted = Vec::new();
+    let mut keep = |outputs: Vec<AudioChunk>| {
+        emitted.extend(
+            outputs
+                .into_iter()
+                .map(|output| (output.meta, output.samples.len())),
+        );
+    };
     for i in 0..40u64 {
-        let mut c = chunk(&pools, &block);
-        let end = Duration::from_millis(i * 100 + 100);
-        c.meta.timestamp = Duration::from_millis(i * 100);
-        c.meta.end_timestamp = end;
-        c.meta.frame_offset = i * u64::try_from(cf).unwrap();
-        fed_ends.insert(end);
-        if let Some(o) = render_serviced(&mut fx, c) {
-            emitted.push(o);
-        }
-    }
-    while let Some(o) = flush_serviced(&mut fx) {
         hang_tick!();
-        let frames = o.frames();
-        emitted.push(o);
-        if frames > 0 {
-            hang_reset!();
-        }
+        let mut c = chunk(&pools, &block);
+        let frame = i * u64::try_from(cf).unwrap();
+        c.meta.timestamp = spec().duration_for(frame).expect("test timestamp fits");
+        c.meta.end_timestamp = spec()
+            .duration_for(frame + u64::try_from(cf).unwrap())
+            .expect("test timestamp fits");
+        c.meta.frame_offset = frame;
+        keep(feed.feed(&mut fx, c));
+        hang_reset!();
     }
+    keep(feed.end(&mut fx));
+    keep(drain_tail(&mut fx));
+    let fed_end = spec()
+        .duration_for(40 * u64::try_from(cf).unwrap())
+        .expect("test end fits");
     assert!(!emitted.is_empty(), "stretch produced no output");
-    for o in &emitted {
+    for (meta, samples) in &emitted {
         assert_eq!(
-            o.spec(),
+            meta.spec,
             AudioSpec {
                 channels: consts::CH,
                 sample_rate: NonZero::new(consts::SR).unwrap()
@@ -584,13 +590,22 @@ fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind, warp_sin
             "spec (incl. sample rate) preserved verbatim"
         );
         assert_eq!(
-            usize::try_from(o.meta.frames).unwrap(),
-            o.samples.len() / channels,
+            usize::try_from(meta.frames).unwrap(),
+            samples / channels,
             "frames recomputed to the actual output count"
         );
+        let span = meta.source_span.expect("output source mapping");
+        assert_eq!(
+            (meta.timestamp, meta.end_timestamp),
+            (
+                span.position_at(0).expect("span start"),
+                span.position_at(span.output_frames()).expect("span end")
+            ),
+            "timestamps are the source-track time of the rendered span"
+        );
         assert!(
-            fed_ends.contains(&o.meta.end_timestamp),
-            "end_timestamp carried verbatim from an input chunk (source-track time)"
+            meta.end_timestamp <= fed_end,
+            "output time stays on the decoded timeline"
         );
     }
 }
@@ -680,8 +695,9 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp
     );
     let pools = fx.pools.clone();
     let block = warp_sine[..(4096) * 2].to_vec();
-    let unity = render_serviced(&mut fx, chunk(&pools, &block)).expect("unity bypass emits");
-    assert_eq!(&unity.samples[..], &block[..], "unity phase bypasses");
+    let mut feed = LaneFeed::default();
+    let unity = feed.feed(&mut fx, chunk(&pools, &block));
+    assert_eq!(concat(&unity), block, "unity phase bypasses");
 
     fx.set_speed(SpeedCurve::Constant(0.5), 1)
         .expect("valid speed");
@@ -692,16 +708,11 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp
         let mut input = chunk(&pools, &block);
         input.meta.frame_offset = source;
         source += u64::try_from(input.frames()).expect("source frames fit u64");
-        if let Some(c) = render_serviced(&mut fx, input) {
-            stretched.extend_from_slice(&c.samples);
-        }
+        stretched.extend(concat(&feed.feed(&mut fx, input)));
         hang_reset!();
     }
-    while let Some(c) = flush_serviced(&mut fx) {
-        hang_tick!();
-        stretched.extend_from_slice(&c.samples);
-        hang_reset!();
-    }
+    stretched.extend(concat(&feed.end(&mut fx)));
+    stretched.extend(concat(&drain_tail(&mut fx)));
     assert!(
         stretched.len() > block.len() * 24,
         "half-speed key-lock should lengthen output after a live speed change"
@@ -730,15 +741,14 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_si
     let block = warp_sine[..(4096) * 2].to_vec();
 
     let mut vinyl_out: Vec<f32> = Vec::new();
+    let mut feed = LaneFeed::default();
     let mut source = 0;
     for _ in 0..24 {
         hang_tick!();
         let mut input = chunk(&pools, &block);
         input.meta.frame_offset = source;
         source += u64::try_from(input.frames()).expect("source frames fit u64");
-        if let Some(c) = render_serviced(&mut fx, input) {
-            vinyl_out.extend_from_slice(&c.samples);
-        }
+        vinyl_out.extend(concat(&feed.feed(&mut fx, input)));
         hang_reset!();
     }
     let vinyl_mono: Vec<f32> = vinyl_out
@@ -753,29 +763,16 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_si
 
     fx.set_keylock(true);
     let mut stretched: Vec<f32> = Vec::new();
-    fx.prepare(spec());
-    while fx.transition_pending() {
-        hang_tick!();
-        if let Some(output) = flush_serviced(&mut fx) {
-            stretched.extend_from_slice(&output.samples);
-            hang_reset!();
-        }
-    }
     for _ in 0..24 {
         hang_tick!();
         let mut input = chunk(&pools, &block);
         input.meta.frame_offset = source;
         source += u64::try_from(input.frames()).expect("source frames fit u64");
-        if let Some(c) = render_serviced(&mut fx, input) {
-            stretched.extend_from_slice(&c.samples);
-        }
+        stretched.extend(concat(&feed.feed(&mut fx, input)));
         hang_reset!();
     }
-    while let Some(c) = flush_serviced(&mut fx) {
-        hang_tick!();
-        stretched.extend_from_slice(&c.samples);
-        hang_reset!();
-    }
+    stretched.extend(concat(&feed.end(&mut fx)));
+    stretched.extend(concat(&drain_tail(&mut fx)));
     let mono: Vec<f32> = stretched
         .iter()
         .step_by(usize::from(consts::CH))
