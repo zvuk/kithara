@@ -10,7 +10,7 @@ use super::{
     BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, add_f32, affine_f32,
     correlate_f32, deinterleave_pair_f32, downmix_pair_f32, interleave_pair_f32,
     linear_interpolate_f32, max_magnitude_f32, multiply_f32, multiply_in_place_f32,
-    quadratic_interpolate_f32, scale_add_f32, sub_f32, sum_squares_f32,
+    quadratic_interpolate_f32, scale_add_f32, sub_f32, sum_squares_f32, tangent_f64,
 };
 
 const SPECIALS: [f32; 8] = [
@@ -24,6 +24,81 @@ const SPECIALS: [f32; 8] = [
     f32::NAN,
 ];
 const UNWRITTEN: f32 = -1.0;
+
+#[kithara::test(native)]
+fn tangent_double_preserves_prefix_special_values_and_precision() {
+    let input = [
+        0.0,
+        -0.0,
+        f64::from_bits(1),
+        -f64::from_bits(1),
+        0.1,
+        1.0,
+        f64::NAN,
+        f64::INFINITY,
+    ];
+    let mut output = [-7.0; 9];
+    assert_eq!(tangent_f64(&input, &mut output), input.len());
+    for (actual, input) in output.iter().zip(input) {
+        let expected = input.tan();
+        if input.abs() < f64::MIN_POSITIVE {
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        } else if expected.is_nan() {
+            assert!(actual.is_nan());
+        } else {
+            assert!((actual - expected).abs() <= 8.0 * f64::EPSILON * expected.abs());
+        }
+    }
+    assert_eq!(output[8], -7.0);
+    assert_eq!(tangent_f64(&input, &mut output[..2]), 2);
+    let before = output;
+    assert_eq!(tangent_f64(&[], &mut output), 0);
+    assert_eq!(tangent_f64(&input, &mut []), 0);
+    assert_eq!(output.map(f64::to_bits), before.map(f64::to_bits));
+}
+
+#[kithara::test(native)]
+fn tangent_double_is_bit_identical_across_widths_offsets_and_partitions() {
+    let angles = [
+        0.0,
+        f64::from_bits(1),
+        1e-100,
+        0.001,
+        0.2,
+        0.8,
+        1.5,
+        std::f64::consts::FRAC_PI_2,
+    ];
+    let input: Vec<_> = angles.into_iter().cycle().take(1_027).collect();
+    let expected: Vec<_> = input
+        .iter()
+        .map(|&angle| {
+            let mut output = [0.0];
+            assert_eq!(tangent_f64(&[angle], &mut output), 1);
+            output[0].to_bits()
+        })
+        .collect();
+    for width in [1, 2, 3, 7, 13, 16, 31, 255, 256, 257, 1_027] {
+        for offset in 0..4 {
+            let mut output = vec![-7.0; input.len() + offset + 1];
+            for (input, output) in input
+                .chunks(width)
+                .zip(output[offset..offset + input.len()].chunks_mut(width))
+            {
+                assert_eq!(tangent_f64(input, output), input.len());
+            }
+            assert_eq!(
+                output[offset..offset + input.len()]
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert!(output[..offset].iter().all(|value| *value == -7.0));
+            assert_eq!(output.last(), Some(&-7.0));
+        }
+    }
+}
 
 /// `N` samples on the boundary `RealDft` takes its planes on.
 #[repr(C, align(64))]

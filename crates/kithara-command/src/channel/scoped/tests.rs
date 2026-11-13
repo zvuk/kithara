@@ -56,7 +56,7 @@ fn await_plain_answers(
     assert_eq!(sender.receipts().count(), 0, "no duplicate answer");
 }
 
-#[kithara::test(native, tokio, browser)]
+#[kithara::test(miri, native, tokio, browser)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn sends_racing_inbox_drop_are_answered_exactly_once() {
     let _real_io = kithara_platform::flash::real_io();
@@ -149,7 +149,7 @@ fn lost_answer_negative_control_trips_the_watchdog() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(miri)]
 fn a_publication_admitted_before_drop_recovers_both_levels() {
     use crate::Port;
     let (mut sender, inbox) = scoped_channel::<Test, Test>(ScopedConfig::builder().build());
@@ -343,7 +343,7 @@ fn a_closed_gate_spends_neither_a_number_nor_a_credit() {
     assert!(sender.publish().is_err());
 }
 
-#[kithara::test]
+#[kithara::test(miri)]
 fn a_scoped_holder_rearms_on_receipt_and_release_stops_waking() {
     use crate::Port;
 

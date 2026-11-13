@@ -6,6 +6,7 @@
 //! archives, and the crates out as the project site. The nightly channel
 //! replaces one rolling release with what the branch built today.
 
+mod app;
 mod artifact;
 mod changelog;
 mod command;

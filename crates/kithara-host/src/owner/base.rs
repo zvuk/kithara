@@ -604,10 +604,8 @@ where
                             part,
                             DeckPart::Eq(_)
                                 | DeckPart::EqProgram { .. }
-                                | DeckPart::Filter { .. }
                                 | DeckPart::FilterProgram { .. }
                                 | DeckPart::Returned(kithara_render::bridge::Returned::Eq(_))
-                                | DeckPart::Returned(kithara_render::bridge::Returned::Filter(_))
                         )
                     });
                     if mix || effects {

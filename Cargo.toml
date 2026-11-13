@@ -52,6 +52,7 @@ members = [
     "crates/kithara-stream",
     "crates/kithara-stretch",
     "crates/kithara-sync",
+    "crates/kithara-test-args",
     "crates/kithara-test-fixtures",
     "crates/kithara-test-macros",
     "crates/kithara-test-utils",
@@ -132,6 +133,7 @@ default-members = [
     "crates/kithara-download",
     "crates/kithara-stream",
     "crates/kithara-sync",
+    "crates/kithara-test-args",
     "crates/kithara-test-fixtures",
     "crates/kithara-test-macros",
     "crates/kithara-test-utils",
@@ -338,6 +340,7 @@ kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha5", d
 kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha5", default-features = false }
 kithara-stretch = { path = "crates/kithara-stretch", version = "0.0.1-alpha5", default-features = false }
 kithara-sync = { path = "crates/kithara-sync", version = "0.0.1-alpha5", default-features = false }
+kithara-test-args = { path = "crates/kithara-test-args", version = "0.0.1-alpha5" }
 kithara-test-dylib = { path = "tests/crates/dylib", version = "0.0.1-alpha5" }
 kithara-test-fixtures = { path = "crates/kithara-test-fixtures", version = "0.0.1-alpha5", default-features = false }
 kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha5" }

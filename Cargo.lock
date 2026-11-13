@@ -5322,7 +5322,6 @@ dependencies = [
  "bon",
  "delegate",
  "derive-where",
- "derive_more",
  "fieldwork",
  "firewheel",
  "kithara-bufpool",
@@ -5785,7 +5784,6 @@ dependencies = [
  "kithara-app",
  "kithara-app-library",
  "kithara-command",
- "kithara-config",
  "kithara-devtools-trace-format",
  "kithara-dsp",
  "kithara-encode",
@@ -6367,6 +6365,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-test-args"
+version = "0.0.1-alpha5"
+dependencies = [
+ "bitflags 2.13.2",
+ "fieldwork",
+ "proc-macro2",
+ "syn 3.0.6",
+]
+
+[[package]]
 name = "kithara-test-dylib"
 version = "0.0.1-alpha5"
 dependencies = [
@@ -6409,6 +6417,7 @@ dependencies = [
 name = "kithara-test-macros"
 version = "0.0.1-alpha5"
 dependencies = [
+ "kithara-test-args",
  "proc-macro2",
  "quote",
  "syn 3.0.6",
@@ -13259,6 +13268,7 @@ dependencies = [
  "hex",
  "humantime",
  "kithara-devtools",
+ "kithara-test-args",
  "nix",
  "plist",
  "proc-macro2",
