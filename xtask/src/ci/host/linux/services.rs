@@ -320,30 +320,22 @@ fn install_renewal_timer(root: &Path) -> Result<()> {
 
 /// Which cores this runner's jobs may use.
 ///
-/// Blocks are handed out in order and wrap around the machine, so runners
-/// overlap once they outnumber the cores. The overlap is deliberate: what a set
-/// buys over a share is that `nproc` inside the container reports the size of
-/// the set, so Cargo starts that many compilations rather than one per host
-/// core. Sharing a core between two runners costs throughput; misreporting the
-/// count costs memory, and memory is what the kernel kills for.
+/// Sets follow profile order and wrap when their total width exceeds the machine.
+/// They bound the core count Cargo sees; excess demand deliberately shares cores.
 pub(super) fn cpusets(
     widths: impl IntoIterator<Item = u32>,
     cores: usize,
 ) -> impl Iterator<Item = String> {
-    widths
-        .into_iter()
-        .enumerate()
-        .map(move |(index, cpus)| cpuset(index, cpus, cores))
-}
-
-fn cpuset(index: usize, cpus: u32, cores: usize) -> String {
-    let cores = u32::try_from(cores).unwrap_or(u32::MAX).max(1);
-    let cpus = cpus.clamp(1, cores);
-    let first = u32::try_from(index).unwrap_or(0).saturating_mul(cpus) % cores;
-    (0..cpus)
-        .map(|offset| ((first + offset) % cores).to_string())
-        .collect::<Vec<_>>()
-        .join(",")
+    let cores = u64::from(u32::try_from(cores).unwrap_or(u32::MAX).max(1));
+    widths.into_iter().scan(0_u64, move |first, width| {
+        let width = u64::from(width).clamp(1, cores);
+        let set = (0..width)
+            .map(|offset| ((*first + offset) % cores).to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        *first = (*first + width) % cores;
+        Some(set)
+    })
 }
 
 /// The runner takes one job and exits, the container goes with it, and systemd
@@ -552,8 +544,7 @@ mod tests {
     /// count is what Cargo turns into concurrent compilations.
     #[test]
     fn a_runner_is_given_exactly_the_cores_it_asked_for() {
-        for index in 0..12 {
-            let set = cpuset(index, 3, 32);
+        for (index, set) in cpusets([3; 12], 32).enumerate() {
             let cores = set.split(',').collect::<Vec<_>>();
             assert_eq!(cores.len(), 3, "index {index}: {set}");
             assert_eq!(
@@ -914,11 +905,11 @@ mod tests {
     /// costs nothing, so the machine carries more of them than it has cores.
     #[test]
     fn the_sets_wrap_instead_of_running_out() {
-        let set = cpuset(11, 3, 32);
+        let set = cpusets([3; 12], 32).last().expect("twelve sets");
         assert_eq!(set, "1,2,3", "{set}");
-        assert_eq!(cpuset(0, 4, 4), "0,1,2,3");
+        assert_eq!(cpusets([4], 4).next().as_deref(), Some("0,1,2,3"));
         // A runner may not ask for more of the machine than it has.
-        assert_eq!(cpuset(0, 9, 4), "0,1,2,3");
+        assert_eq!(cpusets([9], 4).next().as_deref(), Some("0,1,2,3"));
     }
 
     /// A unit is a command line, and one this crate cannot parse fails only
