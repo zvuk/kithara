@@ -4,7 +4,6 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 use kithara_effects::{
     DeckEffect, FxParamChange, GainDb,
-    /// The deck's equaliser, after its trim.
     eq::{EqConfig, EqLayout, GainShapeError, StereoEq, generate_log_spaced_bands},
     filter::{FilterEffect, FilterKnob},
 };
@@ -28,6 +27,7 @@ pub(crate) struct RenderPass {
     /// from the frame it is set on.
     controls: [SmoothedParam; DeckParameter::CHANNELS],
     control_buffers: [SampleBuffer; DeckParameter::CHANNELS],
+    /// The deck's equaliser, after its trim.
     eq: StereoEq,
     /// The deck's FX units, after its equaliser.
     units: Box<[FxUnit]>,
