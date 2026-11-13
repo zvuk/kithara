@@ -55,12 +55,23 @@ release:app:
     - .rules-release
   stage: release-build
   timeout: 180 minutes
+  resource_group: kithara-app-signing
+  environment:
+    name: release
+    action: prepare
   needs:
     - apple:test
     - job: deps:semver
       optional: true
   script:
+    - |
+      printf 'unlock-keychain -p "%s" "%s"\n' \
+        "${KITHARA_APP_SIGN_KEYCHAIN_PASSWORD:?set signing Keychain password}" \
+        "${KITHARA_APP_SIGN_KEYCHAIN:?set signing Keychain path}" |
+        security -q -i
     - just ci run release-app
+  after_script:
+    - security lock-keychain "$KITHARA_APP_SIGN_KEYCHAIN"
   artifacts:
     when: always
     expire_in: never

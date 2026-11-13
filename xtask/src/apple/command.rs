@@ -1934,12 +1934,21 @@ mod tests {
 
         build_merged(&arch, &[source], &tools)?;
 
-        let interface = fs::read_to_string(root.join("arm64-apple-ios.swiftinterface"))?;
-        assert!(interface.contains("-swift-version 5"), "{interface}");
-        assert!(
-            interface.contains("public var value: Swift.Int"),
-            "{interface}"
-        );
+        fs::rename(
+            root.join("arm64-apple-ios.swiftinterface"),
+            root.join("Probe.swiftinterface"),
+        )?;
+        fs::remove_file(root.join("Probe.swiftmodule"))?;
+        let consumer = root.join("Consumer.swift");
+        fs::write(&consumer, "import Probe\nlet result: Int = Probe.value\n")?;
+        let mut command = Command::new(tools.program("xcrun"));
+        command
+            .args(["swiftc", "-typecheck", "-sdk"])
+            .arg(&sdk)
+            .args(["-target", arch.triple, "-I"])
+            .arg(root)
+            .arg(consumer);
+        run_quiet(&mut command, "import the merged Swift interface")?;
         assert!(root.join("libProbeSwift.a").is_file());
         Ok(())
     }
