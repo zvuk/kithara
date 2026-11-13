@@ -196,13 +196,17 @@ const fn classify_progress(
     FetchProgress::Idle
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod ownership_tests {
-    use std::{num::NonZeroU64, thread};
+    use std::num::NonZeroU64;
 
     use kithara_abr::AbrPeerId;
     use kithara_net::NetError;
-    use kithara_platform::{CancelGroup, CancelToken, time::Instant, tokio::sync::oneshot};
+    use kithara_platform::{
+        CancelGroup, CancelToken,
+        time::Instant,
+        tokio::{sync::oneshot, task::spawn},
+    };
     use kithara_test_utils::{cancel_token, kithara};
     use url::Url;
 
@@ -212,12 +216,12 @@ mod ownership_tests {
         peer::{InternalCmd, ResponseTarget, SlotEntry},
     };
 
-    #[kithara::test(miri, tokio)]
+    #[kithara::test(miri, tokio, multi_thread)]
     async fn queued_commands_wake_and_answer_across_registry_teardown(cancel_token: CancelToken) {
         let mut registry = Registry::default();
         let peer_cancel = cancel_token.child();
         let (response, receiver) = oneshot::channel();
-        let answer = thread::spawn(move || receiver.blocking_recv());
+        let answer = spawn(receiver);
         registry.slots.enqueue(
             0,
             SlotEntry {
@@ -247,10 +251,10 @@ mod ownership_tests {
         drop(registry);
         assert!(
             matches!(
-                answer.join().expect("response thread"),
+                answer.await.expect("response task"),
                 Ok(Err(NetError::Cancelled))
             ),
-            "owner teardown answers the other thread instead of dropping its response"
+            "owner teardown answers the receiving task instead of dropping its response"
         );
     }
 }

@@ -993,7 +993,6 @@ default_features = [
   "kithara-test-utils/flash",
 ]
 cargo.packages = [
-  "kithara-test-args",
   "kithara-test-utils",
   "kithara-test-macros",
   "kithara-platform",
@@ -1003,7 +1002,7 @@ cargo.profile = "test-release"
 # the filter keeps its product tests out of this lane. A caller's `-E` narrows
 # it rather than joining it.
 runner.nextest.ignore_default_filter = true
-runner.nextest.filter = "binary_id(=kithara-platform::flash_attr) + binary_id(=kithara-platform::flash_spawn) + package(kithara-test-utils) + package(kithara-test-macros) + package(kithara-test-args)"
+runner.nextest.filter = "binary_id(=kithara-platform::flash_attr) + binary_id(=kithara-platform::flash_spawn) + package(kithara-test-utils) + package(kithara-test-macros)"
 
 # The fixture library and the harness meta-tests: the local test server, the
 # fixture cache and protocol, the signal oracles (`goertzel`,
