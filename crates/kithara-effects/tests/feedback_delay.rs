@@ -8,7 +8,6 @@
 use std::{
     f64::consts::{FRAC_1_SQRT_2, PI},
     num::{NonZeroU32, NonZeroUsize},
-    time::Duration,
 };
 
 use kithara_effects::{
@@ -17,7 +16,7 @@ use kithara_effects::{
         DelayParam, DelayTime, Feedback, FeedbackDelay, FeedbackDelayConfig, FeedbackHighPass,
     },
 };
-use kithara_test_utils::{bufpool::pools, kithara};
+use kithara_test_utils::{bufpool::pools, kithara, kithara_platform::time::Duration};
 use num_traits::ToPrimitive;
 
 const RATE: u32 = 44_100;
