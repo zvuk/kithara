@@ -1,6 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    abr::AbrMode,
     events::{EventReceiver, TrackId},
     platform::time::{Duration, timeout},
     queue::{QueueControl, QueueEvent, TrackStatus},
@@ -26,7 +27,7 @@ async fn zvuk_drm_master_playlist_trace() {
     let ctx = CTX.get().await;
     let url = "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8";
 
-    let source = build_source(url, &ctx.config);
+    let source = build_source(url, &ctx.config, AbrMode::default());
 
     let mut rx = ctx.queue.subscribe();
     let track_id = ctx

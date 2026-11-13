@@ -15,7 +15,13 @@ use ::kithara::ui::{
     source::{FillDocument, SourceResolver, UiConfig},
     view::{self, ViewState},
 };
+#[cfg(feature = "zvuk")]
+use keyring_core::sample::Store;
+#[cfg(feature = "zvuk")]
+use kithara_app_library::{Context, Environment, Secrets};
 use kithara_app_library::{Document, Endpoint, PAGES, Registration, SourcePage};
+#[cfg(feature = "zvuk")]
+use kithara_app_zvuk::Source;
 use kithara_test_utils::kithara;
 
 use super::{
@@ -1999,6 +2005,12 @@ mod answered {
             render::{Scope, WindowCommand},
         },
     };
+    #[cfg(feature = "zvuk")]
+    use keyring_core::sample::Store;
+    #[cfg(feature = "zvuk")]
+    use kithara_app_library::{Context, Environment, Secrets};
+    #[cfg(feature = "zvuk")]
+    use kithara_app_zvuk::Source;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -2348,4 +2360,38 @@ fn a_source_page_gesture_reaches_its_source_through_the_app_dispatch() {
         Walk::new(&ReadRoot::new(&state)).get("source.query@source=probe"),
         Some(ReadValue::Text("needle"))
     );
+}
+
+#[cfg(feature = "zvuk")]
+#[kithara::test(native, flash(false))]
+fn zvuk_settings_bind_the_streaming_toggle_to_its_source() {
+    let runtime = test_fixture::runtime();
+    let config = test_fixture::config(runtime.handle());
+    let environment = Environment::new(
+        runtime.handle().clone(),
+        config.net.clone(),
+        Secrets::new(Store::new()),
+    );
+    let entry = serde_yaml_ng::from_str("{user_agent: synthetic-agent}").unwrap();
+    let context = Context::new(config.shutdown.child(), entry);
+    let registration = (Source::FACTORY.register)(&environment, context).unwrap();
+    let (package, _library) = test_fixture::mount(None, vec![registration]).unwrap();
+    for layout in LAYOUTS {
+        let ui = compile_package(&package, layout).unwrap();
+        let controls = controls(&ui);
+        let toggles = controls
+            .iter()
+            .filter(|(path, _)| path.ends_with("streaming-toggle"))
+            .collect::<Vec<_>>();
+        assert!(!toggles.is_empty());
+        for (_, bindings) in toggles {
+            assert_eq!(
+                bindings,
+                &[
+                    "source.adaptive_streaming@source=zvuk",
+                    "source.adaptive_streaming@source=zvuk"
+                ]
+            );
+        }
+    }
 }

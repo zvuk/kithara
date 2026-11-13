@@ -20,7 +20,8 @@ these and routes reads and writes to the owning source.
 
 A source exports a `Factory` that returns a `Registration`. It receives the
 services the app shares with plugins in `Environment`, and its configuration
-and cancellation token in `Context`. `Secrets::native` keeps secrets in the
+and cancellation token in `Context`. The context may also supply the source's
+native preference file; an absent path requests session-only preferences. `Secrets::native` keeps secrets in the
 `secrets` section of the configuration overlay it is given, or with the
 `keystore` feature in the operating system's store; without either, such as in
 the browser, every call returns `SecretError::Unsupported`.

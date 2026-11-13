@@ -2,7 +2,7 @@ use kithara_app_library::{Context, Environment, RegisterError, Secrets};
 use kithara_app_zvuk::Source;
 use kithara_net::{HttpClient, NetError, NetOptions};
 use kithara_platform::{CancelToken, tokio::runtime::Handle};
-use kithara_test_utils::bufpool::pools;
+use kithara_test_utils::{TestTempDir, bufpool::pools};
 use kithara_ui::{error::UiDocError, ids::SourceUri, text::parse_text};
 use serde_yaml_ng::Value as Section;
 
@@ -377,4 +377,67 @@ async fn shutdown_discards_a_completion_already_waiting_for_tick() {
     source.tick();
     assert!(source.rows(None).is_empty());
     release(source, &net).await;
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn the_registered_source_restores_its_native_streaming_preference() {
+    let directory = TestTempDir::new();
+    let path = directory.path().join("nested").join("zvuk.json");
+    let cancel = kithara_test_utils::cancel_token();
+    let environment = environment(&cancel, memory());
+    let build = || {
+        let entry: Section = serde_yaml_ng::from_str("{user_agent: agent}").unwrap();
+        let context = Context::new(cancel.child(), entry).with_settings_path(Some(path.clone()));
+        let registered = (Source::FACTORY.register)(&environment, context).unwrap();
+        let text = registered.page().texts[0];
+        let words = parse_text(text.text, &SourceUri(text.path.to_owned())).unwrap();
+        registered.build(&words).unwrap()
+    };
+    let mut first = build();
+    wait_until(Duration::from_secs(2), "initial preference is read", || {
+        first.tick();
+        first.read("streaming_pending") == Some(ReadValue::Bool(false))
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        first.read("adaptive_streaming"),
+        Some(ReadValue::Bool(true))
+    );
+    first.write("adaptive_streaming", &WriteValue::Trigger);
+    wait_until(
+        Duration::from_secs(2),
+        "changed preference is saved",
+        || {
+            first.tick();
+            first.read("streaming_pending") == Some(ReadValue::Bool(false))
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        first.read("adaptive_streaming"),
+        Some(ReadValue::Bool(false))
+    );
+    assert_eq!(
+        first.read("streaming_fault_hidden"),
+        Some(ReadValue::Bool(true))
+    );
+    drop(first);
+    let mut restarted = build();
+    wait_until(
+        Duration::from_secs(2),
+        "restarted preference is read",
+        || {
+            restarted.tick();
+            restarted.read("streaming_pending") == Some(ReadValue::Bool(false))
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        restarted.read("adaptive_streaming"),
+        Some(ReadValue::Bool(false))
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "false");
 }

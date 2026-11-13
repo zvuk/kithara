@@ -9,14 +9,17 @@ use kithara::{
     platform::{time::Duration, tokio::task::spawn_blocking},
     queue::Transition,
 };
-use kithara_app::document::Config;
+use kithara_app::{catalog::load_onto, document::Config};
+use kithara_app_library::Playable;
 use kithara_integration_tests::{
-    TestServerHelper, kithara,
-    offline::{app_queue, app_track_source},
+    HlsFixtureBuilder, TestServerHelper,
+    fixture_protocol::PcmPattern,
+    kithara,
+    offline::{LOCAL_LOAD_DEADLINE, app_queue, app_track_source},
     served_mp3,
     waits::wait_for_position_at_least,
 };
-use kithara_test_utils::temp_dir;
+use kithara_test_utils::{temp_dir, wait_until};
 use url::Url;
 
 /// The native ticker uses a real timed channel receive, so its lifetime needs a real clock.
@@ -84,4 +87,67 @@ async fn app_fixtures_own_separate_disk_stores() {
         first_root, second_root,
         "independent fixtures never write the same indices"
     );
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn source_startup_quality_yields_to_each_deck_and_existing_resources() {
+    let server = TestServerHelper::new().await;
+    let media = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(3)
+                .segments_per_variant(4)
+                .segment_duration_secs(2.0)
+                .packaged_audio_per_variant_pcm_flac(44_100, 2, vec![PcmPattern::Ascending; 3]),
+        )
+        .await
+        .expect("multiple playable HLS variants");
+    let fixed = app_queue(local_document().await).await;
+    let automatic = app_queue(local_document().await).await;
+    for (fixture, adaptive) in [(&fixed, false), (&automatic, true)] {
+        let mut track = Playable::new(media.master_url().to_string());
+        track.adaptive_streaming = Some(adaptive);
+        let config = fixture.config.clone();
+        fixture
+            .queue
+            .run(move |queue| load_onto(queue, &track, &config))
+            .await
+            .expect("the source track loads");
+        wait_until(LOCAL_LOAD_DEADLINE, "the HLS ladder is ready", || {
+            fixture
+                .queue
+                .control()
+                .current_abr_handle()
+                .is_some_and(|handle| handle.variants().len() == 3)
+        })
+        .await
+        .expect("the resource exposes its HLS variants");
+    }
+    let fixed_handle = fixed.queue.control().current_abr_handle().unwrap();
+    let auto_handle = automatic.queue.control().current_abr_handle().unwrap();
+    assert_eq!(fixed_handle.mode(), Some(AbrMode::manual(0)));
+    assert_eq!(auto_handle.mode(), Some(AbrMode::Auto(None)));
+    fixed_handle
+        .set_mode(AbrMode::Auto(None))
+        .expect("deck AUTO overrides fixed startup");
+    assert_eq!(fixed_handle.mode(), Some(AbrMode::Auto(None)));
+    fixed_handle
+        .set_mode(AbrMode::manual(1))
+        .expect("deck quality overrides source default");
+    let mut repeated = Playable::new(media.master_url().to_string());
+    repeated.adaptive_streaming = Some(true);
+    let config = fixed.config.clone();
+    fixed
+        .queue
+        .run(move |queue| load_onto(queue, &repeated, &config))
+        .await
+        .expect("the queued track is selected again");
+    assert_eq!(fixed.queue.control().tracks().len(), 1);
+    assert_eq!(
+        fixed.queue.control().current_abr_handle().unwrap().mode(),
+        Some(AbrMode::manual(1))
+    );
+    assert_eq!(auto_handle.mode(), Some(AbrMode::Auto(None)));
+    automatic.close().await;
+    fixed.close().await;
 }

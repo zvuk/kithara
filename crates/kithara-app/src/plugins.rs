@@ -1,7 +1,12 @@
 //! The library plugins this build can mount and their registration.
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use kithara::platform::CancelToken;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_app_library::Cause;
 use kithara_app_library::{Context, Environment, Factory, KeyAccess, RegisterError, Registration};
 use serde_yaml_ng::Value;
 
@@ -27,7 +32,31 @@ pub fn mount(
     environment: &Environment,
     shutdown: &CancelToken,
 ) -> Result<Vec<Registration>, RegisterError> {
-    configured(FACTORIES, document.sources(), environment, shutdown)
+    #[cfg(not(target_arch = "wasm32"))]
+    let settings_root: Option<PathBuf> = {
+        let Some(factory) = FACTORIES.iter().find(|factory| {
+            document
+                .sources()
+                .get(factory.id)
+                .is_some_and(|section| !section.is_null())
+        }) else {
+            return Ok(Vec::new());
+        };
+        Some(
+            dirs_next::config_dir()
+                .ok_or_else(|| RegisterError::new(factory.id, Cause::SettingsUnavailable))?
+                .join("kithara"),
+        )
+    };
+    #[cfg(target_arch = "wasm32")]
+    let settings_root: Option<PathBuf> = None;
+    configured(
+        FACTORIES,
+        document.sources(),
+        environment,
+        shutdown,
+        settings_root.as_deref(),
+    )
 }
 
 /// Registers each factory whose entry is present and non-null.
@@ -39,6 +68,7 @@ fn configured(
     sections: &BTreeMap<String, Value>,
     environment: &Environment,
     shutdown: &CancelToken,
+    settings_root: Option<&Path>,
 ) -> Result<Vec<Registration>, RegisterError> {
     factories
         .iter()
@@ -47,8 +77,13 @@ fn configured(
                 .get(factory.id)
                 .filter(|section| !section.is_null())?;
             Some(
-                (factory.register)(environment, Context::new(shutdown.child(), section.clone()))
-                    .map_err(|cause| RegisterError::new(factory.id, cause)),
+                (factory.register)(
+                    environment,
+                    Context::new(shutdown.child(), section.clone()).with_settings_path(
+                        settings_root.map(|path| path.join(format!("{}.json", factory.id))),
+                    ),
+                )
+                .map_err(|cause| RegisterError::new(factory.id, cause)),
             )
         })
         .collect()
@@ -120,9 +155,9 @@ mod tests {
         let environment =
             Environment::new(runtime.handle().clone(), net, Secrets::new(Store::new()));
 
-        let registered = configured(&probes, &sections, &environment, &cancel_token)
+        let registered = configured(&probes, &sections, &environment, &cancel_token, None)
             .expect("both entries match the schema");
-        let refused = configured(&probes, &mismatched, &environment, &cancel_token);
+        let refused = configured(&probes, &mismatched, &environment, &cancel_token, None);
 
         assert_eq!(registered.len(), 2);
         let refused = refused.err().map(|error| error.to_string());

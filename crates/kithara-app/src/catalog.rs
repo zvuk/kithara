@@ -1,4 +1,5 @@
 use kithara::{
+    abr::AbrMode,
     prelude::{ResourceSrc, TrackMetadata},
     queue::{QueueError, Transition},
 };
@@ -35,7 +36,12 @@ pub fn load_onto(
     let id = if let Some(id) = existing {
         id
     } else {
-        let mut built = build_source(&track.source, config);
+        let mode = if track.adaptive_streaming == Some(false) {
+            AbrMode::manual(0)
+        } else {
+            AbrMode::default()
+        };
+        let mut built = build_source(&track.source, config, mode);
         if let AppTrackSource::Config(resource) = &mut built {
             resource.set_metadata(TrackMetadata {
                 title: track.title.clone(),

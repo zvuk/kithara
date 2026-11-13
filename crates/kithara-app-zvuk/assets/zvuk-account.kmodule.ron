@@ -94,6 +94,39 @@
                     ),
                 ],
             ),
+            Row(
+                id: "streaming",
+                size: (w: Fill, h: Fixed(36.0)),
+                gap: 16.0,
+                pad_x: 16.0,
+                frame: (top: false, right: false, bottom: true, left: false),
+                frame_color: LineInner,
+                children: [
+                    Text(id: "streaming-label", style: Body, color: TextDim, label: "@zvuk.streaming.label"),
+                    Spacer(id: "streaming-gap", size: Some((w: Fill, h: Fill))),
+                    Optional(
+                        id: "streaming-fault",
+                        hidden: Model(id: "source.streaming_fault_hidden", with: { "source": "$source" }),
+                        child: Text(id: "streaming-fault-text", style: MicroLabel, read: Model(id: "source.streaming_fault", with: { "source": "$source" })),
+                    ),
+                    Optional(
+                        id: "streaming-busy",
+                        hidden: Model(id: "source.streaming_idle", with: { "source": "$source" }),
+                        child: Text(id: "streaming-busy-text", style: MicroLabel, label: "@zvuk.streaming.updating"),
+                    ),
+                    Optional(
+                        id: "streaming-ready",
+                        hidden: Model(id: "source.streaming_pending", with: { "source": "$source" }),
+                        child: Toggle(id: "streaming-toggle", read: Model(id: "source.adaptive_streaming", with: { "source": "$source" }), write: Command(id: "source.adaptive_streaming", with: { "source": "$source" })),
+                    ),
+                ],
+            ),
+            Row(
+                id: "streaming-help",
+                size: (w: Fill, h: Fixed(36.0)),
+                pad_x: 16.0,
+                children: [Text(id: "streaming-help-text", style: MicroLabel, color: Muted, label: "@zvuk.streaming.help")],
+            ),
         ],
     ),
 )

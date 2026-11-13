@@ -397,7 +397,8 @@ mod tests {
         let config = test_fixture::config(&Handle::current());
         let (host, queue) = fixtures::queue_off().await;
 
-        let mut source = build_resource_config(&short_wav, &config).expect("fixture source");
+        let mut source =
+            build_resource_config(&short_wav, &config, AbrMode::default()).expect("fixture source");
         source.set_metadata(TrackMetadata {
             artwork: Some(test_fixture::cover([255, 0, 0], ImageFormat::Png)),
             ..Default::default()

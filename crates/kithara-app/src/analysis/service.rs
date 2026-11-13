@@ -4,6 +4,7 @@ use std::{
 };
 
 use kithara::{
+    abr::AbrMode,
     events::TrackId,
     platform::{
         CancelToken,
@@ -411,7 +412,7 @@ pub(super) fn resource_config_from_source(
 ) -> Option<AppResourceConfig> {
     match source {
         AppTrackSource::Config(cfg) => Some(*cfg),
-        AppTrackSource::Uri(url) => build_resource_config(&url, config),
+        AppTrackSource::Uri(url) => build_resource_config(&url, config, AbrMode::default()),
         _ => None,
     }
 }

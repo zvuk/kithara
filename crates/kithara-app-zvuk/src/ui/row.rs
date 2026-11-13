@@ -59,6 +59,12 @@ impl Row {
         self.source.as_deref()
     }
 
+    pub(super) fn set_adaptive(&mut self, adaptive: bool) {
+        if let Some(drag) = &mut self.drag {
+            drag.insert("adaptive_streaming".to_owned(), adaptive.to_string());
+        }
+    }
+
     pub(super) fn matches(&self, query: &str) -> bool {
         self.title.to_lowercase().contains(query) || self.artists.to_lowercase().contains(query)
     }

@@ -119,6 +119,12 @@ impl Catalogue {
             .map(|row| (row.id.clone(), !row.liked))
     }
 
+    pub(super) fn set_adaptive(&mut self, adaptive: bool) {
+        for row in &mut self.rows {
+            row.set_adaptive(adaptive);
+        }
+    }
+
     pub(super) fn confirm_reaction(&mut self, id: &TrackId, liked: bool) -> bool {
         for row in self.rows.iter_mut().filter(|row| &row.id == id) {
             row.liked = liked;

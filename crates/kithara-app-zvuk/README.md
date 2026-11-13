@@ -62,3 +62,17 @@ go out once.
 
 See [library sources](https://github.com/zvuk/kithara/wiki/kithara-app#library-sources)
 for the source contract.
+
+### Streaming
+
+Adaptive streaming in the Zvuk settings section chooses the initial mode for
+newly loaded tracks: AUTO when enabled, the fixed initial stream variant when
+disabled. A deck's AUTO or quality selection governs its loaded track; changing
+the source default leaves those tracks alone. Loading an already queued source URL
+selects its existing resource and preserves its quality.
+
+The native application stores the preference in `kithara/zvuk.json` under the
+operating system's user configuration directory. Writes finish before the
+switch accepts its new value; a failure is shown and preserves the accepted
+value. The sidecar does not modify the secret overlay. A caller supplying
+`Source::registered` without `settings_path` explicitly gets a session preference.

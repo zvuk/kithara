@@ -108,3 +108,43 @@ async fn playlist_navigation_is_loaded_once_by_the_source() {
     assert_eq!(net.events(), ["start:node", "end:node"]);
     release(source, &net).await;
 }
+
+#[kithara::test]
+async fn adaptive_streaming_starts_enabled_and_accepts_a_session_choice() {
+    let net = DelayedNet::new(Unimock::new(()));
+    let mut source = source(net.clone()).await;
+    assert_eq!(
+        source.read("adaptive_streaming"),
+        Some(ReadValue::Bool(true))
+    );
+    source.write("adaptive_streaming", &WriteValue::Trigger);
+    source.tick();
+    assert_eq!(
+        source.read("adaptive_streaming"),
+        Some(ReadValue::Bool(false))
+    );
+    release(source, &net).await;
+}
+
+#[kithara::test]
+async fn the_accepted_default_updates_new_drags_without_changing_prior_snapshots() {
+    let net = DelayedNet::new(Unimock::new((
+        NetMock::post_bytes
+            .next_call(matching!(_, _, _))
+            .returns(Ok(search_reply())),
+        NetMock::post_bytes
+            .next_call(matching!(_, _, _))
+            .returns(Ok(stream_reply())),
+    )));
+    let mut source = loaded_search(net.clone()).await;
+    let previous = source.rows(None)[0].drag().unwrap().clone();
+    assert_eq!(previous["adaptive_streaming"], "true");
+    source.write("adaptive_streaming", &WriteValue::Trigger);
+    assert_eq!(
+        source.rows(None)[0].drag().unwrap()["adaptive_streaming"],
+        "false"
+    );
+    assert_eq!(previous["adaptive_streaming"], "true");
+    assert_eq!(source.rows(None).len(), 5);
+    release(source, &net).await;
+}

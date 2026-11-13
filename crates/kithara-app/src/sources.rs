@@ -1,6 +1,7 @@
 use std::fmt;
 
 use kithara::{
+    abr::AbrMode,
     hls::KeyOptions,
     play::{Headers, ResourceSrc},
 };
@@ -11,11 +12,11 @@ use crate::{
     pools::{AppResourceConfig, AppTrackSource},
 };
 
-/// Build an [`AppTrackSource`] with the app's shared network, asset, and DRM state.
+/// Build a track source with `mode` and the app's network, asset, and DRM state.
 /// Matching policy headers also apply to playlist and segment requests.
 #[must_use]
-pub fn build_source(url: &str, config: &AppConfig) -> AppTrackSource {
-    build_resource_config(url, config).map_or_else(
+pub fn build_source(url: &str, config: &AppConfig, mode: AbrMode) -> AppTrackSource {
+    build_resource_config(url, config, mode).map_or_else(
         || AppTrackSource::Uri(url.to_string()),
         |cfg| AppTrackSource::Config(Box::new(cfg)),
     )
@@ -25,7 +26,11 @@ pub fn build_source(url: &str, config: &AppConfig) -> AppTrackSource {
 /// downloader, flush hub, and DRM routing injected (same as
 /// [`build_source`]). `None` when `url` is not a valid source.
 #[must_use]
-pub(crate) fn build_resource_config(url: &str, config: &AppConfig) -> Option<AppResourceConfig> {
+pub(crate) fn build_resource_config(
+    url: &str,
+    config: &AppConfig,
+    mode: AbrMode,
+) -> Option<AppResourceConfig> {
     let src = match ResourceSrc::parse(url) {
         Ok(src) => src,
         Err(e) => {
@@ -62,6 +67,7 @@ pub(crate) fn build_resource_config(url: &str, config: &AppConfig) -> Option<App
     });
     Some(
         builder
+            .initial_abr_mode(mode)
             .downloader(config.downloader.clone())
             .worker(config.worker.clone())
             .store(config.store.clone())
@@ -82,7 +88,7 @@ pub fn build_sources(config: &AppConfig) -> Vec<AppTrackSource> {
     config
         .tracks
         .iter()
-        .map(|url| build_source(url, config))
+        .map(|url| build_source(url, config, AbrMode::default()))
         .collect()
 }
 

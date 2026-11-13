@@ -16,6 +16,9 @@ impl<N: Net + Clone + 'static> Source<N> {
     }
 
     pub(super) fn start(&mut self) {
+        if !self.streaming.loaded() {
+            return;
+        }
         let Load::Due(due) = self.load else {
             return;
         };
@@ -135,5 +138,6 @@ impl<N: Net + Clone + 'static> Source<N> {
             .record(Operation::Page, batch.streams)
             .unwrap_or_default();
         self.catalogue.accept(batch.page, streams);
+        self.catalogue.set_adaptive(self.streaming.adaptive);
     }
 }
