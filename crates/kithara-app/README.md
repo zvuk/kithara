@@ -31,6 +31,44 @@ cargo run -p kithara-app --release -- --help
 
 Without arguments the app plays the playlist from its configuration.
 
+### macOS application
+
+```bash
+just release app --identity 'Apple Development: Your Name (TEAMID)'
+```
+
+Builds `target/release-app/Kithara.app` for Apple Silicon and Intel (macOS 13+),
+and writes `Kithara-macos-universal.zip` with its `.sha256` at the workspace
+root. `KITHARA_APP_SIGN_IDENTITY` can supply the identity instead. The certificate
+and its private key must already be available in the build user's Keychain;
+the same protected variable configures the macOS CI release job, which runs
+on the protected `kithara-release` runner. No keys are exported by packaging.
+
+The bundle carries the complete default UI package in
+`Contents/Resources/assets/ui`, its icon, public configuration and licenses.
+CLI `--ui-package` overrides `app.ui_package` in the configuration, which
+overrides the bundled package. Paths are resolved from the executable, so
+moving the application or starting it from Finder needs no checkout.
+
+The release includes `zvuk` and `keystore`: the stock Zvuk catalogue and account
+connection are available, and its account token stays in macOS Keychain.
+It uses the existing `app.yaml` and build-time environment/`.env` resolution;
+application key values retain their intentional `obfstr` embedding. Set the
+referenced application parameters before building: packaging requires them
+through the existing `KITHARA_DRM_REQUIRE` check. The `.env` file is not copied
+into the application. Its writable configuration lives at
+`~/Library/Application Support/Kithara/kithara.yaml`; `--config` selects an
+explicit external file. Settings never modify the signed application.
+
+Packaging requires a real signing identity and verifies its signature before
+replacing the archive. The archive is **not notarized**. Apple Development can
+sign a preview, but does not provide Developer ID distribution trust:
+Gatekeeper may require **System Settings > Privacy & Security > Open Anyway**,
+and managed Macs can prohibit that override. Public downloads without this
+manual approval need Developer ID Application signing and Apple notarization.
+Intel runtime validation requires an Intel Mac in addition to the universal
+binary checks performed during packaging.
+
 ### Configuration
 
 The configuration is `app.yaml`, embedded at build time. A `kithara.yaml`

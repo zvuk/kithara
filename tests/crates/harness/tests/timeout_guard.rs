@@ -26,7 +26,7 @@ fn sync_infinite_loop_is_killed_by_timeout() {
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_millis(4026)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
 #[serial_test::serial]
 #[cfg_attr(not(target_arch = "wasm32"), should_panic(expected = "timed out"))]
 #[cfg_attr(target_arch = "wasm32", should_panic)]
@@ -36,7 +36,7 @@ async fn async_infinite_loop_is_killed_by_timeout() {
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_millis(4228)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
 #[serial_test::serial]
 #[cfg_attr(not(target_arch = "wasm32"), should_panic(expected = "timed out"))]
 #[cfg_attr(target_arch = "wasm32", should_panic)]
