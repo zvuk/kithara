@@ -16,11 +16,14 @@ use super::{GraphError, credits::Credits};
 use crate::session::processor::SessionProcessor;
 
 /// Owns every writer of the Host's framework queue, reserving before graph mutation.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct SessionGraph {
     pub(super) inner: Option<FirewheelContext>,
     credits: Credits,
     reserved: bool,
     pub(super) stop: Option<HeapProd<()>>,
+    #[field(get, vis = "pub(crate)")]
     pub(super) output_starting: bool,
     #[cfg(target_arch = "wasm32")]
     pub(super) clock: Option<crate::session::web_output::WebClock>,
@@ -144,10 +147,6 @@ impl SessionGraph {
         if let Some(stop) = &mut self.stop {
             let _ = stop.try_push(());
         }
-    }
-
-    pub(crate) fn output_starting(&self) -> bool {
-        self.output_starting
     }
 
     pub(crate) fn has_session_clock(&self) -> bool {
