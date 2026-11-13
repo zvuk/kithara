@@ -141,8 +141,22 @@ fn an_empty_mailbox_does_not_prepare_an_idle_offline_output() {
 }
 
 #[kithara::test]
+fn an_offline_owner_without_a_render_context_has_no_start_to_wait_for() {
+    let mut state = test_state(start_route_loss_stream);
+    let preparation = state.owner.poll_output();
+    let idle = state.ctx.is_none() && state.stream.is_none();
+    drop(state);
+    assert!(matches!(preparation, Poll::Ready(Ok(()))));
+    assert!(idle);
+}
+
+#[kithara::test]
 fn a_started_offline_owner_executes_a_post_in_the_same_drain() {
     let mut state = test_state(start_route_loss_stream);
+    state
+        .owner
+        .prepare_offline()
+        .expect("ordinary offline output start");
     let prepared = state.owner.poll_output();
     let actual = state
         .ctx

@@ -36,8 +36,8 @@ pub trait HostOwner<S>:
     /// The deck objects held by this owner.
     type Deck: ?Sized + HostedDeck<S>;
 
-    /// Pending while output starts, Ready(Ok) when SDK, output graph and geometry exist,
-    /// or Ready(Err) with the original startup failure.
+    /// Pending during an already-started asynchronous output preparation; otherwise Ready(Ok).
+    /// Ready(Err) carries the original startup refusal.
     fn poll_output(&mut self) -> Poll<Result<(), PlayError>>;
 
     /// Runs a command and returns the batch it sent, if any.

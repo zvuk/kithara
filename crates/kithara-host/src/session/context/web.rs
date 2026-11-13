@@ -3,18 +3,12 @@ use super::{GraphError, SessionGraph};
 impl SessionGraph {
     pub(crate) fn install_web_clock(&mut self, clock: crate::session::web_output::WebClock) {
         self.clock = Some(clock);
+        self.output_starting = true;
     }
 
     pub(crate) fn initial_output(&self) -> bool {
         self.stop.is_none()
     }
-    pub(crate) fn output_starting(&self) -> bool {
-        if let Some(clock) = &self.clock {
-            return clock.starting();
-        }
-        false
-    }
-
     pub(crate) fn output_ready(&self) -> Result<bool, GraphError> {
         if let Some(clock) = &self.clock {
             return clock.ready().map_err(GraphError::Device);
@@ -30,9 +24,7 @@ impl SessionGraph {
     }
 
     pub(crate) fn acknowledge_output(&mut self) {
-        if let Some(clock) = &mut self.clock {
-            clock.acknowledge();
-        }
+        self.output_starting = false;
     }
 }
 

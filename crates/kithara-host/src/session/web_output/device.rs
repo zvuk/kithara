@@ -108,7 +108,6 @@ impl WebOutput {
             lease: acquired.lease.clone(),
             input,
             requested,
-            acknowledged: false,
             info,
             initial: graph.initial_output(),
         });

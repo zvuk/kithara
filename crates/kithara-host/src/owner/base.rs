@@ -262,20 +262,15 @@ where
     type Deck = D;
 
     fn poll_output(&mut self) -> std::task::Poll<Result<(), PlayError>> {
+        if !matches!(self.session.ctx.as_ref(), Some(ctx) if ctx.output_starting()) {
+            return std::task::Poll::Ready(Ok(()));
+        }
         if let Err(error) = crate::session::state::ensure_ctx(&mut self.session) {
             return std::task::Poll::Ready(Err(error.into()));
         }
-        let ready = !self.session.stream_needs_restart
-            && self.session.session_output_node_id.is_some()
-            && self
-                .session
-                .ctx
-                .as_ref()
-                .is_some_and(|ctx| ctx.is_active() && ctx.stream_info().is_some());
-        if ready {
-            std::task::Poll::Ready(Ok(()))
-        } else {
-            std::task::Poll::Pending
+        match self.session.ctx.as_ref() {
+            Some(ctx) if ctx.output_starting() => std::task::Poll::Pending,
+            _ => std::task::Poll::Ready(Ok(())),
         }
     }
 

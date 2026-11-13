@@ -21,6 +21,7 @@ pub(crate) struct SessionGraph {
     credits: Credits,
     reserved: bool,
     pub(super) stop: Option<HeapProd<()>>,
+    pub(super) output_starting: bool,
     #[cfg(target_arch = "wasm32")]
     pub(super) clock: Option<crate::session::web_output::WebClock>,
 }
@@ -32,6 +33,7 @@ impl SessionGraph {
             inner: Some(FirewheelContext::new(config)),
             reserved: false,
             stop: None,
+            output_starting: false,
             #[cfg(target_arch = "wasm32")]
             clock: None,
         }
@@ -144,10 +146,14 @@ impl SessionGraph {
         }
     }
 
+    pub(crate) fn output_starting(&self) -> bool {
+        self.output_starting
+    }
+
     pub(crate) fn has_session_clock(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         if let Some(clock) = &self.clock {
-            if clock.starting() {
+            if self.output_starting {
                 return clock.initial();
             }
         }

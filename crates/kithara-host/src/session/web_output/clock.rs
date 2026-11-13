@@ -10,7 +10,6 @@ pub(crate) struct WebClock {
     pub(super) input: Input<ClockStamp>,
     #[field(get(copy))]
     pub(super) requested: u32,
-    pub(super) acknowledged: bool,
     #[field(get(copy))]
     pub(super) info: firewheel::ActivateInfo,
     #[field(get(copy))]
@@ -32,12 +31,5 @@ impl WebClock {
             audio: self.lease.current_time(),
         });
         Ok(())
-    }
-
-    pub(crate) fn starting(&self) -> bool {
-        !self.acknowledged
-    }
-    pub(crate) fn acknowledge(&mut self) {
-        self.acknowledged = true;
     }
 }
