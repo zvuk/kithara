@@ -261,6 +261,24 @@ where
     type Command = HostCommand<S, D>;
     type Deck = D;
 
+    fn poll_output(&mut self) -> std::task::Poll<Result<(), PlayError>> {
+        if let Err(error) = crate::session::state::ensure_ctx(&mut self.session) {
+            return std::task::Poll::Ready(Err(error.into()));
+        }
+        let ready = !self.session.stream_needs_restart
+            && self.session.session_output_node_id.is_some()
+            && self
+                .session
+                .ctx
+                .as_ref()
+                .is_some_and(|ctx| ctx.is_active() && ctx.stream_info().is_some());
+        if ready {
+            std::task::Poll::Ready(Ok(()))
+        } else {
+            std::task::Poll::Pending
+        }
+    }
+
     fn apply(&mut self, command: Self::Command) -> Result<Option<Seq>, PlayError> {
         match command {
             HostCommand::Register { id, deck } => self.register(id, deck).map(|()| None),

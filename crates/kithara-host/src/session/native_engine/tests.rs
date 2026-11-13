@@ -96,6 +96,7 @@ impl HostOwner<TestPools> for RigOwner {
 
     delegate::delegate! {
         to self.0 {
+            fn poll_output(&mut self) -> std::task::Poll<Result<(), PlayError>>;
             fn register(&mut self, id: DeckId, deck: Box<Self::Deck>) -> Result<(), PlayError>;
             fn each_deck(
                 &mut self,

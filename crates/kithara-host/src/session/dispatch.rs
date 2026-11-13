@@ -37,9 +37,19 @@ impl OwnerPosts {
         owner: &mut O,
         mailbox: &mut HostMailbox<O::Command>,
     ) {
+        if mailbox.is_empty() {
+            return;
+        }
+        let std::task::Poll::Ready(preparation) = owner.poll_output() else {
+            return;
+        };
         for Post { command, answer } in Self::take_posts(mailbox) {
             let releasing = O::release_id(&command);
-            match run_host_cmd(owner, command) {
+            let outcome = match &preparation {
+                Ok(()) => run_host_cmd(owner, command),
+                Err(error) => Err(error.clone()),
+            };
+            match outcome {
                 Ok(_) if releasing.is_some() => {
                     if let Some(id) = releasing {
                         self.closing.push((id, answer));
