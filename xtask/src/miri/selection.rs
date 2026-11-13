@@ -93,7 +93,7 @@ impl<'ast> Visit<'ast> for Marks {
             };
             match args {
                 Ok(args) if args.flags().contains(TestFlags::MIRI) => {
-                    self.tests.push(function.sig.ident.to_string())
+                    self.tests.push(function.sig.ident.to_string());
                 }
                 Ok(_) => {}
                 Err(error) => self.errors.push(format!("{}: {error}", function.sig.ident)),
