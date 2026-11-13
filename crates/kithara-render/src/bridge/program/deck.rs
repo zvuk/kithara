@@ -5,16 +5,23 @@ use kithara_signal::SessionFrame;
 use super::{ParameterCurve, ParameterCurveError, ParameterKnot};
 
 /// Identity of the layout that gives an EQ band or FX unit address its meaning.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LayoutRevision {
-    #[field(#[must_use] get(copy), vis = "pub")]
     scope: ScopeId,
-    #[field(#[must_use] get(copy), vis = "pub")]
     instance: Option<Seq>,
 }
 
 impl LayoutRevision {
+    #[must_use]
+    pub fn scope(&self) -> ScopeId {
+        self.scope
+    }
+
+    #[must_use]
+    pub fn instance(&self) -> Option<Seq> {
+        self.instance
+    }
+
     pub(crate) const fn new(scope: ScopeId, instance: Option<Seq>) -> Self {
         Self { scope, instance }
     }
@@ -46,13 +53,17 @@ impl DeckParameter {
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct DeckProgram {
-    #[field(#[must_use] get(copy), vis = "pub")]
     parameter: DeckParameter,
     #[field(#[must_use] get, vis = "pub(crate)")]
     curve: ParameterCurve,
 }
 
 impl DeckProgram {
+    #[must_use]
+    pub fn parameter(&self) -> DeckParameter {
+        self.parameter
+    }
+
     pub const MAX_KNOTS: usize = ParameterCurve::MAX_KNOTS;
 
     /// Checks ordered knots and the addressed control's native range off the audio thread.

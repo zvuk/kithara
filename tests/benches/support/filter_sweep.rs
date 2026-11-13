@@ -78,9 +78,9 @@ fn position(frame: usize, frames: usize, shape: CurveShape) -> f64 {
     if frame >= frames {
         return END;
     }
-    START
-        + (END - START)
-            * shape.progress(frame.to_f64().expect("offset") / frames.to_f64().expect("length"))
+    let mut values = [frame.to_f64().expect("offset") / frames.to_f64().expect("length")];
+    shape.process(&mut values, [START, END]);
+    values[0]
 }
 
 async fn oracle(

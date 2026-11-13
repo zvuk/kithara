@@ -16,8 +16,7 @@ pub(in crate::rt) struct DeckPrograms {
     layout: Option<Seq>,
     units: Vec<Option<Seq>>,
     fields: Vec<ParameterState>,
-    values: Vec<Box<[f64]>>,
-    written: Vec<bool>,
+    values: Vec<Vec<f64>>,
 }
 
 impl DeckPrograms {
@@ -28,10 +27,7 @@ impl DeckPrograms {
             layout: None,
             units: vec![None; units],
             fields: vec![ParameterState::default(); count],
-            values: (0..count)
-                .map(|_| vec![0.0; capacity].into_boxed_slice())
-                .collect(),
-            written: vec![false; count],
+            values: (0..count).map(|_| Vec::with_capacity(capacity)).collect(),
         }
     }
 
@@ -54,14 +50,12 @@ impl DeckPrograms {
         at: SessionFrame,
         frames: usize,
     ) {
-        if let (Some(field), Some(values), Some(written)) = (
-            self.fields.get_mut(index),
-            self.values.get_mut(index),
-            self.written.get_mut(index),
-        ) {
-            if let Some(output) = values.get_mut(..frames) {
-                field.write(curve, at, output);
-                *written = true;
+        if let (Some(field), Some(values)) =
+            (self.fields.get_mut(index), self.values.get_mut(index))
+        {
+            if frames <= values.capacity() {
+                values.resize(frames, 0.0);
+                field.write(curve, at, values);
             }
         }
     }
@@ -72,7 +66,6 @@ impl DeckPrograms {
         at: SessionFrame,
         frames: usize,
     ) {
-        self.written.fill(false);
         for index in 0..self.fields.len() {
             let seq = self
                 .fields
@@ -84,29 +77,25 @@ impl DeckPrograms {
                 .map(DeckProgram::curve)
             {
                 self.write_curve(index, curve, at, frames);
+            } else if let Some(values) = self.values.get_mut(index) {
+                values.clear();
             }
         }
     }
 
     pub(in crate::rt) fn any_written(&self) -> bool {
-        self.written.iter().any(|written| *written)
+        self.values.iter().any(|values| !values.is_empty())
     }
 
     pub(in crate::rt) fn values(&self, index: usize, frames: usize) -> Option<&[f64]> {
-        self.written
+        self.values
             .get(index)
-            .copied()
-            .filter(|written| *written)
-            .and_then(|_| self.values.get(index))
+            .filter(|values| !values.is_empty())
             .and_then(|values| values.get(..frames))
     }
 
-    pub(in crate::rt) fn eq_values(
-        &self,
-        frames: usize,
-    ) -> impl Iterator<Item = (usize, &[f64])> + Clone {
-        (4..self.fields.len())
-            .filter_map(move |index| self.values(index, frames).map(|values| (index - 4, values)))
+    pub(in crate::rt) fn eq_values(&self) -> &[Vec<f64>] {
+        self.values.get(4..).unwrap_or_default()
     }
 
     pub(in crate::rt) fn publish(

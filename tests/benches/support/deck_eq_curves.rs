@@ -66,7 +66,9 @@ fn expected(frame: usize, frames: usize, shape: CurveShape) -> (GainDb, [f32; 2]
     let db = if frame >= frames {
         -12.0
     } else {
-        -12.0 * shape.progress(time)
+        let mut values = [time];
+        shape.process(&mut values, [0.0, -12.0]);
+        values[0]
     };
     let gain = GainDb::checked(db.to_f32().expect("bounded dB")).expect("canonical gain");
     (gain, [0.5 * 10.0_f32.powf(f32::from(gain) / 20.0); 2])

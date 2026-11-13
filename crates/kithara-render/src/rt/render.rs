@@ -4,7 +4,7 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 use kithara_effects::{
     DeckEffect, FxParamChange, GainDb,
-    eq::{EqConfig, EqLayout, StereoEq, generate_log_spaced_bands},
+    eq::{EqConfig, EqLayout, GainShapeError, StereoEq, generate_log_spaced_bands},
     filter::{FilterEffect, FilterKnob},
 };
 use num_traits::cast::AsPrimitive;
@@ -115,8 +115,12 @@ impl RenderPass {
         priming
     }
 
-    pub(in crate::rt) fn finish(&mut self, left: &mut [f32], right: &mut [f32]) {
-        self.run(left, right, None);
+    pub(in crate::rt) fn finish(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+    ) -> Result<(), GainShapeError> {
+        self.run(left, right, None)
     }
 
     pub(in crate::rt) fn finish_curves(
@@ -124,12 +128,17 @@ impl RenderPass {
         left: &mut [f32],
         right: &mut [f32],
         programs: &DeckPrograms,
-    ) {
-        self.run(left, right, Some(programs));
+    ) -> Result<(), GainShapeError> {
+        self.run(left, right, Some(programs))
     }
 
     /// Pass a stereo chunk through the chain under the values prepared for this chunk.
-    fn run(&mut self, left: &mut [f32], right: &mut [f32], programs: Option<&DeckPrograms>) {
+    fn run(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        programs: Option<&DeckPrograms>,
+    ) -> Result<(), GainShapeError> {
         let frames = left.len().min(right.len());
         let controls = &mut self.control_buffers;
         for (index, (control, output)) in self
@@ -149,13 +158,8 @@ impl RenderPass {
         }
         kithara_dsp::multiply_in_place(left, &controls[0][..frames]);
         kithara_dsp::multiply_in_place(right, &controls[0][..frames]);
-        self.eq.process_with_gains(
-            left,
-            right,
-            programs
-                .into_iter()
-                .flat_map(|programs| programs.eq_values(frames)),
-        );
+        let gains = programs.map_or(&[][..], DeckPrograms::eq_values);
+        self.eq.process_with_gains(left, right, gains)?;
         for unit in &mut self.units {
             unit.process(left, right, &mut self.wet);
         }
@@ -178,6 +182,7 @@ impl RenderPass {
         }
         kithara_dsp::multiply_in_place(left, &output[..frames]);
         kithara_dsp::multiply_in_place(right, &output[..frames]);
+        Ok(())
     }
 
     pub(in crate::rt) fn advance(&mut self, frames: usize, programs: &DeckPrograms) {
@@ -190,7 +195,7 @@ impl RenderPass {
                 control.reset_to_target();
             }
         }
-        for (band, values) in programs.eq_values(frames) {
+        for (band, values) in programs.eq_values().iter().enumerate() {
             if let Some(value) = values.last() {
                 self.eq
                     .set_gain_explicit(band, GainDb::from(AsPrimitive::<f32>::as_(*value)));
@@ -616,7 +621,9 @@ mod tests {
         let mut programs = DeckPrograms::new(scope, 1, 2, 4);
         programs.write_curve(4, &program, start, 4);
         let (mut left, mut right) = ([0.125; 4], [-0.5; 4]);
-        render.finish_curves(&mut left, &mut right, &programs);
+        render
+            .finish_curves(&mut left, &mut right, &programs)
+            .expect("valid gain rows");
         assert_eq!(left.map(f32::to_bits), [0.125_f32.to_bits(); 4]);
         assert_eq!(right.map(f32::to_bits), [0.125_f32.to_bits(); 4]);
         let mut gains = [GainDb::DEFAULT];
@@ -646,7 +653,9 @@ mod tests {
         };
         let block = |render: &mut RenderPass| {
             let (mut left, mut right) = ([INPUT; BLOCK], [INPUT; BLOCK]);
-            render.finish(&mut left, &mut right);
+            render
+                .finish(&mut left, &mut right)
+                .expect("manual gain rows");
             [left, right]
         };
         // With the coefficient of the old rate, ramps up after a fall in rate

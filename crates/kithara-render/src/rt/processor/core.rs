@@ -7,6 +7,7 @@ use firewheel::{
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_command::{LevelInbox, ScopeId, Target};
 use kithara_dsp::param::SmootherConfig;
+use kithara_effects::eq::GainShapeError;
 use kithara_signal::{FrameCount, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
 use ringbuf::HeapProd;
@@ -211,7 +212,15 @@ impl<E: SessionInbox> DeckMixer<E> {
         let mut sounded = false;
         if !self.retired {
             if let Some(mut level) = level {
-                sounded = self.render_block_in(&mut level, context, start, buffers, frames);
+                sounded = match self.render_block_in(&mut level, context, start, buffers, frames) {
+                    Ok(sounded) => sounded,
+                    Err(_) => {
+                        for channel in buffers.outputs.iter_mut() {
+                            channel.fill(0.0);
+                        }
+                        false
+                    }
+                };
                 if level.is_closing() && self.deck.tails_quiet() {
                     self.deck.cancel_program_epoch(&mut level);
                     level.retire();
@@ -241,7 +250,7 @@ impl<E: SessionInbox> DeckMixer<E> {
         start: SessionFrame,
         buffers: &mut ProcBuffers,
         frames: usize,
-    ) -> bool {
+    ) -> Result<bool, GainShapeError> {
         self.deck.recycle.fill(self.recycle_per_block);
         if let Some(context) = context {
             self.deck
@@ -291,12 +300,12 @@ impl<E: SessionInbox> DeckMixer<E> {
                 cursor..end,
                 start,
                 level,
-            );
+            )?;
             self.deck.advance(cursor..end, start, level);
             cursor = end;
         }
         self.deck.maintain();
-        sounded
+        Ok(sounded)
     }
 
     pub(super) fn publish(&mut self, at: SessionFrame) {
@@ -430,20 +439,20 @@ impl Deck {
         range: Range<usize>,
         start: SessionFrame,
         level: &mut LevelInbox<'_, DeckProtocol>,
-    ) -> bool {
+    ) -> Result<bool, GainShapeError> {
         let [scratch_left, scratch_right] = scratch;
         let capacity = scratch_left.len().min(scratch_right.len());
         if context.is_none() {
             for tail in &mut self.tails {
                 tail.advance(range.len());
             }
-            return false;
+            return Ok(false);
         }
         if !output_covers(buffers, range.end, capacity) {
             for tail in &mut self.tails {
                 tail.advance(range.len());
             }
-            return false;
+            return Ok(false);
         }
         if self.render.take_priming() {
             for (_, track) in self.tracks.iter_mut() {
@@ -500,8 +509,8 @@ impl Deck {
             start,
             range.clone(),
             sounded.then_some([&mut left[range.clone()], &mut right[range]]),
-        );
-        sounded
+        )?;
+        Ok(sounded)
     }
 
     fn tails_quiet(&self) -> bool {

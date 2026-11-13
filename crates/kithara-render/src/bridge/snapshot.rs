@@ -46,18 +46,29 @@ impl DeckSnapshot {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ParameterSnapshot {
-    #[field(#[must_use] get(copy), vis = "pub")]
     value: f64,
-    #[field(#[must_use] get(copy), vis = "pub")]
     program: Option<Seq>,
-    #[field(#[must_use] get(copy), vis = "pub")]
     authority: Option<Seq>,
 }
 
 impl ParameterSnapshot {
+    #[must_use]
+    pub fn value(&self) -> f64 {
+        self.value
+    }
+
+    #[must_use]
+    pub fn program(&self) -> Option<Seq> {
+        self.program
+    }
+
+    #[must_use]
+    pub fn authority(&self) -> Option<Seq> {
+        self.authority
+    }
+
     pub(crate) const fn new(value: f64, program: Option<Seq>, authority: Option<Seq>) -> Self {
         Self {
             value,
@@ -97,13 +108,17 @@ pub struct EqSnapshot {
     bands: usize,
     #[field(get_mut, vis = "pub(crate)")]
     gains: Vec<GainDb>,
-    #[field(#[must_use] get(copy), vis = "pub")]
     layout: Option<LayoutRevision>,
     programs: Vec<Option<Seq>>,
     authorities: Vec<Option<Seq>>,
 }
 
 impl EqSnapshot {
+    #[must_use]
+    pub fn layout(&self) -> Option<LayoutRevision> {
+        self.layout
+    }
+
     #[must_use]
     pub const fn bands(&self) -> usize {
         self.bands
