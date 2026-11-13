@@ -945,22 +945,32 @@ async fn deck_fx_mismatched_param_refuses_batch() {
         deck(Some(2), DeckMixSettings::default()).await,
         asset(),
         setup(),
-        vec![(
-            LEAD + 500,
-            vec![
-                DeckFxChange::Install {
+        vec![
+            (
+                LEAD + 100,
+                vec![DeckFxChange::Install {
                     unit: 1,
-                    effect: Box::new(ParameterGain::new()),
-                },
-                DeckFxChange::Param {
-                    unit: 1,
-                    change: FxParamChange {
-                        index: 0,
-                        value: 0.25,
+                    effect: Box::new(Curve(|sample| sample * 0.75)),
+                }],
+            ),
+            (
+                LEAD + 500,
+                vec![
+                    DeckFxChange::Clear { unit: 1 },
+                    DeckFxChange::Install {
+                        unit: 1,
+                        effect: Box::new(ParameterGain::new()),
                     },
-                },
-            ],
-        )],
+                    DeckFxChange::Param {
+                        unit: 1,
+                        change: FxParamChange {
+                            index: 0,
+                            value: 0.25,
+                        },
+                    },
+                ],
+            ),
+        ],
         None,
     )
     .await;
@@ -1003,32 +1013,38 @@ async fn deck_fx_mismatched_param_refuses_batch() {
         ));
     }
     for (offset, layout) in [
-        (LEAD + 3500, DeckFxChange::Clear { unit: 1 }),
+        (LEAD + 3500, vec![DeckFxChange::Clear { unit: 1 }]),
         (
             LEAD + 4500,
-            DeckFxChange::Install {
+            vec![DeckFxChange::Install {
                 unit: 1,
                 effect: Box::new(Curve(|sample| sample)),
-            },
+            }],
+        ),
+        (
+            LEAD + 5500,
+            vec![
+                DeckFxChange::Install {
+                    unit: 1,
+                    effect: Box::new(ParameterGain::new()),
+                },
+                DeckFxChange::Clear { unit: 1 },
+            ],
         ),
     ] {
-        timed.push((
-            offset,
-            vec![
-                DeckFxChange::Mix {
-                    unit: 0,
-                    value: FxMix::MIN,
-                },
-                layout,
-                DeckFxChange::Param {
-                    unit: 1,
-                    change: FxParamChange {
-                        index: 0,
-                        value: 0.25,
-                    },
-                },
-            ],
-        ));
+        let mut changes = vec![DeckFxChange::Mix {
+            unit: 0,
+            value: FxMix::MIN,
+        }];
+        changes.extend(layout);
+        changes.push(DeckFxChange::Param {
+            unit: 1,
+            change: FxParamChange {
+                index: 0,
+                value: 0.25,
+            },
+        });
+        timed.push((offset, changes));
     }
     let refused = take(
         deck(Some(2), DeckMixSettings::default()).await,
