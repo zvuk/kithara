@@ -71,21 +71,20 @@ impl<P> Linked<P> {
         if !self.synced() {
             return;
         }
-        let retry = matches!(reason, Rejection::Late | Rejection::Refused(_));
         let newer_seek = self.speeds.iter().any(|(pending, operation)| {
             *pending > seq && matches!(operation, SpeedOperation::Relocation { .. })
         });
-        match operation {
-            SpeedOperation::Correction { cause, .. } if retry && !newer_seek => {
+        match (operation, reason) {
+            (SpeedOperation::Correction { cause, .. }, Rejection::Late | Rejection::Refused(_))
+                if !newer_seek =>
+            {
                 self.alignment = Some(cause);
             }
-            SpeedOperation::Alignment { .. } if retry => {
+            (SpeedOperation::Alignment { .. }, Rejection::Late | Rejection::Refused(_)) => {
                 let required = self.inner.snapshot().as_ref().position;
                 self.waiting.get_or_insert(Waiting::Align { required });
             }
-            SpeedOperation::Relocation { .. }
-                if matches!(reason, Rejection::Late | Rejection::Stale) =>
-            {
+            (SpeedOperation::Relocation { .. }, Rejection::Late | Rejection::Stale) => {
                 if let Some(relocation) = self
                     .relocation
                     .as_mut()
