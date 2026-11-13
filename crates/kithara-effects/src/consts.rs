@@ -7,19 +7,8 @@ pub(crate) const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
 pub(crate) const NYQUIST_FACTOR: f32 = 2.0;
 pub(crate) const FILTER_BLOCK_FRAMES: usize = 256;
 
-/// Planes a deck effect renders: the deck is stereo.
-pub(crate) const DELAY_CHANNELS: NonZeroUsize = NonZeroUsize::MIN.saturating_add(1);
-
-/// Frames a feedback delay renders per pass; the scratch it reads and
-/// filters into lives on the stack at this length.
-pub(crate) const DELAY_CHUNK: usize = 256;
-
 /// Seconds a delay time change crosses from the old read to the new one.
 pub(crate) const DELAY_RAMP_SECONDS: f64 = 0.02;
-
-/// Level, -120 dBFS, at or under which a sample a feedback delay writes to
-/// its history counts as silent.
-pub(crate) const DELAY_TAIL_FLOOR: f32 = 1e-6;
 
 pub(crate) const PASSTHROUGH: Coefficients<f32> = Coefficients {
     a1: 0.0,

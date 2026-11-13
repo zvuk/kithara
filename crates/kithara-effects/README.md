@@ -57,7 +57,7 @@ fn boost_low_band<S: HasPool<f32>>(config: &EqConfig<S>, sample_rate: NonZeroU32
 
 <tr><td><code>FxParamChange</code></td><td>A change of one deck effect parameter; each effect's parameters join as a variant</td></tr>
 
-<tr><td><code>FeedbackDelay</code></td><td>Stereo feedback delay with a ramped time change and a high-pass on every repeat, history taken from the pools</td></tr>
+<tr><td><code>FeedbackDelay</code></td><td>Stereo feedback delay: maps its time, feedback and high-pass cutoff onto a <code>kithara-dsp</code> feedback comb, history taken from the pools</td></tr>
 
 <tr><td><code>IsolatorEq</code></td><td>DJ isolator built on crossover filters</td></tr>
 
