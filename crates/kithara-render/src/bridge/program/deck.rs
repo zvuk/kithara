@@ -27,7 +27,6 @@ impl LayoutRevision {
     }
 }
 
-/// A continuous channel control, or one band in its observed EQ layout.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeckParameter {
     Trim,
@@ -38,13 +37,20 @@ pub enum DeckParameter {
 }
 
 impl DeckParameter {
-    pub(crate) fn index(self) -> usize {
+    pub(crate) const CHANNELS: usize = 3;
+    pub(crate) const EQ_START: usize = Self::CHANNELS + 1;
+
+    pub(crate) const fn eq_index(band: usize) -> usize {
+        Self::EQ_START.saturating_add(band)
+    }
+
+    pub(crate) const fn index(self) -> usize {
         match self {
             Self::Trim => 0,
             Self::Volume => 1,
             Self::Crossfader => 2,
-            Self::Filter => 3,
-            Self::EqBand { band, .. } => band.saturating_add(4),
+            Self::Filter => Self::CHANNELS,
+            Self::EqBand { band, .. } => Self::eq_index(band),
         }
     }
 }
@@ -66,7 +72,6 @@ impl DeckProgram {
 
     pub const MAX_KNOTS: usize = ParameterCurve::MAX_KNOTS;
 
-    /// Checks ordered knots and the addressed control's native range off the audio thread.
     /// # Errors
     /// Refuses malformed knots and nonfinite or out-of-range values.
     pub fn new(
@@ -90,7 +95,6 @@ impl DeckProgram {
 
     delegate::delegate! {
         to self.curve {
-            /// First addressed session frame.
             #[must_use]
             pub fn start(&self) -> SessionFrame;
             /// Last knot, whose value is held afterward.

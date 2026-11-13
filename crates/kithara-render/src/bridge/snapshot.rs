@@ -24,7 +24,7 @@ pub struct DeckSnapshot {
     pub eq: EqSnapshot,
     pub filter: FilterSnapshot,
     pub epoch: Option<kithara_signal::SessionEpoch>,
-    pub channels: [ParameterSnapshot; 3],
+    pub channels: [ParameterSnapshot; DeckParameter::CHANNELS],
     pub fx_layouts: Vec<Option<LayoutRevision>>,
 }
 

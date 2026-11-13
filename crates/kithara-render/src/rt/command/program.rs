@@ -21,7 +21,7 @@ pub(in crate::rt) struct DeckPrograms {
 
 impl DeckPrograms {
     pub(in crate::rt) fn new(scope: ScopeId, bands: usize, units: usize, capacity: usize) -> Self {
-        let count = bands.saturating_add(4);
+        let count = DeckParameter::eq_index(bands);
         Self {
             scope,
             layout: None,
@@ -95,38 +95,33 @@ impl DeckPrograms {
     }
 
     pub(in crate::rt) fn eq_values(&self) -> &[Vec<f64>] {
-        self.values.get(4..).unwrap_or_default()
+        let eq = DeckParameter::EQ_START;
+        self.values.get(eq..).unwrap_or_default()
     }
 
     pub(in crate::rt) fn publish(
         &self,
         snapshot: &mut DeckSnapshot,
         epoch: Option<SessionEpoch>,
-        channels: [f64; 3],
+        channels: [f64; DeckParameter::CHANNELS],
         knob: f64,
     ) {
         snapshot.epoch = epoch;
-        snapshot
-            .eq
-            .set_layout(epoch.map(|_| LayoutRevision::new(self.scope, self.layout)));
+        let layout = epoch.map(|_| LayoutRevision::new(self.scope, self.layout));
+        snapshot.eq.set_layout(layout);
         for (unit, revision) in snapshot.fx_layouts.iter_mut().zip(&self.units) {
             *unit = epoch.map(|_| LayoutRevision::new(self.scope, *revision));
         }
         for (index, field) in self.fields.iter().enumerate() {
+            let program = field.program.applied();
+            let authority = field.authority;
             if let Some(channel) = snapshot.channels.get_mut(index) {
-                *channel = ParameterSnapshot::new(
-                    channels[index],
-                    field.program.applied(),
-                    field.authority,
-                );
-            } else if index == 3 {
-                snapshot
-                    .filter
-                    .publish(knob, field.program.applied(), field.authority);
+                *channel = ParameterSnapshot::new(channels[index], program, authority);
+            } else if index == DeckParameter::Filter.index() {
+                snapshot.filter.publish(knob, program, authority);
             } else {
-                snapshot
-                    .eq
-                    .publish_program(index - 4, field.program.applied(), field.authority);
+                let band = index - DeckParameter::EQ_START;
+                snapshot.eq.publish_program(band, program, authority);
             }
         }
     }
@@ -143,26 +138,20 @@ fn program_in(commands: &[DeckPart], index: usize) -> Option<&DeckProgram> {
     })
 }
 
-fn manual(part: &DeckPart) -> Option<DeckParameter> {
-    match part {
-        DeckPart::Mix(change) => match change {
-            DeckMixSettingsChange::Trim(_) => Some(DeckParameter::Trim),
-            DeckMixSettingsChange::Volume(_) => Some(DeckParameter::Volume),
-            DeckMixSettingsChange::Muted(_) => None,
-            DeckMixSettingsChange::Crossfader(_) => Some(DeckParameter::Crossfader),
-            DeckMixSettingsChange::Filter(_) => Some(DeckParameter::Filter),
-        },
-        _ => None,
-    }
-}
-
 fn cancels(part: &DeckPart, index: usize) -> bool {
-    match part {
-        DeckPart::Eq(DeckEqChange::Layout(_)) => index >= 4,
-        DeckPart::Eq(DeckEqChange::Gain { band, .. }) => index == band.saturating_add(4),
-        DeckPart::Program { program, .. } => index == program.parameter().index(),
-        _ => manual(part).is_some_and(|parameter| parameter.index() == index),
-    }
+    let parameter = match part {
+        DeckPart::Eq(DeckEqChange::Layout(_)) => return index >= DeckParameter::EQ_START,
+        DeckPart::Eq(DeckEqChange::Gain { band, .. }) => {
+            return index == DeckParameter::eq_index(*band);
+        }
+        DeckPart::Program { program, .. } => program.parameter(),
+        DeckPart::Mix(DeckMixSettingsChange::Trim(_)) => DeckParameter::Trim,
+        DeckPart::Mix(DeckMixSettingsChange::Volume(_)) => DeckParameter::Volume,
+        DeckPart::Mix(DeckMixSettingsChange::Crossfader(_)) => DeckParameter::Crossfader,
+        DeckPart::Mix(DeckMixSettingsChange::Filter(_)) => DeckParameter::Filter,
+        _ => return false,
+    };
+    parameter.index() == index
 }
 
 impl Deck {
@@ -170,7 +159,14 @@ impl Deck {
         &self,
         commands: &[DeckPart],
     ) -> Result<(), DeckRefusal> {
-        if commands.iter().any(|part| matches!(part, DeckPart::Eq(DeckEqChange::Layout(layout)) if layout.band_count() > self.programs.fields.len().saturating_sub(4))) { return Err(DeckRefusal::EqLayoutCapacity); }
+        let bands = self.programs.eq_values().len();
+        let oversized = commands.iter().any(|part| match part {
+            DeckPart::Eq(DeckEqChange::Layout(layout)) => layout.band_count() > bands,
+            _ => false,
+        });
+        if oversized {
+            return Err(DeckRefusal::EqLayoutCapacity);
+        }
         for (index, part) in commands.iter().enumerate() {
             let DeckPart::Program {
                 epoch,
@@ -260,7 +256,7 @@ impl Deck {
         match part {
             DeckPart::Eq(DeckEqChange::Layout(_)) => {
                 self.programs.layout = Some(due.seq());
-                if let Some(fields) = self.programs.fields.get_mut(4..) {
+                if let Some(fields) = self.programs.fields.get_mut(DeckParameter::EQ_START..) {
                     fields.fill(ParameterState::default());
                 }
             }

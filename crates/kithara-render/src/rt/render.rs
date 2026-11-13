@@ -11,7 +11,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{command::DeckPrograms, processor::StreamShape};
 use crate::{
-    bridge::{DeckFxChange, DeckMixSettingsChange, DeckPart, Returned},
+    bridge::{DeckFxChange, DeckMixSettingsChange, DeckParameter, DeckPart, Returned},
     consts::{FADE_CHUNK, GAIN_SPAN},
 };
 
@@ -20,21 +20,15 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct RenderPass {
-    /// Values most recently emitted by the control buffers, for the applied snapshot.
     #[field(#[must_use] get(copy), vis = "pub(crate)")]
-    control_values: [f64; 3],
-    /// The deck's trim, ramped to each new target from the frame it is set on.
-    controls: [SmoothedParam; 3],
-    control_buffers: [SampleBuffer; 3],
-    /// The deck's equaliser, after its trim.
+    control_values: [f64; DeckParameter::CHANNELS],
+    controls: [SmoothedParam; DeckParameter::CHANNELS],
+    control_buffers: [SampleBuffer; DeckParameter::CHANNELS],
     eq: StereoEq,
-    /// The deck's FX units, after its equaliser.
     units: Box<[FxUnit]>,
     /// The deck filter, after the FX units; transparent at its center.
     filter: FilterEffect,
-    /// The wet signal of the unit running now.
     wet: [SampleBuffer; crate::consts::MIN_STEREO],
-    /// Fader times crossfader, after the units, so it cuts their tails too.
     muted: bool,
     /// Set until the first range renders, which moves every ramp to its target at once.
     priming: bool,
@@ -132,7 +126,6 @@ impl RenderPass {
         self.run(left, right, Some(programs))
     }
 
-    /// Pass a stereo chunk through the chain under the values prepared for this chunk.
     fn run(
         &mut self,
         left: &mut [f32],
@@ -164,7 +157,8 @@ impl RenderPass {
             unit.process(left, right, &mut self.wet);
         }
         let planes = &mut [&mut left[..frames], &mut right[..frames]];
-        if let Some(knobs) = programs.and_then(|programs| programs.values(3, frames)) {
+        let knobs = programs.and_then(|rows| rows.values(DeckParameter::Filter.index(), frames));
+        if let Some(knobs) = knobs {
             self.filter
                 .process_program(planes, 0..frames, knobs)
                 .expect("prepared stereo knob program");
@@ -201,7 +195,8 @@ impl RenderPass {
                     .set_gain_explicit(band, GainDb::from(AsPrimitive::<f32>::as_(*value)));
             }
         }
-        if let Some(value) = programs.values(3, frames).and_then(|values| values.last()) {
+        let knobs = programs.values(DeckParameter::Filter.index(), frames);
+        if let Some(value) = knobs.and_then(<[f64]>::last) {
             if let Some(knob) = FilterKnob::checked(*value) {
                 self.filter.configure(knob);
                 self.filter.reset();
@@ -619,7 +614,7 @@ mod tests {
         );
         let scope = sender.open(1).expect("scope");
         let mut programs = DeckPrograms::new(scope, 1, 2, 4);
-        programs.write_curve(4, &program, start, 4);
+        programs.write_curve(DeckParameter::eq_index(0), &program, start, 4);
         let (mut left, mut right) = ([0.125; 4], [-0.5; 4]);
         render
             .finish_curves(&mut left, &mut right, &programs)
