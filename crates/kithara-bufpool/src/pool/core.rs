@@ -622,7 +622,7 @@ mod tests {
         assert_eq!(region_budget.current(), 0);
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn pressure_reclaim_scans_only_the_idle_snapshot() {
         let region_budget = RegionBudget::new(8);
         let core = Arc::new(

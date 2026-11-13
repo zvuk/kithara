@@ -658,6 +658,7 @@ cargo.exclude = [
   "kithara-devtools",
   "kithara-devtools-trace-format",
   "xtask",
+  "kithara-test-args",
   "kithara-test-utils",
   "kithara-test-macros",
   "kithara-ffi-web-tests",
@@ -1832,6 +1833,16 @@ timeout_minutes = 120
 # forbid `unsafe` themselves. The interpreter runs a program hundreds of times
 # slower than the machine does, so this stays weekly rather than nightly.
 [ext.ci.lanes.deep-miri]
+test_packages = [
+  "kithara-abr",
+  "kithara-bufpool",
+  "kithara-command",
+  "kithara-download",
+  "kithara-events",
+  "kithara-queue",
+  "kithara-ring",
+  "kithara-stream",
+]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -1842,7 +1853,7 @@ role = "deep"
 kinds = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
-timeout_minutes = 240
+timeout_minutes = 60
 artifact = { name = "miri-junit", path = "target/nextest/miri/junit.xml", when = "always" }
 
 # libFuzzer needs the nightly sanitizer flags, so the targets build on the

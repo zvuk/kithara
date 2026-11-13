@@ -849,14 +849,18 @@ fn block(queue: &mut Queue<TestPools>, rig: &mut mock::DeckRig<TestPools>, at: i
     crate::mock::settle(queue, rig, SessionFrame::new(at));
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(miri, tokio)]
 async fn a_fade_in_makes_its_track_leading_and_a_preload_does_not(
     #[by_ref] worker_owner: &WorkerOwner,
 ) {
     let (mut queue, _, second, mut rig, dir) = pending_selection(&worker_owner.0);
     let leading_source = answer_duration(&mut queue, &mut rig, &dir, 64.0).await;
     crate::mock::finish(&mut queue, &mut rig);
-    assert_eq!(queue.control().duration_seconds(), Some(64.0));
+    assert_eq!(
+        queue.control().duration_seconds(),
+        Some(64.0),
+        "the admitted first item is leading"
+    );
     with_outbox(&mut queue, &mut rig, |queue, out| {
         queue.apply_command(
             QueueCommand::Select {
@@ -877,8 +881,16 @@ async fn a_fade_in_makes_its_track_leading_and_a_preload_does_not(
     );
     block(&mut queue, &mut rig, 128);
     block(&mut queue, &mut rig, 256);
-    assert_eq!(queue.control().position_seconds(), Some(0.0));
-    assert_eq!(queue.control().duration_seconds(), Some(162.0));
+    assert_eq!(
+        queue.control().position_seconds(),
+        Some(0.0),
+        "handover starts at the successor origin"
+    );
+    assert_eq!(
+        queue.control().duration_seconds(),
+        Some(162.0),
+        "handover publishes the successor duration"
+    );
     drop((leading_source, successor_source));
     drop((queue, rig));
     dir.finish().await;

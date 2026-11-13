@@ -163,7 +163,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn underflow_release_keeps_the_charge() {
         let counter = BudgetCounter::new(16);
         counter
@@ -174,7 +174,7 @@ mod tests {
         assert_eq!(counter.current(), 8);
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn region_reclaims_the_exact_deficit_and_rotates_the_first_slot() {
         let budget = RegionBudget::new(1);
         let first = Arc::new(RecordingReclaimer::default());
