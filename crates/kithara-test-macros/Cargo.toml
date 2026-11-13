@@ -12,6 +12,8 @@ categories = ["development-tools::testing"]
 proc-macro = true
 
 [dependencies]
+kithara-test-args = { workspace = true }
+
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
 syn = { workspace = true, features = ["extra-traits", "visit-mut"] }

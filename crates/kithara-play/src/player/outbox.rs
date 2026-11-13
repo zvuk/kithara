@@ -1,18 +1,17 @@
 use kithara_command::{
     Batch, Live, LiveError, Outcome, Port, Receipt, Rejection, SendError, Sender, Seq, When,
 };
-use kithara_effects::filter::{FilterConfig, FilterEffect};
 use kithara_render::{
     DispatcherCommand, DispatcherProtocol, LaneFrame, LaneId, LaneProtocol, LoadRequest,
     ServiceClass,
     bridge::{DeckEvent, DeckPart, DeckProtocol, Slot},
 };
 pub use kithara_signal::Bound;
-use kithara_signal::{AudioSpec, SessionFrame};
+use kithara_signal::SessionFrame;
 
 use crate::{
-    DeckEqChange, DeckFilterChange, DeckFxChange, DeckMixSettings, DeckMixSettingsChange, DeckPass,
-    FilterSettings, InterruptionKind, PlayError, ResourceLoad, SessionEvent,
+    DeckEqChange, DeckFxChange, DeckMixSettings, DeckMixSettingsChange, DeckPass, InterruptionKind,
+    PlayError, ResourceLoad, SessionEvent,
 };
 
 /// One loaded track or a deck built of them: it changes its own state on the
@@ -180,25 +179,7 @@ impl<'a, S> Outbox<'a, S> {
         self.deck(When::Next, parts.into_iter().map(DeckPart::Eq).collect())
     }
 
-    /// Send one filter operation on the observed instance and output stream.
-    /// # Errors
-    /// Refuses a missing output binding, late frame or exhausted command capacity.
-    pub fn filter(
-        &mut self,
-        at: When<SessionFrame>,
-        change: DeckFilterChange,
-    ) -> Result<Option<Seq>, PlayError> {
-        let binding = self
-            .pass
-            .ok_or(PlayError::NotReady)?
-            .deck
-            .filter
-            .binding()
-            .ok_or(PlayError::NotReady)?;
-        self.deck(at, vec![DeckPart::Filter { binding, change }])
-    }
-
-    /// Submit one trajectory against the observed Filter instance and field authority.
+    /// Submit a filter knob program against the observed output stream and knob authority.
     /// # Errors
     /// Refuses unavailable output state, insufficient delivery lead or command capacity.
     pub fn filter_program(
@@ -207,10 +188,7 @@ impl<'a, S> Outbox<'a, S> {
     ) -> Result<Option<Seq>, PlayError> {
         let pass = self.pass.ok_or(PlayError::NotReady)?;
         let binding = pass.deck.filter.binding().ok_or(PlayError::NotReady)?;
-        if pass.deck.filter.settings().is_none() {
-            return Err(PlayError::NotReady);
-        }
-        let authority = pass.deck.filter.authority(program.parameter());
+        let authority = pass.deck.filter.authority();
         self.deck(
             When::At(program.start()),
             vec![DeckPart::FilterProgram {
@@ -219,27 +197,6 @@ impl<'a, S> Outbox<'a, S> {
                 program,
             }],
         )
-    }
-
-    /// Prepare a stereo filter at the deck's actual output rate, off the audio thread.
-    /// # Errors
-    /// Preserves geometry, design and pool errors; refuses an unpublished output rate.
-    pub fn install_filter(
-        &mut self,
-        at: When<SessionFrame>,
-        settings: FilterSettings,
-        pools: &kithara_bufpool::PoolRegion<S>,
-    ) -> Result<Option<Seq>, PlayError>
-    where
-        S: kithara_bufpool::HasPool<f32>,
-    {
-        let snapshot = self.pass.ok_or(PlayError::NotReady)?.deck;
-        let rate = std::num::NonZeroU32::new(snapshot.sample_rate).ok_or(PlayError::NotReady)?;
-        let filter = FilterEffect::new(
-            AudioSpec::new(2, rate),
-            FilterConfig::from((pools.clone(), settings)),
-        )?;
-        self.filter(at, DeckFilterChange::Install(Box::new(filter)))
     }
 
     /// Send an EQ trajectory on the layout and authority last observed by this pass.
@@ -558,7 +515,6 @@ pub(crate) fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
         | DeckPart::Mix(_)
         | DeckPart::Eq(_)
         | DeckPart::Fx(_)
-        | DeckPart::Filter { .. }
         | DeckPart::FilterProgram { .. }
         | DeckPart::EqProgram { .. }
         | DeckPart::GainProgram { .. }

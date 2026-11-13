@@ -12,7 +12,9 @@ use super::{
     },
     state::*,
 };
-use crate::bridge::{DeckEqChange, DeckPart, DeckProtocol, Fade, Returned, Slot};
+use crate::bridge::{
+    DeckEqChange, DeckMixSettingsChange, DeckPart, DeckProtocol, Fade, Returned, Slot,
+};
 
 impl Deck {
     pub(in crate::rt) fn apply(
@@ -74,7 +76,11 @@ impl Deck {
             }
             DeckPart::Mix(change) => {
                 self.mix.apply_change(change);
-                self.render.set_mix(self.mix);
+                if let DeckMixSettingsChange::Filter(knob) = change {
+                    self.render.set_filter_knob(knob);
+                } else {
+                    self.render.set_mix(self.mix);
+                }
                 Some(DeckPart::Mix(change))
             }
             DeckPart::Eq(DeckEqChange::Gain { band, gain }) => {
@@ -100,8 +106,17 @@ impl Deck {
                 })
             }
             DeckPart::Fx(change) => self.render.change_fx(change, self.sample_rate),
-            DeckPart::Filter { .. } | DeckPart::FilterProgram { .. } => {
-                unreachable!("filter operations use single-command admission")
+            DeckPart::FilterProgram {
+                binding,
+                authority,
+                program,
+            } => {
+                self.begin_filter_program(seq);
+                Some(DeckPart::FilterProgram {
+                    binding,
+                    authority,
+                    program,
+                })
             }
             DeckPart::GainProgram {
                 slot,

@@ -457,7 +457,7 @@ fn an_empty_block_answers_nothing() {
     );
 }
 
-#[kithara::test(tokio, browser)]
+#[kithara::test(miri, tokio, browser)]
 async fn the_halves_cross_threads() {
     let (mut sender, mut inbox) = pair(8, 0);
     let seq = send(&mut sender, When::Next, batch(1, &[]));
@@ -673,7 +673,7 @@ fn a_deferred_batch_leaves_the_block_to_the_batches_after_it() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(miri)]
 fn a_send_wakes_an_executor_waiting_on_its_inbox() {
     let (mut sender, mut inbox) = pair(8, 0);
     let (waker, wakes) = waker();
@@ -706,7 +706,7 @@ fn a_dropped_sender_closes_the_inbox_and_wakes_its_executor() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(miri)]
 fn a_dropped_inbox_answers_every_batch_it_holds() {
     let (mut sender, mut inbox) = pair(8, 0);
     let parked = send(&mut sender, When::Next, batch(1, &[]));
@@ -743,7 +743,7 @@ fn a_dropped_inbox_answers_every_batch_it_holds() {
 
 /// An inbox that dropped answers nothing more, so a later send comes back
 /// whole instead of waiting on a ring nobody drains.
-#[kithara::test]
+#[kithara::test(miri)]
 fn a_batch_sent_after_the_inbox_dropped_comes_back_closed() {
     let (mut sender, inbox) = pair(8, 0);
 
