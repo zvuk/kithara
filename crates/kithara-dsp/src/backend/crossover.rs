@@ -1,44 +1,83 @@
 use std::ops::{Deref, DerefMut};
 
-use fearless_simd::{Level, Simd, dispatch};
+use fearless_simd::{Level, dispatch, f64x2, prelude::*};
+use num_traits::ToPrimitive;
 
 use super::svf;
-use crate::filter::Response;
+use crate::{consts, filter::Response};
 
 const DAMPING: f64 = 1.0 / std::f64::consts::FRAC_1_SQRT_2;
 
 struct Section<const CHANNELS: usize> {
-    state: [svf::State<1>; CHANNELS],
-    gain: f64,
+    state: [[f64; CHANNELS]; 2],
+    quiet: [usize; CHANNELS],
+    coefficients: [f64; 3],
     response: Response,
 }
 
 impl<const CHANNELS: usize> Section<CHANNELS> {
     fn new(gain: f64, response: Response) -> Self {
         Self {
-            state: std::array::from_fn(|_| svf::State::new()),
-            gain,
+            state: [[0.0; CHANNELS]; 2],
+            quiet: [0; CHANNELS],
+            coefficients: svf::coefficients(gain, DAMPING),
             response,
         }
     }
 
     #[inline(always)]
     fn run<S: Simd>(&mut self, simd: S, mut samples: [f32; CHANNELS]) -> [f32; CHANNELS] {
-        svf::independent_frame(
-            simd,
-            &mut self.state,
-            &mut samples,
-            self.gain,
-            DAMPING,
-            self.response,
-        );
+        let [state1, state2] = &mut self.state;
+        for (((samples, memory1), memory2), quiet) in samples
+            .chunks_mut(2)
+            .zip(state1.chunks_mut(2))
+            .zip(state2.chunks_mut(2))
+            .zip(self.quiet.chunks_mut(2))
+        {
+            let x = f64x2::from_fn(simd, |lane| {
+                samples.get(lane).copied().map_or(0.0, f64::from)
+            });
+            let ([next1, next2], output) = svf::step(
+                simd,
+                x,
+                [load_pair(simd, memory1), load_pair(simd, memory2)],
+                self.coefficients,
+                DAMPING,
+                self.response,
+            );
+            for (index, (sample, quiet)) in samples.iter_mut().zip(quiet).enumerate() {
+                let input = *sample;
+                *sample = output.as_slice()[index].to_f32().unwrap_or(f32::NAN);
+                let silent =
+                    input.abs() <= consts::SILENT_PEAK && sample.abs() <= consts::SILENT_PEAK;
+                *quiet = if silent {
+                    quiet.saturating_add(1).min(consts::SECTION_MEMORY)
+                } else {
+                    0
+                };
+                if *quiet == consts::SECTION_MEMORY {
+                    memory1[index] = 0.0;
+                    memory2[index] = 0.0;
+                } else {
+                    memory1[index] = next1.as_slice()[index];
+                    memory2[index] = next2.as_slice()[index];
+                }
+            }
+        }
         samples
     }
 
     fn reset(&mut self) {
-        for state in &mut self.state {
-            state.reset();
-        }
+        self.state.fill([0.0; CHANNELS]);
+        self.quiet.fill(0);
+    }
+}
+
+#[inline(always)]
+fn load_pair<S: Simd>(simd: S, memory: &[f64]) -> f64x2<S> {
+    match memory {
+        [one] => f64x2::from_slice(simd, &[*one, 0.0]),
+        pair => f64x2::from_slice(simd, pair),
     }
 }
 
@@ -72,10 +111,10 @@ impl<const CHANNELS: usize> Split<CHANNELS> {
 
     pub(crate) fn retune(&mut self, gain: f64, later: impl Iterator<Item = f64>) {
         for section in self.lowpass.iter_mut().chain(&mut self.highpass) {
-            section.gain = gain;
+            section.coefficients = svf::coefficients(gain, DAMPING);
         }
         for (section, gain) in self.allpass.iter_mut().zip(later) {
-            section.gain = gain;
+            section.coefficients = svf::coefficients(gain, DAMPING);
         }
         self.reset();
     }

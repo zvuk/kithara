@@ -149,9 +149,7 @@ impl<const CHANNELS: usize> State<CHANNELS> {
             self.count(true);
             return;
         }
-        let a1 = (1.0 + gain * (gain + damping)).recip();
-        let a2 = gain * a1;
-        let a3 = gain * a2;
+        let coefficients = coefficients(gain, damping);
         let mut frame_quiet = true;
         let [memory1, memory2] = &mut self.state;
         for ((samples, memory1), memory2) in samples
@@ -168,7 +166,7 @@ impl<const CHANNELS: usize> State<CHANNELS> {
                     .copied()
                     .map_or(0.0, f64::from)
             });
-            let ([next1, next2], output) = step(simd, x, [s1, s2], [a1, a2, a3], damping, response);
+            let ([next1, next2], output) = step(simd, x, [s1, s2], coefficients, damping, response);
             for (memory, value) in memory1.iter_mut().zip(next1.as_slice()) {
                 *memory = *value;
             }
@@ -226,46 +224,11 @@ pub(crate) fn process<const CHANNELS: usize>(
     });
 }
 
-#[inline(always)]
-pub(super) fn independent_frame<S: Simd, const CHANNELS: usize>(
-    simd: S,
-    states: &mut [State<1>; CHANNELS],
-    samples: &mut [f32; CHANNELS],
-    gain: f64,
-    damping: f64,
-    response: Response,
-) {
+pub(super) fn coefficients(gain: f64, damping: f64) -> [f64; 3] {
     let a1 = (1.0 + gain * (gain + damping)).recip();
     let a2 = gain * a1;
     let a3 = gain * a2;
-    for (states, samples) in states.chunks_mut(2).zip(samples.chunks_mut(2)) {
-        let idle = std::array::from_fn::<_, 2, _>(|lane| {
-            states
-                .get(lane)
-                .zip(samples.get(lane))
-                .is_none_or(|(state, sample)| state.reset_state && sample.to_bits() == 0)
-        });
-        let x = f64x2::from_fn(simd, |lane| {
-            samples.get(lane).copied().map_or(0.0, f64::from)
-        });
-        let memory = std::array::from_fn(|index| {
-            f64x2::from_fn(simd, |lane| {
-                states.get(lane).map_or(0.0, |state| state.state[index][0])
-            })
-        });
-        let ([next1, next2], output) = step(simd, x, memory, [a1, a2, a3], damping, response);
-        for (lane, (state, sample)) in states.iter_mut().zip(samples).enumerate() {
-            if idle[lane] {
-                state.count(true);
-                continue;
-            }
-            let input = *sample;
-            *sample = output.as_slice()[lane].to_f32().unwrap_or(f32::NAN);
-            state.state = [[next1.as_slice()[lane]], [next2.as_slice()[lane]]];
-            state.reset_state = false;
-            state.count(input.abs() <= consts::SILENT_PEAK && sample.abs() <= consts::SILENT_PEAK);
-        }
-    }
+    [a1, a2, a3]
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@ use kithara_dsp::{
     filter::{Biquad, Coefficients, Crossover, Hertz, Type},
     param::{DEFAULT_GAIN_SPAN, MIN_SETTLE_RATIO, SmoothingFilter, SmoothingFilterCoeff},
 };
-use kithara_test_fixtures::{portable, unit_fixtures};
+use kithara_test_fixtures::portable;
 use num_traits::AsPrimitive;
 
 const RATE: f32 = 48_000.0;
@@ -393,9 +393,18 @@ impl Diagnostic for Block {
 fn diagnose<K: Diagnostic>(frequencies: &[f32], frames: usize, label: &str, make: impl Fn() -> K) {
     for (case, left) in [
         ("sine_440", portable::eq_sine_440().to_vec()),
-        ("finite", unit_fixtures::eq_finite()),
-        ("impulse_tail", unit_fixtures::eq_impulse()),
-        ("silence", unit_fixtures::eq_silence()),
+        (
+            "finite",
+            (0_u16..1024)
+                .map(|index| (f32::from(index) * 0.1).sin())
+                .collect(),
+        ),
+        ("impulse_tail", {
+            let mut samples = vec![0.0; 192_001];
+            samples[0] = 1.0;
+            samples
+        }),
+        ("silence", vec![0.0; 8820]),
         (
             "subnormal_input",
             [f32::MIN_POSITIVE, f32::from_bits(1), -f32::from_bits(1)]

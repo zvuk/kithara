@@ -336,3 +336,65 @@ fn coefficient_factory_errors_and_nonfinite_results_are_not_identity() {
         Err(FilterError::Parameters)
     ));
 }
+
+#[kithara::test]
+fn a_refused_retune_preserves_every_sections_history() {
+    let mut actual = crossover(&[250.0, 2_500.0], 48_000.0);
+    let mut reference = crossover(&[250.0, 2_500.0], 48_000.0);
+    let mut warm = vec![[vec![0.0; 257]]; 3];
+    actual.split(&[&input()[..257]], &mut warm);
+    reference.split(&[&input()[..257]], &mut warm);
+    assert!(matches!(
+        actual.update_sample_rate(hz(1_000.0)),
+        Err(FilterError::Parameters)
+    ));
+    let tail = [0.25; 257];
+    let mut output = vec![[vec![0.0; tail.len()]]; 3];
+    let mut expected = output.clone();
+    actual.split(&[&tail[..]], &mut output);
+    reference.split(&[&tail[..]], &mut expected);
+    for (actual, expected) in output
+        .iter()
+        .flatten()
+        .flatten()
+        .zip(expected.iter().flatten().flatten())
+    {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+}
+
+#[kithara::test]
+fn stereo_quiet_retirement_keeps_each_mono_history() {
+    let frequencies = [hz(250.0), hz(2_500.0)];
+    let mut stereo = Crossover::<2>::new(&frequencies, hz(48_000.0)).expect("stereo design");
+    let mut mono = std::array::from_fn::<_, 2, _>(|_| crossover(&[250.0, 2_500.0], 48_000.0));
+    for rate in [48_000.0, 44_100.0] {
+        stereo.update_sample_rate(hz(rate)).expect("stereo retune");
+        for mono in &mut mono {
+            mono.update_sample_rate(hz(rate)).expect("mono retune");
+        }
+        for frames in [1, 7, 255, 256, 257, 8192] {
+            let left: Vec<_> = input().into_iter().cycle().take(frames).collect();
+            let right: Vec<_> = [0.0, -0.0, 1e-10, f32::from_bits(1)]
+                .into_iter()
+                .cycle()
+                .take(frames)
+                .collect();
+            let mut actual = vec![[vec![0.0; frames], vec![0.0; frames]]; 3];
+            stereo.split(&[left.as_slice(), right.as_slice()], &mut actual);
+            for (channel, (mono, input)) in mono.iter_mut().zip([left, right]).enumerate() {
+                let mut expected = vec![[vec![0.0; frames]]; 3];
+                mono.split(&[input.as_slice()], &mut expected);
+                for (band, expected) in actual.iter().zip(&expected) {
+                    for (actual, expected) in band[channel].iter().zip(&expected[0]) {
+                        assert_eq!(
+                            actual.to_bits(),
+                            expected.to_bits(),
+                            "channel{channel} frames{frames} rate{rate}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
