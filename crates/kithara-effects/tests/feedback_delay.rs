@@ -909,3 +909,49 @@ fn feedback_delay_rate_drop_ends_a_cross_past_its_new_length() {
         );
     }
 }
+
+#[kithara::test]
+#[case::construction(false)]
+#[case::retune(true)]
+fn feedback_delay_high_pass_boundaries_and_former_holes(#[case] retune: bool) {
+    let boundaries = [
+        384_000, 768_000, 352_800, 705_600, 44_100, 48_000, 96_000, 192_000, 8_000, 326_461,
+        326_462,
+    ]
+    .into_iter()
+    .flat_map(|rate| [20.0, 4000.0].map(|cutoff| (rate, cutoff)));
+    for (rate, cutoff) in boundaries.chain([
+        (352_800, 20.022_65),
+        (384_000, 20.0),
+        (768_000, 20.0),
+        (8000, 3999.676_5),
+    ]) {
+        if f64::from(cutoff) >= f64::from(rate) / 2.0 {
+            continue;
+        }
+        let settings = Settings {
+            capacity: 8,
+            time: 1,
+            feedback: 0.5,
+            high_pass: cutoff,
+        };
+        let mut effect = delay_at(settings, if retune { RATE } else { rate });
+        if retune {
+            effect.update_sample_rate(rate_of(rate));
+        }
+        assert!(effect.accepts(&high_pass_change(cutoff)));
+        let input = [1.0, 0.0, 0.0];
+        let mut wet = [[0.0; 3]; 2];
+        let [left, right] = &mut wet;
+        effect.process([&input, &input], [left, right]);
+        let expected = 0.5 * high_pass(cutoff, rate)[2];
+        for plane in wet {
+            assert_eq!(plane[1], 1.0, "first echo remains unfiltered");
+            assert!(
+                (f64::from(plane[2]) - expected).abs() <= MODEL,
+                "new-rate echo at {rate}, cutoff {cutoff}, retune={retune}: {} vs {expected}",
+                plane[2]
+            );
+        }
+    }
+}

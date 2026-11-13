@@ -92,7 +92,7 @@ fn feedback_comb(c: &mut Criterion) {
             group.bench_function(BenchmarkId::new(format!("{name}/{path}"), frames), |b| {
                 b.iter(|| {
                     comb.process(black_box(&input), black_box(&mut output), 0..consts::BLOCK)
-                        .expect("block")
+                        .expect("block");
                 });
             });
         }

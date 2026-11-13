@@ -313,14 +313,37 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::DerefMut;
+    use std::{f64::consts::FRAC_1_SQRT_2, num::NonZeroU32, ops::DerefMut};
 
     use fearless_simd::{Level, Simd, dispatch};
     use kithara_test_utils::kithara;
     use num_traits::ToPrimitive;
 
-    use super::{Response, StateVariableFilter};
+    use super::{Response, StateVariableFilter, SvfDesign};
     use crate::consts;
+
+    #[kithara::test]
+    fn state_variable_design_has_no_holes_below_nyquist() {
+        const STEPS: u32 = 65_536;
+        for rate in [
+            384_000, 768_000, 352_800, 705_600, 44_100, 48_000, 96_000, 192_000, 8_000, 326_461,
+            326_462,
+        ] {
+            let rate = NonZeroU32::new(rate).expect("host rate");
+            for step in 0..=STEPS {
+                let cutoff = (20.0 * 200.0_f64.powf(f64::from(step) / f64::from(STEPS)))
+                    .to_f32()
+                    .expect("cutoff fits f32");
+                if f64::from(cutoff) < f64::from(rate.get()) / 2.0 {
+                    assert!(
+                        SvfDesign::new(rate, f64::from(cutoff), FRAC_1_SQRT_2, Response::HighPass)
+                            .is_ok(),
+                        "cutoff {cutoff} below Nyquist at {rate}"
+                    );
+                }
+            }
+        }
+    }
 
     trait Frame {
         fn frame<S: Simd, P: DerefMut<Target = [f32]>>(
