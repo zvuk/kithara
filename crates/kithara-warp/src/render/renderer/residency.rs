@@ -34,7 +34,6 @@ impl SourceResidency {
         history: usize,
         latency: ElasticLatency,
         source: usize,
-        expansion: f64,
     ) -> Result<usize, ElasticError> {
         latency
             .first()
@@ -42,8 +41,6 @@ impl SourceResidency {
             .and_then(|lead| lead.checked_mul(12))
             .and_then(|lead| lead.checked_add(history))
             .and_then(|frames| frames.checked_add(source))
-            .and_then(|frames| frames.to_f64())
-            .and_then(|frames| (frames * expansion).ceil().to_usize())
             .and_then(|frames| frames.checked_add(crate::consts::SOURCE_RADIUS))
             .ok_or(ElasticError::SampleCountOverflow)
     }

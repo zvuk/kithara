@@ -25,7 +25,7 @@ async fn pending_successor(
     mock::DeckRig<TestPools>,
     QueueFixture,
 ) {
-    let (mut queue, first, second, mut rig, dir) = selected(worker).await;
+    let (mut queue, first, second, mut rig, dir) = selected(worker, FixtureSource::Synthetic).await;
     apply(
         &mut queue,
         &mut rig,
@@ -59,7 +59,7 @@ async fn rate_events_follow_applied_playback_without_duplicates(
     };
 
     assert_eq!(control.rate(), 0.0);
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Decoded).await;
     assert!(rates(&mut events).is_empty());
     finish(&mut queue, &mut rig);
     assert_eq!(control.rate(), 1.0);
@@ -118,7 +118,7 @@ async fn player_remove_all_resets_state(
     if with_item {
         apply(&mut queue, &mut rig, QueueCommand::Pause { at: When::Next })
             .expect("pause selection");
-        answer_load(&mut queue, &mut rig, &dir).await;
+        answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
         finish(&mut queue, &mut rig);
         assert!(queue.control().current().is_some());
     }
@@ -136,7 +136,7 @@ async fn replay_same_item_does_not_re_emit_current_item_changed(
 ) {
     let (mut queue, _, _, mut rig, dir) = pending_selection(&worker_owner.0);
     let mut rx = queue.control().subscribe();
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     finish(&mut queue, &mut rig);
     let first = drain(&mut rx);
     let first_count = first
@@ -215,7 +215,8 @@ async fn a_selected_resource_adopts_the_session_wake_mode(#[by_ref] worker_owner
 
 #[kithara::test(tokio)]
 async fn re_selecting_the_current_item_does_not_re_announce(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, item, _, mut rig, fixture_directory) = selected(&worker_owner.0).await;
+    let (mut queue, item, _, mut rig, fixture_directory) =
+        selected(&worker_owner.0, FixtureSource::Synthetic).await;
     let mut rx = queue.control().subscribe();
     apply(
         &mut queue,
@@ -243,7 +244,8 @@ async fn re_selecting_the_current_item_does_not_re_announce(#[by_ref] worker_own
 
 #[kithara::test(tokio)]
 async fn selecting_another_item_announces_it(#[by_ref] worker_owner: &WorkerOwner) {
-    let (mut queue, _, second, mut rig, dir) = selected(&worker_owner.0).await;
+    let (mut queue, _, second, mut rig, dir) =
+        selected(&worker_owner.0, FixtureSource::Synthetic).await;
     let mut rx = queue.control().subscribe();
     apply(
         &mut queue,
@@ -254,7 +256,7 @@ async fn selecting_another_item_announces_it(#[by_ref] worker_owner: &WorkerOwne
         },
     )
     .expect("select second");
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     finish(&mut queue, &mut rig);
     let after = drain(&mut rx);
     assert!(
@@ -364,7 +366,7 @@ async fn commit_next_makes_the_successor_current_and_announces_it(
 ) {
     let (mut queue, _, second, mut rig, dir) = pending_successor(&worker_owner.0).await;
     let mut rx = queue.control().subscribe();
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(second));
     assert_eq!(
@@ -381,7 +383,7 @@ async fn commit_next_makes_the_successor_current_and_announces_it(
 #[kithara::test(tokio)]
 async fn commit_next_idempotent_when_already_activated(#[by_ref] worker_owner: &WorkerOwner) {
     let (mut queue, _, second, mut rig, dir) = pending_successor(&worker_owner.0).await;
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     finish(&mut queue, &mut rig);
     for _ in 0..2 {
         apply(
@@ -414,7 +416,7 @@ async fn unarm_next_clears_an_armed_successor(#[by_ref] worker_owner: &WorkerOwn
 #[kithara::test(tokio)]
 async fn unarm_next_preserves_activated_current(#[by_ref] worker_owner: &WorkerOwner) {
     let (mut queue, _, second, mut rig, dir) = pending_successor(&worker_owner.0).await;
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     finish(&mut queue, &mut rig);
     with_outbox(&mut queue, &mut rig, Queue::cancel_target).expect("cancel no pending target");
     assert_eq!(queue.target.map(|target| target.to), None);
@@ -430,7 +432,7 @@ async fn selecting_another_item_unarms_the_successor(#[by_ref] worker_owner: &Wo
     let (mut queue, _, second, mut rig, dir) = pending_successor(&worker_owner.0).await;
     hang_reset!();
     hang_tick!();
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     hang_reset!();
     let third = TrackId::allocate();
     apply(
@@ -453,7 +455,7 @@ async fn selecting_another_item_unarms_the_successor(#[by_ref] worker_owner: &Wo
     )
     .expect("select third");
     finish(&mut queue, &mut rig);
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     finish(&mut queue, &mut rig);
     assert_eq!(
         queue.target.map(|target| target.to),
@@ -469,7 +471,7 @@ async fn selecting_another_item_unarms_the_successor(#[by_ref] worker_owner: &Wo
 #[kithara::test(tokio)]
 async fn selecting_the_armed_item_promotes_it(#[by_ref] worker_owner: &WorkerOwner) {
     let (mut queue, _, second, mut rig, dir) = pending_successor(&worker_owner.0).await;
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     apply(
         &mut queue,
         &mut rig,

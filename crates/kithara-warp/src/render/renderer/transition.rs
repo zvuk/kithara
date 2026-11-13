@@ -36,7 +36,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .and_then(|history| history.checked_add(latency.second()))
             .ok_or(ElasticError::SampleCountOverflow)
         } else {
-            let stages = self.projection_stages()?;
+            let stages = self.trajectory.projection_stages()?;
             latency
                 .first()
                 .checked_add(latency.second())
@@ -133,7 +133,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::PoolCapacity)?;
         let folded = resident.fold_supply(output, channels)?;
         output.clear();
-        self.advance_trajectory(sampled)?;
+        self.trajectory.advance(sampled)?;
         Ok((sampled.output_frames() >= span.output_frames()).then_some(folded))
     }
 }

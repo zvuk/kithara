@@ -303,7 +303,11 @@ fn the_catalog_declares_every_lane_the_github_workflows_will_ask_for() {
         "linux-msrv",
         "linux-perf-memory",
         "linux-test-real-clock",
-        "linux-support",
+        "linux-tooling",
+        "linux-harness",
+        "linux-fixtures",
+        "linux-net-host",
+        "linux-broadcast",
         "deep-rtsan-fast",
         "deep-rtsan-file",
         "deep-rtsan-hls",
@@ -499,10 +503,11 @@ fn a_ready_pull_request_schedules_exactly_the_lanes_a_branch_push_does() {
 /// The product suite is what a `test run` naming no lane runs. Every lane a
 /// branch push schedules for it runs one command, apart from the toggles it
 /// asks for, so the clocks it is run under are the only difference between
-/// their counts. Only a branch push narrows it to the lanes the push touched;
-/// a ready pull request runs it whole, as the default branch does.
+/// their counts. That command is the same on every kind: a branch push runs it
+/// over the draft scope by its kind alone, and only the Apple gate names the
+/// selection a branch verdict reads.
 #[test]
-fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_branch_push() {
+fn the_product_suite_lanes_differ_only_in_their_toggles_and_run_one_command_on_every_kind() {
     let config = xtask_config();
     let mut recipes = Vec::new();
     for (name, lane) in ci_lanes(&config) {
@@ -516,43 +521,39 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_bra
         for step in steps {
             let args = step.get("args").map_or_else(Vec::new, strings);
             if !matches!(args.as_slice(), ["test", "run", ..])
-                || args.iter().any(|arg| arg.starts_with("--lane"))
+                || args
+                    .iter()
+                    .any(|arg| arg.starts_with("--lane") || *arg == "-E")
             {
                 continue;
             }
-            assert!(
-                !args.contains(&"--touched"),
-                "lane `{name}` narrows the suite on kinds other than a branch push"
-            );
             let by_kind = step
                 .get("args_by_kind")
                 .and_then(toml::Value::as_table)
                 .cloned()
                 .unwrap_or_default();
-            assert_eq!(
-                by_kind.keys().map(String::as_str).collect::<Vec<_>>(),
-                ["branch"],
-                "lane `{name}` runs the suite whole on every kind but a branch push"
-            );
-            let branch = strings(&by_kind["branch"]);
-            assert!(
-                branch.contains(&"--touched"),
-                "lane `{name}` runs the whole suite on a branch push"
-            );
-            assert_eq!(
-                branch
-                    .iter()
-                    .copied()
-                    .filter(|arg| {
-                        *arg != "--touched"
-                            && !(name == "apple-test"
-                                && *arg
-                                    == "--selection-output=.ci-artifacts/junit/apple-test.selection.json")
-                    })
-                    .collect::<Vec<_>>(),
-                args,
-                "lane `{name}` narrows a different command than it runs whole"
-            );
+            if name == "apple-test" {
+                let mut branch = args.clone();
+                branch.insert(
+                    2,
+                    "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
+                );
+                assert_eq!(
+                    by_kind.keys().map(String::as_str).collect::<Vec<_>>(),
+                    ["branch"],
+                    "the Apple gate adds only the branch selection"
+                );
+                assert_eq!(
+                    strings(&by_kind["branch"]),
+                    branch,
+                    "the Apple gate runs a different command on a branch push"
+                );
+            } else {
+                assert!(
+                    by_kind.is_empty(),
+                    "lane `{name}` runs a different command on some kind"
+                );
+            }
             let command: Vec<&str> = args
                 .iter()
                 .copied()
@@ -583,6 +584,58 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_bra
             other, recipe,
             "lanes `{first}` and `{name}` build or run the product suite differently"
         );
+    }
+}
+
+/// The suites `just test` does not carry run under their own configuration,
+/// each in a lane of its own that names it alone: whole on a ready pull
+/// request and the default branch, and over the draft scope on a branch push,
+/// which the branch kind alone asks for.
+#[test]
+fn every_own_configuration_suite_is_a_lane_of_every_reviewed_kind() {
+    let config = xtask_config();
+    for suite in ["tooling", "harness", "fixtures", "net-host", "broadcast"] {
+        let flag = format!("--lane={suite}");
+        let lanes: Vec<(&String, &toml::Value)> = ci_lanes(&config)
+            .iter()
+            .filter(|(_, lane)| {
+                lane.get("steps")
+                    .and_then(toml::Value::as_array)
+                    .is_some_and(|steps| {
+                        steps.iter().any(|step| {
+                            step.get("args")
+                                .is_some_and(|args| strings(args).contains(&flag.as_str()))
+                        })
+                    })
+            })
+            .collect();
+        let [(name, lane)] = lanes.as_slice() else {
+            panic!("suite `{suite}` runs in {} lanes, not one", lanes.len());
+        };
+        for step in lane["steps"].as_array().expect("steps") {
+            if !step
+                .get("args")
+                .is_some_and(|args| strings(args).contains(&flag.as_str()))
+            {
+                continue;
+            }
+            assert_eq!(
+                step.get("args").map(strings),
+                Some(vec!["test", "run", flag.as_str()]),
+                "lane `{name}` runs `{suite}` with a selection of its own"
+            );
+            assert!(
+                step.get("args_by_kind").is_none(),
+                "lane `{name}` runs `{suite}` differently on some kind"
+            );
+        }
+        let kinds = github_membership(lane);
+        for kind in ["branch", "merge-request", "main"] {
+            assert!(
+                kinds.contains(&kind),
+                "lane `{name}` does not run `{suite}` on `{kind}`"
+            );
+        }
     }
 }
 

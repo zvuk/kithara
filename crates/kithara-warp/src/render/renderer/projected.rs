@@ -217,15 +217,11 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         if output.is_empty() {
             return Ok(());
         }
-        let source_start = span.start();
         let mut position = nominal
             .map(|nominal| {
-                self.map_nominal_position(
-                    source_start,
-                    nominal
-                        .source_ratio_at(0)
-                        .ok_or(ElasticError::SampleCountOverflow)?,
-                )
+                nominal
+                    .source_ratio_at(0)
+                    .ok_or(ElasticError::SampleCountOverflow)
             })
             .transpose()?;
         for (frame, output) in output.enumerate() {
@@ -237,12 +233,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             let frame = u64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?;
             let next = nominal
                 .map(|nominal| {
-                    self.map_nominal_position(
-                        source_start,
-                        nominal
-                            .source_ratio_at(frame + 1)
-                            .ok_or(ElasticError::SampleCountOverflow)?,
-                    )
+                    nominal
+                        .source_ratio_at(frame + 1)
+                        .ok_or(ElasticError::SampleCountOverflow)
                 })
                 .transpose()?;
             let current = match nominal {
@@ -400,7 +393,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
         let channels = usize::from(self.spec.channels);
         let latency = capabilities.latency();
-        let stages = self.projection_stages()?;
+        let stages = self.trajectory.projection_stages()?;
         let lookahead = latency
             .first()
             .checked_add(latency.second())

@@ -57,7 +57,11 @@ allow = [
 confidence-threshold = 0.93
 
 # Allow exceptions by crate if needed (keep this list small).
-exceptions = []
+exceptions = [
+  # The filterset parser's target-spec dependency; the LLVM exception only
+  # widens Apache-2.0.
+  { allow = ["Apache-2.0 WITH LLVM-exception"], crate = "target-lexicon" },
+]
 
 [licenses.private]
 ignore = false

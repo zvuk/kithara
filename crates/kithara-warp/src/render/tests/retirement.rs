@@ -1,4 +1,4 @@
-use Control::{Backend, Curve, Keylock, Speed};
+use Control::{Curve, Keylock, Speed};
 use kithara_signal::ExponentialApproach;
 use kithara_stretch::{BackendCapabilities, StretchKind};
 use kithara_sync::SpeedCurve;
@@ -30,7 +30,6 @@ enum Control {
     Keylock(bool),
     Speed(f32),
     Curve(ExponentialApproach),
-    Backend(StretchKind),
 }
 
 /// Controls the lane applies as one batch at an output frame. Presses at one
@@ -89,7 +88,6 @@ fn render(config: &WarpConfig, presses: &[Press], frames: usize, tone: &[f32]) -
                     Curve(curve) => fx
                         .set_speed(SpeedCurve::Approach(curve), fx.render_revision() + 1)
                         .expect("valid tempo curve"),
-                    Backend(kind) => fx.set_backend(kind),
                 }
             }
             fx.prepare_engine_latency(spec()).expect("prepared batch");
@@ -113,10 +111,9 @@ fn steps(mono: &[f32]) -> impl Iterator<Item = f32> + '_ {
 
 /// From the step into the first press on, every step stays within the
 /// steepest steady side's step plus the gain slope of the shortest keylock
-/// fade across both sides. The sides are every distinct backend, keylock
-/// state and speed of the script; equal sides render equal twins.
+/// fade across both sides. The sides are every keylock state and distinct
+/// speed of the script on its backend; equal sides render equal twins.
 fn assert_continuous(tone: &[f32], scenario: &Scenario) {
-    let mut backends = vec![scenario.backend];
     let mut speeds = vec![scenario.speed];
     let mut add_speed = |speed: f32| {
         if !speeds.iter().any(|side| side.to_bits() == speed.to_bits()) {
@@ -125,22 +122,17 @@ fn assert_continuous(tone: &[f32], scenario: &Scenario) {
     };
     for control in scenario.presses.iter().flat_map(|press| &press.batch) {
         match *control {
-            Backend(kind) if !backends.contains(&kind) => backends.push(kind),
             Speed(speed) => add_speed(speed),
             Curve(curve) => {
                 add_speed(curve.initial().to_f32().expect("initial speed fits f32"));
                 add_speed(curve.target().to_f32().expect("target speed fits f32"));
             }
-            Backend(_) | Keylock(_) => {}
+            Keylock(_) => {}
         }
     }
-    let sides: Vec<WarpConfig> = backends
+    let sides: Vec<WarpConfig> = speeds
         .iter()
-        .flat_map(|&backend| {
-            speeds
-                .iter()
-                .flat_map(move |&speed| [false, true].map(|on| config(backend, on, speed)))
-        })
+        .flat_map(|&speed| [false, true].map(|on| config(scenario.backend, on, speed)))
         .collect();
     let output = scenario.played(tone);
     let from = scenario.presses[0].frame - 1;
@@ -438,28 +430,6 @@ fn retirement_scripts(backend: StretchKind) -> Vec<Scenario> {
         ),
     ]);
     scenarios
-}
-
-/// A keylock backend change fades the source-supported prefix of the old
-/// engine's tail into the new engine.
-#[kithara::test]
-fn keylock_backend_change_keeps_the_tone_continuous(warp_sine: Vec<f32>) {
-    let backends: Vec<_> = StretchKind::supporting(BackendCapabilities::KEYLOCK).collect();
-    assert!(!backends.is_empty(), "the build compiles a keylock backend");
-    for pair in backends.windows(2) {
-        assert_continuous(
-            &warp_sine,
-            &Scenario {
-                backend: pair[0],
-                keylock: true,
-                speed: 1.08,
-                presses: vec![Press {
-                    frame: PRESSES[0],
-                    batch: vec![Backend(pair[1])],
-                }],
-            },
-        );
-    }
 }
 
 /// Batches the lane applies before one render sound as their net batch: two

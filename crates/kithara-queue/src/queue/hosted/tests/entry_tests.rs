@@ -217,11 +217,18 @@ fn rejected_slot_volume_leaves_live_values_unchanged(#[by_ref] worker_owner: &Wo
 #[kithara::flash(io)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn arm_current_fixture(
-    worker: &PlayWorker<TestPools>,
+    queue: &Queue<TestPools>,
     rig: &mut mock::DeckRig<TestPools>,
     dir: &TestTempDir,
+    source: FixtureSource,
 ) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
-    let mut loaded = std::pin::pin!(loaded_fixture(worker, rig, dir));
+    let mut loaded = std::pin::pin!(loaded_fixture(
+        queue.worker().expect("fixture worker"),
+        rig,
+        dir,
+        crate::mock::selected_load_seq(queue),
+        source,
+    ));
     loop {
         hang_tick!();
         if let Ok(loaded) =
@@ -282,7 +289,7 @@ async fn finish_disarms_and_ignores_stale_ticket(#[by_ref] worker_owner: &Worker
         .apply_report(crate::loading::LoadReport::Slow { id, watch });
     assert_eq!(queue.tracks.records()[0].status, TrackStatus::Slow);
     assert!(!current.is_cancelled());
-    let loaded = arm_current_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
+    let loaded = arm_current_fixture(&queue, &mut rig, &dir, FixtureSource::Synthetic).await;
     answer_loaded(&mut queue, &mut rig, loaded);
     assert!(
         queue.tracks.records()[0].load.is_none(),
@@ -329,7 +336,7 @@ async fn a_seek_accepted_while_opening_is_adopted_before_the_first_start(
     assert_eq!(sent, None);
     assert_eq!(queue.control().position_seconds(), Some(to.as_secs_f64()));
 
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     let Some(SeekPosition::Pending {
         item,
         sent: SeekBatch::Deck(seq),
@@ -383,8 +390,7 @@ async fn selected_source_clock(
         .find_map(|active| active.load)
         .expect("selected load")
         .seq();
-    let loaded =
-        crate::mock::loaded_request(queue.worker().expect("fixture worker"), &mut rig, seq).await;
+    let loaded = crate::mock::loaded_request(&queue, &mut rig, seq, FixtureSource::Synthetic).await;
     let clock = loaded
         .opened
         .pcm
@@ -644,7 +650,7 @@ async fn atomic_track_id_cas_arm_then_disarm(#[by_ref] worker_owner: &WorkerOwne
         )
         .expect("select sounding predecessor");
     });
-    let loaded = arm_current_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
+    let loaded = arm_current_fixture(&queue, &mut rig, &dir, FixtureSource::Synthetic).await;
     let source = loaded
         .opened
         .pcm
@@ -791,7 +797,7 @@ async fn an_item_is_loaded_on_its_load_receipt_before_its_attach_applies(
 ) {
     let (mut queue, first, _, mut rig, dir) = pending_selection(&worker_owner.0);
     let mut events = queue.subscribe::<QueueEvent>();
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     assert_eq!(
         queue.track(first).expect("record").status,
         TrackStatus::Loaded
@@ -839,7 +845,7 @@ async fn a_pause_before_the_selected_item_enters_makes_it_current_paused(
         Player::apply(queue, QueueCommand::Pause { at: When::Next }, out)
     })
     .expect("pause pending selection");
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     assert_eq!(queue.current, None);
     crate::mock::settle(&mut queue, &mut rig, SessionFrame::new(0));
     assert_eq!(queue.current, None);
@@ -945,7 +951,7 @@ async fn play_with_a_pending_selection_enters_that_selection(#[by_ref] worker_ow
     })
     .expect("play pending selection");
     assert_eq!(queue.target.expect("selected target").to, first);
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     answer_deck(&mut queue, &mut rig, SessionFrame::new(0));
     assert!(matches!(
         queue
@@ -979,7 +985,7 @@ async fn a_pause_over_a_scheduled_entry_settles_current_paused(
     let scheduled = SessionFrame::new(256);
     queue.target.as_mut().expect("selected target").bound =
         Some(kithara_play::Bound::AtOrAfter(scheduled));
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     assert!(
         queue.pending_handover.is_none(),
         "the future entry waits for native attachment"

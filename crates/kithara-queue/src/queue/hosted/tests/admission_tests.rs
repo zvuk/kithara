@@ -61,8 +61,14 @@ async fn admission_fills_unset_metadata_from_the_decoder(
             )
         })
         .expect("select admission fixture");
-        let mut loaded =
-            loaded_fixture(queue.worker().expect("fixture worker"), &mut rig, &dir).await;
+        let mut loaded = loaded_fixture(
+            queue.worker().expect("fixture worker"),
+            &mut rig,
+            &dir,
+            crate::mock::selected_load_seq(&queue),
+            FixtureSource::Synthetic,
+        )
+        .await;
         loaded.opened.metadata.title = Some("Mock".to_owned());
         answer_loaded(&mut queue, &mut rig, loaded);
         crate::mock::finish(&mut queue, &mut rig);
@@ -85,5 +91,72 @@ async fn admission_fills_unset_metadata_from_the_decoder(
     })
     .expect("close the queue before deferred loads run");
     drop((queue, rig));
+    dir.finish().await;
+}
+
+#[kithara::test(tokio)]
+async fn a_synthetic_load_opens_the_decoded_fixture_facts(#[by_ref] worker_owner: &WorkerOwner) {
+    let mut opened = Vec::new();
+    for source in [FixtureSource::Decoded, FixtureSource::Synthetic] {
+        let (queue, _, _, mut rig, dir) = pending_selection(&worker_owner.0);
+        let seq = crate::mock::selected_load_seq(&queue);
+        let loaded = crate::mock::loaded_request(&queue, &mut rig, seq, source).await;
+        let pcm = &loaded.opened.pcm;
+        assert_eq!(
+            **pcm.src(),
+            *fixture_uri(dir.path(), "entry.wav"),
+            "{source:?} opens the requested source"
+        );
+        opened.push((
+            loaded.lane,
+            loaded.engine_latency,
+            loaded.opened.abr.is_none(),
+            pcm.spec(),
+            pcm.next_chunk_info(),
+        ));
+        drop((loaded, queue, rig));
+        dir.finish().await;
+    }
+    assert_eq!(
+        opened[0], opened[1],
+        "a synthetic load answers with the decoded fixture's lane, latency and source facts"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn a_synthetic_load_reads_no_source_bytes(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
+    let unseeded = fixture_uri(dir.path(), "unseeded.wav");
+    let id = TrackId::allocate();
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::apply(
+            queue,
+            QueueCommand::Append {
+                position: kithara_play::Position::ZERO,
+                id,
+                source: TrackSource::Uri(unseeded.clone()),
+            },
+            out,
+        )
+        .expect("append unseeded track");
+        Player::apply(
+            queue,
+            QueueCommand::Select {
+                id,
+                transition: Transition::None,
+            },
+            out,
+        )
+        .expect("select unseeded track");
+    });
+    let seq = crate::mock::selected_load_seq(&queue);
+    let loaded = crate::mock::loaded_request(&queue, &mut rig, seq, FixtureSource::Synthetic).await;
+    assert_eq!(**loaded.opened.pcm.src(), *unseeded);
+    assert_eq!(
+        loaded.opened.pcm.next_chunk_info(),
+        Some(crate::mock::fixture_chunk()),
+        "the track opens from memory although its source has no bytes"
+    );
+    drop((loaded, queue, rig));
     dir.finish().await;
 }

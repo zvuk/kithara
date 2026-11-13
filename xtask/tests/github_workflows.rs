@@ -440,21 +440,15 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         "a runner reachability check must not add a self-hosted admission"
     );
 
-    let (selection_name, _) = ui_selection(jobs);
     for name in workflow_job_names(jobs) {
         if matches!(name.as_str(), "authorize" | "required") {
             continue;
         }
         let job = workflow_job(jobs, &name);
         assert_no_key(&Value::Mapping(job.clone()), "continue-on-error");
-        let expected_needs = if name == "ui" {
-            BTreeSet::from(["authorize".to_owned(), selection_name.to_owned()])
-        } else {
-            BTreeSet::from(["authorize".to_owned()])
-        };
         assert_eq!(
             job_needs(job),
-            expected_needs,
+            BTreeSet::from(["authorize".to_owned()]),
             "workflow job `{name}` must depend directly on hosted authorization"
         );
         let condition = job.get("if").and_then(Value::as_str).unwrap_or_default();
@@ -561,7 +555,7 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
 }
 
 // A push to a branch whose pull request is ready for review runs the suite
-// whole, a draft's push only what it touched. Nothing here reacts to a pull
+// whole, a draft's push only the draft scope. Nothing here reacts to a pull
 // request, so the push asks: the hosted job looks the request up before any
 // job reaches the fleet, and every role reads the one kind it named instead of
 // deciding again.
@@ -590,13 +584,7 @@ fn a_ready_pull_request_is_a_merge_request_pipeline() {
     let script = mapping_field(step, "run")
         .as_str()
         .expect("the kind step is a script");
-    for named in [
-        "main",
-        "merge-request",
-        "branch",
-        ".draft",
-        ".parent.full_name",
-    ] {
+    for named in ["main", ".parent.full_name", "PULLS", "github kind"] {
         assert!(
             script.contains(named),
             "the kind step never reads `{named}`"
@@ -2286,88 +2274,26 @@ fn a_request_for_one_lane_starts_nothing_beside_it() {
     );
 }
 
-fn ui_selection(jobs: &Mapping) -> (&str, &Mapping) {
-    jobs.iter()
-        .find_map(|(name, job)| {
-            let job = job.as_mapping()?;
-            job.get("outputs")?
-                .as_mapping()?
-                .contains_key("ui_required")
-                .then(|| (name.as_str().expect("job name is a string"), job))
-        })
-        .expect("CI publishes automatic UI ownership selection")
-}
-
+// A ready pull request runs everything, the UI suite included; a draft runs
+// it only when its lane is named. Nothing selects it by path.
 #[test]
-fn ui_ownership_selection_uses_the_fleet_checkout_and_build_environment() {
-    let ci = github_workflow("ci.yml");
-    let (_, selection) = ui_selection(workflow_jobs(&ci));
-    let run = github_workflow("run.yml");
-    let reference = workflow_job(workflow_jobs(&run), "select");
-    assert_eq!(
-        mapping_field(selection, "runs-on"),
-        mapping_field(reference, "runs-on")
-    );
-    assert_eq!(
-        mapping_field(reference, "runs-on"),
-        &serde_yaml_ng::to_value(["self-hosted", "linux", "x64", "kithara-report"])
-            .expect("control runner labels"),
-        "selectors must stay schedulable when compilation runners are occupied"
-    );
-    assert_eq!(first_step(selection), first_step(reference));
-    assert_no_key(&Value::Mapping(selection.clone()), "fetch-depth");
-    for variable in [
-        "CARGO_TARGET_DIR",
-        "CARGO_HOME",
-        "KITHARA_CI_TARGET_ROOT",
-        "KITHARA_CI_CACHE_ROOT",
-        "KITHARA_XTASK_TARGET",
-    ] {
-        assert_no_key(&ci, variable);
-    }
-    let step = named_step(selection, "Select UI ownership");
-    let step_id = mapping_field(step, "id")
-        .as_str()
-        .expect("selection step has an id");
-    let outputs = mapping_field(selection, "outputs")
-        .as_mapping()
-        .expect("selection has outputs");
-    assert_eq!(
-        mapping_field(outputs, "ui_required").as_str(),
-        Some(format!("${{{{ steps.{step_id}.outputs.ui_required }}}}").as_str())
-    );
-    assert_eq!(
-        mapping_field(step, "run")
-            .as_str()
-            .expect("selection has a script")
-            .trim(),
-        "ui_required=$(just ci touched --lane ui)\necho \"ui_required=$ui_required\" >> \"$GITHUB_OUTPUT\""
-    );
-}
-
-#[test]
-fn ui_scheduling_consults_owned_path_selection() {
+fn a_ready_pull_request_schedules_the_ui_suite() {
     let ci = github_workflow("ci.yml");
     let jobs = workflow_jobs(&ci);
-    let (selection_name, _) = ui_selection(jobs);
     let ui = workflow_job(jobs, "ui");
     let condition = mapping_field(ui, "if")
         .as_str()
         .expect("UI scheduling is conditional");
     assert!(condition.contains("vars.KITHARA_GPU_RUNNER_LABELS != ''"));
-    assert!(condition.contains(&format!(
-        "needs.{selection_name}.outputs.ui_required == 'true'"
-    )));
-    assert!(job_needs(ui).contains(selection_name));
+    assert!(condition.contains("needs.authorize.outputs.kind == 'merge-request'"));
+    assert_eq!(job_needs(ui), BTreeSet::from(["authorize".to_owned()]));
 }
 
 #[test]
-fn required_aggregation_requires_an_automatically_selected_ui_verdict() {
+fn required_aggregation_requires_the_ui_verdict_of_a_ready_pull_request() {
     let ci = github_workflow("ci.yml");
     let jobs = workflow_jobs(&ci);
-    let (selection_name, _) = ui_selection(jobs);
     let required = workflow_job(jobs, "required");
-    assert!(job_needs(required).contains(selection_name));
     let step = named_step(
         required,
         "Require every CI job to have executed successfully",
@@ -2376,10 +2302,12 @@ fn required_aggregation_requires_an_automatically_selected_ui_verdict() {
         .as_mapping()
         .expect("aggregate has an environment");
     assert_eq!(
-        mapping_field(env, "TOUCHED_UI_REQUIRED").as_str(),
-        Some(format!("${{{{ vars.KITHARA_GPU_RUNNER_LABELS != '' && needs.{selection_name}.outputs.ui_required == 'true' }}}}").as_str())
+        mapping_field(env, "READY_UI_REQUIRED").as_str(),
+        Some(
+            "${{ vars.KITHARA_GPU_RUNNER_LABELS != '' && needs.authorize.outputs.kind == 'merge-request' }}"
+        )
     );
-    for (selected, lanes, result, accepted) in [
+    for (ready, lanes, result, accepted) in [
         ("true", "", "skipped", false),
         ("true", "", "failure", false),
         ("true", "", "cancelled", false),
@@ -2395,34 +2323,14 @@ fn required_aggregation_requires_an_automatically_selected_ui_verdict() {
             .args(["github", "required"])
             .env("RESULTS", results.to_string())
             .env("REQUIRED_LANES", lanes)
-            .env("TOUCHED_UI_REQUIRED", selected)
+            .env("READY_UI_REQUIRED", ready)
             .output()
             .expect("the real aggregate script executes");
         assert_eq!(
             output.status.success(),
             accepted,
-            "selected={selected}, lanes={lanes}, result={result}"
+            "ready={ready}, lanes={lanes}, result={result}"
         );
-    }
-}
-
-#[test]
-fn lane_jobs_do_not_wait_for_ui_ownership_selection() {
-    let ci = github_workflow("ci.yml");
-    let jobs = workflow_jobs(&ci);
-    let (selection_name, selection) = ui_selection(jobs);
-    assert_eq!(
-        job_needs(selection),
-        BTreeSet::from(["authorize".to_owned()])
-    );
-    for (name, job) in jobs {
-        let job = job.as_mapping().expect("job is a mapping");
-        if job.get("uses").and_then(Value::as_str) == Some("./.github/workflows/run.yml") {
-            assert!(
-                !job_needs(job).contains(selection_name),
-                "{name:?} waits for UI selection"
-            );
-        }
     }
 }
 
