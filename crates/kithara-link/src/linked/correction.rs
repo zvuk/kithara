@@ -362,7 +362,7 @@ impl<P> Linked<P> {
         let at = self.jump_frame(out)?;
         let (position, _speed) = self.planned::<S>(at)?;
         if !covers(grid.geometry(), position) {
-            self.waiting = Some(Waiting::Sync { required: position });
+            self.waiting = Some(Waiting::Align { required: position });
             return Ok(None);
         }
         self.align_playing(&source, position, at, out)

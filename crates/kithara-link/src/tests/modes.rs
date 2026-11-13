@@ -131,10 +131,17 @@ fn a_grid_waiting_sync_follows_the_live_source_into_coverage() {
         rig.run(|out| deck.sync(true, out)).expect("waiting sync"),
         None
     );
+    assert!(control.commands().is_empty());
     super::fixtures::sound(&control, &mut rig, 0, 30_000);
     rig.run(|out| deck.tick(SessionFrame::new(0), out));
     let commands = control.commands();
-    assert!(matches!(commands.as_slice(), [(_, Command::Speed(..))]));
+    assert!(
+        matches!(commands.as_slice(), [
+            (speed, Command::Speed(_, When::At(at))),
+            (jump, Command::Jump(_, landing)),
+        ] if speed == jump && at == landing),
+        "the explicit SYNC resumes as one alignment: {commands:?}"
+    );
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
 }
 

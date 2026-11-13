@@ -613,11 +613,10 @@ async fn a_refused_sync_leaves_a_later_track_free(rhythm_a_wav: String, rhythm_b
     served.abort();
 }
 
-/// A refusal after SYNC was accepted turns the indicator off and frees the
-/// tempo fader, which steps from the played speed; a grid that arrives later
-/// puts the track back on the host at the tempo the host holds by then.
+/// A late grid restores SYNC with continuous speed correction; a seek then
+/// aligns immediately to the tempo the host holds by then.
 #[kithara::test(native, tokio)]
-async fn a_ready_grid_after_a_refusal_turns_sync_back_on_at_the_host_tempo(rhythm_a_wav: String) {
+async fn a_ready_grid_recovers_sync_smoothly_until_a_seek_aligns_it(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 126.0).await;
     let analysis = served.await.expect("the analysis fixture serves");
     rig.call(|rig| {
@@ -662,13 +661,30 @@ async fn a_ready_grid_after_a_refusal_turns_sync_back_on_at_the_host_tempo(rhyth
     .await;
     analysis.send_replace(Some(fixtures::supplied(rhythm_grid())));
     rig.call(|rig| {
+        let from = rig.queues[0].rate();
+        assert_revision_keeps_playback(rig);
+        rig.frame();
+        assert!(
+            rig.flag("deck.playback.synced@deck=a"),
+            "the usable grid restores SYNC during continuous playback"
+        );
+        let target = 124.0 / consts::TRACK_BPM;
+        let corrected = f64::from(rig.queues[0].rate());
+        assert!(
+            (target..f64::from(from)).contains(&corrected),
+            "recovery approaches the latest host tempo continuously: {from} -> {corrected}, target {target}"
+        );
+
+        rig.send("deck-a/wave", ControlAction::SetScalar(0.25));
+        rig.pump();
         rig.until(
-            "the grid restores SYNC at the host tempo",
+            "the seek aligns to the latest host tempo",
             Rig::DEADLINE,
             Rig::frame,
             |rig| {
                 rig.flag("deck.playback.synced@deck=a")
                     && rig.text("deck.playback.tempo@deck=a").as_deref() == Some("+3.3%")
+                    && rig.text("deck.playback.bpm@deck=a").as_deref() == Some("124.0")
             },
         );
     })
