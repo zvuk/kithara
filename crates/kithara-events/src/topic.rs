@@ -117,7 +117,7 @@ mod tests {
         assert!(topics.find::<B>().is_some());
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     async fn a_concurrent_insert_of_the_same_type_yields_one_channel() {
         let topics = std::sync::Arc::new(ScopeTopics::new(4));
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));

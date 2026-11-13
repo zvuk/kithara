@@ -262,23 +262,7 @@ fuzz SECONDS="120" *TARGETS:
 
 [positional-arguments]
 miri *ARGS:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # Isolation hides the clock and the environment, which every one of these
-    # crates reads on the way to its first assertion.
-    MIRIFLAGS="-Zmiri-disable-isolation" \
-        cargo +nightly miri nextest run --profile miri --lib --no-default-features \
-        --features kithara-platform/tokio-rt-multi-thread \
-        --features kithara-queue/symphonia,kithara-queue/stretch-glide,kithara-queue/client-reqwest,kithara-queue/tls-rustls \
-        -p kithara-abr \
-        -p kithara-bufpool \
-        -p kithara-command \
-        -p kithara-download \
-        -p kithara-events \
-        -p kithara-queue \
-        -p kithara-ring \
-        -p kithara-stream \
-        "$@"
+    just _xtask miri -- "$@"
 
 # Two backends answer to the same annotations, chosen by KITHARA_RTSAN_BACKEND:
 #
