@@ -6,7 +6,7 @@ use std::{
 use kithara::{
     assets::{AssetStore, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
-    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
+    platform::{CancelToken, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{

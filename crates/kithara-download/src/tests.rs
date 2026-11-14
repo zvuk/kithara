@@ -35,9 +35,7 @@ use super::{
 };
 use crate::DownloaderEvent;
 
-const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
 const FLOOD_BATCH_SIZE: usize = 10;
-const PORT_STRESS_TIMEOUT_SECS: u64 = 60;
 const SLOW_DEADLINE_SECS: u64 = 5;
 const SLOW_POLL_TIMEOUT_MS: u64 = 200;
 

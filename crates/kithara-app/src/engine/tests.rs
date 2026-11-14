@@ -487,7 +487,7 @@ async fn sync_puts_the_deck_on_the_host_beat(rhythm_a_wav: String) {
     drop(served);
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(native, tokio, timeout(Short))]
 async fn offline_sync_capture_keeps_the_host_beat_clicks(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {

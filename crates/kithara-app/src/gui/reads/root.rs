@@ -111,7 +111,7 @@ mod tests {
     use ::kithara::{
         abr::AbrMode,
         effects::GainDb,
-        platform::{time::Duration, tokio::runtime::Handle},
+        platform::tokio::runtime::Handle,
         prelude::TrackMetadata,
         ui::render::{ReadValue, Reads, TableCell, Walk},
     };

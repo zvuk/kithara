@@ -1,4 +1,4 @@
-use kithara::{decode::DecoderBackend, platform::time::Duration};
+use kithara::decode::DecoderBackend;
 use kithara_integration_tests::{TestServerHelper, mixed_encrypted, mixed_plain, served_mp3};
 use kithara_test_utils::{TestTempDir, temp_dir};
 use packaged::create_packaged_abr_fixture;

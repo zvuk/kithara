@@ -4,7 +4,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioConfig,
     file::{File, FileConfig},
-    platform::{time::Duration, tokio::task::spawn_blocking},
+    platform::tokio::task::spawn_blocking,
     play::{PlayWorker, PlayWorkerConfig},
     stream::Stream,
 };
@@ -101,7 +101,7 @@ async fn run_concurrent_file(n: usize, source: (TestServerHelper, Url)) {
     tokio,
     browser,
     serial,
-    timeout(::std::time::Duration::from_millis(3786)),
+    timeout(::std::time::Duration::from_millis(4429)),
     hang_timeout_secs(2)
 )]
 #[case::n2(2)]

@@ -188,12 +188,9 @@ impl SizeSignal {
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::{
-        sync::{
-            Arc, CondvarGate, WaitGate,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-        },
-        time::Duration,
+    use kithara_platform::sync::{
+        Arc, CondvarGate, WaitGate,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use kithara_storage::WaitOutcome;
     use kithara_stream::{DeferredWake, SourceError, StreamError, WorkerWake};

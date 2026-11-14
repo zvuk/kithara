@@ -198,7 +198,7 @@ impl PinsIndex {
 mod tests {
     use std::fs;
 
-    use kithara_platform::{CancelToken, time::Duration};
+    use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
 

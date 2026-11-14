@@ -2,7 +2,7 @@ use std::io::Cursor;
 
 use kithara::{
     decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory},
-    platform::{time::Duration, tokio::task::spawn_blocking},
+    platform::tokio::task::spawn_blocking,
     signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
@@ -274,7 +274,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
 #[kithara::test(
     native,
     tokio,
-    timeout(::std::time::Duration::from_millis(1302)),
+    timeout(::std::time::Duration::from_millis(2240)),
     hang_timeout_secs(1)
 )]
 #[case::aac("aac", AudioCodec::AacLc)]

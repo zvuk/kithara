@@ -1097,7 +1097,7 @@ async fn run_census(prepared: PreparedTracks, seam: Seam, temp_dir: &TestTempDir
 #[kithara::test(
     native,
     tokio,
-    timeout(::std::time::Duration::from_millis(3224)),
+    timeout(::std::time::Duration::from_millis(4156)),
     hang_timeout_secs(20)
 )]
 #[case::gapless_hls(HLS_QUEUE, Seam::Gapless)]

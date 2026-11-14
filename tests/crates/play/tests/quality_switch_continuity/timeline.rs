@@ -1,7 +1,4 @@
-use kithara::{
-    decode::DecoderBackend,
-    platform::{time::Duration, tokio::join},
-};
+use kithara::{decode::DecoderBackend, platform::tokio::join};
 use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::PackagedSignal};
 use num_traits::ToPrimitive;
 use rustfft::{FftPlanner, num_complex::Complex};

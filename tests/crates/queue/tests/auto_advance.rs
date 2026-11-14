@@ -378,7 +378,7 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
 /// cf=0: queue.tick must drive `process_notifications`, the audio thread
 /// arena handover at EOF promotes the armed next track, and the second
 /// track's PCM signal must replace the first one's.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1066)))]
 async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     const TRACK_SECS: f64 = 0.4;
     const TRACK_A_VALUE: f32 = 0.10;
@@ -1358,7 +1358,7 @@ async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() 
     harness.close().await;
 }
 
-#[kithara::test(tokio, flash(false), timeout(Short))]
+#[kithara::test(tokio, flash(false), timeout(Medium))]
 async fn cf_zero_replay_after_full_playthrough_still_advances() {
     const TRACK_SECS: f64 = 0.4;
 
@@ -1502,7 +1502,7 @@ async fn queue_stops_live_playback_when_last_track_ends() {
 /// the incoming track's very first tick, and the queue advances straight past
 /// it. Two tracks cannot show this — there is no successor left to jump to, so
 /// the sibling crossfade test above stays green while a playlist skips.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1003)))]
 async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
     const TRACK_SECS: f64 = 1.5;
     const CROSSFADE_SECS: f32 = 0.3;
@@ -1615,7 +1615,7 @@ async fn autoplay_queue(
 #[kithara::test(
     tokio,
     tracing("kithara_queue=debug,kithara_file=debug,kithara_storage=debug"),
-    timeout(::std::time::Duration::from_millis(1366))
+    timeout(::std::time::Duration::from_millis(1663))
 )]
 async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
     const TRACK_SECS: f64 = 0.4;

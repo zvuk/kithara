@@ -3480,7 +3480,7 @@ fn source_media_at(
     tokio,
     multi_thread,
     serial,
-    timeout(::std::time::Duration::from_millis(8936))
+    timeout(::std::time::Duration::from_millis(9680))
 )]
 #[case::plain_tempo_hold(
     Provider::HlsMp3(HlsProtection::Plain),

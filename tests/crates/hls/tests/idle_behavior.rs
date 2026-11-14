@@ -156,7 +156,12 @@ fn count_files_recursive(root: &Path) -> usize {
 /// behavior, free of ABR-switch noise. The assertion's upper bound is
 /// generous — it catches the "no cap at all" regression rather than a
 /// tight tuning number.
-#[kithara::test(tokio, native, serial, timeout(Long))]
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(::std::time::Duration::from_millis(9194))
+)]
 async fn idle_prefetch_is_capped(
     temp_dir: TestTempDir,
     #[future(awt)] capped_hls: (TestServerHelper, url::Url),

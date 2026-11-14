@@ -1,6 +1,6 @@
 use std::{io::Cursor, num::NonZeroU32};
 
-use kithara::{decode::probe_mp4_gapless, platform::time::Duration, stream::AudioCodec};
+use kithara::{decode::probe_mp4_gapless, stream::AudioCodec};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::pools,

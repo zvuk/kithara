@@ -115,7 +115,7 @@ fn prepared_oracle_silence_retains_its_full_extent() {
     assert!(silence.iter().all(|sample| sample.to_bits() == 0));
 }
 
-#[kithara::test(native)]
+#[kithara::test(native, timeout(Short))]
 fn prepared_bytes_preserve_pcm_and_reject_incomplete_frames(encoder_saw_aac: Pcm) {
     let bytes = Vec::from(encoder_saw_aac);
     let pcm = Pcm::from((48_000, 2, bytes.clone()));

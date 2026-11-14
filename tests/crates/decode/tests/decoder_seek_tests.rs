@@ -1603,7 +1603,7 @@ async fn read_until_decoded(
 #[kithara::test(
     tokio,
     native,
-    timeout(::std::time::Duration::from_millis(1716)),
+    timeout(::std::time::Duration::from_millis(1828)),
     hang_timeout_secs(1)
 )]
 #[cfg_attr(

@@ -4,7 +4,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioConfig,
     hls::{AbrMode, Hls, HlsConfig},
-    platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
+    platform::{CancelToken, sync::Arc, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };

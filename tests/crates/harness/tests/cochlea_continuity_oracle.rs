@@ -186,7 +186,7 @@ async fn tempo_oracle_distinguishes_a_decorated_capture(
     }
 }
 
-#[kithara::test(tokio, multi_thread)]
+#[kithara::test(tokio, multi_thread, timeout(Short))]
 #[case::cd_rate(44_100)]
 #[case::render_rate(48_000)]
 async fn tempo_oracle_preserves_the_live_rate_boundary(#[case] sample_rate: u32) {

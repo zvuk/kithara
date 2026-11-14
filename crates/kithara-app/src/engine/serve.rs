@@ -29,8 +29,7 @@ pub(crate) async fn serve(
 #[cfg(test)]
 mod tests {
     use ::kithara::platform::{
-        CancelToken,
-        time::{self, Duration},
+        CancelToken, time,
         tokio::sync::{mpsc, oneshot},
     };
     use kithara_test_utils::kithara;

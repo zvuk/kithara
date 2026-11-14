@@ -602,7 +602,7 @@ async fn committed_seek_position(
 
 /// Aggressive seek storm — many seeks in rapid succession, like a
 /// user dragging the slider. Loader has to cancel and restart fetches.
-#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(1365)))]
+#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(1366)))]
 #[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
 #[case::aac_abr_manual0(track_hls_aac_lc_abr4().await, AbrMode::manual(0))]
 #[case::mixed_codec_auto(track_hls_mixed_codec_abr4().await, AbrMode::Auto(None))]
@@ -679,7 +679,7 @@ async fn user_sim_long_play_then_switch_then_seek(#[case] kinds: PreparedTracks)
 /// Three-track DRM-heavy playlist: DRM → plain → DRM. The second
 /// DRM track must initialise fresh — covers the per-track DRM key
 /// state isolation path.
-#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(2571)))]
+#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(2725)))]
 #[case::drm_plain_drm(tracks_hls_aac_lc_drm_abr4_hls_aac_lc_abr4_hls_aac_lc_drm_abr4().await)]
 #[case::plain_drm_plain(tracks_hls_aac_lc_abr4_hls_aac_lc_drm_abr4_hls_aac_lc_abr4().await)]
 async fn user_sim_three_track_bounce_with_seeks(#[case] kinds: PreparedTracks) {

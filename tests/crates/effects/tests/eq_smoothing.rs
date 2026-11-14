@@ -1,6 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::platform::time::Duration;
 use kithara_integration_tests::{
     kithara,
     smoothing::{

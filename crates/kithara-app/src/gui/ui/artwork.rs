@@ -88,7 +88,6 @@ fn decode(bytes: &[u8]) -> image::ImageResult<Option<Image>> {
 
 #[cfg(test)]
 mod tests {
-    use ::kithara::platform::time::Duration;
     use image::ImageFormat;
     use kithara_test_utils::{kithara, wait_until};
 

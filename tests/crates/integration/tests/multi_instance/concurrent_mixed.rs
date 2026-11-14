@@ -6,7 +6,6 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
-        time::Duration,
         tokio::task::{JoinHandle, spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig},

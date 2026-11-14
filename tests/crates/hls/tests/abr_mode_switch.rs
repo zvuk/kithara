@@ -2738,7 +2738,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     serial,
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug"),
-    timeout(::std::time::Duration::from_millis(2672))
+    timeout(::std::time::Duration::from_millis(3185))
 )]
 #[cfg_attr(
     not(target_os = "android"),

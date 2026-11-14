@@ -6,7 +6,7 @@ use std::num::NonZeroU32;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     host::{HostConfig, HostSettings},
-    platform::{sync::Arc, time::Duration},
+    platform::sync::Arc,
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
