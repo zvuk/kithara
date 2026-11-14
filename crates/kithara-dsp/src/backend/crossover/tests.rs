@@ -1,5 +1,6 @@
 use biquad::Hertz;
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
 use super::Crossover;
 use crate::filter::{FilterError, Response};
@@ -50,11 +51,13 @@ impl ScalarSection {
         let v1 = a1 * s1 + a2 * v3;
         let v2 = s2 + a2 * s1 + a3 * v3;
         self.state = [2.0 * v1 - s1, 2.0 * v2 - s2];
-        let output = match self.response {
+        let output = (match self.response {
             Response::LowPass => v2,
             Response::HighPass => x - damping * v1 - v2,
             Response::AllPass => x - 2.0 * damping * v1,
-        } as f32;
+        })
+        .to_f32()
+        .expect("bounded scalar oracle output");
         self.reset = false;
         self.count(
             input.abs() <= crate::consts::SILENT_PEAK && output.abs() <= crate::consts::SILENT_PEAK,
@@ -134,9 +137,14 @@ fn sum(filter: &mut Crossover<1>, output: &mut [f32], gains: &[Vec<f32>]) -> usi
     let input = output.to_vec();
     let mut bands = vec![[vec![0.0; output.len()]]; gains.len()];
     let frames = filter.split(&[input.as_slice()], &mut bands);
-    output[..frames].fill(0.0);
+    let output = output.get_mut(..frames).expect("processed output prefix");
+    output.fill(0.0);
     for (band, gain) in bands.iter().zip(gains) {
-        crate::vector::mul_add(&band[0][..frames], &gain[..frames], &mut output[..frames]);
+        crate::vector::mul_add(
+            band[0].get(..frames).expect("processed band prefix"),
+            gain.get(..frames).expect("processed gain prefix"),
+            output,
+        );
     }
     frames
 }
@@ -321,7 +329,9 @@ fn butterworth_lp_dc_gain_is_unity() {
     let input = vec![1.0; 4096];
     let mut bands = vec![[vec![0.0; input.len()]]; 2];
     assert_eq!(filter.split(&[&input[..]], &mut bands), input.len());
-    let dc_gain = *bands[0][0].last().expect("nonempty DC response");
+    let dc_gain = *bands.first().expect("low band")[0]
+        .last()
+        .expect("nonempty DC response");
     assert!((dc_gain - 1.0).abs() < 0.001);
 }
 
@@ -342,8 +352,10 @@ fn a_refused_retune_preserves_every_sections_history() {
     let mut actual = crossover(&[250.0, 2_500.0], 48_000.0);
     let mut reference = crossover(&[250.0, 2_500.0], 48_000.0);
     let mut warm = vec![[vec![0.0; 257]]; 3];
-    actual.split(&[&input()[..257]], &mut warm);
-    reference.split(&[&input()[..257]], &mut warm);
+    let input = input();
+    let prefix = input.get(..257).expect("warmup prefix");
+    actual.split(&[prefix], &mut warm);
+    reference.split(&[prefix], &mut warm);
     assert!(matches!(
         actual.update_sample_rate(hz(1_000.0)),
         Err(FilterError::Parameters)
@@ -386,7 +398,12 @@ fn stereo_quiet_retirement_keeps_each_mono_history() {
                 let mut expected = vec![[vec![0.0; frames]]; 3];
                 mono.split(&[input.as_slice()], &mut expected);
                 for (band, expected) in actual.iter().zip(&expected) {
-                    for (actual, expected) in band[channel].iter().zip(&expected[0]) {
+                    for (actual, expected) in band
+                        .get(channel)
+                        .expect("stereo channel")
+                        .iter()
+                        .zip(&expected[0])
+                    {
                         assert_eq!(
                             actual.to_bits(),
                             expected.to_bits(),

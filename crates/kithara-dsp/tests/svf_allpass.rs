@@ -2,23 +2,38 @@ use std::num::NonZeroU32;
 
 use kithara_dsp::filter::{Response, StateVariableFilter};
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
 #[kithara::test]
 fn allpass_preserves_magnitude_and_reverses_phase_at_its_cutoff() {
     const TOLERANCE: f64 = 1e-5;
     for rate in [48_000_u32, 768_000] {
         for cutoff in [20.0, 1_000.0] {
-            let cutoff_period = (f64::from(rate) / cutoff) as usize;
-            let mut periods = vec![4, 16, 64, 256, 1_024, rate as usize / 20, cutoff_period];
+            let cutoff_period = (f64::from(rate) / cutoff)
+                .to_usize()
+                .expect("positive bounded cutoff period");
+            let mut periods = vec![
+                4,
+                16,
+                64,
+                256,
+                1_024,
+                usize::try_from(rate).expect("test rate fits usize") / 20,
+                cutoff_period,
+            ];
             periods.sort_unstable();
             periods.dedup();
             for period in periods {
                 let warmup = (8 * cutoff_period).max(2 * period);
                 let measured = 4 * period;
                 let frames = warmup + measured;
-                let phase = |frame: usize| std::f64::consts::TAU * frame as f64 / period as f64;
-                let mut output: Vec<f32> =
-                    (0..frames).map(|frame| phase(frame).sin() as f32).collect();
+                let phase = |frame: usize| {
+                    std::f64::consts::TAU * frame.to_f64().expect("test frame fits f64")
+                        / period.to_f64().expect("test period fits f64")
+                };
+                let mut output: Vec<f32> = (0..frames)
+                    .map(|frame| phase(frame).sin().to_f32().expect("bounded sine"))
+                    .collect();
                 let mut filter = StateVariableFilter::<1>::new();
                 filter
                     .process(
@@ -37,7 +52,7 @@ fn allpass_preserves_magnitude_and_reverses_phase_at_its_cutoff() {
                     real += f64::from(*value) * sine;
                     imaginary += f64::from(*value) * cosine;
                 }
-                let scale = 2.0 / measured as f64;
+                let scale = 2.0 / measured.to_f64().expect("test window fits f64");
                 let (real, imaginary) = (real * scale, imaginary * scale);
                 assert!(
                     (real.hypot(imaginary) - 1.0).abs() <= TOLERANCE,

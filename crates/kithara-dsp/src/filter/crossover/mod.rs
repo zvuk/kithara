@@ -2,7 +2,7 @@ mod core;
 mod design;
 
 #[cfg(test)]
-#[path = "../../backend/crossover_tests.rs"]
+#[path = "../../backend/crossover/tests.rs"]
 mod tests;
 
 pub use core::Crossover;

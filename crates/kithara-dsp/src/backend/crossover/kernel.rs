@@ -3,10 +3,7 @@ use std::ops::{Deref, DerefMut};
 use fearless_simd::{Level, dispatch, f64x2, prelude::*};
 use num_traits::ToPrimitive;
 
-use super::svf;
-use crate::{consts, filter::Response};
-
-const DAMPING: f64 = 1.0 / std::f64::consts::FRAC_1_SQRT_2;
+use crate::{backend::svf, consts, filter::Response};
 
 struct Section<const CHANNELS: usize> {
     state: [[f64; CHANNELS]; 2],
@@ -20,7 +17,7 @@ impl<const CHANNELS: usize> Section<CHANNELS> {
         Self {
             state: [[0.0; CHANNELS]; 2],
             quiet: [0; CHANNELS],
-            coefficients: svf::coefficients(gain, DAMPING),
+            coefficients: svf::coefficients(gain, consts::CROSSOVER_DAMPING),
             response,
         }
     }
@@ -42,12 +39,17 @@ impl<const CHANNELS: usize> Section<CHANNELS> {
                 x,
                 [load_pair(simd, memory1), load_pair(simd, memory2)],
                 self.coefficients,
-                DAMPING,
+                consts::CROSSOVER_DAMPING,
                 self.response,
             );
-            for (index, (sample, quiet)) in samples.iter_mut().zip(quiet).enumerate() {
+            let memory = memory1.iter_mut().zip(memory2);
+            let next = next1.as_slice().iter().zip(next2.as_slice());
+            let output = samples.iter_mut().zip(output.as_slice());
+            for (((sample, output), (memory1, memory2)), (quiet, (next1, next2))) in
+                output.zip(memory).zip(quiet.iter_mut().zip(next))
+            {
                 let input = *sample;
-                *sample = output.as_slice()[index].to_f32().unwrap_or(f32::NAN);
+                *sample = output.to_f32().unwrap_or(f32::NAN);
                 let silent =
                     input.abs() <= consts::SILENT_PEAK && sample.abs() <= consts::SILENT_PEAK;
                 *quiet = if silent {
@@ -56,11 +58,11 @@ impl<const CHANNELS: usize> Section<CHANNELS> {
                     0
                 };
                 if *quiet == consts::SECTION_MEMORY {
-                    memory1[index] = 0.0;
-                    memory2[index] = 0.0;
+                    *memory1 = 0.0;
+                    *memory2 = 0.0;
                 } else {
-                    memory1[index] = next1.as_slice()[index];
-                    memory2[index] = next2.as_slice()[index];
+                    *memory1 = *next1;
+                    *memory2 = *next2;
                 }
             }
         }
@@ -111,10 +113,10 @@ impl<const CHANNELS: usize> Split<CHANNELS> {
 
     pub(crate) fn retune(&mut self, gain: f64, later: impl Iterator<Item = f64>) {
         for section in self.lowpass.iter_mut().chain(&mut self.highpass) {
-            section.coefficients = svf::coefficients(gain, DAMPING);
+            section.coefficients = svf::coefficients(gain, consts::CROSSOVER_DAMPING);
         }
         for (section, gain) in self.allpass.iter_mut().zip(later) {
-            section.coefficients = svf::coefficients(gain, DAMPING);
+            section.coefficients = svf::coefficients(gain, consts::CROSSOVER_DAMPING);
         }
         self.reset();
     }
@@ -147,7 +149,11 @@ fn process_kernel<
     frames: usize,
 ) {
     for frame in 0..frames {
-        let mut high = input.each_ref().map(|plane| plane[frame]);
+        let mut high = input.each_ref().map(|plane| {
+            *plane
+                .get(frame)
+                .expect("frame belongs to the validated common prefix")
+        });
         let (high_band, lower) = bands.split_last_mut().expect("validated high band");
         for (split, band) in splits.iter_mut().zip(lower) {
             let mut low = high;
@@ -161,11 +167,15 @@ fn process_kernel<
                 low = section.run(simd, low);
             }
             for (plane, value) in band.iter_mut().zip(low) {
-                plane[frame] = value;
+                *plane
+                    .get_mut(frame)
+                    .expect("frame belongs to the validated common prefix") = value;
             }
         }
         for (plane, value) in high_band.iter_mut().zip(high) {
-            plane[frame] = value;
+            *plane
+                .get_mut(frame)
+                .expect("frame belongs to the validated common prefix") = value;
         }
     }
 }
@@ -177,14 +187,21 @@ mod tests {
     use super::*;
 
     fn parity<const CHANNELS: usize>(bands: usize) {
-        let gains: Vec<_> = (0..bands - 1)
-            .map(|index| 0.01 * (index + 1) as f64)
+        let gains: Vec<_> = (0..bands.checked_sub(1).expect("one high band"))
+            .map(|index| {
+                0.01 * index
+                    .saturating_add(1)
+                    .to_f64()
+                    .expect("bounded section index")
+            })
             .collect();
         let make = || {
             gains
                 .iter()
                 .enumerate()
-                .map(|(index, gain)| Split::new(*gain, gains.iter().copied().skip(index + 1)))
+                .map(|(index, gain)| {
+                    Split::new(*gain, gains.iter().copied().skip(index.saturating_add(1)))
+                })
                 .collect::<Vec<Split<CHANNELS>>>()
         };
         let mut native = make();
@@ -194,8 +211,11 @@ mod tests {
                 for splits in [&mut native, &mut fallback] {
                     for (index, split) in splits.iter_mut().enumerate() {
                         split.retune(
-                            gains[index] * 0.5,
-                            gains.iter().skip(index + 1).map(|gain| gain * 0.5),
+                            *gains.get(index).expect("prepared split gain") * 0.5,
+                            gains
+                                .iter()
+                                .skip(index.saturating_add(1))
+                                .map(|gain| gain * 0.5),
                         );
                     }
                 }
@@ -219,10 +239,18 @@ mod tests {
                             .collect()
                     });
                     let mut actual =
-                        vec![std::array::from_fn(|_| vec![-7.0; frames + 1]); bands + 1];
+                        vec![
+                            std::array::from_fn(|_| vec![-7.0; frames.saturating_add(1)]);
+                            bands.saturating_add(1)
+                        ];
                     let mut expected = actual.clone();
-                    process(&mut native, &input, &mut actual[..bands], frames);
-                    dispatch!(Level::fallback(), simd => process_kernel(simd, &mut fallback, &input, &mut expected[..bands], frames));
+                    process(
+                        &mut native,
+                        &input,
+                        actual.get_mut(..bands).expect("required band planes"),
+                        frames,
+                    );
+                    dispatch!(Level::fallback(), simd => process_kernel(simd, &mut fallback, &input, expected.get_mut(..bands).expect("required band planes"), frames));
                     for (actual, expected) in actual
                         .iter()
                         .flatten()

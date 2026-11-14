@@ -1,5 +1,6 @@
 use kithara_dsp::filter::{Crossover, Hertz};
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
 fn hz(value: f64) -> Hertz<f64> {
     Hertz::from_hz(value).expect("positive domain point")
@@ -27,13 +28,13 @@ fn impulse(filter: &mut Crossover, bands: usize) -> [f32; 3] {
 #[case(705_600)]
 #[case(768_000)]
 fn lr4_ap2_domain_constructs_and_retunes_without_response_holes(#[case] rate: u32) {
-    const INTERVALS: usize = 65_536;
+    const INTERVALS: u32 = 65_536;
     let mut minimum = f32::INFINITY;
     for point in 0..=INTERVALS {
         let cutoff = match point {
             0 => 20.0,
             INTERVALS => 20_000.0,
-            _ => 20.0 * (1_000.0_f64.ln() * point as f64 / INTERVALS as f64).exp(),
+            _ => 20.0 * (1_000.0_f64.ln() * f64::from(point) / f64::from(INTERVALS)).exp(),
         };
         let frequencies = if point == 0 {
             vec![hz(20.0)]
@@ -73,13 +74,24 @@ fn divisor(mut left: usize, mut right: usize) -> usize {
 
 fn response(frequencies: &[f64], rate: u32, tone: u32) {
     const TOLERANCE: f64 = 1e-5;
-    let period = rate as usize / divisor(rate as usize, tone as usize);
-    let warmup = (8.0 * f64::from(rate) / frequencies[0]).ceil() as usize;
+    let period = usize::try_from(rate).expect("test rate fits usize")
+        / divisor(
+            usize::try_from(rate).expect("test rate fits usize"),
+            usize::try_from(tone).expect("test tone fits usize"),
+        );
+    let warmup = (8.0 * f64::from(rate) / frequencies[0])
+        .ceil()
+        .to_usize()
+        .expect("positive bounded warmup");
     let measured = 4 * period;
     let frames = warmup + measured;
-    let phase =
-        |frame: usize| std::f64::consts::TAU * f64::from(tone) * frame as f64 / f64::from(rate);
-    let mut output: Vec<f32> = (0..frames).map(|frame| phase(frame).sin() as f32).collect();
+    let phase = |frame: usize| {
+        std::f64::consts::TAU * f64::from(tone) * frame.to_f64().expect("test frame fits f64")
+            / f64::from(rate)
+    };
+    let mut output: Vec<f32> = (0..frames)
+        .map(|frame| phase(frame).sin().to_f32().expect("bounded sine"))
+        .collect();
     let gains = vec![vec![1.0_f32; frames]; frequencies.len() + 1];
     let cutoffs: Vec<_> = frequencies.iter().copied().map(hz).collect();
     let mut filter = Crossover::<1>::new(&cutoffs, hz(f64::from(rate))).expect("response design");
@@ -96,7 +108,7 @@ fn response(frequencies: &[f64], rate: u32, tone: u32) {
         real += f64::from(*value) * sine;
         imaginary += f64::from(*value) * cosine;
     }
-    let scale = 2.0 / measured as f64;
+    let scale = 2.0 / measured.to_f64().expect("test window fits f64");
     let (real, imaginary) = (real * scale, imaginary * scale);
     let mut expected = (1.0, 0.0);
     for cutoff in frequencies {

@@ -17,7 +17,7 @@ impl<const CHANNELS: usize> Crossover<CHANNELS> {
     /// Allocates zeroed state for ascending crossovers; an empty list is one identity band.
     ///
     /// # Errors
-    /// Returns [FilterError::Parameters] for nonfinite/nonpositive rate or frequencies,
+    /// Returns [`FilterError::Parameters`] for nonfinite/nonpositive rate or frequencies,
     /// crossovers not strictly increasing below Nyquist, or an unrepresentable design.
     pub fn new(frequencies: &[Hertz<f64>], sample_rate: Hertz<f64>) -> Result<Self, FilterError> {
         validate(frequencies.iter().copied(), sample_rate)?;
@@ -73,7 +73,7 @@ impl<const CHANNELS: usize> Crossover<CHANNELS> {
     /// Atomically retunes every section, clearing history without allocation.
     ///
     /// # Errors
-    /// Returns [FilterError::Parameters] if the rate cannot represent every crossover.
+    /// Returns [`FilterError::Parameters`] if the rate cannot represent every crossover.
     /// A refusal leaves the active design and history unchanged.
     pub fn update_sample_rate(&mut self, sample_rate: Hertz<f64>) -> Result<(), FilterError> {
         validate(self.frequencies.iter().copied(), sample_rate)?;

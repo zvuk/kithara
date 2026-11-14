@@ -1,12 +1,13 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara_dsp::filter::{Crossover, Hertz};
+use kithara_test_utils::kithara;
 
 fn hz(value: f64) -> Hertz<f64> {
     Hertz::from_hz(value).expect("positive frequency")
 }
 
-#[test]
+#[kithara::test]
 fn a_positive_crossover_keeps_its_low_band_when_constructed_or_retuned() {
     let mut missing = 0;
     for rate in [705_600.0, 768_000.0] {
