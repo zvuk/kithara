@@ -7,14 +7,136 @@ use std::{
 };
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use fearless_simd::{Level, dispatch};
 use kithara_dsp::{
-    filter::{Biquad, Coefficients, Hertz, Response, StateVariableFilter, Type},
+    filter::{Biquad, Coefficients, Hertz, Response, StateVariableFilter, SvfDesign, Type},
     interp::{Interpolation, interpolate, interpolate_frame, weighted_frames},
     spectrum::{Autocorrelation, Fft, FftLen, prediction_difference},
 };
 use kithara_test_utils::bufpool::pools;
 use num_traits::ToPrimitive;
 use realfft::{RealToComplex, RealToComplexEven};
+
+#[path = "../src/backend/load.rs"]
+mod load;
+#[path = "../src/backend/last_loud.rs"]
+mod loud_kernel;
+
+fn loud_fallback(samples: &[f32], limit: f32) -> Option<usize> {
+    dispatch!(Level::fallback(), simd => loud_kernel::kernel(simd, samples, limit))
+}
+
+fn loud_scalar(samples: &[f32], limit: f32) -> Option<usize> {
+    samples.iter().rposition(|sample| sample.abs() > limit)
+}
+
+fn last_loud(c: &mut Criterion) {
+    type Search = fn(&[f32], f32) -> Option<usize>;
+    let implementations: [(&str, Search); 3] = [
+        ("native", kithara_dsp::last_loud),
+        ("fallback", loud_fallback),
+        ("rposition", loud_scalar),
+    ];
+    let mut group = c.benchmark_group("last_loud");
+    group.sample_size(20);
+    for size in [128, 512, 4096] {
+        for shape in ["silent", "last"] {
+            let mut samples = vec![0.0_f32; size];
+            if shape == "last" {
+                *samples.last_mut().expect("nonempty") = 0.25;
+            }
+            let expected = loud_scalar(&samples, 1e-6);
+            group.throughput(Throughput::Elements(u64::try_from(size).expect("size")));
+            for (name, search) in implementations {
+                assert_eq!(search(&samples, 1e-6), expected);
+                group.bench_function(BenchmarkId::new(format!("{shape}/{name}"), size), |b| {
+                    b.iter(|| black_box(search(black_box(&samples), black_box(1e-6))));
+                });
+            }
+        }
+    }
+    group.finish();
+}
+
+fn svf_fixed(c: &mut Criterion) {
+    let mut group = c.benchmark_group("svf_fixed");
+    group.sample_size(20);
+    let rate = NonZeroU32::new(48_000).expect("rate");
+    for frames in [128, 512] {
+        let samples: Vec<_> = tone(frames)
+            .into_iter()
+            .map(|sample| 0.25 * sample)
+            .collect();
+        let template = [samples.clone(), samples];
+        let cutoffs = vec![4000.0; frames];
+        group.throughput(Throughput::Elements(
+            u64::try_from(frames * 2).expect("stereo"),
+        ));
+        for response in [Response::LowPass, Response::HighPass] {
+            let design = SvfDesign::new(rate, 4000.0, FRAC_1_SQRT_2, response).expect("design");
+            let mut fixed = template.clone();
+            let mut dynamic = template.clone();
+            StateVariableFilter::<2>::new()
+                .process_fixed(&mut fixed, 0..frames, &design)
+                .expect("shape");
+            StateVariableFilter::<2>::new()
+                .process(
+                    &mut dynamic,
+                    0..frames,
+                    &cutoffs,
+                    rate,
+                    FRAC_1_SQRT_2,
+                    response,
+                )
+                .expect("shape");
+            assert!(
+                fixed
+                    .iter()
+                    .flatten()
+                    .zip(dynamic.iter().flatten())
+                    .all(|(left, right)| left.is_finite()
+                        && right.is_finite()
+                        && (left - right).abs() <= 1e-6)
+            );
+            for prepared in [true, false] {
+                let mode = if prepared { "fixed" } else { "per_frame" };
+                group.bench_function(
+                    BenchmarkId::new(format!("2ch_{response:?}/{mode}"), frames),
+                    |b| {
+                        b.iter_batched_ref(
+                            || (StateVariableFilter::<2>::new(), template.clone()),
+                            |(filter, planes)| {
+                                if prepared {
+                                    filter
+                                        .process_fixed(
+                                            black_box(&mut *planes),
+                                            0..frames,
+                                            black_box(&design),
+                                        )
+                                        .expect("shape");
+                                } else {
+                                    filter
+                                        .process(
+                                            black_box(&mut *planes),
+                                            0..frames,
+                                            black_box(&cutoffs),
+                                            rate,
+                                            FRAC_1_SQRT_2,
+                                            response,
+                                        )
+                                        .expect("shape");
+                                }
+                                black_box(planes);
+                            },
+                            BatchSize::SmallInput,
+                        );
+                    },
+                );
+            }
+        }
+    }
+    group.finish();
+}
 
 mod consts {
     use super::NonZeroUsize;
@@ -541,6 +663,8 @@ fn source_frames(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    last_loud,
+    svf_fixed,
     crossfade,
     kernels,
     vector,

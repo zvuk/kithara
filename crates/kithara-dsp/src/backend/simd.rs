@@ -6,6 +6,8 @@ use std::{
 use fearless_simd::{Level, dispatch, prelude::*};
 use num_traits::AsPrimitive;
 
+pub(super) use super::{last_loud::kernel as last_loud_kernel, load::padded};
+
 /// Replaces `NaN`, ±infinity, subnormals and −0.0 with `+0.0` in place; every
 /// other value keeps its bits.
 pub fn sanitize(samples: &mut [f32]) {
@@ -221,16 +223,6 @@ fn sanitized<S: Simd>(x: S::f32s, smallest: S::f32s, largest: S::f32s, zero: S::
     let magnitude = x.abs();
     let normal = magnitude.simd_ge(smallest).select(x, zero);
     magnitude.simd_le(largest).select(normal, zero)
-}
-
-/// A vector holding `tail` in its first lanes and `+0.0` in the rest.
-#[inline(always)]
-pub(super) fn padded<S: Simd>(simd: S, tail: &[f32]) -> S::f32s {
-    let mut vector = S::f32s::splat(simd, 0.0);
-    for (slot, sample) in vector.as_mut_slice().iter_mut().zip(tail) {
-        *slot = *sample;
-    }
-    vector
 }
 
 pub(crate) fn crossfade_linear(
@@ -490,19 +482,4 @@ pub(super) fn first_quiet_kernel<S: Simd, P: Deref<Target = [f32]>>(
 
 pub(crate) fn last_loud(samples: &[f32], limit: f32) -> Option<usize> {
     dispatch!(Level::new(), simd => last_loud_kernel(simd, samples, limit))
-}
-
-#[inline(always)]
-pub(super) fn last_loud_kernel<S: Simd>(simd: S, samples: &[f32], limit: f32) -> Option<usize> {
-    let bound = S::f32s::splat(simd, limit);
-    for (block, values) in samples.chunks(S::f32s::LEN).enumerate().rev() {
-        let lanes = u32::try_from(values.len()).expect("SIMD width fits u32");
-        let valid = u64::MAX.wrapping_shr(u64::BITS.saturating_sub(lanes));
-        let loud = padded(simd, values).abs().simd_gt(bound).to_bitmask() & valid;
-        if loud != 0 {
-            let lane = usize::try_from(loud.ilog2()).expect("SIMD lane fits usize");
-            return Some(block.saturating_mul(S::f32s::LEN).saturating_add(lane));
-        }
-    }
-    None
 }

@@ -8,6 +8,8 @@ mod envelope;
 mod fade;
 mod fir;
 mod interpolate;
+mod last_loud;
+mod load;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) mod portable;
 mod simd;
