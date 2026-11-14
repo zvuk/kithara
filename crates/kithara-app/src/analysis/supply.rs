@@ -84,6 +84,7 @@ impl Prepared {
             AnalysisDemand::WAVEFORM,
             fingerprint.waveform().is_some() && self.waveform.is_missing(),
         );
+        demand.set(AnalysisDemand::KEY, fingerprint.key().is_some());
         demand
     }
 
@@ -101,7 +102,8 @@ impl Prepared {
 
     /// Whether the track needs nothing further: the pass ran its course and
     /// every artifact this runtime offers is either prepared or published.
-    /// A prepared artifact excuses the pass from producing it.
+    /// A prepared artifact excuses the pass from producing it. The key is
+    /// published once the snapshot carries its tag, with or without a key.
     pub(crate) fn settled_for(
         &self,
         progress: &AnalysisProgress,
@@ -114,6 +116,7 @@ impl Prepared {
         let waveform = !self.waveform.is_missing()
             || fingerprint.waveform().is_none()
             || analysis.waveform().is_some();
-        analysis.is_settled() && beat && waveform
+        let key = fingerprint.key().is_none() || analysis.fingerprint().key().is_some();
+        analysis.is_settled() && beat && waveform && key
     }
 }

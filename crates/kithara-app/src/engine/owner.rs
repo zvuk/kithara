@@ -187,7 +187,7 @@ impl Engine {
 
     fn snapshot(&self) -> EngineSnapshot {
         EngineSnapshot {
-            track_bpms: Arc::clone(&self.analysis.bpms()),
+            track_facts: Arc::clone(&self.analysis.track_facts()),
             decks: self
                 .session
                 .records()

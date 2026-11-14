@@ -4675,6 +4675,7 @@ dependencies = [
  "kithara-derive",
  "kithara-dsp",
  "kithara-events",
+ "kithara-key",
  "kithara-platform",
  "kithara-resampler",
  "kithara-signal",

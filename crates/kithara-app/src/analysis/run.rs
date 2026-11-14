@@ -141,15 +141,6 @@ impl Owner {
             return None;
         }
         let demand = entry.prepared().demand(fingerprint);
-        if demand.is_empty() {
-            debug!(
-                ?track_id,
-                held, "analysis: every artifact is prepared or published; no pass opened"
-            );
-            entry.set_stage(Stage::Ended(axis));
-            entry.release();
-            return None;
-        }
         let queue = entry.queue().clone();
         let config = entry.config().clone();
         let revision = seed
@@ -191,6 +182,7 @@ impl Owner {
             fresh,
             beat = demand.beat(),
             waveform = demand.waveform(),
+            key = demand.key(),
             axis = axis.get(),
             "analysis: pass opened"
         );

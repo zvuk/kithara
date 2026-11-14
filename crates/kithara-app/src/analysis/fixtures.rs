@@ -71,7 +71,9 @@ pub(crate) fn other_axis() -> NonZeroU32 {
 }
 
 pub(crate) fn fingerprint() -> AnalysisFingerprint {
-    AnalysisFingerprint::new(None, Some("wave:test:v1"))
+    AnalysisFingerprint::builder()
+        .waveform("wave:test:v1")
+        .build()
 }
 
 pub(crate) fn progress(analysis: TrackAnalysis) -> AnalysisProgress {

@@ -12,7 +12,7 @@ use kithara::{
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    analysis::TrackArtifacts,
+    analysis::{TrackArtifacts, TrackFacts},
     broadcast::Broadcaster,
     deck::{EqMode, TempoPercent},
     mix::{MixState, MixStrip},
@@ -26,7 +26,7 @@ pub(crate) struct EngineSnapshot {
     pub(crate) mix: MixState,
     pub(crate) tempo: Tempo,
     pub(crate) decks: Vec<DeckSnapshot>,
-    pub(crate) track_bpms: Arc<BTreeMap<String, f64>>,
+    pub(crate) track_facts: Arc<BTreeMap<String, TrackFacts>>,
     pub(crate) applied_seq: u64,
 }
 
@@ -38,7 +38,7 @@ impl EngineSnapshot {
             mix: MixState::default(),
             tempo: Tempo::DEFAULT,
             decks: Vec::new(),
-            track_bpms: Arc::new(BTreeMap::new()),
+            track_facts: Arc::new(BTreeMap::new()),
             applied_seq: 0,
         }
     }
