@@ -9,7 +9,7 @@
 //! application actually uses, and looks at a pixel.
 use futures_lite::future::block_on;
 use iced::{
-    Color, Pixels, Size, Vector,
+    Color, Pixels, Radians, Rectangle, Size, Vector,
     advanced::{
         Renderer as _,
         graphics::{geometry::Renderer as _, text::font_system},
@@ -428,6 +428,49 @@ fn iced_runs_a_ramp_across_the_shape_it_fills() {
 }
 
 #[kithara::test]
+fn iced_canvas_gradient_quarters_follow_the_linear_stop_fraction() {
+    let rgba = through_iced(&ramped());
+    assert_linear_quarters(&rgba);
+}
+
+#[kithara::test]
+fn iced_quad_gradient_quarters_follow_the_linear_stop_fraction() {
+    let rgba = iced_image(|renderer| {
+        let bounds = Rectangle {
+            x: consts::ORIGIN.0 + consts::OUTER.x,
+            y: consts::ORIGIN.1 + consts::OUTER.y,
+            width: consts::OUTER.w,
+            height: consts::OUTER.h,
+        };
+        let gradient = iced::gradient::Linear::new(Radians(std::f32::consts::FRAC_PI_2))
+            .add_stop(0.0, Color::from_rgb(1.0, 0.0, 0.0))
+            .add_stop(1.0, Color::WHITE);
+        renderer.fill_quad(
+            iced::advanced::renderer::Quad {
+                bounds,
+                ..Default::default()
+            },
+            gradient,
+        );
+    });
+    assert_linear_quarters(&rgba);
+}
+
+fn assert_linear_quarters(rgba: &[u8]) {
+    let middle = consts::OUTER.y + consts::OUTER.h / 2.0;
+    for fraction in [0.25, 0.75] {
+        let x = consts::OUTER.x + consts::OUTER.w * fraction;
+        let actual = sample(rgba, x, middle);
+        let expected: u8 = cast(((x + 0.5 - consts::OUTER.x) / consts::OUTER.w * 255.0).round())
+            .expect("the reference fraction is inside RGBA8");
+        assert!(
+            actual.abs_diff(expected) <= 1,
+            "fraction {fraction}: {actual}, expected {expected}"
+        );
+    }
+}
+
+#[kithara::test]
 fn iced_leaves_the_hole_an_outline_asked_for() {
     assert!(
         ring_has_a_hole(&through_iced(&ring())),
@@ -451,6 +494,21 @@ fn iced_paints_what_a_clip_contains() {
 
 fn through_iced(list: &DrawList) -> Vec<u8> {
     let skin = builtin::skin();
+    iced_image(|renderer| {
+        let mut frame = Frame::new(
+            renderer,
+            Size::new(f32::from(consts::SURFACE.0), f32::from(consts::SURFACE.1)),
+        );
+        replay_ordered(list, &mut frame, skin.text_resources.as_ref());
+        let geometry = frame.into_geometry();
+        renderer.with_translation(
+            Vector::new(consts::ORIGIN.0, consts::ORIGIN.1),
+            |renderer| renderer.draw_geometry(geometry),
+        );
+    })
+}
+
+fn iced_image(draw: impl FnOnce(&mut iced::Renderer)) -> Vec<u8> {
     let mut fonts = font_system()
         .write()
         .unwrap_or_else(|error| panic!("the iced font system must be available: {error}"));
@@ -465,18 +523,7 @@ fn through_iced(list: &DrawList) -> Vec<u8> {
         Some("wgpu"),
     ))
     .expect("iced must give a wgpu renderer without a window");
-    let mut frame = Frame::new(
-        &renderer,
-        Size::new(f32::from(consts::SURFACE.0), f32::from(consts::SURFACE.1)),
-    );
-    replay_ordered(list, &mut frame, skin.text_resources.as_ref());
-    let geometry = frame.into_geometry();
-    renderer.with_translation(
-        Vector::new(consts::ORIGIN.0, consts::ORIGIN.1),
-        |renderer| {
-            renderer.draw_geometry(geometry);
-        },
-    );
+    draw(&mut renderer);
     renderer.screenshot(
         Size::new(u32::from(consts::SURFACE.0), u32::from(consts::SURFACE.1)),
         1.0,
