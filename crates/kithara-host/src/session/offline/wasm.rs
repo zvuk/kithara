@@ -122,7 +122,7 @@ mod tests {
     use std::{
         cell::Cell,
         rc::Rc,
-        sync::atomic::{AtomicBool, Ordering},
+        sync::atomic::{AtomicBool, AtomicU8, Ordering},
     };
 
     use kithara_platform::{sync::mpsc, thread, time::Duration};
@@ -249,14 +249,25 @@ mod tests {
         let (sender, _receiver) = mpsc::channel();
         let client = Arc::new(OfflineSessionClient::new(postbox, sender, route));
         let waker = client.waker(DeckMsg::Receipts);
-        let finished = Arc::new(AtomicBool::new(false));
-        let wake_finished = finished.clone();
+        let progress = Arc::new(AtomicU8::new(0));
+        let wake_progress = progress.clone();
 
         drop(thread::spawn(move || {
+            wake_progress.store(1, Ordering::Release);
             waker.wake();
-            wake_finished.store(true, Ordering::Release);
+            wake_progress.store(2, Ordering::Release);
         }));
-        while !finished.load(Ordering::Acquire) {
+        let mut observed = None;
+        loop {
+            let stage = progress.load(Ordering::Acquire);
+            if observed != Some(stage) {
+                tracing::warn!(target: "kithara_test::host::offline_wake", stage,
+                    "foreign worker wake progress: 0 bootstrap, 1 waking owner, 2 returned");
+                observed = Some(stage);
+            }
+            if stage == 2 {
+                break;
+            }
             sleep(SESSION_PUMP_INTERVAL).await;
         }
 

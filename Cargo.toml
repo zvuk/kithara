@@ -428,6 +428,7 @@ dbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rus
 delegate = "0.13"
 derive-where = "1.7"
 derive_more = { version = "2.1", features = ["debug", "deref", "deref_mut", "display", "error", "from", "into"] }
+dirs-next = "2.0"
 fast-interleave = "0.1"
 fdk-aac-sys = "0.5.0"
 fearless_simd = "1.0"

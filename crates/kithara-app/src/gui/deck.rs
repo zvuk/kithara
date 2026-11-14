@@ -48,7 +48,10 @@ pub(crate) fn command(shown: &DeckSnapshot, eq_mode: EqMode, msg: &DeckMsg) -> O
             DeckCmd::RemoveTrack(shown.tracks.get(current)?.id)
         }
         DeckMsg::SetTempo(tempo) => DeckCmd::SetTempo(tempo),
-        DeckMsg::SetQuality(variant) => DeckCmd::SetQuality(variant),
+        DeckMsg::SetQuality(variant) => DeckCmd::SetQuality {
+            track: shown.tracks.get(shown.current_track_index?)?.id,
+            variant,
+        },
         DeckMsg::ToggleSync => DeckCmd::ToggleSync,
         DeckMsg::ToggleKeylock => DeckCmd::ToggleKeylock,
     })

@@ -18,6 +18,71 @@ struct HandoverRig {
     last_lane: Option<kithara_render::LaneId>,
 }
 
+#[kithara::test(tokio)]
+#[case::applied_before_cancel(true)]
+#[case::withdrawn_before_apply(false)]
+async fn a_source_change_follows_its_native_receipt_after_selection_changes(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] applied_before_cancel: bool,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
+    let id = rig.ids[0];
+    let before = rig.queue.control().current().unwrap().url;
+    let alternate = fixture_uri(rig.dir.path(), "alternate.wav");
+    seed_fixture(
+        rig.queue.config.store.as_ref().unwrap(),
+        &alternate,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
+    );
+    rig.apply(QueueCommand::ReplaceSource {
+        id,
+        source: alternate.clone().into(),
+    })
+    .unwrap();
+    rig.load(0, 64.295).await;
+    let pending = rig
+        .queue
+        .pending_handover
+        .expect("native source entry submitted");
+    assert!(matches!(
+        rig.apply(QueueCommand::Seek { to: Position::ZERO }),
+        Err(PlayError::NotReady)
+    ));
+    let receipts = if applied_before_cancel {
+        rig.deck.block(SessionFrame::new(128), 0.0).unwrap()
+    } else {
+        Vec::new()
+    };
+    rig.select(1, Transition::None).unwrap();
+    assert!(rig.queue.tracks.is_changing_source(id));
+    let receipts = if applied_before_cancel {
+        receipts
+    } else {
+        rig.deck.block(SessionFrame::new(128), 0.0).unwrap()
+    };
+    let entry = receipts
+        .iter()
+        .find(|receipt| receipt.seq() == pending.seq)
+        .unwrap();
+    assert_eq!(
+        matches!(entry.outcome(), Outcome::Applied { .. }),
+        applied_before_cancel
+    );
+    rig.settle(receipts);
+    assert!(!rig.queue.tracks.is_changing_source(id));
+    assert_eq!(
+        rig.queue.control().track(id).unwrap().url,
+        if applied_before_cancel {
+            Some(alternate)
+        } else {
+            before
+        }
+    );
+    assert!(rig.queue.pending_handover.is_none());
+    assert_eq!(rig.queue.target.unwrap().to, rig.ids[1]);
+    rig.finish().await;
+}
+
 impl HandoverRig {
     async fn finish(self) {
         let Self {

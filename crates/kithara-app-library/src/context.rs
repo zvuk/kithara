@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use kithara_net::HttpClient;
 use kithara_platform::{CancelToken, tokio::runtime::Handle};
 use kithara_ui::error::UiDocError;
@@ -58,15 +60,30 @@ impl Environment {
 pub struct OpenUrlError(#[from] std::io::Error);
 
 /// Plugin cancellation token and resolved `sources` configuration entry.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub struct Context {
     cancel: CancelToken,
     section: Value,
+    /// Native preference file; absent requests session-only preferences.
+    #[field(with)]
+    settings_path: Option<PathBuf>,
 }
 
 impl Context {
     #[must_use]
     pub const fn new(cancel: CancelToken, section: Value) -> Self {
-        Self { cancel, section }
+        Self {
+            cancel,
+            section,
+            settings_path: None,
+        }
+    }
+
+    /// Native preference file; absent for an explicitly session-only source.
+    #[must_use]
+    pub fn settings_path(&self) -> Option<&Path> {
+        self.settings_path.as_deref()
     }
 
     /// Consumes the context and returns the plugin cancellation token.
@@ -111,6 +128,9 @@ impl RegisterError {
 pub enum Cause {
     #[error(transparent)]
     Section(#[from] SectionError),
+    /// Native setup could not locate a user configuration directory.
+    #[error("the native configuration directory is unavailable")]
+    SettingsUnavailable,
     #[error("the plugin's document does not parse")]
     Document(#[source] Box<UiDocError>),
 }

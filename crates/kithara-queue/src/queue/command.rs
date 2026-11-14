@@ -46,6 +46,10 @@ where
         id: TrackId,
         transition: Transition,
     },
+    ReplaceSource {
+        id: TrackId,
+        source: TrackSource<S>,
+    },
     Next(Transition),
     Previous(Transition),
     Play {
@@ -107,7 +111,9 @@ where
                 .map_err(PlayError::from)?;
         }
         let id = match command {
-            QueueCommand::Select { id, .. } | QueueCommand::Remove(id) => Some(*id),
+            QueueCommand::Select { id, .. }
+            | QueueCommand::ReplaceSource { id, .. }
+            | QueueCommand::Remove(id) => Some(*id),
             QueueCommand::Insert { after, .. } => *after,
             _ => None,
         };
@@ -159,6 +165,9 @@ where
                 output,
                 out,
             ),
+            QueueCommand::ReplaceSource { id, source } => {
+                self.replace_current_source(id, source, output, out)
+            }
             QueueCommand::Next(transition) => self.next_target(
                 transition,
                 AdvanceReason::UserNext,
@@ -381,6 +390,12 @@ where
         at: When<SessionFrame>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
+        if self
+            .current
+            .is_some_and(|id| self.tracks.is_changing_source(id))
+        {
+            self.withdraw_transition(out)?;
+        }
         if self.active_current_index().is_none() && self.target.is_some() {
             self.withdraw_transition(out)?;
             self.target
@@ -641,6 +656,15 @@ where
         to: Position,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
+        if let Some(id) = self
+            .current
+            .filter(|id| self.tracks.is_changing_source(*id))
+        {
+            if self.pending_handover.is_some() {
+                return Err(QueueError::NotReady(id));
+            }
+            self.cancel_target(out)?;
+        }
         let index = self.active_current_index().or_else(|| {
             self.target
                 .and_then(|target| self.incoming_index(target.to))

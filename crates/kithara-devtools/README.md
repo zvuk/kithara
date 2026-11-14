@@ -86,6 +86,12 @@ Quality Lab intentionally keeps a separate, **required**
 path. The ownership rules, the schema's strictness, and what each section is
 allowed to declare are in [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-devtools).
 
+### Test selection
+
+Draft scope admits configured Cargo/libtest suites as whole commands, retaining
+their package, profile and test-name selection. Nextest lanes apply the exact
+draft filter. An explicit `--narrow` still requires a nextest runner.
+
 ### AST configuration
 
 AST rule definitions belong to the caller's ordinary `sgconfig.yml` and its

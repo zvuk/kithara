@@ -24,8 +24,10 @@ kithara-platform = { workspace = true }
 kithara-ui = { workspace = true, default-features = false, features = ["render"] }
 
 derive_more = { workspace = true }
+fieldwork = { workspace = true }
 keyring-core = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }

@@ -179,6 +179,93 @@ async fn each_page_reports_the_total_the_service_establishes() {
     }
 }
 
+#[kithara::test]
+async fn media_requests_include_adaptive_and_progressive_capabilities() {
+    fn has_sources(body: &Bytes) -> bool {
+        let body: Value = serde_json::from_slice(body).unwrap();
+        let query = body["query"].as_str().unwrap();
+        ["streamV3", "hls", "expire", "stream", "mid", "high", "flac"]
+            .iter()
+            .all(|field| query.split_whitespace().any(|token| token == *field))
+    }
+    let net = Unimock::new(
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if has_sources(body)))
+            .returns(Ok(Bytes::from_static(include_bytes!(
+                "../../tests/fixtures/streams.json"
+            )))),
+    );
+    let ids = ["1000", "1003", "1006", "1008", "1010"].map(|id| TrackId(id.to_owned()));
+    assert_eq!(
+        mock_client(net)
+            .streams(&token(), &ids)
+            .await
+            .unwrap()
+            .len(),
+        ids.len()
+    );
+}
+
+#[kithara::test]
+async fn invalid_progressive_urls_are_protocol_errors() {
+    for url in [
+        "file:///private/media",
+        "not a URL",
+        "https://media.example/master.m3u8",
+    ] {
+        let body = serde_json::json!({"data":{"mediaContents":[{
+            "id":"1000",
+            "streamV3":{"hls":"https://media.example/master.m3u8","expire":null},
+            "stream":{"mid":null,"high":url,"flac":null}
+        }]}});
+        assert!(matches!(
+            mock_client(reply(body.to_string()))
+                .streams(&token(), &[TrackId("1000".to_owned())])
+                .await,
+            Err(Error::Protocol(_))
+        ));
+    }
+}
+
+#[kithara::test]
+async fn one_unavailable_progressive_quality_keeps_the_other_sources() {
+    let body = serde_json::json!({
+        "data":{"mediaContents":[{
+            "id":"1000",
+            "streamV3":{"hls":"https://media.example/master.m3u8","expire":null},
+            "stream":{"mid":"https://media.example/mid.mp3","high":null,"flac":null}
+        }]},
+        "errors":[{
+            "message":"Content quality unavailable",
+            "path":["mediaContents",0,"stream","high"],
+            "extensions":{"code":"DOWNSTREAM_SERVICE_ERROR"}
+        }]
+    });
+    let rows = mock_client(reply(body.to_string()))
+        .streams(&token(), &[TrackId("1000".to_owned())])
+        .await
+        .unwrap();
+    let progressive = rows[0].stream.as_ref().unwrap();
+    assert!(progressive.high.is_none());
+    assert_eq!(progressive.mid.as_ref().unwrap().path(), "/mid.mp3");
+    assert!(rows[0].stream_v3.as_ref().unwrap().hls.is_some());
+
+    for path in [
+        serde_json::json!(["mediaContents", 0, "stream", "other"]),
+        serde_json::json!(["mediaContents", 0, "stream", "mid"]),
+        serde_json::json!(["mediaContents", 0, "streamV3", "hls"]),
+    ] {
+        let mut invalid = body.clone();
+        invalid["errors"][0]["path"] = path;
+        assert!(matches!(
+            mock_client(reply(invalid.to_string()))
+                .streams(&token(), &[TrackId("1000".to_owned())])
+                .await,
+            Err(Error::GraphQl(_))
+        ));
+    }
+}
+
 /// A stream batch keeps every row's stream, expiry and playable URL, or fails
 /// whole when a row or the batch breaks the request's shape.
 #[kithara::test]
@@ -211,29 +298,34 @@ async fn a_stream_batch_resolves_every_row_or_fails_whole() {
     let expire = "2026-10-04T15:00:00+00:00";
     let batch = |rows: &str| format!(r#"{{"data":{{"mediaContents":[{rows}]}}}}"#);
     for (body, expected) in [
-        (batch(r#"{"id":"1000","streamV3":null}"#), Ok(None)),
+        (
+            batch(r#"{"id":"1000","stream":null,"streamV3":null}"#),
+            Ok(None),
+        ),
         (
             batch(&format!(
-                r#"{{"id":"1000","streamV3":{{"hls":null,"expire":"{expire}"}}}}"#
+                r#"{{"id":"1000","stream":null,"streamV3":{{"hls":null,"expire":"{expire}"}}}}"#
             )),
             Ok(Some((None, Some(expire)))),
         ),
         (
-            batch(r#"{"id":"1000","streamV3":{"hls":"","expire":null}}"#),
+            batch(r#"{"id":"1000","stream":null,"streamV3":{"hls":"","expire":null}}"#),
             Ok(Some((None, None))),
         ),
         (
             batch(&format!(
-                r#"{{"id":"1000","streamV3":{{"hls":"{url}","expire":null}}}}"#
+                r#"{{"id":"1000","stream":null,"streamV3":{{"hls":"{url}","expire":null}}}}"#
             )),
             Ok(Some((Some(url), None))),
         ),
         (
-            batch(r#"{"id":"1000","streamV3":{"hls":"not a URL","expire":null}}"#),
+            batch(r#"{"id":"1000","stream":null,"streamV3":{"hls":"not a URL","expire":null}}"#),
             Err(()),
         ),
         (
-            batch(r#"{"id":"1000","streamV3":{"hls":"file:///private/media","expire":null}}"#),
+            batch(
+                r#"{"id":"1000","stream":null,"streamV3":{"hls":"file:///private/media","expire":null}}"#,
+            ),
             Err(()),
         ),
         (batch(r#"{"id":"1000"}"#), Err(())),

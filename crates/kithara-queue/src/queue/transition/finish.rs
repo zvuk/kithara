@@ -44,15 +44,12 @@ where
         let Some(target) = self.target else {
             return Ok(());
         };
-        let consumed =
-            target.auto
-                && self
-                    .incoming_index(target.to)
-                    .is_some_and(|index| !self.active.is_replacement(index))
-                || target.reason == AdvanceReason::InitialLoad
-                    && self.tracks.records().iter().any(|record| {
-                        record.id == target.to && record.status == TrackStatus::Loaded
-                    });
+        let consumed = target.auto
+            && self
+                .incoming_index(target.to)
+                .is_some_and(|index| !self.active.is_replacement(index))
+            || target.reason == AdvanceReason::InitialLoad
+                && self.tracks.status(target.to) == Some(&TrackStatus::Loaded);
         if target.repeat.is_some() {
             self.cancel_repeat(out)?;
             self.target = None;
@@ -70,10 +67,22 @@ where
                 self.release_track(index, out)?;
             }
         }
-        if (incoming.is_some() || self.current != Some(target.to))
-            && !self.tracks.records().iter().any(|record| {
-                record.id == target.to && matches!(record.status, TrackStatus::Failed(_))
-            })
+        self.cancel_target_record(target, incoming.is_some(), consumed);
+        self.target = None;
+        self.reap_released();
+        Ok(())
+    }
+
+    fn cancel_target_record(&mut self, target: Target, had_incoming: bool, consumed: bool) {
+        if self.tracks.is_changing_source(target.to) {
+            if self
+                .pending_handover
+                .is_none_or(|pending| pending.item != target.to)
+            {
+                self.tracks.restore_source(target.to);
+            }
+        } else if (had_incoming || self.current != Some(target.to))
+            && !matches!(self.tracks.status(target.to), Some(TrackStatus::Failed(_)))
         {
             self.tracks.set_status(
                 target.to,
@@ -84,9 +93,6 @@ where
                 },
             );
         }
-        self.target = None;
-        self.reap_released();
-        Ok(())
     }
 
     pub(in crate::queue) fn cancel_auto(

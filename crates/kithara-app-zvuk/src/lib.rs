@@ -9,6 +9,7 @@ mod job;
 mod media;
 mod model;
 mod page;
+mod streaming;
 mod ui;
 
 pub use crate::{account::Opener, client::Client, config::Config, ui::Source};

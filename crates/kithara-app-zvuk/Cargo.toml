@@ -35,13 +35,16 @@ uuid = { workspace = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tempfile = { workspace = true }
+
 [dev-dependencies]
 kithara-net = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 kithara-test-utils = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-net = { workspace = true, features = ["mock"] }
-kithara-test-utils = { workspace = true, features = ["http-server"] }
+kithara-test-utils = { workspace = true, features = ["http-server", "temp-dir"] }
 
 async-trait = { workspace = true }
 axum = { workspace = true }

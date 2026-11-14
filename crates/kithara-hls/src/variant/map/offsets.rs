@@ -273,6 +273,15 @@ impl Layout {
         self.publication_seq.fetch_add(1, Ordering::Release);
     }
 
+    /// Publishes coordinate metadata against one stable layout without rebuilding its table.
+    pub(in crate::variant) fn with_metadata_update<T>(&self, update: impl FnOnce() -> T) -> T {
+        let _writer = self.write_lock.lock();
+        self.begin_publication();
+        let result = update();
+        self.finish_publication();
+        result
+    }
+
     /// True when the frame is already the canonical single-variant
     /// full-range layout (`byte_shift == 0`, `served = [0, num)`, no
     /// `init_seed`, offsets sized to `segments`) AND every served size is

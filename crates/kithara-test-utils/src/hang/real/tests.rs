@@ -50,7 +50,7 @@ mod detector_tests {
         detector.tick();
     }
 
-    #[kithara::test(flash(false))]
+    #[kithara::test(wasm, flash(false))]
     fn reset_extends_deadline() {
         let mut detector: HangDetector = HangDetector::new("test", Duration::from_millis(50));
         sleep(Duration::from_millis(30));

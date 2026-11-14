@@ -38,6 +38,17 @@ where
         &self,
         position: Duration,
     ) -> StreamResult<Option<SourceSeekAnchor>> {
+        let anchor = self
+            .layout
+            .with_metadata_update(|| self.prepare_seek_time_anchor_locked(position))?;
+        self.complete_exact_seek_if_ready();
+        Ok(anchor)
+    }
+
+    fn prepare_seek_time_anchor_locked(
+        &self,
+        position: Duration,
+    ) -> StreamResult<Option<SourceSeekAnchor>> {
         let variant = self.variant;
         let Some((seg_idx_u32, segment_start, segment_end)) = self.seek_point_at_time(position)
         else {
@@ -76,7 +87,7 @@ where
         self.set_prefetch_anchor(prefetch_anchor);
         self.set_seek_alias(byte_offset, seg_idx_u32);
         self.set_segment_aware_seek_tail(fetch_start);
-        self.set_exact_seek_demand(byte_offset, seg_idx_u32);
+        self.set_exact_seek_demand_locked(byte_offset, seg_idx_u32);
         self.flow.reader.clear_wait();
         Ok(Some(anchor))
     }

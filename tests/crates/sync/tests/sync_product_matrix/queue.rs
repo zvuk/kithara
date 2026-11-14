@@ -197,7 +197,7 @@ fn host_beat(grid: &BeatGridSnapshot, at: i64) -> f64 {
     f64::from(*beat.value().value())
 }
 
-fn envelope(capture: &LinkCapture, item: TrackId, session: i64, mixer: DeckMixerConfig) -> f32 {
+fn envelope(capture: &LinkCapture, item: TrackId, mixer: DeckMixerConfig) -> impl Fn(i64) -> f32 {
     let (_, _, start, fade) = *capture
         .starts
         .iter()
@@ -215,26 +215,98 @@ fn envelope(capture: &LinkCapture, item: TrackId, session: i64, mixer: DeckMixer
     let gain = |settings: CrossfadeSettings, at: SessionFrame, incoming: bool| {
         let rate: f32 = RATE.as_();
         let frames: u64 = (settings.duration * rate).round().as_();
-        let elapsed =
-            u64::try_from(session - frame(at)).expect("gain lies after its native command");
-        let progress = if frames <= 1 {
-            1.0
-        } else {
+        let last = frames.saturating_sub(1);
+        let start = frame(at);
+        let (out, into) = settings.gains(1.0);
+        let settled = if incoming { into } else { out };
+        move |session| {
+            let elapsed =
+                u64::try_from(session - start).expect("gain lies after its native command");
+            if elapsed >= last {
+                return settled;
+            }
             let elapsed: f32 = elapsed.as_();
-            let last: f32 = (frames - 1).as_();
-            (elapsed / last).min(1.0)
-        };
-        let (out, into) = settings.gains(progress);
-        if incoming { into } else { out }
+            let last: f32 = last.as_();
+            let (out, into) = settings.gains((elapsed / last).min(1.0));
+            if incoming { into } else { out }
+        }
     };
-    if let Some((_, _, at, settings, FadeDir::Out)) =
-        capture.fades.iter().find(|(owner, _, at, _, dir)| {
-            *owner == item && *dir == FadeDir::Out && frame(*at) <= session
-        })
-    {
-        gain(*settings, *at, false)
-    } else {
-        gain(settings, start, true)
+    let incoming = gain(settings, start, true);
+    let outgoing: Vec<_> = capture
+        .fades
+        .iter()
+        .filter(|(owner, _, _, _, dir)| *owner == item && *dir == FadeDir::Out)
+        .map(|(_, _, at, settings, _)| (frame(*at), gain(*settings, *at, false)))
+        .collect();
+    move |session| {
+        outgoing
+            .iter()
+            .find(|(at, _)| *at <= session)
+            .map_or_else(|| incoming(session), |(_, gain)| gain(session))
+    }
+}
+
+#[kithara::test]
+fn prepared_native_envelope_preserves_command_order_and_endpoints() {
+    let item = TrackId(7);
+    let rate: f32 = RATE.as_();
+    let settings = CrossfadeSettings {
+        duration: 11.0 / rate,
+        curve: CrossfadeCurve::Linear,
+        depth: 1.0,
+        position: 0.5,
+    };
+    let capture = LinkCapture {
+        starts: vec![(
+            item,
+            Slot::new(0),
+            SessionFrame::new(0),
+            Fade::Crossfade(settings),
+        )],
+        fades: vec![
+            (
+                TrackId(8),
+                Slot::new(1),
+                SessionFrame::new(1),
+                settings,
+                FadeDir::Out,
+            ),
+            (
+                item,
+                Slot::new(0),
+                SessionFrame::new(40),
+                settings,
+                FadeDir::Out,
+            ),
+            (
+                item,
+                Slot::new(0),
+                SessionFrame::new(20),
+                settings,
+                FadeDir::Out,
+            ),
+        ],
+        ..LinkCapture::default()
+    };
+    let gain = envelope(&capture, item, DeckMixerConfig::default());
+    for (session, expected) in [
+        (0, 0.0_f32),
+        (5, 0.5),
+        (10, 1.0),
+        (19, 1.0),
+        (20, 1.0),
+        (25, 0.5),
+        (30, 0.0),
+        (39, 0.0),
+        (40, 1.0),
+        (45, 0.5),
+        (50, 0.0),
+    ] {
+        assert_eq!(
+            gain(session).to_bits(),
+            expected.to_bits(),
+            "frame {session}"
+        );
     }
 }
 
@@ -608,6 +680,100 @@ fn source_packets(
     packets
 }
 
+fn physical_reference_span(span: SourceSpan, basis: SourceSpan, origin: u64) -> Option<SourceSpan> {
+    let pivot = basis.source_ratio_at(0)?;
+    let inverse = basis.source_inverse(origin)?;
+    let adjacent = inverse.output_at((pivot.0.checked_add(pivot.1.get())?, pivot.1))?;
+    let advance = adjacent
+        .0
+        .checked_sub(u128::from(origin).checked_mul(adjacent.1.get())?)?;
+    span.scaled_from(
+        pivot,
+        (u128::from(origin), std::num::NonZeroU128::MIN),
+        (advance, adjacent.1),
+    )
+}
+
+#[kithara::test]
+fn prepared_physical_reference_preserves_exact_coordinates_and_speed() {
+    let rate = NonZeroU32::new(RATE).expect("reference rate");
+    let denominator = std::num::NonZeroU128::new(17).expect("reference denominator");
+    let approach = SourceSpan::approaching(
+        100_001,
+        denominator,
+        kithara::signal::ExponentialApproach::new(0.73, 1.37, 48.0).expect("reference approach"),
+        5,
+        rate,
+        257,
+    )
+    .expect("analytic reference");
+    let spans = [
+        SourceSpan::try_from((100_001, 7, denominator, rate, 257)).expect("affine reference"),
+        SourceSpan::try_from((100_001, 500, -1, denominator, rate, 257))
+            .expect("accelerating reference"),
+        approach,
+        approach
+            .scaled_from(
+                (0, std::num::NonZeroU128::MIN),
+                (1 << 24, std::num::NonZeroU128::MIN),
+                (
+                    147,
+                    std::num::NonZeroU128::new(160).expect("reference scale"),
+                ),
+            )
+            .expect("transformed analytic reference"),
+    ];
+    for (step, divisor) in [(147, 49), (147, 160), (1, 1)] {
+        let basis = SourceSpan::try_from((
+            503,
+            step,
+            std::num::NonZeroU128::new(divisor).expect("decoded denominator"),
+            rate,
+            512,
+        ))
+        .expect("affine decoded basis");
+        for origin in [0, 50_000, 1 << 24] {
+            let inverse = basis.source_inverse(origin).expect("decoded inverse");
+            for source in spans {
+                for domain in [0..257, 7..251] {
+                    let clipped = source
+                        .for_output_range(domain.clone())
+                        .expect("source slice");
+                    let prepared = physical_reference_span(clipped, basis, origin)
+                        .expect("prepared physical source");
+                    let mut previous = None;
+                    for offset in 0..=clipped.output_frames() {
+                        let expected = inverse
+                            .output_at(
+                                source
+                                    .source_ratio_at(domain.start + offset)
+                                    .expect("raw source"),
+                            )
+                            .expect("pointwise physical source");
+                        let actual = prepared
+                            .source_ratio_at(offset)
+                            .expect("prepared coordinate");
+                        assert_eq!(
+                            actual, expected,
+                            "origin {origin}, domain {domain:?}, frame {offset}"
+                        );
+                        if let Some((before, prepared_before)) = previous {
+                            let expected_speed =
+                                super::control::physical_source_speed(before, expected)
+                                    .expect("pointwise speed");
+                            let actual_speed =
+                                super::control::physical_source_speed(prepared_before, actual)
+                                    .expect("prepared speed");
+                            assert_eq!(actual_speed.to_bits(), expected_speed.to_bits());
+                        }
+                        previous = Some((expected, actual));
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn reference(
     voices: &[Voice],
     capture: &LinkCapture,
@@ -622,6 +788,7 @@ fn reference(
     let mut reported = wall;
     let mut source_seen = None;
     let mut expected = vec![0.0_f32; frames * 2];
+    let mut gains = BTreeMap::new();
     for interval in intervals {
         if omit == Some(interval.voice) {
             continue;
@@ -631,6 +798,9 @@ fn reference(
             continue;
         }
         let voice = &voices[interval.voice];
+        let gain = gains
+            .entry(interval.voice)
+            .or_insert_with(|| envelope(capture, voice.item, mixer));
         if source_seen != Some(interval.voice) || reported.elapsed() >= Duration::from_secs(1) {
             tracing::info!(target: "kithara_test::sync::queue321", phase = "reference_progress",
                 wall_s = wall.elapsed().as_secs_f64(), item = u64::from(voice.item),
@@ -641,36 +811,34 @@ fn reference(
         }
         let mut recording = voice.decoded.lock();
         let decoded = recording.view();
-        let span = interval.source;
+        let source_start = u64::try_from(active.start - interval.start).expect("source offset");
+        let source_end = u64::try_from(active.end - interval.start).expect("source endpoint");
+        let span = interval
+            .source
+            .for_output_range(source_start..source_end)
+            .and_then(|source| {
+                physical_reference_span(source, interval.physical_basis, interval.physical_origin)
+            })
+            .expect("the admitted decoded basis projects the active source interval");
         {
             let mut sample_source = decoded
                 .sampler_at_domain(interval.identity, [0, 1], interval.physical_domain.clone())
                 .unwrap_or_else(|error| {
                     panic!("source {:?} session {}: {error}", voice.item, active.start)
                 });
-            let physical_inverse = interval
-                .physical_basis
-                .source_inverse(interval.physical_origin)
-                .expect("the admitted decoded basis is invertible");
             // A frame's endpoint is the next frame's start, so each coordinate is
             // projected once and carried into the following frame.
             let mut carried = None;
+            let active_start = active.start;
             for session in active {
-                let offset = u64::try_from(session - interval.start).expect("source offset");
+                let offset = u64::try_from(session - active_start).expect("source offset");
                 let physical = carried.take().unwrap_or_else(|| {
-                    let raw = span
-                        .source_ratio_at(offset)
-                        .expect("physical source coordinate");
-                    physical_inverse
-                        .output_at(raw)
+                    span.source_ratio_at(offset)
                         .expect("actual decoded physical coordinate")
                 });
-                let next = span
+                let endpoint = span
                     .source_ratio_at(offset + 1)
                     .expect("physical source endpoint");
-                let endpoint = physical_inverse
-                    .output_at(next)
-                    .expect("actual decoded physical endpoint");
                 carried = Some(endpoint);
                 let speed = super::control::physical_source_speed(physical, endpoint)
                     .expect("actual source speed");
@@ -685,7 +853,7 @@ fn reference(
                 } else {
                     physical
                 };
-                let gain = envelope(capture, voice.item, session, mixer);
+                let gain = gain(session);
                 let base = usize::try_from(session - domain.start).expect("reference offset") * 2;
                 let samples = sample_source(position, speed).unwrap_or_else(|error| {
                     panic!("source {:?} session {session}: {error}", voice.item)
@@ -2265,6 +2433,12 @@ fn assert_reuse(
 
 fn assert_gains(o: &LinkObservation, mixer: DeckMixerConfig) {
     let capture = o.capture.as_ref().expect("capture");
+    let mut envelopes = BTreeMap::new();
+    for (item, _, start, _) in &capture.starts {
+        envelopes
+            .entry(*item)
+            .or_insert_with(|| (*start, envelope(capture, *item, mixer)));
+    }
     for &(at, item, _, slot) in &capture.consumed {
         if slot.state != SlotState::Playing {
             continue;
@@ -2272,14 +2446,13 @@ fn assert_gains(o: &LinkObservation, mixer: DeckMixerConfig) {
         let Some(mark) = slot.mark else {
             continue;
         };
-        let Some((_, _, start, _)) = capture.starts.iter().find(|(owner, ..)| *owner == item)
-        else {
+        let Some((start, gain)) = envelopes.get(&item) else {
             continue;
         };
         if mark.lane.frame == 0 || mark.session <= *start {
             continue;
         }
-        let expected = envelope(capture, item, frame(mark.session) - 1, mixer);
+        let expected = gain(frame(mark.session) - 1);
         assert_eq!(
             slot.gain, expected,
             "item {item:?} published gain at {at:?} follows the native envelope"
