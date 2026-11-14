@@ -10,7 +10,7 @@ pub(super) use kithara_render::{
 pub(super) use kithara_signal::{AudioChunkInfo, AudioSpec};
 pub(super) use kithara_sync::SpeedCurve;
 pub(super) use kithara_test_utils::{TestTempDir, kithara};
-pub(super) use kithara_warp::StretchKind;
+pub(super) use kithara_warp::{Pitch, StretchKind};
 
 use super::*;
 pub(super) use crate::{
@@ -174,15 +174,10 @@ pub(super) fn frame(value: i64) -> SessionFrame {
 }
 
 pub(super) fn track(slot: Slot) -> Track {
-    let settings = TrackSettings::builder()
-        .speed(1.0)
-        .keylock(false)
-        .backend(StretchKind::default())
-        .build();
     let mut track = PlayerImpl::new(PlayerConfig {
         item: TrackId::allocate(),
         slot: Some(slot),
-        settings,
+        settings: TrackSettings::default(),
     })
     .expect("unity speed is a valid track speed");
     track.extent.media_origin = Some(Duration::ZERO);
@@ -2249,6 +2244,30 @@ fn a_refused_open_leaves_the_track_idle() {
     );
 }
 
+/// A pitch change to the pitch a track already has never reaches the lane.
+#[kithara::test]
+fn a_pitch_change_that_moves_nothing_never_reaches_the_lane() {
+    let mut rig = rig();
+    let (mut track, mut inbox) = prepared_track();
+    track.settings =
+        kithara_command::Live::new(TrackSettings::builder().pitch(Pitch::HELD).build())
+            .expect("unity speed is a valid track speed");
+
+    let sent = rig
+        .with_outbox(|out| {
+            track.apply(
+                TrackCommand::Configure(TrackSettingsChange::Pitch(Pitch::HELD), When::Next),
+                out,
+            )
+        })
+        .expect("live deck scope")
+        .expect("a change that moves nothing is accepted");
+
+    assert!(sent.is_none(), "nothing went to the lane");
+    assert!(lane_commands(&mut inbox).is_empty());
+    assert_eq!(track.projected().pitch(), Pitch::HELD);
+}
+
 #[kithara::test]
 async fn play_sounds_from_its_frame_and_pause_reports_where_it_stopped() {
     let mut rig = rig();
@@ -3782,7 +3801,10 @@ fn a_change_at_a_frame_is_refused_as_untimed(#[case] attached: bool) {
     let refused = rig
         .with_outbox(|out| {
             track.apply(
-                TrackCommand::Configure(TrackSettingsChange::Keylock(true), When::At(frame(4_096))),
+                TrackCommand::Configure(
+                    TrackSettingsChange::Pitch(Pitch::HELD),
+                    When::At(frame(4_096)),
+                ),
                 out,
             )
         })

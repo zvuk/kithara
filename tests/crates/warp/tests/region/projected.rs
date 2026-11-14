@@ -1,3 +1,5 @@
+use ::kithara::warp::Pitch;
+
 use super::*;
 
 #[kithara::test]
@@ -54,7 +56,7 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
             for quantum in [64, 257] {
                 let config = WarpConfig::builder()
                     .speed(2.0)
-                    .keylock(keylock)
+                    .maybe_pitch(keylock.then_some(Pitch::HELD))
                     .backend(backend)
                     .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
                     .build();

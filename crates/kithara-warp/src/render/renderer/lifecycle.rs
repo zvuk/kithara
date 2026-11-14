@@ -653,7 +653,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         if self.mapped_render && self.stretch_target().1 && self.keylocked_unity() {
             self.trajectory.snap_to_frame()?;
         }
-        if !self.mapped_render || (self.active && self.current_keylock) {
+        if !self.mapped_render || (self.active && self.current_pitch_engine) {
             if let Err(error) = self.retain_replacement() {
                 self.retire_engine();
                 self.clear_render_state();

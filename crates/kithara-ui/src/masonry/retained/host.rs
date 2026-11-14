@@ -27,6 +27,7 @@ use super::{
 };
 use crate::{
     draw::{Rgba, Transform},
+    engine::Presses,
     expand::{Binding, ControlSpec, ExpandedNode},
     hosts::{
         controls::Draws,
@@ -611,10 +612,7 @@ where
                 output.host_engine(Rc::clone(&self.map_event), self.skin);
             }
         } else if activates(spec) {
-            output.set_actions(
-                Some(self.control_action(path.to_owned(), ControlAction::Activate)),
-                None,
-            );
+            output.set_primary(self.control_action(path.to_owned(), ControlAction::Activate));
         }
         output
     }
@@ -764,10 +762,7 @@ where
             NewWidget::new(PopoverLayer::new(content, declared, state, at, align, skin)).erased()
         });
         let path = self.ctx.ui.resolve(popover.path()).to_owned();
-        output.set_actions(
-            Some(self.control_action(path, ControlAction::Activate)),
-            None,
-        );
+        output.set_primary(self.control_action(path, ControlAction::Activate));
         output
     }
 
@@ -795,6 +790,8 @@ where
     fn pressable(
         &mut self,
         path: InternId,
+        presses: Presses,
+        _owner: InputOwner,
         child: Self::Output,
         size: Option<SizeSpec>,
     ) -> Self::Output {
@@ -805,14 +802,11 @@ where
         output.add_engine_control(
             HostedControlPlan::Activation {
                 path: path.to_owned(),
+                presses,
             },
             true,
         );
         output.host_engine(Rc::clone(&self.map_event), self.skin);
-        output.set_actions(
-            None,
-            Some(self.control_action(path.to_owned(), ControlAction::SecondaryActivate)),
-        );
         output
     }
 

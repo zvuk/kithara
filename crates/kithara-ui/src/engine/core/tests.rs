@@ -4,7 +4,7 @@ use kithara_test_utils::kithara;
 use super::{
     super::{
         component::{PickerSnapshot, TextInputSnapshot},
-        model::{Descriptor, Emission, EngineEvent, Target},
+        model::{Descriptor, Emission, EngineEvent, Presses, Target},
     },
     engine::*,
 };
@@ -159,6 +159,8 @@ fn value(emission: Option<Emission>) -> Option<f64> {
         Some(EngineEvent::Scalar(value)) => Some(value),
         Some(
             EngineEvent::Activate
+            | EngineEvent::SecondaryActivate
+            | EngineEvent::DoubleActivate
             | EngineEvent::Crossing(_)
             | EngineEvent::Index(_)
             | EngineEvent::Drag { .. }
@@ -244,7 +246,7 @@ fn volume_fader_keeps_drag_continuous_and_wheel_step_separate() {
 fn activation_publishes_once_on_press() {
     let mut engine = Engine::default();
     let path = "gallery/toggles/enabled";
-    engine.reconcile([Descriptor::activation(path.to_owned())]);
+    engine.reconcile([Descriptor::pressable(path.to_owned(), Presses::default())]);
 
     let press = engine
         .handle(
@@ -282,7 +284,7 @@ fn activation_publishes_once_on_press() {
 fn activation_press_that_misses_publishes_nothing() {
     let mut engine = Engine::default();
     let path = "gallery/toggles/enabled";
-    engine.reconcile([Descriptor::activation(path.to_owned())]);
+    engine.reconcile([Descriptor::pressable(path.to_owned(), Presses::default())]);
 
     assert!(
         engine
@@ -600,7 +602,7 @@ fn activation_does_not_take_the_capture_slot() {
     let meter = "gallery/meters/level";
     engine.reconcile([
         Descriptor::vertical_vu(meter.to_owned()),
-        Descriptor::activation(toggle.to_owned()),
+        Descriptor::pressable(toggle.to_owned(), Presses::default()),
     ]);
 
     let activation = engine
@@ -961,6 +963,8 @@ fn a_kind_change_rebuilds_state_and_clears_the_captured_identity() {
                 Some(EngineEvent::Scalar(value)) => Some(value),
                 Some(
                     EngineEvent::Activate
+                    | EngineEvent::SecondaryActivate
+                    | EngineEvent::DoubleActivate
                     | EngineEvent::Crossing(_)
                     | EngineEvent::Index(_)
                     | EngineEvent::Drag { .. }
@@ -1826,7 +1830,7 @@ fn picker_focus_survives_reorder_and_layout_swap_but_not_removal() {
     let other = "library/action";
     let now = Instant::now();
     engine.reconcile([
-        Descriptor::activation(other.to_owned()),
+        Descriptor::pressable(other.to_owned(), Presses::default()),
         Descriptor::picker(path.to_owned(), 2, Some(0)),
     ]);
     let _ = engine.handle(
@@ -1838,7 +1842,7 @@ fn picker_focus_survives_reorder_and_layout_swap_but_not_removal() {
 
     engine.reconcile([
         Descriptor::picker(path.to_owned(), 2, Some(0)),
-        Descriptor::activation(other.to_owned()),
+        Descriptor::pressable(other.to_owned(), Presses::default()),
     ]);
     let opened = engine.handle(
         key_pressed(Key::Enter),
@@ -1854,10 +1858,10 @@ fn picker_focus_survives_reorder_and_layout_swap_but_not_removal() {
         Some(true)
     );
 
-    engine.reconcile([Descriptor::activation(other.to_owned())]);
+    engine.reconcile([Descriptor::pressable(other.to_owned(), Presses::default())]);
     engine.reconcile([
         Descriptor::picker(path.to_owned(), 2, Some(0)),
-        Descriptor::activation(other.to_owned()),
+        Descriptor::pressable(other.to_owned(), Presses::default()),
     ]);
     assert!(
         engine

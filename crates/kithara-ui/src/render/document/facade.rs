@@ -1,8 +1,8 @@
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    Band, Ctx, Group, GroupMount, Host, Lit, Measured, Modal, Module, PlacedMount, Popover, Snap,
-    SplitMount, StageMount,
+    Band, Ctx, Group, GroupMount, Host, Lit, Measured, Modal, Module, PlacedMount, Popover,
+    Presses, Snap, SplitMount, StageMount,
 };
 use crate::{
     compile::{Address, CompiledNode, CompiledUi, SplitCell},
@@ -526,9 +526,25 @@ where
                 },
             )
         }
-        ExpandedNode::Pressable { path, child, .. } => {
+        ExpandedNode::Pressable {
+            path,
+            secondary,
+            double,
+            child,
+            ..
+        } => {
             let child = expanded(child, &address.child(0), branch, ctx, host);
-            host.pressable(*path, child, effective_size(node, ctx.skin, snapshot))
+            let presses = Presses {
+                secondary: secondary.is_some(),
+                double: double.is_some(),
+            };
+            host.pressable(
+                *path,
+                presses,
+                branch.input_owner,
+                child,
+                effective_size(node, ctx.skin, snapshot),
+            )
         }
         ExpandedNode::Scroll { id, child, .. } => {
             let child = expanded(child, &address.child(0), branch, ctx, host);

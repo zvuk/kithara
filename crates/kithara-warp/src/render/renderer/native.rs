@@ -421,7 +421,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         speed: f64,
     ) -> Result<(), ElasticError> {
         self.check_native_origin(span)?;
-        self.apply_pitch(1.0)?;
+        self.apply_pitch(self.target_pitch(speed))?;
         if !self.active {
             self.prime_native_projection(span)?;
         }

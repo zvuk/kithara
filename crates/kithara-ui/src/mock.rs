@@ -22,6 +22,9 @@ pub fn player_registry() -> MapEndpoints {
     );
     for id in [
         "deck.key.toggle_lock",
+        "deck.key.transpose_down",
+        "deck.key.transpose_reset",
+        "deck.key.transpose_up",
         "deck.transport.toggle_loop",
         "deck.transport.toggle_play",
         "deck.transport.toggle_reverse",
@@ -74,6 +77,11 @@ pub fn player_registry() -> MapEndpoints {
             EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
         );
     }
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "deck.key.transpose",
+        EndpointDesc::new(ValueKind::Text).with_scope("deck"),
+    );
     registry.insert(
         EndpointCategory::Telemetry,
         "deck.playback.tempo",

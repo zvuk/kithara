@@ -4,8 +4,8 @@ use kithara_bufpool::HasPool;
 use kithara_events::{EventReceiver, EventSet, TrackId};
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    DeckMixSettings, DeckMixerConfig, DeckSnapshot, EngineLoadSnapshot, Player, PlayerStatus,
-    Position, SlotSnapshot, StretchKind, Track, TrackFactory, TrackSettings, TrackSnapshot,
+    DeckMixSettings, DeckMixerConfig, DeckSnapshot, EngineLoadSnapshot, Pitch, Player,
+    PlayerStatus, Position, SlotSnapshot, Track, TrackFactory, TrackSettings, TrackSnapshot,
     TrackStatus as PlayingStatus,
 };
 
@@ -50,6 +50,7 @@ where
     repeat: RepeatMode,
     action: ActionAtItemEnd,
     initial: TrackSettings,
+    pitch: Option<Pitch>,
     slot: Option<SlotSnapshot>,
     sample_rate: u32,
     held_position: Option<Position>,
@@ -87,6 +88,7 @@ where
         navigation: &NavigationState,
         settings: QueueSettings,
         initial: TrackSettings,
+        pitch: Option<Pitch>,
         action: ActionAtItemEnd,
         deck: DeckObservation,
     ) -> Self {
@@ -102,6 +104,7 @@ where
             repeat: navigation.repeat_mode(),
             action,
             initial,
+            pitch,
             slot: None,
             sample_rate: 0,
             held_position: None,
@@ -179,6 +182,7 @@ where
             repeat: self.navigation.repeat_mode(),
             action: self.config.action_at_item_end,
             initial: self.config.track,
+            pitch: self.config.pitch(),
             slot,
             sample_rate: self.deck.mixer.sample_rate,
             held_position: self.held_position.and_then(SeekPosition::held),
@@ -397,16 +401,11 @@ where
             .map_or_else(|| snapshot.initial.speed(), |track| track.speed)
     }
 
-    /// The deck's keylock setting: the one its sounding and next tracks are given.
+    /// The deck's pitch: the one its sounding and next tracks are given,
+    /// `None` when its backend has no pitch control.
     #[must_use]
-    pub fn keylock(&self) -> bool {
-        self.view.read().initial.keylock()
-    }
-
-    /// The stretch backend the deck's tracks render with.
-    #[must_use]
-    pub fn backend(&self) -> StretchKind {
-        self.view.read().initial.backend()
+    pub fn pitch(&self) -> Option<Pitch> {
+        self.view.read().pitch
     }
 
     #[must_use]

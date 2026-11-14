@@ -13,7 +13,7 @@ use kithara::{
     },
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     signal::{SessionFrame, TransportRevision},
-    warp::{StretchKind, WarpConfig},
+    warp::{Pitch, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, fixture_protocol::PackagedSignal,
@@ -1147,7 +1147,7 @@ async fn prepare_deck(
         .warp(
             WarpConfig::builder()
                 .backend(StretchKind::Signalsmith)
-                .keylock(true)
+                .pitch(Pitch::HELD)
                 .build(),
         )
         .block_on_underrun(true)
@@ -1163,12 +1163,7 @@ async fn prepare_deck(
         QueueConfig::builder()
             .prep(prep)
             .store(store)
-            .track(
-                TrackSettings::builder()
-                    .backend(StretchKind::Signalsmith)
-                    .keylock(true)
-                    .build(),
-            )
+            .track(TrackSettings::builder().pitch(Pitch::HELD).build())
             .settings(
                 QueueSettings::builder()
                     .crossfade(CrossfadeSettings {

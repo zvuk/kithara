@@ -1,6 +1,6 @@
 use iced::{
     Alignment, Element, Length, Size,
-    widget::{Space, Stack, container, mouse_area},
+    widget::{Space, Stack, container},
 };
 
 use super::{
@@ -11,6 +11,7 @@ use super::{
 };
 use crate::{
     draw::Transform,
+    engine::Presses,
     expand::{Binding, ControlSpec, ExpandedNode, SurfaceSpec, header_path},
     hosts::surface::entry_value,
     iced::{
@@ -240,20 +241,16 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
     fn pressable(
         &mut self,
         path: InternId,
+        presses: Presses,
+        owner: InputOwner,
         child: Self::Output,
         size: Option<SizeSpec>,
     ) -> Self::Output {
-        let path = self.ctx.ui.resolve(path);
-        let element = mouse_area(child)
-            .on_press(crate::hosts::event::control_event(
-                path,
-                ControlAction::Activate,
-            ))
-            .on_right_press(crate::hosts::event::control_event(
-                path,
-                ControlAction::SecondaryActivate,
-            ))
-            .into();
+        let element = if owner == InputOwner::Engine {
+            child
+        } else {
+            host::pressable(child, self.ctx.ui.resolve(path), presses)
+        };
         apply_size(Rendered::leading(element), size)
     }
 

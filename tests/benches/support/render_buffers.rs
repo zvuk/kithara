@@ -19,8 +19,6 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, SessionDuckingMode},
     queue::TrackSource,
     signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame},
-    sync::SpeedCurve,
-    warp::StretchKind,
 };
 use kithara_command::{Batch, Outcome, ScopedReceipt, Seq, When};
 use kithara_dsp::param::{DEFAULT_SMOOTH_SECONDS, MIN_SETTLE_RATIO, SmoothedParam, SmootherConfig};
@@ -347,16 +345,7 @@ async fn jump_fixture() -> JumpFixture {
     let config = kithara::play::TrackConfig::for_audio(audio).build();
     let (mut sender, inbox) = worker.lane_channel();
     let (mut receiver, lane, _) = worker
-        .load(
-            config,
-            Duration::ZERO,
-            LaneStart {
-                speed: SpeedCurve::Constant(1.0),
-                keylock: false,
-                backend: StretchKind::default(),
-            },
-            inbox,
-        )
+        .load(config, Duration::ZERO, LaneStart::default(), inbox)
         .await
         .expect("prepared actual worker");
     let mut start = 0;

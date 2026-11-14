@@ -196,6 +196,9 @@ pub enum ControlNode {
         /// Written by a secondary press.
         #[serde(default)]
         secondary: Option<BindingRef>,
+        /// Written by a double click, after the two presses it is made of.
+        #[serde(default)]
+        double: Option<BindingRef>,
         child: Box<Self>,
     },
     /// Offsets its child from wherever its container placed it.

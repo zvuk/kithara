@@ -65,6 +65,7 @@ mod consts {
     pub(super) const SILENCE_SHARE: f32 = 0.01;
     pub(super) const SILENT_RUN: Duration = Duration::from_millis(1);
     pub(super) const STEPPED_BPM: f64 = 122.0;
+    pub(super) const SEMITONE: f64 = 1.059_463_094_359_295_3;
     pub(super) const SYNC_BPM: f64 = 126.0;
     pub(super) const TONE_HZ: f64 = 440.0;
     pub(super) const TRACK_BEATS: i64 = 23;
@@ -1277,7 +1278,7 @@ fn longest_silence(pcm: &[f32], floor: f32) -> usize {
 }
 
 fn press_keylock(rig: &mut Rig) -> bool {
-    rig.send("deck-a/keylock/toggle", ControlAction::Activate);
+    rig.send("deck-a/keylock/chip/toggle", ControlAction::Activate);
     rig.apply();
     rig.engine.publish();
     rig.frame();
@@ -1347,31 +1348,19 @@ async fn the_keylock_chip_holds_the_pitch_of_a_playing_deck(long_wav: String) {
     rig.close().await;
 }
 
-/// Every deck starts with keylock on and its chip shown, unless the
-/// document's queue section sets the track keylock.
+/// Every deck starts with keylock on and its chip shown.
 #[kithara::test(native, tokio, flash(false))]
-#[case::shipped("{}", true)]
-#[case::document_turns_it_off("track:\n  keylock: false\n", false)]
-async fn a_deck_starts_with_keylock_on_unless_the_document_sets_it(
-    #[case] document: &'static str,
-    #[case] locked: bool,
-) {
-    let rig = OffThread::spawn("engine", move || {
-        Ok::<_, Infallible>(Rig::offline_with(|config| {
-            config.queue =
-                serde_yaml_ng::from_str(document).expect("the document parses as a queue");
-        }))
-    })
-    .await
-    .expect("rig fixture is infallible");
-    rig.call(move |rig| {
+async fn a_deck_starts_with_keylock_on() {
+    let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
+        .await
+        .expect("rig fixture is infallible");
+    rig.call(|rig| {
         rig.pump();
         rig.frame();
         for deck in ["a", "b"] {
-            assert_eq!(
+            assert!(
                 rig.flag(&format!("deck.key.locked@deck={deck}")),
-                locked,
-                "deck {deck} with the document {document:?}"
+                "deck {deck} starts with keylock on"
             );
             assert!(
                 !rig.flag(&format!("deck.key.lock_hidden@deck={deck}")),
@@ -1471,4 +1460,120 @@ async fn a_synced_tone_plays_on_without_a_gap_across_a_tempo_step_and_a_keylock_
     .await;
     rig.close().await;
     drop(served);
+}
+
+/// Presses one of deck A's transpose steps, `up` or `down`, and shows the
+/// engine's answer.
+fn step_transpose(rig: &mut Rig, step: &str) {
+    rig.send(&format!("deck-a/keylock/{step}"), ControlAction::Activate);
+    rig.apply();
+    rig.engine.publish();
+    rig.frame();
+}
+
+/// The two clicks of a double click on the chip toggle KEY LOCK twice and
+/// its reset clears the transpose, all in one batch the way a host sends
+/// them: KEY LOCK ends as it was.
+#[kithara::test(native, tokio, flash(false))]
+async fn a_double_click_on_the_key_lock_chip_resets_the_transpose_and_keeps_key_lock() {
+    let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
+        .await
+        .expect("rig fixture is infallible");
+    rig.call(|rig| {
+        rig.pump();
+        rig.frame();
+        for _ in 0..3 {
+            step_transpose(rig, "up");
+        }
+        assert_eq!(rig.text("deck.key.transpose@deck=a").as_deref(), Some("+3"));
+        let locked = rig.flag("deck.key.locked@deck=a");
+        for action in [
+            ControlAction::Activate,
+            ControlAction::Activate,
+            ControlAction::DoubleActivate,
+        ] {
+            rig.send("deck-a/keylock/chip/toggle", action);
+        }
+        rig.apply();
+        rig.engine.publish();
+        rig.frame();
+        assert_eq!(rig.flag("deck.key.locked@deck=a"), locked, "KEY LOCK");
+        assert_eq!(rig.text("deck.key.transpose@deck=a").as_deref(), Some(""));
+    })
+    .await;
+    rig.close().await;
+}
+
+/// Plays deck A's tone at `speed` and settles it.
+fn tone_at(rig: &mut Rig, url: &str, speed: f32) {
+    rig.queues[0].append(url).expect("deck A takes the tone");
+    rig.send("deck-a/play", ControlAction::Activate);
+    rig.pump();
+    rig.until("deck A plays the tone", Rig::DEADLINE, Rig::frame, |rig| {
+        rig.queues[0].is_playing()
+    });
+    rig.queues[0]
+        .set_rate(speed)
+        .expect("deck A takes the speed");
+    rig.pump();
+    let _ = capture(rig, consts::SETTLE);
+}
+
+/// Presses `up` on deck A and measures its tone once it settles.
+fn stepped_up(rig: &mut Rig) -> f64 {
+    step_transpose(rig, "up");
+    let _ = capture(rig, consts::SETTLE);
+    let measured = capture(rig, consts::PITCH_MEASURE);
+    pitch(rig, &measured.pcm)
+}
+
+/// Two presses of the chip's up step raise a 440 Hz tone two semitones with
+/// KEY LOCK on; with KEY LOCK off at +8% each press raises the tone's
+/// tempo-following pitch by a semitone. The chip reads the shift as `+N` or
+/// with a minus sign, nothing at 0, and the steps stop at an octave down.
+#[kithara::test(native, tokio)]
+#[case::locked(true, 1.0)]
+#[case::unlocked(false, consts::KEYLOCK_SPEED)]
+async fn the_transpose_steps_raise_a_playing_tone_a_semitone_a_press(
+    long_wav: String,
+    #[case] locked: bool,
+    #[case] speed: f32,
+) {
+    let rig = OffThread::spawn("engine", || {
+        Ok::<_, Infallible>(Rig::playback().on_device())
+    })
+    .await
+    .expect("rig fixture is infallible");
+    rig.call(move |rig| {
+        tone_at(rig, &long_wav, speed);
+        if !locked {
+            assert!(!press_keylock(rig), "the press turns keylock off");
+        }
+        let readout = |rig: &Rig| rig.text("deck.key.transpose@deck=a");
+        assert_eq!(readout(rig).as_deref(), Some(""), "no shift reads nothing");
+        let followed = consts::TONE_HZ * if locked { 1.0 } else { f64::from(speed) };
+        let once = stepped_up(rig);
+        assert_pitch(once, followed * consts::SEMITONE, "one press up");
+        let twice = stepped_up(rig);
+        assert_pitch(
+            twice,
+            followed * consts::SEMITONE * consts::SEMITONE,
+            "two presses up",
+        );
+        assert_eq!(readout(rig).as_deref(), Some("+2"));
+        for _ in 0..3 {
+            step_transpose(rig, "down");
+        }
+        assert_eq!(readout(rig).as_deref(), Some("\u{2212}1"));
+        for _ in 0..12 {
+            step_transpose(rig, "down");
+        }
+        assert_eq!(
+            readout(rig).as_deref(),
+            Some("\u{2212}12"),
+            "the steps stop at an octave down"
+        );
+    })
+    .await;
+    rig.close().await;
 }

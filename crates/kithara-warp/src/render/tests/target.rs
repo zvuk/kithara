@@ -5,7 +5,7 @@ use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
 use super::{WarpConfig, spec};
-use crate::test_pools::pools_with_budget as test_pools;
+use crate::{Pitch, test_pools::pools_with_budget as test_pools};
 
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -30,7 +30,7 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
             let pools = test_pools(usize::MAX);
             let config = WarpConfig::builder()
                 .speed(0.5)
-                .keylock(true)
+                .pitch(Pitch::HELD)
                 .backend(backend)
                 .build();
             let target = crate::Warp::new((), &config).renderer(target_spec, pools.clone());
@@ -44,7 +44,7 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
     let pools = test_pools(target_bytes);
     let config = WarpConfig::builder()
         .speed(0.5)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(backend)
         .build();
     let mut fx = crate::Warp::new((), &config).renderer(initial, pools.clone());
@@ -88,7 +88,7 @@ fn failed_target_rebuild_is_not_retried_without_a_new_revision(#[case] backend: 
     let pools = test_pools(0);
     let config = WarpConfig::builder()
         .speed(0.5)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(backend)
         .build();
     let mut fx = crate::Warp::new((), &config).renderer(spec(), pools.clone());

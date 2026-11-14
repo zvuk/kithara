@@ -176,7 +176,6 @@ pub(crate) struct Node {
     lit: Option<Faces>,
     pointer: Option<(Pt, Pt)>,
     primary: Option<Box<dyn Fn() -> HostAction>>,
-    secondary: Option<Box<dyn Fn() -> HostAction>>,
     /// Where this node stands in the stage that holds it, when it is one of
     /// its placements.
     spot: Option<Spot>,
@@ -205,7 +204,6 @@ impl Node {
             frame,
             limits: None,
             primary: None,
-            secondary: None,
             round: FrameCorners::EMPTY,
             radius: 0.0,
             double_click: false,
@@ -493,21 +491,6 @@ impl Node {
         self.leaf_input(ctx, &cancel, input, Hit::new(None, area));
     }
 
-    fn queue_pointer(&self, ctx: &mut EventCtx<'_>, event: &PointerEvent) {
-        let PointerEvent::Down(button) = event else {
-            return;
-        };
-        let action = match button.button {
-            Some(MasonryPointerButton::Secondary) => self.secondary.as_ref(),
-            Some(MasonryPointerButton::Primary) | None => self.primary.as_ref(),
-            _ => None,
-        };
-        if let Some(action) = action {
-            ctx.submit_action::<HostAction>(action());
-            ctx.set_handled();
-        }
-    }
-
     pub(crate) fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
         self.layout.leaf().is_some_and(|leaf| leaf.refresh(ctx))
     }
@@ -582,6 +565,19 @@ impl Node {
         self.detent
             .as_mut()
             .is_some_and(|detent| detent.step(ctx, input, hit))
+    }
+}
+
+/// What a primary press on a node runs.
+impl Node {
+    fn queue_pointer(&mut self, ctx: &mut EventCtx<'_>, event: &PointerEvent) {
+        let (PointerEvent::Down(button), Some(action)) = (event, &self.primary) else {
+            return;
+        };
+        if matches!(button.button, Some(MasonryPointerButton::Primary) | None) {
+            ctx.submit_action::<HostAction>(action());
+            ctx.set_handled();
+        }
     }
 }
 
@@ -678,15 +674,9 @@ impl Node {
         moved
     }
 
-    /// What this node runs when it is pressed, and what it runs when it is
-    /// pressed with the other button.
-    pub(crate) fn set_actions(
-        &mut self,
-        primary: Option<Box<dyn Fn() -> HostAction>>,
-        secondary: Option<Box<dyn Fn() -> HostAction>>,
-    ) {
-        self.primary = primary;
-        self.secondary = secondary;
+    /// What this node runs when it is pressed.
+    pub(crate) fn set_primary(&mut self, primary: Box<dyn Fn() -> HostAction>) {
+        self.primary = Some(primary);
     }
 
     /// The stepping surface this flow is asked to carry over itself.
@@ -731,7 +721,6 @@ impl Widget for Node {
     /// widget Masonry counts as taking the pointer.
     fn accepts_pointer_interaction(&self) -> bool {
         self.primary.is_some()
-            || self.secondary.is_some()
             || self.detent.is_some()
             || self.spot.as_ref().is_some_and(Spot::grips)
             || self.layout.accepts_input()

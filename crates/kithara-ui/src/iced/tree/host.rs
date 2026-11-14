@@ -15,7 +15,7 @@ use kithara_platform::time::Instant;
 
 use super::geometry::HostedLayout;
 use crate::{
-    engine::{Engine, Target},
+    engine::{Engine, Presses, Target},
     expand::ExpandedNode,
     iced::{
         controls::sync_tree_scroll,
@@ -45,6 +45,18 @@ pub(super) fn module_host<'a>(
         child,
         layout: HostedLayout::module(spec),
         outline: spec.drop.unwrap_or_default(),
+    })
+}
+
+pub(super) fn pressable<'a>(
+    child: Element<'a, Published>,
+    path: &str,
+    presses: Presses,
+) -> Element<'a, Published> {
+    Element::new(Host {
+        child,
+        layout: HostedLayout::pressable(path, presses),
+        outline: Border::default(),
     })
 }
 
@@ -430,7 +442,25 @@ impl IcedWidget<Published, Theme, Renderer> for Host<'_> {
         let item_was_pressed = state.engine.has_pressed_item();
         let picker_before = self.layout.picker_snapshots(&state.engine);
         let text_before = state.engine.text_input_snapshots();
-        let captured = self.route_input(&mut state.engine, input, layout, cursor, shell);
+        let child_first = matches!(self.layout, HostedLayout::Pressable { child: None, .. });
+        if child_first {
+            self.child.as_widget_mut().update(
+                &mut tree.children[0],
+                event,
+                layout,
+                cursor,
+                renderer,
+                clipboard,
+                shell,
+                viewport,
+            );
+        }
+        let state = tree.state.downcast_mut::<State>();
+        let captured = if child_first && shell.is_event_captured() {
+            Captured::default()
+        } else {
+            self.route_input(&mut state.engine, input, layout, cursor, shell)
+        };
         if state.engine.focused_path().is_some()
             && focus_before.as_deref() != state.engine.focused_path()
         {
@@ -442,7 +472,7 @@ impl IcedWidget<Published, Theme, Renderer> for Host<'_> {
                 &mut unfocus,
             );
         }
-        if !captured.event {
+        if !captured.event && !child_first {
             self.child.as_widget_mut().update(
                 &mut tree.children[0],
                 event,
@@ -727,7 +757,7 @@ mod tests {
                 InputOwner, Published, Skin,
                 document::{
                     Ctx, Group, GroupMount, Host, Measured, Modal, Module, PlacedMount, Popover,
-                    SplitMount, StageMount, render,
+                    Presses, SplitMount, StageMount, render,
                 },
             },
             size::SizeSpec,
@@ -830,6 +860,8 @@ mod tests {
                     fn pressable(
                         &mut self,
                         path: InternId,
+                        presses: Presses,
+                        owner: InputOwner,
                         child: Self::Output,
                         size: Option<SizeSpec>,
                     ) -> Self::Output;
@@ -2471,6 +2503,7 @@ mod tests {
                 HostedLayout::Control(Some(HostedControl::mounted(
                     crate::hosts::hosted::HostedControlPlan::Activation {
                         path: "hosted/button".to_owned(),
+                        presses: Presses::default(),
                     },
                 ))),
                 mouse::Interaction::Pointer,
@@ -5005,10 +5038,12 @@ mod tests {
         let descriptors = hosted.descriptors();
         let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         let expected_paths = [
+            "mixer/a/eq-menu-anchor",
             "mixer/a/high",
             "mixer/a/mid",
             "mixer/a/low",
             "mixer/a/volume",
+            "mixer/b/eq-menu-anchor",
             "mixer/b/high",
             "mixer/b/mid",
             "mixer/b/low",
@@ -5030,7 +5065,9 @@ mod tests {
                 .all(|target| target.hit.area().w > 0.0 && target.hit.area().h > 0.0),
             "every retained component must resolve to its paint-only canvas bounds",
         );
-        for target in targets.iter().filter(|target| target.path != "mixer/xfade") {
+        for target in targets.iter().filter(|target| {
+            target.path != "mixer/xfade" && !target.path.ends_with("/eq-menu-anchor")
+        }) {
             let area = target.hit.area();
             if target.path.ends_with("/volume") {
                 assert_eq!(area.w, 38.0, "the VU target must be its declared canvas");

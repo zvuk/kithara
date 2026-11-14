@@ -1,6 +1,7 @@
 use kithara::{
     effects::GainDb,
     host::api::Tempo,
+    play::PitchStep,
     ui::render::{
         DEFAULT_ZOOM, Scope, UiEvent, WindowCommand, WriteValue, Zoom, zoom_in, zoom_out,
     },
@@ -66,7 +67,10 @@ fn deck_write(
         }
         ("deck.transport.toggle_play", WriteValue::Trigger) => DeckMsg::TogglePlayPause,
         ("deck.transport.toggle_sync", WriteValue::Trigger) => DeckMsg::ToggleSync,
-        ("deck.key.toggle_lock", WriteValue::Trigger) => DeckMsg::ToggleKeylock,
+        ("deck.key.toggle_lock", WriteValue::Trigger) => DeckMsg::Pitch(PitchStep::ToggleKeylock),
+        ("deck.key.transpose_up", WriteValue::Trigger) => DeckMsg::Pitch(PitchStep::Up),
+        ("deck.key.transpose_down", WriteValue::Trigger) => DeckMsg::Pitch(PitchStep::Down),
+        ("deck.key.transpose_reset", WriteValue::Trigger) => DeckMsg::Pitch(PitchStep::Reset),
         ("deck.transport.prev", WriteValue::Trigger) => DeckMsg::Prev,
         ("deck.transport.next", WriteValue::Trigger) => DeckMsg::Next,
         ("deck.transport.seek_normalized", WriteValue::Scalar(position)) => {

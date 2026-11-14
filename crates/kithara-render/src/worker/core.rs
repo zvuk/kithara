@@ -252,10 +252,7 @@ where
                 position,
             );
             let activity = audio.take_activity_writer();
-            let warp = Warp::new(
-                (),
-                &warp.starting_at(warp.speed(), start.keylock, start.backend),
-            );
+            let warp = Warp::new((), &warp.starting_at(warp.speed(), start.pitch));
             let pools = self.pools().clone();
             let dispatch = tracing::dispatcher::get_default(Clone::clone);
             let span = tracing::Span::current();
@@ -373,9 +370,7 @@ mod tests {
     use kithara_audio::{AudioConfig, NoResamplerBackend};
     use kithara_file::{File, FileConfig, FileSrc};
     use kithara_platform::CancelScope;
-    use kithara_sync::SpeedCurve;
     use kithara_test_utils::kithara;
-    use kithara_warp::StretchKind;
 
     use super::*;
     use crate::test_pools::pools;
@@ -394,11 +389,7 @@ mod tests {
             AudioConfig::<File<_>, NoResamplerBackend>::for_stream(file).build()
         };
         let (_sender, inbox) = play.lane_channel();
-        let start = LaneStart {
-            speed: SpeedCurve::Constant(1.0),
-            keylock: false,
-            backend: StretchKind::default(),
-        };
+        let start = LaneStart::default();
         let preparation =
             play.load::<File<_>, NoResamplerBackend, _>(audio(), Duration::ZERO, start, inbox);
         let source = Audio::<Stream<File<_>>>::prepare(
@@ -469,11 +460,7 @@ mod tests {
             .cancel(audio_cancel.token())
             .build();
         let (_sender, inbox) = play.lane_channel();
-        let start = LaneStart {
-            speed: SpeedCurve::Constant(1.0),
-            keylock: false,
-            backend: StretchKind::default(),
-        };
+        let start = LaneStart::default();
         let mut opening = Box::pin(play.load::<GatedFailure, NoResamplerBackend, _>(
             audio,
             Duration::ZERO,

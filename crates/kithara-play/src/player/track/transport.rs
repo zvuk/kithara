@@ -2,7 +2,7 @@ use kithara_audio::TrackFailureKind;
 use kithara_command::{Rejection, Seq, When};
 use kithara_config::{ConfigOwner, LiveConfig};
 use kithara_render::{
-    LaneCommand,
+    LaneCommand, LaneFrame,
     bridge::{DeckPart, Fade, PlaybackFault, Slot, SlotMark},
 };
 use kithara_signal::SessionFrame;
@@ -275,10 +275,7 @@ impl<S> PlayerImpl<S> {
         }
         let when = self.lane_when(at, out)?;
         let change = TrackSettings::check(change)?;
-        if let TrackSettingsChange::Speed(speed) = change
-            && matches!(when, When::Next)
-            && self.unchanged_speed(speed)
-        {
+        if self.unchanged(change, when) {
             return Ok((Configuring::Unchanged, None));
         }
         if matches!(change, TrackSettingsChange::Speed(_)) {
@@ -289,6 +286,15 @@ impl<S> PlayerImpl<S> {
             return Err(PlayError::Full("lane"));
         }
         Ok((Configuring::Send(when, change), Some(0)))
+    }
+
+    fn unchanged(&self, change: TrackSettingsChange, when: When<LaneFrame>) -> bool {
+        match change {
+            TrackSettingsChange::Speed(speed) => {
+                matches!(when, When::Next) && self.unchanged_speed(speed)
+            }
+            TrackSettingsChange::Pitch(pitch) => self.settings.projected().pitch() == pitch,
+        }
     }
 
     fn unchanged_speed(&self, speed: f32) -> bool {
@@ -365,7 +371,7 @@ impl<S> PlayerImpl<S> {
         &mut self,
         speed: SpeedCurve,
         target: f32,
-        when: When<kithara_render::LaneFrame>,
+        when: When<LaneFrame>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         if !matches!(self.status, TrackStatus::Playing { .. }) {

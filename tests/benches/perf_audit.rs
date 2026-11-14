@@ -34,7 +34,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
     stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine},
     sync::SpeedCurve,
-    warp::{Warp, WarpConfig, WarpRenderer},
+    warp::{Pitch, Warp, WarpConfig, WarpRenderer},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
@@ -555,7 +555,7 @@ fn bench_stretch_process(c: &mut Criterion) {
         let config = WarpConfig::builder()
             .speed(0.8)
             .backend(backend)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .build();
         let backend_label = backend.to_string().to_ascii_lowercase();
         group.bench_function(format!("{backend_label}_ratio_1_25"), |b| {
@@ -725,7 +725,7 @@ fn bench_warp_transition(c: &mut Criterion) {
                     (),
                     &WarpConfig::builder()
                         .speed(0.5)
-                        .keylock(true)
+                        .pitch(Pitch::HELD)
                         .backend(StretchKind::Signalsmith)
                         .build(),
                 )
@@ -736,10 +736,10 @@ fn bench_warp_transition(c: &mut Criterion) {
                 let mut produced = 0;
                 for block in 0..12 {
                     if block == 4 {
-                        renderer.set_keylock(false);
+                        renderer.set_pitch(Pitch::default());
                     }
                     if block == 8 {
-                        renderer.set_keylock(true);
+                        renderer.set_pitch(Pitch::HELD);
                     }
                     renderer.prepare(spec);
                     renderer
@@ -773,14 +773,14 @@ fn bench_warp_transition(c: &mut Criterion) {
                     (),
                     &WarpConfig::builder()
                         .speed(0.5)
-                        .keylock(true)
+                        .pitch(Pitch::HELD)
                         .backend(StretchKind::Signalsmith)
                         .build(),
                 )
                 .renderer(spec, pools.clone());
                 let resumed = render_windows(&mut replacement, &pools, spec, &pcm[..16_384]);
                 replacement.prepare(spec);
-                replacement.set_keylock(false);
+                replacement.set_pitch(Pitch::default());
                 replacement
                     .set_speed(SpeedCurve::Constant(1.0), 1)
                     .expect("unity replacement rate");
@@ -914,7 +914,6 @@ fn sampler_fixture(
     );
     let config = WarpConfig::builder()
         .backend(StretchKind::Signalsmith)
-        .keylock(false)
         .speed(speed)
         .render_quantum_frames(NonZeroUsize::new(output_frames).expect("output quantum"))
         .build();

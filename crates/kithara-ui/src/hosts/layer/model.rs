@@ -1,6 +1,6 @@
 use crate::{
     draw::{DrawList, Pt, Rect},
-    interact::{CursorShape, Hit, Input, Outcome, PointerPhase},
+    interact::{CursorShape, Hit, Input, Outcome},
 };
 
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -23,7 +23,7 @@ impl<A> HostLayer<A> {
     {
         if !matches!(
             input,
-            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down
+            Input::Pointer(pointer) if pointer.presses_primary()
         ) {
             return Outcome::IGNORED;
         }

@@ -14,7 +14,7 @@ pub use cell::{Band, GroupMount, Measured, SplitMount, StageMount};
 pub use ctx::{Clock, Ctx};
 pub use facade::render;
 pub use group::{Group, Lit};
-pub use host::Host;
+pub use host::{Host, Presses};
 pub use modal::Modal;
 pub use module::Module;
 pub use placed::{PlacedMount, Snap};

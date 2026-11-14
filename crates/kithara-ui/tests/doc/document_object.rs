@@ -11,20 +11,19 @@ use kithara_ui::{
     expand::{Binding, ControlSpec},
     geom::{Pt, Transform},
     ids::InternId,
-    layout::Axis,
-    module::MeasureAxis,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{
         Clock, InputOwner, ReadValue, Reads,
         document::{
-            Ctx, Group, GroupMount, Host, Measured, Modal, Module, PlacedMount, Popover,
-            SplitMount, StageMount, render,
+            Ctx, Group, GroupMount, Host, Measured, Modal, Module, PlacedMount, Popover, render,
         },
     },
     size::SizeSpec,
     source::UiConfig,
     view,
 };
+
+use crate::mount::{flatten, pass_through_mounts};
 
 /// One control, and where the document put what it draws.
 #[derive(Debug, PartialEq)]
@@ -35,12 +34,6 @@ struct Placed {
 
 struct Spy<'a> {
     ui: &'a CompiledUi,
-}
-
-impl Spy<'_> {
-    fn flatten<T>(groups: impl IntoIterator<Item = Vec<T>>) -> Vec<T> {
-        groups.into_iter().flatten().collect()
-    }
 }
 
 impl Host for Spy<'_> {
@@ -66,7 +59,7 @@ impl Host for Spy<'_> {
         _group: Group<'_>,
         children: Vec<GroupMount<Self::Output>>,
     ) -> Self::Output {
-        Self::flatten(children.into_iter().map(|cell| cell.output))
+        flatten(children.into_iter().map(|cell| cell.output))
     }
 
     fn hosted(
@@ -78,7 +71,7 @@ impl Host for Spy<'_> {
     }
 
     fn measured(&mut self, _plan: Measured, branches: Vec<Self::Output>) -> Self::Output {
-        Self::flatten(branches)
+        flatten(branches)
     }
 
     fn module(&mut self, _module: Module<'_>, content: Option<Self::Output>) -> Self::Output {
@@ -116,52 +109,7 @@ impl Host for Spy<'_> {
         }
     }
 
-    fn pressable(
-        &mut self,
-        _path: InternId,
-        child: Self::Output,
-        _size: Option<SizeSpec>,
-    ) -> Self::Output {
-        child
-    }
-
-    fn scroll(
-        &mut self,
-        _id: InternId,
-        child: Self::Output,
-        _size: Option<SizeSpec>,
-    ) -> Self::Output {
-        child
-    }
-
-    fn slot(
-        &mut self,
-        children: Vec<GroupMount<Self::Output>>,
-        _size: Option<SizeSpec>,
-    ) -> Self::Output {
-        Self::flatten(children.into_iter().map(|cell| cell.output))
-    }
-
-    fn split(
-        &mut self,
-        _axis: Axis,
-        _measure: Option<MeasureAxis>,
-        children: Vec<SplitMount<Self::Output>>,
-    ) -> Self::Output {
-        Self::flatten(children.into_iter().map(|cell| cell.output))
-    }
-
-    fn stage(
-        &mut self,
-        children: Vec<StageMount<Self::Output>>,
-        _size: Option<SizeSpec>,
-    ) -> Self::Output {
-        Self::flatten(children.into_iter().map(|child| child.output))
-    }
-
-    fn window(&mut self, content: Self::Output, _resize_edges: bool) -> Self::Output {
-        content
-    }
+    pass_through_mounts!();
 }
 
 /// One scalar the document can be driven by, standing in for whatever the app

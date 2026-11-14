@@ -149,6 +149,30 @@ static ENDPOINTS: &[Endpoint] = &[
         scopes: Endpoint::DECK,
     },
     Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.key.transpose",
+        value: ValueKind::Text,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.key.transpose_up",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.key.transpose_down",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.key.transpose_reset",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
         category: EndpointCategory::Command,
         id: "deck.transport.prev",
         value: ValueKind::Trigger,

@@ -4,7 +4,7 @@ use kithara_events::TrackId;
 use kithara_platform::time::{Duration, Instant};
 use kithara_play::{
     CrossfadeSettings, CrossfaderGain, DeckFxChange, EqBandConfig, FilterKnob, InterruptionKind,
-    PlayError, Position, TrackSettingsChange, Trim,
+    PitchStep, PlayError, Position, TrackSettingsChange, Trim,
 };
 use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
@@ -190,14 +190,12 @@ where
         ))
     }
 
-    /// Turns keylock on or off for every active track and every later track.
+    /// Moves the deck's pitch by `step`; every active track and every later
+    /// track plays the pitch it lands on.
     /// # Errors
     /// Returns the broadcast's refusal or a closed mailbox.
-    pub fn set_keylock(&self, on: bool) -> Result<(), QueueError> {
-        self.call(QueueCommand::ConfigureTrack(
-            TrackSettingsChange::Keylock(on),
-            When::Next,
-        ))
+    pub fn step_pitch(&self, step: PitchStep) -> Result<(), QueueError> {
+        self.call(QueueCommand::StepPitch(step))
     }
 
     /// Changes the speed inherited by subsequent tracks.

@@ -1,6 +1,7 @@
 use kithara::{
     effects::GainDb,
     host::{DeckId, api::Tempo},
+    play::PitchStep,
     queue::TrackId,
 };
 use kithara_app_library::Playable;
@@ -37,7 +38,7 @@ pub(crate) enum DeckCmd {
     SetTempo(TempoPercent),
     SetQuality(Option<usize>),
     ToggleSync,
-    ToggleKeylock,
+    Pitch(PitchStep),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

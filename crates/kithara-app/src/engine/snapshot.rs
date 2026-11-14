@@ -5,6 +5,7 @@ use kithara::{
     effects::GainDb,
     host::{DeckId, api::Tempo},
     platform::sync::Arc,
+    play::Pitch,
     prelude::EngineLoadSnapshot,
     queue::TrackEntry,
 };
@@ -81,8 +82,7 @@ pub(crate) struct DeckSnapshot {
     pub(crate) tempo: TempoPercent,
     pub(crate) speed: f32,
     pub(crate) synced: bool,
-    pub(crate) keylock: bool,
-    pub(crate) holds_pitch: bool,
+    pub(crate) pitch: Option<Pitch>,
     pub(crate) playing: bool,
     pub(crate) duration: f64,
     pub(crate) position: f64,
@@ -115,8 +115,7 @@ impl DeckSnapshot {
         eq_bands: Vec<GainDb>,
         tempo: TempoPercent,
         synced: bool,
-        keylock: bool,
-        holds_pitch: bool,
+        pitch: Option<Pitch>,
         state: &UiState,
     ) -> Self {
         Self {
@@ -132,8 +131,7 @@ impl DeckSnapshot {
             tempo,
             speed: state.speed,
             synced,
-            keylock,
-            holds_pitch,
+            pitch,
             current_track_index: state.current_track_index,
             duration: state.duration,
             position: state.position,

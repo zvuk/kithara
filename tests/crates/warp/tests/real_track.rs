@@ -10,8 +10,8 @@ use kithara::{
     stretch::StretchKind,
     sync::{SessionAnchor, SessionBeat},
     warp::{
-        Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapPoint, WarpConfig,
-        WarpMap, WarpMapRevision,
+        Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapPoint, Pitch,
+        WarpConfig, WarpMap, WarpMapRevision,
     },
 };
 use kithara_integration_tests::{
@@ -348,7 +348,7 @@ fn render(
     let mut rendered = render_configured_grid_with_updates(
         WarpConfig::builder()
             .speed(1.0)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .backend(backend)
             .render_quantum_frames(NonZero::new(64).expect("quantum"))
             .build(),

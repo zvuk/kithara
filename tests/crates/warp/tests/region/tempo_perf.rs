@@ -1,6 +1,7 @@
 use ::kithara::{
     platform::time::{Duration, Instant},
     signal::ExponentialApproach,
+    warp::Pitch,
 };
 use kithara_test_utils::{kithara, tracing};
 use num_traits::ToPrimitive;
@@ -50,7 +51,7 @@ fn summary(durations: &mut [Duration]) -> (f64, f64, f64) {
 fn tempo_worker_profile(#[case] motion: Motion, #[case] keylock: bool) {
     let config = WarpConfig::builder()
         .backend(StretchKind::Signalsmith)
-        .keylock(keylock)
+        .maybe_pitch(keylock.then_some(Pitch::HELD))
         .speed(1.05)
         .build();
     let pools: [_; DECKS] = std::array::from_fn(|_| pools());
