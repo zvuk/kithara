@@ -16,7 +16,7 @@ const BLOCK_FRAMES: usize = 512;
 const BLOCKS: usize = 40;
 const LEVEL: f32 = 0.25;
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 async fn a_bare_deck_keeps_its_item_past_the_end() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()

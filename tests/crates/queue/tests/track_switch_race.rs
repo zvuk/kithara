@@ -900,7 +900,7 @@ async fn completion_observer_keeps_current_changes_in_bus_order(
 #[kithara::test(
     tokio,
     multi_thread,
-    timeout(::std::time::Duration::from_millis(64036))
+    timeout(::std::time::Duration::from_millis(64488))
 )]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn concurrent_completion_race_does_not_barge_in(

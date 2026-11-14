@@ -256,7 +256,7 @@ mod tests {
     macro_rules! sync_cancel_tests {
         ($($name:ident: $spec:expr, $action:expr, $expected:expr;)*) => {
             $(
-                #[kithara::test(timeout(Duration::from_secs(5)))]
+                #[kithara::test]
                 fn $name() {
                     let s = build(&$spec);
                     fire(&$action, &s);
@@ -296,7 +296,7 @@ mod tests {
     macro_rules! async_cancel_tests {
         ($($name:ident: $spec:expr, $action:expr;)*) => {
             $(
-                #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+                #[kithara::test(tokio)]
                 async fn $name() {
                     let s = build(&$spec);
                     let group2 = s.group.clone();

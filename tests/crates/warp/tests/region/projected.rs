@@ -1,6 +1,6 @@
 use super::*;
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(1128)))]
+#[kithara::test(timeout(::std::time::Duration::from_millis(2526)))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

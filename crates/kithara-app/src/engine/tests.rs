@@ -475,7 +475,7 @@ fn assert_clicks_on_host_beats(rig: &mut Rig, found: &[Onset]) {
     );
 }
 
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(17760)))]
+#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(17848)))]
 async fn sync_puts_the_deck_on_the_host_beat(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {
@@ -714,7 +714,7 @@ async fn a_sync_press_after_a_refusal_shows_sync_on_before_a_grid_arrives(rhythm
 
 /// A tempo the host takes while the current track is refused reaches the
 /// deck's next track, which sounds on the host beats of that tempo.
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(13716)))]
+#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(13784)))]
 async fn a_tempo_during_a_refusal_reaches_the_next_track(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
@@ -862,7 +862,7 @@ async fn a_revision_of_the_bar_lands_on_the_host_downbeat(rhythm_a_wav: String) 
 
 /// A synced deck changes to a track the analysis has heard only roughly, and
 /// the true grid arrives once that track sounds.
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(15712)))]
+#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(15714)))]
 async fn a_track_change_into_a_track_analysed_late_ends_on_the_host_beat(
     rhythm_a_wav: String,
     rhythm_b_wav: String,

@@ -737,7 +737,7 @@ fn native_pitch_cascade_reports_its_full_latency(#[case] backend: StretchKind) {
     assert_eq!(slow.engine_latency(), latency);
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 #[case::signalsmith(StretchKind::Signalsmith)]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn replacing_a_curve_during_drain_applies_at_the_next_frame(#[case] backend: StretchKind) {

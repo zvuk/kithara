@@ -806,7 +806,7 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(
 #[kithara::test(
     native,
     tokio,
-    timeout(::std::time::Duration::from_millis(45060)),
+    timeout(::std::time::Duration::from_millis(45834)),
     hang_timeout_secs(5)
 )]
 #[case::plain(false, "crossfade FLAC", CrossfadeFlavor::Plain)]

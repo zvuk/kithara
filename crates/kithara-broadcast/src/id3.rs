@@ -105,7 +105,7 @@ mod tests {
         assert_eq!(timestamp[3], 1, "bit 32 is the timestamp's top bit");
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn the_timestamp_wraps_at_thirty_three_bits() {
         assert_eq!(
             TimestampTag::mpeg_timestamp(consts::WRAP, consts::MPEG_TIMESCALE),

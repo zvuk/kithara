@@ -165,7 +165,7 @@ fn manual_ramp_to_the_rate_limit_keeps_quantized_requests_bounded() {
 }
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

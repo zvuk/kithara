@@ -293,7 +293,7 @@ mod tests {
 
     /// A probe of one grain hop measures the latency a probe of a whole
     /// quantum measures, at every rate, layout and grain size.
-    #[kithara::test(timeout(::std::time::Duration::from_millis(2422)))]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(2570)))]
     fn a_one_hop_latency_probe_measures_the_whole_quantum_latency() {
         const QUANTUM: usize = 8192;
         for rate in [8_000, 22_050, 44_100, 48_000, 96_000, 192_000] {

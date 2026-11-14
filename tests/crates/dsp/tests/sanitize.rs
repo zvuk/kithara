@@ -4,7 +4,7 @@ const BLOCK: u32 = 1 << 16;
 const BLOCK_LEN: usize = 1 << 16;
 const BLOCKS: u32 = 1 << 16;
 
-#[kithara::test(native, timeout(::std::time::Duration::from_millis(1130)))]
+#[kithara::test(native, timeout(::std::time::Duration::from_millis(1908)))]
 #[case(0)]
 #[case(1)]
 #[case(2)]

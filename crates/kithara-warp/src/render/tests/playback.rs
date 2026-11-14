@@ -384,7 +384,7 @@ fn assert_unity_contract(warp_sine: &[f32], kind: StretchKind) {
 }
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

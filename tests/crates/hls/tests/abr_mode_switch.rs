@@ -1993,7 +1993,8 @@ async fn runtime_manual_switch_works_when_all_segments_cached(
     tokio,
     serial,
     hang_timeout_secs(5),
-    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug"),
+    timeout(Short)
 )]
 async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: CreatedHls) {
     let segment_count: usize = 6;

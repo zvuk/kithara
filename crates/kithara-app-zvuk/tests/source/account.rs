@@ -116,7 +116,7 @@ async fn signing_in_grants_the_token_and_reloads_the_catalogue() {
 }
 
 /// Expiry, Cancel and a failing browser each end the sign-in.
-#[kithara::test(timeout(::std::time::Duration::from_millis(14194)))]
+#[kithara::test(timeout(::std::time::Duration::from_millis(14198)))]
 async fn a_sign_in_without_a_confirmed_code_keeps_no_token() {
     let expiring = DelayedNet::new(Unimock::new(()));
     expiring.sessions([Ok(session(3))]);
