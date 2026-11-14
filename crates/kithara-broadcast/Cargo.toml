@@ -56,7 +56,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 
 hls_m3u8 = { workspace = true }
 serde_yaml_ng = { workspace = true }

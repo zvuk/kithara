@@ -11,8 +11,11 @@ categories = ["development-tools::testing"]
 [lib]
 proc-macro = true
 
+[features]
+test = ["dep:kithara-test-args"]
+
 [dependencies]
-kithara-test-args = { workspace = true }
+kithara-test-args = { workspace = true, optional = true }
 
 proc-macro2 = { workspace = true }
 quote = { workspace = true }

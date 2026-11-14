@@ -21,11 +21,11 @@ load = ["kithara-integration-tests/load"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
-kithara = { workspace = true, features = ["usdt", "download", "mock", "offline", "resample-rubato", "signal", "tokio-net", "tokio-rt-multi-thread"] }
+kithara = { workspace = true, features = ["test", "usdt", "download", "mock", "offline", "resample-rubato", "signal", "tokio-net", "tokio-rt-multi-thread"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
 
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "temp-dir", "http-server"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "hang", "mock", "temp-dir", "http-server"] }
 
 axum = { workspace = true }
 bytes = { workspace = true }
@@ -34,7 +34,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-kithara = { workspace = true, features = ["full", "symphonia"] }
+kithara = { workspace = true, features = ["test", "full", "symphonia"] }
 
 [lints]
 workspace = true

@@ -53,8 +53,8 @@ kithara-platform = { workspace = true, features = ["tokio-process"] }
 kithara-resampler = { workspace = true, features = ["resample-rubato"], optional = true }
 kithara-signal = { workspace = true, optional = true }
 kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
-kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true, optional = true }
+kithara-test-macros = { features = ["test"], workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true, optional = true }
 
 aes = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
@@ -82,7 +82,7 @@ url = { workspace = true, optional = true }
 # The playlist hydrator's tests serve a local playlist; `library` is the one
 # family that carries the hydrator, so the tests turn it on for themselves.
 kithara-fixture-gen = { path = ".", features = ["library"] }
-kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
+kithara-test-utils = { workspace = true, features = ["test", "client-reqwest", "tls-rustls"] }
 
 tempfile = { workspace = true }
 tiny_http = { workspace = true }

@@ -36,7 +36,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 
 serde_json = { workspace = true }
 

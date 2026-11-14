@@ -214,18 +214,18 @@ tracing-android = { workspace = true }
 kithara-apple = { workspace = true, features = ["foundation"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-kithara = { workspace = true, features = ["usdt", "audio", "decode", "download", "net", "offline", "signal"] }
+kithara = { workspace = true, features = ["test", "usdt", "audio", "decode", "download", "net", "offline", "signal"] }
 kithara-ffi = { path = ".", default-features = false, features = ["mock"] }
 kithara-platform = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["wav"] }
-kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "mock", "hang"] }
 
 tempfile = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-kithara = { workspace = true, features = ["decode", "mock", "signal"] }
-kithara-test-utils = { workspace = true, features = ["mock", "subscriber"] }
+kithara = { workspace = true, features = ["test", "decode", "mock", "signal"] }
+kithara-test-utils = { workspace = true, features = ["test", "mock", "subscriber"] }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 web-sys = { workspace = true, features = ["LockManager", "Navigator"] }

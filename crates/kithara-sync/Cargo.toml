@@ -26,7 +26,7 @@ thiserror = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 
 [lints]
 workspace = true

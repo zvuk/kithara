@@ -31,7 +31,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
 kithara-core-test-fixtures = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "tls-rustls"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "client-reqwest", "tls-rustls"] }
 
 [lints]
 workspace = true

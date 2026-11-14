@@ -22,13 +22,13 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 broadcast = ["kithara/broadcast"]
 
 [dependencies]
-kithara = { workspace = true, features = ["usdt", "full", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith"] }
+kithara = { workspace = true, features = ["test", "usdt", "full", "symphonia", "fdk-aac", "resample-rubato", "stretch-signalsmith"] }
 kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["packaged"] }
 
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "hang", "mock"] }
 
 bytes = { workspace = true }
 url = { workspace = true }

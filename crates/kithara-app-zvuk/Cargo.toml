@@ -37,11 +37,11 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-net = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-net = { workspace = true, features = ["mock"] }
-kithara-test-utils = { workspace = true, features = ["http-server"] }
+kithara-test-utils = { workspace = true, features = ["test", "http-server"] }
 
 async-trait = { workspace = true }
 axum = { workspace = true }

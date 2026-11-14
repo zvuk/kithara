@@ -13,7 +13,7 @@ categories = ["concurrency", "data-structures"]
 ringbuf = { workspace = true }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 
 [lints]
 workspace = true

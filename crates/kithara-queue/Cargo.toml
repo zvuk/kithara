@@ -79,7 +79,7 @@ kithara-queue = { path = ".", default-features = false, features = ["usdt"] }
 kithara-render = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
 kithara-sync = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "temp-dir"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang", "temp-dir"] }
 kithara-warp = { workspace = true }
 kithara-worker = { workspace = true }
 

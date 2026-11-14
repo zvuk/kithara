@@ -44,7 +44,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 rayon = { workspace = true }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "hang", "tls-rustls", "subscriber"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "client-reqwest", "hang", "tls-rustls", "subscriber"] }
 kithara-worker = { path = ".", default-features = false, features = ["usdt"] }
 
 tracing = { workspace = true }

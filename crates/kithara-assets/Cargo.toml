@@ -66,7 +66,7 @@ tempfile = { workspace = true }
 kithara-assets = { path = ".", features = ["usdt", "mock"] }
 kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "temp-dir"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang", "temp-dir"] }
 
 aes = { workspace = true }
 bytes = { workspace = true }

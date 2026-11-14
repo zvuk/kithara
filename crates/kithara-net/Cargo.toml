@@ -100,14 +100,14 @@ wreq = { workspace = true, optional = true, features = [
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
 kithara-net = { path = ".", default-features = false, features = ["mock"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang"] }
 
 futures = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-platform = { workspace = true, features = ["tokio-rt-multi-thread"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["http-server"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "http-server"] }
 
 axum = { workspace = true }
 serde_yaml_ng = { workspace = true }
