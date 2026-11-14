@@ -20,7 +20,7 @@ use kithara_worker::{
 };
 
 use super::{
-    DecoderNode, PcmReceiver, PlayWorkerConfig, TrackConfig,
+    DecoderNode, OpenedPcm, PcmReceiver, PlayWorkerConfig, TrackConfig,
     reader::PcmLead,
     scheduler::{PlaybackObserver, StreamWake},
     track::pcm_quantum,
@@ -200,7 +200,7 @@ where
         position: Duration,
         start: LaneStart,
         inbox: Inbox<LaneProtocol>,
-    ) -> Result<(PcmReceiver, DecoderNode<Audio<Stream<T>>, S>, FrameCount), LoadRefusal>
+    ) -> Result<(OpenedPcm, DecoderNode<Audio<Stream<T>>, S>, FrameCount), LoadRefusal>
     where
         T: StreamType<Events = EventBus>,
         B: Default + ResamplerBackend,
@@ -222,7 +222,7 @@ where
                 detail: "lane preload quota exceeds PCM ring capacity",
             }));
         }
-        let (receiver, lane) = {
+        let (opened, lane) = {
             let wake = StreamWake::new(self.0.dispatcher.wake_handle());
             // Keep cold source preparation out of the callers' inline future state.
             let prepared = Box::pin(Audio::<Stream<T>>::prepare(
@@ -251,6 +251,11 @@ where
                 &audio,
                 position,
             );
+            let opened = OpenedPcm {
+                receiver,
+                metadata: audio.metadata().clone(),
+                abr: audio.abr_handle(),
+            };
             let activity = audio.take_activity_writer();
             let warp = Warp::new(
                 (),
@@ -299,11 +304,11 @@ where
                 self.pools().clone(),
                 cancel.clone(),
             ));
-            (receiver, lane)
+            (opened, lane)
         };
         self.check_load_cancelled(cancel.as_ref())?;
         let latency = lane.engine_latency();
-        Ok((receiver, *lane, latency))
+        Ok((opened, *lane, latency))
     }
 
     fn check_load_cancelled(

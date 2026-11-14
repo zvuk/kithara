@@ -12,8 +12,8 @@ use kithara_test_utils::{
 };
 
 use super::{
-    DeckMixerConfig, DeckPart, Fade, PcmConsumer, PlayerResource, Slot, StreamShape, TestEnds,
-    TestMixer, chunk, mixer_with_shape, pools, send,
+    DeckMixerConfig, DeckPart, Fade, PlayerResource, Slot, StreamShape, TestEnds, TestMixer, chunk,
+    mixer_with_shape, send,
 };
 use crate::worker::{PcmPacket, packet_tests::PacketRing};
 
@@ -83,11 +83,9 @@ fn load_tracks(
             2,
         );
         let pcm = PlayerResource::new(
-            PcmConsumer::new(packets.receiver.take().expect("packet receiver")),
+            packets.receiver.take().expect("packet receiver"),
             Arc::from(format!("no-sync-deadline-track-{index}")),
-            &pools(),
-        )
-        .expect("resource fits pool budget");
+        );
         let slot = Slot::new(u16::try_from(index).expect("slot fits u16"));
         send(
             control,

@@ -564,14 +564,10 @@ fn a_deferred_adopt_restarts_an_ended_slot_after_repeated_eof_observation() {
     let mut end = chunk(spec, old, 4, 4, &[]);
     end.meta.end_of_track = true;
     packets.push(PcmPacket::Chunk(Box::new(end)));
-    let resource = Box::new(
-        PlayerResource::new(
-            PcmConsumer::new(packets.receiver.take().expect("receiver")),
-            Arc::from("repeat"),
-            &pools(),
-        )
-        .expect("resource"),
-    );
+    let resource = Box::new(PlayerResource::new(
+        packets.receiver.take().expect("receiver"),
+        Arc::from("repeat"),
+    ));
     let attached = send_on(
         &mut ends,
         When::Next,
@@ -993,14 +989,10 @@ async fn a_transport_reset_finishes_the_active_underrun_once(#[case] reset: Deck
     fixture
         .push(PcmPacket::Chunk(Box::new(prepared)))
         .expect("prepared PCM");
-    let resource = Box::new(
-        PlayerResource::new(
-            PcmConsumer::new(fixture.receiver.take().expect("receiver")),
-            Arc::from("stalled transport"),
-            &pools(),
-        )
-        .expect("resource"),
-    );
+    let resource = Box::new(PlayerResource::new(
+        fixture.receiver.take().expect("receiver"),
+        Arc::from("stalled transport"),
+    ));
     let item = kithara_events::TrackId::allocate();
     let (mut mixer, mut ends) = mixer();
     send(

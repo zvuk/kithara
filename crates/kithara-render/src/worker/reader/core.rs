@@ -1,8 +1,6 @@
 use std::fmt;
 
-use kithara_abr::AbrHandle;
 use kithara_audio::{Audio, AudioEvent, AudioSession};
-use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
 use kithara_platform::{
     sync::{Arc, ThreadGate, WaitGate},
@@ -90,8 +88,6 @@ pub struct PcmReceiver {
     pub(super) playhead: Arc<dyn PlayheadRead>,
     pub(super) position: Duration,
     pub(super) frontier: Duration,
-    pub(super) metadata: TrackMetadata,
-    pub(super) abr: Option<AbrHandle>,
 }
 
 impl PcmReceiver {
@@ -119,8 +115,6 @@ impl PcmReceiver {
                 playhead: audio.playhead_read(),
                 position,
                 frontier: position,
-                metadata: audio.metadata().clone(),
-                abr: audio.abr_handle(),
             },
             PcmProducer {
                 forward: forward_tx,
@@ -206,17 +200,6 @@ impl PcmReceiver {
                 .unwrap_or(self.frontier),
             _ => self.frontier,
         }
-    }
-
-    #[must_use]
-    pub const fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-
-    /// Adaptive bitrate control retained from the one source open.
-    #[must_use]
-    pub fn abr_handle(&self) -> Option<AbrHandle> {
-        self.abr.clone()
     }
 
     /// Publish transport activity through the ring's deferred wake path.

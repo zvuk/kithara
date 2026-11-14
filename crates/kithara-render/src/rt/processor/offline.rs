@@ -211,13 +211,13 @@ impl<E: SessionInbox> AudioNodeProcessor for OfflineProcessor<E> {
 mod tests {
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_signal::{AudioSpec, SegmentId, SessionFrame};
-    use kithara_test_utils::{bufpool::pools, kithara, test::usdt};
+    use kithara_test_utils::{kithara, test::usdt};
 
     use super::super::mock::{mixer, send};
     use crate::{
         bridge::{DeckPart, Fade, Slot},
         mock::PacketRing,
-        rt::track::{PcmConsumer, PlayerResource},
+        rt::track::PlayerResource,
     };
 
     #[kithara::test]
@@ -226,11 +226,9 @@ mod tests {
         let rate = mixer.mixer.deck.sample_rate;
         let mut packets = PacketRing::new(AudioSpec::new(2, rate), Duration::from_secs(1), 1);
         let resource = PlayerResource::new(
-            PcmConsumer::new(packets.receiver.take().expect("PCM receiver")),
+            packets.receiver.take().expect("PCM receiver"),
             Arc::from("starved-device"),
-            &pools(),
-        )
-        .expect("resource");
+        );
         let slot = Slot::new(0);
         send(
             &mut ends,

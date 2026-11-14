@@ -19,10 +19,7 @@ use super::*;
 pub(super) use crate::{
     CrossfadeCurve, CrossfadeSettings,
     bridge::{DeckEqChange, DeckPart, DeckRefusal, Fade, FadeDir, Returned},
-    rt::{
-        DeckMixerConfig,
-        track::{PcmConsumer, PlayerResource},
-    },
+    rt::{DeckMixerConfig, track::PlayerResource},
     test_pools::pools,
     worker::{
         PcmPacket,
@@ -484,10 +481,7 @@ fn adopt_never_mixes_a_blocked_older_packet_or_publishes_its_mark(#[case] check_
     packets.push(PcmPacket::Chunk(Box::new(chunk(
         spec, old, 0, 0, &[1.0; 32],
     ))));
-    let resource = Box::new(
-        PlayerResource::new(PcmConsumer::new(receiver), Arc::from("segments"), &pools())
-            .expect("resource"),
-    );
+    let resource = Box::new(PlayerResource::new(receiver, Arc::from("segments")));
     let instant = Fade::Crossfade(
         CrossfadeSettings::new(0.0, CrossfadeCurve::Linear, 1.0, 0.5).expect("instant envelope"),
     );

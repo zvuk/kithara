@@ -5,10 +5,9 @@ use kithara_signal::{SegmentId, SessionFrame};
 use kithara_test_fixtures::mock_fixtures::ring_pcm;
 use kithara_test_utils::kithara;
 
-use super::super::{PcmConsumer, PlayerResource, ReadOutcome};
+use super::super::{PlayerResource, ReadOutcome};
 use crate::{
     mock::pcm_fixture::{PcmFixture, chunk},
-    test_pools::pools,
     worker::PcmPacket,
 };
 struct RingFixture {
@@ -20,8 +19,7 @@ impl RingFixture {
         let mut transport = PcmFixture::new(8, false).await;
         let receiver = transport.receiver.take().expect("receiver");
         Self {
-            resource: PlayerResource::new(PcmConsumer::new(receiver), Arc::from("moved"), &pools())
-                .expect("resource"),
+            resource: PlayerResource::new(receiver, Arc::from("moved")),
             transport,
         }
     }

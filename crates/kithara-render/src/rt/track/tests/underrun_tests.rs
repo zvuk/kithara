@@ -13,13 +13,10 @@ use ringbuf::{
     traits::{Consumer, Split},
 };
 
-use super::super::{
-    PcmConsumer, PlayerResource, PlayerTrack, RtSink, TrackBuffers, TrackReadOutcome,
-};
+use super::super::{PlayerResource, PlayerTrack, RtSink, TrackBuffers, TrackReadOutcome};
 use crate::{
     bridge::{DeckEvent, Fade, RtMetrics, Slot},
     mock::pcm_fixture::{PcmFixture, chunk},
-    test_pools::pools,
     worker::PcmPacket,
 };
 
@@ -33,11 +30,9 @@ fn offline_preparation_waits_for_the_lane_instead_of_underrunning() {
         .expect("fixture runtime");
     let mut fixture = runtime.block_on(PcmFixture::new(8, true));
     let resource = PlayerResource::new(
-        PcmConsumer::new(fixture.receiver.take().expect("receiver")),
+        fixture.receiver.take().expect("receiver"),
         Arc::from("blocking-underrun"),
-        &pools(),
-    )
-    .expect("resource");
+    );
     let rate = NonZeroU32::new(48_000).expect("rate");
     let mut track = PlayerTrack::builder()
         .item_id(kithara_events::TrackId::allocate())
@@ -97,7 +92,7 @@ fn offline_preparation_waits_for_the_lane_instead_of_underrunning() {
     assert_eq!(metrics.snapshot().underruns(), 0);
     assert!(received.try_pop().is_none());
     let _fixture = writer.join().expect("the late lane publishes");
-    assert!(!track.resource.consumer.get().receiver.is_closed());
+    assert!(!track.resource.receiver.get().is_closed());
     let entries = trace.events_of("pcm_wait_started");
     let exits = trace.events_of("pcm_wait_finished");
     let truncated = usdt::recorded().1;
@@ -125,11 +120,9 @@ fn offline_preparation_waits_for_the_lane_instead_of_underrunning() {
 async fn underrun_edges_emit_once_per_starvation_window() {
     let mut fixture = PcmFixture::new(8, false).await;
     let resource = PlayerResource::new(
-        PcmConsumer::new(fixture.receiver.take().expect("receiver")),
+        fixture.receiver.take().expect("receiver"),
         Arc::from("underrun"),
-        &pools(),
-    )
-    .expect("resource");
+    );
     let rate = NonZeroU32::new(48_000).expect("rate");
     let mut track = PlayerTrack::builder()
         .item_id(kithara_events::TrackId::allocate())
@@ -250,11 +243,9 @@ async fn underrun_edges_emit_once_per_starvation_window() {
 async fn a_graph_read_does_not_wait_for_an_offline_lane() {
     let mut fixture = PcmFixture::new(8, true).await;
     let mut resource = PlayerResource::new(
-        PcmConsumer::new(fixture.receiver.take().expect("receiver")),
+        fixture.receiver.take().expect("receiver"),
         Arc::from("unprepared-offline"),
-        &pools(),
-    )
-    .expect("resource");
+    );
     let trace = usdt::scope();
     let mut left = [99.0; 2];
     let mut right = [99.0; 2];

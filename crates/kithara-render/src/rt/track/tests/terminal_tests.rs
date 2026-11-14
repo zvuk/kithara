@@ -15,7 +15,7 @@ use ringbuf::{
     traits::{Consumer, Split},
 };
 
-use super::super::{PcmConsumer, PlayerResource, PlayerTrack, ReadOutcome, RtSink};
+use super::super::{PlayerResource, PlayerTrack, ReadOutcome, RtSink};
 use crate::{
     bridge::{DeckEvent, Fade, PlaybackFault, RtMetrics, Slot},
     test_pools::{TestPools, pools, sample_buffer},
@@ -27,12 +27,7 @@ fn spec() -> AudioSpec {
 }
 
 fn resource(receiver: PcmReceiver) -> PlayerResource {
-    PlayerResource::new(
-        PcmConsumer::new(receiver),
-        Arc::from("repeated.wav"),
-        &pools(),
-    )
-    .expect("packet resource")
+    PlayerResource::new(receiver, Arc::from("repeated.wav"))
 }
 
 fn observe(reader: &mut PlayerResource) -> Option<ReadOutcome> {
@@ -596,7 +591,7 @@ fn failed_seek_commits_its_epoch_for_the_terminal_marker() {
         kind: DecodeErrorKind::Interrupted,
     };
     assert!(
-        matches!(reader.consumer.get().receiver.peek(), Some(PcmPacket::Failed { segment, failure: actual }) if *segment == selected && *actual == failure)
+        matches!(reader.receiver.get().peek(), Some(PcmPacket::Failed { segment, failure: actual }) if *segment == selected && *actual == failure)
     );
     assert_eq!(
         observe(&mut reader),

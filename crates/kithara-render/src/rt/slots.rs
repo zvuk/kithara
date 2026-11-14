@@ -87,21 +87,15 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{
-        rt::track::{PcmConsumer, PlayerResource},
-        test_pools::pools,
-        worker::packet_tests::PacketRing,
-    };
+    use crate::{rt::track::PlayerResource, worker::packet_tests::PacketRing};
 
     fn track(src: Arc<str>) -> PlayerTrack {
         let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");
         let mut ring = PacketRing::new(AudioSpec::new(2, sample_rate), Duration::from_secs(1), 2);
-        let resource = PlayerResource::new(
-            PcmConsumer::new(ring.receiver.take().expect("receiver")),
+        let resource = Box::new(PlayerResource::new(
+            ring.receiver.take().expect("receiver"),
             src,
-            &pools(),
-        )
-        .map_or_else(|error| panic!("test player resource: {error}"), Box::new);
+        ));
 
         PlayerTrack::builder()
             .item_id(kithara_events::TrackId::allocate())

@@ -11,13 +11,9 @@ use kithara_worker::Task;
 use num_traits::ToPrimitive;
 
 use super::{PlayerResource, ReadOutcome as BlockReadOutcome};
-use crate::{
-    rt::track::PcmConsumer,
-    test_pools::pools,
-    worker::{
-        PcmPacket,
-        packet_tests::{PacketRing, chunk},
-    },
+use crate::worker::{
+    PcmPacket,
+    packet_tests::{PacketRing, chunk},
 };
 
 fn spec() -> AudioSpec {
@@ -48,12 +44,7 @@ fn resource(src: &str, seconds: f64, samples: &[f32], ended: bool) -> (PlayerRes
         end.meta.end_of_track = true;
         packets.push(PcmPacket::Chunk(Box::new(end)));
     }
-    let resource = PlayerResource::new(
-        PcmConsumer::new(packets.receiver.take().expect("receiver")),
-        Arc::from(src),
-        &pools(),
-    )
-    .expect("resource fits the pool budget");
+    let resource = PlayerResource::new(packets.receiver.take().expect("receiver"), Arc::from(src));
     (resource, packets)
 }
 
@@ -100,9 +91,7 @@ fn full_read_refills_before_the_next_callback_drains_scratch() {
     for _ in 0..16 {
         node.tick();
     }
-    let mut player =
-        PlayerResource::new(PcmConsumer::new(receiver), Arc::from("chunked"), &pools())
-            .expect("worker resource");
+    let mut player = PlayerResource::new(receiver, Arc::from("chunked"));
     let mut left = vec![0.0f32; CALLBACK_FRAMES];
     let mut right = vec![0.0f32; CALLBACK_FRAMES];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];

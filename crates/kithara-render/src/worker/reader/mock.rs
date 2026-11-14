@@ -1,6 +1,5 @@
 use std::num::NonZeroUsize;
 
-use kithara_decode::TrackMetadata;
 use kithara_platform::{
     sync::{Arc, ThreadGate, WaitGate},
     time::Duration,
@@ -158,8 +157,6 @@ impl PacketRing {
                 playhead: playhead.clone(),
                 position: Duration::ZERO,
                 frontier: Duration::ZERO,
-                metadata: TrackMetadata::default(),
-                abr: None,
             }),
             producer: PcmProducer {
                 forward: forward_tx,
@@ -296,8 +293,6 @@ pub(in crate::worker) fn packet_fixture(
             playhead: Arc::new(PlayheadState::new()),
             position: Duration::ZERO,
             frontier: Duration::ZERO,
-            metadata: TrackMetadata::default(),
-            abr: None,
         },
         PcmProducer {
             forward,
@@ -336,8 +331,7 @@ pub fn wait_for_packet(receiver: &PcmReceiver) {
             "{stage}: waited={waited:?}, gate_before={gate_before}, gate_after={gate_after}, \
              packet_ready={packet_ready}, producer_held={producer_held}, \
              next_chunk={next_chunk:?}, position={:?}, frontier={:?}, spec={:?}, \
-             playhead_position={:?}, decoded_frontier={:?}, cached={:?}, duration={:?}, \
-             abr_variant={:?}",
+             playhead_position={:?}, decoded_frontier={:?}, cached={:?}, duration={:?}",
             receiver.position,
             receiver.frontier,
             receiver.spec,
@@ -345,10 +339,6 @@ pub fn wait_for_packet(receiver: &PcmReceiver) {
             receiver.playhead.decoded_frontier(),
             receiver.playhead.cached(),
             receiver.playhead.duration(),
-            receiver
-                .abr
-                .as_ref()
-                .and_then(kithara_abr::AbrHandle::current_variant_index),
         )
     };
     let mut waited = None;

@@ -18,10 +18,7 @@ use super::{DeckMixer, StreamShape};
 use crate::{
     bridge::{DeckEnds, DeckPart, DeckProtocol, SessionInbox, Slot, scope_channels},
     mock::{PacketRing, chunk},
-    rt::{
-        DeckMixerConfig,
-        track::{PcmConsumer, PlayerResource},
-    },
+    rt::{DeckMixerConfig, track::PlayerResource},
     worker::PcmPacket,
 };
 
@@ -162,14 +159,10 @@ pub fn pcm_samples(src: &str, seconds: f64, samples: &[f32], ended: bool) -> Box
         end.meta.end_of_track = true;
         ring.push(PcmPacket::Chunk(Box::new(end)));
     }
-    Box::new(
-        PlayerResource::new(
-            PcmConsumer::new(ring.receiver.take().expect("receiver")),
-            Arc::from(src),
-            &pools(),
-        )
-        .expect("resource"),
-    )
+    Box::new(PlayerResource::new(
+        ring.receiver.take().expect("receiver"),
+        Arc::from(src),
+    ))
 }
 
 pub fn send(ring: &mut TestEnds, when: When<SessionFrame>, parts: Vec<DeckPart>) -> Seq {
@@ -333,7 +326,6 @@ pub fn prepared_seek(spec: AudioSpec, segment: SegmentId, target: Duration) -> P
     }
     assert_eq!(counts.try_iter().collect::<Vec<_>>(), vec![target]);
     assert_eq!(lane.receipts().count(), 1);
-    let pcm = PlayerResource::new(PcmConsumer::new(receiver), Arc::from("split.mp3"), &pools())
-        .expect("prepared PCM");
+    let pcm = PlayerResource::new(receiver, Arc::from("split.mp3"));
     (Box::new(pcm), node, lane, counts)
 }

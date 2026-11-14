@@ -14,7 +14,7 @@ use kithara::{
 use kithara_command::{ChannelConfig, Inbox, Sender, channel};
 use kithara_render::{
     DecoderNode, DispatcherProtocol, LaneProtocol, LaneStart, LoadRefusal, Open, OpenResult,
-    PcmReceiver,
+    OpenedPcm,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -82,7 +82,7 @@ where
     B: Default + ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    type Opened = PcmReceiver;
+    type Opened = OpenedPcm;
     type Lane = DecoderNode<Audio<Stream<T>>, S>;
 
     async fn open(

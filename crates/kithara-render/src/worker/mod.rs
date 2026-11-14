@@ -8,6 +8,7 @@ pub(crate) mod mock;
 #[cfg(all(test, feature = "mock"))]
 pub(crate) use node::mock as node_fixture;
 mod node;
+mod opened;
 mod reader;
 #[cfg(any(test, feature = "mock"))]
 pub(crate) use node::fixture as source_fixture;
@@ -25,6 +26,7 @@ pub use config::{PlayWorkerConfig, PlayWorkerConfigPatch};
 pub(crate) use fixture::{terminal_node, terminal_ring};
 pub use load::{EngineLoad, EngineLoadSnapshot};
 pub use node::DecoderNode;
+pub use opened::OpenedPcm;
 pub use reader::{PcmPacket, PcmReceiver};
 pub use scheduler::StreamWake;
 pub use track::{TrackConfig, TrackConfigPatch, pcm_quantum};

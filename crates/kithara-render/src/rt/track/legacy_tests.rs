@@ -15,7 +15,6 @@ use super::{tests::stop_seq, *};
 use crate::{
     CrossfadeSettings,
     bridge::{DeckEvent, Fade, FadeDir, RtMetrics, Slot, SlotState},
-    test_pools::pools,
     worker::{
         PcmPacket,
         packet_tests::{PacketRing, chunk},
@@ -83,11 +82,9 @@ fn make_track_with(input: &'static [u8], seconds: f64, _slot: Slot) -> Fixture {
     terminal.meta.end_of_track = true;
     packets.push(PcmPacket::Chunk(Box::new(terminal)));
     let resource = PlayerResource::new(
-        PcmConsumer::new(packets.receiver.take().expect("receiver")),
+        packets.receiver.take().expect("receiver"),
         Arc::from("test.mp3"),
-        &pools(),
-    )
-    .expect("resource");
+    );
     Fixture {
         track: PlayerTrack::builder()
             .item_id(kithara_events::TrackId::allocate())
@@ -425,11 +422,9 @@ async fn read_outcome_matches_track_state(
 fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
     let mut packets = PacketRing::new(spec(), Duration::from_secs(100), 4);
     let resource = PlayerResource::new(
-        PcmConsumer::new(packets.receiver.take().expect("receiver")),
+        packets.receiver.take().expect("receiver"),
         Arc::from("frontier.flac"),
-        &pools(),
-    )
-    .expect("resource");
+    );
     let track = PlayerTrack::builder()
         .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec().sample_rate)
@@ -528,11 +523,9 @@ async fn a_buffered_eof_corrects_an_overestimated_duration(constant_half: &'stat
     terminal.meta.end_of_track = true;
     packets.push(PcmPacket::Chunk(Box::new(terminal)));
     let resource = PlayerResource::new(
-        PcmConsumer::new(packets.receiver.take().expect("receiver")),
+        packets.receiver.take().expect("receiver"),
         Arc::from("misreported.mp3"),
-        &pools(),
-    )
-    .expect("resource");
+    );
     let mut track = PlayerTrack::builder()
         .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec().sample_rate)

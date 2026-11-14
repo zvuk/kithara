@@ -284,11 +284,7 @@ pub(crate) fn synthetic_loaded(
     kithara_render::Loaded<kithara_play::OpenedTrack>,
     kithara_render::mock::PacketRing,
 ) {
-    use kithara_render::{
-        PcmPacket,
-        mock::PacketRing,
-        rt::track::{PcmConsumer, PlayerResource},
-    };
+    use kithara_render::{PcmPacket, mock::PacketRing, rt::track::PlayerResource};
     use kithara_signal::AudioChunk;
     use kithara_test_utils::bufpool::sample_buffer;
 
@@ -301,10 +297,7 @@ pub(crate) fn synthetic_loaded(
         sample_buffer(&region, &samples),
     ))));
     let receiver = packets.receiver.take().expect("fixture receiver");
-    let pcm = Box::new(
-        PlayerResource::new(PcmConsumer::new(receiver), src.into(), &region)
-            .expect("fixture playback resource"),
-    );
+    let pcm = Box::new(PlayerResource::new(receiver, src.into()));
     let opened = kithara_play::OpenedTrack {
         pcm,
         abr: None,

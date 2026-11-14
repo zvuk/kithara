@@ -103,7 +103,7 @@ mod tests {
     use crate::{
         CrossfadeSettings,
         bridge::Fade,
-        rt::track::{PcmConsumer, PlayerResource},
+        rt::track::PlayerResource,
         worker::{
             PcmPacket,
             packet_tests::{PacketRing, chunk},
@@ -126,12 +126,8 @@ mod tests {
                         &vec![0.5; available * 2],
                     ))));
                 }
-                let resource = PlayerResource::new(
-                    PcmConsumer::new(ring.receiver.take().expect("receiver")),
-                    Arc::from("tail"),
-                    &pools,
-                )
-                .expect("resource");
+                let resource =
+                    PlayerResource::new(ring.receiver.take().expect("receiver"), Arc::from("tail"));
                 let mut track = PlayerTrack::builder()
                     .item_id(kithara_events::TrackId::allocate())
                     .sample_rate(spec.sample_rate)

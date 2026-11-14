@@ -21,11 +21,9 @@ fn snapshot_frontier_never_trails_position() {
         &[0.5; 2],
     ))));
     let pcm = PlayerResource::new(
-        PcmConsumer::new(packets.receiver.take().expect("receiver")),
+        packets.receiver.take().expect("receiver"),
         Arc::from("frontier"),
-        &pools(),
-    )
-    .expect("resource");
+    );
     let (mut mixer, mut ends) = mixer();
     send(
         &mut ends,
@@ -116,11 +114,9 @@ fn snapshot_carries_the_owner_origin_without_rewriting_raw_pcm_position() {
     let data = chunk(spec, SegmentId::FIRST, 0, 1_500, &[0.5; 338]);
     packets.push(PcmPacket::Chunk(Box::new(data)));
     let pcm = PlayerResource::new(
-        PcmConsumer::new(packets.receiver.take().expect("receiver")),
+        packets.receiver.take().expect("receiver"),
         Arc::from("offset"),
-        &pools(),
-    )
-    .expect("resource");
+    );
     let (mut mixer, mut ends) = mixer();
     send(
         &mut ends,
