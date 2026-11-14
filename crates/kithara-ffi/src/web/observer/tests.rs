@@ -40,6 +40,49 @@ use types::{
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+const contexts = [];
+const nodes = [];
+const constructors = new Map();
+if (typeof window !== 'undefined') {
+  for (const name of ['AudioContext', 'AudioWorkletNode']) {
+    const original = globalThis[name];
+    constructors.set(name, original);
+    globalThis[name] = new Proxy(original, {
+      construct(target, args, newTarget) {
+        const value = Reflect.construct(target, args, newTarget);
+        const events = [];
+        if (name === 'AudioContext') {
+          contexts.push({value, events});
+          value.addEventListener('statechange', () => events.push(value.state));
+        } else {
+          nodes.push({name: args[1], events});
+          value.port.addEventListener('message', ({data}) => events.push(data.kind));
+          value.addEventListener('processorerror', () => events.push('processorerror'));
+        }
+        return value;
+      }
+    });
+  }
+}
+export async function outputDiagnostic() {
+  try {
+    const locks = await navigator.locks.query();
+    return JSON.stringify({
+      contexts: contexts.map(({value, events}) => ({state: value.state, time: value.currentTime, rate: value.sampleRate, events})),
+      nodes,
+      locks
+    });
+  } finally {
+    for (const [name, original] of constructors) globalThis[name] = original;
+  }
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = outputDiagnostic)]
+    fn output_diagnostic() -> js_sys::Promise;
+}
+
 fn surface_player() -> AudioPlayer {
     static STARTUP: Once = Once::new();
     STARTUP.call_once(|| {
@@ -298,7 +341,7 @@ async fn surface_settings_follow_owner_publication_and_report_refusal() {
         .expect("browser window")
         .document()
         .expect("browser document");
-    wait_until(Duration::from_secs(5), "owner settings", || {
+    let ready = wait_until(Duration::from_secs(5), "owner settings", || {
         player.tick_js();
         // The backend installs its resume listener after the worklet starts.
         let click = web_sys::Event::new("click").expect("build a click event");
@@ -307,8 +350,14 @@ async fn surface_settings_follow_owner_publication_and_report_refusal() {
             && player.volume() == 0.25
             && player.is_muted()
     })
-    .await
-    .unwrap_or_else(|error| {
+    .await;
+    let diagnostic = kithara::platform::time::timeout(
+        Duration::from_millis(100),
+        js_sys::futures::JsFuture::from(output_diagnostic()),
+    )
+    .await;
+    wasm_bindgen_test::console_log!("OUTPUT_DIAGNOSTIC {diagnostic:?}");
+    ready.unwrap_or_else(|error| {
         panic!(
             "{error}; rate={}, volume={}, muted={}, process_calls={}, events={:?}",
             player.playing_rate(),
