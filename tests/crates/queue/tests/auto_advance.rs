@@ -232,6 +232,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
 async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,

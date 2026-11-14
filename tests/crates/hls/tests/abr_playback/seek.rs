@@ -653,7 +653,6 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
     let _ = audio.preload();
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    #[kithara_test_utils::kithara::flash(io)]
     async fn next_chunk(
         audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     ) -> Option<AudioChunk> {
@@ -754,7 +753,6 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
     }
     seek_segment.release();
 
-    #[kithara_test_utils::kithara::flash(io)]
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     fn read_after_seek(
         audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
