@@ -7,6 +7,42 @@ use super::*;
 use crate::Bound;
 
 #[kithara::test]
+fn a_late_lane_answer_is_published_with_its_owner_turn() {
+    let mut rig = rig();
+    let (mut track, mut inbox) = prepared_track();
+    track.seat = Seat::Unseated;
+    let seq = in_pass(&mut rig, frame(0), |out| {
+        track.cue(Duration::from_secs(2), SpeedCurve::Constant(1.0), out)
+    })
+    .expect("cue admitted")
+    .expect("native cue sequence");
+    let segment = track.segment.id;
+    let bound = Bound::AtOrAfter(frame(128));
+    in_pass(&mut rig, frame(0), |out| track.tick(frame(0), out));
+    assert_eq!(track.entry(bound), None);
+    inbox.drain();
+    inbox
+        .next_due(LaneFrame { segment, frame: 0 }, 1)
+        .expect("late native cue")
+        .apply(kithara_render::LaneApplied {
+            source_basis: None,
+            engine_latency: FrameCount::new(0),
+            ready: Some(segment),
+        });
+    assert!(
+        track.lane_receipt().is_none(),
+        "a late reply cannot bypass the owner's next turn"
+    );
+    assert_eq!(track.entry(bound), None);
+    in_pass(&mut rig, frame(128), |out| track.tick(frame(128), out));
+    assert!(
+        matches!(track.lane_receipt(), Some(Settled::Applied { seq: answered, .. }) if answered == seq)
+    );
+    assert_eq!(track.entry(bound), Some(frame(128)));
+    assert!(track.lane_receipt().is_none());
+}
+
+#[kithara::test]
 fn lane_feedback_does_not_wait_for_a_consumed_session_mark() {
     let (mut track, mut inbox) = prepared_track();
     let seq = track

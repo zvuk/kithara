@@ -65,7 +65,7 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
     /// Returns when the playing segment has no usable mark or effective clock.
     fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;
 
-    /// Takes one producer result in its lane clock. The driver drains these
+    /// Takes one settled producer result in its lane clock. The driver drains these
     /// each turn, through every decorator that owns matching work.
     fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>>;
 

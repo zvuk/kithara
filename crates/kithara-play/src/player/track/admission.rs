@@ -246,9 +246,6 @@ impl<S> Track<S> for PlayerImpl<S> {
     }
 
     fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>> {
-        if self.lane_commands.receipts.is_empty() {
-            self.settle_lane();
-        }
         self.lane_commands.receipts.pop_front()
     }
 
