@@ -25,6 +25,8 @@ minimum window, and FFT planes take their memory from the caller's
 `kithara-bufpool` region. The FFT builds only
 with the `spectrum` feature.
 
+`filter::Crossover` prepares LR4 split and allpass state off the audio thread.
+
 ## Usage
 
 ```rust
@@ -67,6 +69,8 @@ assert_eq!(samples, [0.0, 0.5]);
 <tr><td><code>filter::Biquad</code></td><td>Biquad sections in cascade over planar channels; <code>new</code> allocates, <code>retune</code>, <code>process</code>, <code>settle</code> and <code>copy_state</code> do not, and silence resets the state</td></tr>
 
 <tr><td><code>filter::Coefficients</code></td><td>The <code>biquad</code> crate's RBJ cookbook designs (with <code>Type</code>, <code>Hertz</code> and <code>Errors</code>), re-exported as the one import path</td></tr>
+
+<tr><td><code>filter::Crossover</code></td><td>Planar LR4/allpass state; <code>split</code> writes ascending bands of channel planes; reset and rate changes clear history without allocation</td></tr>
 
 <tr><td><code>interp::interpolate</code></td><td>Reads a window at fractional positions with an <code>interp::Interpolation</code> method (linear, quadratic, Hermite, Watte); a position outside the window is an error and leaves the output untouched</td></tr>
 

@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod support;
+
 use std::{
     f64::consts::{FRAC_1_SQRT_2, TAU},
     hint::black_box,
@@ -546,6 +548,7 @@ criterion_group!(
     vector,
     downmix,
     biquad,
+    support::crossover_biquad::bench,
     biquad_decay,
     svf,
     interp,

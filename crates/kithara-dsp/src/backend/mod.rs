@@ -4,6 +4,7 @@ pub(crate) mod accelerate;
 mod bins;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 mod cascade;
+pub(crate) mod crossover;
 mod envelope;
 mod fade;
 mod fir;
@@ -17,7 +18,7 @@ mod simd;
 ))]
 mod spectrum;
 mod strided;
-mod svf;
+pub(crate) mod svf;
 #[cfg(test)]
 mod tests;
 
@@ -34,4 +35,3 @@ pub(crate) use portable as platform;
 pub use simd::sanitize;
 pub(crate) use simd::{crossfade_linear, div, first_quiet, mul_add, ramp, scale_in_place};
 pub(crate) use strided::{gather, scatter};
-pub(crate) use svf::step as svf_step;
