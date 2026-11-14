@@ -876,6 +876,7 @@ default_features = ["kithara-beat/dsp", "kithara-waveform/dsp"]
 cargo.packages = [
   "kithara-analysis",
   "kithara-beat",
+  "kithara-key",
   "kithara-waveform",
   "kithara-analysis-tests",
 ]

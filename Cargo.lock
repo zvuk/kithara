@@ -5817,6 +5817,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-key"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara-blob",
+ "kithara-bufpool",
+ "kithara-dsp",
+ "kithara-signal",
+ "kithara-test-dylib",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "num-traits",
+ "rangemap",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "kithara-link"
 version = "0.0.1-alpha5"
 dependencies = [
