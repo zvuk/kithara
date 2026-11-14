@@ -11,7 +11,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     signal::{AudioChunk, SegmentId},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
-    warp::{StretchKind, WarpConfig},
+    warp::{Pitch, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
@@ -146,7 +146,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
                     NonZeroUsize::new(RENDER_QUANTUM_FRAMES).expect("render quantum is non-zero"),
                 )
                 .backend(backend)
-                .keylock(true)
+                .pitch(Pitch::HELD)
                 .build(),
         )
         .build();

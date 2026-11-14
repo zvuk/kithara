@@ -10,7 +10,7 @@ use kithara::{
         rubato::RubatoBackend,
     },
     signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView, PlanarBuffer},
-    warp::{StretchKind, Warp, WarpConfig, WarpRenderer},
+    warp::{Pitch, StretchKind, Warp, WarpConfig, WarpRenderer},
 };
 use kithara_integration_tests::bufpool_ext::{Pools, TestPools, pools_with};
 use kithara_test_fixtures::integration_fixtures::{
@@ -57,7 +57,7 @@ fn warp_renderer(
     let config = WarpConfig::builder()
         .speed(speed)
         .backend(kind)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .build();
     Warp::new((), &config).renderer(spec, pools)
 }
@@ -409,7 +409,7 @@ fn timestretch_maximum_output_is_allocation_free(
         let config = WarpConfig::builder()
             .speed(0.05)
             .backend(kind)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .source_block_frames(NonZeroUsize::new(MAXIMUM_OUTPUT).expect("source block"))
             .build();
         let mut maximum = Warp::new((), &config).renderer(spec, pools.clone());

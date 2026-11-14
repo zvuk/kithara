@@ -9,7 +9,11 @@ use kithara_audio::{
     AudioReadError, AudioSource, Fetch, SeekOutcome, SourceDiscontinuity, TrackFailureKind,
     TrackStep,
 };
-#[cfg(feature = "stretch-identity")]
+#[cfg(any(
+    feature = "stretch-identity",
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee"
+))]
 use kithara_command::Batch;
 use kithara_command::{ChannelConfig, Outcome, Rejection, When, channel};
 use kithara_platform::{

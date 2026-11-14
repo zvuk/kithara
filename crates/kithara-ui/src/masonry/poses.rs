@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use crate::{
     compile::CompiledNode,
     draw::Transform,
+    engine::Presses,
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
@@ -90,7 +91,15 @@ impl Host for &mut Poses {
         }
     }
 
-    fn pressable(&mut self, _path: InternId, _child: Self::Output, _size: Option<SizeSpec>) {}
+    fn pressable(
+        &mut self,
+        _path: InternId,
+        _presses: Presses,
+        _owner: InputOwner,
+        _child: Self::Output,
+        _size: Option<SizeSpec>,
+    ) {
+    }
 
     fn scroll(&mut self, _id: InternId, _child: Self::Output, _size: Option<SizeSpec>) {}
 

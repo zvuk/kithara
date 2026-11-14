@@ -1820,7 +1820,10 @@ fn a_popover_compiles_with_its_anchor_and_its_content_subtree() {
     assert_eq!(ui.resolve(*path), "mixer/menu");
     assert_eq!(ui.resolve(open.id), "ui.menu.open");
 
-    let ExpandedNode::Pressable { path, press, child } = &**anchor else {
+    let ExpandedNode::Pressable {
+        path, press, child, ..
+    } = &**anchor
+    else {
         panic!("expected a pressable anchor");
     };
     assert_eq!(ui.resolve(*path), "mixer/burger");

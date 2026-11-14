@@ -422,25 +422,4 @@ impl Trajectory {
                 }),
         })
     }
-
-    pub(in crate::render) fn projection_stages(&self) -> Result<usize, ElasticError> {
-        let (minimum, maximum) = self.speed_bounds()?;
-        let mut pitch = 1.0 / f64::from(minimum);
-        let mut stages = 1;
-        while pitch > 4.0 {
-            pitch /= 4.0;
-            stages += 1;
-        }
-        let mut pitch = 1.0 / f64::from(maximum);
-        let mut fast_stages = 1;
-        while pitch < 0.25 {
-            pitch *= 4.0;
-            fast_stages += 1;
-        }
-        stages = stages.max(fast_stages);
-        if stages > 3 {
-            return Err(ElasticError::InvalidRate(f64::from(minimum)));
-        }
-        Ok(stages)
-    }
 }

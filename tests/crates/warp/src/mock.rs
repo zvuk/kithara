@@ -23,7 +23,7 @@ use kithara::{
         Activity, ActivityWriter, PlayheadRead, PlayheadWrite, ReadOutcome, ReaderControl, Source,
         SourceError, SourcePhase, SourceProbe, StreamResult, StreamType,
     },
-    warp::{StretchKind, WarpConfig},
+    warp::{Pitch, StretchKind, WarpConfig},
 };
 #[cfg(not(target_os = "android"))]
 use kithara_integration_tests::audio_artifact::write_audio_artifact;
@@ -286,7 +286,7 @@ fn warp_config(stretch: Option<(StretchKind, f32)>) -> WarpConfig {
             WarpConfig::builder()
                 .speed(speed)
                 .backend(backend)
-                .keylock(true)
+                .pitch(Pitch::HELD)
                 .build()
         },
     )

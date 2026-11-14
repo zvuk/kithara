@@ -25,8 +25,8 @@ pub(in crate::render) struct Projection {
     pub(in crate::render) offset: usize,
 }
 
-fn pitch_factors(speed: f64, stages: usize) -> [f64; 3] {
-    let mut remaining = speed.recip();
+fn pitch_factors(correction: f64, stages: usize) -> [f64; 3] {
+    let mut remaining = correction;
     let mut factors = [1.0; 3];
     for factor in &mut factors[..stages] {
         *factor = remaining.clamp(0.25, 4.0);
@@ -325,7 +325,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         channels: usize,
         stages: usize,
     ) -> Result<(), ElasticError> {
-        let factors = pitch_factors(speed, stages);
+        let factors = pitch_factors(self.target_pitch(speed) / speed, stages);
         self.apply_pitch(factors[0])?;
         let input = self
             .pending_source
@@ -387,13 +387,13 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities();
         if let Some((_, speed)) =
-            self.native_projection_rates(capabilities, self.current_keylock)?
+            self.native_projection_rates(capabilities, self.pitch_controls().keylock())?
         {
             return self.render_native_projection(span, speed);
         }
         let channels = usize::from(self.spec.channels);
         let latency = capabilities.latency();
-        let stages = self.trajectory.projection_stages()?;
+        let stages = self.projection_stages()?;
         let lookahead = latency
             .first()
             .checked_add(latency.second())
@@ -510,10 +510,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
         let channels = usize::from(self.spec.channels);
         let lead = self.prepare_prime_source(span, history, warm, stages)?;
-        let factors = pitch_factors(
-            self.mapped_frame_speed(span.start(), self.spec.sample_rate, 0)?,
-            stages,
-        );
+        let speed = self.mapped_frame_speed(span.start(), self.spec.sample_rate, 0)?;
+        let factors = pitch_factors(self.target_pitch(speed) / speed, stages);
         self.apply_pitch(factors[0])?;
         self.prime_projected_stages(stages, history, lead, channels, factors)?;
         self.clear_pending_source();

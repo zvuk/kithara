@@ -133,6 +133,9 @@ impl IndexPress {
         let Input::Pointer(pointer) = input else {
             return (false, Outcome::IGNORED);
         };
+        if pointer.phase == PointerPhase::Down && !pointer.presses_primary() {
+            return (false, Outcome::IGNORED);
+        }
         if !release_activation {
             let selected = match pointer.phase {
                 PointerPhase::Down => index.map_or(Outcome::IGNORED, Outcome::set),

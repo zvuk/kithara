@@ -5,7 +5,7 @@ use kithara_test_utils::kithara;
 
 use super::*;
 use crate::{
-    Warp,
+    Pitch, Warp,
     render::tests::fixtures::LaneFeed,
     test_pools::{TestPools, pools, sample_buffer},
 };
@@ -45,7 +45,7 @@ fn keylock_reprime_retains_projected_source_history() {
         quantum(&mut renderer, &mut source);
         hang_reset!();
     }
-    renderer.set_keylock(true);
+    renderer.set_pitch(Pitch::HELD);
     renderer
         .set_speed(SpeedCurve::Constant(0.05), 2)
         .expect("speed");
@@ -106,7 +106,7 @@ fn retiring_keylock_admits_both_engines_source_packets(
     );
     let config = WarpConfig::builder()
         .backend(backend)
-        .keylock(keylock)
+        .maybe_pitch(keylock.then_some(Pitch::HELD))
         .render_quantum_frames(NonZeroUsize::new(128).expect("quantum"))
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools());
@@ -119,7 +119,11 @@ fn retiring_keylock_admits_both_engines_source_packets(
                 .expect("speed");
         }
         if block == 32 {
-            renderer.set_keylock(!keylock);
+            renderer.set_pitch(if keylock {
+                Pitch::default()
+            } else {
+                Pitch::HELD
+            });
         }
         let output = quantum(&mut renderer, &mut source);
         assert_eq!(output.frames(), 128);

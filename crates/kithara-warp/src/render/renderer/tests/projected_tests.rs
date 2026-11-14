@@ -6,7 +6,7 @@ use kithara_test_utils::kithara;
 
 use super::*;
 use crate::{
-    Warp, WarpConfig,
+    Pitch, Warp, WarpConfig,
     render::renderer::residency::SourceResidency,
     test_pools::{TestPools, pools},
 };
@@ -15,7 +15,7 @@ fn renderer() -> WarpRenderer<TestPools> {
     let spec = AudioSpec::new(2, NonZeroU32::new(8_000).expect("sample rate"));
     let config = WarpConfig::builder()
         .backend(StretchKind::Signalsmith)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .speed(0.5)
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools());
@@ -171,11 +171,11 @@ fn scalar_projected(
         .ok_or(ElasticError::PoolCapacity)?
         .capabilities();
     assert_eq!(
-        renderer.native_projection_rates(capabilities, renderer.current_keylock)?,
+        renderer.native_projection_rates(capabilities, renderer.pitch_controls().keylock())?,
         None
     );
     let channels = usize::from(renderer.spec.channels);
-    let stages = renderer.trajectory.projection_stages()?;
+    let stages = renderer.projection_stages()?;
     let lookahead = (capabilities.latency().first() + capabilities.latency().second()) * stages;
     if !renderer.active {
         renderer.prime_projected(span, stages)?;
@@ -186,7 +186,7 @@ fn scalar_projected(
             span,
             u64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?,
         )?;
-        let factors = pitch_factors(speed, stages);
+        let factors = pitch_factors(speed.recip(), stages);
         renderer.apply_pitch(factors[0])?;
         let input = renderer
             .pending_source

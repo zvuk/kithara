@@ -31,6 +31,7 @@ use super::flush_serviced;
 ))]
 use super::{LaneFeed, chunk, renderer, samples, spec};
 use super::{WarpRenderer, f64_of};
+use crate::Pitch;
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use crate::Warp;
 
@@ -104,7 +105,7 @@ fn assert_identity_quantum(
 fn manual_ramp_to_the_rate_limit_keeps_quantized_requests_bounded() {
     let config = WarpConfig::builder()
         .speed(2.0)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(StretchKind::Signalsmith)
         .backends(
             kithara_stretch::ElasticBackendConfig::builder()
@@ -177,7 +178,7 @@ fn live_unity_transition_drains_active_backend_tail(
 ) {
     let config = WarpConfig::builder()
         .speed(0.5)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(backend)
         .build();
     let signal = |frame: u64| {
@@ -311,7 +312,7 @@ fn a_fractional_identity_phase_snaps_to_its_nearest_frame_without_starving(
 ) {
     let config = WarpConfig::builder()
         .speed(1.0 / 1.6)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(backend)
         .build();
     let signal = |frame: u64| {
@@ -366,7 +367,7 @@ fn keylocked_unity_reenters_the_engine_without_a_source_jump_or_starvation(
     let mut fx = renderer(
         &WarpConfig::builder()
             .speed(1.0)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .backend(backend)
             .build(),
     );
@@ -449,7 +450,7 @@ fn reset_discards_pending_span_before_new_timeline(
     let mut fx = renderer(
         &WarpConfig::builder()
             .speed(1.0 / 0.75)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .backend(backend)
             .build(),
     );
@@ -496,7 +497,7 @@ fn a_deferred_reset_renders_like_a_fresh_renderer(
     const SEEK_FRAME: usize = 40_960;
     let config = WarpConfig::builder()
         .speed(0.75)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(backend)
         .build();
     let channels = usize::from(consts::CH);
@@ -729,11 +730,7 @@ fn an_active_varispeed_run_hands_its_queued_unity_quantum_over_without_a_copy(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let config = WarpConfig::builder()
-        .speed(0.5)
-        .keylock(false)
-        .backend(backend)
-        .build();
+    let config = WarpConfig::builder().speed(0.5).backend(backend).build();
     let signal = |frame: u64| {
         let frame = usize::try_from(frame).expect("test source frame fits usize");
         warp_sine[frame * 2 % warp_sine.len()]
@@ -773,13 +770,7 @@ fn rendered_source_is_committed_before_live_unity_passthrough(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let mut fx = renderer(
-        &WarpConfig::builder()
-            .speed(1.5)
-            .keylock(false)
-            .backend(backend)
-            .build(),
-    );
+    let mut fx = renderer(&WarpConfig::builder().speed(1.5).backend(backend).build());
     let signal = |frame: u64| {
         let frame = usize::try_from(frame).expect("test source frame fits usize");
         warp_sine[frame * 2 % warp_sine.len()]

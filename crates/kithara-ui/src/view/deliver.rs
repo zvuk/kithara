@@ -43,7 +43,9 @@ impl ViewWrites {
 
 fn value(declared: &Declared, action: ControlAction, reads: &dyn Reads) -> Option<WriteValue> {
     Some(match action {
-        ControlAction::Activate | ControlAction::SecondaryActivate => WriteValue::Trigger,
+        ControlAction::Activate
+        | ControlAction::SecondaryActivate
+        | ControlAction::DoubleActivate => WriteValue::Trigger,
         ControlAction::SetScalar(value) => match &declared.edge {
             Some((edge, interval)) => interval_with(*edge, value, reads.get(interval)?)?,
             None => WriteValue::Scalar(value),

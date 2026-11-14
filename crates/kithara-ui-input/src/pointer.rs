@@ -80,6 +80,14 @@ impl PointerInput {
             clicks,
         }
     }
+
+    /// Whether this event presses the primary button. A host that reports no
+    /// button presses the primary one.
+    #[must_use]
+    pub const fn presses_primary(&self) -> bool {
+        matches!(self.phase, PointerPhase::Down)
+            && matches!(self.button, Some(PointerButton::Primary) | None)
+    }
 }
 
 #[must_use]

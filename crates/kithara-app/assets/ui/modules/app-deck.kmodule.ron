@@ -45,17 +45,10 @@
                     Optional(
                         id: "keylock-block",
                         hidden: Telemetry(id: "deck.key.lock_hidden", with: { "deck": "$deck" }),
-                        child: Row(
-                            frame: (top: false, right: true, bottom: false, left: false),
-                            frame_color: LineInner,
-                            size: (w: Shrink, h: Fill),
-                            children: [
-                                Include(
-                                    id: "keylock",
-                                    source: "deck/key-lock-chip.kmodule.ron",
-                                    with: { "deck": "$deck" },
-                                ),
-                            ],
+                        child: Include(
+                            id: "keylock",
+                            source: "deck/key-lock.kmodule.ron",
+                            with: { "deck": "$deck" },
                         ),
                     ),
                     Button(

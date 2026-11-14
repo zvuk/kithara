@@ -45,6 +45,7 @@ fn insert_deck_endpoints(registry: &mut MapEndpoints) {
         ("deck.key.transpose_down", ValueKind::Trigger),
         ("deck.key.toggle_lock", ValueKind::Trigger),
         ("deck.key.transpose_up", ValueKind::Trigger),
+        ("deck.key.transpose_reset", ValueKind::Trigger),
         ("deck.view.zoom_in", ValueKind::Trigger),
         ("deck.view.zoom_out", ValueKind::Trigger),
     ] {
@@ -66,6 +67,7 @@ fn insert_deck_endpoints(registry: &mut MapEndpoints) {
         ("deck.playback.reverse", ValueKind::Bool),
         ("deck.playback.synced", ValueKind::Bool),
         ("deck.key.locked", ValueKind::Bool),
+        ("deck.key.transpose", ValueKind::Text),
         ("deck.playback.tempo", ValueKind::Text),
         ("deck.playback.waveform", ValueKind::Waveform),
         ("deck.track.title", ValueKind::Text),

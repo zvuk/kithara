@@ -37,7 +37,40 @@ pub(in crate::render) fn span_speed(span: SourceSpan, frame: u64) -> Result<f64,
         .ok_or(ElasticError::SampleCountOverflow)
 }
 
+fn correction_stages(low: f64, high: f64) -> Result<usize, ElasticError> {
+    let mut pitch = high;
+    let mut slow_stages = 1;
+    while pitch > 4.0 {
+        pitch /= 4.0;
+        slow_stages += 1;
+    }
+    let mut pitch = low;
+    let mut fast_stages = 1;
+    while pitch < 0.25 {
+        pitch *= 4.0;
+        fast_stages += 1;
+    }
+    let stages = slow_stages.max(fast_stages);
+    if stages > 3 {
+        return Err(ElasticError::InvalidPitch(if slow_stages > 3 {
+            high
+        } else {
+            low
+        }));
+    }
+    Ok(stages)
+}
+
 impl<S: HasPool<f32>> WarpRenderer<S> {
+    pub(in crate::render) fn projection_stages(&self) -> Result<usize, ElasticError> {
+        let (slowest, fastest) = self.trajectory.speed_bounds()?;
+        let correction = |speed: f64| self.target_pitch(speed) / speed;
+        correction_stages(
+            correction(f64::from(fastest)),
+            correction(f64::from(slowest)),
+        )
+    }
+
     pub(in crate::render) fn mapped_frame_speed(
         &self,
         start: u64,

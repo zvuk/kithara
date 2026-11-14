@@ -1,5 +1,6 @@
 use kithara_signal::AudioChunkInfo;
 use kithara_test_utils::bufpool::sample_buffer;
+use kithara_warp::Pitch;
 
 use super::*;
 
@@ -77,7 +78,7 @@ fn upstream_terminal_failure_keeps_its_classification(
     let config = kithara_warp::WarpConfig::builder()
         .backend(backend)
         .speed(0.5)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .build();
     let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
     let mut source = WarpSource::new(
@@ -140,7 +141,7 @@ fn upstream_terminal_failure_keeps_its_classification_after_buffered_pcm(
     let config = kithara_warp::WarpConfig::builder()
         .backend(backend)
         .speed(0.5)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .render_quantum_frames(NonZeroUsize::new(128).expect("test quantum"))
         .build();
     let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
@@ -375,7 +376,6 @@ fn live_unity_hands_over_within_its_quantum_and_a_seek_discards_the_held_source(
         };
         let config = kithara_warp::WarpConfig::builder()
             .speed(0.5)
-            .keylock(false)
             .backend(backend)
             .render_quantum_frames(
                 NonZeroUsize::new(usize::try_from(ACTIVE_FRAMES).expect("quantum fits usize"))
@@ -540,7 +540,7 @@ fn projected_keylock_switch_keeps_pending_input_during_resident_output(quarter: 
     let pools = pools();
     let config = kithara_warp::WarpConfig::builder()
         .speed(2.0 / 3.0)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(StretchKind::Signalsmith)
         .render_quantum_frames(NonZeroUsize::new(128).expect("quantum"))
         .build();
@@ -587,7 +587,7 @@ fn projected_keylock_switch_keeps_pending_input_during_resident_output(quarter: 
     let meta = pending.chunk.meta;
     let consumed = pending.consumed_frames;
     let input_head = head.load(Ordering::Acquire);
-    source.warp.set_keylock(false);
+    source.warp.set_pitch(Pitch::default());
     source.warp.prepare(spec);
     assert!(
         source.warp.transition_pending(),
@@ -717,7 +717,10 @@ fn a_keylock_release_over_a_partly_staged_window_keeps_the_source_playing(quarte
         let staged_end = source.source.head.load(Ordering::Acquire);
         play.staged_end = Some(staged_end);
         let release = lane
-            .send(When::Next, command_batch(LaneCommand::SetKeylock(false)))
+            .send(
+                When::Next,
+                command_batch(LaneCommand::SetPitch(Pitch::default())),
+            )
             .expect("the lane has room for the release");
         let played_past = steps.any(|_| {
             play.step(&mut source)
@@ -756,7 +759,7 @@ fn unavailable_warp_target_fails_before_pulling_source(quarter: Vec<f32>) {
         };
         let config = kithara_warp::WarpConfig::builder()
             .speed(0.5)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .backend(backend)
             .build();
         let target_pools = pools_with_budget(0);

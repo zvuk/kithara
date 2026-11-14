@@ -208,11 +208,7 @@ where
         let bus = T::event_bus(config.audio().stream())
             .or_else(|| config.audio().bus().cloned())
             .unwrap_or_default();
-        let start = LaneStart {
-            speed: SpeedCurve::Constant(config.warp().speed()),
-            keylock: config.warp().keylock(),
-            backend: config.warp().backend(),
-        };
+        let start = LaneStart::new(config.warp().speed(), config.warp().pitch());
         let speed = start.speed.clone();
         let (sender, inbox) = worker.lane_channel();
         let block_on_underrun = config.block_on_underrun();
