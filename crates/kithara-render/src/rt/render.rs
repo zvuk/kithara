@@ -144,9 +144,8 @@ impl RenderPass {
             programs.and_then(|rows| rows.values(DeckParameter::Trim.index(), frames));
         let trim_state = trim_values.is_none().then_some(self.trim);
         let trim = &mut self.control_buffers[DeckParameter::Trim.index()][..frames];
-        native_values(&mut self.trim, trim_values, trim);
-        if let Some(value) = trim.last() {
-            self.trim_value = *value;
+        if let Some(value) = native_values(&mut self.trim, trim_values, trim, false) {
+            self.trim_value = value;
         }
         apply_gain(trim_state, left, right, trim);
         let gains = programs.map_or(&[][..], DeckPrograms::eq_values);
@@ -165,43 +164,45 @@ impl RenderPass {
                 .process(planes, 0..frames)
                 .expect("stereo planes");
         }
-        for parameter in [DeckParameter::Volume, DeckParameter::Crossfader] {
-            let index = parameter.index();
-            let value = match parameter {
-                DeckParameter::Volume => f32::from(self.mix.volume()),
-                _ => f32::from(self.mix.crossfader()),
-            };
-            let output = &mut self.control_buffers[index][..frames];
-            if self.output_owners[index].is_some() {
-                if let Some(values) = programs.and_then(|rows| rows.values(index, frames)) {
-                    kithara_dsp::narrow_f64(values, output);
-                } else {
-                    output.fill(value);
-                }
-                if let Some(value) = output.last() {
-                    let change = match parameter {
-                        DeckParameter::Volume => {
-                            Some(DeckMixSettingsChange::Volume((*value).into()))
-                        }
-                        _ => CrossfaderGain::checked(*value).map(DeckMixSettingsChange::Crossfader),
-                    };
-                    if let Some(change) = change {
-                        self.mix.apply_change(change);
+        let programmed = self.output_owners.iter().any(Option::is_some);
+        if programmed {
+            for (parameter, value) in [
+                (DeckParameter::Volume, f32::from(self.mix.volume())),
+                (DeckParameter::Crossfader, f32::from(self.mix.crossfader())),
+            ] {
+                let index = parameter.index();
+                let output = &mut self.control_buffers[index][..frames];
+                if self.output_owners[index].is_some() {
+                    if let Some(values) = programs.and_then(|rows| rows.values(index, frames)) {
+                        kithara_dsp::narrow_f64(values, output);
+                    } else {
+                        output.fill(value);
                     }
+                    if let Some(value) = output.last() {
+                        let change = match parameter {
+                            DeckParameter::Volume => {
+                                Some(DeckMixSettingsChange::Volume((*value).into()))
+                            }
+                            _ => CrossfaderGain::checked(*value)
+                                .map(DeckMixSettingsChange::Crossfader),
+                        };
+                        if let Some(change) = change {
+                            self.mix.apply_change(change);
+                        }
+                    }
+                } else {
+                    output.fill(1.0);
                 }
-            } else {
-                output.fill(1.0);
             }
         }
-        let programmed = self.output_owners.iter().any(Option::is_some);
         let state = (!programmed).then_some(self.output);
         let [output, volume, crossfader] = &mut self.control_buffers;
         let output = &mut output[..frames];
-        native_values(&mut self.output, None, output);
+        let value = native_values(&mut self.output, None, output, programmed);
         if self.output.has_settled() {
             self.output_current = self.output.target_value();
-        } else if let Some(value) = output.last() {
-            self.output_current = *value;
+        } else if let Some(value) = value {
+            self.output_current = value;
         }
         if programmed {
             kithara_dsp::multiply_squared_in_place(
@@ -558,16 +559,24 @@ fn retune(param: &mut SmoothedParam, sample_rate: NonZeroU32) {
     param.set_value(param.target_value());
 }
 
-fn native_values(control: &mut SmoothedParam, explicit: Option<&[f64]>, output: &mut [f32]) {
+fn native_values(
+    control: &mut SmoothedParam,
+    explicit: Option<&[f64]>,
+    output: &mut [f32],
+    buffer_required: bool,
+) -> Option<f32> {
     if let Some(values) = explicit {
         kithara_dsp::narrow_f64(values, output);
         if let Some(value) = values.last() {
             control.set_value(value.as_());
             control.reset_to_target();
         }
-    } else {
+    } else if buffer_required || control.is_smoothing() {
         control.process_into_buffer(output);
+    } else {
+        return (!output.is_empty()).then_some(control.target_value());
     }
+    output.last().copied()
 }
 
 #[cfg(test)]
@@ -594,7 +603,7 @@ mod tests {
         let frames = left.len().min(right.len());
         let mut values = vec![0.0; frames];
         let state = *gain;
-        native_values(gain, None, &mut values);
+        let _ = native_values(gain, None, &mut values, false);
         super::apply_gain(Some(state), left, right, &values);
     }
 
