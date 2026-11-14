@@ -405,7 +405,7 @@ async fn selected_source_clock(
     (queue, rig, dir, clock)
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(miri, tokio)]
 async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position(
     #[by_ref] worker_owner: &WorkerOwner,
 ) {
@@ -434,7 +434,11 @@ async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position(
     })
     .expect("accept second seek")
     .expect("second seek receipt");
-    assert_eq!(queue.control().position_seconds(), Some(2.0));
+    assert_eq!(
+        queue.control().position_seconds(),
+        Some(2.0),
+        "the latest seek publishes its requested position"
+    );
     let slot = queue
         .current_track()
         .expect("selected track")
@@ -461,7 +465,11 @@ async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position(
         )
     });
     queue.publish();
-    assert_eq!(queue.control().position_seconds(), Some(2.0));
+    assert_eq!(
+        queue.control().position_seconds(),
+        Some(2.0),
+        "an older receipt cannot relinquish the latest seek"
+    );
     let receipt = rig
         .block(SessionFrame::new(256), 0.0)
         .expect("seek adoption block")
@@ -520,7 +528,11 @@ async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position(
         )
     });
     queue.publish();
-    assert_eq!(queue.control().position_seconds(), before);
+    assert_eq!(
+        queue.control().position_seconds(),
+        before,
+        "the accepted receipt restores the rendered position"
+    );
     drop((queue, rig));
     fixture_directory.finish().await;
 }

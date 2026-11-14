@@ -29,6 +29,7 @@ platforms = [
 # env-filter (and its regex/regex-automata/aho-corasick) out of the shared hack.
 # xtask and kithara-devtools are host-side tooling and should not inherit the
 # application dependency union through the generated workspace hack.
+# The shared test-attribute parser stays in that same host-only closure.
 # kithara-app's desktop deps (incl env-filter) are gated to non-iOS in its own
 # manifest, and aarch64-apple-ios is a hakari platform, so env-filter resolves
 # only for the desktop platforms — the iOS device closure never requests
@@ -74,6 +75,7 @@ workspace-members = [
   "kithara-ring",
   "kithara-stream-tests",
   "kithara-sync-tests",
+  "kithara-test-args",
   "kithara-test-dylib",
   "kithara-test-fixtures",
   "kithara-test-macros",

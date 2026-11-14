@@ -1,10 +1,10 @@
+use kithara_test_args::{TestArgs, TestFlags};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Attribute, Ident};
 
 use super::{
     fixture_args::Preamble,
-    parse::TestArgs,
     shared::{
         finalize_body, make_ambient_stmt, make_clock_measurement_stmt,
         make_dedicated_worker_config, make_hang_budget, make_hard_timeout_watchdog,
@@ -30,20 +30,20 @@ pub(crate) fn emit_async_runtime_test(
     args: &TestArgs,
     serial_attr: &TokenStream2,
 ) -> TokenStream2 {
-    let hang_budget = make_hang_budget(args.hang_timeout_secs);
+    let hang_budget = make_hang_budget(args.hang_timeout_secs());
     let prekill_guard = make_prekill_guard(fn_name);
     let selenium_attr = make_selenium_attrs(args);
     let runtime_builder = make_runtime_builder(args);
-    let flash = args.flash.unwrap_or(true);
+    let flash = args.flash().unwrap_or(true);
     let fn_name_str = fn_name.to_string();
     let scoped = body.scoped(true);
     let body = &body.body;
-    let inner_body = if !args.soft_fail_patterns.is_empty() {
+    let inner_body = if !args.soft_fail_patterns().is_empty() {
         wrap_with_soft_fail(
             &quote! { { #body } },
             fn_name,
             true,
-            &args.soft_fail_patterns,
+            args.soft_fail_patterns(),
         )
     } else {
         quote! { { #body } }
@@ -123,19 +123,19 @@ pub(crate) fn emit_async_timeout_test(
     serial_attr: &TokenStream2,
 ) -> TokenStream2 {
     let dur = args
-        .timeout
+        .timeout()
         .as_ref()
-        .expect("BUG: caller checks `args.timeout.is_some()` before this fn");
+        .expect("BUG: caller checks `args.timeout().is_some()` before this fn");
     let fn_name_str = fn_name.to_string();
     let scoped = body.scoped(true);
     let body = &body.body;
-    let timeout_panic_arm = if args.soft_fail_patterns.is_empty() {
+    let timeout_panic_arm = if args.soft_fail_patterns().is_empty() {
         quote! {
             Err(__payload) => ::std::panic::resume_unwind(__payload),
         }
     } else {
         let pattern_strs: Vec<_> = args
-            .soft_fail_patterns
+            .soft_fail_patterns()
             .iter()
             .map(|p| p.to_lowercase())
             .collect();
@@ -163,17 +163,17 @@ pub(crate) fn emit_async_timeout_test(
     };
 
     let braced = quote! { { #body } };
-    let inner_body = if !args.soft_fail_patterns.is_empty() {
-        wrap_with_soft_fail(&braced, fn_name, true, &args.soft_fail_patterns)
+    let inner_body = if !args.soft_fail_patterns().is_empty() {
+        wrap_with_soft_fail(&braced, fn_name, true, args.soft_fail_patterns())
     } else {
         braced
     };
 
-    let hang_budget = make_hang_budget(args.hang_timeout_secs);
+    let hang_budget = make_hang_budget(args.hang_timeout_secs());
     let hard_timeout_watchdog = make_hard_timeout_watchdog(&fn_name_str);
     let selenium_attr = make_selenium_attrs(args);
     let runtime_builder = make_runtime_builder(args);
-    let flash = args.flash.unwrap_or(true);
+    let flash = args.flash().unwrap_or(true);
 
     // Installing the subscriber parses filter directives and allocates. The
     // real-time sanitizer checks every poll of the test future, and the first
@@ -301,7 +301,7 @@ pub(crate) fn emit_browser_test(
         #ambient
         #(#body_stmts)*
     };
-    let wasm_with_timeout = wrap_with_timeout(&wasm_body, &args.timeout, true, fn_name);
+    let wasm_with_timeout = wrap_with_timeout(&wasm_body, args.timeout(), true, fn_name);
     let wasm_wrapped = finalize_body(&wasm_with_timeout, args, fn_name, true);
     let wasm_serial_guard = make_wasm_serial_guard(args);
     output.extend(quote! {
@@ -315,13 +315,13 @@ pub(crate) fn emit_browser_test(
     });
 
     if !browser_only {
-        let native_is_async = is_async || args.is_tokio;
+        let native_is_async = is_async || args.flags().contains(TestFlags::TOKIO);
         // Plain body for the async-native branches: their sole ambient holder
         // is the per-poll `with_ambient` inside the emitted runtime wrapper.
         // Tracing is not set up here — see `emit_async_runtime_test`.
         let native_body = preamble.with_body(body_stmts);
 
-        if native_is_async && args.timeout.is_some() {
+        if native_is_async && args.timeout().is_some() {
             output.extend(emit_async_timeout_test(
                 fn_name,
                 vis,
@@ -346,7 +346,7 @@ pub(crate) fn emit_browser_test(
                 super::shared::wrap_with_sync_participation(&quote! { #(#body_stmts)* }, args);
             let native_body_held = quote! { #test_setup #scoped #bindings #ambient #sync_body };
             let native_with_timeout =
-                wrap_with_timeout(&native_body_held, &args.timeout, false, fn_name);
+                wrap_with_timeout(&native_body_held, args.timeout(), false, fn_name);
             let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, false);
             output.extend(quote! {
                 #(#remaining_attrs)*

@@ -119,12 +119,13 @@ fn required_images(host: &LinuxHost, pins: &CiPins) -> Result<Vec<String>> {
 /// Everything the installed fleet depends on, in the order cleanup is told it.
 /// Both spellings of each image are kept: the pin is what a rebuild compares
 /// against, and the floating tag is what the running containers hold.
+/// The collector runs the first tag, so it must be the installed one.
 fn installed_images(host: &LinuxHost, pins: &CiPins) -> Result<Vec<String>> {
     let mut images = Vec::new();
     for (toolchain, runner) in flavor_images(host, pins) {
         for image in [toolchain, runner] {
-            images.push(image.to_owned());
             images.push(floating_tag(image)?);
+            images.push(image.to_owned());
         }
     }
     Ok(images)
@@ -593,6 +594,19 @@ mod tests {
             .collect::<Vec<_>>();
         let argv = std::iter::once("xtask").chain(command.iter().copied());
         assert!(Cli::try_parse_from(argv).is_ok(), "{command:?}");
+    }
+
+    #[test]
+    fn cleanup_runs_the_installed_toolchain_tag_when_the_pin_is_retired() {
+        let host = host_fixture();
+        let pins = &fixture().pins;
+        let text = cleanup_unit(&host, &installed_images(&host, pins).unwrap());
+        let image = text.split_once(" cleanup --keep ").unwrap().1;
+
+        assert_eq!(
+            image.split_whitespace().next(),
+            Some(floating_tag(&pins.linux_image).unwrap().as_str())
+        );
     }
 
     /// One wedged pass must not end cleanup on the machine, and how long a

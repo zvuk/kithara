@@ -152,7 +152,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test(flash(false), timeout(Duration::from_secs(5)))]
+    #[kithara::test(miri, flash(false), timeout(Duration::from_secs(5)))]
     fn cancellation_at_park_publishes_a_guarded_readiness_edge() {
         for from_parent in [false, true] {
             let parent = CancelScope::new(None);

@@ -19,18 +19,16 @@ impl Deck {
         );
         let animated = {
             let eq = self.eq_programs.curves(level);
-            let filter = self.filter_programs.curves(level);
-            let animated = eq.iter().any(Option::is_some) || filter.iter().any(Option::is_some);
+            let filter = self.filter_programs.program(level);
+            let animated = eq.iter().any(Option::is_some) || filter.is_some();
             if let Some([left, right]) = input {
                 if animated {
-                    self.render.finish_curves(left, right, at, &eq, &filter);
+                    self.render.finish_curves(left, right, at, &eq, filter);
                 } else {
                     self.render.finish(left, right);
                 }
             } else {
-                if animated || self.render.filter_settings().is_some() {
-                    self.render.advance_curves(at, range.len(), &eq, &filter);
-                }
+                self.render.advance(at, range.len(), &eq, filter);
                 self.render.idle();
             }
             animated

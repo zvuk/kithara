@@ -23,12 +23,6 @@ pub(in crate::rt) struct EqPrograms {
 }
 
 impl EqPrograms {
-    pub(in crate::rt) fn active_count(&self) -> usize {
-        self.fields
-            .iter()
-            .filter(|field| field.program.active().is_some())
-            .count()
-    }
     pub(in crate::rt) fn new(scope: ScopeId, bands: usize) -> Self {
         Self {
             scope,
@@ -89,17 +83,7 @@ fn program_in(commands: &[DeckPart], band: usize) -> Option<&EqGainProgram> {
 }
 
 pub(in crate::rt) fn gain_at(curve: &ParameterCurve, at: SessionFrame) -> GainDb {
-    let elapsed = at
-        .frames_since(curve.start())
-        .expect("the program has started on this axis");
-    let (left, right, progression) = curve.segment_at(elapsed);
-    let value = if left == right || progression == 0.0 {
-        left
-    } else if progression == 1.0 {
-        right
-    } else {
-        left + (right - left) * progression
-    };
+    let value = curve.value_at(at);
     GainDb::checked(value.to_f32().expect("admitted gain fits f32"))
         .expect("monotone admitted gain remains in range")
 }
@@ -160,8 +144,17 @@ impl Deck {
                 return Err(DeckRefusal::EqOutdated { band });
             }
         }
-        let active = self
-            .eq_programs
+        if self.eq_programs_after(commands) + self.filter_programs_after(commands)
+            > EqGainProgram::MAX_ACTIVE
+        {
+            return Err(DeckRefusal::EqProgramCapacity);
+        }
+        Ok(())
+    }
+
+    /// Active EQ programs after `commands` apply.
+    pub(in crate::rt) fn eq_programs_after(&self, commands: &[DeckPart]) -> usize {
+        self.eq_programs
             .fields
             .iter()
             .enumerate()
@@ -172,11 +165,7 @@ impl Deck {
                 }) || (field.program.active().is_some()
                     && !commands.iter().any(|part| cancels(part, *band)))
             })
-            .count();
-        if active + self.filter_programs.active_count() > EqGainProgram::MAX_ACTIVE {
-            return Err(DeckRefusal::EqProgramCapacity);
-        }
-        Ok(())
+            .count()
     }
 
     pub(in crate::rt) fn validate_eq_at(

@@ -38,5 +38,5 @@ impl<T> EffectBinding<T> {
 /// The EQ layout and session axis on which a program was prepared.
 pub type EqBinding = EffectBinding<StereoEq>;
 
-/// The deck, installed Filter instance and output stream observed by a control.
+/// The deck and output stream a filter knob program was prepared on.
 pub type FilterBinding = EffectBinding<FilterEffect>;
