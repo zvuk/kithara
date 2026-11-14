@@ -6,7 +6,9 @@ use std::{
 use fearless_simd::{Level, dispatch, prelude::*};
 use num_traits::AsPrimitive;
 
-pub(super) use super::{last_loud::kernel as last_loud_kernel, load::padded};
+mod scan;
+
+pub(super) use scan::{kernel as last_loud_kernel, padded};
 
 /// Replaces `NaN`, ±infinity, subnormals and −0.0 with `+0.0` in place; every
 /// other value keeps its bits.

@@ -17,9 +17,7 @@ use kithara_test_utils::bufpool::pools;
 use num_traits::ToPrimitive;
 use realfft::{RealToComplex, RealToComplexEven};
 
-#[path = "../src/backend/load.rs"]
-mod load;
-#[path = "../src/backend/last_loud.rs"]
+#[path = "../src/backend/simd/scan.rs"]
 mod loud_kernel;
 
 fn loud_fallback(samples: &[f32], limit: f32) -> Option<usize> {

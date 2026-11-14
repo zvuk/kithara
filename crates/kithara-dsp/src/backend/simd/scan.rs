@@ -1,9 +1,7 @@
 use fearless_simd::prelude::*;
 
-use super::load::padded;
-
 #[inline(always)]
-pub(super) fn kernel<S: Simd>(simd: S, samples: &[f32], limit: f32) -> Option<usize> {
+pub(crate) fn kernel<S: Simd>(simd: S, samples: &[f32], limit: f32) -> Option<usize> {
     let bound = S::f32s::splat(simd, limit);
     for (block, values) in samples.chunks(S::f32s::LEN).enumerate().rev() {
         let lanes = u32::try_from(values.len()).expect("SIMD width fits u32");
@@ -15,4 +13,14 @@ pub(super) fn kernel<S: Simd>(simd: S, samples: &[f32], limit: f32) -> Option<us
         }
     }
     None
+}
+
+/// A vector holding `tail` in its first lanes and `+0.0` in the rest.
+#[inline(always)]
+pub(crate) fn padded<S: Simd>(simd: S, tail: &[f32]) -> S::f32s {
+    let mut vector = S::f32s::splat(simd, 0.0);
+    for (slot, sample) in vector.as_mut_slice().iter_mut().zip(tail) {
+        *slot = *sample;
+    }
+    vector
 }
