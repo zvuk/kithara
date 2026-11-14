@@ -149,6 +149,10 @@ lockbud_exclude = [
   "kithara-fuzz",
   "kithara-harness-tests",
   "kithara-hls-tests",
+  "kithara-hls-abr-tests",
+  "kithara-hls-keys-tests",
+  "kithara-hls-lifecycle-tests",
+  "kithara-hls-audio-tests",
   "kithara-host-tests",
   "kithara-integration-tests",
   "kithara-play-tests",
@@ -612,6 +616,10 @@ packages = [
   "kithara-queue-network-tests",
   "kithara-queue-zvuk-tests",
   "kithara-hls-tests",
+  "kithara-hls-abr-tests",
+  "kithara-hls-keys-tests",
+  "kithara-hls-lifecycle-tests",
+  "kithara-hls-audio-tests",
   "kithara-sync-tests",
   "kithara-play-tests",
   "xtask",
@@ -692,6 +700,10 @@ cargo.packages = [
   "kithara-file-tests",
   "kithara-hls",
   "kithara-hls-tests",
+  "kithara-hls-abr-tests",
+  "kithara-hls-keys-tests",
+  "kithara-hls-lifecycle-tests",
+  "kithara-hls-audio-tests",
   "kithara-host",
   "kithara-host-tests",
   "kithara-play",
@@ -741,6 +753,10 @@ cargo.packages = [
   "kithara-harness-tests",
   "kithara-hls",
   "kithara-hls-tests",
+  "kithara-hls-abr-tests",
+  "kithara-hls-keys-tests",
+  "kithara-hls-lifecycle-tests",
+  "kithara-hls-audio-tests",
   "kithara-host",
   "kithara-host-tests",
   "kithara-integration-tests",
@@ -808,6 +824,10 @@ cargo.packages = [
   "kithara-decode-tests",
   "kithara-file-tests",
   "kithara-hls-tests",
+  "kithara-hls-abr-tests",
+  "kithara-hls-keys-tests",
+  "kithara-hls-lifecycle-tests",
+  "kithara-hls-audio-tests",
   "kithara-host-tests",
   "kithara-integration-tests",
   "kithara-play-tests",
@@ -917,7 +937,14 @@ cargo.packages = ["kithara-file", "kithara-file-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.hls]
-cargo.packages = ["kithara-hls", "kithara-hls-tests"]
+cargo.packages = [
+  "kithara-hls",
+  "kithara-hls-tests",
+  "kithara-hls-abr-tests",
+  "kithara-hls-keys-tests",
+  "kithara-hls-lifecycle-tests",
+  "kithara-hls-audio-tests",
+]
 cargo.profile = "test-release"
 
 [test.lanes.host]
@@ -1202,19 +1229,19 @@ default_features = ["kithara-render/usdt"]
 default_flash = false
 
 [test.lanes.usdt-hls]
-cargo.packages = ["kithara-hls-tests"]
+cargo.packages = ["kithara-hls-tests", "kithara-hls-audio-tests"]
 cargo.profile = "test-release"
 cargo.tests = ["hls"]
 runner.nextest.filter = "test(/(hls_variant_playlists_concurrent::variant_media_playlists_load_concurrently|flac_swallow_fixture)/)"
-default_features = ["kithara-hls-tests/usdt"]
+default_features = ["kithara-hls-tests/usdt", "kithara-hls-audio-tests/usdt"]
 default_flash = false
 
 [test.lanes.usdt-hls-stress]
-cargo.packages = ["kithara-hls-tests"]
+cargo.packages = ["kithara-hls-audio-tests"]
 cargo.profile = "test-release"
 cargo.tests = ["hls_stress"]
 runner.nextest.filter = "test(/stress_seek_audio::stress_seek_audio_hls/)"
-default_features = ["kithara-hls-tests/usdt"]
+default_features = ["kithara-hls-audio-tests/usdt"]
 default_flash = false
 
 [test.lanes.usdt-queue]
@@ -1289,6 +1316,41 @@ pr_review_line_limit = 5000
 # project migration, so a moved known failure stays known while a new failure
 # still blocks the pipeline.
 [ext.ci.verdict.id_aliases]
+"kithara-hls-tests::hls::abr_integration::" = "kithara-hls-abr-tests::hls::abr_integration::"
+"kithara-hls-tests::hls::cancel_isolation::" = "kithara-hls-lifecycle-tests::hls::cancel_isolation::"
+"kithara-hls-tests::hls::cold_seek_middle::" = "kithara-hls-audio-tests::hls::cold_seek_middle::"
+"kithara-hls-tests::hls::config_with_downloader::" = "kithara-hls-lifecycle-tests::hls::config_with_downloader::"
+"kithara-hls-tests::hls::cpal_cold_seek_synthetic::" = "kithara-hls-audio-tests::hls::cpal_cold_seek_synthetic::"
+"kithara-hls-tests::hls::deferred_abr::" = "kithara-hls-abr-tests::hls::deferred_abr::"
+"kithara-hls-tests::hls::ephemeral::" = "kithara-hls-lifecycle-tests::hls::ephemeral::"
+"kithara-hls-tests::hls::flac_swallow_fixture::" = "kithara-hls-audio-tests::hls::flac_swallow_fixture::"
+"kithara-hls-tests::hls::html_error_cleanup::" = "kithara-hls-lifecycle-tests::hls::html_error_cleanup::"
+"kithara-hls-tests::hls::keys_integration::" = "kithara-hls-keys-tests::hls::keys_integration::"
+"kithara-hls-tests::hls::red_abr_no_escape_from_stalled_variant::" = "kithara-hls-abr-tests::hls::red_abr_no_escape_from_stalled_variant::"
+"kithara-hls-tests::hls::red_leak_pattern::" = "kithara-hls-lifecycle-tests::hls::red_leak_pattern::"
+"kithara-hls-tests::hls::red_leak_peer_handle_cycle::" = "kithara-hls-lifecycle-tests::hls::red_leak_peer_handle_cycle::"
+"kithara-hls-tests::hls::red_leak_small_cache_seek::" = "kithara-hls-lifecycle-tests::hls::red_leak_small_cache_seek::"
+"kithara-hls-tests::hls::red_stale_tmp_claim_bricks_segment::" = "kithara-hls-lifecycle-tests::hls::red_stale_tmp_claim_bricks_segment::"
+"kithara-hls-tests::hls::seek_variant_switch_after_eof::" = "kithara-hls-abr-tests::hls::seek_variant_switch_after_eof::"
+"kithara-hls-tests::hls_heavy::drm_stream_integrity::" = "kithara-hls-keys-tests::hls_heavy::drm_stream_integrity::"
+"kithara-hls-tests::hls_heavy::hls_abr_variant_switch::" = "kithara-hls-abr-tests::hls_heavy::hls_abr_variant_switch::"
+"kithara-hls-tests::hls_heavy::saw_chunk::" = "kithara-hls-audio-tests::hls_heavy::saw_chunk::"
+"kithara-hls-tests::hls_heavy::stress_chunk_integrity::" = "kithara-hls-audio-tests::hls_heavy::stress_chunk_integrity::"
+"kithara-hls-tests::hls_stress::abr_auto_switch::" = "kithara-hls-abr-tests::hls_stress::abr_auto_switch::"
+"kithara-hls-tests::hls_stress::abr_mode_switch::" = "kithara-hls-abr-tests::hls_stress::abr_mode_switch::"
+"kithara-hls-tests::hls_stress::abr_playback::" = "kithara-hls-abr-tests::hls_stress::abr_playback::"
+"kithara-hls-tests::hls_stress::abr_switch_playback::" = "kithara-hls-abr-tests::hls_stress::abr_switch_playback::"
+"kithara-hls-tests::hls_stress::idle_behavior::" = "kithara-hls-lifecycle-tests::hls_stress::idle_behavior::"
+"kithara-hls-tests::hls_stress::live_stress_real_stream::" = "kithara-hls-audio-tests::hls_stress::live_stress_real_stream::"
+"kithara-hls-tests::hls_stress::phase_continuity::" = "kithara-hls-audio-tests::hls_stress::phase_continuity::"
+"kithara-hls-tests::hls_stress::red_flaky_small_cache_hot_refetch::" = "kithara-hls-lifecycle-tests::hls_stress::red_flaky_small_cache_hot_refetch::"
+"kithara-hls-tests::hls_stress::red_leak_native_drm_seek_resume::" = "kithara-hls-lifecycle-tests::hls_stress::red_leak_native_drm_seek_resume::"
+"kithara-hls-tests::hls_stress::saw_chunk::" = "kithara-hls-audio-tests::hls_stress::saw_chunk::"
+"kithara-hls-tests::hls_stress::startup_no_eager_size_probe_storm::" = "kithara-hls-lifecycle-tests::hls_stress::startup_no_eager_size_probe_storm::"
+"kithara-hls-tests::hls_stress::stress_seek_abr::" = "kithara-hls-abr-tests::hls_stress::stress_seek_abr::"
+"kithara-hls-tests::hls_stress::stress_seek_abr_audio::" = "kithara-hls-audio-tests::hls_stress::stress_seek_abr_audio::"
+"kithara-hls-tests::hls_stress::stress_seek_audio::" = "kithara-hls-audio-tests::hls_stress::stress_seek_audio::"
+"kithara-hls-tests::hls_stress::stress_seek_lifecycle::" = "kithara-hls-audio-tests::hls_stress::stress_seek_lifecycle::"
 "kithara-assets::eviction_subscription::dropping_second_subscriber_preserves_first" = "kithara-assets::eviction_subscription::dropping_one_subscriber_preserves_the_other_second"
 "kithara-assets::eviction_subscription::dropping_first_subscriber_preserves_second" = "kithara-assets::eviction_subscription::dropping_one_subscriber_preserves_the_other_first"
 "kithara-assets::availability_persistence::delete_asset_persists_availability_deletion_across_rebuild" = "kithara-assets::availability_persistence::a_deletion_persists_in_availability_across_rebuild_delete_asset"
@@ -1386,12 +1448,12 @@ pr_review_line_limit = 5000
 "suite_light::kithara_queue::hls_seek_near_end_stress::" = "kithara-hls-tests::hls::hls_seek_near_end_stress::"
 "kithara-integration-tests::suite_light::kithara_queue::hls_seek_cancels_stale_fetches::" = "kithara-hls-tests::hls::hls_seek_cancels_stale_fetches::"
 "suite_light::kithara_queue::hls_seek_cancels_stale_fetches::" = "kithara-hls-tests::hls::hls_seek_cancels_stale_fetches::"
-"kithara-integration-tests::suite_light::kithara_queue::flac_swallow_fixture::" = "kithara-hls-tests::hls::flac_swallow_fixture::"
-"suite_light::kithara_queue::flac_swallow_fixture::" = "kithara-hls-tests::hls::flac_swallow_fixture::"
-"kithara-integration-tests::suite_light::kithara_queue::cpal_cold_seek_synthetic::" = "kithara-hls-tests::hls::cpal_cold_seek_synthetic::"
-"suite_light::kithara_queue::cpal_cold_seek_synthetic::" = "kithara-hls-tests::hls::cpal_cold_seek_synthetic::"
-"kithara-integration-tests::suite_light::kithara_queue::cold_seek_middle::" = "kithara-hls-tests::hls::cold_seek_middle::"
-"suite_light::kithara_queue::cold_seek_middle::" = "kithara-hls-tests::hls::cold_seek_middle::"
+"kithara-integration-tests::suite_light::kithara_queue::flac_swallow_fixture::" = "kithara-hls-audio-tests::hls::flac_swallow_fixture::"
+"suite_light::kithara_queue::flac_swallow_fixture::" = "kithara-hls-audio-tests::hls::flac_swallow_fixture::"
+"kithara-integration-tests::suite_light::kithara_queue::cpal_cold_seek_synthetic::" = "kithara-hls-audio-tests::hls::cpal_cold_seek_synthetic::"
+"suite_light::kithara_queue::cpal_cold_seek_synthetic::" = "kithara-hls-audio-tests::hls::cpal_cold_seek_synthetic::"
+"kithara-integration-tests::suite_light::kithara_queue::cold_seek_middle::" = "kithara-hls-audio-tests::hls::cold_seek_middle::"
+"suite_light::kithara_queue::cold_seek_middle::" = "kithara-hls-audio-tests::hls::cold_seek_middle::"
 "kithara-integration-tests::suite_light::kithara_play::player_queue_api_regressions::" = "kithara-queue-tests::queue::player_queue_api_regressions::"
 "suite_light::kithara_play::player_queue_api_regressions::" = "kithara-queue-tests::queue::player_queue_api_regressions::"
 "kithara-integration-tests::suite_light::kithara_play::gapless_startup_regressions::" = "kithara-decode-tests::decode_heavy::gapless_startup_regressions::"
@@ -1409,7 +1471,7 @@ pr_review_line_limit = 5000
 "kithara-decode-tests::decode_heavy::fixture_integration::test_test_server_helper_serves_audio_fixture_urls" = "kithara-harness-tests::suite_light::fixture_server::test_test_server_helper_serves_audio_fixture_urls"
 "kithara-play-tests::play::parameter_smoothing::queue_append_while_playing_does_not_wait_for_host" = "kithara-queue-tests::queue::append_while_playing::queue_append_while_playing_does_not_wait_for_host"
 "kithara-play-tests::play::parameter_smoothing::failed_deck_preparation_releases_host_membership" = "kithara-host-tests::host::deck_membership::failed_deck_preparation_releases_host_membership"
-"kithara-integration-tests::suite_stress::phase_continuity::hls::" = "kithara-hls-tests::hls_stress::phase_continuity::"
+"kithara-integration-tests::suite_stress::phase_continuity::hls::" = "kithara-hls-audio-tests::hls_stress::phase_continuity::"
 "kithara-integration-tests::suite_stress::phase_continuity::file::" = "kithara-decode-tests::decode_heavy::phase_continuity::"
 "kithara-play-tests::play_heavy::no_sync_real_media::" = "kithara-host-tests::host::no_sync_real_media::"
 "kithara-play-tests::play_stress::hls_seek_middle_stress_long::" = "kithara-integration-tests::suite_stress::hls_seek_middle_stress_long::"
@@ -1425,10 +1487,10 @@ pr_review_line_limit = 5000
 "kithara-queue-tests::queue::rapid_scrub_decode_failure::" = "kithara-hls-tests::hls::rapid_scrub_decode_failure::"
 "kithara-queue-tests::queue::hls_seek_near_end_stress::" = "kithara-hls-tests::hls::hls_seek_near_end_stress::"
 "kithara-queue-tests::queue::hls_seek_cancels_stale_fetches::" = "kithara-hls-tests::hls::hls_seek_cancels_stale_fetches::"
-"kithara-queue-tests::queue::flac_swallow_fixture::" = "kithara-hls-tests::hls::flac_swallow_fixture::"
-"kithara-queue-tests::queue::cpal_cold_seek_synthetic::" = "kithara-hls-tests::hls::cpal_cold_seek_synthetic::"
-"kithara-queue-tests::queue::cold_seek_middle::" = "kithara-hls-tests::hls::cold_seek_middle::"
-"kithara-decode-tests::decode_heavy::hls_abr_variant_switch::" = "kithara-hls-tests::hls_heavy::hls_abr_variant_switch::"
+"kithara-queue-tests::queue::flac_swallow_fixture::" = "kithara-hls-audio-tests::hls::flac_swallow_fixture::"
+"kithara-queue-tests::queue::cpal_cold_seek_synthetic::" = "kithara-hls-audio-tests::hls::cpal_cold_seek_synthetic::"
+"kithara-queue-tests::queue::cold_seek_middle::" = "kithara-hls-audio-tests::hls::cold_seek_middle::"
+"kithara-decode-tests::decode_heavy::hls_abr_variant_switch::" = "kithara-hls-abr-tests::hls_heavy::hls_abr_variant_switch::"
 "kithara-hls-tests::hls::aac_he_v2_hls_decode::" = "kithara-decode-tests::decode::aac_he_v2_hls_decode::"
 "kithara-play-tests::play::gapless_startup_regressions::" = "kithara-decode-tests::decode_heavy::gapless_startup_regressions::"
 "kithara-play-tests::play::generated_gapless_hls::" = "kithara-decode-tests::decode_heavy::generated_gapless_hls::"
@@ -1511,7 +1573,21 @@ pr_review_line_limit = 5000
 "suite_light::kithara_audio::" = "kithara-audio-tests::audio::"
 "suite_light::kithara_play::" = "kithara-play-tests::play::"
 "suite_light::kithara_queue::" = "kithara-queue-tests::queue::"
-"suite_stress::kithara_hls::" = "kithara-hls-tests::hls_stress::"
+"suite_stress::kithara_hls::abr_auto_switch::" = "kithara-hls-abr-tests::hls_stress::abr_auto_switch::"
+"suite_stress::kithara_hls::abr_mode_switch::" = "kithara-hls-abr-tests::hls_stress::abr_mode_switch::"
+"suite_stress::kithara_hls::abr_playback::" = "kithara-hls-abr-tests::hls_stress::abr_playback::"
+"suite_stress::kithara_hls::abr_switch_playback::" = "kithara-hls-abr-tests::hls_stress::abr_switch_playback::"
+"suite_stress::kithara_hls::idle_behavior::" = "kithara-hls-lifecycle-tests::hls_stress::idle_behavior::"
+"suite_stress::kithara_hls::live_stress_real_stream::" = "kithara-hls-audio-tests::hls_stress::live_stress_real_stream::"
+"suite_stress::kithara_hls::phase_continuity::" = "kithara-hls-audio-tests::hls_stress::phase_continuity::"
+"suite_stress::kithara_hls::red_flaky_small_cache_hot_refetch::" = "kithara-hls-lifecycle-tests::hls_stress::red_flaky_small_cache_hot_refetch::"
+"suite_stress::kithara_hls::red_leak_native_drm_seek_resume::" = "kithara-hls-lifecycle-tests::hls_stress::red_leak_native_drm_seek_resume::"
+"suite_stress::kithara_hls::saw_chunk::" = "kithara-hls-audio-tests::hls_stress::saw_chunk::"
+"suite_stress::kithara_hls::startup_no_eager_size_probe_storm::" = "kithara-hls-lifecycle-tests::hls_stress::startup_no_eager_size_probe_storm::"
+"suite_stress::kithara_hls::stress_seek_abr::" = "kithara-hls-abr-tests::hls_stress::stress_seek_abr::"
+"suite_stress::kithara_hls::stress_seek_abr_audio::" = "kithara-hls-audio-tests::hls_stress::stress_seek_abr_audio::"
+"suite_stress::kithara_hls::stress_seek_audio::" = "kithara-hls-audio-tests::hls_stress::stress_seek_audio::"
+"suite_stress::kithara_hls::stress_seek_lifecycle::" = "kithara-hls-audio-tests::hls_stress::stress_seek_lifecycle::"
 "suite_stress::kithara_play::" = "kithara-play-tests::play_stress::"
 
 # Lanes that are nothing but the work they ask the executor for. A lane needs a
