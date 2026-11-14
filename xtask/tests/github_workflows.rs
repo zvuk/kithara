@@ -2436,6 +2436,33 @@ fn a_checkout_never_fetches_every_branch() {
 }
 
 #[test]
+fn dependent_lane_downloads_only_selected_report_artifacts() {
+    let workflow = github_workflow("run.yml");
+    let dependent = workflow_job(workflow_jobs(&workflow), "dependent");
+    assert_eq!(
+        dependent["with"]["download"].as_str(),
+        Some("${{ join(matrix.download, '|') }}")
+    );
+
+    let workflow = github_workflow("lane.yml");
+    let download = named_step(
+        workflow_job(workflow_jobs(&workflow), "run"),
+        "Fetch what this lane reads",
+    );
+    assert_eq!(
+        download["if"].as_str(),
+        Some("${{ inputs.download != '' }}")
+    );
+    assert_action_repository(download, "actions/download-artifact");
+    assert_eq!(download["with"]["path"].as_str(), Some("artifacts"));
+    assert_eq!(
+        download["with"]["pattern"].as_str(),
+        Some("${{ format('@({0})-{1}-{2}', inputs.download, github.run_id, github.run_attempt) }}")
+    );
+    assert_ne!(download["with"]["merge-multiple"].as_bool(), Some(true));
+}
+
+#[test]
 fn lane_uploads_bootstrap_evidence_when_the_lane_has_not_started() {
     let workflow = github_workflow("lane.yml");
     let upload = named_step(
