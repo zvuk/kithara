@@ -1,5 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    mem::size_of_val,
+    ptr,
     sync::{
         Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, Ordering},
@@ -208,6 +210,11 @@ pub fn scope() -> Scope {
         state.waiting = 0;
     }
     *lock(&NESTING) = Some((here, Arc::clone(&recorded)));
+    tracing::debug!(
+        state = ?ptr::from_ref(&STATE),
+        state_bytes = size_of_val(&STATE),
+        "USDT recording opened"
+    );
     ARMED.store(true, Ordering::Release);
     Scope {
         recorded,
