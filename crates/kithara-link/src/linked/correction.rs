@@ -14,9 +14,9 @@ use crate::{covers, jump_target};
 /// How a correction closes the phase of a sounding deck.
 pub(super) enum Corrected {
     /// By bounded speed steps.
-    Slew(Option<Seq>),
+    Slew,
     /// By relocating the deck, which holds the whole trajectory from there on.
-    Move(Option<Seq>),
+    Move,
 }
 
 impl<P> Linked<P> {
@@ -82,14 +82,6 @@ impl<P> Linked<P> {
                 self.relocation = Some(Relocation { caller, sent: None });
             }
         }
-    }
-
-    pub(super) fn record_retime(&mut self, at: SessionFrame, sent: Option<Seq>) {
-        let Some(seq) = sent else {
-            return;
-        };
-        self.retimes.retain(|(frame, _)| *frame != at);
-        self.retimes.push((at, seq));
     }
 
     pub(super) fn correct<S>(
@@ -161,7 +153,7 @@ impl<P> Linked<P> {
             Some(Slew::Relocate) | None if self.waiting.is_some() => {
                 return Err(PlayError::NotReady);
             }
-            Some(Slew::Relocate) => return self.align(out).map(Corrected::Move),
+            Some(Slew::Relocate) => return self.align(out).map(|_| Corrected::Move),
             None => {
                 return Err(PlayError::Internal(
                     "source phase correction has no playable grid law".into(),
@@ -187,7 +179,7 @@ impl<P> Linked<P> {
                 .push((seq, SpeedOperation::Correction { cause, state }));
             self.plan_sent(at, coverage);
         }
-        Ok(Corrected::Slew(sent))
+        Ok(Corrected::Slew)
     }
 
     /// A sounding deck owes a drift correction once the earliest frame it can
@@ -239,7 +231,7 @@ impl<P> Linked<P> {
         match result {
             Ok(corrected) => {
                 self.alignment = None;
-                matches!(corrected, Corrected::Move(_))
+                matches!(corrected, Corrected::Move)
             }
             Err(error) => {
                 if let Refusal::Drop = self.triage(&error, out) {
@@ -258,9 +250,8 @@ impl<P> Linked<P> {
     {
         for &at in frames {
             match self.correct(at, Cause::Commanded, out) {
-                Ok(Corrected::Slew(sent)) => self.record_retime(at, sent),
-                Ok(Corrected::Move(sent)) => {
-                    self.record_retime(at, sent);
+                Ok(Corrected::Slew) => {}
+                Ok(Corrected::Move) => {
                     self.alignment = None;
                     return;
                 }

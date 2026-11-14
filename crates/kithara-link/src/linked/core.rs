@@ -281,8 +281,7 @@ impl<P> Linked<P> {
                     self.send_cue(required, curve, Some((entry_frame, coverage)), out)
                 });
         match sent {
-            Ok(sent @ Some(_)) => {
-                self.record_retime(at, sent);
+            Ok(Some(_)) => {
                 if let Some(start) = self.start {
                     self.start_caller.get_or_insert(start);
                 }
@@ -657,13 +656,10 @@ impl<P> Linked<P> {
         P: Track<S>,
     {
         let sent = self.inner.cue(position, speed, out)?;
-        if let Some(seq) = sent {
+        if sent.is_some() {
             match plan {
                 Some((at, coverage)) => self.plan_sent(at, coverage),
                 None => self.plan_end = None,
-            }
-            for (_, current) in &mut self.retimes {
-                *current = seq;
             }
         }
         Ok(sent)
@@ -772,21 +768,6 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
                 && snapshot.as_ref().attached
                 && !matches!(snapshot.as_ref().status, TrackStatus::Playing { .. }),
         )
-    }
-
-    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool> {
-        let mut awaiting = false;
-        for &(frame, seq) in &self.retimes {
-            if frame != at {
-                continue;
-            }
-            match self.inner.speed_applied(seq) {
-                Some(true) => return Some(true),
-                None => awaiting = true,
-                Some(false) => {}
-            }
-        }
-        (!awaiting).then_some(false)
     }
 
     fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {

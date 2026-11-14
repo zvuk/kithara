@@ -59,18 +59,6 @@ where
         self.tracks_active().map(LinkedPlayer::scope_parts).sum()
     }
 
-    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool> {
-        let mut awaiting = false;
-        for track in self.tracks_mut() {
-            match track.retime_applied(at) {
-                Some(true) => return Some(true),
-                None => awaiting = true,
-                Some(false) => {}
-            }
-        }
-        (!awaiting).then_some(false)
-    }
-
     fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
         self.factory_mut().set_trajectory(trajectory);
         for track in self.tracks_mut() {

@@ -1464,9 +1464,6 @@ where
     fn scope_parts(&self) -> usize {
         LinkedPlayer::scope_parts(&self.inner)
     }
-    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool> {
-        LinkedPlayer::retime_applied(&mut self.inner, at)
-    }
     fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
         self.observation.lock().owner_inputs.push(LinkOwnerInput {
             item: None,

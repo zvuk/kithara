@@ -34,8 +34,6 @@ pub trait LinkedDeck<S>: HostedDeck<S> {
     fn lane_room(&self) -> usize;
     /// Scope batches needed to reopen silent tracks during a retime.
     fn scope_parts(&self) -> usize;
-    /// Whether any lane applied its current native representation of this retime.
-    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool>;
     /// Closes phase against the new trajectory without a commanded speed step.
     fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
 }
@@ -72,10 +70,6 @@ impl<S, D: HostedDeck<S> + LinkedPlayer<S>> LinkedDeck<S> for D {
 
     fn scope_parts(&self) -> usize {
         LinkedPlayer::scope_parts(self)
-    }
-
-    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool> {
-        LinkedPlayer::retime_applied(self, at)
     }
 
     fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
