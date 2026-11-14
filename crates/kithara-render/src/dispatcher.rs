@@ -150,19 +150,28 @@ where
     I::Lane: LaneTask,
 {
     fn remove_lane(&mut self, index: usize, refusal: LoadRefusal) {
-        let mut resident = self.lanes.remove(index);
-        let lane = resident.id;
-        if let Some((seq, _, _)) = resident.admission.as_ref()
-            && let Some(due) = self.inbox.resume(*seq, (), ())
+        let pending = Self::retire_resident(self.lanes.remove(index));
+        self.refuse_admission(pending, refusal);
+    }
+
+    fn refuse_admission(&mut self, seq: Option<Seq>, refusal: LoadRefusal) {
+        if let Some(seq) = seq
+            && let Some(due) = self.inbox.resume(seq, (), ())
         {
             due.refuse(refusal);
         }
+    }
+
+    fn retire_resident(mut resident: Resident<I::Opened, I::Lane>) -> Option<Seq> {
+        let lane = resident.id;
+        let pending = resident.admission.as_ref().map(|(seq, _, _)| *seq);
         if catch_unwind(AssertUnwindSafe(|| resident.task.on_cancel())).is_err() {
             tracing::error!(?lane, "render lane panicked during cancellation");
         }
         if catch_unwind(AssertUnwindSafe(|| drop(resident))).is_err() {
             tracing::error!(?lane, "render lane panicked during cleanup");
         }
+        pending
     }
 
     fn cancel_lanes(&mut self) {
@@ -178,6 +187,7 @@ where
 {
     fn drop(&mut self) {
         self.cancel_lanes();
+        self.opening.clear();
     }
 }
 
@@ -227,11 +237,7 @@ where
                         );
                     }
                 }
-                Err(refusal) => {
-                    if let Some(due) = self.inbox.resume(seq, (), ()) {
-                        due.refuse(refusal);
-                    }
-                }
+                Err(refusal) => self.refuse_admission(Some(seq), refusal),
             }
         }
         progress
@@ -258,6 +264,7 @@ where
                 DispatcherCommand::Load(request) => {
                     let request = *request;
                     if !runtime_ready {
+                        drop(request);
                         due.refuse(LoadRefusal::NoRuntime);
                         continue;
                     }
@@ -270,6 +277,7 @@ where
                             + self.playing_opens
                             >= self.capacity.get()
                     {
+                        drop(request);
                         due.refuse(LoadRefusal::Capacity {
                             capacity: self.capacity.get(),
                         });
@@ -313,11 +321,13 @@ where
                     );
                 }
                 DispatcherCommand::Release(lane) => {
+                    let pending = self
+                        .lanes
+                        .iter()
+                        .position(|resident| resident.id == lane)
+                        .and_then(|index| Self::retire_resident(self.lanes.remove(index)));
                     due.apply(Dispatched::Released);
-                    if let Some(index) = self.lanes.iter().position(|resident| resident.id == lane)
-                    {
-                        self.remove_lane(index, LoadRefusal::Cancelled);
-                    }
+                    self.refuse_admission(pending, LoadRefusal::Cancelled);
                 }
                 DispatcherCommand::SetPriority(lane, class) => {
                     if let Some(resident) =
@@ -507,9 +517,12 @@ mod panic_tests;
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::{Cell, RefCell},
         num::NonZeroUsize,
         pin::pin,
-        task::{Context, Poll, Waker},
+        rc::Rc,
+        sync::{Arc, Mutex},
+        task::{Context, Poll, Wake, Waker},
     };
 
     use futures::channel::oneshot;
@@ -522,9 +535,20 @@ mod tests {
 
     /// An item whose open ends with what the test sends it.
     #[derive(Debug)]
-    struct Gate(oneshot::Receiver<Result<u32, LoadRefusal>>);
+    struct Gate(oneshot::Receiver<Result<u32, LoadRefusal>>, bool);
 
-    struct TestLane;
+    struct TestLane {
+        ready: bool,
+        on_drop: Option<Box<dyn FnOnce()>>,
+    }
+
+    impl Drop for TestLane {
+        fn drop(&mut self) {
+            if let Some(on_drop) = self.on_drop.take() {
+                on_drop();
+            }
+        }
+    }
     impl Task for TestLane {
         fn tick(&mut self) -> TickResult {
             TickResult::Waiting
@@ -532,7 +556,7 @@ mod tests {
     }
     impl LaneTask for TestLane {
         fn preload_status(&mut self) -> Result<bool, LoadRefusal> {
-            Ok(true)
+            Ok(self.ready)
         }
         fn set_priority(&mut self, _class: ServiceClass) {}
         fn poll_commands(&mut self, _cx: &mut Context<'_>) -> Poll<()> {
@@ -550,10 +574,20 @@ mod tests {
             _start: LaneStart,
             _inbox: Inbox<LaneProtocol>,
         ) -> Result<(u32, TestLane, FrameCount), LoadRefusal> {
-            self.0
+            let Self(input, ready) = self;
+            input
                 .await
                 .expect("the test answers every open it lets run")
-                .map(|value| (value, TestLane, FrameCount::new(0)))
+                .map(|value| {
+                    (
+                        value,
+                        TestLane {
+                            ready,
+                            on_drop: None,
+                        },
+                        FrameCount::new(0),
+                    )
+                })
         }
     }
 
@@ -580,7 +614,7 @@ mod tests {
                         Batch {
                             basis: Vec::new(),
                             commands: vec![DispatcherCommand::Load(Box::new(LoadRequest {
-                                item: Gate(input),
+                                item: Gate(input, true),
                                 class,
                                 position: Duration::ZERO,
                                 start: LaneStart {
@@ -749,7 +783,7 @@ mod tests {
 
     fn gate() -> (oneshot::Sender<Result<u32, LoadRefusal>>, Gate) {
         let (answer, opening) = oneshot::channel();
-        (answer, Gate(opening))
+        (answer, Gate(opening, true))
     }
 
     fn pair() -> (Sender<Protocol>, Inbox<Protocol>) {
@@ -789,6 +823,158 @@ mod tests {
 
     fn receipts(sender: &mut Sender<Protocol>) -> Vec<Receipt<Protocol>> {
         sender.receipts().collect()
+    }
+
+    struct RefusalWake(Mutex<(Sender<LaneProtocol>, Option<bool>)>);
+
+    impl Wake for RefusalWake {
+        fn wake(self: Arc<Self>) {
+            let mut probe = self.0.lock().expect("refusal observer");
+            let ready = probe.0.receipts().next().is_some();
+            probe.1 = Some(ready);
+        }
+    }
+
+    #[kithara::test]
+    #[case::no_runtime(false, false)]
+    #[case::capacity(true, false)]
+    #[case::dispatcher_drop(false, true)]
+    fn admission_refusal_follows_lane_inbox_cleanup(
+        #[case] capacity: bool,
+        #[case] shutdown: bool,
+    ) {
+        let (mut sender, inbox) = pair();
+        let mut dispatcher = DispatchState::new(inbox, NonZeroUsize::MIN);
+        let mut context = Context::from_waker(Waker::noop());
+        let (_first, first) = gate();
+        if capacity {
+            send(&mut sender, vec![first]);
+            assert!(dispatcher.poll(&mut context, true).is_pending());
+        }
+        let (mut lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
+        lane.send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![crate::LaneCommand::SetKeylock(true)],
+            },
+        )
+        .expect("opening configuration");
+        let probe = Arc::new(RefusalWake(Mutex::new((lane, None))));
+        sender.hold(Waker::from(Arc::clone(&probe)));
+        let (_answer, item) = gate();
+        let request = sender
+            .send(
+                When::Next,
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![DispatcherCommand::Load(Box::new(LoadRequest {
+                        item,
+                        class: ServiceClass::Warm,
+                        position: Duration::ZERO,
+                        start: LaneStart {
+                            speed: SpeedCurve::Constant(1.0),
+                            keylock: false,
+                            backend: StretchKind::default(),
+                        },
+                        inbox,
+                    }))],
+                },
+            )
+            .expect("open request");
+        if shutdown {
+            assert!(dispatcher.poll(&mut context, true).is_pending());
+            drop(dispatcher);
+        } else {
+            assert!(dispatcher.poll(&mut context, capacity).is_pending());
+        }
+        assert_eq!(
+            probe.0.lock().expect("observer").1,
+            Some(true),
+            "lane outcomes precede the terminal open refusal"
+        );
+        let receipt = sender.receipts().next().expect("open refusal");
+        assert_eq!(receipt.seq(), request);
+        assert!(match receipt.outcome() {
+            Outcome::Rejected(Rejection::Refused(LoadRefusal::Capacity { capacity: 1 })) =>
+                capacity,
+            Outcome::Rejected(Rejection::Refused(LoadRefusal::NoRuntime)) => !capacity && !shutdown,
+            Outcome::Rejected(Rejection::Unanswered) => shutdown,
+            _ => false,
+        });
+    }
+
+    #[kithara::test]
+    #[case::loaded(false)]
+    #[case::admitting_cancel(true)]
+    fn release_receipts_follow_resident_cleanup(#[case] admitting: bool) {
+        let (mut sender, inbox) = pair();
+        let (answer, input) = oneshot::channel();
+        let load = send(&mut sender, vec![Gate(input, !admitting)]);
+        answer.send(Ok(7)).expect("source opens");
+        let mut dispatcher = DispatchState::new(inbox, NonZeroUsize::MIN);
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(dispatcher.poll(&mut context, true).is_pending());
+        assert!(dispatcher.poll(&mut context, true).is_pending());
+        let initial = receipts(&mut sender);
+        assert_eq!(initial.len(), usize::from(!admitting));
+        if let Some(receipt) = initial.first() {
+            assert_eq!(receipt.seq(), load);
+            assert!(matches!(
+                receipt.outcome(),
+                Outcome::Applied {
+                    data: Dispatched::Loaded(_),
+                    ..
+                }
+            ));
+        }
+        assert_eq!(dispatcher.lanes.len(), 1);
+        assert_eq!(dispatcher.lanes[0].admission.is_some(), admitting);
+
+        let sender = Rc::new(RefCell::new(sender));
+        let observed = Rc::new(Cell::new(None));
+        let observer = Rc::clone(&sender);
+        let dropped = Rc::clone(&observed);
+        dispatcher.lanes[0].task.on_drop = Some(Box::new(move || {
+            let visible = observer.borrow_mut().receipts().next().is_some();
+            dropped.set(Some(visible));
+        }));
+        let release = if admitting {
+            dispatcher.cancel_lanes();
+            None
+        } else {
+            let seq = sender
+                .borrow_mut()
+                .send(
+                    When::Next,
+                    Batch {
+                        basis: Vec::new(),
+                        commands: vec![DispatcherCommand::Release(LaneId::admitted(load))],
+                    },
+                )
+                .expect("release resident");
+            assert!(dispatcher.poll(&mut context, true).is_pending());
+            Some(seq)
+        };
+        assert_eq!(
+            observed.get(),
+            Some(false),
+            "a terminal receipt must not be visible inside resident drop"
+        );
+        let finished = receipts(&mut sender.borrow_mut());
+        assert_eq!(finished.len(), 1);
+        let receipt = finished.first().expect("terminal response");
+        assert_eq!(receipt.seq(), release.unwrap_or(load));
+        assert!(match receipt.outcome() {
+            Outcome::Applied {
+                data: Dispatched::Released,
+                ..
+            } => !admitting,
+            Outcome::Rejected(Rejection::Refused(LoadRefusal::Cancelled)) => admitting,
+            _ => false,
+        });
+        assert!(dispatcher.lanes.is_empty());
+        assert!(sender.borrow_mut().receipts().next().is_none());
     }
 
     #[kithara::test]

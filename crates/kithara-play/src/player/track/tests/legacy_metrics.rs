@@ -92,7 +92,12 @@ async fn unloading_one_seek_binding_preserves_other_identity() {
     settle(&mut second, &mut rig, &mut receipts);
     let mut retired = release(&mut second, &mut rig);
     let (mut replacement, mut replacement_inbox) = loaded(&mut rig, B, "same.mp3").await;
+    assert!(replacement.lane.sender().is_some());
     settle(&mut replacement, &mut rig, &mut retired);
+    assert!(
+        replacement.lane.sender().is_some(),
+        "old PCM returns cannot retire the replacement source"
+    );
     command_at_zero(
         &mut replacement,
         &mut rig,

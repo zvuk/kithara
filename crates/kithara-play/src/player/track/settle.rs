@@ -119,7 +119,7 @@ impl<S> PlayerImpl<S> {
                 "a segment adoption cannot join a timed group".into(),
             ));
         }
-        let lane = self.lane.as_ref().ok_or(PlayError::NotReady)?;
+        let lane = self.lane.sender().ok_or(PlayError::NotReady)?;
         if lane.available() == 0 {
             return Err(PlayError::Full("lane"));
         }
@@ -170,7 +170,7 @@ impl<S> PlayerImpl<S> {
             }
         };
         if attaching.is_some() {
-            self.seat.land(at);
+            self.seat.land(seq, at);
             self.loading = None;
             if transport_current {
                 self.status = TrackStatus::Loaded;
@@ -355,11 +355,14 @@ impl<S> PlayerImpl<S> {
     }
 
     pub(super) fn release_lane(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
-        if let Registration::Registered(lane) = self.registration {
-            self.registration = Registration::Releasing {
-                lane,
-                seq: out.release(lane)?,
-            };
+        self.close_lane_admission();
+        if let Some(lane) = self.lane.release_needed() {
+            match out.release(lane) {
+                Ok(seq) => self.lane.releasing(Some(seq)),
+                // Dispatcher teardown retires residents before closing its inbox.
+                Err(PlayError::Closed) => self.finish_lane(),
+                Err(error) => return Err(error),
+            }
         }
         Ok(())
     }
@@ -423,20 +426,24 @@ impl<S> PlayerImpl<S> {
     }
 
     pub(super) fn settle_lane(&mut self) {
-        if self.lane.is_none() {
-            return;
-        }
-        while let Some(receipt) = self.lane.as_mut().and_then(|lane| lane.receipts().next()) {
-            self.settings.settle(&receipt);
+        let accepting = self.lane.sender().is_some();
+        while let Some(receipt) = self.lane.receipt() {
+            if accepting {
+                self.settings.settle(&receipt);
+            }
             let seq = receipt.seq();
             let settled = match receipt.outcome() {
                 Outcome::Applied { at, data } => {
-                    self.apply_lane(seq, *at, data);
+                    if accepting {
+                        self.apply_lane(seq, *at, data);
+                    }
                     Settled::Applied { seq, at: *at }
                 }
                 Outcome::Rejected(reason) => {
-                    self.segment.answer_request(seq, Err(*reason));
-                    self.lane_history.retain(|operation| operation.seq != seq);
+                    if accepting {
+                        self.segment.answer_request(seq, Err(*reason));
+                        self.lane_history.retain(|operation| operation.seq != seq);
+                    }
                     warn!(?reason, "lane command was rejected");
                     Settled::Rejected {
                         seq,
@@ -445,6 +452,9 @@ impl<S> PlayerImpl<S> {
                 }
             };
             self.lane_history.receipts.push_back(settled);
+        }
+        if !accepting {
+            return;
         }
         let current = self.segment.id;
         let adoptions = &self.adoptions;

@@ -263,7 +263,7 @@ impl<S> PlayerImpl<S> {
         if self.adoptions.cancelling() {
             return Err(PlayError::NotReady);
         }
-        if self.lane.is_none() {
+        if self.lane.sender().is_none() {
             if !matches!(at, When::Next) {
                 return Err(PlayError::Untimed);
             }
@@ -284,7 +284,7 @@ impl<S> PlayerImpl<S> {
             let cost = self.speed_admission(at, out)?;
             return Ok((Configuring::Send(when, change), cost));
         }
-        if self.lane.as_ref().is_none_or(|lane| lane.available() == 0) {
+        if self.lane.available() == 0 {
             return Err(PlayError::Full("lane"));
         }
         Ok((Configuring::Send(when, change), Some(0)))
@@ -334,7 +334,7 @@ impl<S> PlayerImpl<S> {
         at: When<SessionFrame>,
         out: &Outbox<'_, S>,
     ) -> Result<Option<usize>, PlayError> {
-        if self.lane.is_none() {
+        if self.lane.sender().is_none() {
             return Err(PlayError::NotReady);
         }
         if !matches!(self.status, TrackStatus::Playing { .. }) {
@@ -354,7 +354,7 @@ impl<S> PlayerImpl<S> {
             return Ok(Some(usize::from(self.attached())));
         }
         self.lane_when(at, out)?;
-        if self.lane.as_ref().is_none_or(|lane| lane.available() == 0) {
+        if self.lane.available() == 0 {
             return Err(PlayError::Full("lane"));
         }
         Ok(Some(0))

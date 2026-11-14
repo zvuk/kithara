@@ -291,7 +291,7 @@ async fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reser
         rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
             .expect("live scope");
         let (sender, inbox) = lane();
-        track.lane = Some(sender);
+        replace_lane_sender(&mut track.lane, sender);
         (track, inbox)
     } else if matches!(initial, TrackStatus::Paused { .. }) {
         loaded(&mut rig, A, "refused-paused-preparation").await
@@ -628,7 +628,7 @@ async fn assert_failed_replacement_keeps_incumbent(
     assert!(!newcomer.attached());
     assert!(newcomer.segment.ready);
     let (sender, mut inbox) = lane();
-    newcomer.lane = Some(sender);
+    replace_lane_sender(&mut newcomer.lane, sender);
     let group = with_mixer(&mut mixer, &mut support.dispatcher, frame(64), |out| {
         let at = When::At(frame(256));
         out.together_owned(at, |out| {
@@ -1060,7 +1060,7 @@ fn a_queued_speed_publishes_its_target_and_sequence_once(#[case] curve: SpeedCur
             .capacity(NonZeroUsize::new(1).expect("one batch"))
             .build(),
     );
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.mark = Some(SlotMark {
         session: frame(128),
         lane: LaneFrame {
@@ -1093,7 +1093,7 @@ fn a_ready_paused_segment_keeps_its_cue_over_an_old_slot_snapshot() {
     let mut rig = rig();
     let (mut track, _) = prepared_track();
     let (sender, mut inbox) = channel(ChannelConfig::builder().build());
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.status = TrackStatus::Paused { at: Position::ZERO };
     let to = Duration::from_secs(2);
     let _ = command_at_zero(&mut track, &mut rig, TrackCommand::Seek { to });
@@ -1202,7 +1202,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
             .capacity(NonZeroUsize::new(1).expect("one batch"))
             .build(),
     );
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.geometry.declick = FrameCount::new(32);
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
@@ -1225,7 +1225,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
         },
     )
     .expect("alignment batch");
-    assert_eq!(track.lane.as_ref().expect("lane").available(), 0);
+    assert_eq!(track.lane.sender().expect("lane").available(), 0);
     assert_eq!(track.snapshot().speed, 1.5);
     inbox.drain();
     let at = LaneFrame {
@@ -1282,5 +1282,5 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
     );
     assert_eq!(speed, if applied { 1.5 } else { 1.0 });
     assert_eq!(track.snapshot().speed, if applied { 1.5 } else { 1.0 });
-    assert_eq!(track.lane.as_ref().expect("lane").available(), 1);
+    assert_eq!(track.lane.sender().expect("lane").available(), 1);
 }

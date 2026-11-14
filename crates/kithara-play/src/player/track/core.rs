@@ -1,7 +1,7 @@
 use std::{cell::RefCell, marker::PhantomData};
 
 use kithara_abr::AbrHandle;
-use kithara_command::{Live, Sender, Seq, Target, When};
+use kithara_command::{Live, Seq, Target, When};
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_render::{
@@ -28,8 +28,7 @@ pub struct PlayerImpl<S> {
     pub(super) item: TrackId,
     pub(super) seat: Seat,
     pub(super) class: ServiceClass,
-    pub(super) lane: Option<Sender<LaneProtocol>>,
-    pub(super) registration: Registration,
+    pub(super) lane: Lane,
     pub(super) settings: Live<TrackSettings, LaneProtocol>,
     pub(super) output: kithara_render::bridge::SlotOutputSnapshot,
     pub(super) status: TrackStatus,
@@ -69,8 +68,7 @@ impl<S> PlayerImpl<S> {
             item: config.item,
             seat: config.slot.map_or(Seat::Unseated, Seat::Named),
             class: ServiceClass::default(),
-            lane: None,
-            registration: Registration::None,
+            lane: Lane::None,
             settings: Live::new(config.settings)?,
             output: kithara_render::bridge::SlotOutputSnapshot::default(),
             status: TrackStatus::Idle,
@@ -102,6 +100,27 @@ impl<S> PlayerImpl<S> {
     #[must_use]
     pub fn status(&self) -> TrackStatus {
         self.status
+    }
+
+    pub(super) fn close_lane_admission(&mut self) {
+        if self.lane.sender().is_none() {
+            return;
+        }
+        self.settle_lane();
+        self.settings.abandon();
+        self.lane.retire();
+        self.lane_history.retain(|_| false);
+        self.segment.ready = false;
+        self.source_basis = None;
+        self.observed_source = None;
+        self.mark = None;
+        self.resume = None;
+        *self.projected_end.borrow_mut() = None;
+    }
+
+    pub(super) fn finish_lane(&mut self) {
+        self.settle_lane();
+        self.lane = Lane::None;
     }
 
     pub(super) fn seat(&self) -> Result<Slot, PlayError> {
@@ -152,7 +171,7 @@ impl<S> PlayerImpl<S> {
     }
 
     pub(super) fn observe(&mut self, out: &Outbox<'_, S>) {
-        if self.loading.is_some() {
+        if self.loading.is_some() || self.seat.attached_at().is_none() {
             return;
         }
         if let Some(seat) = self.seat.slot()
@@ -166,7 +185,6 @@ impl<S> PlayerImpl<S> {
                 self.output = slot.output;
             }
             if let Some(source) = slot.source.filter(|info| info.segment == self.segment.id)
-                && self.seat.attached_at().is_some()
                 && !matches!(self.status, TrackStatus::Released)
             {
                 if self.segment.origin.is_none() {
@@ -251,7 +269,7 @@ impl<S> PlayerImpl<S> {
         if self.adoptions.cancelling() {
             return Err(PlayError::NotReady);
         }
-        let lane = self.lane.as_mut().ok_or(PlayError::NotReady)?;
+        let lane = self.lane.sender_mut().ok_or(PlayError::NotReady)?;
         let seq = Outbox::<S>::lane(lane, when, commands.clone())?;
         self.lane_history
             .submit(commands.into_iter().map(|command| {

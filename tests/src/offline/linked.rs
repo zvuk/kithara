@@ -854,6 +854,8 @@ where
         to self.inner {
             fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_, S>) -> Result<Option<usize>, PlayError>;
             fn projected(&self) -> TrackSettings;
+            fn source_request(&self) -> Option<Seq>;
+            fn source_closed(&self) -> bool;
             fn prepared_speed(&self) -> Option<&kithara::sync::SpeedCurve>;
             fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_, S>) -> Result<bool, PlayError>;
             fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;

@@ -597,6 +597,8 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
     delegate::delegate! {
         to self.inner {
             fn projected(&self) -> TrackSettings;
+            fn source_request(&self) -> Option<Seq>;
+            fn source_closed(&self) -> bool;
             fn prepared_speed(&self) -> Option<&kithara_sync::SpeedCurve>;
             fn planned(
                 &self,

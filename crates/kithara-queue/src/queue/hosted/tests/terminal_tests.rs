@@ -174,6 +174,13 @@ impl Track<TestPools> for SnapshotTrack {
         panic!("terminal-event fixture does not send speed commands")
     }
 
+    fn source_request(&self) -> Option<Seq> {
+        None
+    }
+    fn source_closed(&self) -> bool {
+        true
+    }
+
     fn finish_group(&mut self, _result: Result<Seq, &mut Vec<DeckPart>>) {
         panic!("terminal-event fixture does not stage attachments")
     }

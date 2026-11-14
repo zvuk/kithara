@@ -270,6 +270,17 @@ impl<S> Track<S> for PlayerImpl<S> {
             .map_or(Some(false), |operation| operation.applied.then_some(true))
     }
 
+    fn source_request(&self) -> Option<Seq> {
+        match &self.lane {
+            Lane::Opening(_) | Lane::RetiringOpen(_) => self.loading.as_ref().map(|load| load.seq),
+            _ => self.lane.release_seq(),
+        }
+    }
+
+    fn source_closed(&self) -> bool {
+        matches!(self.lane, Lane::None)
+    }
+
     fn attached(&self) -> bool {
         Self::attached(self)
     }

@@ -191,8 +191,19 @@ pub(super) fn track(slot: Slot) -> Track {
 
 /// The seat of a track the deck attached in `slot` on frame 0.
 pub(super) fn seated(slot: Slot) -> Seat {
+    let (mut sender, _inbox) = channel::<DeckProtocol>(ChannelConfig::builder().build());
+    let seq = sender
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: Vec::new(),
+            },
+        )
+        .expect("fixture attachment sequence");
     Seat::Attached {
         slot,
+        seq,
         at: frame(0),
         releasing: false,
     }
@@ -218,6 +229,20 @@ pub(super) fn item() -> ResourceLoad<TestPools> {
 
 pub(super) fn lane() -> (Sender<LaneProtocol>, Inbox<LaneProtocol>) {
     channel(ChannelConfig::builder().build())
+}
+
+pub(super) fn replace_lane_sender(lane: &mut Lane, sender: Sender<LaneProtocol>) {
+    match lane {
+        Lane::None => *lane = Lane::Opening(sender),
+        Lane::Opening(current)
+        | Lane::Registered {
+            sender: current, ..
+        }
+        | Lane::RetiringOpen(current)
+        | Lane::Retiring {
+            sender: current, ..
+        } => *current = sender,
+    }
 }
 
 pub(super) fn answer_next(rig: &mut Rig, answer: Result<(), DeckRefusal>) -> Receipt<DeckProtocol> {
@@ -271,7 +296,7 @@ pub(super) fn answer_track(
 pub(super) fn prepared_track() -> (Track, Inbox<LaneProtocol>) {
     let (sender, inbox) = lane();
     let mut track = track(A);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.status = TrackStatus::Loaded;
     track.seat = seated(A);
     track.segment.ready = true;
@@ -644,8 +669,8 @@ async fn an_installed_lane_the_owner_refuses_is_dropped_and_reported_cancelled()
         .expect("release answer");
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live scope");
-    assert!(track.lane.is_none());
-    assert!(track.registration.lane().is_none());
+    assert!(track.lane.sender().is_none());
+    assert!(track.lane.resident().is_none());
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("live scope");
     assert!(matches!(
@@ -1216,7 +1241,7 @@ async fn player_phase_kind_exhaustive() {
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live scope");
     let (sender, mut inbox) = lane();
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let mut receipts = rig.block(frame(0), 0.0);
     settle(&mut track, &mut rig, &mut receipts);
     assert_eq!(track.snapshot().status, TrackStatus::Loaded);
@@ -1516,7 +1541,7 @@ fn a_staged_preparation_needs_an_owner_and_a_stageable_load(#[case] refusal: u8)
     assert_eq!(track.snapshot().speed, before.speed);
     assert_eq!(track.snapshot().mark, before.mark);
     assert!(track.loading.is_none());
-    assert!(track.lane.is_none());
+    assert!(track.lane.sender().is_none());
     rig.deck.opens.drain();
     assert!(rig.deck.opens.next_due((), 1).is_none());
     rig.deck.ring.publish().expect("publish empty scope");
@@ -1687,7 +1712,7 @@ fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
     let mut rig = rig();
     let (sender, mut inbox) = lane();
     let mut track = track(A);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.status = TrackStatus::Loaded;
     track.seat = seated(A);
     let before = track.snapshot();
@@ -1787,7 +1812,7 @@ fn withdrawing_an_overtaken_epoch_leaves_the_newer_seek_published() {
     let mut rig = rig();
     let (sender, _inbox) = lane();
     let mut track = track(A);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.status = TrackStatus::Loaded;
     track.seat = seated(A);
     for seconds in [1, 2] {
@@ -1840,7 +1865,7 @@ fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
     let mut rig = rig();
     let (sender, _inbox) = lane();
     let mut track = track(A);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.status = TrackStatus::Loaded;
     track.seat = seated(A);
     let output = mock::output(None).get();
@@ -2055,7 +2080,7 @@ pub(super) async fn loaded_with_item(
         .expect("the load reached the dispatcher");
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live deck scope");
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let mut receipts = rig.block(frame(0), 0.0);
     settle(&mut track, rig, &mut receipts);
     assert_eq!(track.snapshot().status, TrackStatus::Loaded);
@@ -2133,7 +2158,7 @@ fn a_cued_subfloor_speed_reaches_the_lane_at_the_floor(#[case] speed: f32) {
     let mut rig = rig();
     let (sender, mut inbox) = lane();
     let mut track = track(A);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     rig.with_outbox(|out| track.cue(Position::ZERO, SpeedCurve::Constant(speed), out))
         .expect("live deck scope")
         .expect("finite cue speed is admitted");
@@ -2156,7 +2181,7 @@ fn a_speed_curve_clamps_every_finite_subfloor_point(#[case] speed: SpeedCurve) {
     let mut rig = rig();
     let (sender, mut inbox) = lane();
     let mut track = track(A);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.status = TrackStatus::Playing { since: frame(0) };
     rig.with_outbox(|out| {
         track.apply(
@@ -2872,6 +2897,20 @@ async fn an_evicting_track_takes_the_slot_over_on_its_frame() {
             since: frame(1_024)
         }
     );
+    assert!(matches!(
+        settle(&mut new, &mut rig, &mut receipts).as_slice(),
+        [Settled::Pending]
+    ));
+    assert_eq!(
+        new.snapshot().status,
+        TrackStatus::Playing {
+            since: frame(1_024)
+        }
+    );
+    assert!(
+        new.lane.sender().is_some(),
+        "replaying the attachment cannot retire its new consumer"
+    );
 }
 
 #[kithara::test]
@@ -3352,7 +3391,7 @@ async fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
     let (sender, mut inbox) = lane();
     let mut track = track(A);
     let seq = load(&mut track, &mut rig, Position::ZERO);
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let opened = opened_fixture(&mut rig, "track").await;
     let receipt = rig.open(Ok(opened)).expect("one open");
 
@@ -3531,7 +3570,7 @@ fn full_notification_ring_retries_latest_effective_rate_once() {
             .capacity(std::num::NonZeroUsize::new(2).expect("two outstanding rates"))
             .build(),
     );
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let first = command_at_zero(
         &mut track,
         &mut rig,
@@ -3550,17 +3589,17 @@ fn full_notification_ring_retries_latest_effective_rate_once() {
         LaneCommand::SetSpeed(SpeedCurve::Constant(latest))] if *first == 1.25 && *latest == 1.5)
     );
     assert_ne!(first, latest);
-    assert_eq!(track.lane.as_ref().expect("lane").available(), 0);
+    assert_eq!(track.lane.sender().expect("lane").available(), 0);
     assert_eq!(track.projected().speed(), 1.5);
     assert_eq!(track.snapshot().speed, 1.0);
     rig.with_outbox(|out| track.tick(frame(0), out))
         .expect("owner takes the reserved replies");
     assert_eq!(track.snapshot().speed, 1.5);
-    assert_eq!(track.lane.as_ref().expect("lane").available(), 2);
+    assert_eq!(track.lane.sender().expect("lane").available(), 2);
     assert!(
         track
             .lane
-            .as_mut()
+            .sender_mut()
             .expect("lane")
             .receipts()
             .next()
@@ -3581,7 +3620,7 @@ fn full_notification_ring_retries_latest_effective_rate_once() {
     assert!(
         track
             .lane
-            .as_mut()
+            .sender_mut()
             .expect("lane")
             .receipts()
             .next()
@@ -3821,7 +3860,7 @@ async fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     let seq = load(&mut track, &mut rig, Position::ZERO);
     track.extent.media_origin = None;
     let (sender, mut inbox) = lane();
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let curve = SpeedCurve::Ramp {
         to: 2.0,
         frames: std::num::NonZeroU64::new(128).expect("native ramp"),
@@ -4218,7 +4257,7 @@ fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
     );
 
     let (sender, _inbox) = lane();
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let seq = track
         .send_lane(
             LaneCommand::SetSpeed(SpeedCurve::Constant(0.5)),
@@ -4327,7 +4366,7 @@ fn planned_end_uses_the_current_mark_after_the_source_endpoint(#[case] initially
 fn planned_end_projects_again_after_a_backward_jump_past_the_first_endpoint() {
     let (mut track, rate) = projecting_track();
     let (sender, _inbox) = lane();
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track
         .send_lane(
             LaneCommand::Jump {
@@ -4382,7 +4421,7 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
     });
     retain_projection_source(&mut track, mock::SAMPLE_RATE);
     let (sender, _inbox) = lane();
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     let seq = track
         .send_lane(
             LaneCommand::Jump {
@@ -4477,7 +4516,7 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
             position: basis.timestamp,
         });
         let (sender, _inbox) = lane();
-        exact.lane = Some(sender);
+        replace_lane_sender(&mut exact.lane, sender);
         exact
             .send_lane(
                 LaneCommand::Jump {

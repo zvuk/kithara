@@ -69,6 +69,12 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
     /// each turn, through every decorator that owns matching work.
     fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>>;
 
+    /// The dispatcher request this source still awaits, on the shared dispatcher channel.
+    fn source_request(&self) -> Option<Seq>;
+
+    /// The source scope has completed retirement and its final intake.
+    fn source_closed(&self) -> bool;
+
     /// Whether the track holds a deck slot or is joining one.
     fn attached(&self) -> bool {
         self.snapshot().as_ref().attached

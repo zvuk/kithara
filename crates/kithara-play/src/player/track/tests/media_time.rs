@@ -210,7 +210,7 @@ fn assert_quiet_curve_projection(
     };
     track.resume = Some(consumed);
     track.mark = Some(consumed);
-    let available = track.lane.as_ref().expect("real lane").available();
+    let available = track.lane.sender().expect("real lane").available();
     let issued_at = source.cursor();
     command_at_zero(
         &mut track,
@@ -228,7 +228,7 @@ fn assert_quiet_curve_projection(
         .expect("native Segment")
         .seq;
     assert_eq!(
-        track.lane.as_ref().expect("real lane").available() + 1,
+        track.lane.sender().expect("real lane").available() + 1,
         available
     );
     assert!(

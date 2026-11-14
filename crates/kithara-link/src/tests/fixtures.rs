@@ -539,6 +539,13 @@ impl Track<TestPools> for ScriptedTrack {
             )
         })
     }
+    fn source_request(&self) -> Option<Seq> {
+        None
+    }
+    fn source_closed(&self) -> bool {
+        true
+    }
+
     fn finish_group(&mut self, _result: Result<Seq, &mut Vec<DeckPart>>) {}
 
     fn cue(

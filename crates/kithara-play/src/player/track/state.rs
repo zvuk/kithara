@@ -5,12 +5,12 @@ use std::{
 };
 
 use kithara_abr::AbrHandle;
-use kithara_command::{Seq, When};
+use kithara_command::{Receipt, Sender, Seq, When};
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
-    CrossfadeSettings, LaneCommand, LaneFrame, LaneId,
+    CrossfadeSettings, LaneCommand, LaneFrame, LaneId, LaneProtocol,
     bridge::{FadeDir, PlaybackFault, Slot, SlotMark, TrackClock},
     rt::track::PlayerResource,
 };
@@ -186,24 +186,107 @@ impl Extent {
     }
 }
 
-/// The track's lane as the dispatcher knows it.
-#[derive(Clone, Copy)]
-pub(super) enum Registration {
-    /// The dispatcher holds no lane of this track.
+/// Admission and dispatcher retirement of one source channel.
+#[derive(Default)]
+pub(super) enum Lane {
+    #[default]
     None,
-    Registered(LaneId),
-    /// The release `seq` is in flight; a refusal leaves the lane registered.
-    Releasing {
-        lane: LaneId,
-        seq: Seq,
+    Opening(Sender<LaneProtocol>),
+    Registered {
+        id: LaneId,
+        sender: Sender<LaneProtocol>,
+    },
+    RetiringOpen(Sender<LaneProtocol>),
+    Retiring {
+        id: LaneId,
+        sender: Sender<LaneProtocol>,
+        release: Option<Seq>,
     },
 }
 
-impl Registration {
-    pub(super) fn lane(self) -> Option<LaneId> {
+impl Lane {
+    pub(super) fn sender(&self) -> Option<&Sender<LaneProtocol>> {
+        match self {
+            Self::Opening(sender) | Self::Registered { sender, .. } => Some(sender),
+            _ => None,
+        }
+    }
+
+    pub(super) fn sender_mut(&mut self) -> Option<&mut Sender<LaneProtocol>> {
+        match self {
+            Self::Opening(sender) | Self::Registered { sender, .. } => Some(sender),
+            _ => None,
+        }
+    }
+
+    pub(super) fn available(&self) -> usize {
+        self.sender().map_or(0, Sender::available)
+    }
+
+    pub(super) fn receipt(&mut self) -> Option<Receipt<LaneProtocol>> {
         match self {
             Self::None => None,
-            Self::Registered(lane) | Self::Releasing { lane, .. } => Some(lane),
+            Self::Opening(sender)
+            | Self::Registered { sender, .. }
+            | Self::RetiringOpen(sender)
+            | Self::Retiring { sender, .. } => sender.receipts().next(),
+        }
+    }
+
+    pub(super) fn resident(&self) -> Option<LaneId> {
+        match self {
+            Self::Registered { id, .. } => Some(*id),
+            _ => None,
+        }
+    }
+
+    pub(super) fn loaded(&mut self, id: LaneId) {
+        *self = match std::mem::take(self) {
+            Self::Opening(sender) => Self::Registered { id, sender },
+            Self::RetiringOpen(sender) => Self::Retiring {
+                id,
+                sender,
+                release: None,
+            },
+            state => state,
+        };
+    }
+
+    pub(super) fn retire(&mut self) {
+        *self = match std::mem::take(self) {
+            Self::Opening(sender) => Self::RetiringOpen(sender),
+            Self::Registered { id, sender } => Self::Retiring {
+                id,
+                sender,
+                release: None,
+            },
+            state => state,
+        };
+    }
+
+    pub(super) fn retiring(&self) -> bool {
+        matches!(self, Self::RetiringOpen(_) | Self::Retiring { .. })
+    }
+
+    pub(super) fn release_needed(&self) -> Option<LaneId> {
+        match self {
+            Self::Retiring {
+                id, release: None, ..
+            } => Some(*id),
+            _ => None,
+        }
+    }
+
+    pub(super) fn release_seq(&self) -> Option<Seq> {
+        match self {
+            Self::Retiring { release, .. } => *release,
+            _ => None,
+        }
+    }
+
+    pub(super) fn releasing(&mut self, seq: Option<Seq>) {
+        if let Self::Retiring { release, .. } = self {
+            *release = seq;
         }
     }
 }
