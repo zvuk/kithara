@@ -42,6 +42,25 @@ struct Comb {
     input_gain: f32,
 }
 
+impl Comb {
+    fn new<S: HasPool<f32>>(
+        rate: NonZeroU32,
+        length: NonZeroUsize,
+        decay: Decay,
+        pools: &PoolRegion<S>,
+    ) -> Result<Self, ReverbError> {
+        let line = DelayLine::new(NonZeroUsize::MIN, length, pools)?;
+        let tap = line.tap(length.get().to_f64().ok_or(ReverbError::Geometry(rate))?)?;
+        let (feedback, input_gain) = comb_gains(rate, length.get(), decay)?;
+        Ok(Self {
+            line,
+            tap,
+            feedback,
+            input_gain,
+        })
+    }
+}
+
 #[derive(Debug)]
 struct Bank {
     combs: Vec<Comb>,
@@ -67,15 +86,7 @@ impl Bank {
             let length = frames(rate, reference, channel)?;
             shortest = shortest.min(length);
             longest_comb = longest_comb.max(length);
-            let line = DelayLine::new(NonZeroUsize::MIN, length, pools)?;
-            let tap = line.tap(length.get().to_f64().ok_or(ReverbError::Geometry(rate))?)?;
-            let (feedback, input_gain) = comb_gains(rate, length.get(), config.decay())?;
-            combs.push(Comb {
-                line,
-                tap,
-                feedback,
-                input_gain,
-            });
+            combs.push(Comb::new(rate, length, config.decay(), pools)?);
         }
         let mut diffusers: Vec<DelayDiffuser<1>> =
             Vec::with_capacity(consts::REVERB_DIFFUSER_LENGTHS.len());
@@ -288,45 +299,55 @@ impl Reverb {
                 first.get(cursor..end).ok_or(ReverbError::Shape)?,
                 second.get(cursor..end).ok_or(ReverbError::Shape)?,
             ];
-            let mut output = [
+            let output = [
                 left.get_mut(cursor..end).ok_or(ReverbError::Shape)?,
                 right.get_mut(cursor..end).ok_or(ReverbError::Shape)?,
             ];
-            let last = input
-                .iter()
-                .filter_map(|plane| plane.iter().rposition(|sample| *sample != 0.0))
-                .max();
-            if !active && last.is_none() {
-                for plane in output {
-                    plane.fill(0.0);
-                }
-                cursor = end;
-                continue;
-            }
-            for ((input, output), bank) in input
-                .into_iter()
-                .zip(output.iter_mut())
-                .zip(&mut self.banks)
-            {
-                bank.process_span(input, output)?;
-            }
-            mix_width(output, self.width)?;
-            // A Decay command's origin is its first processed frame, like an input event.
-            let event = last.or_else(|| self.is_decay_epoch_pending.then_some(0));
-            self.is_decay_epoch_pending = false;
-            let silent = event
-                .map_or(count, |frame| count.wrapping_sub(frame).wrapping_sub(1))
-                .to_u64()
-                .ok_or(ReverbError::Shape)?;
-            self.tail_age = if event.is_some() {
-                silent
-            } else {
-                self.tail_age.saturating_add(silent)
-            };
-            if self.tail_exhausted() {
-                self.reset();
-            }
+            self.process_span(input, output)?;
             cursor = end;
+        }
+        Ok(())
+    }
+
+    fn process_span(
+        &mut self,
+        input: [&[f32]; 2],
+        mut output: [&mut [f32]; 2],
+    ) -> Result<(), ReverbError> {
+        let [first, _] = input;
+        let count = first.len();
+        let last = input
+            .iter()
+            .filter_map(|plane| plane.iter().rposition(|sample| *sample != 0.0))
+            .max();
+        if self.tail_exhausted() && last.is_none() {
+            for plane in output {
+                plane.fill(0.0);
+            }
+            return Ok(());
+        }
+        for ((input, output), bank) in input
+            .into_iter()
+            .zip(output.iter_mut())
+            .zip(&mut self.banks)
+        {
+            bank.process_span(input, output)?;
+        }
+        mix_width(output, self.width)?;
+        // A Decay command's origin is its first processed frame, like an input event.
+        let event = last.or_else(|| self.is_decay_epoch_pending.then_some(0));
+        self.is_decay_epoch_pending = false;
+        let silent = event
+            .map_or(count, |frame| count.wrapping_sub(frame).wrapping_sub(1))
+            .to_u64()
+            .ok_or(ReverbError::Shape)?;
+        self.tail_age = if event.is_some() {
+            silent
+        } else {
+            self.tail_age.saturating_add(silent)
+        };
+        if self.tail_exhausted() {
+            self.reset();
         }
         Ok(())
     }

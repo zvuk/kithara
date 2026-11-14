@@ -1,8 +1,6 @@
 use fearless_simd::{Level, dispatch};
 
-use super::platform;
-mod kernels;
-pub(super) use kernels::{blend_kernel, diffuse_kernel};
+use super::{super::platform, blend_kernel, diffuse_kernel};
 
 pub(crate) fn diffuse(
     samples: &mut [f32],

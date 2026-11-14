@@ -133,6 +133,7 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
             }
         }
     }
+    refs.resolve_renames();
     (defs, refs)
 }
 
@@ -757,12 +758,61 @@ struct Refs {
     /// in-crate `#[cfg(test)]` block. These are fixture/harness support — the
     /// relocate-to-`tests/` signal, as opposed to delete-the-in-crate-test.
     test_external: BTreeSet<String>,
+    prod_renames: HashMap<String, BTreeSet<String>>,
+    test_renames: HashMap<String, BTreeSet<String>>,
+}
+
+impl Refs {
+    fn resolve_renames(&mut self) {
+        loop {
+            let before = (self.prod.len(), self.test.len(), self.test_external.len());
+            for (alias, sources) in &self.prod_renames {
+                if self.prod.contains(alias) {
+                    self.prod.extend(sources.iter().cloned());
+                }
+                if self.test.contains(alias) {
+                    self.test.extend(sources.iter().cloned());
+                }
+                if self.test_external.contains(alias) {
+                    self.test_external.extend(sources.iter().cloned());
+                }
+            }
+            for (alias, sources) in &self.test_renames {
+                if self.test.contains(alias) {
+                    self.test.extend(sources.iter().cloned());
+                }
+                if self.test_external.contains(alias) {
+                    self.test_external.extend(sources.iter().cloned());
+                }
+            }
+            if before == (self.prod.len(), self.test.len(), self.test_external.len()) {
+                break;
+            }
+        }
+    }
+}
+
+fn collect_renames(tree: &UseTree, aliases: &mut HashMap<String, BTreeSet<String>>) {
+    match tree {
+        UseTree::Path(path) => collect_renames(&path.tree, aliases),
+        UseTree::Group(group) => {
+            for tree in &group.items {
+                collect_renames(tree, aliases);
+            }
+        }
+        UseTree::Rename(rename) => {
+            aliases
+                .entry(rename.rename.to_string())
+                .or_default()
+                .insert(rename.ident.to_string());
+        }
+        UseTree::Name(_) | UseTree::Glob(_) => {}
+    }
 }
 
 /// Collects identifier references (path segments + method-call names),
-/// bucketed by whether the surrounding context is test code. `use` trees are
-/// not `syn::Path` nodes, so re-exports are naturally excluded — only genuine
-/// call/type/expression references count. Attribute internals are skipped.
+/// bucketed by whether the surrounding context is test code. Renamed imports
+/// credit their source only when the alias has a genuine reference.
 struct RefCollector<'a> {
     workspace_crates: &'a HashSet<String>,
     refs: &'a mut Refs,
@@ -1146,6 +1196,12 @@ impl<'ast> Visit<'ast> for RefCollector<'_> {
         if self.qualified_only {
             self.record_qualified_use_tree(&item_use.tree, false);
         } else {
+            let aliases = if self.in_test || attrs_mark_test(&item_use.attrs) {
+                &mut self.refs.test_renames
+            } else {
+                &mut self.refs.prod_renames
+            };
+            collect_renames(&item_use.tree, aliases);
             visit::visit_item_use(self, item_use);
         }
     }
@@ -1215,6 +1271,7 @@ mod tests {
             workspace_self_fields: HashSet::new(),
         }
         .visit_file(&file);
+        refs.resolve_renames();
         refs
     }
 
@@ -1338,6 +1395,57 @@ mod tests {
             !refs.prod.contains("imported_leaf"),
             "normal mode must not start counting use-tree leaves"
         );
+    }
+
+    #[test]
+    fn normal_collection_credits_used_renamed_reexports() {
+        let refs = collect_refs(
+            r#"
+            mod source { pub fn diffuse() {} }
+            pub use source::diffuse as forwarded;
+            mod platform { pub use super::forwarded as delay_diffuse; }
+            fn process() { platform::delay_diffuse(); }
+            "#,
+            false,
+        );
+        assert!(refs.prod.contains("diffuse"));
+    }
+
+    #[test]
+    fn test_only_rename_cannot_credit_an_unrelated_production_name() {
+        let refs = collect_refs(
+            r#"
+            mod source { pub fn diffuse() {} }
+            #[cfg(test)] use source::diffuse as selected;
+            mod unrelated { pub fn selected() {} }
+            fn process() { unrelated::selected(); }
+            "#,
+            false,
+        );
+        assert!(!refs.prod.contains("diffuse"));
+    }
+
+    #[test]
+    fn renamed_reexports_keep_unused_and_test_only_sources_out_of_production() {
+        for (caller, referenced_in_test) in [
+            ("", false),
+            (
+                "#[cfg(test)] mod tests { fn contract() { super::platform::delay_diffuse(); } }",
+                true,
+            ),
+        ] {
+            let refs = collect_refs(
+                &format!(
+                    "mod source {{ pub fn diffuse() {{}} }}\n\
+                     pub use source::diffuse as forwarded;\n\
+                     mod platform {{ pub use super::forwarded as delay_diffuse; }}\n\
+                     {caller}"
+                ),
+                false,
+            );
+            assert!(!refs.prod.contains("diffuse"));
+            assert_eq!(refs.test.contains("diffuse"), referenced_in_test);
+        }
     }
 
     #[test]
