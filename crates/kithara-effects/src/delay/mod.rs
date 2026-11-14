@@ -9,4 +9,4 @@ mod param;
 pub use config::FeedbackDelayConfig;
 pub use effect::FeedbackDelay;
 pub use error::CombError;
-pub use param::{DelayParam, DelayTime, Feedback, FeedbackHighPass};
+pub use param::{DelayTime, Feedback, FeedbackHighPass};

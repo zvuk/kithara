@@ -1,7 +1,6 @@
 use std::num::NonZeroU32;
 
 use firewheel::{
-    FirewheelContext,
     clock::InstantSamples,
     dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
     log::{RealtimeLoggerConfig, realtime_logger},
@@ -42,6 +41,7 @@ use crate::{
     consts,
     host::{HostSettings, HostSettingsChange, HostSettingsExec},
     session::{
+        context::SessionGraph,
         queue::{HostPart, HostProtocol, settle_root_receipts},
         state::{SessionState, SessionStream, ensure_ctx},
         tests::graph,
@@ -248,7 +248,7 @@ fn outcome(queue: &mut ScopedSender<HostProtocol, DeckProtocol>) -> Outcome<Host
 fn owned_session() -> SessionState<(), TestPools> {
     let sample_rate = NonZeroU32::new(consts::TRANSPORT_SAMPLE_RATE)
         .expect("invariant: the fixture rate is non-zero");
-    let mut state = graph::state_for(sample_rate, |_ctx, _sample_rate| {
+    let mut state = graph::state_for(sample_rate, |_ctx, _sample_rate, _decks| {
         Ok(SessionStream::Realtime { _backend: () })
     });
     assert!(ensure_ctx(&mut state).is_ok());
@@ -259,7 +259,7 @@ fn proc_store(state: &mut SessionState<(), TestPools>) -> &mut ProcStore {
     state
         .ctx
         .as_mut()
-        .and_then(FirewheelContext::proc_store_mut)
+        .and_then(SessionGraph::proc_store_mut)
         .expect("invariant: a context never started keeps its store")
 }
 

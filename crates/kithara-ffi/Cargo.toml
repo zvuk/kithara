@@ -228,6 +228,7 @@ kithara = { workspace = true, features = ["decode", "mock", "signal"] }
 kithara-test-utils = { workspace = true, features = ["mock", "subscriber"] }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
+web-sys = { workspace = true, features = ["LockManager", "Navigator"] }
 
 [[test]]
 name = "web-bootstrap"

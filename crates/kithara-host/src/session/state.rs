@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use arc_swap::ArcSwap;
 use firewheel::{
-    FirewheelConfig, FirewheelContext,
+    FirewheelConfig,
     channel_config::ChannelCount,
     node::{AudioNode, NodeID},
 };
@@ -34,11 +34,13 @@ use crate::{
     api::Tap,
     host::HostSettings,
     rt::{LimiterNode, MasterNode, MetronomeNode, SessionOutput},
+    session::context::SessionGraph,
 };
 
 pub(crate) enum TapSlot {
     Requested(OutputGroup),
     Installed(NodeID),
+    Retiring(NodeID),
 }
 
 #[derive(Default)]
@@ -199,9 +201,9 @@ impl RootView {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) type DeviceBackend = Box<firewheel::cpal::CpalStream>;
+pub(crate) type DeviceBackend = Box<super::native_engine::NativeStream>;
 #[cfg(target_arch = "wasm32")]
-pub(crate) type DeviceBackend = firewheel_web_audio::WebAudioBackend;
+pub(crate) type DeviceBackend = super::web_output::WebOutput;
 
 pub(crate) enum SessionStream<T = DeviceBackend> {
     Realtime {
@@ -219,6 +221,11 @@ pub(crate) struct DeckNode {
     pub(crate) offline: Option<kithara_render::rt::OfflineDeck<super::transport::TransportState>>,
 }
 
+pub(crate) struct RetiredDeck {
+    pub(crate) deck: DeckNode,
+    pub(crate) staged: bool,
+}
+
 #[derive(Clone, Copy, Default)]
 pub(crate) struct SessionBufferConfig {
     pub(crate) max_block_frames: Option<NonZeroU32>,
@@ -233,13 +240,14 @@ pub(crate) struct SessionState<T, S> {
     pub(crate) delivery_delay: Option<Duration>,
     /// Graph node identities; deck state remains with the deck's owner.
     pub(crate) deck_nodes: Vec<DeckNode>,
+    pub(crate) retired_decks: Vec<RetiredDeck>,
     pub(crate) channel_config: ScopedConfig,
     pub(crate) root: HostRoot,
     pub(crate) output: SessionOutput<S>,
     pub(crate) session_metronome_node_id: Option<NodeID>,
-    pub(crate) ctx: Option<FirewheelContext>,
+    pub(crate) ctx: Option<SessionGraph>,
     /// Detached contexts awaiting the return of their backend processor.
-    pub(super) retired_contexts: Vec<FirewheelContext>,
+    pub(super) retired_contexts: Vec<SessionGraph>,
     pub(crate) taps: Taps,
     /// The pause/resume fade length the session asks Firewheel for, in frames.
     /// `None` leaves Firewheel's own default in place.
@@ -294,7 +302,14 @@ impl<T, S> SessionState<T, S> {
         start_stream_fn: F,
     ) -> Self
     where
-        F: FnMut(&mut FirewheelContext, u32) -> Result<SessionStream<T>, String> + Send + 'static,
+        F: FnMut(
+                &mut SessionGraph,
+                u32,
+                &mut [DeckNode],
+                Option<SessionStream<T>>,
+            ) -> Result<SessionStream<T>, String>
+            + Send
+            + 'static,
     {
         let grid_id = root.id();
         let mut generation = SessionGridGeneration::new(grid_id);
@@ -325,6 +340,7 @@ impl<T, S> SessionState<T, S> {
             iteration_clock: None,
             delivery_delay: None,
             deck_nodes: Vec::new(),
+            retired_decks: Vec::new(),
         };
         state.publish_root();
         state
@@ -334,14 +350,16 @@ impl<T, S> SessionState<T, S> {
     /// a block publishes its snapshot after the stream advanced its clock, so
     /// the clock read next counts frames on the axis the snapshot confirms.
     pub(crate) fn begin_iteration(&mut self) {
-        self.retired_contexts.retain(FirewheelContext::is_active);
+        self.retired_contexts.retain(|ctx| ctx.is_active());
         let snapshot = self
             .transport_observation
             .as_mut()
             .and_then(|observation| observation.read().snapshot());
         self.timeline.observe(snapshot);
         let now = self.ctx.as_ref().and_then(|ctx| {
-            let _ = ctx.stream_info()?;
+            if !ctx.has_session_clock() {
+                return None;
+            }
             Some(SessionFrame::new(ctx.audio_clock().samples.0))
         });
         self.iteration_clock = now.map(|now| self.clock_at(now));
@@ -422,7 +440,7 @@ impl<T, S> SessionState<T, S> {
 /// the session's own graph error. A node the graph refuses is a wiring bug, not
 /// a runtime condition the session can route around.
 pub(crate) fn add_graph_node<N: AudioNode + 'static>(
-    ctx: &mut FirewheelContext,
+    ctx: &mut SessionGraph,
     node: N,
 ) -> Result<NodeID, SessionError> {
     ctx.add_node(node, None)
@@ -464,7 +482,7 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
             Duration::from_secs_f64(f64::from(declick_frames.get()) / f64::from(sample_rate))
                 .as_secs_f32();
     }
-    let mut ctx = FirewheelContext::new(config);
+    let mut ctx = SessionGraph::new(config);
     let session_grid = state
         .reserved_session_grid
         .ok_or_else(|| SessionError::Graph("session grid generation is missing".to_owned()))?;
@@ -480,7 +498,13 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
             return Err(SessionError::Graph(error.into()));
         }
     };
-    let stream = match start_stream(&mut state.start_stream_fn, &mut ctx, sample_rate) {
+    let stream = match start_stream(
+        &mut state.start_stream_fn,
+        &mut ctx,
+        sample_rate,
+        &mut state.deck_nodes,
+        None,
+    ) {
         Ok(stream) => stream,
         Err(error) => {
             state.reserved_session_grid = Some(session_grid);
@@ -491,7 +515,14 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
     state.stream = Some(stream);
     state.channel = Some(channel);
     state.transport_observation = Some(transport_observation);
-    state.stream_needs_restart = false;
+    #[cfg(target_arch = "wasm32")]
+    let starting = state
+        .ctx
+        .as_ref()
+        .is_some_and(SessionGraph::output_starting);
+    #[cfg(not(target_arch = "wasm32"))]
+    let starting = false;
+    state.stream_needs_restart = starting;
     state.publish_root();
     trace_stream_info(state, "start-stream");
     debug!(sample_rate, "[KITHARA-ROUTE] firewheel context ready");
@@ -506,7 +537,7 @@ fn ensure_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let running = state.ctx.as_ref().is_some_and(FirewheelContext::is_active);
+    let running = state.ctx.as_ref().is_some_and(|ctx| ctx.is_active());
     if running && state.session_output_node_id.is_none() {
         return create_session_output(state);
     }
@@ -559,7 +590,7 @@ where
 /// connects it in order to the graph output and compiles the graph. Returns the
 /// master, limiter and metronome nodes.
 fn build_session_output<S>(
-    ctx: &mut FirewheelContext,
+    ctx: &mut SessionGraph,
     limiter: LimiterNode<S>,
     metronome: MetronomeNode<S>,
     added: &mut Vec<NodeID>,
@@ -1019,7 +1050,7 @@ mod tests {
         let running_at = |device_rate: NonZeroU32| {
             crate::session::tests::graph::state_for(
                 NonZeroU32::new(48_000).expect("fixture rate"),
-                move |ctx, _rate| {
+                move |ctx, _rate, _decks| {
                     let processor = ctx
                         .activate(ActivateInfo {
                             sample_rate: device_rate,
@@ -1057,7 +1088,7 @@ mod tests {
     #[kithara::test]
     fn the_output_chain_waits_for_a_running_context() {
         let rate = NonZeroU32::new(48_000).expect("fixture rate");
-        let mut state = crate::session::tests::graph::state_for(rate, |_ctx, _rate| {
+        let mut state = crate::session::tests::graph::state_for(rate, |_ctx, _rate, _decks| {
             Ok(SessionStream::Realtime { _backend: () })
         });
         state.output = SessionOutput::new(lookahead(), pools_with_budget(0));

@@ -56,9 +56,11 @@ fn boost_low_band<S: HasPool<f32>>(config: &EqConfig<S>, sample_rate: NonZeroU32
 
 <tr><td><code>DeckEffect</code></td><td>Contract of the effect a deck FX unit holds: planar stereo wet signal, parameter changes, reset, tail exhaustion, sample-rate retune</td></tr>
 
-<tr><td><code>FxParamChange</code></td><td>A change of one deck effect parameter</td></tr>
+<tr><td><code>FxParamChange</code></td><td>An effect parameter index and native-unit value, admitted by render before the batch applies</td></tr>
 
-<tr><td><code>FeedbackDelay</code></td><td>Stereo feedback delay: maps its time, feedback and high-pass cutoff onto a <code>kithara-dsp</code> feedback comb, history taken from the pools</td></tr>
+<tr><td><code>FxParamDescriptor</code></td><td>A checked native range, unit and optional linear/log mapping; no mapping declares integer steps</td></tr>
+
+<tr><td><code>FeedbackDelay</code></td><td>Stereo feedback delay composing DSP history and a fixed high-pass; owns its comb policy and takes history from the pools</td></tr>
 
 <tr><td><code>IsolatorEq</code></td><td>DJ isolator built on crossover filters</td></tr>
 
@@ -99,5 +101,11 @@ interval peaks and release recursion belong to `kithara-dsp`; effects owns its
 tap design, ceiling, channel linking and per-frame sanitization policy.
 `LimiterConfig` takes checked `Ceiling` (0.001..=1.0) and `ReleaseMs`
 (1..=5000 ms) values; their defaults are 0.98 and 50 ms.
+
+`DeckEffect::parameters` borrows descriptors prepared outside the audio thread.
+They remain valid and unchanged across every supported sample-rate retune; the
+effect reserves storage for that complete domain. Render checks manual changes
+against these domains before any batch part applies, and `set` applies the
+validated value without a second per-effect admission path.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-effects) for detailed contracts, invariants, and internals.

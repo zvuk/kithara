@@ -5,10 +5,12 @@ use std::{
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_dsp::filter::{Response, SvfDesign};
-use num_traits::ToPrimitive;
+use num_traits::{AsPrimitive, ToPrimitive};
 
-use super::{CombError, DelayParam, FeedbackDelayConfig, FeedbackHighPass, comb::FeedbackComb};
-use crate::{DeckEffect, FxParamChange, consts};
+use super::{
+    CombError, DelayTime, Feedback, FeedbackDelayConfig, FeedbackHighPass, comb::FeedbackComb,
+};
+use crate::{DeckEffect, FxParamChange, FxParamDescriptor, consts};
 
 /// Stereo deck FX delay: unfiltered first echo, then a Butterworth high-pass on each repeat.
 /// Time/capacity count frames; time changes cross over 20 ms.
@@ -16,6 +18,7 @@ use crate::{DeckEffect, FxParamChange, consts};
 #[derive(Debug)]
 pub struct FeedbackDelay {
     comb: FeedbackComb<{ consts::STEREO.get() }>,
+    parameters: [FxParamDescriptor; 3],
     high_pass: FeedbackHighPass,
     sample_rate: NonZeroU32,
 }
@@ -26,11 +29,43 @@ impl FeedbackDelay {
     /// # Errors
     /// [`CombError::Delay`] when the starting time exceeds the capacity,
     /// [`CombError::Pool`] when the history does not fit `pools`.
+    ///
+    /// # Panics
+    /// If an internally declared parameter domain violates its checked bounds.
     pub fn new<S: HasPool<f32>>(
         config: FeedbackDelayConfig,
         pools: &PoolRegion<S>,
     ) -> Result<Self, CombError> {
+        use crate::{
+            FxParamMapping::{Linear, Log},
+            FxParamUnit::{Frames, Hertz, Ratio},
+        };
+
         let sample_rate = config.sample_rate();
+        let capacity: f64 = config.capacity().get().as_();
+        let parameters = [
+            (
+                f64::from(DelayTime::MIN)..=capacity.min(f64::from(DelayTime::MAX)),
+                Frames,
+                Linear,
+            ),
+            (
+                f64::from(f32::from(Feedback::MIN))..=f64::from(f32::from(Feedback::MAX)),
+                Ratio,
+                Linear,
+            ),
+            (
+                f64::from(f32::from(FeedbackHighPass::MIN))
+                    ..=f64::from(f32::from(FeedbackHighPass::MAX)),
+                Hertz,
+                Log,
+            ),
+        ]
+        .map(|(range, unit, mapping)| {
+            // Nonzero capacity and the finite ranged bounds prove each domain valid.
+            FxParamDescriptor::checked(range, unit, Some(mapping))
+                .expect("prepared parameter domain")
+        });
         let comb = FeedbackComb::new(
             config.capacity(),
             f64::from(config.time()),
@@ -41,6 +76,7 @@ impl FeedbackDelay {
         )?;
         Ok(Self {
             comb,
+            parameters,
             sample_rate,
             high_pass: config.high_pass(),
         })
@@ -73,24 +109,28 @@ impl DeckEffect for FeedbackDelay {
         }
     }
 
-    fn accepts(&self, change: &FxParamChange) -> bool {
-        let FxParamChange::Delay(param) = change;
-        match param {
-            DelayParam::Time(time) => self.comb.tap(f64::from(*time)).is_ok(),
-            DelayParam::Feedback(_) | DelayParam::HighPass(_) => true,
-        }
+    fn parameters(&self) -> &[FxParamDescriptor] {
+        &self.parameters
     }
 
     fn set(&mut self, change: FxParamChange) {
-        let FxParamChange::Delay(param) = change;
-        match param {
-            DelayParam::Time(time) => {
-                if let Ok(delay) = self.comb.tap(f64::from(time)) {
+        match change.index {
+            0 => {
+                if let Ok(delay) = self.comb.tap(change.value) {
                     self.comb.retime(delay);
                 }
             }
-            DelayParam::Feedback(feedback) => self.comb.set_gain(f32::from(feedback)),
-            DelayParam::HighPass(cutoff) => self.tune(cutoff),
+            1 => {
+                if let Some(feedback) = change.value.to_f32().and_then(Feedback::checked) {
+                    self.comb.set_gain(f32::from(feedback));
+                }
+            }
+            2 => {
+                if let Some(cutoff) = change.value.to_f32().and_then(FeedbackHighPass::checked) {
+                    self.tune(cutoff);
+                }
+            }
+            _ => {}
         }
     }
 

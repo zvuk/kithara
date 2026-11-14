@@ -8,10 +8,8 @@ use std::{
 };
 
 use kithara_effects::{
-    DeckEffect, FxParamChange,
-    delay::{
-        DelayParam, DelayTime, Feedback, FeedbackDelay, FeedbackDelayConfig, FeedbackHighPass,
-    },
+    DeckEffect, FxParamChange, FxParamMapping, FxParamUnit,
+    delay::{DelayTime, Feedback, FeedbackDelay, FeedbackDelayConfig, FeedbackHighPass},
 };
 use kithara_test_utils::{bufpool::pools, kithara, kithara_platform::time::Duration};
 use num_traits::ToPrimitive;
@@ -66,15 +64,19 @@ fn rate_of(rate: u32) -> NonZeroU32 {
 }
 
 fn time(frames: f64) -> FxParamChange {
-    FxParamChange::Delay(DelayParam::Time(
-        DelayTime::checked(frames).expect("a representable delay"),
-    ))
+    FxParamChange {
+        index: 0,
+        value: f64::from(DelayTime::checked(frames).expect("a representable delay")),
+    }
 }
 
 fn high_pass_change(cutoff: f32) -> FxParamChange {
-    FxParamChange::Delay(DelayParam::HighPass(
-        FeedbackHighPass::checked(cutoff).expect("a cutoff in range"),
-    ))
+    FxParamChange {
+        index: 2,
+        value: f64::from(f32::from(
+            FeedbackHighPass::checked(cutoff).expect("a cutoff in range"),
+        )),
+    }
 }
 
 fn frames(count: u32) -> usize {
@@ -104,7 +106,10 @@ fn run(
             break;
         }
         while let Some((_, change)) = changes.next_if(|(at, _)| *at == start) {
-            assert!(effect.accepts(change), "the delay takes {change:?}");
+            assert!(
+                effect.parameters()[change.index].contains(change.value),
+                "the delay takes {change:?}"
+            );
             effect.set(*change);
         }
         let due = changes.peek().map_or(length, |(at, _)| *at);
@@ -338,9 +343,12 @@ fn feedback_delay_feedback_change_takes_effect_on_its_frame() {
     const TO: f32 = 0.9;
     let settings = settings(TIME, 64, 0.5, f32::from(FeedbackHighPass::MAX));
     let input = impulses(12 * frames(TIME));
-    let change = FxParamChange::Delay(DelayParam::Feedback(
-        Feedback::checked(TO).expect("a feedback below unity"),
-    ));
+    let change = FxParamChange {
+        index: 1,
+        value: f64::from(f32::from(
+            Feedback::checked(TO).expect("a feedback below unity"),
+        )),
+    };
     let wet = run(&mut delay(settings), &input, &REGULAR, &[(CHANGE, change)]);
     for (channel, (wet, input)) in wet.iter().zip(&input).enumerate() {
         let mut model = Model::new(settings);
@@ -632,27 +640,52 @@ fn feedback_delay_refuses_a_time_beyond_its_capacity() {
         "a zero delay is unrepresentable"
     );
     let effect = delay(settings);
-    assert!(effect.accepts(&time(512.0)), "the full capacity is a delay");
+    assert_eq!(effect.parameters().len(), 3);
+    let domains = [
+        (
+            f64::from(DelayTime::MIN)..=512.0,
+            FxParamUnit::Frames,
+            FxParamMapping::Linear,
+        ),
+        (
+            f64::from(f32::from(Feedback::MIN))..=f64::from(f32::from(Feedback::MAX)),
+            FxParamUnit::Ratio,
+            FxParamMapping::Linear,
+        ),
+        (
+            f64::from(f32::from(FeedbackHighPass::MIN))
+                ..=f64::from(f32::from(FeedbackHighPass::MAX)),
+            FxParamUnit::Hertz,
+            FxParamMapping::Log,
+        ),
+    ];
+    for (actual, (range, unit, mapping)) in effect.parameters().iter().zip(domains) {
+        assert_eq!(actual.range(), &range);
+        assert_eq!(actual.unit(), unit);
+        assert_eq!(actual.mapping(), Some(mapping));
+    }
     assert!(
-        effect.accepts(&time(511.5)),
+        effect.parameters()[0].contains(512.0),
+        "the full capacity is a delay"
+    );
+    assert!(
+        effect.parameters()[0].contains(511.5),
         "a fraction inside the capacity is a delay"
     );
     assert!(
-        !effect.accepts(&time(512.5)),
+        !effect.parameters()[0].contains(512.5),
         "a fraction past the capacity is refused"
     );
     assert!(
-        !effect.accepts(&time(513.0)),
+        !effect.parameters()[0].contains(513.0),
         "a delay past the capacity is refused"
     );
     assert!(
         f32::from(Feedback::MAX) < 1.0,
         "the feedback stays below unity, so every tail ends"
     );
-    assert!(effect.accepts(&FxParamChange::Delay(DelayParam::Feedback(Feedback::MAX))));
-    assert!(effect.accepts(&FxParamChange::Delay(DelayParam::HighPass(
-        FeedbackHighPass::MAX
-    ))));
+    assert!(effect.parameters()[1].contains(f64::from(f32::from(Feedback::MAX))));
+    assert!(effect.parameters()[2].contains(f64::from(f32::from(FeedbackHighPass::MAX))));
     assert!(
         FeedbackDelay::new(
             config(
@@ -819,10 +852,16 @@ fn feedback_delay_saturates_its_design_and_restores_the_requested_cutoff(
     if set {
         effect.set(high_pass_change(settings.high_pass));
     }
+    let parameters = effect.parameters().to_vec();
     let input = impulses(3 * frames(settings.time));
     let mut models = [Model::new(settings), Model::new(settings)];
     for (rate, cutoff) in [(8000, 4000.0_f64.next_down()), (48_000, 4000.0)] {
         effect.update_sample_rate(rate_of(rate));
+        assert_eq!(
+            effect.parameters(),
+            parameters.as_slice(),
+            "rate-independent domains"
+        );
         let wet = run(&mut effect, &input, &REGULAR, &[]);
         for ((wet, input), model) in wet.iter().zip(&input).zip(&mut models) {
             let offset = model.wet.len();
@@ -841,7 +880,7 @@ fn feedback_delay_saturates_its_design_and_restores_the_requested_cutoff(
             FeedbackHighPass::MAX,
             "requested cutoff"
         );
-        assert!(effect.accepts(&high_pass_change(settings.high_pass)));
+        assert!(effect.parameters()[2].contains(f64::from(settings.high_pass)));
     }
 }
 
@@ -890,7 +929,7 @@ fn feedback_delay_high_pass_boundaries_and_former_holes(#[case] retune: bool) {
         (352_800, 20.022_65),
         (384_000, 20.0),
         (768_000, 20.0),
-        (8000, 3999.676_5),
+        (8000, 3_999.676_5),
     ]) {
         if f64::from(cutoff) >= f64::from(rate) / 2.0 {
             continue;
@@ -900,7 +939,7 @@ fn feedback_delay_high_pass_boundaries_and_former_holes(#[case] retune: bool) {
         if retune {
             effect.update_sample_rate(rate_of(rate));
         }
-        assert!(effect.accepts(&high_pass_change(cutoff)));
+        assert!(effect.parameters()[2].contains(f64::from(cutoff)));
         let input = [1.0, 0.0, 0.0];
         let mut wet = [[0.0; 3]; 2];
         let [left, right] = &mut wet;

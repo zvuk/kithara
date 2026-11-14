@@ -47,9 +47,9 @@ fn last_loud_matches_scalar_at_native_and_fallback_levels() {
                     .into_iter()
                     .chain(SPECIALS)
                     .cycle()
-                    .take(size + offset)
+                    .take(size.checked_add(offset).expect("bounded fixture length"))
                     .collect();
-                let samples = &samples[offset..];
+                let samples = samples.get(offset..).expect("fixture includes its offset");
                 let expected = samples.iter().rposition(|sample| sample.abs() > limit);
                 for level in [Level::fallback(), Level::new()] {
                     let actual =

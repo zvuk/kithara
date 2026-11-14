@@ -16,11 +16,3 @@ pub struct Feedback(f32);
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Ranged)]
 #[ranged(min = 20.0, max = 4000.0)]
 pub struct FeedbackHighPass(f32);
-
-/// A change of one [`FeedbackDelay`](super::FeedbackDelay) parameter.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum DelayParam {
-    Time(DelayTime),
-    Feedback(Feedback),
-    HighPass(FeedbackHighPass),
-}

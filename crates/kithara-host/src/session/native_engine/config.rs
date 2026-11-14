@@ -1,6 +1,11 @@
-use super::*;
+use std::num::NonZeroU32;
 
-pub(super) fn cpal_config(sample_rate: u32, output_block_frames: Option<NonZeroU32>) -> CpalConfig {
+use firewheel::cpal::CpalConfig;
+
+pub(in crate::session::native_engine) fn cpal_config(
+    sample_rate: u32,
+    output_block_frames: Option<NonZeroU32>,
+) -> CpalConfig {
     let mut config = CpalConfig::default();
     config.output.desired_sample_rate = NonZeroU32::new(sample_rate).map(NonZeroU32::get);
     if let Some(frames) = output_block_frames {
