@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 use anyhow::{Context, Result, bail};
 
 use super::profile::{LinuxHost, LinuxRunner};
@@ -46,23 +44,22 @@ pub(super) fn assignments(host: &LinuxHost, cores: usize) -> Result<Vec<String>>
             "Linux CI ordinary CPU requests do not fit the {ordinary} CPUs left after reserving {reserved} stress CPUs"
         );
     }
-    let mut stress_offset = 0;
-    let mut ordinary_index = 0;
+    let mut stress_cpus = (0..reserved).cycle();
+    let mut ordinary_cpus = (reserved..cores).cycle();
     Ok(host
         .runners
         .iter()
         .zip(requests)
         .map(|(runner, cpus)| {
-            let (index, pool) = if is_stress(runner) {
-                let first = stress_offset;
-                stress_offset += cpus;
-                (0, first..stress_offset)
+            let pool = if is_stress(runner) {
+                &mut stress_cpus
             } else {
-                let index = ordinary_index;
-                ordinary_index += 1;
-                (index, reserved..cores)
+                &mut ordinary_cpus
             };
-            cpuset(index, cpus, pool)
+            pool.take(cpus)
+                .map(|cpu| cpu.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
         })
         .collect())
 }
@@ -72,18 +69,6 @@ fn is_stress(runner: &LinuxRunner) -> bool {
         .labels
         .iter()
         .any(|label| label.eq_ignore_ascii_case("kithara-stress"))
-}
-
-/// Ordinary sets wrap within their pool; their size remains the job's nproc.
-fn cpuset(index: usize, cpus: usize, pool: Range<usize>) -> String {
-    let cpus = cpus.clamp(1, pool.len());
-    let first = index.saturating_mul(cpus) % pool.len();
-    pool.cycle()
-        .skip(first)
-        .take(cpus)
-        .map(|cpu| cpu.to_string())
-        .collect::<Vec<_>>()
-        .join(",")
 }
 
 #[cfg(test)]
@@ -156,8 +141,12 @@ mod tests {
 
     #[test]
     fn a_runner_is_given_exactly_the_cores_it_asked_for() {
-        for index in 0..12 {
-            let set = cpuset(index, 3, 0..32);
+        let host = ordinary_host([3; 12]);
+        for (index, set) in assignments(&host, 32)
+            .expect("ordinary pool")
+            .iter()
+            .enumerate()
+        {
             let cores = set.split(',').collect::<Vec<_>>();
             assert_eq!(cores.len(), 3, "index {index}: {set}");
             assert_eq!(
@@ -170,8 +159,56 @@ mod tests {
 
     #[test]
     fn the_sets_wrap_instead_of_running_out() {
-        assert_eq!(cpuset(11, 3, 0..32), "1,2,3");
-        assert_eq!(cpuset(0, 4, 0..4), "0,1,2,3");
-        assert_eq!(cpuset(0, 9, 0..4), "0,1,2,3");
+        let sets = assignments(&ordinary_host([3; 12]), 32).expect("ordinary pool");
+        assert_eq!(sets[11], "1,2,3");
+        assert_eq!(
+            assignments(&ordinary_host([4]), 4).expect("full pool"),
+            ["0,1,2,3"]
+        );
+        assert_eq!(
+            assignments(&ordinary_host([9]), 4).expect("clamped pool"),
+            ["0,1,2,3"]
+        );
+    }
+
+    fn ordinary_host(widths: impl IntoIterator<Item = u32>) -> LinuxHost {
+        let mut host = host_fixture();
+        let template = host.runners[0].clone();
+        host.runners = widths
+            .into_iter()
+            .map(|cpus| {
+                let mut runner = template.clone();
+                runner.cpus = cpus;
+                runner
+            })
+            .collect();
+        host
+    }
+
+    #[test]
+    fn runner_cpu_sets_do_not_overlap_when_their_widths_fit() {
+        for cores in 1_u32..=8 {
+            let mut pending = vec![Vec::<u32>::new()];
+            while let Some(widths) = pending.pop() {
+                let mut assigned = BTreeSet::new();
+                let host = ordinary_host(widths.iter().copied());
+                for cpus in assignments(&host, usize::try_from(cores).expect("small core count"))
+                    .expect("fitting widths")
+                {
+                    for cpu in cpus.split(',') {
+                        assert!(
+                            assigned.insert(cpu.to_owned()),
+                            "overlapping CPU {cpu}: cores={cores}, widths={widths:?}"
+                        );
+                    }
+                }
+                let used: u32 = widths.iter().sum();
+                for width in 1..=cores - used {
+                    let mut next = widths.clone();
+                    next.push(width);
+                    pending.push(next);
+                }
+            }
+        }
     }
 }
