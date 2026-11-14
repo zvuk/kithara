@@ -2108,41 +2108,49 @@
 # linux-tooling / branch
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --draft --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / platforms
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / main
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / nightly
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / weekly
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / release
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-usdt / branch
