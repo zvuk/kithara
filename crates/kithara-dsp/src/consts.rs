@@ -1,3 +1,6 @@
+/// Frames per diffuser span in its scratch planes.
+pub(crate) const DIFFUSER_SCRATCH_FRAMES: usize = 128;
+
 /// Fewest factors of two in an FFT length vDSP's real DFT builds.
 pub(crate) const FFT_MIN_TWOS: u32 = 4;
 /// Hann window: `w[n] = A0 − A0·cos(2πn / (N − 1))`.

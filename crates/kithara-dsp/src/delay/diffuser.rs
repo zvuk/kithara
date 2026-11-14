@@ -3,9 +3,7 @@ use std::ops::{DerefMut, Range};
 use num_traits::ToPrimitive;
 
 use super::{DelayError, DelayLine, DiffuserError, Tap};
-use crate::backend::platform;
-
-const SCRATCH_FRAMES: usize = 128;
+use crate::{backend::platform, consts};
 
 /// Delay diffusion with `d = read; y = d - x; write = x + g * d`.
 ///
@@ -65,9 +63,9 @@ impl<const CHANNELS: usize> DelayDiffuser<CHANNELS> {
         {
             return Err(DelayError::Shape.into());
         }
-        let mut scratch = [[0.0; SCRATCH_FRAMES]; CHANNELS];
-        let mut writes = [[0.0; SCRATCH_FRAMES]; CHANNELS];
-        let span = self.tap.whole().min(SCRATCH_FRAMES);
+        let mut scratch = [[0.0; consts::DIFFUSER_SCRATCH_FRAMES]; CHANNELS];
+        let mut writes = [[0.0; consts::DIFFUSER_SCRATCH_FRAMES]; CHANNELS];
+        let span = self.tap.whole().min(consts::DIFFUSER_SCRATCH_FRAMES);
         let mut start = range.start;
         while start < range.end {
             let end = start.saturating_add(span).min(range.end);
@@ -85,7 +83,9 @@ impl<const CHANNELS: usize> DelayDiffuser<CHANNELS> {
                 platform::delay_diffuse(samples, history, self.feedback, writes);
             }
             self.line.write(
-                &writes.each_ref().map(<[f32; SCRATCH_FRAMES]>::as_slice),
+                &writes
+                    .each_ref()
+                    .map(<[f32; consts::DIFFUSER_SCRATCH_FRAMES]>::as_slice),
                 0..len,
             )?;
             start = end;
