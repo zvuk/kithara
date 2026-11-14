@@ -680,6 +680,100 @@ fn source_packets(
     packets
 }
 
+fn physical_reference_span(span: SourceSpan, basis: SourceSpan, origin: u64) -> Option<SourceSpan> {
+    let pivot = basis.source_ratio_at(0)?;
+    let inverse = basis.source_inverse(origin)?;
+    let adjacent = inverse.output_at((pivot.0.checked_add(pivot.1.get())?, pivot.1))?;
+    let advance = adjacent
+        .0
+        .checked_sub(u128::from(origin).checked_mul(adjacent.1.get())?)?;
+    span.scaled_from(
+        pivot,
+        (u128::from(origin), std::num::NonZeroU128::MIN),
+        (advance, adjacent.1),
+    )
+}
+
+#[kithara::test]
+fn prepared_physical_reference_preserves_exact_coordinates_and_speed() {
+    let rate = NonZeroU32::new(RATE).expect("reference rate");
+    let denominator = std::num::NonZeroU128::new(17).expect("reference denominator");
+    let approach = SourceSpan::approaching(
+        100_001,
+        denominator,
+        kithara::signal::ExponentialApproach::new(0.73, 1.37, 48.0).expect("reference approach"),
+        5,
+        rate,
+        257,
+    )
+    .expect("analytic reference");
+    let spans = [
+        SourceSpan::try_from((100_001, 7, denominator, rate, 257)).expect("affine reference"),
+        SourceSpan::try_from((100_001, 500, -1, denominator, rate, 257))
+            .expect("accelerating reference"),
+        approach,
+        approach
+            .scaled_from(
+                (0, std::num::NonZeroU128::MIN),
+                (1 << 24, std::num::NonZeroU128::MIN),
+                (
+                    147,
+                    std::num::NonZeroU128::new(160).expect("reference scale"),
+                ),
+            )
+            .expect("transformed analytic reference"),
+    ];
+    for (step, divisor) in [(147, 49), (147, 160), (1, 1)] {
+        let basis = SourceSpan::try_from((
+            503,
+            step,
+            std::num::NonZeroU128::new(divisor).expect("decoded denominator"),
+            rate,
+            512,
+        ))
+        .expect("affine decoded basis");
+        for origin in [0, 50_000, 1 << 24] {
+            let inverse = basis.source_inverse(origin).expect("decoded inverse");
+            for source in spans {
+                for domain in [0..257, 7..251] {
+                    let clipped = source
+                        .for_output_range(domain.clone())
+                        .expect("source slice");
+                    let prepared = physical_reference_span(clipped, basis, origin)
+                        .expect("prepared physical source");
+                    let mut previous = None;
+                    for offset in 0..=clipped.output_frames() {
+                        let expected = inverse
+                            .output_at(
+                                source
+                                    .source_ratio_at(domain.start + offset)
+                                    .expect("raw source"),
+                            )
+                            .expect("pointwise physical source");
+                        let actual = prepared
+                            .source_ratio_at(offset)
+                            .expect("prepared coordinate");
+                        assert_eq!(
+                            actual, expected,
+                            "origin {origin}, domain {domain:?}, frame {offset}"
+                        );
+                        if let Some((before, prepared_before)) = previous {
+                            let expected_speed =
+                                super::control::physical_source_speed(before, expected)
+                                    .expect("pointwise speed");
+                            let actual_speed =
+                                super::control::physical_source_speed(prepared_before, actual)
+                                    .expect("prepared speed");
+                            assert_eq!(actual_speed.to_bits(), expected_speed.to_bits());
+                        }
+                        previous = Some((expected, actual));
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn reference(
     voices: &[Voice],
     capture: &LinkCapture,
@@ -717,36 +811,34 @@ fn reference(
         }
         let mut recording = voice.decoded.lock();
         let decoded = recording.view();
-        let span = interval.source;
+        let source_start = u64::try_from(active.start - interval.start).expect("source offset");
+        let source_end = u64::try_from(active.end - interval.start).expect("source endpoint");
+        let span = interval
+            .source
+            .for_output_range(source_start..source_end)
+            .and_then(|source| {
+                physical_reference_span(source, interval.physical_basis, interval.physical_origin)
+            })
+            .expect("the admitted decoded basis projects the active source interval");
         {
             let mut sample_source = decoded
                 .sampler_at_domain(interval.identity, [0, 1], interval.physical_domain.clone())
                 .unwrap_or_else(|error| {
                     panic!("source {:?} session {}: {error}", voice.item, active.start)
                 });
-            let physical_inverse = interval
-                .physical_basis
-                .source_inverse(interval.physical_origin)
-                .expect("the admitted decoded basis is invertible");
             // A frame's endpoint is the next frame's start, so each coordinate is
             // projected once and carried into the following frame.
             let mut carried = None;
+            let active_start = active.start;
             for session in active {
-                let offset = u64::try_from(session - interval.start).expect("source offset");
+                let offset = u64::try_from(session - active_start).expect("source offset");
                 let physical = carried.take().unwrap_or_else(|| {
-                    let raw = span
-                        .source_ratio_at(offset)
-                        .expect("physical source coordinate");
-                    physical_inverse
-                        .output_at(raw)
+                    span.source_ratio_at(offset)
                         .expect("actual decoded physical coordinate")
                 });
-                let next = span
+                let endpoint = span
                     .source_ratio_at(offset + 1)
                     .expect("physical source endpoint");
-                let endpoint = physical_inverse
-                    .output_at(next)
-                    .expect("actual decoded physical endpoint");
                 carried = Some(endpoint);
                 let speed = super::control::physical_source_speed(physical, endpoint)
                     .expect("actual source speed");
