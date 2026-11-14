@@ -1,7 +1,6 @@
-#[cfg(feature = "resample-rubato")]
-use std::num::NonZeroU32;
 use std::{
     io::{self, Cursor, ErrorKind, Seek, SeekFrom},
+    num::NonZeroU32,
     ops::Range,
     sync::{
         Mutex,
@@ -13,7 +12,7 @@ use kithara_bufpool::PoolRegion;
 use kithara_platform::{sync::Arc, time::Duration};
 #[cfg(feature = "resample-rubato")]
 use kithara_resampler::{ResamplerOptions, rubato::RubatoBackend};
-use kithara_signal::AudioChunk;
+use kithara_signal::{AudioChunk, AudioChunkInfo, SourceSpan};
 #[cfg(feature = "symphonia")]
 use kithara_stream::AudioCodec;
 use kithara_stream::{ByteMap, ConstructionGate, NotReadyCause, PendingReason, SegmentDescriptor};
@@ -411,6 +410,75 @@ fn assert_pending_preparation_recovers_after_shrink(
     panic!("committed segment must produce PCM within the preparation budget");
 }
 
+fn source_intervals(chunks: &[AudioChunkInfo]) -> Vec<(AudioChunkInfo, SourceSpan)> {
+    let mut intervals: Vec<(AudioChunkInfo, SourceSpan)> = Vec::new();
+    for chunk in chunks {
+        assert!(chunk.frames > 0);
+        let span = chunk.source_geometry().expect("valid source geometry");
+        assert_eq!(span.start(), chunk.frame_range().start);
+        assert_eq!(span.end(), chunk.frame_range().end);
+        assert_eq!(
+            chunk.spec.frame_at(chunk.end_timestamp).expect("valid end"),
+            chunk.frame_range().end
+        );
+        let mut identity = *chunk;
+        identity.frames = 0;
+        identity.frame_offset = 0;
+        identity.timestamp = Duration::ZERO;
+        identity.end_timestamp = Duration::ZERO;
+        identity.source_span = None;
+        // Native decode-call byte charges do not define a PCM presentation interval.
+        identity.source_bytes = 0;
+        if let Some((previous, geometry)) = intervals.last_mut()
+            && *previous == identity
+            && let Some(joined) = geometry.followed_by(span)
+        {
+            *geometry = joined;
+        } else {
+            intervals.push((identity, span));
+        }
+    }
+    intervals
+}
+
+#[kithara::test]
+fn source_intervals_preserve_coverage_across_native_output_batching() {
+    let spec =
+        kithara_signal::AudioSpec::new(2, NonZeroU32::new(44_100).expect("nonzero test rate"));
+    let chunk = |start, frames| AudioChunkInfo {
+        spec,
+        timestamp: spec.duration_for(start).expect("start"),
+        end_timestamp: spec.duration_for(start + u64::from(frames)).expect("end"),
+        frame_offset: start,
+        frames,
+        segment_index: Some(0),
+        variant_index: Some(0),
+        ..AudioChunkInfo::default()
+    };
+    let separate = [chunk(0, 4_608), chunk(4_608, 4_608), chunk(9_216, 4_608)];
+    let batched = [chunk(0, 9_216), chunk(9_216, 4_608)];
+    let expected = source_intervals(&separate);
+    assert_eq!(source_intervals(&batched), expected);
+    assert_ne!(source_intervals(&separate[..2]), expected, "lost tail");
+    assert_ne!(
+        source_intervals(&[separate[0], separate[2]]),
+        expected,
+        "missing source interval"
+    );
+    assert_ne!(
+        source_intervals(&[separate[0], separate[0], separate[1], separate[2]]),
+        expected,
+        "duplicated source interval"
+    );
+    let mut mislabeled = separate;
+    mislabeled[1].segment_index = Some(1);
+    assert_ne!(
+        source_intervals(&mislabeled),
+        expected,
+        "wrong source segment"
+    );
+}
+
 #[kithara::test]
 fn complete_flac_pcm_survives_live_segment_shrink(flac_three: (Vec<u8>, FakeSegmented)) {
     let (blob, segmented) = flac_three;
@@ -499,12 +567,13 @@ fn complete_flac_pcm_survives_live_segment_shrink(flac_three: (Vec<u8>, FakeSegm
         "layout correction must not skip a segment"
     );
     assert_eq!(
-        actual.1, expected.1,
-        "layout correction must preserve every source interval"
-    );
-    assert_eq!(
         actual.0, expected.0,
         "layout correction must preserve every PCM bit"
+    );
+    assert_eq!(
+        source_intervals(&actual.1),
+        source_intervals(&expected.1),
+        "layout correction must preserve every source interval"
     );
 }
 
