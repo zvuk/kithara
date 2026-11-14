@@ -1,6 +1,7 @@
 use kithara_command::{Rejection, Seq, When};
-use kithara_play::{Outbox, PlayError, Position, Settled, Track, TrackCommand, TrackStatus};
-use kithara_signal::{FrameCount, SegmentId, SessionFrame};
+use kithara_play::{Outbox, PlayError, Position, Track, TrackCommand, TrackStatus};
+use kithara_render::LaneFrame;
+use kithara_signal::{FrameCount, SessionFrame};
 use kithara_sync::{Slew, SlewCause, slew};
 
 use super::{
@@ -20,42 +21,36 @@ pub(super) enum Corrected {
 }
 
 impl<P> Linked<P> {
-    pub(super) fn drain_speed_receipts<S>(&mut self)
+    pub(super) fn drain_lane_receipts<S>(&mut self)
     where
         P: Track<S>,
     {
-        if self.speeds.is_empty() {
-            return;
-        }
-        while let Some(receipt) = self.inner.speed_receipt() {
-            match receipt {
-                Settled::Pending => {}
-                Settled::Applied { seq, at } => self.speed_applied(seq, at),
-                Settled::Rejected { seq, reason } => self.speed_rejected::<S>(seq, &reason),
-            }
-        }
+        while self.lane_receipt().is_some() {}
     }
 
     /// An applied correction runs from `at`; any other applied speed is done.
-    fn speed_applied(&mut self, seq: Seq, at: SessionFrame) {
-        let Some((_, operation)) = self.speeds.iter_mut().find(|(pending, _)| *pending == seq)
-        else {
+    pub(super) fn correction_applied(&mut self, seq: Seq, lane: LaneFrame) {
+        let Some(index) = self.speeds.iter().position(|(pending, _)| *pending == seq) else {
             return;
         };
-        match operation {
+        match &mut self.speeds[index].1 {
             SpeedOperation::Correction { state, .. } => {
-                if let CorrectionState::Pending(correction) = state {
-                    *state = CorrectionState::Applied(RunningCorrection { at, ..*correction });
+                if let CorrectionState::Pending(correction, mark) = state {
+                    if let Some(at) = mark.session_at(lane) {
+                        *state = CorrectionState::Applied(RunningCorrection { at, ..*correction });
+                    } else {
+                        self.speeds.remove(index);
+                    }
                 }
             }
             SpeedOperation::Alignment | SpeedOperation::Relocation { .. } => {
-                self.speeds.retain(|(pending, _)| *pending != seq);
+                self.speeds.remove(index);
             }
         }
     }
 
     /// A synchronized track owes a refused speed's step again.
-    fn speed_rejected<S>(&mut self, seq: Seq, reason: &Rejection<PlayError>)
+    pub(super) fn speed_rejected<S>(&mut self, seq: Seq, reason: &Rejection<PlayError>)
     where
         P: Track<S>,
     {
@@ -96,14 +91,9 @@ impl<P> Linked<P> {
         let Some(grid) = self.grid.as_ref() else {
             return Err(PlayError::NotReady);
         };
-        let segment = self
-            .inner
-            .snapshot()
-            .as_ref()
-            .mark
-            .ok_or(PlayError::NotReady)?
-            .lane
-            .segment;
+        if self.inner.snapshot().as_ref().mark.is_none() {
+            return Err(PlayError::NotReady);
+        }
         let (position, from) = self.planned::<S>(at)?;
         if !covers(grid.geometry(), position) {
             return Err(PlayError::NotReady);
@@ -129,7 +119,7 @@ impl<P> Linked<P> {
             law,
             self.horizon(),
         );
-        self.close_phase(planned, cause, at, segment, out)
+        self.close_phase(planned, cause, at, out)
     }
 
     /// Sends what closes the phase: the speed law of a slew, or a relocation.
@@ -138,7 +128,6 @@ impl<P> Linked<P> {
         planned: Option<Slew>,
         cause: Cause,
         at: SessionFrame,
-        segment: SegmentId,
         out: &mut Outbox<'_, S>,
     ) -> Result<Corrected, PlayError>
     where
@@ -170,11 +159,20 @@ impl<P> Linked<P> {
         };
         let sent = self.inner.apply(speed, out)?;
         if let Some(seq) = sent {
-            let state = CorrectionState::Pending(RunningCorrection {
-                at,
-                frames,
-                segment,
-            });
+            let mark = self
+                .inner
+                .snapshot()
+                .as_ref()
+                .mark
+                .ok_or(PlayError::Untimed)?;
+            let state = CorrectionState::Pending(
+                RunningCorrection {
+                    at,
+                    frames,
+                    segment: mark.lane.segment,
+                },
+                mark,
+            );
             self.speeds
                 .push((seq, SpeedOperation::Correction { cause, state }));
             self.plan_sent(at, coverage);

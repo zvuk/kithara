@@ -121,8 +121,7 @@ impl Track<TestPools> for RampedTrack {
             fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_, TestPools>) -> Result<bool, PlayError>;
             fn planned(&self, at: SessionFrame, sample_rate: NonZeroU32) -> Result<(Duration, f64), PlayError>;
             fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;
-            fn speed_receipt(&mut self) -> Option<Settled>;
-            fn speed_applied(&mut self, seq: Seq) -> Option<bool>;
+            fn lane_receipt(&mut self) -> Option<Settled<kithara_render::LaneFrame>>;
             fn seek(&mut self, to: Duration, out: &mut Outbox<'_, TestPools>) -> Result<Option<SeekBatch>, PlayError>;
             fn seek_applied(&mut self, seq: Seq) -> Option<bool>;
             fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);

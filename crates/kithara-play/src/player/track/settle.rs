@@ -15,7 +15,6 @@ use super::{
         settings::TrackSettingsChange,
     },
     core::PlayerImpl,
-    geometry::session_at,
     segment::{Adoption, Segment},
     state::*,
 };
@@ -389,10 +388,9 @@ impl<S> PlayerImpl<S> {
         }
     }
 
-    fn apply_lane(&mut self, seq: Seq, at: LaneFrame, data: &LaneApplied, segment: bool) {
+    fn apply_lane(&mut self, seq: Seq, at: LaneFrame, data: &LaneApplied) {
         self.segment.answer_request(seq, Ok(()));
         let operations = self.lane_history.answered(seq);
-        let mut speed_session = None;
         for operation in operations {
             tracing::debug!(
                 item = u64::from(self.item),
@@ -407,15 +405,8 @@ impl<S> PlayerImpl<S> {
                 command = ?operation.command,
                 "lane command settled"
             );
-            let session = match operation.when {
-                When::At(requested) if requested == at => operation.session,
-                _ => self.mark.and_then(|mark| session_at(mark, at)),
-            };
             operation.when = When::At(at);
-            operation.applied = Some(true);
-            if matches!(&operation.command, LaneCommand::SetSpeed(_)) {
-                speed_session = Some(session);
-            }
+            operation.applied = true;
             if let LaneCommand::Segment { id, from, .. } = operation.command
                 && data.ready == Some(id)
                 && id == self.segment.id
@@ -428,13 +419,6 @@ impl<S> PlayerImpl<S> {
                 }
             }
         }
-        if let Some(session) = speed_session
-            && !segment
-        {
-            self.lane_history
-                .speed_answers
-                .push_back((seq, Ok((at, session))));
-        }
         self.accept_ready(seq, data);
     }
 
@@ -444,29 +428,39 @@ impl<S> PlayerImpl<S> {
         }
         while let Some(receipt) = self.lane.as_mut().and_then(|lane| lane.receipts().next()) {
             self.settings.settle(&receipt);
-            let segment = receipt
-                .batch()
-                .commands
-                .iter()
-                .any(|command| matches!(command, LaneCommand::Segment { .. }));
-            if let Outcome::Applied { at, data } = receipt.outcome() {
-                self.apply_lane(receipt.seq(), *at, data, segment);
-            } else if let Outcome::Rejected(reason) = receipt.outcome() {
-                self.segment.answer_request(receipt.seq(), Err(*reason));
-                let mut speed = false;
-                for operation in self.lane_history.answered(receipt.seq()) {
-                    operation.applied = Some(false);
-                    speed |= matches!(operation.command, LaneCommand::SetSpeed(_));
+            let seq = receipt.seq();
+            let settled = match receipt.outcome() {
+                Outcome::Applied { at, data } => {
+                    self.apply_lane(seq, *at, data);
+                    Settled::Applied { seq, at: *at }
                 }
-                if speed && !segment {
-                    self.lane_history.speed_answers.push_back((
-                        receipt.seq(),
-                        Err(rejection(reason, |failure| PlayError::Lane(*failure))),
-                    ));
+                Outcome::Rejected(reason) => {
+                    self.segment.answer_request(seq, Err(*reason));
+                    self.lane_history.retain(|operation| operation.seq != seq);
+                    warn!(?reason, "lane command was rejected");
+                    Settled::Rejected {
+                        seq,
+                        reason: rejection(reason, |failure| PlayError::Lane(*failure)),
+                    }
                 }
-                warn!(?reason, "lane command was rejected");
-            }
+            };
+            self.lane_history.receipts.push_back(settled);
         }
+        let current = self.segment.id;
+        let adoptions = &self.adoptions;
+        self.lane_history.retain(|operation| {
+            if !operation.applied {
+                return true;
+            }
+            let live = |segment| {
+                segment == current || adoptions.inflight.iter().any(|adoption| {
+                    adoption.segment == segment || adoption.parked.is_some_and(|(parked, _)| parked == segment)
+                })
+            };
+            live(operation.segment)
+                || matches!(operation.when, When::At(at) if live(at.segment))
+                || matches!(operation.command, LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. } if live(id))
+        });
         self.reserved_ready();
     }
 }

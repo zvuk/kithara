@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_command::{Seq, When};
-use kithara_render::bridge::DeckPart;
+use kithara_render::{LaneFrame, bridge::DeckPart};
 use kithara_signal::SessionFrame;
 use kithara_sync::SpeedCurve;
 
@@ -65,11 +65,9 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
     /// Returns when the playing segment has no usable mark or effective clock.
     fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;
 
-    /// Takes a final speed verdict already drained by the track's lane owner.
-    fn speed_receipt(&mut self) -> Option<Settled>;
-
-    /// Whether the lane accepted a particular speed batch, once it answered.
-    fn speed_applied(&mut self, seq: Seq) -> Option<bool>;
+    /// Takes one producer result in its lane clock. The driver drains these
+    /// each turn, through every decorator that owns matching work.
+    fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>>;
 
     /// Whether the track holds a deck slot or is joining one.
     fn attached(&self) -> bool {
@@ -95,10 +93,9 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
         Ok(sent.map(batch))
     }
 
-    /// Whether the seek sent as lane batch `seq` took effect, once that is final.
-    fn seek_applied(&mut self, seq: Seq) -> Option<bool> {
-        self.speed_applied(seq)
-    }
+    /// The seek's result while its lane effect is live; an unanswered batch
+    /// returns None and a retired request returns false.
+    fn seek_applied(&mut self, seq: Seq) -> Option<bool>;
 
     /// Binds a staged attachment to its shared batch or restores returned parts.
     fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);

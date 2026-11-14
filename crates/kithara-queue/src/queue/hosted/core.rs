@@ -7,7 +7,7 @@ use kithara_platform::sync::Arc;
 use kithara_play::{
     DeckEvent, DeckMixerConfig, DeckPass, DeckProtocol, DeckRefusal, DispatcherProtocol,
     HostedDeck, ItemRole, LoadRefusal, Outbox, OutputSnapshot, PlayError, PlayWorker,
-    PlaybackFault, Player, PlayerEvent, ResourceLoad, Settled, TrackCommand, TrackFactory,
+    PlaybackFault, Player, PlayerEvent, ResourceLoad, Settled, Track, TrackCommand, TrackFactory,
     TrackReceipt, TrackRef, TrackStatus as PlayingStatus,
 };
 use kithara_signal::SessionFrame;
@@ -385,6 +385,9 @@ where
         self.reap_released();
         if self.active.parked_len() < parked {
             self.pump_loads(output, out);
+        }
+        for track in self.active.tracks_mut() {
+            while track.lane_receipt().is_some() {}
         }
         self.publish();
     }

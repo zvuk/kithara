@@ -251,10 +251,6 @@ impl<S> PlayerImpl<S> {
         if self.adoptions.cancelling() {
             return Err(PlayError::NotReady);
         }
-        let session = match when {
-            When::At(frame) => self.mark.and_then(|mark| session_at(mark, frame)),
-            When::Next | When::Deferred => None,
-        };
         let lane = self.lane.as_mut().ok_or(PlayError::NotReady)?;
         let seq = Outbox::<S>::lane(lane, when, commands.clone())?;
         self.lane_history
@@ -295,9 +291,8 @@ impl<S> PlayerImpl<S> {
                     seq,
                     when,
                     segment: self.segment.id,
-                    session,
                     command,
-                    applied: None,
+                    applied: false,
                 }
             }));
         Ok(seq)

@@ -5,6 +5,7 @@ use kithara_platform::time::Duration;
 use kithara_play::{
     Outbox, PlayError, Player, Position, Settled, Track, TrackClock, TrackCommand, TrackSnapshot,
 };
+use kithara_render::bridge::SlotMark;
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 
 use crate::{GridAnswer, LinkError, LinkedConfig, TempoTrajectory};
@@ -227,7 +228,7 @@ pub(super) struct RunningCorrection {
 }
 
 pub(super) enum CorrectionState {
-    Pending(RunningCorrection),
+    Pending(RunningCorrection, SlotMark),
     Applied(RunningCorrection),
 }
 
@@ -350,7 +351,7 @@ impl<P> Linked<P> {
             let SpeedOperation::Correction { state, .. } = operation else {
                 return true;
             };
-            let (CorrectionState::Pending(correction) | CorrectionState::Applied(correction)) =
+            let (CorrectionState::Pending(correction, _) | CorrectionState::Applied(correction)) =
                 state;
             correction.segment > mark.lane.segment
                 || correction.segment == mark.lane.segment

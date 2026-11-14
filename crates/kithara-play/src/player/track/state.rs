@@ -5,7 +5,7 @@ use std::{
 };
 
 use kithara_abr::AbrHandle;
-use kithara_command::{Rejection, Seq, When};
+use kithara_command::{Seq, When};
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
@@ -18,7 +18,7 @@ use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
 
 use super::super::settings::TrackSettingsChange;
-use crate::{PlayError, ResourceLoad};
+use crate::{ResourceLoad, Settled};
 
 /// A position in a track's media.
 pub type Position = Duration;
@@ -219,9 +219,8 @@ pub(super) struct LaneOperation {
     pub(super) seq: Seq,
     pub(super) when: When<LaneFrame>,
     pub(super) segment: SegmentId,
-    pub(super) session: Option<SessionFrame>,
     pub(super) command: LaneCommand,
-    pub(super) applied: Option<bool>,
+    pub(super) applied: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -247,11 +246,6 @@ pub(super) struct PlaybackOperation {
     /// The newest applied envelope descendant of this pending transport.
     pub(super) transparent: Option<Seq>,
 }
-
-pub(super) type SpeedAnswer = (
-    Seq,
-    Result<(LaneFrame, Option<SessionFrame>), Rejection<PlayError>>,
-);
 
 pub(super) enum Configuring {
     Apply(TrackSettingsChange),
@@ -286,15 +280,15 @@ pub(super) struct SpeedProjection {
     pub(super) speed: f32,
 }
 
-/// Every lane command a track has sent, with its final acceptance bit.
+/// Unanswered commands and effects still needed by live segments.
 ///
 /// `speed_projection` is derived from `commands`, so the history changes only
-/// through `submit` and `answered`, which both drop it. `speed_answers` holds
-/// the settled speed commands until their callers collect them.
+/// through intake and submission, which invalidate it. Producer feedback is
+/// taken once by the driver, independently of retained planning effects.
 #[derive(Default)]
 pub(super) struct LaneHistory {
     pub(super) commands: Vec<LaneOperation>,
-    pub(super) speed_answers: VecDeque<SpeedAnswer>,
+    pub(super) receipts: VecDeque<Settled<LaneFrame>>,
     /// Entries name every projection input other than `commands`.
     pub(super) speed_projection: Cell<Option<SpeedProjection>>,
 }
@@ -303,6 +297,14 @@ impl LaneHistory {
     pub(super) fn submit(&mut self, operations: impl IntoIterator<Item = LaneOperation>) {
         self.speed_projection.set(None);
         self.commands.extend(operations);
+    }
+
+    pub(super) fn retain(&mut self, keep: impl FnMut(&LaneOperation) -> bool) {
+        let before = self.commands.len();
+        self.commands.retain(keep);
+        if self.commands.len() != before {
+            self.speed_projection.set(None);
+        }
     }
 
     /// The operations one lane receipt answers.

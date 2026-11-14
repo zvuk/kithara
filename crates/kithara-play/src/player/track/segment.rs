@@ -58,6 +58,10 @@ impl Segment {
         }
     }
 
+    pub(super) fn request_seq(&self) -> Option<Seq> {
+        self.request.map(|request| request.seq)
+    }
+
     pub(super) fn request_verdict(&self) -> Option<Result<(), Rejection<TrackFailureKind>>> {
         self.request.and_then(|request| request.verdict)
     }

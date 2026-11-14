@@ -7,7 +7,7 @@ use kithara_play::{
     SeekBatch, Settled, Track, TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange,
     TrackStatus,
 };
-use kithara_render::{bridge::DeckPart, rt::DeckMixerConfig};
+use kithara_render::{LaneFrame, bridge::DeckPart, rt::DeckMixerConfig};
 use kithara_signal::{FrameCount, SessionFrame};
 use tracing::warn;
 
@@ -435,7 +435,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
     fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
         self.keep_clock(out);
         self.inner.tick(now, out);
-        self.drain_speed_receipts::<S>();
+        self.drain_lane_receipts::<S>();
         self.update_correction::<S>();
         if self.synced() {
             self.renew_plan(out);
@@ -559,7 +559,7 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
     }
 
     fn seek_applied(&mut self, seq: Seq) -> Option<bool> {
-        self.drain_speed_receipts::<S>();
+        self.drain_lane_receipts::<S>();
         match self.relocation {
             Some(Relocation {
                 caller,
@@ -580,6 +580,16 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
         }
     }
 
+    fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>> {
+        let receipt = self.inner.lane_receipt()?;
+        match &receipt {
+            Settled::Applied { seq, at } => self.correction_applied(*seq, *at),
+            Settled::Rejected { seq, reason } => self.speed_rejected::<S>(*seq, reason),
+            Settled::Pending => {}
+        }
+        Some(receipt)
+    }
+
     fn follows_host(&self) -> bool {
         LinkedPlayer::<S>::synced(self)
     }
@@ -597,8 +607,6 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
                 &self,
                 sample_rate: std::num::NonZeroU32,
             ) -> Result<Option<SessionFrame>, PlayError>;
-            fn speed_receipt(&mut self) -> Option<Settled>;
-            fn speed_applied(&mut self, seq: Seq) -> Option<bool>;
             fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);
         }
     }

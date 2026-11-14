@@ -1454,7 +1454,7 @@ fn worker_handoff_geometry_derives_source_output_and_beat_together() {
             u64::try_from(at).expect("forward session frame")
         );
         assert_eq!(
-            session_at(track.mark.expect("applied mark"), lane),
+            track.mark.expect("applied mark").session_at(lane),
             Some(frame(at))
         );
         assert_eq!(position.as_secs_f64() * 2.0, beat);
@@ -3739,28 +3739,22 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
             track.settle_lane();
             assert_eq!(track.snapshot().speed, 1.5);
             assert!(!track.segment.ready);
-            let operations = track
-                .lane_history
-                .commands
-                .iter()
-                .filter(|operation| operation.seq == seq)
-                .collect::<Vec<_>>();
-            assert_eq!(operations.len(), 2);
             assert!(
-                operations
+                track
+                    .lane_history
+                    .commands
                     .iter()
-                    .all(|operation| operation.applied == Some(false))
+                    .all(|operation| operation.seq != seq)
             );
             assert_eq!(
                 track.segment.request_verdict(),
                 Some(Err(Rejection::Unanswered))
             );
+            let receipt = std::iter::from_fn(|| track.lane_receipt()).find(|receipt| {
+                matches!(receipt, Settled::Applied { seq: answered, .. } | Settled::Rejected { seq: answered, .. } if *answered == seq)
+            });
             assert!(
-                track
-                    .lane_history
-                    .speed_answers
-                    .iter()
-                    .all(|(answered, _)| *answered != seq)
+                matches!(receipt, Some(Settled::Rejected { seq: answered, reason: Rejection::Unanswered }) if answered == seq)
             );
         }
     }
@@ -4238,13 +4232,7 @@ fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
         track.planned_end(rate).expect("new curve"),
         Some(frame(113))
     );
-    track
-        .lane_history
-        .commands
-        .iter_mut()
-        .find(|operation| operation.seq == seq)
-        .expect("accepted speed")
-        .applied = Some(false);
+    track.lane_history.retain(|operation| operation.seq != seq);
     assert_eq!(
         track.planned_end(rate).expect("withdrawn curve"),
         Some(frame(107))
