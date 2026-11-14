@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, panic::resume_unwind};
 
 use kithara_abr::AbrState;
 use kithara_decode::{
@@ -350,7 +350,10 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
 #[kithara::test(tokio)]
 async fn rebuild_factory_panic_fails_track_without_hang() {
     let mut source = test_source(1).await.source;
-    source.factory = DecoderFactory::new(|_, _, _| panic!("decoder construction blew up"), None);
+    source.factory = DecoderFactory::new(
+        |_, _, _| resume_unwind(Box::new("decoder construction blew up")),
+        None,
+    );
     let wake = PreparationWake::install(&mut source);
     source.set_host_sample_rate(NonZeroU32::new(96_000).expect("host rate"));
     wait_for_source_change(&mut source, &wake).await;
