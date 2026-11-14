@@ -29,19 +29,33 @@ catalog unchanged.
 ## Usage
 
 ```rust
-use kithara_ui_shaping::{FontFamily, FontWeight, TextContext, TextStyle};
+use std::{collections::BTreeMap, sync::Arc};
+use kithara_ui_shaping::{
+    FontFamily, FontId, FontPolicy, FontWeight, GlyphFace, TextContext, TextResources, TextStyle,
+};
 
-let mut text = TextContext::new()?;
+let resources = TextResources::with_fonts(
+    FontPolicy::Embedded,
+    BTreeMap::from([(
+        FontFamily::Sans,
+        vec![Arc::from(FontId::JetBrainsMonoRegular.bytes())],
+    )]),
+)?;
+let mut text = TextContext::from(&resources);
 let style = TextStyle {
     font: FontFamily::Sans,
-    weight: FontWeight::Semibold,
+    weight: FontWeight::Normal,
     size: 12.0,
     spacing: 0.0,
 };
 let run = text.shape("GAIN", style, None);
 assert!(run.width() > 0.0);
+assert!(matches!(run.segments()[0].face(), GlyphFace::System(_)));
 # Ok::<(), kithara_ui_shaping::TextError>(())
 ```
+
+The example registers a bundled face as a skin face; applications can pass
+their own `Arc<[u8]>` font data in the same map.
 
 ## Key Types
 
