@@ -259,7 +259,7 @@ fn plan(
     let (curve, frames, coverage) = curve(
         &steady_host(),
         source,
-        Duration::ZERO,
+        0.0,
         Span {
             start: SessionFrame::new(0),
             landing: None,
@@ -434,7 +434,7 @@ fn a_renewal_from_the_planned_position_continues_the_unbounded_plan() {
     let (second, _, _) = curve(
         &steady_host(),
         &source,
-        planned,
+        planned.as_secs_f64(),
         Span {
             start: SessionFrame::new(i64::try_from(seam).expect("seam")),
             landing: None,

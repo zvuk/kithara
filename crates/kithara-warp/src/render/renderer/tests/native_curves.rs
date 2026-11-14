@@ -1,9 +1,12 @@
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::{NonZeroU16, NonZeroU64, NonZeroUsize};
 
-use kithara_platform::sync::Arc;
-use kithara_signal::ExponentialApproach;
-use kithara_sync::SpeedCurve;
-use kithara_test_fixtures::signal::{Wave, deinterleave_left, goertzel_magnitude, mean_abs};
+use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::{ExponentialApproach, SessionFrame};
+use kithara_sync::{
+    SessionBeat, Slew, SlewCause, SourceGrid, SpeedCurve, Tempo, TempoStep, TempoTrajectory,
+    TrackBeat, TrackGrid, phase_error, slew,
+};
+use kithara_test_fixtures::signal::{Wave, deinterleave_left, goertzel_magnitude, mean_abs, rms};
 use num_traits::ToPrimitive;
 
 use super::*;
@@ -25,6 +28,7 @@ const ENVELOPE_FRAMES: usize = 32;
 const ONSET_TOLERANCE: f64 = 240.0;
 const TONE_HZ: f64 = 440.0;
 const PITCH_WINDOW: usize = 12_000;
+const FIRST_GESTURE_FRAME: usize = 24_001;
 
 /// Renders `frames` output frames of a held level from source frame `source` on.
 fn render_held(renderer: &mut WarpRenderer<TestPools>, source: &mut u64, frames: usize) {
@@ -391,12 +395,30 @@ fn render_controls(
         while let Some((_, revision, curve)) =
             controls.next_if(|(frame, _, _)| *frame == output_frame)
         {
+            if output_frame == FIRST_GESTURE_FRAME {
+                let projection = renderer
+                    .projection
+                    .as_ref()
+                    .expect("native output is prepared");
+                assert!(
+                    projection.offset < projection.buffers[0].len(),
+                    "the first gesture interrupts a cached native packet"
+                );
+            }
             renderer.set_speed(curve, revision).expect("accepted tempo");
             assert!(renderer.trajectory.requires_quanta());
         }
         renderer
             .prepare_engine_latency(spec)
             .expect("continuous engine");
+        if let Some((frame, _, curve)) = controls.peek() {
+            renderer
+                .anticipate_speed(
+                    curve,
+                    u64::try_from(*frame - output_frame).expect("future control lead"),
+                )
+                .expect("next native control is observable");
+        }
         let capabilities = renderer
             .engine
             .as_ref()
@@ -562,7 +584,7 @@ fn gesture_steps(high: f64) -> Vec<GestureStep> {
     }];
     for index in 0..100 {
         // Leave native output queued when the first tempo command arrives.
-        let frame = 24_001 + index * 960;
+        let frame = FIRST_GESTURE_FRAME + index * 960;
         let at = frame.to_f64().expect("gesture frame");
         let previous = steps.last().expect("initial tempo");
         steps.push(GestureStep {
@@ -580,13 +602,13 @@ fn gesture_source_at(steps: &[GestureStep], frame: f64) -> f64 {
     steps[index - 1].source_at(frame)
 }
 
-fn gesture_output_at(steps: &[GestureStep], source: f64) -> f64 {
+fn gesture_output_at(source: f64, source_at: impl Fn(f64) -> f64) -> f64 {
     let mut lower = 0.0;
     let mut upper = CAPTURE_FRAMES.to_f64().expect("capture duration");
-    assert!(gesture_source_at(steps, upper) > source);
+    assert!(source_at(upper) > source);
     for _ in 0..64 {
         let middle = (lower + upper) * 0.5;
-        if gesture_source_at(steps, middle) < source {
+        if source_at(middle) < source {
             lower = middle;
         } else {
             upper = middle;
@@ -641,7 +663,7 @@ fn native_tempo_gestures_keep_physical_kicks_and_pitch_on_the_accepted_curve(
         );
         let kicks = deinterleave_left(&whole, 2);
         for (index, &source) in source_onsets.iter().enumerate() {
-            let expected = gesture_output_at(&steps, source);
+            let expected = gesture_output_at(source, |frame| gesture_source_at(&steps, frame));
             let actual = kick_onset(&kicks, expected);
             assert!(
                 (actual - expected).abs() <= ONSET_TOLERANCE,
@@ -667,5 +689,218 @@ fn native_tempo_gestures_keep_physical_kicks_and_pitch_on_the_accepted_curve(
                 "{backend:?}, high={high}, output {first}: held={held}, shifted={shifted}"
             );
         }
+    }
+}
+
+fn accepted_area(laws: &[(u64, ExponentialApproach)], end: f64) -> f64 {
+    laws.iter()
+        .enumerate()
+        .filter_map(|(index, (at, law))| {
+            let start = at.to_f64().expect("law boundary");
+            let after = laws
+                .get(index + 1)
+                .map_or(end, |(next, _)| next.to_f64().expect("next law boundary"));
+            let through = end.min(after);
+            (through > start).then(|| {
+                law.advance_over(0.0, through - start)
+                    .expect("accepted analytic area")
+            })
+        })
+        .sum()
+}
+
+struct CommandedGesture {
+    controls: Vec<(usize, u64, SpeedCurve)>,
+    clock: Vec<f64>,
+}
+
+fn commanded_gesture(high: f64, initial: f32) -> CommandedGesture {
+    const COMMANDS: usize = 100;
+    const INTERVAL: usize = 960;
+    let rate = NonZeroU32::new(SAMPLE_RATE).expect("source rate");
+    let model = TrackGrid::new(
+        (0..=32)
+            .map(|ordinal| TrackBeat {
+                at: 0.125 + f64::from(ordinal) * 0.5,
+                ordinal: i64::from(ordinal),
+            })
+            .collect(),
+        Vec::new(),
+        None,
+        120.0,
+        Some(16.125),
+    )
+    .expect("source grid stays a quarter beat behind its declared source time");
+    let source = SourceGrid::new(&model, rate, None, false).expect("covered source geometry");
+    let mut host = TempoTrajectory::new(
+        TempoStep {
+            frame: SessionFrame::new(0),
+            beat: SessionBeat::default(),
+            tempo: Tempo::new(126.0).expect("reference tempo"),
+        },
+        NonZeroU16::new(4).expect("meter"),
+        rate,
+    );
+    let initial = f64::from(initial);
+    let mut laws = vec![(
+        0,
+        ExponentialApproach::new(initial, initial, 0.0).expect("initial native rate"),
+    )];
+    let mut controls = Vec::with_capacity(COMMANDS);
+    let mut clock = Vec::with_capacity(CAPTURE_FRAMES + 1);
+    let mut origin_frame = 0;
+    let mut origin_source = 0.0;
+    clock.push(0.0);
+    for frame in 0..CAPTURE_FRAMES {
+        if frame >= FIRST_GESTURE_FRAME
+            && (frame - FIRST_GESTURE_FRAME).is_multiple_of(INTERVAL)
+            && controls.len() < COMMANDS
+        {
+            let elapsed = (frame - origin_frame)
+                .to_f64()
+                .expect("elapsed accepted frames");
+            origin_source += accepted_area(&laws, elapsed);
+            let (start, law) = laws
+                .iter()
+                .rev()
+                .find(|(at, _)| at.to_f64().expect("law boundary") <= elapsed)
+                .expect("a current accepted law");
+            let from = law
+                .rate_at(elapsed - start.to_f64().expect("current law boundary"))
+                .expect("actual accepted velocity");
+            let at = SessionFrame::new(i64::try_from(frame).expect("command session frame"));
+            let target = if controls.len() % 2 == 0 { high } else { 126.0 };
+            host.push(at, Tempo::new(target).expect("target tempo"))
+                .expect("real Host tempo smoothing");
+            let cue = Duration::from_secs_f64(origin_source / f64::from(SAMPLE_RATE));
+            let phase = phase_error(&host, &source, cue, at).expect("covered source phase");
+            assert!(
+                phase.beats.min(phase.period - phase.beats) > 0.1,
+                "the gesture exercises an active source phase correction"
+            );
+            let Some(Slew::Corrects { curve, .. }) = slew(
+                &host,
+                &source,
+                cue,
+                at,
+                0.001,
+                SlewCause::Commanded { from },
+                4 * u64::from(SAMPLE_RATE),
+            ) else {
+                panic!("the Host/source pair admits the tempo programme");
+            };
+            laws = match &curve {
+                SpeedCurve::Constant(speed) => vec![(
+                    0,
+                    ExponentialApproach::new(f64::from(*speed), f64::from(*speed), 0.0)
+                        .expect("constant accepted law"),
+                )],
+                SpeedCurve::Approach(law) => vec![(0, *law)],
+                SpeedCurve::ApproachSteps(parts) => parts.to_vec(),
+                other => panic!("unexpected source programme: {other:?}"),
+            };
+            let revision = u64::try_from(controls.len() + 1).expect("control revision");
+            controls.push((frame, revision, curve));
+            origin_frame = frame;
+        }
+        clock.push(
+            origin_source
+                + accepted_area(
+                    &laws,
+                    (frame + 1 - origin_frame)
+                        .to_f64()
+                        .expect("next accepted frame"),
+                ),
+        );
+    }
+    assert_eq!(controls.len(), COMMANDS);
+    assert!(clock.windows(2).all(|pair| pair[1] > pair[0]));
+    CommandedGesture { controls, clock }
+}
+
+fn sampled_source_at(clock: &[f64], frame: f64) -> f64 {
+    let first = frame.floor().to_usize().expect("bounded output frame");
+    let source = clock[first];
+    if first + 1 == clock.len() {
+        assert_eq!(frame, first.to_f64().expect("capture endpoint"));
+        source
+    } else {
+        source + (clock[first + 1] - source) * (frame - first.to_f64().expect("sample frame"))
+    }
+}
+
+#[kithara::test]
+#[cfg_attr(feature = "stretch-signalsmith", case::signalsmith_behind(StretchKind::Signalsmith, -0.0005))]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith_ahead(StretchKind::Signalsmith, 0.0005)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee_behind(StretchKind::Bungee, -0.0005))]
+#[cfg_attr(
+    feature = "stretch-bungee",
+    case::bungee_ahead(StretchKind::Bungee, 0.0005)
+)]
+fn commanded_slew_gestures_keep_physical_phase_pitch_and_level(
+    #[case] backend: StretchKind,
+    #[case] nudge: f32,
+) {
+    let (source, source_onsets) = physical_source();
+    let initial = 1.05_f32 + nudge;
+    let config = WarpConfig::builder()
+        .backend(backend)
+        .speed(initial)
+        .keylock(true)
+        .render_quantum_frames(NonZeroUsize::new(512).expect("prepared quantum"))
+        .build();
+    let high = 132.0;
+    let CommandedGesture { controls, clock } = commanded_gesture(high, initial);
+    let whole = render_controls(&config, controls.clone(), 512, &source, |frame| {
+        sampled_source_at(&clock, frame)
+    });
+    let split = render_controls(&config, controls, 257, &source, |frame| {
+        sampled_source_at(&clock, frame)
+    });
+    assert_eq!(
+        split, whole,
+        "{backend:?}, high={high}, nudge={nudge}: accepted programmes are partition independent"
+    );
+    let kicks = deinterleave_left(&whole, 2);
+    for (index, &onset) in source_onsets.iter().enumerate() {
+        let expected = gesture_output_at(onset, |frame| sampled_source_at(&clock, frame));
+        let actual = kick_onset(&kicks, expected);
+        assert!(
+            (actual - expected).abs() <= ONSET_TOLERANCE,
+            "{backend:?}, high={high}, nudge={nudge}, kick {index}: {actual} vs {expected}"
+        );
+    }
+    let tone: Vec<_> = whole
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|frame| frame[1])
+        .collect();
+    let window = usize::try_from(SAMPLE_RATE / 20).expect("50ms level window");
+    let hop = usize::try_from(SAMPLE_RATE / 100).expect("10ms level hop");
+    let reference = rms(&tone[FIRST_GESTURE_FRAME - window * 2..FIRST_GESTURE_FRAME]);
+    assert!(reference > 0.1, "the steady keylocked tone is audible");
+    let minimum = tone[FIRST_GESTURE_FRAME..FIRST_GESTURE_FRAME + 100 * 960]
+        .windows(window)
+        .step_by(hop)
+        .map(rms)
+        .fold(f32::INFINITY, f32::min);
+    let minimum_db = 20.0 * (minimum / reference).log10();
+    assert!(
+        minimum_db >= -1.0,
+        "{backend:?}, high={high}, nudge={nudge}: accepted programme loses {minimum_db:.3}dB"
+    );
+    for first in [48_000, 96_000, 144_000] {
+        let end = first + PITCH_WINDOW;
+        let rate = (clock[end] - clock[first]) / PITCH_WINDOW.to_f64().expect("pitch window");
+        let held = goertzel_magnitude(&tone[first..end], TONE_HZ, SAMPLE_RATE);
+        let shifted = goertzel_magnitude(&tone[first..end], TONE_HZ * rate, SAMPLE_RATE);
+        assert!(
+            held > shifted * 8.0,
+            "{backend:?}, high={high}, nudge={nudge}, frame={first}: held={held}, shifted={shifted}"
+        );
     }
 }

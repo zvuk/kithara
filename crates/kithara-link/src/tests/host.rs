@@ -257,9 +257,19 @@ fn a_later_grid_recovers_sync_at_the_tempo_changed_while_the_grid_was_unsupporte
         SpeedCurve::ApproachSteps(laws) => laws.first().expect("recovery speed law").1.initial(),
         other => panic!("recovery must preserve an analytic speed law: {other:?}"),
     };
+    assert_eq!(
+        first, 1.0,
+        "recovery retains the sounding speed at its origin"
+    );
+    let SpeedCurve::ApproachSteps(laws) = curve else {
+        panic!("recovery must expose its bounded correction after the origin");
+    };
+    let (offset, correction) = laws.get(1).expect("the recovery starts correcting");
+    assert_eq!(*offset, 1);
+    let first = correction.initial();
     assert!(
         (1.0 - f64::from(LinkConfig::default().epsilon())..1.0).contains(&first),
-        "recovery must start slowing toward 110/120, not retain the stale 120 BPM: {first}"
+        "recovery must slow toward 110/120 after its origin: {first}"
     );
     probe.read(|observation| assert_eq!(observation.snapshot.sync, SyncStatus::On));
     host.with_deck(id, &mut |member, _, _| {

@@ -2484,7 +2484,7 @@ impl QueueLaw {
             return Err("Queue planned(C) differs from independent prior source law".to_owned());
         }
         let cause = if commanded {
-            SlewCause::Commanded
+            SlewCause::Commanded { from: planned.1 }
         } else {
             SlewCause::Drift { from: planned.1 }
         };
@@ -4971,7 +4971,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
         media,
         start,
         LinkConfig::default().epsilon(),
-        SlewCause::Commanded,
+        SlewCause::Commanded { from: 1.0 },
         plan_horizon(&host),
     )
     else {

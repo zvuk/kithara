@@ -24,6 +24,7 @@ use ::kithara::{
     ui::render::ControlAction,
     warp::{Beat, BeatGrid, BeatGridQuery, BeatGridSnapshot, MapPoint, MapPosition},
 };
+use kithara_test_fixtures::signal::rms;
 use kithara_test_utils::{kithara, off_thread::OffThread};
 use num_traits::cast::AsPrimitive;
 
@@ -1531,4 +1532,98 @@ async fn a_synced_tone_plays_on_without_a_gap_across_a_tempo_step_and_a_keylock_
     .await;
     rig.close().await;
     drop(served);
+}
+
+#[kithara::test(native, tokio, flash(false), tracing("info"))]
+#[case::aligned(false)]
+#[case::correcting(true)]
+async fn master_tempo_gestures_preserve_a_synced_keylocked_tones_level(
+    #[case] correcting: bool,
+    long_wav: String,
+) {
+    let grid = if correcting {
+        grid_a_quarter_beat_late()
+    } else {
+        rhythm_grid()
+    };
+    let Synced { rig, served } = synced(vec![long_wav], consts::SYNC_BPM, |requests, tracks| {
+        task::spawn(fixtures::serve_grid(requests, tracks[0], grid))
+    })
+    .await;
+    let analysis = served.await.expect("the analysis fixture serves");
+    rig.call(move |rig| {
+        let _ = capture(rig, consts::SETTLE);
+        rig.frame();
+        assert!(rig.flag("deck.key.locked@deck=a"));
+        assert!(rig.flag("deck.playback.synced@deck=a"));
+        let steady = capture(rig, consts::PITCH_MEASURE);
+        let reference = rms(&steady.pcm);
+        assert!(reference > 0.1, "the steady synced tone is audible");
+
+        if correcting {
+            analysis.send_replace(Some(fixtures::supplied(rhythm_grid())));
+            rig.until(
+                "the revised grid starts a source phase correction",
+                Rig::DEADLINE,
+                Rig::frame,
+                |rig| (rig.queues[0].rate() - 1.05).abs() > 0.0005,
+            );
+        }
+
+        let mut through = Vec::new();
+        let mut lowest_rate = rig.queues[0].rate();
+        let mut highest_rate = lowest_rate;
+        for index in 0..100 {
+            let target = if index % 2 == 0 {
+                132.0
+            } else {
+                consts::SYNC_BPM
+            };
+            rig.send("bar/tempo", ControlAction::SetScalar(target));
+            assert_eq!(rig.apply().len(), 1, "the MASTER BPM gesture is applied");
+            through.extend(capture(rig, Duration::from_millis(20)).pcm);
+            let rate = rig.queues[0].rate();
+            lowest_rate = lowest_rate.min(rate);
+            highest_rate = highest_rate.max(rate);
+        }
+        assert!(
+            highest_rate - lowest_rate > 0.01,
+            "the tempo gestures reach the playing source: {lowest_rate}..{highest_rate}"
+        );
+        let channels = usize::from(consts::CHANNELS);
+        let window = usize::try_from(frames(rig, Duration::from_millis(50)))
+            .expect("RMS window fits usize")
+            * channels;
+        let hop = usize::try_from(frames(rig, Duration::from_millis(10)))
+            .expect("RMS hop fits usize")
+            * channels;
+        assert!(
+            through.len() >= window,
+            "the gesture produces measurable PCM"
+        );
+        let minimum = through
+            .windows(window)
+            .step_by(hop)
+            .map(rms)
+            .fold(f32::INFINITY, f32::min);
+        let minimum_db = 20.0 * (minimum / reference).log10();
+        tracing::info!(
+            reference,
+            minimum,
+            minimum_db,
+            correcting,
+            "MASTER BPM keylock level"
+        );
+        assert!(
+            minimum_db >= -1.0,
+            "MASTER BPM gestures lose {minimum_db:.2} dB with SYNC and KEYLOCK"
+        );
+        assert_pitch(
+            pitch(rig, &through),
+            consts::TONE_HZ,
+            "KEYLOCK during MASTER BPM gestures",
+        );
+    })
+    .await;
+    rig.close().await;
 }
