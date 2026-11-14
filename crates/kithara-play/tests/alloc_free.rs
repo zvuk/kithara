@@ -24,8 +24,8 @@ use kithara_command::{
 };
 use kithara_platform::time::Duration;
 use kithara_play::{
-    CrossfadeSettings, PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceLoad, ResourceSrc,
-    TrackSettings,
+    CrossfadeSettings, CurveShape, DeckParameter, DeckProgram, ParameterKnot, PlayWorker,
+    PlayWorkerConfig, ResourceConfig, ResourceLoad, ResourceSrc, TrackSettings,
 };
 use kithara_render::{
     Open,
@@ -70,7 +70,11 @@ impl SessionInbox for TestSessionInbox {
 
 #[kithara::test(tokio)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
-async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
+#[case::manual(false)]
+#[case::all_bands(true)]
+async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating(
+    #[case] programs: bool,
+) {
     let (mut ring, inbox) = scoped_channel(
         ScopedConfig::builder()
             .scope(ChannelConfig::builder().targets(ABSENT_FADES + 2).build())
@@ -84,7 +88,7 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
         .slots(NonZeroUsize::new(ABSENT_FADES + 2).expect("held and absent slots"))
         .build();
     let scope = ring.open(config.slots().get()).expect("deck scope");
-    let (_ends, inputs) = scope_channels(scope, config);
+    let (mut ends, inputs) = scope_channels(scope, config);
     let mut deck =
         DeckMixer::<TestSessionInbox>::new(inputs, shape, &pools()).expect("mixer pools");
     let settings = CrossfadeSettings::default();
@@ -105,11 +109,10 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
         Box::new(AudioObserverSlot::default().relay()),
     );
     let (_sender, lane_inbox) = worker.lane_channel();
-    let (opened, _lane, _latency) = {
-        // WHY: Disk preparation runs on a real worker, outside the virtual scheduler.
+    let (opened, mut lane, _latency) = {
         let _real_io = kithara_platform::flash::real_io();
         hang_tick!("allocation fixture awaits its source open".to_owned());
-        let (opened, _lane, _latency) = kithara_platform::time::timeout(
+        kithara_platform::time::timeout(
             __hang_detector.remaining(),
             load.open(
                 Duration::ZERO,
@@ -119,9 +122,13 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
         )
         .await
         .expect("allocation fixture opens within the watchdog budget")
-        .expect("URI source opens");
-        (opened, _lane, _latency)
+        .expect("URI source opens")
     };
+    if programs {
+        kithara_play::mock::preload_lane(&mut lane)
+            .await
+            .expect("PCM preloaded before allocation measurement");
+    }
     hang_reset!();
     let held = Slot::new(0);
     let mut store = ProcStore::with_capacity(2);
@@ -230,6 +237,31 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
             },
         );
     }
+    if programs {
+        let snapshot = ends.snapshot.read();
+        let layout = snapshot.eq.layout().expect("observed EQ layout");
+        let first = SessionFrame::new(i64::from(BLOCK.get()));
+        let last = SessionFrame::new(i64::from(BLOCK.get()) * 3);
+        for band in 0..config.eq_bands() {
+            let program = DeckProgram::new(
+                DeckParameter::EqBand { band, layout },
+                vec![
+                    ParameterKnot::new(first, 0.0, CurveShape::LINEAR).expect("start"),
+                    ParameterKnot::new(last, -6.0, CurveShape::HOLD).expect("end"),
+                ],
+            )
+            .expect("prepared band program");
+            send(
+                &mut ring,
+                scope,
+                DeckPart::Program {
+                    epoch: snapshot.epoch.expect("live output axis"),
+                    authority: snapshot.eq.authority(band),
+                    program,
+                },
+            );
+        }
+    }
     ring.publish().expect("publish absent-track fades");
     info.clock_samples = InstantSamples(i64::from(BLOCK.get()));
     info.duration_since_stream_start =
@@ -250,4 +282,12 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
     tracing::dispatcher::with_default(&dispatch, || {
         assert_no_alloc(|| render(&mut deck, &info, &mut extra));
     });
+    if programs {
+        let snapshot = ends.snapshot.read();
+        for band in 0..config.eq_bands() {
+            assert!(snapshot.eq.program(band).is_some(), "active band");
+            assert_ne!(snapshot.eq.gain(band), Some(kithara_play::GainDb::DEFAULT));
+        }
+        assert!(out_l.iter().any(|sample| *sample != 0.0), "measured PCM");
+    }
 }

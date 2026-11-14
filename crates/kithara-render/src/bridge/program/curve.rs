@@ -1,6 +1,7 @@
+use std::num::NonZeroU64;
+
 use kithara_dsp::curve::CurveShape;
 use kithara_signal::SessionFrame;
-use num_traits::ToPrimitive;
 
 /// An exact session-frame knot and its outgoing progression.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,7 +48,20 @@ pub enum ParameterCurveError {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub(crate) struct ParameterCurve {
-    knots: Box<[ParameterKnot]>,
+    knots: Box<[Point]>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Point {
+    at: SessionFrame,
+    value: f64,
+    shape: CurveShape,
+    duration: NonZeroU64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CurveCursor {
+    index: usize,
 }
 
 impl ParameterCurve {
@@ -66,8 +80,26 @@ impl ParameterCurve {
         if knots.windows(2).any(|pair| pair[0].at >= pair[1].at) {
             return Err(ParameterCurveError::Order);
         }
+        let mut points: Vec<Point> = Vec::with_capacity(knots.len());
+        let mut knots = knots.into_iter().peekable();
+        while let Some(knot) = knots.next() {
+            let duration = match knots.peek() {
+                Some(next) => next
+                    .at
+                    .frames_since(knot.at)
+                    .and_then(NonZeroU64::new)
+                    .ok_or(ParameterCurveError::Order)?,
+                None => NonZeroU64::MIN,
+            };
+            points.push(Point {
+                at: knot.at,
+                value: knot.value,
+                shape: knot.shape,
+                duration,
+            });
+        }
         Ok(Self {
-            knots: knots.into_boxed_slice(),
+            knots: points.into_boxed_slice(),
         })
     }
 
@@ -99,50 +131,64 @@ impl ParameterCurve {
         low..=high
     }
 
-    /// Values bracketing `elapsed` and their normalized progression.
-    /// Exact knot and held values return equal endpoints, without interpolation.
-    #[must_use]
-    pub(crate) fn segment_at(&self, elapsed: u64) -> (f64, f64, f64) {
-        let start = self.start();
-        let index = self.knots.partition_point(|knot| {
-            knot.at
-                .frames_since(start)
-                .is_some_and(|offset| offset <= elapsed)
-        });
-        let left = self
-            .knots
-            .get(index.saturating_sub(1))
-            .expect("first knot has offset zero");
-        let left_at = left.at.frames_since(start).expect("ordered program");
-        let Some(right) = self.knots.get(index) else {
-            return (left.value, left.value, 0.0);
-        };
-        if elapsed == left_at {
-            return (left.value, left.value, 0.0);
+    pub(crate) fn write(
+        &self,
+        cursor: &mut CurveCursor,
+        mut at: SessionFrame,
+        mut output: &mut [f64],
+    ) {
+        if let Some(first) = self.knots.first() {
+            let count = if at < first.at {
+                first
+                    .at
+                    .frames_since(at)
+                    .and_then(|frames| usize::try_from(frames).ok())
+                    .unwrap_or(output.len())
+                    .min(output.len())
+            } else {
+                0
+            };
+            output = &mut output[count..];
+            at = SessionFrame::new(
+                i64::from(at).saturating_add(i64::try_from(count).unwrap_or(i64::MAX)),
+            );
         }
-        let duration = right.at.frames_since(left.at).expect("ordered segment");
-        let time = elapsed
-            .saturating_sub(left_at)
-            .to_f64()
-            .expect("u64 is finite in f64")
-            / duration.to_f64().expect("u64 is finite in f64");
-        (left.value, right.value, left.shape.progress(time))
-    }
-
-    /// The program's value on frame `at`, which must not precede its start.
-    /// Exact knots and held values are returned bit for bit.
-    #[must_use]
-    pub(crate) fn value_at(&self, at: SessionFrame) -> f64 {
-        let elapsed = at
-            .frames_since(self.start())
-            .expect("the program has started on this axis");
-        let (left, right, progression) = self.segment_at(elapsed);
-        if left == right || progression == 0.0 {
-            left
-        } else if progression == 1.0 {
-            right
-        } else {
-            left + (right - left) * progression
+        while !output.is_empty() {
+            while cursor.index > 0
+                && self
+                    .knots
+                    .get(cursor.index)
+                    .is_some_and(|point| at < point.at)
+            {
+                cursor.index -= 1;
+            }
+            while self
+                .knots
+                .get(cursor.index.saturating_add(1))
+                .is_some_and(|point| point.at <= at)
+            {
+                cursor.index += 1;
+            }
+            let Some(left) = self.knots.get(cursor.index) else {
+                return;
+            };
+            let Some(right) = self.knots.get(cursor.index.saturating_add(1)) else {
+                output.fill(left.value);
+                return;
+            };
+            let count = right
+                .at
+                .frames_since(at)
+                .and_then(|frames| usize::try_from(frames).ok())
+                .unwrap_or(output.len())
+                .min(output.len());
+            let (values, rest) = output.split_at_mut(count);
+            kithara_dsp::ratio_ramp(values, at.frames_since(left.at).unwrap_or(0), left.duration);
+            left.shape.process(values, [left.value, right.value]);
+            at = SessionFrame::new(
+                i64::from(at).saturating_add(i64::try_from(count).unwrap_or(i64::MAX)),
+            );
+            output = rest;
         }
     }
 }
@@ -150,6 +196,7 @@ impl ParameterCurve {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use num_traits::ToPrimitive;
 
     use super::*;
 
@@ -158,12 +205,15 @@ mod tests {
     }
 
     fn value(curve: &ParameterCurve, frame: u64) -> f64 {
-        let (left, right, progression) = curve.segment_at(frame);
-        if left == right || progression == 0.0 {
-            left
-        } else {
-            left + (right - left) * progression
-        }
+        let mut output = [0.0];
+        curve.write(
+            &mut CurveCursor::default(),
+            SessionFrame::new(
+                i64::from(curve.start()).saturating_add(i64::try_from(frame).unwrap_or(i64::MAX)),
+            ),
+            &mut output,
+        );
+        output[0]
     }
 
     #[kithara::test]

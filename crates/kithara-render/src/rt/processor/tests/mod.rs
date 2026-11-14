@@ -6,6 +6,7 @@ mod filter_programs;
 mod legacy_fixture;
 mod no_sync_deadline;
 mod player_processor_internal;
+mod programs;
 mod rt_click;
 mod rt_metrics;
 mod snapshot_contracts;

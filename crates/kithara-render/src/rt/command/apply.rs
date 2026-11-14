@@ -1,5 +1,4 @@
 use kithara_command::{Due, Seq, Target};
-use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_signal::{SegmentId, SessionFrame};
 #[cfg(feature = "usdt")]
@@ -12,9 +11,7 @@ use super::{
     },
     state::*,
 };
-use crate::bridge::{
-    DeckEqChange, DeckMixSettingsChange, DeckPart, DeckProtocol, Fade, Returned, Slot,
-};
+use crate::bridge::{DeckEqChange, DeckPart, DeckProtocol, Fade, Returned, Slot};
 
 impl Deck {
     pub(in crate::rt) fn apply(
@@ -75,49 +72,22 @@ impl Deck {
                 Some(DeckPart::Clock { slot, clock })
             }
             DeckPart::Mix(change) => {
-                self.mix.apply_change(change);
-                if let DeckMixSettingsChange::Filter(knob) = change {
-                    self.render.set_filter_knob(knob);
-                } else {
-                    self.render.set_mix(self.mix);
-                }
+                self.render.set_mix(change);
                 Some(DeckPart::Mix(change))
             }
             DeckPart::Eq(DeckEqChange::Gain { band, gain }) => {
                 self.render.set_eq_gain(band, gain);
                 Some(DeckPart::Eq(DeckEqChange::Gain { band, gain }))
             }
-            DeckPart::Eq(DeckEqChange::Layout(layout)) => {
-                self.eq_programs.replace_layout(seq);
-                self.render
-                    .take_eq_layout(layout)
-                    .map(|layout| DeckPart::Returned(Returned::Eq(layout)))
-            }
-            DeckPart::EqProgram {
-                binding,
-                authority,
-                program,
-            } => {
-                self.eq_programs.begin(program.band(), seq);
-                Some(DeckPart::EqProgram {
-                    binding,
-                    authority,
-                    program,
-                })
+            DeckPart::Eq(DeckEqChange::Layout(layout)) => self
+                .render
+                .take_eq_layout(layout)
+                .map(|layout| DeckPart::Returned(Returned::Eq(layout))),
+            DeckPart::Program { program, .. } => {
+                self.programs.begin(program.parameter(), seq);
+                Some(DeckPart::Returned(Returned::Program(program)))
             }
             DeckPart::Fx(change) => self.render.change_fx(change, self.sample_rate),
-            DeckPart::FilterProgram {
-                binding,
-                authority,
-                program,
-            } => {
-                self.begin_filter_program(seq);
-                Some(DeckPart::FilterProgram {
-                    binding,
-                    authority,
-                    program,
-                })
-            }
             DeckPart::GainProgram {
                 slot,
                 binding,

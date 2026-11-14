@@ -1,4 +1,7 @@
-use std::{num::NonZeroUsize, ops::Range};
+use std::{
+    num::{NonZeroU64, NonZeroUsize},
+    ops::Range,
+};
 
 use fearless_simd::{Level, dispatch};
 use kithara_test_fixtures::{
@@ -6,12 +9,13 @@ use kithara_test_fixtures::{
     signal::Wave,
 };
 use kithara_test_utils::kithara;
-use num_traits::ToPrimitive;
+use num_traits::{AsPrimitive, ToPrimitive};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::accelerate;
-use super::{cascade, fade, platform, portable, simd, strided};
+use super::{cascade, curve, fade, platform, portable, simd, strided};
 use crate::{
+    curve::Progression,
     fade::FadeCurve,
     filter::{Coefficients, Hertz, Type},
     interp::{InterpError, Interpolation},
@@ -1584,5 +1588,150 @@ fn fade_gains_track_the_f64_curves_at_every_level() {
             3,
             "{name}: the shortest side bounds the prefix"
         );
+    }
+}
+
+#[kithara::test]
+fn native_and_fallback_interpolation_keep_scalar_order_and_endpoints() {
+    for shape in [
+        Progression::Hold,
+        Progression::Linear,
+        Progression::Cubic {
+            first: 0.0,
+            second: 1.0,
+        },
+        Progression::Cubic {
+            first: 0.2,
+            second: 0.6,
+        },
+    ] {
+        for endpoints in [[0.75, 0.25], [-0.0, 0.0]] {
+            let mut native = [-1.0, 0.0, 1.0 / 6.0, 0.25, 0.5, 0.75, 1.0, 2.0, 0.9];
+            let mut fallback = native;
+            let expected = native.map(|time| {
+                let progress = match shape {
+                    Progression::Hold => 0.0,
+                    Progression::Linear => time,
+                    Progression::Cubic { first, second } => {
+                        let remaining = 1.0 - time;
+                        let a = 3.0 * remaining * remaining * time * first;
+                        let b = 3.0 * remaining * time * time * second;
+                        ((a + b) + time * time * time).clamp(0.0, 1.0)
+                    }
+                };
+                let [left, right] = endpoints;
+                if time >= 1.0 {
+                    right
+                } else if time <= 0.0 || left == right || progress == 0.0 {
+                    left
+                } else if progress == 1.0 {
+                    right
+                } else {
+                    left + (right - left) * progress
+                }
+            });
+            curve::interpolate(shape, &mut native, endpoints);
+            dispatch!(Level::fallback(), simd => curve::kernel(simd, shape, &mut fallback, endpoints));
+            assert_eq!(native.map(f64::to_bits), expected.map(f64::to_bits));
+            assert_eq!(native.map(f64::to_bits), fallback.map(f64::to_bits));
+        }
+    }
+}
+#[kithara::test]
+fn native_and_fallback_ratio_and_conversion_keep_integer_precision_and_prefix() {
+    for first in [0, 1, (1 << 25) + 3, (1 << 53) - 3, u64::MAX - 3] {
+        for length in [0_usize, 1, 2, 3, 7, 256, 257] {
+            let divisor = NonZeroU64::new(6).expect("divisor");
+            let mut native = vec![0.0; length];
+            let mut fallback = native.clone();
+            simd::ratio_ramp(&mut native, first, divisor);
+            dispatch!(Level::fallback(), simd => simd::ratio_kernel(simd, &mut fallback, first, divisor));
+            let expected: Vec<f64> = (0..length)
+                .map(|index| {
+                    let numerator: f64 = first.saturating_add(index.as_()).as_();
+                    numerator / 6.0
+                })
+                .collect();
+            assert!(
+                native
+                    .iter()
+                    .map(|x| x.to_bits())
+                    .eq(expected.iter().map(|x| x.to_bits()))
+            );
+            assert!(
+                native
+                    .iter()
+                    .map(|x| x.to_bits())
+                    .eq(fallback.iter().map(|x| x.to_bits()))
+            );
+            let mut narrow = vec![-17.0; length.saturating_add(3)];
+            let mut fallback_narrow = narrow.clone();
+            let mut platform_narrow = narrow.clone();
+            let mut scalar = narrow.clone();
+            for (out, value) in scalar.iter_mut().zip(&expected) {
+                *out = value.as_();
+            }
+            assert_eq!(portable::narrow_f64(&native, &mut narrow), length);
+            dispatch!(Level::fallback(), simd => simd::narrow_kernel(simd, &native, &mut fallback_narrow));
+            assert_eq!(platform::narrow_f64(&native, &mut platform_narrow), length);
+            let expected: Vec<_> = scalar.into_iter().map(f32::to_bits).collect();
+            for actual in [narrow, fallback_narrow, platform_narrow] {
+                assert_eq!(
+                    actual.into_iter().map(f32::to_bits).collect::<Vec<_>>(),
+                    expected
+                );
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn native_and_fallback_narrowing_preserve_ieee_bits_and_untouched_tails() {
+    let input = [
+        0.0,
+        -0.0,
+        f64::MIN_POSITIVE,
+        f64::from(f32::from_bits(1)),
+        f64::from(f32::MIN_POSITIVE),
+        1.0 / 6.0,
+        5.0 / 6.0,
+        f64::MAX,
+        f64::NEG_INFINITY,
+    ];
+    for count in 0..=input.len() {
+        let prefix = input.get(..count).expect("bounded input prefix");
+        let mut native = [17.0; 12];
+        let mut fallback = native;
+        let mut platform_values = native;
+        let mut expected = native;
+        for (output, value) in expected.iter_mut().zip(prefix) {
+            *output = value.as_();
+        }
+        assert_eq!(portable::narrow_f64(prefix, &mut native), count);
+        dispatch!(Level::fallback(), simd => simd::narrow_kernel(simd, prefix, &mut fallback));
+        assert_eq!(platform::narrow_f64(prefix, &mut platform_values), count);
+        for actual in [native, fallback, platform_values] {
+            assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits));
+        }
+    }
+}
+
+#[kithara::test]
+fn native_and_fallback_squared_product_keep_scalar_order_prefix_and_tail() {
+    let input = [0.0, -0.0, 0.7, -0.3, f32::MIN_POSITIVE, 1.0e-20, 0.9];
+    let square = [0.5, 0.8, 0.7, 0.1, 0.9, 1.0e-20, 0.3];
+    let gain = [0.3, 0.1, 0.9, 0.7, 0.8, 0.5, 0.2];
+    for count in 0..=input.len() {
+        let square = square.get(..count).expect("bounded square prefix");
+        let mut expected = input;
+        for ((value, square), gain) in expected.iter_mut().zip(square).zip(gain) {
+            *value = (*value * (square * square)) * gain;
+        }
+        for level in [Level::new(), Level::fallback()] {
+            let mut actual = input;
+            let written = dispatch!(level, simd => simd::multiply_squared_kernel(simd, &mut actual, square, &gain));
+            assert_eq!(written, count);
+            assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits));
+        }
     }
 }

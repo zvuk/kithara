@@ -4,6 +4,7 @@ pub(crate) mod accelerate;
 mod bins;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 mod cascade;
+pub(crate) mod curve;
 mod envelope;
 mod fade;
 mod fir;
@@ -32,6 +33,9 @@ pub(crate) use interpolate::quadratic;
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use portable as platform;
 pub use simd::sanitize;
-pub(crate) use simd::{crossfade_linear, div, first_quiet, mul_add, ramp, scale_in_place};
+pub(crate) use simd::{
+    crossfade_linear, div, first_quiet, mul_add, multiply_squared_in_place, ramp, ratio_ramp,
+    scale_in_place,
+};
 pub(crate) use strided::{gather, scatter};
 pub(crate) use svf::step as svf_step;

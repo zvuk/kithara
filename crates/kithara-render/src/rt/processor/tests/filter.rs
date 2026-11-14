@@ -3,7 +3,7 @@ use kithara_effects::filter::{FilterEffect, FilterKnob, FilterSettings};
 
 use super::*;
 use crate::{
-    bridge::{DeckMixSettings, DeckMixSettingsChange, FilterBinding},
+    bridge::{DeckMixSettings, DeckMixSettingsChange},
     worker::packet_tests::{PacketRing, chunk},
 };
 
@@ -55,15 +55,6 @@ pub(super) fn reference(rate: NonZeroU32, start: FilterKnob) -> FilterEffect {
 
 pub(super) fn turn(value: f64) -> DeckPart {
     DeckPart::Mix(DeckMixSettingsChange::Filter(knob(value)))
-}
-
-pub(super) fn binding(ends: &mut TestEnds) -> FilterBinding {
-    ends.deck
-        .snapshot
-        .read()
-        .filter
-        .binding()
-        .expect("observed output stream")
 }
 
 pub(super) fn bits(pcm: &[f32]) -> Vec<u32> {
@@ -199,9 +190,9 @@ fn a_knob_turn_is_frame_exact_after_a_bit_transparent_center() {
     assert_eq!(snapshot.filter.authority(), Some(turned));
     assert_eq!(snapshot.filter.program(), None);
     assert_eq!(snapshot.filter.knob().to_bits(), filter.knob().to_bits());
-    assert_eq!(
-        snapshot.filter.binding().map(|binding| binding.instance()),
-        Some(None)
+    assert!(
+        snapshot.epoch.is_some(),
+        "the fixed filter remains on the live output axis"
     );
 }
 

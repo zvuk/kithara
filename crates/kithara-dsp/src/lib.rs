@@ -48,6 +48,6 @@ pub use layout::{
     deinterleave_channel_major, deinterleave_variable, downmix, interleave_channel_major,
 };
 pub use vector::{
-    add, affine, crossfade_linear, div, mul_add, multiply_in_place, ramp, scale_add,
-    scale_in_place, sub, sum_squares,
+    add, affine, crossfade_linear, div, mul_add, multiply_in_place, multiply_squared_in_place,
+    narrow_f64, ramp, ratio_ramp, scale_add, scale_in_place, sub, sum_squares,
 };

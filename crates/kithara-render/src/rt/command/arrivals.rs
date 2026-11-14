@@ -53,9 +53,7 @@ impl Deck {
             due.refuse(reason);
             return;
         }
-        if let Err(reason) = Self::validate_eq_at(due.commands(), due.at())
-            .and_then(|()| Self::validate_filter_at(due.commands(), due.at()))
-        {
+        if let Err(reason) = Self::validate_program_at(due.commands(), due.at()) {
             due.refuse(reason);
             return;
         }
@@ -63,9 +61,7 @@ impl Deck {
             && due.commands().iter().any(|part| {
                 matches!(
                     part,
-                    DeckPart::GainProgram { .. }
-                        | DeckPart::EqProgram { .. }
-                        | DeckPart::FilterProgram { .. }
+                    DeckPart::GainProgram { .. } | DeckPart::Program { .. }
                 )
             })
         {
@@ -77,8 +73,7 @@ impl Deck {
         let length = due.commands().len();
         for remaining in (0..length).rev() {
             let part = due.commands_mut().remove(0);
-            self.interrupt_eq(&mut due, &part);
-            self.interrupt_filter(&mut due, &part);
+            self.interrupt_programs(&mut due, &part);
             self.interrupt_output(&mut due, &part);
             if let Some(slot) = shifted_slot(&part) {
                 self.interrupt_stop(&mut due, slot, remaining);
@@ -198,8 +193,7 @@ impl Deck {
 
     pub(in crate::rt) fn validate(&mut self, commands: &[DeckPart]) -> Result<(), DeckRefusal> {
         self.validate_output_programs(commands)?;
-        self.validate_eq_programs(commands)?;
-        self.validate_filter_programs(commands)?;
+        self.validate_programs(commands)?;
         for (entry, slot) in self.held.iter_mut().zip(self.tracks.slots()) {
             *entry = self.tracks.at(slot).map(PlayerTrack::segment);
         }
@@ -278,8 +272,7 @@ impl Deck {
                 | DeckPart::Mix(_)
                 | DeckPart::Eq(_)
                 | DeckPart::GainProgram { .. }
-                | DeckPart::EqProgram { .. }
-                | DeckPart::FilterProgram { .. }
+                | DeckPart::Program { .. }
                 | DeckPart::Returned(_) => {}
             }
         }

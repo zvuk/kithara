@@ -4,10 +4,10 @@ use fearless_simd::{Level, dispatch, prelude::*};
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use super::cascade::Cascade;
-pub(crate) use super::interpolate::interpolate;
 use super::simd::{padded, update};
 #[cfg(all(feature = "spectrum", not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) use super::spectrum::{Dft, Work, correlate};
+pub(crate) use super::{interpolate::interpolate, simd::narrow_f64};
 
 mod consts {
     /// Scale that turns the sum of a pair into its mean.

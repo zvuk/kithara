@@ -1,9 +1,9 @@
 use std::{
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     ops::{Add, Deref, Div, Mul, Range, Shr, Sub},
 };
 
-use fearless_simd::{Level, dispatch, prelude::*};
+use fearless_simd::{Level, dispatch, f64x2, prelude::*};
 use num_traits::AsPrimitive;
 
 /// Replaces `NaN`, ±infinity, subnormals and −0.0 with `+0.0` in place; every
@@ -486,4 +486,67 @@ pub(super) fn first_quiet_kernel<S: Simd, P: Deref<Target = [f32]>>(
                 .all(|plane| plane.get(*frame).expect("validated frame").abs() <= limit)
         })
         .unwrap_or(range.end)
+}
+
+pub(crate) fn ratio_ramp(output: &mut [f64], first: u64, divisor: NonZeroU64) -> usize {
+    dispatch!(Level::new(), simd => ratio_kernel(simd, output, first, divisor));
+    output.len()
+}
+
+pub(super) fn ratio_kernel<S: Simd>(simd: S, output: &mut [f64], first: u64, divisor: NonZeroU64) {
+    let divisor = f64x2::splat(simd, divisor.get().as_());
+    for (index, chunk) in output.chunks_mut(2).enumerate() {
+        let values = f64x2::from_fn(simd, |lane| {
+            first
+                .saturating_add(index.saturating_mul(2).saturating_add(lane).as_())
+                .as_()
+        })
+        .div(divisor);
+        if let Some(values) = values.as_slice().get(..chunk.len()) {
+            chunk.copy_from_slice(values);
+        }
+    }
+}
+
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
+pub(crate) fn narrow_f64(input: &[f64], output: &mut [f32]) -> usize {
+    dispatch!(Level::new(), simd => narrow_kernel(simd, input, output))
+}
+
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
+pub(super) fn narrow_kernel<S: Simd>(simd: S, input: &[f64], output: &mut [f32]) -> usize {
+    let count = input.len().min(output.len());
+    let (Some(input), Some(output)) = (input.get(..count), output.get_mut(..count)) else {
+        return 0;
+    };
+    for (input, output) in input.chunks(4).zip(output.chunks_mut(4)) {
+        let low = f64x2::from_fn(simd, |lane| input.get(lane).copied().unwrap_or(0.0));
+        let high = f64x2::from_fn(simd, |lane| {
+            input.get(lane.saturating_add(2)).copied().unwrap_or(0.0)
+        });
+        let value = low.narrow(high);
+        if let Some(values) = value.as_slice().get(..output.len()) {
+            output.copy_from_slice(values);
+        }
+    }
+    count
+}
+
+pub(crate) fn multiply_squared_in_place(
+    samples: &mut [f32],
+    square: &[f32],
+    gains: &[f32],
+) -> usize {
+    dispatch!(Level::new(), simd => multiply_squared_kernel(simd, samples, square, gains))
+}
+
+pub(super) fn multiply_squared_kernel<S: Simd>(
+    simd: S,
+    samples: &mut [f32],
+    square: &[f32],
+    gains: &[f32],
+) -> usize {
+    update(simd, samples, [square, gains], |x, [square, gain]| {
+        x.mul(square.mul(square)).mul(gain)
+    })
 }

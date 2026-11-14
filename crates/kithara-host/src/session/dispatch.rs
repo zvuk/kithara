@@ -69,9 +69,7 @@ impl OwnerPosts {
             owner.each_deck(&mut |_, deck, out, pass| deck.tick(pass, out));
         }
         let settled = owner.pass();
-        if !self.closing.is_empty() {
-            self.settle(settled);
-        }
+        self.settle(settled);
     }
 
     fn settle(&mut self, settled: Vec<HostSettled>) {
@@ -87,6 +85,12 @@ impl OwnerPosts {
                             index += 1;
                         }
                     }
+                }
+                HostSettled::Batch {
+                    seq,
+                    outcome: Err(rejection),
+                } => {
+                    warn!(?seq, ?rejection, "deck batch was not applied");
                 }
                 HostSettled::Settings { .. } | HostSettled::Batch { .. } => {}
             }
