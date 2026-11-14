@@ -9,5 +9,3 @@ pub use kithara_integration_tests::bufpool_ext;
 use kithara_test_dylib as _;
 
 mod cold_seek_cpal;
-mod zvuk_drm_trace;
-mod zvuk_stage_drm_e2e;

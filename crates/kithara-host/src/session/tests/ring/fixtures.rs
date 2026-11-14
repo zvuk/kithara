@@ -14,6 +14,8 @@ use firewheel::{
 use kithara_platform::sync::Arc;
 use num_traits::AsPrimitive;
 
+use crate::session::context::SessionGraph;
+
 #[derive(Clone, Default)]
 pub(crate) struct CountingProbe {
     inner: Arc<CountingProbeInner>,
@@ -150,10 +152,7 @@ impl FixtureState for () {
     }
 }
 
-pub(crate) fn install_stereo_source<N>(
-    ctx: &mut firewheel::FirewheelContext,
-    node: N,
-) -> Result<NodeID, String>
+pub(crate) fn install_stereo_source<N>(ctx: &mut SessionGraph, node: N) -> Result<NodeID, String>
 where
     N: AudioNode<Configuration = EmptyConfig> + 'static,
 {

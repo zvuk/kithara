@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, task::Poll};
 
 use kithara_command::{Rejection, Seq, When};
 use kithara_platform::maybe_send::MaybeSend;
@@ -35,6 +35,10 @@ pub trait HostOwner<S>:
     type Command: From<HostCommand<S, Self::Deck>> + MaybeSend;
     /// The deck objects held by this owner.
     type Deck: ?Sized + HostedDeck<S>;
+
+    /// Pending during an already-started asynchronous output preparation; otherwise Ready(Ok).
+    /// Ready(Err) carries the original startup refusal.
+    fn poll_output(&mut self) -> Poll<Result<(), PlayError>>;
 
     /// Runs a command and returns the batch it sent, if any.
     ///

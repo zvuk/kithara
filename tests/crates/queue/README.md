@@ -1,5 +1,6 @@
 # kithara-queue-tests
 
-Integration tests for the public `kithara::queue` facade live in [`tests`](tests).
-Regular and network-bound queue contracts use separate binaries so changes in
-other domains do not invalidate their compiled artifacts.
+Tests the queue API, loading, playback, and track advancement.
+
+Zvuk provider contracts live in `queue-zvuk`; live network playback and device
+contracts live in `queue-network`. All packages link the shared test dylib.

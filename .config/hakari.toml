@@ -42,10 +42,11 @@ platforms = [
 # Profiling belongs to each crate's perf/memprof features. Traversing hotpath
 # unifies allocation instrumentation into timing-only builds and pulls its
 # profiling dependencies into device builds that never requested them.
-# Portable consumers must not inherit the application dependency union.
+# Portable and Apple UI consumers must not inherit the application dependency union.
 [traversal-excludes]
 workspace-members = [
   "kithara-analysis-tests",
+  "kithara-apple",
   "kithara-app-tests",
   "kithara-audio-tests",
   "kithara-broadcast-tests",
@@ -71,7 +72,9 @@ workspace-members = [
   "kithara-integration-tests",
   "kithara-platform",
   "kithara-play-tests",
+  "kithara-queue-network-tests",
   "kithara-queue-tests",
+  "kithara-queue-zvuk-tests",
   "kithara-ring",
   "kithara-stream-tests",
   "kithara-sync-tests",

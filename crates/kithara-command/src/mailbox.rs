@@ -161,6 +161,12 @@ pub struct Mailbox<C, R> {
 }
 
 impl<C, R> Mailbox<C, R> {
+    /// Whether the mailbox has no queued posts.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.state.lock().posts.is_empty()
+    }
+
     /// Wakes `waker` after each post from now on, so the executor behind it
     /// drains the owner. Posts that waited for a holder are the executor's
     /// to drain once it holds the owner.
@@ -198,6 +204,19 @@ mod tests {
 
     use super::{PostError, Refused, mailbox};
     use crate::wakes::waker;
+
+    #[kithara::test]
+    fn is_empty_tracks_posts_without_taking_them() {
+        let (postbox, mut mailbox) = mailbox::<u32, ()>();
+        assert!(mailbox.is_empty());
+        let ticket = postbox.post(7).expect("post into an empty mailbox");
+        assert!(!mailbox.is_empty());
+        let posts: Vec<_> = mailbox.drain().collect();
+        assert!(mailbox.is_empty());
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts.first().expect("one posted command").command, 7);
+        drop(ticket);
+    }
 
     #[kithara::test]
     fn a_post_made_before_a_holder_waits_for_it() {

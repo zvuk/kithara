@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     Ctx,
-    common::project::{ProjectConfig, TestCommandConfig},
+    common::project::{ProjectConfig, TestCommandConfig, TestRunner},
     retried::Evidence,
 };
 
@@ -23,8 +23,8 @@ pub struct TestArgs {
     /// `--lane=<configured-name>`, `--flash=true|false|on|off`, `--no-flash`,
     /// `--loom=true|false|on|off`, `--no-loom`, `--no-block=true|false|on|off`,
     /// `--load=true|false|on|off`, `--net-backend=<configured-name>`, `--narrow=<filterset>`,
-    /// `--draft` (only the lane's share of the required packages and the pull request's
-    /// `KITHARA_PR_TESTS` block),
+    /// `--draft` (the lane's share of the required packages and the pull request's
+    /// `KITHARA_PR_TESTS` block; admitted Cargo suites keep their native selection),
     /// `--selection-output=<path>` (JSON lane names), and `--expected-tests=<path>`
     /// (UTF-8 TSV: binary ID, tab, full test name per line).
     #[arg(value_name = "ARGS", allow_hyphen_values = true)]
@@ -170,18 +170,21 @@ pub(super) fn requested_lane(
     }
 }
 
-/// The command of one draft lane: the lane's own command with one added
-/// filterset, the draft scope, and a pass when the lane holds none of it.
+/// An admitted Draft lane's command. Nextest narrows to the Draft scope;
+/// Cargo suites keep their native selection because they cannot use filtersets.
 fn draft_command(
     test: &TestCommandConfig,
     lane_name: &str,
     scope: &DraftScope,
     request: &TestRequest,
 ) -> Result<Command> {
+    let lane = requested_lane(test, lane_name, request)?;
+    if matches!(&lane.runner, TestRunner::Cargo(_)) {
+        return lane.command(NextestAction::Run, &request.passthrough);
+    }
     let mut extra = request.passthrough.clone();
     extra.push("--no-tests=pass".to_owned());
-    requested_lane(test, lane_name, request)?
-        .filtered(scope.filterset())?
+    lane.filtered(scope.filterset())?
         .command(NextestAction::Run, &extra)
 }
 
@@ -209,7 +212,7 @@ pub fn nextest_command_for_lane(
 mod selection_tests {
     use super::*;
     use crate::common::project::{
-        TestCargoOptions, TestLaneConfig, TestNetBackendConfig, TestRequiredConfig,
+        TestCargoOptions, TestCargoRunner, TestLaneConfig, TestNetBackendConfig, TestRequiredConfig,
     };
 
     fn args_of(command: &Command) -> Vec<String> {
@@ -284,6 +287,45 @@ mod selection_tests {
         rest.pop();
         rest.drain(filter..=filter + 1);
         assert_eq!(rest, main_args);
+    }
+
+    #[test]
+    fn a_draft_cargo_lane_keeps_its_native_command() {
+        let root = crate::test::repository_tests::root();
+        for runner in [
+            TestCargoRunner {
+                doc: true,
+                ..TestCargoRunner::default()
+            },
+            TestCargoRunner {
+                name_filters: vec!["selenium".to_owned()],
+                no_capture: true,
+                ..TestCargoRunner::default()
+            },
+        ] {
+            let mut test = drafted();
+            test.lanes.get_mut("tooling").unwrap().runner = TestRunner::Cargo(runner);
+            let main = request(&["--lane=tooling", "--profile", "ci"]);
+            let draft = request(&["--lane=tooling", "--draft", "--profile", "ci"]);
+            let main_command = requested_lane(&test, "tooling", &main)
+                .unwrap()
+                .command(NextestAction::Run, &main.passthrough)
+                .unwrap();
+            for block in [None, Some("packages = ['kithara-devtools']")] {
+                let Plan::Draft { lane, scope } = plan(&test, &root, &draft, block).unwrap() else {
+                    panic!("the required Cargo lane must run");
+                };
+                let command = draft_command(&test, lane, &scope, &draft)
+                    .expect("Draft scope must support native Cargo runners");
+                assert_eq!(command.get_program(), main_command.get_program());
+                assert_eq!(args_of(&command), args_of(&main_command));
+                assert_eq!(
+                    command.get_envs().collect::<Vec<_>>(),
+                    main_command.get_envs().collect::<Vec<_>>()
+                );
+            }
+            assert!(plan(&test, &root, &draft, Some("packages = ['missing']")).is_err());
+        }
     }
 
     #[test]

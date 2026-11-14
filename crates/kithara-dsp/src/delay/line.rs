@@ -7,6 +7,7 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use num_traits::ToPrimitive;
 
 use super::DelayError;
+use crate::backend;
 
 /// Planar frame history with one write cursor shared by every channel.
 ///
@@ -136,12 +137,7 @@ impl DelayLine {
             return Ok(());
         }
         let older = self.behind(tap.whole.wrapping_add(1));
-        for (offset, out) in output.iter_mut().enumerate() {
-            let newer = sample(plane, start, offset);
-            *out = tap
-                .fraction
-                .mul_add(sample(plane, older, offset) - newer, newer);
-        }
+        backend::delay_read(plane, start, older, tap.fraction, output);
         Ok(())
     }
 
@@ -216,11 +212,6 @@ impl DelayLine {
 
 fn wrap(slot: usize, capacity: usize) -> usize {
     slot.checked_rem(capacity).unwrap_or(0)
-}
-
-fn sample(plane: &[f32], start: usize, offset: usize) -> f32 {
-    let slot = wrap(start.wrapping_add(offset), plane.len());
-    plane.get(slot).copied().unwrap_or(0.0)
 }
 
 fn copy_wrapped(plane: &[f32], start: usize, output: &mut [f32]) {

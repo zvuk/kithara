@@ -29,6 +29,31 @@ nondefault ignored selection cannot be combined with the guard. Compilation
 still follows the configured Cargo selection, and Run reuses its normal build
 artifacts. An unguarded run keeps its existing behavior.
 
+### Package-split census
+
+Generate complete nextest JSON inventories at the base and candidate revisions
+with the same package coverage, features, target, and profile. Include ignored
+tests and disable the default filter:
+
+```sh
+cargo nextest list --ignore-default-filter --run-ignored=all --message-format=json > before.json
+```
+
+Repeat at the candidate with its successor packages, then run
+`just test census --before before.json --after after.json --renames renames.toml`.
+The rename table maps binary IDs, never individual tests:
+
+```toml
+[binaries]
+"old-package::suite" = ["new-core::suite", "new-domain::suite"]
+```
+
+Unchanged binaries need no entry. The census rejects lost, added or duplicated
+test identities, changed ignored flags, filtered inventories, and invalid
+rename entries. Record the revisions and the inventory-producing commands with
+the result; the comparator reads the generated outputs without building either
+revision.
+
 ### Axes
 
 - `flash` is the default axis and defaults ON.

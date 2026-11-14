@@ -5,8 +5,8 @@ pub(crate) mod mock;
 mod offline;
 mod shape;
 
-pub(in crate::rt) use core::Deck;
 pub use core::DeckMixer;
+pub(in crate::rt) use core::{Deck, PreparedDeck};
 
 pub(in crate::rt) use driver::PlayerProcessor;
 pub(in crate::rt) use offline::OfflineProcessor;

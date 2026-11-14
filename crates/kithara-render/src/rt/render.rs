@@ -226,12 +226,28 @@ impl RenderPass {
         self.units.len()
     }
 
-    /// Whether `unit` holds an effect that takes `change`.
-    pub(crate) fn accepts_fx(&self, unit: usize, change: FxParamChange) -> bool {
-        self.units
-            .get(unit)
-            .and_then(|unit| unit.effect.as_ref())
-            .is_some_and(|effect| effect.accepts(&change))
+    /// Check a parameter against the effect after preceding installs and clears.
+    pub(crate) fn accepts_fx(
+        &self,
+        unit: usize,
+        change: FxParamChange,
+        preceding: &[DeckPart],
+    ) -> bool {
+        let current = self.units.get(unit).and_then(|unit| unit.effect.as_deref());
+        preceding
+            .iter()
+            .rev()
+            .find_map(|part| match part {
+                DeckPart::Fx(DeckFxChange::Install {
+                    unit: target,
+                    effect,
+                }) if *target == unit => Some(Some(effect.as_ref())),
+                DeckPart::Fx(DeckFxChange::Clear { unit: target }) if *target == unit => Some(None),
+                _ => None,
+            })
+            .unwrap_or(current)
+            .and_then(|effect| effect.parameters().get(change.index))
+            .is_some_and(|descriptor| descriptor.contains(change.value))
     }
 
     /// Apply `change` to its unit, tuning an installed effect to the deck's
@@ -438,6 +454,7 @@ fn frame_at(start: SessionFrame, frame: usize) -> SessionFrame {
 #[cfg(test)]
 mod tests {
     use kithara_dsp::param::DEFAULT_SMOOTH_SECONDS;
+    use kithara_effects::FxParamDescriptor;
     use kithara_platform::{
         sync::{Arc, Mutex},
         time::Duration,
@@ -530,8 +547,8 @@ mod tests {
             }
         }
 
-        fn accepts(&self, _: &FxParamChange) -> bool {
-            false
+        fn parameters(&self) -> &[FxParamDescriptor] {
+            &[]
         }
 
         fn set(&mut self, _: FxParamChange) {}

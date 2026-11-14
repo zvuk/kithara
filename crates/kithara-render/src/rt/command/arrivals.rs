@@ -203,7 +203,7 @@ impl Deck {
         for (entry, slot) in self.held.iter_mut().zip(self.tracks.slots()) {
             *entry = self.tracks.at(slot).map(PlayerTrack::segment);
         }
-        for part in commands {
+        for (part_index, part) in commands.iter().enumerate() {
             match part {
                 DeckPart::Attach { slot, segment, .. } => {
                     let Some(entry) = self.held.get_mut(slot.index()) else {
@@ -267,7 +267,9 @@ impl Deck {
                         return Err(DeckRefusal::MissingFxUnit { unit });
                     }
                     if let DeckFxChange::Param { change, .. } = change
-                        && !self.render.accepts_fx(unit, *change)
+                        && !commands.get(..part_index).is_some_and(|preceding| {
+                            self.render.accepts_fx(unit, *change, preceding)
+                        })
                     {
                         return Err(DeckRefusal::RefusedFxParam { unit });
                     }

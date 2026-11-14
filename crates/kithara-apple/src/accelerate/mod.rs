@@ -9,7 +9,9 @@ mod vector;
 
 pub use biquad::{BiquadError, MultichannelBiquad};
 pub use dft::{DftError, RealDft};
-pub use interpolation::{OutOfWindow, linear_interpolate_f32, quadratic_interpolate_f32};
+pub use interpolation::{
+    OutOfWindow, linear_blend_f32, linear_interpolate_f32, quadratic_interpolate_f32,
+};
 pub use layout::{deinterleave_pair_f32, downmix_pair_f32, interleave_pair_f32};
 pub use vector::{
     add_f32, affine_f32, correlate_f32, max_magnitude_f32, multiply_f32, multiply_in_place_f32,
