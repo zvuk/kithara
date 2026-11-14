@@ -10,7 +10,6 @@ use kithara::{
         DispatcherProtocol, LoadRefusal, PlayWorker, PlayWorkerConfig, ResourceConfig,
         ResourceLoad, ResourceSrc,
     },
-    sync::SpeedCurve,
     warp::WarpConfig,
 };
 use kithara_command::{Batch, ChannelConfig, Outcome, Receipt, Rejection, Sender, When, channel};
@@ -116,11 +115,7 @@ fn load(worker: &PlayWorker<TestPools>, dir: &TestTempDir, name: &str) -> Batch<
         })
         .build();
     let warp = WarpConfig::builder().build();
-    let start = LaneStart {
-        speed: SpeedCurve::Constant(warp.speed()),
-        keylock: warp.keylock(),
-        backend: warp.backend(),
-    };
+    let start = LaneStart::new(warp.speed(), warp.pitch());
     let config = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(store)
         .worker(worker.clone())
@@ -571,11 +566,7 @@ async fn a_nonzero_initial_hls_load_returns_while_its_segment_is_pending_and_adm
                     class: ServiceClass::Warm,
                     item: initial_hls::ObservedLoad { item, returned },
                     position: target,
-                    start: LaneStart {
-                        speed: SpeedCurve::Constant(warp.speed()),
-                        keylock: warp.keylock(),
-                        backend: warp.backend(),
-                    },
+                    start: LaneStart::new(warp.speed(), warp.pitch()),
                     inbox: lane_inbox,
                 }))],
             },

@@ -181,6 +181,9 @@ impl RetainedComponent {
             }
             (Self::Item(component), Self::Item(next)) => Self::Item(component.reconcile(next)),
             (Self::Crossing(component), Self::Crossing(_)) => Self::Crossing(component),
+            (Self::Activation(component), Self::Activation(next)) => {
+                Self::Activation(component.reconcile(next))
+            }
             (_, next) => next,
         }
     }

@@ -187,7 +187,6 @@ fn renderer_pcm_matches_independent_rows_across_controls_and_budgets() {
             let pools = pools();
             let config = WarpConfig::builder()
                 .backend(StretchKind::Glide)
-                .keylock(false)
                 .speed(0.75)
                 .source_block_frames(NonZeroUsize::new(512).expect("fixture source block"))
                 .render_quantum_frames(NonZeroUsize::new(127).expect("quantum"))

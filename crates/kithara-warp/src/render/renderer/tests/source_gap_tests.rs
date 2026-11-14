@@ -4,7 +4,7 @@ use kithara_test_utils::kithara;
 
 use super::*;
 use crate::{
-    Warp, WarpRenderError,
+    Pitch, Warp, WarpRenderError,
     test_pools::{TestPools, pools, sample_buffer},
 };
 
@@ -21,7 +21,7 @@ fn keylocked_renderer() -> Renderer {
     let config = WarpConfig::builder()
         .backend(StretchKind::Signalsmith)
         .speed(0.5)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .render_quantum_frames(NonZeroUsize::new(QUANTUM).expect("quantum"))
         .build();
     Warp::new((), &config).renderer(spec, pools())

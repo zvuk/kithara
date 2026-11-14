@@ -14,7 +14,7 @@ use num_traits::ToPrimitive;
 
 use super::*;
 use crate::{
-    Warp, WarpRenderError,
+    Pitch, Warp, WarpRenderError,
     render::tests::fixtures::LaneFeed,
     test_pools::{pools, sample_buffer},
 };
@@ -26,7 +26,7 @@ fn prepared_renderer(backend: StretchKind) -> WarpRenderer<crate::test_pools::Te
     );
     let config = WarpConfig::builder()
         .speed(0.5)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(backend)
         .build();
     Warp::new((), &config).renderer(spec, pools())
@@ -186,7 +186,7 @@ fn latency_receipt_retires_engine_without_advancing_output(#[case] backend: Stre
     let mut renderer = active_renderer(backend);
     let frontier = renderer.rendered_source_end();
     let source_meta = renderer.last_input_meta;
-    renderer.set_keylock(false);
+    renderer.set_pitch(Pitch::default());
 
     assert!(renderer.transition_pending());
     let latency = renderer
@@ -216,7 +216,7 @@ fn latency_receipt_retires_engine_without_advancing_output(#[case] backend: Stre
 fn latency_receipt_waits_for_queued_unity(#[case] backend: StretchKind) {
     let mut renderer = active_renderer(backend);
     renderer.pending_unity_meta = Some(AudioChunkInfo::default());
-    renderer.set_keylock(false);
+    renderer.set_pitch(Pitch::default());
 
     assert!(matches!(
         renderer.prepare_engine_latency(renderer.spec),
@@ -233,7 +233,7 @@ fn latency_receipt_waits_for_queued_unity(#[case] backend: StretchKind) {
 fn latency_receipt_uses_the_prepared_replacement(#[case] backend: StretchKind) {
     let mut renderer = prepared_renderer(backend);
     assert!(renderer.engine_latency().get() > 0);
-    renderer.set_keylock(false);
+    renderer.set_pitch(Pitch::default());
 
     let latency = renderer
         .prepare_engine_latency(renderer.spec)
@@ -262,7 +262,7 @@ fn keylock_off_at_unity_crossfades_the_retained_tail_by_the_linear_law(
     renderer
         .set_speed(SpeedCurve::Constant(1.0), 1)
         .expect("unity speed");
-    renderer.set_keylock(false);
+    renderer.set_pitch(Pitch::default());
     assert_eq!(
         renderer
             .prepare_engine_latency(renderer.spec)
