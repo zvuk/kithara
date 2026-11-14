@@ -18,7 +18,7 @@ fn sync_timeout_preserves_the_harness_thread_name(#[case] expected: &str) {
 }
 
 #[kithara::test(native, flash(false))]
-#[kithara::hang_watchdog]
+#[kithara_test_utils::kithara::hang_watchdog]
 fn sync_timeout_preserves_watchdog_progress_and_result() -> Result<(), &'static str> {
     hang_reset!();
     hang_tick!();
