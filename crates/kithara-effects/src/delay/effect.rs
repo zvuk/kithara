@@ -77,8 +77,7 @@ impl DeckEffect for FeedbackDelay {
         let FxParamChange::Delay(param) = change;
         match param {
             DelayParam::Time(time) => self.comb.tap(f64::from(*time)).is_ok(),
-            DelayParam::Feedback(_) => true,
-            DelayParam::HighPass(_) => true,
+            DelayParam::Feedback(_) | DelayParam::HighPass(_) => true,
         }
     }
 
