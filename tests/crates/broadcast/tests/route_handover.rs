@@ -69,8 +69,13 @@ impl PartSinkFactory for AssetFactory {
 }
 
 async fn playing_harness() -> OfflinePlayer {
-    let harness =
-        OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), OLD_RATE).await;
+    let harness = OfflinePlayer::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
+            .build(),
+        OLD_RATE,
+    )
+    .await;
     let id = TrackId::allocate();
     let source = TrackSource::Uri(asset_source(&broadcast_tone_wav()));
     let mut events = harness.player().subscribe();
