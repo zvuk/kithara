@@ -600,6 +600,8 @@ pub struct SurfaceSpec {
 #[derive(Clone, Copy)]
 pub(crate) struct ControlSite<'a> {
     pub(crate) control: &'a ControlNode,
+    #[cfg(feature = "render")]
+    pub(crate) artworks: [Option<&'a str>; 2],
     /// Already resolved, so a parameterised list is validated like a literal one.
     pub(crate) columns: &'a [TableColumn],
     pub(crate) path: &'a str,
@@ -623,6 +625,8 @@ impl<'a> ControlSite<'a> {
     pub(crate) fn new(control: &'a ControlNode, path: &'a str) -> Self {
         Self {
             control,
+            #[cfg(feature = "render")]
+            artworks: [None, None],
             path,
             columns: &[],
             active: None,
