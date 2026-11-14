@@ -8,6 +8,7 @@ use tracing::info;
 
 use super::{
     container::{Container, container},
+    cpu,
     profile::{LinuxHost, LinuxRunner, RunnerFlavor},
 };
 use crate::{
@@ -30,6 +31,10 @@ pub(super) fn install(
     root: &Path,
 ) -> Result<()> {
     require_pinned_images(process, host, pins)?;
+    let cores = std::thread::available_parallelism()
+        .context("reading this machine's core count")?
+        .get();
+    let cpusets = cpu::assignments(host, cores)?;
     if Path::new(executable) != Path::new(consts::SERVICE_EXECUTABLE) {
         std::fs::copy(executable, consts::SERVICE_EXECUTABLE)
             .with_context(|| format!("installing {}", consts::SERVICE_EXECUTABLE))?;
@@ -37,11 +42,7 @@ pub(super) fn install(
     super::permissions::set_mode(Path::new(consts::SERVICE_EXECUTABLE), consts::EXECUTABLE)
         .with_context(|| format!("making {} executable", consts::SERVICE_EXECUTABLE))?;
 
-    let cores = std::thread::available_parallelism()
-        .context("reading this machine's core count")?
-        .get();
-    let sets = cpusets(host.runners.iter().map(|runner| runner.cpus), cores);
-    for (runner, cpuset) in host.runners.iter().zip(sets) {
+    for (runner, cpuset) in host.runners.iter().zip(cpusets) {
         client_environment(&runner.sccache_s3_env_file).with_context(|| {
             format!(
                 "validating S3 cache environment for Linux runner {}",
@@ -318,26 +319,6 @@ fn install_renewal_timer(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Which cores this runner's jobs may use.
-///
-/// Sets follow profile order and wrap when their total width exceeds the machine.
-/// They bound the core count Cargo sees; excess demand deliberately shares cores.
-pub(super) fn cpusets(
-    widths: impl IntoIterator<Item = u32>,
-    cores: usize,
-) -> impl Iterator<Item = String> {
-    let cores = u64::from(u32::try_from(cores).unwrap_or(u32::MAX).max(1));
-    widths.into_iter().scan(0_u64, move |first, width| {
-        let width = u64::from(width).clamp(1, cores);
-        let set = (0..width)
-            .map(|offset| ((*first + offset) % cores).to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        *first = (*first + width) % cores;
-        Some(set)
-    })
-}
-
 /// The runner takes one job and exits, the container goes with it, and systemd
 /// starts the next one. The runner keeps its checkout and caches; checkout
 /// cleans generated files and updates tracked files without retouching unchanged
@@ -537,51 +518,6 @@ mod tests {
                 Recording::default().with_reply(&["systemctl"], reply),
             );
             assert!(health(&process, &host).is_err(), "{reply:?}");
-        }
-    }
-
-    /// The container must see as many cores as it was given, because that
-    /// count is what Cargo turns into concurrent compilations.
-    #[test]
-    fn a_runner_is_given_exactly_the_cores_it_asked_for() {
-        for (index, set) in cpusets([3; 12], 32).enumerate() {
-            let cores = set.split(',').collect::<Vec<_>>();
-            assert_eq!(cores.len(), 3, "index {index}: {set}");
-            assert_eq!(
-                cores
-                    .iter()
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len(),
-                3,
-                "index {index} repeats a core: {set}"
-            );
-        }
-    }
-
-    #[test]
-    fn runner_cpu_sets_do_not_overlap_when_their_widths_fit() {
-        for cores in 1_u32..=8 {
-            let mut pending = vec![Vec::<u32>::new()];
-            while let Some(widths) = pending.pop() {
-                let mut assigned = std::collections::BTreeSet::new();
-                for set in cpusets(
-                    widths.iter().copied(),
-                    usize::try_from(cores).expect("small core count"),
-                ) {
-                    for cpu in set.split(',') {
-                        assert!(
-                            assigned.insert(cpu.to_owned()),
-                            "overlapping CPU {cpu}: cores={cores}, widths={widths:?}"
-                        );
-                    }
-                }
-                let used: u32 = widths.iter().sum();
-                for width in 1..=cores - used {
-                    let mut next = widths.clone();
-                    next.push(width);
-                    pending.push(next);
-                }
-            }
         }
     }
 
@@ -899,17 +835,6 @@ mod tests {
             mount(&first, "/runner/_work"),
             "/var/lib/kithara-ci/workspaces/kithara-ci-octocat"
         );
-    }
-
-    /// More runners than cores is the point of the exercise: an idle listener
-    /// costs nothing, so the machine carries more of them than it has cores.
-    #[test]
-    fn the_sets_wrap_instead_of_running_out() {
-        let set = cpusets([3; 12], 32).last().expect("twelve sets");
-        assert_eq!(set, "1,2,3", "{set}");
-        assert_eq!(cpusets([4], 4).next().as_deref(), Some("0,1,2,3"));
-        // A runner may not ask for more of the machine than it has.
-        assert_eq!(cpusets([9], 4).next().as_deref(), Some("0,1,2,3"));
     }
 
     /// A unit is a command line, and one this crate cannot parse fails only

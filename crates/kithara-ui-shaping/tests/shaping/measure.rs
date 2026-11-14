@@ -1,5 +1,10 @@
+use std::collections::BTreeMap;
+
+use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
-use kithara_ui_shaping::{Elision, FontFamily, FontId, FontWeight, GlyphFace, TextContext};
+use kithara_ui_shaping::{
+    Elision, FontFamily, FontId, FontPolicy, FontWeight, GlyphFace, TextContext, TextResources,
+};
 
 use crate::support::{DISPLAY, style};
 
@@ -39,6 +44,36 @@ fn shape_returns_positioned_glyphs_and_measurement() {
     );
     assert!(run.width() > 0.0);
     assert!(run.height() > 0.0);
+}
+
+#[kithara::test]
+fn registered_font_bytes_outlive_resources_and_context() {
+    let mut bytes = FontId::JetBrainsMonoRegular.bytes().to_vec();
+    bytes.extend_from_slice(b"skin-owned");
+    let run = {
+        let mut context = {
+            let resources = TextResources::with_fonts(
+                FontPolicy::Embedded,
+                BTreeMap::from([(FontFamily::Sans, vec![Arc::from(bytes.clone())])]),
+            )
+            .unwrap();
+            TextContext::from(&resources)
+        };
+        context.shape(
+            "GAIN",
+            style(FontFamily::Sans, FontWeight::Normal, 12.0, 0.0),
+            None,
+        )
+    };
+
+    let [segment] = run.segments() else {
+        panic!("the registered Sans source must shape as one segment");
+    };
+    let GlyphFace::System(font) = segment.face() else {
+        panic!("the shaped segment must retain the registered font data");
+    };
+    assert_eq!(font.data.as_ref(), bytes);
+    assert!(segment.glyphs().iter().all(|glyph| glyph.id != 0));
 }
 
 #[kithara::test]
