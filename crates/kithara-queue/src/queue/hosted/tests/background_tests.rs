@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use kithara_command::Batch;
+use kithara_command::{Batch, ChannelConfig, channel};
 use kithara_decode::DecodeError;
 use kithara_events::EventReceiver;
 use kithara_play::{LoadRefusal, Settled, Track, TrackSettingsChange};
@@ -889,4 +889,154 @@ async fn a_superseded_initial_open_releases_its_answered_lane(
     assert_eq!(queue.target.expect("selected target survives").to, ids[1]);
     drop((queue, rig));
     dir.finish().await;
+}
+
+fn fill_dispatcher(rig: &mut mock::DeckRig<TestPools>, resident: kithara_render::LaneId) {
+    for _ in 0..rig.dispatcher.available() {
+        rig.dispatcher
+            .send(
+                When::Next,
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![DispatcherCommand::SetPriority(resident, ServiceClass::Warm)],
+                },
+            )
+            .expect("fill dispatcher credits");
+    }
+}
+
+#[kithara::test(tokio)]
+#[case::admitted(false, false)]
+#[case::full_dispatcher(true, false)]
+#[case::closed_after_admission(false, true)]
+#[case::closed_before_admission(true, true)]
+async fn released_tracks_wait_for_source_retirement_through_the_queue(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] full: bool,
+    #[case] closed: bool,
+) {
+    let (mut queue, mut rig, dir) =
+        queue_with_load_settings(&worker_owner.0, NonZeroUsize::MIN, false);
+    let id = append(&mut queue, &mut rig, &dir, 1)[0];
+    select(&mut queue, &mut rig, id);
+    let seq = load_seq(&queue, id);
+    let loaded = loaded_fixture(
+        queue.worker().expect("worker"),
+        &mut rig,
+        &dir,
+        seq,
+        FixtureSource::Synthetic,
+    )
+    .await;
+    let resident = loaded.lane;
+    answer_loaded(&mut queue, &mut rig, loaded);
+    crate::mock::settle(&mut queue, &mut rig, SessionFrame::new(0));
+    assert_eq!(queue.active.len(), 1);
+    assert!(queue.active.get(0).expect("loaded track").track.attached());
+    if full {
+        fill_dispatcher(&mut rig, resident);
+        assert_eq!(rig.dispatcher.available(), 0);
+    }
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::apply(queue, QueueCommand::RemoveAll, out)
+    })
+    .expect("clear attached queue");
+    crate::mock::settle(&mut queue, &mut rig, SessionFrame::new(0));
+    assert_eq!(queue.active.len(), 0, "RT detach releases its slot");
+    assert_eq!(
+        queue.active.parked_len(),
+        1,
+        "source ownership survives RT detach"
+    );
+    if closed {
+        let (_unused, replacement) = channel(ChannelConfig::builder().build());
+        drop(std::mem::replace(&mut rig.opens, replacement));
+        settle_dispatcher(&mut queue, &mut rig);
+        tick_fixture(&mut queue, &mut rig);
+        queue.reap_released();
+        assert_eq!(
+            queue.active.parked_len(),
+            0,
+            "a destroyed dispatcher cannot retain source retirement"
+        );
+        return;
+    }
+    let waiting = TrackId::allocate();
+    queue.insert_entry(
+        waiting,
+        TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
+        kithara_play::Position::ZERO,
+        crate::queue::types::Placement::Append,
+    );
+    let output = mock::output(None).get();
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        queue.pump_loads(Some(&output), out);
+    });
+    assert!(
+        !queue
+            .active
+            .parked_iter()
+            .any(|parked| parked.item == waiting)
+    );
+    let mut release = None;
+    rig.opens.drain();
+    while let Some(due) = rig.opens.next_due((), 1) {
+        match due.commands() {
+            [DispatcherCommand::SetPriority(_, _)] => due.apply(Dispatched::Prioritized),
+            [DispatcherCommand::Release(id)] if *id == resident => release = Some(due.defer()),
+            _ => panic!("retirement or priority"),
+        }
+    }
+    settle_dispatcher(&mut queue, &mut rig);
+    tick_fixture(&mut queue, &mut rig);
+    rig.opens.drain();
+    if release.is_none() {
+        let due = rig
+            .opens
+            .next_due((), 1)
+            .expect("release retries after credits return");
+        assert!(matches!(due.commands(), [DispatcherCommand::Release(id)] if *id == resident));
+        release = Some(due.defer());
+    }
+    queue.reap_released();
+    assert_eq!(
+        queue.active.parked_len(),
+        1,
+        "a sent release still waits for its acknowledgement"
+    );
+    fill_dispatcher(&mut rig, resident);
+    assert!(
+        with_outbox(&mut queue, &mut rig, Queue::release_all).is_ok(),
+        "an admitted release spends no new dispatcher credit"
+    );
+    rig.opens.drain();
+    while let Some(due) = rig.opens.next_due((), 1) {
+        assert!(matches!(
+            due.commands(),
+            [DispatcherCommand::SetPriority(_, _)]
+        ));
+        due.apply(Dispatched::Prioritized);
+    }
+    settle_dispatcher(&mut queue, &mut rig);
+    rig.opens
+        .resume(release.expect("source release"), (), ())
+        .expect("held release")
+        .apply(Dispatched::Released);
+    let receipt = rig
+        .dispatcher
+        .receipts()
+        .next()
+        .expect("source acknowledgement");
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        queue.settle_with_output(TrackReceipt::Loaded(receipt), Some(&output), out)
+    });
+    assert!(!queue.active.parked_iter().any(|parked| parked.item == id));
+    assert!(
+        queue
+            .active
+            .parked_iter()
+            .any(|parked| parked.item == waiting
+                && matches!(parked.load, Some(LoadState::Opening(_)))),
+        "cleanup acknowledgement refills the released source budget without another command"
+    );
 }

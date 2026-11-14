@@ -15,7 +15,6 @@ use super::{
         settings::TrackSettingsChange,
     },
     core::PlayerImpl,
-    geometry::session_at,
     segment::{Adoption, Segment},
     state::*,
 };
@@ -71,7 +70,8 @@ impl<S> PlayerImpl<S> {
         if rate.is_none() {
             self.settings.track(seq, When::Next, change);
         }
-        self.segment = Segment::issued(segment, origin, starting_speed.unwrap_or(final_speed));
+        self.segment = Segment::issued(segment, origin, starting_speed.unwrap_or(final_speed))
+            .with_request(seq);
         self.observed_source = None;
         self.mark = None;
         self.resume = None;
@@ -119,7 +119,7 @@ impl<S> PlayerImpl<S> {
                 "a segment adoption cannot join a timed group".into(),
             ));
         }
-        let lane = self.lane.as_ref().ok_or(PlayError::NotReady)?;
+        let lane = self.lane.sender().ok_or(PlayError::NotReady)?;
         if lane.available() == 0 {
             return Err(PlayError::Full("lane"));
         }
@@ -170,7 +170,7 @@ impl<S> PlayerImpl<S> {
             }
         };
         if attaching.is_some() {
-            self.seat.land(at);
+            self.seat.land(seq, at);
             self.loading = None;
             if transport_current {
                 self.status = TrackStatus::Loaded;
@@ -196,7 +196,7 @@ impl<S> PlayerImpl<S> {
                 && matches!(outcome, Outcome::Rejected(Rejection::Stale))
                 && let Some((segment, position)) = adoption.parked
             {
-                if let Err(error) = self.send_lane(
+                let seq = match self.send_lane(
                     LaneCommand::Segment {
                         id: segment,
                         from: position,
@@ -204,12 +204,16 @@ impl<S> PlayerImpl<S> {
                     },
                     When::Next,
                 ) {
-                    return Some(Settled::Rejected {
-                        seq: adoption.caller,
-                        reason: Rejection::Refused(error),
-                    });
-                }
-                self.segment = Segment::issued(segment, Some(position), self.segment.speed);
+                    Ok(seq) => seq,
+                    Err(error) => {
+                        return Some(Settled::Rejected {
+                            seq: adoption.caller,
+                            reason: Rejection::Refused(error),
+                        });
+                    }
+                };
+                self.segment =
+                    Segment::issued(segment, Some(position), self.segment.speed).with_request(seq);
                 self.observed_source = None;
             }
             self.repeat = false;
@@ -351,11 +355,14 @@ impl<S> PlayerImpl<S> {
     }
 
     pub(super) fn release_lane(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
-        if let Registration::Registered(lane) = self.registration {
-            self.registration = Registration::Releasing {
-                lane,
-                seq: out.release(lane)?,
-            };
+        self.close_lane_admission();
+        if let Some(lane) = self.lane.release_needed() {
+            match out.release(lane) {
+                Ok(seq) => self.lane.releasing(Some(seq)),
+                // Dispatcher teardown retires residents before closing its inbox.
+                Err(PlayError::Closed) => self.finish_lane(),
+                Err(error) => return Err(error),
+            }
         }
         Ok(())
     }
@@ -384,9 +391,9 @@ impl<S> PlayerImpl<S> {
         }
     }
 
-    fn apply_lane(&mut self, seq: Seq, at: LaneFrame, data: &LaneApplied, segment: bool) {
+    fn apply_lane(&mut self, seq: Seq, at: LaneFrame, data: &LaneApplied) {
+        self.segment.answer_request(seq, Ok(()));
         let operations = self.lane_history.answered(seq);
-        let mut speed_session = None;
         for operation in operations {
             tracing::debug!(
                 item = u64::from(self.item),
@@ -401,15 +408,8 @@ impl<S> PlayerImpl<S> {
                 command = ?operation.command,
                 "lane command settled"
             );
-            let session = match operation.when {
-                When::At(requested) if requested == at => operation.session,
-                _ => self.mark.and_then(|mark| session_at(mark, at)),
-            };
             operation.when = When::At(at);
-            operation.verdict = Some(Ok(()));
-            if matches!(&operation.command, LaneCommand::SetSpeed(_)) {
-                speed_session = Some(session);
-            }
+            operation.applied = true;
             if let LaneCommand::Segment { id, from, .. } = operation.command
                 && data.ready == Some(id)
                 && id == self.segment.id
@@ -422,44 +422,55 @@ impl<S> PlayerImpl<S> {
                 }
             }
         }
-        if let Some(session) = speed_session
-            && !segment
-        {
-            self.lane_history
-                .speed_answers
-                .push_back((seq, Ok((at, session))));
-        }
         self.accept_ready(seq, data);
     }
 
     pub(super) fn settle_lane(&mut self) {
-        if self.lane.is_none() {
+        let accepting = self.lane.sender().is_some();
+        while let Some(receipt) = self.lane.receipt() {
+            if accepting {
+                self.settings.settle(&receipt);
+            }
+            let seq = receipt.seq();
+            let settled = match receipt.outcome() {
+                Outcome::Applied { at, data } => {
+                    if accepting {
+                        self.apply_lane(seq, *at, data);
+                    }
+                    Settled::Applied { seq, at: *at }
+                }
+                Outcome::Rejected(reason) => {
+                    if accepting {
+                        self.segment.answer_request(seq, Err(*reason));
+                        self.lane_history.retain(|operation| operation.seq != seq);
+                    }
+                    warn!(?reason, "lane command was rejected");
+                    Settled::Rejected {
+                        seq,
+                        reason: rejection(reason, |failure| PlayError::Lane(*failure)),
+                    }
+                }
+            };
+            self.lane_history.receipts.push_back(settled);
+        }
+        if !accepting {
             return;
         }
-        while let Some(receipt) = self.lane.as_mut().and_then(|lane| lane.receipts().next()) {
-            self.settings.settle(&receipt);
-            let segment = receipt
-                .batch()
-                .commands
-                .iter()
-                .any(|command| matches!(command, LaneCommand::Segment { .. }));
-            if let Outcome::Applied { at, data } = receipt.outcome() {
-                self.apply_lane(receipt.seq(), *at, data, segment);
-            } else if let Outcome::Rejected(reason) = receipt.outcome() {
-                let mut speed = false;
-                for operation in self.lane_history.answered(receipt.seq()) {
-                    operation.verdict = Some(Err(*reason));
-                    speed |= matches!(operation.command, LaneCommand::SetSpeed(_));
-                }
-                if speed && !segment {
-                    self.lane_history.speed_answers.push_back((
-                        receipt.seq(),
-                        Err(rejection(reason, |failure| PlayError::Lane(*failure))),
-                    ));
-                }
-                warn!(?reason, "lane command was rejected");
+        let current = self.segment.id;
+        let adoptions = &self.adoptions;
+        self.lane_history.retain(|operation| {
+            if !operation.applied {
+                return true;
             }
-        }
+            let live = |segment| {
+                segment == current || adoptions.inflight.iter().any(|adoption| {
+                    adoption.segment == segment || adoption.parked.is_some_and(|(parked, _)| parked == segment)
+                })
+            };
+            live(operation.segment)
+                || matches!(operation.when, When::At(at) if live(at.segment))
+                || matches!(operation.command, LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. } if live(id))
+        });
         self.reserved_ready();
     }
 }

@@ -5,6 +5,7 @@ use kithara_platform::time::Duration;
 use kithara_play::{
     Outbox, PlayError, Player, Position, Settled, Track, TrackClock, TrackCommand, TrackSnapshot,
 };
+use kithara_render::bridge::SlotMark;
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 
 use crate::{GridAnswer, LinkError, LinkedConfig, TempoTrajectory};
@@ -45,10 +46,6 @@ pub trait LinkedPlayer<S>: Player<S> {
 
     /// Scope batches needed to reopen silent tracks during a retime.
     fn scope_parts(&self) -> usize;
-
-    /// Whether the current native representation of this retime has applied.
-    /// None awaits its current receipt.
-    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool>;
 
     /// Replaces the trajectory and closes phase by the law of [`LinkConfig`].
     fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
@@ -189,7 +186,6 @@ pub struct Linked<P> {
     pub(super) start: Option<Seq>,
     pub(super) start_caller: Option<Seq>,
     pub(super) withdrawn: Vec<Seq>,
-    pub(super) retimes: Vec<(SessionFrame, Seq)>,
     pub(super) cue: Option<Cue>,
     pub(super) relocation: Option<Relocation>,
     /// A pause holds a deck that sounded since its Load, and no Seek has moved it since.
@@ -232,7 +228,7 @@ pub(super) struct RunningCorrection {
 }
 
 pub(super) enum CorrectionState {
-    Pending(RunningCorrection),
+    Pending(RunningCorrection, SlotMark),
     Applied(RunningCorrection),
 }
 
@@ -295,7 +291,6 @@ impl<P> Linked<P> {
             start_caller: None,
             relocation: None,
             withdrawn: Vec::new(),
-            retimes: Vec::new(),
             cue: None,
             paused_in_place: false,
         }
@@ -356,7 +351,7 @@ impl<P> Linked<P> {
             let SpeedOperation::Correction { state, .. } = operation else {
                 return true;
             };
-            let (CorrectionState::Pending(correction) | CorrectionState::Applied(correction)) =
+            let (CorrectionState::Pending(correction, _) | CorrectionState::Applied(correction)) =
                 state;
             correction.segment > mark.lane.segment
                 || correction.segment == mark.lane.segment

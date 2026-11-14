@@ -20,6 +20,7 @@ use kithara_play::{
     mock::DeckRig,
 };
 use kithara_render::{
+    LaneFrame,
     bridge::{DeckPart, DeckProtocol, DeckSnapshot, Slot, SlotMark},
     rt::DeckMixerConfig,
 };
@@ -133,8 +134,8 @@ pub(super) struct Script {
     /// SYNC reconciles it on every pass.
     pub clock: TrackClock,
     pub clock_refusal: Option<PlayError>,
-    pending: Vec<(Seq, Vec<Command>, bool)>,
-    speeds: VecDeque<Settled>,
+    pending: Vec<(Seq, Vec<Command>, bool, SlotMark)>,
+    pub(super) speeds: VecDeque<Settled<LaneFrame>>,
     verdicts: Vec<(Seq, bool)>,
 }
 
@@ -210,7 +211,16 @@ impl ScriptedTrack {
             script
                 .sent
                 .extend(commands.iter().cloned().map(|command| (seq, command)));
-            script.pending.push((seq, commands, true));
+            // The scripted lane starts at the session origin before its first mark.
+            let mark = script.snapshot.mark.unwrap_or(SlotMark {
+                session: SessionFrame::new(0),
+                lane: LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: 0,
+                },
+                position: Position::ZERO,
+            });
+            script.pending.push((seq, commands, true, mark));
             Ok(Some(seq))
         })?;
         if let Some(seq) = sent {
@@ -286,7 +296,7 @@ impl Player<TestPools> for ScriptedTrack {
         let sent = self.send(vec![command.clone()])?;
         if load {
             self.control.edit(|script| {
-                script.pending.retain(|(seq, _, _)| Some(*seq) == sent);
+                script.pending.retain(|(seq, _, _, _)| Some(*seq) == sent);
                 script.snapshot.status = TrackStatus::Loading;
                 if let Command::Load(position) = command {
                     script.snapshot.position = position;
@@ -308,20 +318,35 @@ impl Player<TestPools> for ScriptedTrack {
             let Some(index) = script
                 .pending
                 .iter()
-                .position(|(pending, _, _)| *pending == seq)
+                .position(|(pending, _, _, _)| *pending == seq)
             else {
                 return Settled::Pending;
             };
-            let (_, commands, current) = script.pending.remove(index);
+            let (_, commands, current, mark) = script.pending.remove(index);
             if !current {
                 return Settled::Rejected {
                     seq,
                     reason: Rejection::Stale,
                 };
             }
-            let speed = commands
-                .iter()
-                .any(|command| matches!(command, Command::Speed(..)));
+            let lane = commands.iter().any(|command| {
+                matches!(
+                    command,
+                    Command::Speed(..)
+                        | Command::Seek(_)
+                        | Command::Jump(..)
+                        | Command::ConfigureSpeed(..)
+                        | Command::Rate(_)
+                )
+            });
+            let timed = commands.iter().any(|command| {
+                matches!(
+                    command,
+                    Command::Speed(_, When::At(_))
+                        | Command::Jump(..)
+                        | Command::ConfigureSpeed(_, When::At(_))
+                )
+            });
             let settled = match outcome {
                 Outcome::Applied { at, .. } => {
                     for command in commands {
@@ -379,11 +404,28 @@ impl Player<TestPools> for ScriptedTrack {
                     },
                 },
             };
-            if speed {
+            if lane {
                 script
                     .verdicts
                     .push((seq, matches!(settled, Settled::Applied { .. })));
-                script.speeds.push_back(settled.clone());
+                script.speeds.push_back(match &settled {
+                    Settled::Applied { seq, at } => Settled::Applied {
+                        seq: *seq,
+                        at: if timed {
+                            mark.lane_at(*at).expect("actual lane frame")
+                        } else {
+                            LaneFrame {
+                                segment: SegmentId::FIRST,
+                                frame: 0,
+                            }
+                        },
+                    },
+                    Settled::Rejected { seq, reason } => Settled::Rejected {
+                        seq: *seq,
+                        reason: reason.clone(),
+                    },
+                    Settled::Pending => Settled::Pending,
+                });
             }
             settled
         });
@@ -416,8 +458,8 @@ impl Track<TestPools> for ScriptedTrack {
                 .pending
                 .iter()
                 .rev()
-                .filter(|(_, _, current)| *current)
-                .flat_map(|(_, commands, _)| commands.iter().rev())
+                .filter(|(_, _, current, _)| *current)
+                .flat_map(|(_, commands, _, _)| commands.iter().rev())
                 .find_map(|command| match command {
                     Command::Speed(SpeedCurve::Constant(speed), _)
                     | Command::ConfigureSpeed(speed, _) => Some(*speed),
@@ -476,18 +518,34 @@ impl Track<TestPools> for ScriptedTrack {
     fn planned_end(&self, _rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError> {
         Ok(None)
     }
-    fn speed_receipt(&mut self) -> Option<Settled> {
+    fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>> {
         self.control.edit(|script| script.speeds.pop_front())
     }
-    fn speed_applied(&mut self, seq: Seq) -> Option<bool> {
+    fn seek_applied(&mut self, seq: Seq) -> Option<bool> {
         self.control.edit(|script| {
-            script
-                .verdicts
+            if script
+                .pending
                 .iter()
-                .find(|(named, _)| *named == seq)
-                .map(|(_, applied)| *applied)
+                .any(|(pending, _, _, _)| *pending == seq)
+            {
+                return None;
+            }
+            Some(
+                script
+                    .verdicts
+                    .iter()
+                    .find(|(named, _)| *named == seq)
+                    .is_some_and(|(_, applied)| *applied),
+            )
         })
     }
+    fn source_request(&self) -> Option<Seq> {
+        None
+    }
+    fn source_closed(&self) -> bool {
+        true
+    }
+
     fn finish_group(&mut self, _result: Result<Seq, &mut Vec<DeckPart>>) {}
 
     fn cue(
@@ -502,7 +560,7 @@ impl Track<TestPools> for ScriptedTrack {
         ])?;
         self.lane_commands.retain(|(seq, _, _)| Some(*seq) == sent);
         self.control.edit(|script| {
-            for (seq, commands, current) in &mut script.pending {
+            for (seq, commands, current, _) in &mut script.pending {
                 if commands
                     .iter()
                     .any(|command| matches!(command, Command::Play(_)))
@@ -757,7 +815,7 @@ pub(super) fn sound(control: &Control, rig: &mut Rig, now: u32, at: u32) {
         script.snapshot.position = position(at);
         script.snapshot.mark = Some(SlotMark {
             session: rig.now,
-            lane: kithara_render::LaneFrame {
+            lane: LaneFrame {
                 segment: SegmentId::FIRST,
                 frame: u64::from(at),
             },

@@ -7,7 +7,7 @@ use kithara_play::{
     SeekBatch, Settled, Track, TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange,
     TrackStatus,
 };
-use kithara_render::{bridge::DeckPart, rt::DeckMixerConfig};
+use kithara_render::{LaneFrame, bridge::DeckPart, rt::DeckMixerConfig};
 use kithara_signal::{FrameCount, SessionFrame};
 use tracing::warn;
 
@@ -281,8 +281,7 @@ impl<P> Linked<P> {
                     self.send_cue(required, curve, Some((entry_frame, coverage)), out)
                 });
         match sent {
-            Ok(sent @ Some(_)) => {
-                self.record_retime(at, sent);
+            Ok(Some(_)) => {
                 if let Some(start) = self.start {
                     self.start_caller.get_or_insert(start);
                 }
@@ -436,7 +435,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
     fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
         self.keep_clock(out);
         self.inner.tick(now, out);
-        self.drain_speed_receipts::<S>();
+        self.drain_lane_receipts::<S>();
         self.update_correction::<S>();
         if self.synced() {
             self.renew_plan(out);
@@ -560,7 +559,7 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
     }
 
     fn seek_applied(&mut self, seq: Seq) -> Option<bool> {
-        self.drain_speed_receipts::<S>();
+        self.drain_lane_receipts::<S>();
         match self.relocation {
             Some(Relocation {
                 caller,
@@ -581,6 +580,16 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
         }
     }
 
+    fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>> {
+        let receipt = self.inner.lane_receipt()?;
+        match &receipt {
+            Settled::Applied { seq, at } => self.correction_applied(*seq, *at),
+            Settled::Rejected { seq, reason } => self.speed_rejected::<S>(*seq, reason),
+            Settled::Pending => {}
+        }
+        Some(receipt)
+    }
+
     fn follows_host(&self) -> bool {
         LinkedPlayer::<S>::synced(self)
     }
@@ -588,6 +597,8 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
     delegate::delegate! {
         to self.inner {
             fn projected(&self) -> TrackSettings;
+            fn source_request(&self) -> Option<Seq>;
+            fn source_closed(&self) -> bool;
             fn prepared_speed(&self) -> Option<&kithara_sync::SpeedCurve>;
             fn planned(
                 &self,
@@ -598,8 +609,6 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
                 &self,
                 sample_rate: std::num::NonZeroU32,
             ) -> Result<Option<SessionFrame>, PlayError>;
-            fn speed_receipt(&mut self) -> Option<Settled>;
-            fn speed_applied(&mut self, seq: Seq) -> Option<bool>;
             fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);
         }
     }
@@ -657,13 +666,10 @@ impl<P> Linked<P> {
         P: Track<S>,
     {
         let sent = self.inner.cue(position, speed, out)?;
-        if let Some(seq) = sent {
+        if sent.is_some() {
             match plan {
                 Some((at, coverage)) => self.plan_sent(at, coverage),
                 None => self.plan_end = None,
-            }
-            for (_, current) in &mut self.retimes {
-                *current = seq;
             }
         }
         Ok(sent)
@@ -772,21 +778,6 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
                 && snapshot.as_ref().attached
                 && !matches!(snapshot.as_ref().status, TrackStatus::Playing { .. }),
         )
-    }
-
-    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool> {
-        let mut awaiting = false;
-        for &(frame, seq) in &self.retimes {
-            if frame != at {
-                continue;
-            }
-            match self.inner.speed_applied(seq) {
-                Some(true) => return Some(true),
-                None => awaiting = true,
-                Some(false) => {}
-            }
-        }
-        (!awaiting).then_some(false)
     }
 
     fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {

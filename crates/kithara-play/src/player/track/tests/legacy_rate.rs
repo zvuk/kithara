@@ -200,11 +200,7 @@ fn consumed_speed_preserves_the_origin_needed_by_each_curve(
         .expect("accepted before rejection");
     track
         .lane_history
-        .commands
-        .iter_mut()
-        .find(|operation| operation.seq == rejected)
-        .expect("recorded rejected curve")
-        .verdict = Some(Err(Rejection::Stale));
+        .retain(|operation| operation.seq != rejected);
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
         session: frame(20),
@@ -292,12 +288,7 @@ fn consumed_speed_matches_the_full_piecewise_schedule() {
                 )
                 .expect("scheduled curve");
             if index % 5 == 0 {
-                track
-                    .lane_history
-                    .commands
-                    .last_mut()
-                    .expect("recorded curve")
-                    .verdict = Some(Err(Rejection::Stale));
+                track.lane_history.retain(|operation| operation.seq != seq);
             } else {
                 schedule.push((at, seq, curve));
             }

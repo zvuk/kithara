@@ -1,4 +1,4 @@
-use std::{num::NonZeroU32, ops::Deref, task::Waker};
+use std::{collections::VecDeque, num::NonZeroU32, ops::Deref, task::Waker};
 
 use kithara::{
     bufpool::HasPool,
@@ -22,7 +22,7 @@ use kithara::{
 };
 use kithara_command::{Outcome, Rejection, Seq, When};
 use kithara_render::{
-    LoadRefusal,
+    LaneFrame, LoadRefusal,
     bridge::{DeckEvent, DeckPart, SlotSnapshot, SlotState},
     rt::DeckMixerConfig,
 };
@@ -242,6 +242,7 @@ pub struct ObservedTrack<S> {
     /// owner ticks its track first in its own pass, so a timed speed change
     /// sent before any further input renews the owner's plan.
     ticked: Option<usize>,
+    receipts: VecDeque<Settled<LaneFrame>>,
 }
 
 impl<S> TrackFactory<S> for ObservedFactory<S>
@@ -255,6 +256,7 @@ where
             inner: PlayerFactory.track(config)?,
             observation: self.observation.clone(),
             ticked: None,
+            receipts: VecDeque::new(),
         })
     }
 }
@@ -397,6 +399,72 @@ impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
         }
     }
 
+    fn record_lane(&self, receipt: &Settled<LaneFrame>) {
+        let (seq, applied) = match receipt {
+            Settled::Applied { seq, .. } => (*seq, true),
+            Settled::Rejected { seq, .. } => (*seq, false),
+            Settled::Pending => return,
+        };
+        let item = self.inner.snapshot().item;
+        let mut observation = self.observation.lock();
+        observation.timeline.push(serde_json::json!({
+            "event": "lane receipt", "item": u64::from(item), "seq": seq.get(),
+            "outcome": format!("{receipt:?}"),
+        }));
+        if observation
+            .seeks
+            .contains(&(item, LinkReceiptOrigin::Lane, seq))
+        {
+            observation.seek_applied.push((item, seq, applied));
+        }
+        if observation
+            .placements
+            .iter()
+            .any(|placement| placement.item == item && placement.seq == seq)
+        {
+            observation.placement_applied.push((item, seq, applied));
+        }
+        if applied
+            && (observation.cues.contains(&(item, seq))
+                || observation.cue_curves.iter().any(|cue| {
+                    cue.item == item
+                        && cue.seq == seq
+                        && cue.native == Some(LinkReceiptOrigin::Lane)
+                }))
+            && !observation.ready_cues.contains(&(item, seq))
+        {
+            observation.ready_cues.push((item, seq));
+        }
+        let timed = observation.speeds.iter().find(|speed| {
+            speed.item == item
+                && speed.seq == seq
+                && matches!(
+                    speed.before.status,
+                    kithara::play::TrackStatus::Playing { .. }
+                )
+        });
+        let settled = timed.map(|speed| match receipt {
+            Settled::Applied { seq, at } => Settled::Applied {
+                seq: *seq,
+                at: speed
+                    .before
+                    .mark
+                    .expect("an admitted sounding speed has a mark")
+                    .session_at(*at)
+                    .expect("the receipt maps through its admitted source clock"),
+            },
+            Settled::Rejected { seq, reason } => Settled::Rejected {
+                seq: *seq,
+                reason: reason.clone(),
+            },
+            Settled::Pending => Settled::Pending,
+        });
+        drop(observation);
+        if let Some(settled) = settled {
+            self.record(&settled, Some(LinkReceiptOrigin::Lane));
+        }
+    }
+
     fn record(&self, settled: &Settled, origin: Option<LinkReceiptOrigin>) {
         if !matches!(settled, Settled::Pending) {
             let item = self.inner.snapshot().item;
@@ -441,91 +509,28 @@ where
         self.inner.tick(now, out);
         self.ticked = Some(self.observation.lock().owner_inputs.len());
         let item = self.inner.snapshot().item;
-        let pending_seeks: Vec<_> = {
-            let observation = self.observation.lock();
-            observation
-                .seeks
-                .iter()
-                .filter_map(|&(owner, origin, seq)| {
-                    (owner == item
-                        && origin == LinkReceiptOrigin::Lane
-                        && !observation
-                            .seek_applied
-                            .iter()
-                            .any(|&(owner, answered, _)| owner == item && answered == seq))
-                    .then_some(seq)
-                })
-                .collect()
-        };
-        for seq in pending_seeks {
-            if let Some(applied) = self.inner.speed_applied(seq) {
-                self.observation
-                    .lock()
-                    .seek_applied
-                    .push((item, seq, applied));
-            }
+        while let Some(receipt) = self.inner.lane_receipt() {
+            self.record_lane(&receipt);
+            self.receipts.push_back(receipt);
         }
-        let pending_placements = {
-            let observation = self.observation.lock();
-            observation
-                .placements
-                .iter()
-                .filter_map(|placement| {
-                    (placement.item == item
-                        && !observation
-                            .placement_applied
-                            .iter()
-                            .any(|(owner, seq, _)| *owner == item && *seq == placement.seq))
-                    .then_some(placement.seq)
-                })
-                .collect::<Vec<_>>()
-        };
-        for seq in pending_placements {
-            if let Some(applied) = self.inner.speed_applied(seq) {
-                self.observation
-                    .lock()
-                    .placement_applied
-                    .push((item, seq, applied));
-            }
-        }
-        let pending: Vec<_> = self
-            .observation
-            .lock()
-            .cues
-            .iter()
-            .filter_map(|(owner, seq)| (*owner == item).then_some(*seq))
-            .collect();
-        for seq in pending {
-            if self.inner.speed_applied(seq) == Some(true) {
-                let mut observation = self.observation.lock();
-                if !observation.ready_cues.contains(&(item, seq)) {
-                    observation.ready_cues.push((item, seq));
-                }
-            }
-        }
-        let native: Vec<_> = self
-            .observation
-            .lock()
+        let mut observation = self.observation.lock();
+        let ready: Vec<_> = observation
             .cue_curves
             .iter()
             .filter_map(|cue| {
-                (cue.item == item && cue.native.is_some()).then_some((cue.seq, cue.native))
+                (cue.item == item && cue.native == Some(LinkReceiptOrigin::Deck)
+                && observation.placement_receipts.iter().any(|(owner, origin, receipt)| {
+                    *owner == item && *origin == LinkReceiptOrigin::Deck
+                        && matches!(receipt, Settled::Applied { seq, .. } if *seq == cue.seq)
+                })).then_some(cue.seq)
             })
             .collect();
-        for (seq, origin) in native {
-            let ready = if origin == Some(LinkReceiptOrigin::Lane) {
-                self.inner.speed_applied(seq) == Some(true)
-            } else {
-                self.observation.lock().placement_receipts.iter().any(|(owner, origin, receipt)| *owner == item
-                    && *origin == LinkReceiptOrigin::Deck && matches!(receipt, Settled::Applied { seq: answered, .. } if *answered == seq))
-            };
-            if ready {
-                let mut observation = self.observation.lock();
-                if !observation.ready_cues.contains(&(item, seq)) {
-                    observation.ready_cues.push((item, seq));
-                }
+        for seq in ready {
+            if !observation.ready_cues.contains(&(item, seq)) {
+                observation.ready_cues.push((item, seq));
             }
         }
+        drop(observation);
         let snapshot = self.inner.snapshot();
         if let Some(mark) = snapshot.mark
             && let Some(pass) = out.pass()
@@ -849,10 +854,11 @@ where
         to self.inner {
             fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_, S>) -> Result<Option<usize>, PlayError>;
             fn projected(&self) -> TrackSettings;
+            fn source_request(&self) -> Option<Seq>;
+            fn source_closed(&self) -> bool;
             fn prepared_speed(&self) -> Option<&kithara::sync::SpeedCurve>;
             fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_, S>) -> Result<bool, PlayError>;
             fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;
-            fn speed_applied(&mut self, seq: Seq) -> Option<bool>;
             fn seek_applied(&mut self, seq: Seq) -> Option<bool>;
             fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);
         }
@@ -943,12 +949,13 @@ where
         Ok(seq)
     }
 
-    fn speed_receipt(&mut self) -> Option<Settled> {
-        let receipt = self.inner.speed_receipt();
-        if let Some(receipt) = &receipt {
-            self.record(receipt, Some(LinkReceiptOrigin::Lane));
+    fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>> {
+        if let Some(receipt) = self.receipts.pop_front() {
+            return Some(receipt);
         }
-        receipt
+        let receipt = self.inner.lane_receipt()?;
+        self.record_lane(&receipt);
+        Some(receipt)
     }
 }
 
@@ -1463,9 +1470,6 @@ where
     }
     fn scope_parts(&self) -> usize {
         LinkedPlayer::scope_parts(&self.inner)
-    }
-    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool> {
-        LinkedPlayer::retime_applied(&mut self.inner, at)
     }
     fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
         self.observation.lock().owner_inputs.push(LinkOwnerInput {

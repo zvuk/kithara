@@ -7,7 +7,7 @@ use kithara_platform::sync::Arc;
 use kithara_play::{
     DeckEvent, DeckMixerConfig, DeckPass, DeckProtocol, DeckRefusal, DispatcherProtocol,
     HostedDeck, ItemRole, LoadRefusal, Outbox, OutputSnapshot, PlayError, PlayWorker,
-    PlaybackFault, Player, PlayerEvent, ResourceLoad, Settled, TrackCommand, TrackFactory,
+    PlaybackFault, Player, PlayerEvent, ResourceLoad, Settled, Track, TrackCommand, TrackFactory,
     TrackReceipt, TrackRef, TrackStatus as PlayingStatus,
 };
 use kithara_signal::SessionFrame;
@@ -75,7 +75,7 @@ where
                 self.item_event(event, output, out);
             }
             TrackReceipt::Loaded(receipt) => {
-                let Some(settled) = self.settle_loaded_receipt(receipt, output, out) else {
+                let Some(settled) = self.settle_source_receipt(receipt, output, out) else {
                     return Settled::Pending;
                 };
                 outcomes = settled;
@@ -112,7 +112,7 @@ where
         result
     }
 
-    fn settle_loaded_receipt(
+    fn settle_source_receipt(
         &mut self,
         receipt: Receipt<DispatcherProtocol<ResourceLoad<S>>>,
         output: Option<&OutputSnapshot>,
@@ -132,7 +132,7 @@ where
                 && matches!(active.role, Role::Incoming);
             let host_can_answer_later = self.classify_load(id, leaving, wanted, receipt.outcome());
             if let Some(active) = self.active.get_mut(index) {
-                let settled = active.track.settle(TrackReceipt::Loaded(receipt), out);
+                let settled = Self::settle_source(&mut active.track, receipt, out);
                 if host_can_answer_later {
                     if let Err(error) = self.reopen_requested_load(index, output, out) {
                         let error = play_error(error);
@@ -156,9 +156,28 @@ where
             .parked_position(|parked| parked.load == Some(LoadState::Opening(seq)))
         {
             self.settle_parked(index, receipt, out);
+        } else {
+            if let Some(track) = self
+                .active
+                .tracks_mut()
+                .find(|track| track.source_request() == Some(seq))
+            {
+                Self::settle_source(track, receipt, out);
+            }
+            self.reap_released();
         }
         self.pump_loads(output, out);
         Some(outcomes)
+    }
+
+    fn settle_source(
+        track: &mut F::Track,
+        receipt: Receipt<DispatcherProtocol<ResourceLoad<S>>>,
+        out: &mut Outbox<'_, S>,
+    ) -> Settled {
+        let settled = track.settle(TrackReceipt::Loaded(receipt), out);
+        while track.lane_receipt().is_some() {}
+        settled
     }
 
     fn settle_deck_receipt(
@@ -345,7 +364,7 @@ where
         let leaving = parked.track.snapshot().as_ref().status == PlayingStatus::Released;
         if matches!(receipt.outcome(), Outcome::Applied { .. }) {
             let seq = receipt.seq();
-            parked.track.settle(TrackReceipt::Loaded(receipt), out);
+            Self::settle_source(&mut parked.track, receipt, out);
             parked.load = Some(LoadState::Attaching(seq));
             let metadata = parked.track.snapshot().as_ref().metadata.clone();
             if !leaving {
@@ -354,7 +373,7 @@ where
         } else {
             self.classify_load(id, leaving, false, receipt.outcome());
             if let Some(parked) = self.active.parked_get_mut(index) {
-                parked.track.settle(TrackReceipt::Loaded(receipt), out);
+                Self::settle_source(&mut parked.track, receipt, out);
             }
             self.active.take_parked(index);
         }
@@ -385,6 +404,9 @@ where
         self.reap_released();
         if self.active.parked_len() < parked {
             self.pump_loads(output, out);
+        }
+        for track in self.active.tracks_mut() {
+            while track.lane_receipt().is_some() {}
         }
         self.publish();
     }

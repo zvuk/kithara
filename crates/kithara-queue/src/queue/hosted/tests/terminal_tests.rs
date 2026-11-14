@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::{collections::VecDeque, num::NonZeroU32};
 
 use kithara_audio::{DecodeErrorKind, TrackFailureKind};
 use kithara_command::{Batch, ChannelConfig, Outcome, Seq, When, channel};
@@ -10,6 +10,7 @@ use kithara_play::{
     Slot, Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings, TrackSettingsChange,
     TrackSnapshot, TrackStatus as PlayerTrackStatus,
 };
+use kithara_render::LaneFrame;
 use kithara_signal::{AudioSpec, FrameCount, SessionFrame};
 use kithara_test_utils::kithara;
 
@@ -23,6 +24,7 @@ struct SnapshotTrack(
     TrackSnapshot,
     Vec<(TrackSettingsChange, When<SessionFrame>)>,
     Option<usize>,
+    VecDeque<Settled<LaneFrame>>,
 );
 struct SnapshotFactory;
 
@@ -50,6 +52,7 @@ impl TrackFactory<TestPools> for SnapshotFactory {
             },
             Vec::new(),
             Some(0),
+            VecDeque::new(),
         ))
     }
 }
@@ -163,12 +166,19 @@ impl Track<TestPools> for SnapshotTrack {
         )))
     }
 
-    fn speed_receipt(&mut self) -> Option<Settled> {
+    fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>> {
+        self.3.pop_front()
+    }
+
+    fn seek_applied(&mut self, _seq: Seq) -> Option<bool> {
         panic!("terminal-event fixture does not send speed commands")
     }
 
-    fn speed_applied(&mut self, _seq: Seq) -> Option<bool> {
-        panic!("terminal-event fixture does not send speed commands")
+    fn source_request(&self) -> Option<Seq> {
+        None
+    }
+    fn source_closed(&self) -> bool {
+        true
     }
 
     fn finish_group(&mut self, _result: Result<Seq, &mut Vec<DeckPart>>) {
@@ -200,6 +210,48 @@ fn fixture_seq() -> Seq {
 }
 
 type TestQueue = Queue<TestPools, SnapshotFactory>;
+
+#[kithara::test]
+fn every_queue_turn_drains_active_and_parked_lane_feedback() {
+    let (mut queue, _, _) = selected_second();
+    let id = TrackId::allocate();
+    let track = SnapshotFactory
+        .track(PlayerConfig {
+            item: id,
+            slot: None,
+            settings: TrackSettings::default(),
+        })
+        .expect("parked track");
+    queue.active.park(crate::queue::slots::Parked {
+        item: id,
+        track,
+        load: None,
+    });
+    let (mut deck, _deck_inbox) = channel(ChannelConfig::builder().build());
+    let (mut dispatcher, _dispatcher_inbox) = channel(ChannelConfig::builder().build());
+    for turn in 0..64 {
+        let seq = fixture_seq();
+        for track in queue.active.tracks_mut() {
+            track.3.push_back(Settled::Applied {
+                seq,
+                at: LaneFrame {
+                    segment: kithara_signal::SegmentId::FIRST,
+                    frame: turn,
+                },
+            });
+        }
+        queue.tick_with_output(
+            SessionFrame::new(0),
+            None,
+            &mut Outbox::new(&mut deck, &mut dispatcher),
+        );
+        assert_eq!(queue.active.parked_len(), 1);
+        assert!(
+            queue.active.tracks_mut().all(|track| track.3.is_empty()),
+            "feedback cannot accumulate across owner turns"
+        );
+    }
+}
 
 #[kithara::test]
 #[case::fade(false)]

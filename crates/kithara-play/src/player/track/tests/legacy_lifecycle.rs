@@ -8,7 +8,7 @@ fn idle_phase_has_no_slot_or_handle() {
     assert!(snapshot.abr.is_none());
     assert!(player.loading.is_none());
     assert!(player.seat.attaching().is_none());
-    assert!(player.lane.is_none());
+    assert!(player.lane.sender().is_none());
     assert_eq!(snapshot.status, TrackStatus::Idle);
 }
 
@@ -48,7 +48,7 @@ fn player_default_rate_getter_setter() {
     assert!((player.settings.projected().speed() - 0.75).abs() < f32::EPSILON);
     assert_eq!(player.snapshot().status, TrackStatus::Idle);
     assert!(!player.snapshot().attached);
-    assert!(player.lane.is_none());
+    assert!(player.lane.sender().is_none());
     assert!(player.playback_commands.is_empty());
 }
 
@@ -66,7 +66,7 @@ fn set_rate_without_active_slot_updates_only_the_requested_target() {
     .expect("idle speed change");
     assert_eq!(player.snapshot().status, TrackStatus::Idle);
     assert!(!player.snapshot().attached);
-    assert!(player.lane.is_none());
+    assert!(player.lane.sender().is_none());
     assert!(player.playback_commands.is_empty());
     assert!((player.settings.projected().speed() - 2.0).abs() < f32::EPSILON);
 }

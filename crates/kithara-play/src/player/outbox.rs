@@ -547,12 +547,12 @@ fn deck_sent_owned(
 
 /// What became of a batch, as a player reports it up.
 #[derive(Clone, Debug)]
-pub enum Settled {
+pub enum Settled<At = SessionFrame> {
     /// The receipt is not about this player, or its outcome has not come yet.
     Pending,
     Applied {
         seq: Seq,
-        at: SessionFrame,
+        at: At,
     },
     Rejected {
         seq: Seq,

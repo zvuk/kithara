@@ -11,6 +11,7 @@ use super::{
     super::outbox::{Outbox, Settled, rejection},
     core::PlayerImpl,
     seat::{Attaching, Seat},
+    segment::Segment,
     state::*,
 };
 use crate::{OpenedTrack, PlayError, ResourceLoad};
@@ -24,6 +25,9 @@ impl<S> PlayerImpl<S> {
     ) -> Result<Option<Seq>, PlayError> {
         if self.status != TrackStatus::Idle {
             return Err(PlayError::Internal("a track loads once".into()));
+        }
+        if !matches!(self.lane, Lane::None) || !self.lane_history.receipts.is_empty() {
+            return Err(PlayError::NotReady);
         }
         if out.dispatcher_available() == 0 {
             return Err(PlayError::Full("dispatcher"));
@@ -42,11 +46,14 @@ impl<S> PlayerImpl<S> {
             start: self.settings.config().lane_start(),
             inbox,
         })?;
-        self.lane = Some(lane);
+        self.lane = Lane::Opening(lane);
+        self.segment = Segment::issued(SegmentId::FIRST, None, self.settings.config().speed());
+        self.issued_segment = SegmentId::FIRST;
+        self.mark = None;
+        self.resume = None;
+        *self.projected_end.borrow_mut() = None;
         self.geometry = geometry;
         self.position = position;
-        self.segment.speed = self.settings.config().speed();
-        self.segment.origin = None;
         self.source_basis = None;
         self.observed_source = None;
         self.loading = Some(Loading {
@@ -64,8 +71,7 @@ impl<S> PlayerImpl<S> {
         out: &mut Outbox<'_, S>,
     ) -> Settled {
         let seq = receipt.seq();
-        if matches!(self.registration, Registration::Releasing { seq: release, .. } if release == seq)
-        {
+        if self.lane.release_seq() == Some(seq) {
             self.settle_release(&receipt);
             return Settled::Pending;
         }
@@ -84,8 +90,12 @@ impl<S> PlayerImpl<S> {
             } => self.accept_opened(seq, loaded, out),
             Outcome::Rejected(refused) => {
                 self.loading = None;
-                self.lane = None;
-                if !matches!(self.status, TrackStatus::Failed { .. }) {
+                self.close_lane_admission();
+                self.finish_lane();
+                self.segment =
+                    Segment::issued(SegmentId::FIRST, None, self.settings.config().speed());
+                self.issued_segment = SegmentId::FIRST;
+                if self.status != TrackStatus::Released {
                     self.status = TrackStatus::Idle;
                 }
                 Settled::Rejected {
@@ -110,25 +120,32 @@ impl<S> PlayerImpl<S> {
         loaded: Loaded<OpenedTrack>,
         out: &mut Outbox<'_, S>,
     ) -> Settled {
-        self.registration = Registration::Registered(loaded.lane);
+        self.lane.loaded(loaded.lane);
+        let OpenedTrack { pcm, abr, metadata } = loaded.opened;
+        self.abr = abr;
+        self.metadata = metadata;
+        if self.lane.retiring() {
+            self.loading = None;
+            if let Err(error) = self.release_lane(out) {
+                warn!(%error, "released open waits for dispatcher room");
+            }
+            return Settled::Pending;
+        }
         self.engine_latency = loaded.engine_latency;
         if self.segment.id == SegmentId::FIRST {
             self.segment.ready = true;
         }
-        let prepared = loaded.opened.pcm.next_chunk_info();
+        let prepared = pcm.next_chunk_info();
         if let Some(meta) = prepared.filter(|meta| meta.segment == self.segment.id) {
             self.segment.origin = Some(meta.timestamp);
         }
         self.source_basis = prepared;
         self.observed_source = prepared;
         self.extent = Extent::of(prepared);
-        let OpenedTrack { pcm, abr, metadata } = loaded.opened;
-        self.abr = abr;
-        self.metadata = metadata;
         if let Some(loading) = self.loading.as_mut() {
             loading.opened = Some(pcm);
         }
-        if self.status == TrackStatus::Released || self.preparation_failure().is_some() {
+        if self.preparation_failure().is_some() {
             self.loading = None;
             if let Err(error) = self.release_lane(out) {
                 warn!(%error, "released open waits for dispatcher room");
@@ -150,7 +167,6 @@ impl<S> PlayerImpl<S> {
         };
         if let Err(error) = entry.and_then(|()| self.attach(out)) {
             self.loading = None;
-            self.lane = None;
             self.status = TrackStatus::Idle;
             if let Err(error) = self.release_lane(out) {
                 warn!(%error, "refused open waits for dispatcher room");
@@ -168,21 +184,21 @@ impl<S> PlayerImpl<S> {
         &mut self,
         receipt: &Receipt<DispatcherProtocol<ResourceLoad<S>>>,
     ) {
-        let Registration::Releasing { lane, .. } = self.registration else {
-            return;
-        };
-        self.registration = Registration::Registered(lane);
         match receipt.outcome() {
             Outcome::Applied {
                 data: Dispatched::Released,
                 ..
             } => {
-                self.lane = None;
-                self.registration = Registration::None;
+                self.finish_lane();
             }
-            Outcome::Rejected(reason) => warn!(?reason, "dispatcher refused lane release"),
+            Outcome::Rejected(Rejection::Unanswered) => self.finish_lane(),
+            Outcome::Rejected(reason) => {
+                self.lane.releasing(None);
+                warn!(?reason, "dispatcher refused lane release");
+            }
             Outcome::Applied { .. } => {
                 let seq = receipt.seq();
+                self.lane.releasing(None);
                 warn!(?seq, "lane release received a non-release answer");
             }
         }
@@ -388,7 +404,7 @@ impl<S> PlayerImpl<S> {
             _ => return,
         };
         if self.class != class
-            && let Some(lane) = self.registration.lane()
+            && let Some(lane) = self.lane.resident()
         {
             match out.prioritize(lane, class) {
                 Ok(_) => self.class = class,

@@ -828,7 +828,7 @@ async fn paused_future_command(
     })
     .expect("future command")
     .expect("future sequence");
-    assert_eq!(deck.speed_applied(pending), None);
+    assert_eq!(deck.seek_applied(pending), None);
     native_marked(&mut rig, segment, |out| {
         deck.apply(TrackCommand::Pause { at: When::Next }, out)
     })

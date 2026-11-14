@@ -1,4 +1,4 @@
-use kithara_command::{Batch, Outcome, Sender, Seq, Target, When};
+use kithara_command::{Batch, Outcome, Seq, Target, When};
 use kithara_config::ConfigOwner;
 use kithara_render::{
     CrossfadeSettings, LaneCommand,
@@ -100,7 +100,9 @@ impl<S> Player<S> for PlayerImpl<S> {
                             .all(|basis| batch.basis.contains(basis))
                 });
                 if !attaching && !adopting && playback.is_none() {
-                    self.settle_returned(batch, out);
+                    if matches!(outcome, Outcome::Applied { .. }) {
+                        self.settle_returned(seq, batch, out);
+                    }
                     return Settled::Pending;
                 }
                 let mut transport_current = self
@@ -132,7 +134,7 @@ impl<S> Player<S> for PlayerImpl<S> {
         self.adopt_newest_epoch(out);
         self.promote(out);
         self.retry_clock(out);
-        if self.status == TrackStatus::Released {
+        if self.lane.retiring() {
             if let Err(error) = self.release_lane(out) {
                 warn!(%error, "lane release waits for room");
             }
@@ -171,12 +173,12 @@ impl<S> Player<S> for PlayerImpl<S> {
             mark: self.mark,
             engine_latency: self.engine_latency,
             ring_depth: self.geometry.ring_depth,
-            lane_room: self.lane.as_ref().map_or(0, Sender::available),
+            lane_room: self.lane.available(),
             pending_lane: self
                 .lane_history
                 .commands
                 .iter()
-                .any(|operation| operation.applied().is_none())
+                .any(|operation| !operation.applied)
                 || self
                     .loading
                     .as_ref()
@@ -330,7 +332,7 @@ impl<S> PlayerImpl<S> {
                 "a repeat adoption cannot join a timed group".into(),
             ));
         }
-        if self.lane.as_ref().is_none_or(|lane| lane.available() == 0) {
+        if self.lane.available() == 0 {
             return Err(PlayError::Full("lane"));
         }
         if out.deck_available() == 0 {
@@ -342,7 +344,7 @@ impl<S> PlayerImpl<S> {
         };
         let parked = (self.segment.id, parked_position);
         let segment = self.issued_segment.next();
-        self.send_lane(
+        let lane_seq = self.send_lane(
             LaneCommand::Segment {
                 id: segment,
                 from: Position::ZERO,
@@ -356,7 +358,8 @@ impl<S> PlayerImpl<S> {
             segment,
             Some(Position::ZERO),
             self.settings.projected().speed(),
-        );
+        )
+        .with_request(lane_seq);
         self.playback_commands.clear();
         self.repeat = true;
         self.adoptions.inflight.push(Adoption {
@@ -370,7 +373,7 @@ impl<S> PlayerImpl<S> {
     }
 
     fn supersede(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
-        if self.adoptions.parking() && self.lane.as_ref().is_none_or(|lane| lane.available() == 0) {
+        if self.adoptions.parking() && self.lane.available() == 0 {
             return Err(PlayError::Full("lane"));
         }
         out.supersede(self.seat()?)?;
@@ -380,8 +383,9 @@ impl<S> PlayerImpl<S> {
         Ok(None)
     }
 
-    fn settle_returned(&mut self, batch: &Batch<DeckProtocol>, out: &mut Outbox<'_, S>) {
-        if self.seat.attached_at().is_some()
+    fn settle_returned(&mut self, seq: Seq, batch: &Batch<DeckProtocol>, out: &mut Outbox<'_, S>) {
+        // A batch sent before this attachment cannot return its consumer.
+        if self.seat.attachment().is_some_and(|birth| seq > birth)
             && self.status != TrackStatus::Released
             && batch.commands.iter().any(|part| {
                 matches!(part, DeckPart::Returned(Returned::Pcm { slot, .. })

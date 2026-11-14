@@ -7,6 +7,96 @@ use super::*;
 use crate::Bound;
 
 #[kithara::test]
+fn lane_feedback_does_not_wait_for_a_consumed_session_mark() {
+    let (mut track, mut inbox) = prepared_track();
+    let seq = track
+        .send_lane(
+            LaneCommand::SetSpeed(SpeedCurve::Constant(1.25)),
+            When::Next,
+        )
+        .expect("speed admitted");
+    assert!(track.mark.is_none());
+    inbox.drain();
+    inbox
+        .next_due(
+            LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: 37,
+            },
+            1,
+        )
+        .expect("speed due")
+        .apply(kithara_render::LaneApplied {
+            source_basis: None,
+            engine_latency: FrameCount::new(0),
+            ready: None,
+        });
+    track.settle_lane();
+    assert!(
+        matches!(track.lane_receipt(), Some(Settled::Applied { seq: answered, at }) if answered == seq && at == (LaneFrame { segment: SegmentId::FIRST, frame: 37 })),
+        "a lane result must not wait for a session mark"
+    );
+    assert!(track.lane_receipt().is_none());
+}
+
+#[kithara::test]
+#[case::applied(true)]
+#[case::refused(false)]
+fn an_obsolete_cue_releases_its_curve_after_its_final_lane_receipt(#[case] applied: bool) {
+    let mut rig = rig();
+    let (mut track, mut inbox) = prepared_track();
+    track.seat = Seat::Unseated;
+    let steps: Arc<[(u64, kithara_signal::ExponentialApproach)]> = Arc::from([(
+        0,
+        kithara_signal::ExponentialApproach::new(1.0, 1.25, 220.5).expect("curve"),
+    )]);
+    let held = Arc::downgrade(&steps);
+    let first = in_pass(&mut rig, frame(0), |out| {
+        track.cue(Duration::ZERO, SpeedCurve::ApproachSteps(steps), out)
+    })
+    .expect("first cue")
+    .expect("source sequence");
+    let old = track.segment.id;
+    in_pass(&mut rig, frame(0), |out| {
+        track.cue(Duration::from_secs(2), SpeedCurve::Constant(1.5), out)
+    })
+    .expect("replacement cue");
+    let current = track.segment.id;
+    assert_ne!(old, current);
+    assert!(
+        held.upgrade().is_some(),
+        "an unanswered command still owns its curve"
+    );
+    inbox.drain();
+    let due = inbox
+        .next_due(
+            LaneFrame {
+                segment: old,
+                frame: 0,
+            },
+            1,
+        )
+        .expect("old cue due");
+    assert_eq!(due.seq(), first);
+    if applied {
+        due.apply(kithara_render::LaneApplied {
+            source_basis: None,
+            engine_latency: FrameCount::new(0),
+            ready: Some(old),
+        });
+    } else {
+        due.refuse(TrackFailureKind::SourceCancelled);
+    }
+    track.settle_lane();
+    assert!(
+        held.upgrade().is_none(),
+        "an answered obsolete curve has no remaining owner"
+    );
+    assert_eq!(track.segment.id, current);
+    assert_eq!(track.prepared_speed(), Some(&SpeedCurve::Constant(1.5)));
+}
+
+#[kithara::test]
 #[case::ready(true)]
 #[case::rejected(false)]
 async fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(
@@ -98,6 +188,59 @@ async fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(
     }
 }
 
+#[kithara::test]
+#[case::segment(false)]
+#[case::host_rate(true)]
+fn a_current_preparation_refusal_outlives_its_command_record(#[case] host_rate: bool) {
+    let mut rig = rig();
+    let (mut track, mut inbox) = prepared_track();
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        if host_rate {
+            TrackCommand::SetHostRate {
+                rate: mock::SAMPLE_RATE,
+            }
+        } else {
+            TrackCommand::Seek { to: Duration::ZERO }
+        },
+    );
+    let seq = track
+        .lane_history
+        .commands
+        .last()
+        .expect("source preparation")
+        .seq;
+    let segment = track.segment.id;
+    inbox.drain();
+    inbox
+        .next_due(LaneFrame { segment, frame: 0 }, 1)
+        .expect("source preparation due")
+        .refuse(TrackFailureKind::SourceCancelled);
+    assert!(matches!(
+        in_pass(&mut rig, frame(0), |out| track
+            .prepare_entry(frame(128), out)),
+        Err(PlayError::Lane(TrackFailureKind::SourceCancelled))
+    ));
+    assert!(!matches!(track.status, TrackStatus::Failed { .. }));
+    assert!(
+        track
+            .lane_history
+            .commands
+            .iter()
+            .all(|operation| operation.seq != seq)
+    );
+    assert_eq!(track.seek_applied(seq), Some(false));
+    assert!(
+        matches!(
+            in_pass(&mut rig, frame(0), |out| track
+                .prepare_entry(frame(128), out)),
+            Err(PlayError::Lane(TrackFailureKind::SourceCancelled))
+        ),
+        "the current preparation refusal must survive its detailed command record"
+    );
+}
+
 fn pause_prepared_track(track: &mut Track, rig: &mut Rig) {
     let status = track.snapshot().status;
     let position = track.snapshot().position;
@@ -148,7 +291,7 @@ async fn assert_preparation_refusal(host_rate: bool, initial: TrackStatus, reser
         rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
             .expect("live scope");
         let (sender, inbox) = lane();
-        track.lane = Some(sender);
+        replace_lane_sender(&mut track.lane, sender);
         (track, inbox)
     } else if matches!(initial, TrackStatus::Paused { .. }) {
         loaded(&mut rig, A, "refused-paused-preparation").await
@@ -248,38 +391,41 @@ fn assert_obsolete_preparation_refusal(host_rate: bool) {
             TrackCommand::Seek { to: Duration::ZERO }
         },
     );
-    let current = track.segment.id;
+    let obsolete_segment = track.segment.id;
     let obsolete = track
         .lane_history
         .commands
         .last()
         .expect("first preparation")
         .seq;
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        if host_rate {
+            TrackCommand::SetHostRate {
+                rate: mock::SAMPLE_RATE,
+            }
+        } else {
+            TrackCommand::Seek { to: Duration::ZERO }
+        },
+    );
+    let current = track.segment.id;
     let replacement = track
-        .send_lane(
-            if host_rate {
-                LaneCommand::SetHostRate {
-                    id: current,
-                    rate: mock::SAMPLE_RATE,
-                }
-            } else {
-                LaneCommand::Segment {
-                    id: current,
-                    from: Duration::ZERO,
-                    speed: SpeedCurve::Constant(1.0),
-                }
-            },
-            When::Next,
-        )
-        .expect("same-segment replacement");
+        .lane_history
+        .commands
+        .last()
+        .expect("replacement preparation")
+        .seq;
     assert_ne!(obsolete, replacement);
+    assert_ne!(obsolete_segment, current);
     assert!(
         track
             .lane_history
             .commands
             .iter()
             .all(|operation| matches!(operation.command,
-        LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. } if id == current))
+        LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. }
+            if id == obsolete_segment || id == current))
     );
     inbox.drain();
     let due = inbox
@@ -296,7 +442,7 @@ fn assert_obsolete_preparation_refusal(host_rate: bool) {
     assert!(
         !in_pass(&mut rig, frame(64), |out| track
             .prepare_entry(frame(128), out))
-        .expect("obsolete same-segment refusal cannot reject replacement")
+        .expect("obsolete preparation refusal cannot reject replacement")
     );
     in_pass(&mut rig, frame(64), |out| track.tick(frame(64), out));
     assert_eq!(track.snapshot().status, TrackStatus::Loaded);
@@ -480,8 +626,9 @@ async fn assert_failed_replacement_keeps_incumbent(
     });
     assert_eq!(newcomer.status(), TrackStatus::Loaded);
     assert!(!newcomer.attached());
+    assert!(newcomer.segment.ready);
     let (sender, mut inbox) = lane();
-    newcomer.lane = Some(sender);
+    replace_lane_sender(&mut newcomer.lane, sender);
     let group = with_mixer(&mut mixer, &mut support.dispatcher, frame(64), |out| {
         let at = When::At(frame(256));
         out.together_owned(at, |out| {
@@ -526,6 +673,8 @@ async fn assert_failed_replacement_keeps_incumbent(
             When::Next,
         )
         .expect("native source preparation");
+    // Model the pending source verdict without issuing another deck adoption.
+    newcomer.segment = newcomer.segment.with_request(source);
     inbox.drain();
     let due = inbox
         .next_due(LaneFrame { segment, frame: 0 }, 1)
@@ -911,7 +1060,7 @@ fn a_queued_speed_publishes_its_target_and_sequence_once(#[case] curve: SpeedCur
             .capacity(NonZeroUsize::new(1).expect("one batch"))
             .build(),
     );
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.mark = Some(SlotMark {
         session: frame(128),
         lane: LaneFrame {
@@ -944,7 +1093,7 @@ fn a_ready_paused_segment_keeps_its_cue_over_an_old_slot_snapshot() {
     let mut rig = rig();
     let (mut track, _) = prepared_track();
     let (sender, mut inbox) = channel(ChannelConfig::builder().build());
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.status = TrackStatus::Paused { at: Position::ZERO };
     let to = Duration::from_secs(2);
     let _ = command_at_zero(&mut track, &mut rig, TrackCommand::Seek { to });
@@ -980,6 +1129,69 @@ fn a_ready_paused_segment_keeps_its_cue_over_an_old_slot_snapshot() {
 }
 
 #[kithara::test]
+#[case::jump_applied(false, true)]
+#[case::align_applied(true, true)]
+#[case::jump_refused(false, false)]
+#[case::align_refused(true, false)]
+fn a_sounding_seek_waits_for_its_own_lane_receipt(#[case] align: bool, #[case] applied: bool) {
+    let mut rig = rig();
+    let (mut track, mut inbox) = prepared_track();
+    track.geometry.declick = FrameCount::new(32);
+    track.status = TrackStatus::Playing { since: frame(0) };
+    track.mark = Some(SlotMark {
+        session: frame(0),
+        lane: LaneFrame {
+            segment: SegmentId::FIRST,
+            frame: 0,
+        },
+        position: Duration::ZERO,
+    });
+    let to = Duration::from_secs(2);
+    let at = frame(32);
+    let command = if align {
+        TrackCommand::Align {
+            to,
+            speed: SpeedCurve::Constant(1.5),
+            at,
+        }
+    } else {
+        TrackCommand::Jump { to, at }
+    };
+    let seq = command_at_zero(&mut track, &mut rig, command).expect("sounding seek admitted");
+    inbox.drain();
+    let due = inbox
+        .next_due(
+            LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: 0,
+            },
+            1,
+        )
+        .expect("sounding seek due");
+    assert_eq!(due.seq(), seq);
+    assert!(
+        due.commands()
+            .iter()
+            .any(|command| matches!(command, LaneCommand::Jump { to: target } if *target == to))
+    );
+    assert_eq!(
+        track.seek_applied(seq),
+        None,
+        "Jump/Align cannot answer before their lane receipt"
+    );
+    if applied {
+        due.apply(kithara_render::LaneApplied {
+            source_basis: None,
+            engine_latency: FrameCount::new(0),
+            ready: None,
+        });
+    } else {
+        due.refuse(TrackFailureKind::SourceCancelled);
+    }
+    assert_eq!(track.seek_applied(seq), Some(applied));
+}
+
+#[kithara::test]
 #[case::applied(true)]
 #[case::rejected(false)]
 fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
@@ -990,7 +1202,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
             .capacity(NonZeroUsize::new(1).expect("one batch"))
             .build(),
     );
-    track.lane = Some(sender);
+    replace_lane_sender(&mut track.lane, sender);
     track.geometry.declick = FrameCount::new(32);
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
@@ -1013,7 +1225,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
         },
     )
     .expect("alignment batch");
-    assert_eq!(track.lane.as_ref().expect("lane").available(), 0);
+    assert_eq!(track.lane.sender().expect("lane").available(), 0);
     assert_eq!(track.snapshot().speed, 1.5);
     inbox.drain();
     let at = LaneFrame {
@@ -1036,15 +1248,18 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
     }
     assert!(inbox.next_due(at, 1).is_none());
     track.settle_lane();
-    assert_eq!(track.lane_history.commands.len(), 2);
+    assert_eq!(
+        track.lane_history.commands.len(),
+        if applied { 2 } else { 0 }
+    );
     assert!(
         track
             .lane_history
             .commands
             .iter()
-            .all(|operation| operation.seq == seq && operation.applied() == Some(applied))
+            .all(|operation| operation.seq == seq && operation.applied)
     );
-    let receipt = track.speed_receipt().expect("batch verdict");
+    let receipt = track.lane_receipt().expect("batch verdict");
     assert!(match receipt {
         Settled::Applied { seq: named, .. } => applied && named == seq,
         Settled::Rejected {
@@ -1053,7 +1268,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
         } => !applied && named == seq,
         _ => false,
     });
-    assert!(track.speed_receipt().is_none());
+    assert!(track.lane_receipt().is_none());
     let (planned, speed) = track
         .planned(landing, mock::SAMPLE_RATE)
         .expect("planned landing");
@@ -1067,5 +1282,5 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
     );
     assert_eq!(speed, if applied { 1.5 } else { 1.0 });
     assert_eq!(track.snapshot().speed, if applied { 1.5 } else { 1.0 });
-    assert_eq!(track.lane.as_ref().expect("lane").available(), 1);
+    assert_eq!(track.lane.sender().expect("lane").available(), 1);
 }
