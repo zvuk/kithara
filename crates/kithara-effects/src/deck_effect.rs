@@ -12,6 +12,8 @@ pub enum FxParamMapping {
 pub enum FxParamUnit {
     /// A multiplicative ratio relative to unity.
     Ratio,
+    Frames,
+    Hertz,
 }
 
 /// An immutable native parameter domain; no mapping means integral steps.

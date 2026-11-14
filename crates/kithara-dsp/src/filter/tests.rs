@@ -2,8 +2,12 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_test_fixtures::portable::sine_440;
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
-use super::{Biquad, Coefficients, FilterError, Hertz, Response, StateVariableFilter, Type};
+use super::{
+    Biquad, Coefficients, FilterError, Hertz, Response, StateVariableFilter, SvfDesign, Type,
+    decay_frames,
+};
 
 const RATE: f64 = 48_000.0;
 const Q: f64 = std::f64::consts::FRAC_1_SQRT_2;
@@ -432,6 +436,26 @@ fn nan_input_is_nonquiet_under_every_partition() {
             .first()
             .and_then(|plane| plane.get(4))
             .is_some_and(|sample| sample.is_nan())
+    );
+}
+
+#[kithara::test]
+#[case::conjugate_pair(12_000.0, 5.0 / 6.0, 0.5)]
+#[case::real_poles(((1.0_f64 - 0.9) / (1.0 + 0.9)).atan() * 48_000.0 / std::f64::consts::PI, 0.5, 0.9)]
+fn decay_frames_counts_the_slowest_pole_down_to_the_level(
+    #[case] cutoff: f64,
+    #[case] q: f64,
+    #[case] radius: f64,
+) {
+    let level = 1e-6;
+    let design = SvfDesign::new(SVF_RATE, cutoff, q, Response::LowPass).expect("design");
+    let expected = (f64::ln(level) / radius.ln()).ceil();
+    assert_eq!(decay_frames(design, level).to_f64(), Some(expected));
+    let memoryless = SvfDesign::new(SVF_RATE, 12_000.0, 0.5, Response::HighPass).expect("design");
+    assert_eq!(
+        decay_frames(memoryless, level),
+        1,
+        "a filter without memory counts one frame"
     );
 }
 

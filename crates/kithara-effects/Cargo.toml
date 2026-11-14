@@ -46,8 +46,14 @@ kithara-resampler = { workspace = true, default-features = false, features = ["r
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock"] }
 
+criterion = { workspace = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 assert_no_alloc = { workspace = true }
+
+[[bench]]
+name = "feedback_delay"
+harness = false
 
 [lints]
 workspace = true
