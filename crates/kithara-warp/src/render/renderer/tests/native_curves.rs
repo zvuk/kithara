@@ -11,7 +11,7 @@ use num_traits::ToPrimitive;
 
 use super::*;
 use crate::{
-    Warp,
+    Pitch, Warp,
     test_pools::{TestPools, pools, sample_buffer},
 };
 
@@ -91,7 +91,7 @@ fn native_retarget_rejects_incompatible_cached_source_geometry(
     let config = WarpConfig::builder()
         .backend(backend)
         .speed(0.6)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools());
     let mut source = 0;
@@ -137,7 +137,7 @@ fn native_speed_step_taken_a_latency_ahead_keeps_the_engine(#[case] backend: Str
     let config = WarpConfig::builder()
         .backend(backend)
         .speed(0.8)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools());
     let mut source = 0;
@@ -205,7 +205,7 @@ fn queued_output_before_a_packet_step_rejects_another_law(#[case] backend: Stret
     let config = WarpConfig::builder()
         .backend(backend)
         .speed(0.8)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools());
     let mut source = 0;
@@ -265,7 +265,7 @@ fn native_curves_leaving_the_rate_limit_keep_requests_bounded(#[case] backend: S
             let config = WarpConfig::builder()
                 .backend(backend)
                 .speed(4.0)
-                .keylock(true)
+                .pitch(Pitch::HELD)
                 .build();
             let mut renderer = Warp::new((), &config).renderer(spec, pools());
             renderer.set_speed(curve.clone(), 1).expect("bounded curve");
@@ -353,7 +353,7 @@ fn render_curve(backend: StretchKind, approaching: bool, quantum: usize, pcm: &[
     let config = WarpConfig::builder()
         .backend(backend)
         .speed(INITIAL_SPEED)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .render_quantum_frames(NonZeroUsize::new(512).expect("prepared quantum"))
         .build();
     let curve = if approaching {
@@ -626,7 +626,7 @@ fn render_gesture(
     let config = WarpConfig::builder()
         .backend(backend)
         .speed(1.05)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .render_quantum_frames(NonZeroUsize::new(512).expect("prepared quantum"))
         .build();
     let controls = steps.iter().enumerate().skip(1).map(|(revision, step)| {
@@ -849,7 +849,7 @@ fn commanded_slew_gestures_keep_physical_phase_pitch_and_level(
     let config = WarpConfig::builder()
         .backend(backend)
         .speed(initial)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .render_quantum_frames(NonZeroUsize::new(512).expect("prepared quantum"))
         .build();
     let high = 132.0;

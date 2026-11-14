@@ -314,7 +314,7 @@ impl WindowLayerProgram for ControlsProgram {
     ) -> (Outcome<WindowCommand>, bool) {
         let target = layer.action_at(pointer).copied();
         let outcome = match input {
-            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down => {
+            Input::Pointer(pointer) if pointer.presses_primary() => {
                 state.armed = target;
                 if target.is_some() {
                     Outcome::captured().with_ownership(crate::interact::PointerOwnership::Claim)

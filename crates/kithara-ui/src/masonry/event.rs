@@ -12,6 +12,8 @@ pub(crate) fn engine_value(path: &str, child: Option<&str>, event: EngineEvent) 
             control_event(&path, ControlAction::SetScalar(value))
         }
         EngineEvent::Activate => control_event(path, ControlAction::Activate),
+        EngineEvent::SecondaryActivate => control_event(path, ControlAction::SecondaryActivate),
+        EngineEvent::DoubleActivate => control_event(path, ControlAction::DoubleActivate),
         EngineEvent::Crossing(over) => carry_event(path, Carry::Over(over)),
         EngineEvent::Index(selected) => control_event(path, ControlAction::SelectIndex(selected)),
         EngineEvent::Drag { event, index } => carry_event(
