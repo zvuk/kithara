@@ -1,16 +1,20 @@
+use std::error::Error;
+
 use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
     diff::{Diff, Patch, PatchError},
     event::ParamData,
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
-        NodeError,
+        NodeError, NodeID,
     },
 };
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::{Arc, Mutex};
 
-use super::processor::{DeckMixer, OfflineDeck, OfflineProcessor, PlayerProcessor, StreamShape};
+use super::processor::{
+    DeckMixer, OfflineDeck, OfflineProcessor, PlayerProcessor, PreparedDeck, StreamShape,
+};
 use crate::bridge::{MixerInputs, SessionInbox};
 
 /// A deck node whose processor borrows its commands from the Host's session store.
@@ -49,6 +53,7 @@ impl<S, E: SessionInbox> Patch for PlayerNode<S, E> {
 struct ProcessorInputs<E: SessionInbox> {
     mixer: MixerInputs,
     offline: Option<OfflineProcessor<E>>,
+    prepared: Option<PreparedDeck>,
 }
 
 impl<S, E: SessionInbox> PlayerNode<S, E> {
@@ -57,6 +62,7 @@ impl<S, E: SessionInbox> PlayerNode<S, E> {
             ProcessorInputs {
                 mixer: inputs,
                 offline: None,
+                prepared: None,
             },
             pools,
         )
@@ -70,6 +76,7 @@ impl<S, E: SessionInbox> PlayerNode<S, E> {
                 ProcessorInputs {
                     mixer: inputs,
                     offline: Some(processor),
+                    prepared: None,
                 },
                 pools,
             ),
@@ -90,6 +97,98 @@ impl<S, E: SessionInbox> PlayerNode<S, E> {
 #[error("deck processor inputs have already been taken")]
 struct ProcessorInputsTaken;
 
+#[derive(Debug, thiserror::Error)]
+#[error("deck resources were not prepared for the actual stream geometry")]
+struct StreamNotPrepared;
+
+/// The actual graph node and typed cause of a constructor preparation refusal.
+#[derive(Debug, derive_more::Display)]
+#[display("deck node {node:?} preparation failed: {error}")]
+pub struct PlayerNodePreparationError {
+    pub node: NodeID,
+    pub error: NodeError,
+}
+
+impl Error for PlayerNodePreparationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.error.0.as_ref())
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("the deck node is absent from this graph generation")]
+struct NodeUnavailable;
+
+impl<S, E: SessionInbox> PlayerNode<S, E>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    /// Prepares a registered node without entering Firewheel's consuming compile.
+    ///
+    /// # Errors
+    /// Preserves the actual node identity and typed preparation error.
+    pub fn prepare_at(
+        context: &firewheel::FirewheelContext,
+        node: NodeID,
+        shape: StreamShape,
+    ) -> Result<(), PlayerNodePreparationError> {
+        let prepare = || {
+            let player = context
+                .node_state::<Self>(node)
+                .ok_or_else(|| NodeError(Box::new(NodeUnavailable)))?;
+            player.prepare_stream(shape)
+        };
+        prepare().map_err(|error| PlayerNodePreparationError { node, error })
+    }
+
+    /// Prepares a deferred initial factory, or identifies its retained session owner.
+    ///
+    /// # Errors
+    /// Returns the actual node identity and preparation cause without consuming its inputs.
+    pub fn prepare_if_initial(
+        context: &firewheel::FirewheelContext,
+        node: NodeID,
+        shape: StreamShape,
+    ) -> Result<bool, PlayerNodePreparationError> {
+        let player =
+            context
+                .node_state::<Self>(node)
+                .ok_or_else(|| PlayerNodePreparationError {
+                    node,
+                    error: NodeError(Box::new(NodeUnavailable)),
+                })?;
+        let initial = player.inputs.lock().is_some();
+        if initial {
+            player
+                .prepare_stream(shape)
+                .map_err(|error| PlayerNodePreparationError { node, error })?;
+        }
+        Ok(initial)
+    }
+
+    /// Prepares the complete constructor before the graph takes any unique inputs.
+    ///
+    /// # Errors
+    /// Returns the typed pool, design, handoff or ownership refusal.
+    pub fn prepare_stream(&self, shape: StreamShape) -> Result<(), NodeError> {
+        let mut guard = self.inputs.lock();
+        let inputs = guard
+            .as_mut()
+            .ok_or_else(|| NodeError(Box::new(ProcessorInputsTaken)))?;
+        inputs.prepared = None;
+        let prepared = DeckMixer::<E>::prepare(&inputs.mixer, shape, &self.pools)
+            .map_err(|error| NodeError(Box::new(error)))?;
+        if let Some(processor) = &inputs.offline {
+            processor
+                .check_install()
+                .map_err(|error| NodeError(Box::new(error)))?;
+        }
+        inputs.prepared = Some(prepared);
+        drop(guard);
+        Ok(())
+    }
+}
+
 impl<S, E: SessionInbox> AudioNode for PlayerNode<S, E>
 where
     S: HasPool<f32> + Send + Sync + 'static,
@@ -102,15 +201,31 @@ where
         cx: ConstructProcessorContext,
     ) -> Result<impl AudioNodeProcessor, NodeError> {
         let shape = StreamShape::new(cx.stream_info.max_block_frames, cx.stream_info.sample_rate);
-        let inputs = self
-            .inputs
-            .lock()
+        let mut guard = self.inputs.lock();
+        let borrowed = guard
+            .as_ref()
+            .ok_or_else(|| NodeError(Box::new(ProcessorInputsTaken)))?;
+        if !borrowed
+            .prepared
+            .as_ref()
+            .is_some_and(|prepared| prepared.shape == shape)
+        {
+            return Err(NodeError(Box::new(StreamNotPrepared)));
+        }
+        if let Some(processor) = &borrowed.offline {
+            processor
+                .check_install()
+                .map_err(|error| NodeError(Box::new(error)))?;
+        }
+        let prepared = guard
+            .as_mut()
+            .and_then(|inputs| inputs.prepared.take())
+            .ok_or_else(|| NodeError(Box::new(StreamNotPrepared)))?;
+        let inputs = guard
             .take()
             .ok_or_else(|| NodeError(Box::new(ProcessorInputsTaken)))?;
-        let mixer = Box::new(
-            DeckMixer::<E>::new(inputs.mixer, shape, &self.pools)
-                .map_err(|error| NodeError(Box::new(error)))?,
-        );
+        drop(guard);
+        let mixer = Box::new(DeckMixer::<E>::assemble(inputs.mixer, prepared));
         match inputs.offline {
             Some(mut processor) => {
                 processor
@@ -125,6 +240,7 @@ where
     fn info(&self, _config: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {
         Ok(AudioNodeInfo::new()
             .debug_name("Player")
+            .custom_state(self.clone())
             .channel_config(ChannelConfig {
                 num_inputs: ChannelCount::ZERO,
                 num_outputs: ChannelCount::STEREO,
@@ -134,6 +250,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
+    use firewheel::{ActivateInfo, FirewheelConfig, FirewheelContext};
     use kithara_command::{
         Batch, ChannelConfig, LevelInbox, Port, ScopeId, ScopedConfig, ScopedInbox, ScopedSender,
         When, scoped_channel,
@@ -194,6 +313,47 @@ mod tests {
         let (node, _ends, _sender, _inbox) = make_node();
         let info = node.info(&EmptyConfig);
         let _ = info;
+    }
+
+    #[kithara::test]
+    fn registered_preparation_shares_the_consuming_factory() {
+        let (node, mut ends, _sender, _inbox) = make_node();
+        let snapshot = ends.snapshot.read().clone();
+        let mut graph = FirewheelContext::new(FirewheelConfig::default());
+        let node = graph.add_node(node, None).expect("registered deck");
+        graph
+            .connect(node, graph.graph_out_node_id(), &[(0, 0), (1, 1)], false)
+            .expect("real deck output");
+        let info = ActivateInfo {
+            sample_rate: NonZeroU32::new(44_100).expect("rate"),
+            max_block_frames: NonZeroU32::new(128).expect("block"),
+            num_stream_in_channels: 0,
+            num_stream_out_channels: 2,
+            input_to_output_latency_seconds: 0.0,
+        };
+        let shape = StreamShape::new(info.max_block_frames, info.sample_rate);
+        PlayerNode::<TestPools, TestInbox>::prepare_at(&graph, node, shape)
+            .expect("registered factory preparation");
+        assert!(
+            PlayerNode::<TestPools, TestInbox>::prepare_if_initial(&graph, node, shape)
+                .expect("same initial factory")
+        );
+        let processor = graph.activate(info).expect("prepared consuming compile");
+        assert!(
+            !PlayerNode::<TestPools, TestInbox>::prepare_if_initial(&graph, node, shape)
+                .expect("same consumed factory")
+        );
+        let error = PlayerNode::<TestPools, TestInbox>::prepare_at(&graph, node, shape)
+            .expect_err("constructor inputs were consumed once");
+        assert!(
+            error
+                .error
+                .0
+                .downcast_ref::<ProcessorInputsTaken>()
+                .is_some()
+        );
+        assert_eq!(*ends.snapshot.read(), snapshot);
+        drop(processor);
     }
 
     #[kithara::test]
