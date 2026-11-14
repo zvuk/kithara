@@ -169,15 +169,21 @@ fn bench_builds_precede_measurements_and_head_only_needs_no_critcmp() {
     );
     let log = fs::read_to_string(ctx.root.join("bench-results.txt")).unwrap();
     assert_builds_before_measurements(&log, 2);
-    assert!(
-        fs::read_to_string(ctx.root.join("bench-results.txt"))
-            .unwrap()
-            .contains("missing-benchmark-comparison-tool")
-    );
+    assert!(log.contains("missing-benchmark-comparison-tool"));
 }
 
 fn assert_builds_before_measurements(log: &str, builds: usize) {
     let before_measurement = log.split_once("\"--save-baseline\"").unwrap().0;
+    let directories: BTreeSet<_> = before_measurement
+        .lines()
+        .filter_map(|line| line.split_once("CARGO_TARGET_DIR=\""))
+        .map(|(_, path)| path.split('"').next().unwrap())
+        .collect();
+    assert_eq!(
+        directories.len(),
+        builds,
+        "builds need distinct owned directories"
+    );
     assert_eq!(log.matches("\"--no-run\"").count(), builds);
     assert_eq!(before_measurement.matches("\"--no-run\"").count(), builds);
 }

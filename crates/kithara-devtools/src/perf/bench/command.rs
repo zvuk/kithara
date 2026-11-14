@@ -169,21 +169,17 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool) -> Result<()> {
             Some(build(
                 root,
                 target,
-                Some(&sources.scratch.path().join(format!("base-build-{index}"))),
+                &sources.scratch.path().join(format!("base-build-{index}")),
                 ctx,
                 &mut log,
             )?)
         } else {
             None
         };
-        let head_directory = sources
-            .base
-            .as_ref()
-            .map(|_| sources.scratch.path().join(format!("head-build-{index}")));
         let head = build(
             &sources.head,
             target,
-            head_directory.as_deref(),
+            &sources.scratch.path().join(format!("head-build-{index}")),
             ctx,
             &mut log,
         )?;

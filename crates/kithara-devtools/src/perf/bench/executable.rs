@@ -21,26 +21,26 @@ pub(super) struct Binary {
 pub(super) fn build(
     root: &Path,
     target: &Target,
-    directory: Option<&Path>,
+    directory: &Path,
     ctx: &Ctx,
     log: &mut Log,
 ) -> Result<Binary> {
     let mut command = Command::new(ctx.config.tools.program("cargo"));
-    command.current_dir(root).args([
-        "bench",
-        "--locked",
-        "-p",
-        &target.package,
-        "--bench",
-        &target.bench,
-        "--no-run",
-        "--message-format=json",
-    ]);
+    command
+        .current_dir(root)
+        .env("CARGO_TARGET_DIR", directory)
+        .args([
+            "bench",
+            "--locked",
+            "-p",
+            &target.package,
+            "--bench",
+            &target.bench,
+            "--no-run",
+            "--message-format=json",
+        ]);
     if !target.features.is_empty() {
         command.args(["--features", &target.features.join(",")]);
-    }
-    if let Some(directory) = directory {
-        command.env("CARGO_TARGET_DIR", directory);
     }
     let output = log.output(&mut command, true)?;
     let mut executable = None;
