@@ -44,7 +44,23 @@ const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 const contexts = [];
 const nodes = [];
 const constructors = new Map();
+const bootstrap = [];
+const lockManager = typeof window !== 'undefined' ? navigator.locks : null;
+const request = lockManager?.request;
+const requestDescriptor = lockManager && Object.getOwnPropertyDescriptor(lockManager, 'request');
 if (typeof window !== 'undefined') {
+  lockManager.request = function(...args) {
+    if (args[0] !== 'wasm_safe_thread:bootstrap') return Reflect.apply(request, this, args);
+    bootstrap.push('requested');
+    const callback = args[args.length - 1];
+    args[args.length - 1] = function(...values) {
+      bootstrap.push('granted');
+      return Reflect.apply(callback, this, values);
+    };
+    const promise = Reflect.apply(request, this, args);
+    promise.then(() => bootstrap.push('released'), () => bootstrap.push('failed'));
+    return promise;
+  };
   for (const name of ['AudioContext', 'AudioWorkletNode']) {
     const original = globalThis[name];
     constructors.set(name, original);
@@ -71,10 +87,13 @@ export async function outputDiagnostic() {
     return JSON.stringify({
       contexts: contexts.map(({value, events}) => ({state: value.state, time: value.currentTime, rate: value.sampleRate, events})),
       nodes,
+      bootstrap,
       locks
     });
   } finally {
     for (const [name, original] of constructors) globalThis[name] = original;
+    if (requestDescriptor) Object.defineProperty(lockManager, 'request', requestDescriptor);
+    else delete lockManager.request;
   }
 }
 "#)]
