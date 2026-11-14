@@ -68,7 +68,7 @@ mod tests {
         pub(super) const KNOB: f64 = 1e-4;
     }
 
-    #[kithara::test(native, tokio, flash(false))]
+    #[kithara::test(native, tokio, flash(false), timeout(Short))]
     async fn a_gain_for_a_replaced_band_layout_is_rejected_and_echoed() {
         let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
             .await

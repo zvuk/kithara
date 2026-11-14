@@ -345,7 +345,7 @@ mod tests {
         rig.close().await;
     }
 
-    #[kithara::test(native, tokio, flash(false))]
+    #[kithara::test(native, tokio, flash(false), timeout(Short))]
     async fn a_seek_lands_on_the_duration_the_queue_knows_before_the_next_tick(tone_mp3: String) {
         let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
             .await
@@ -400,7 +400,7 @@ mod tests {
         rig.close().await;
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn a_rung_picked_on_a_deck_without_a_ladder_publishes_the_ladder_mode() {
         let mut rig = Rig::offline();
         let deck = rig.deck("a");
