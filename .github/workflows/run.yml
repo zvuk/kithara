@@ -40,6 +40,18 @@ on:
           each.
         default: ""
         type: string
+      bench_target:
+        type: string
+        default: ""
+      bench_filter:
+        type: string
+        default: ""
+      bench_ref:
+        type: string
+        default: ""
+      bench_base_ref:
+        type: string
+        default: ""
       narrow:
         description: >-
           Nextest filterset every lane's test suite is narrowed to. Empty
@@ -129,6 +141,10 @@ jobs:
       runner: ${{ matrix.runner || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
       narrow: ${{ inputs.narrow }}
+      bench_target: ${{ inputs.bench_target }}
+      bench_filter: ${{ inputs.bench_filter }}
+      bench_ref: ${{ inputs.bench_ref }}
+      bench_base_ref: ${{ inputs.bench_base_ref }}
       pr-tests: ${{ inputs.pr-tests }}
 
   # A lane that reads what the matrix produced. It runs under `always()` so a
@@ -157,4 +173,8 @@ jobs:
       runner: ${{ matrix.runner || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
       narrow: ${{ inputs.narrow }}
+      bench_target: ${{ inputs.bench_target }}
+      bench_filter: ${{ inputs.bench_filter }}
+      bench_ref: ${{ inputs.bench_ref }}
+      bench_base_ref: ${{ inputs.bench_base_ref }}
       pr-tests: ${{ inputs.pr-tests }}

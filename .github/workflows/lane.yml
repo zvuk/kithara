@@ -67,6 +67,18 @@ on:
         description: Stable runner label for a lane-owned persistent build cache.
         default: ""
         type: string
+      bench_target:
+        type: string
+        default: ""
+      bench_filter:
+        type: string
+        default: ""
+      bench_ref:
+        type: string
+        default: ""
+      bench_base_ref:
+        type: string
+        default: ""
       narrow:
         description: >-
           Nextest filterset the lane's test suite is narrowed to. Empty narrows
@@ -137,6 +149,10 @@ jobs:
           # A filterset is shell syntax, so it reaches the script as data.
           NARROW: ${{ inputs.narrow }}
           KITHARA_PR_TESTS: ${{ inputs.pr-tests }}
+          BENCH_TARGET: ${{ inputs.bench_target }}
+          BENCH_FILTER: ${{ inputs.bench_filter }}
+          BENCH_REF: ${{ inputs.bench_ref }}
+          BENCH_BASE_REF: ${{ inputs.bench_base_ref }}
         run: |
           # Cargo fetches into a cache outside checkout's credential scope.
           # Scope the header to the pinned dependency and RustSec database.
@@ -146,6 +162,7 @@ jobs:
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
           export GIT_CONFIG_KEY_1=http.https://github.com/RustSec/advisory-db.extraheader
           export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth"
+          if [ -n "$BENCH_TARGET" ]; then export RUN_BENCHMARKS=1; fi
           just ci lane "${{ inputs.lane }}" --kind "${{ inputs.kind }}" ${NARROW:+--narrow "$NARROW"}
 
       - name: Upload test audio

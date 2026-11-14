@@ -71,6 +71,7 @@ lcov.info
 dhat-heap.json
 
 # Performance monitoring outputs
+/bench-results/
 target/hotpath-*.json
 hotpath-*.json
 ui-*-perf.txt

@@ -1,3 +1,4 @@
+mod bench;
 mod cli;
 mod evidence;
 mod gecko;
