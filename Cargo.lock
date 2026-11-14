@@ -6094,26 +6094,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-queue-network-tests"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara",
+ "kithara-app",
+ "kithara-integration-tests",
+ "kithara-render",
+ "kithara-test-dylib",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "tracing",
+]
+
+[[package]]
 name = "kithara-queue-tests"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara",
+ "kithara-app",
+ "kithara-command",
+ "kithara-devtools-trace-format",
+ "kithara-integration-tests",
+ "kithara-test-dylib",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "num-traits",
+ "serde_json",
+ "serial_test",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "kithara-queue-zvuk-tests"
 version = "0.0.1-alpha5"
 dependencies = [
  "aes 0.9.3",
  "bytes",
  "kithara",
  "kithara-app",
- "kithara-command",
- "kithara-devtools-trace-format",
  "kithara-integration-tests",
- "kithara-render",
  "kithara-test-dylib",
- "kithara-test-fixtures",
  "kithara-test-utils",
- "num-traits",
  "reqwest",
- "serde_json",
- "serial_test",
  "tracing",
- "url",
 ]
 
 [[package]]
