@@ -233,7 +233,7 @@ async fn seek_updates_cached_position_optimistically() {
 
 /// Track A reaches real EOF while the fixture server stalls B's HTTP load. Selecting
 /// A again must reload the retained product source and restart playback.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Medium))]
 async fn reselect_finished_track_restarts_when_next_track_never_loads() {
     const PASS_BLOCKS: usize = 64;
 
@@ -296,7 +296,7 @@ async fn reselect_finished_track_restarts_when_next_track_never_loads() {
 /// cadence, so the decode has each block's period to fill it and a zero-filled
 /// block is an underrun of the pipeline, not of the machine running the test;
 /// each judged window therefore has to play without one.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Long))]
 #[case::selected(InitialStart::Select)]
 #[case::play_button(InitialStart::Play)]
 async fn switch_back_to_consumed_track_switches_audio(#[case] initial_start: InitialStart) {
@@ -384,7 +384,7 @@ async fn play_button_marks_current_loaded_track_consumed() {
 
 /// Re-selecting A must cancel a pending switch to a real load that remains
 /// unavailable, so its eventual completion cannot barge into playback.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Medium))]
 async fn reselect_playing_track_cancels_pending_switch() {
     const WARMUP_BLOCKS: usize = 64;
 
@@ -456,7 +456,11 @@ async fn reselect_playing_track_cancels_pending_switch() {
 /// three, so waiting on a reload would assert whichever route won. Each pass
 /// plays at a device's cadence, so it is a span of audio the restart has to
 /// fill, not a race between the renders and the loader.
-#[kithara::test(tokio, tracing("kithara_queue=debug,kithara_play=debug"))]
+#[kithara::test(
+    tokio,
+    tracing("kithara_queue=debug,kithara_play=debug"),
+    timeout(Long)
+)]
 async fn repeat_one_restarts_the_track_its_own_eof_ended() {
     const PASS_BLOCKS: usize = 64;
 

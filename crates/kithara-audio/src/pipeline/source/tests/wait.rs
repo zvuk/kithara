@@ -256,7 +256,7 @@ async fn byte_eof_still_ends_a_drained_decoder_through_the_decode_path(route_pcm
 /// The post-seek wait is the context that actually holds the flake's tail: a
 /// byte-space EOF while awaiting the first post-seek chunk must resume into
 /// `AwaitingResume` and decode that tail, not end the track.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 async fn byte_eof_resumes_a_post_seek_wait_into_the_tail(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     fixture

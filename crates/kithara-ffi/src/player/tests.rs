@@ -245,6 +245,13 @@ struct DroppingObserver {
     matches: fn(&FfiPlayerEvent) -> bool,
     player: Mutex<Option<Arc<AudioPlayer>>>,
     returned: mpsc::Sender<()>,
+    released: mpsc::Sender<()>,
+}
+
+impl Drop for DroppingObserver {
+    fn drop(&mut self) {
+        self.released.send(()).ok();
+    }
 }
 
 impl PlayerObserver for DroppingObserver {
@@ -259,13 +266,14 @@ impl PlayerObserver for DroppingObserver {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1987)))]
 #[case::mode_change(false)]
 #[case::loading(true)]
 fn an_observer_can_release_the_final_player(#[case] during_load: bool) {
     crate::mock::offline();
     let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
     let (returned, received) = mpsc::channel();
+    let (released, retired) = mpsc::channel();
     let observer = Arc::new(DroppingObserver {
         matches: if during_load {
             |event| {
@@ -282,6 +290,7 @@ fn an_observer_can_release_the_final_player(#[case] during_load: bool) {
         },
         player: Mutex::new(None),
         returned,
+        released,
     });
     player.set_observer(observer.clone());
     *observer.player.lock() = Some(player);
@@ -310,9 +319,14 @@ fn an_observer_can_release_the_final_player(#[case] during_load: bool) {
             .as_ref()
             .expect("observer owns the final player"),
     );
-    let returned = received.recv_timeout(Instant::now() + Duration::from_secs(2));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let returned = received.recv_timeout(deadline);
     drop(observer.player.lock().take());
     returned.expect("the callback returned after freeing its player");
+    drop(observer);
+    retired
+        .recv_timeout(deadline)
+        .expect("deferred teardown releases its observer");
 }
 
 /// The host calls `play()` from its own thread, which has no Tokio runtime.

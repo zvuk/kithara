@@ -194,8 +194,9 @@ fn native_speed_step_taken_a_latency_ahead_keeps_the_engine(#[case] backend: Str
 /// A Bungee packet can cross a step of its law, and its source mapping then
 /// covers the frames from that step on only. While output before the step is
 /// still queued, a law that differs there cannot be shown to match it.
+#[cfg(feature = "stretch-bungee")]
 #[kithara::test]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+#[case::bungee(StretchKind::Bungee)]
 fn queued_output_before_a_packet_step_rejects_another_law(#[case] backend: StretchKind) {
     let spec = AudioSpec::new(2, NonZeroU32::new(8_000).expect("sample rate"));
     let config = WarpConfig::builder()
@@ -485,7 +486,7 @@ fn physical_source() -> (Vec<f32>, Vec<f64>) {
     (source, source_onsets)
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)
@@ -621,7 +622,7 @@ fn render_gesture(
     })
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(3650)))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

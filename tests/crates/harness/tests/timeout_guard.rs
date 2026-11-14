@@ -4,6 +4,39 @@ use kithara::platform::{
     time::Duration,
     tokio::task::{spawn_blocking, yield_now},
 };
+use kithara_test_utils::test::wall_sleep;
+
+#[kithara::test(native, flash(false))]
+#[case::first("sync_timeout_preserves_the_harness_thread_name_first")]
+#[case::second("sync_timeout_preserves_the_harness_thread_name_second")]
+fn sync_timeout_preserves_the_harness_thread_name(#[case] expected: &str) {
+    let expected = format!("{}::{expected}", module_path!());
+    let (_, expected) = expected
+        .split_once("::")
+        .expect("crate-qualified test name");
+    assert_eq!(std::thread::current().name(), Some(expected));
+}
+
+#[kithara::test(native, flash(false))]
+#[kithara_test_utils::kithara::hang_watchdog]
+fn sync_timeout_preserves_watchdog_progress_and_result() -> Result<(), &'static str> {
+    hang_reset!();
+    hang_tick!();
+    let value = "42".parse::<u32>().map_err(|_| "invalid integer")?;
+    assert_eq!(value, 42);
+    Ok(())
+}
+
+#[kithara::test(native)]
+#[should_panic(expected = "timed out after 1s")]
+fn default_flash_budget_bounds_wall_time() {
+    wall_sleep(Duration::from_millis(1500));
+}
+
+#[kithara::test(native, flash(false), timeout(Medium))]
+fn named_real_budget_allows_four_wall_seconds() {
+    wall_sleep(Duration::from_secs(4));
+}
 
 #[kithara::test(native, timeout(Duration::from_secs(2)))]
 #[serial_test::serial]

@@ -113,7 +113,7 @@ type DecoderHarness = (
     Arc<AtomicBool>,
 );
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1258)))]
 #[case::ready(false, false)]
 #[case::partial(true, false)]
 #[case::same_target_supersedes_partial(true, true)]
@@ -1140,7 +1140,7 @@ fn symphonia_aac_decode_is_bit_identical_across_passes(aac_init: Vec<u8>, aac_se
 }
 
 #[cfg(feature = "symphonia")]
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1470)))]
 fn symphonia_aac_warm_decode_keeps_pool_bytes_stable(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
     let pools = pools();
     let (mut codec, seg, ranges) = aac_codec_and_frames(&aac_init, &aac_segment);

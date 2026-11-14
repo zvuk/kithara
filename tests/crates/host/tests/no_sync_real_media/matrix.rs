@@ -196,7 +196,13 @@ pub(super) struct CapturedAudio {
     pub(super) start_positions_secs: Vec<f64>,
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(::std::time::Duration::from_millis(11016))
+)]
 #[case::mp3_one_44100(&CASES[0])]
 #[case::mp3_distinct_two_48000(&CASES[1])]
 #[case::mp3_alternating_four_44100(&CASES[2])]

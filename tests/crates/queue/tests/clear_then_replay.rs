@@ -27,7 +27,7 @@ use crate::bufpool_ext::pools;
 /// would. A player that only arms its output on its first track plays the
 /// replacement silently: the track loads, its duration lands, and the playhead
 /// never leaves zero.
-#[kithara::test(tokio, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, timeout(Short))]
 async fn a_cleared_queue_plays_the_track_appended_after_it(
     #[future(awt)] served_mp3: (TestServerHelper, Url),
 ) {

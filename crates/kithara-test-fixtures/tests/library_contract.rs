@@ -38,7 +38,11 @@ fn analysis_of(track: &str) -> AnalysisFile {
 
 /// A grid read against another rate than the track's puts every beat at the
 /// wrong second.
-#[kithara::test(native, flash(false))]
+#[kithara::test(
+    native,
+    flash(false),
+    timeout(::std::time::Duration::from_millis(11076))
+)]
 fn every_library_track_is_analysed_at_the_rate_it_decodes_at() {
     let tracks = assets::MANIFEST.iter().filter(|entry| {
         entry.name.starts_with("library_") && entry.content_type.starts_with("audio/")

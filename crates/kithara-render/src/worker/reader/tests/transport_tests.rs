@@ -120,7 +120,10 @@ async fn playback_publication_is_deferred_even_for_an_offline_receiver(#[case] b
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::test(hang_timeout_secs(1))]
+#[kithara::test(
+    hang_timeout_secs(1),
+    timeout(::std::time::Duration::from_millis(2932))
+)]
 #[case::receiver(false)]
 #[case::fixture(true)]
 #[should_panic(expected = "wait_for_packet")]
@@ -138,7 +141,11 @@ fn blocking_recv_without_preload_panics_when_no_chunk_arrives(#[case] fixture_wa
     }
 }
 
-#[kithara::test(native, hang_timeout_secs(1))]
+#[kithara::test(
+    native,
+    hang_timeout_secs(1),
+    timeout(::std::time::Duration::from_millis(2076))
+)]
 #[case::receiver(false)]
 #[case::fixture(true)]
 fn ready_packet_is_checked_after_a_timed_park(#[case] fixture_wait: bool) {

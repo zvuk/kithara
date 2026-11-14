@@ -40,7 +40,7 @@ mod consts {
 /// segment writer / `on_complete` failure into `epoch_cancel.cancel()` or
 /// into a wider abort, sibling segments would never be requested. That
 /// would manifest as `segments[i].request_count() == 0` for some `i != 3`.
-#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
+#[kithara::test(tokio)]
 async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
 
@@ -167,7 +167,7 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
     );
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio, flash(false))]
 async fn cancelling_one_stream_keeps_the_shared_downloader_serving() {
     use kithara::{
         hls::AbrMode,

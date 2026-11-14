@@ -1,3 +1,5 @@
+use std::panic::resume_unwind;
+
 use super::{
     super::transition::{
         wait_for_incoming_priming, wait_for_retired_decoder, wait_for_transition_settled,
@@ -737,11 +739,12 @@ async fn stale_rebuild_completion_retires_decoder_shell_side() {
 /// A decoder factory that panics during construction must not strand the
 /// FSM in `RebuildingDecoder` forever. The rebuild port catches the panic,
 /// pushes a `SoftFailed` completion, and wakes the worker.
-#[kithara::test(tokio)]
+/// Scripted panics bypass diagnostic I/O while preserving their payload.
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1686)))]
 async fn rebuild_factory_panic_fails_track_without_hang(route_pcm: RoutePcm) {
     let RebuildFixture { mut source, .. } = test_source(1).await;
     source.factory = DecoderFactory::new(
-        |_reader, _info, _rate| panic!("decoder construction blew up"),
+        |_reader, _info, _rate| resume_unwind(Box::new("decoder construction blew up")),
         None,
     );
     let wake = PreparationWake::install(&mut source);
@@ -778,7 +781,7 @@ async fn rebuild_factory_panic_fails_track_without_hang(route_pcm: RoutePcm) {
         fixture.source.factory = DecoderFactory::new(
             move |_, _, _| {
                 if panics {
-                    panic!("incoming factory failure witness");
+                    resume_unwind(Box::new("incoming factory failure witness"));
                 }
                 Err(DecodeError::InvalidData {
                     detail: "incoming factory failure witness",

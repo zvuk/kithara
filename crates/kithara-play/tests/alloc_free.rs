@@ -68,7 +68,7 @@ impl SessionInbox for TestSessionInbox {
     }
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1307)))]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
     let (mut ring, inbox) = scoped_channel(

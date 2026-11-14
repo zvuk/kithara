@@ -626,7 +626,7 @@ mod tests {
     };
     use kithara_download::Peer;
     use kithara_events::{Envelope, EventBus};
-    use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
+    use kithara_platform::{CancelScope, CancelToken, sync::Arc};
     use kithara_stream::WorkerWake;
     use kithara_test_utils::kithara;
 
@@ -814,7 +814,7 @@ mod tests {
             assert!(matches!(Peer::poll_next(&peer, &mut cx, 1), Poll::Pending));
         }
 
-        #[kithara::test(native, timeout(Duration::from_secs(2)))]
+        #[kithara::test(native)]
         fn inflight_clears_after_completion_settlement() {
             let (_store, _key, inner, writer) = fresh_session(None);
             let entered = Arc::new(Barrier::new(2));
@@ -850,7 +850,7 @@ mod tests {
             assert!(peer.inflight.lock().is_none());
         }
 
-        #[kithara::test(native, timeout(Duration::from_secs(2)))]
+        #[kithara::test(native)]
         fn terminal_reader_wake_settles_file_before_worker_wake() {
             let (_store, _key, inner, writer) = fresh_session(None);
             let entered = Arc::new(Barrier::new(2));

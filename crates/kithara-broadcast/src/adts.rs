@@ -127,7 +127,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn a_channel_count_outside_the_table_is_rejected() {
         for channels in [0, 7, 8] {
             let error = AdtsPacker::new(48_000, channels).expect_err("unsupported channels");

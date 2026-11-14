@@ -369,7 +369,7 @@ async fn test_head_success(client: &HttpClient, url: Url) -> Result<Headers, Net
     client.head(url, None).await
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 #[case("/test", b"Hello, World!")]
 #[case("/headers", b"Headers received")]
 async fn test_get_bytes_success_cases(
@@ -386,7 +386,7 @@ async fn test_get_bytes_success_cases(
     assert_eq!(result.unwrap(), Bytes::from(expected_data));
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 #[case("/test")]
 #[case("/headers")]
 async fn test_stream_success_cases(
@@ -407,7 +407,7 @@ async fn test_stream_success_cases(
     assert_eq!(result.unwrap(), expected);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 #[case(7, Some(11), b"World")]
 #[case(0, Some(4), b"Hello")]
 #[case(7, None, b"World!")]
@@ -426,7 +426,7 @@ async fn test_get_range_success_cases(
     assert_eq!(result.unwrap(), expected_data);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 #[case("/error404", 404, false)]
 #[case("/error500", 500, true)]
 #[case("/error429", 429, true)]
@@ -472,7 +472,7 @@ async fn test_http_errors(
     assert_eq!(status, expected_status);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 async fn test_head_success_case(#[future] test_server: TestServer, http_client: HttpClient) {
     let test_server = test_server.await;
     let url = test_server.url("/head-length");
@@ -484,7 +484,7 @@ async fn test_head_success_case(#[future] test_server: TestServer, http_client: 
     assert_eq!(headers.get("content-type"), Some("text/plain"));
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 async fn test_range_on_non_range_supporting_server(
     #[future] test_server: TestServer,
     http_client: HttpClient,
@@ -507,7 +507,7 @@ async fn test_range_on_non_range_supporting_server(
     assert_eq!(collected, b"Full response ignoring range");
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(1)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 async fn test_invalid_url() {
     let url = Url::parse("http://192.0.2.1:9999/invalid").unwrap();
 
@@ -534,7 +534,7 @@ async fn test_invalid_url() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 async fn test_stream_cancellation(#[future] test_server: TestServer, http_client: HttpClient) {
     let test_server = test_server.await;
     let url = test_server.url("/slow-body");
@@ -670,7 +670,11 @@ impl NetObserver for HeadArrivals {
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
+#[kithara::test(
+    tokio,
+    timeout(::std::time::Duration::from_millis(1842)),
+    hang_timeout_secs(1)
+)]
 #[case::slow_alive_stream_completes(
     "/slow-body",
     Duration::from_millis(400),
@@ -765,12 +769,7 @@ impl NetObserver for BackoffStarted {
     }
 }
 
-#[kithara::test(
-    tokio,
-    flash(false),
-    timeout(Duration::from_secs(2)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, flash(false), hang_timeout_secs(1))]
 async fn cancel_during_backoff_ends_the_call_without_the_delay() {
     let server = TestServer::new(test_router()).await;
     let cancel = CancelToken::root();
@@ -803,7 +802,7 @@ async fn cancel_during_backoff_ends_the_call_without_the_delay() {
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 #[case::budget_spent(2, None, "/error500", true)]
 #[case::no_budget(0, None, "/error500", false)]
 #[case::fatal_cause(2, None, "/error404", false)]
@@ -941,7 +940,7 @@ async fn call(client: &HttpClient, url: Url, op: Op) -> Result<Vec<u8>, NetError
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 #[case::get_bytes(Op::GetBytes)]
 #[case::stream(Op::Stream)]
 #[case::range(Op::Range)]
@@ -1043,7 +1042,7 @@ fn flaky_body_router() -> (Router, RequestCounter) {
     (router, counter)
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1), timeout(Short))]
 #[case::get_bytes(Op::GetBytes, b"ok")]
 #[case::head(Op::Head, b"")]
 #[case::post(Op::Post, b"ping")]

@@ -5,6 +5,7 @@ use std::{
     process::Command,
 };
 
+use kithara_test_utils::TestBudget;
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use serde_yaml_ng::{Mapping, Value};
 use syn::{
@@ -1851,6 +1852,9 @@ fn collect_parsed_timeout_meta(
 ) {
     if is_kithara_test(meta.path()) {
         let Meta::List(list) = meta else {
+            if matches!(meta, Meta::Path(_)) {
+                expressions.push(syn::parse_quote!(Quick));
+            }
             return;
         };
         let arguments =
@@ -1864,6 +1868,7 @@ fn collect_parsed_timeout_meta(
                     return;
                 }
             };
+        let mut has_timeout = false;
         for argument in arguments {
             let Expr::Call(call) = argument else {
                 continue;
@@ -1871,6 +1876,7 @@ fn collect_parsed_timeout_meta(
             if call_name(&call).as_deref() != Some("timeout") {
                 continue;
             }
+            has_timeout = true;
             if call.args.len() != 1 {
                 problems.push(format!(
                     "{}: timeout must contain exactly one expression",
@@ -1879,6 +1885,9 @@ fn collect_parsed_timeout_meta(
                 continue;
             }
             expressions.extend(call.args.first().cloned());
+        }
+        if !has_timeout {
+            expressions.push(syn::parse_quote!(Quick));
         }
         return;
     }
@@ -1947,8 +1956,60 @@ fn timeout_source_audit_reads_macro_rules_and_cfg_attr_tokens() {
     assert_eq!(timeout_seconds(&expressions[0], &BTreeMap::new()), Some(5));
 }
 
+#[test]
+fn timeout_source_audit_resolves_named_budgets_from_their_owner() {
+    for (name, budget) in [
+        ("Quick", TestBudget::Quick),
+        ("Short", TestBudget::Short),
+        ("Medium", TestBudget::Medium),
+        ("Long", TestBudget::Long),
+    ] {
+        let expression = syn::parse_str(name).expect("budget identifier");
+        assert_eq!(
+            timeout_seconds(&expression, &BTreeMap::new()),
+            Some(budget.timeout(false).as_secs()),
+            "{name}"
+        );
+    }
+    let unknown = syn::parse_str("UnknownBudget").expect("unknown identifier");
+    assert_eq!(timeout_seconds(&unknown, &BTreeMap::new()), None);
+}
+
+#[test]
+fn timeout_source_audit_includes_default_budgets() {
+    let tokens = "#[kithara::test] fn bare() {} #[kithara::test(tokio)] async fn async_test() {}"
+        .parse()
+        .expect("fixture tokenizes");
+    let mut expressions = Vec::new();
+    let mut problems = Vec::new();
+    collect_timeout_attributes(
+        &tokens,
+        Path::new("defaults.rs"),
+        &mut expressions,
+        &mut problems,
+    );
+    assert!(problems.is_empty());
+    assert_eq!(expressions.len(), 2);
+    for expression in expressions {
+        assert_eq!(
+            timeout_seconds(&expression, &BTreeMap::new()),
+            Some(TestBudget::default().timeout(false).as_secs())
+        );
+    }
+}
+
 fn timeout_seconds(expression: &Expr, constants: &BTreeMap<String, u64>) -> Option<u64> {
     match expression {
+        Expr::Path(path) if path.qself.is_none() => {
+            let budget = match path.path.get_ident()?.to_string().as_str() {
+                "Quick" => TestBudget::Quick,
+                "Short" => TestBudget::Short,
+                "Medium" => TestBudget::Medium,
+                "Long" => TestBudget::Long,
+                _ => return None,
+            };
+            Some(budget.timeout(false).as_secs())
+        }
         Expr::Call(call)
             if call_name(call).as_deref() == Some("from_secs") && call.args.len() == 1 =>
         {

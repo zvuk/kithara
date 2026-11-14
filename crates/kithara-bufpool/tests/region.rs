@@ -4,7 +4,7 @@ use kithara_bufpool::{
     HasPool, OverallBudget, PoolAlias, PoolConfig, PoolError, PoolRegion, StringKey, VecKey,
     pool_schema,
 };
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::sync::Arc;
 #[cfg(all(test, target_os = "android"))]
 use kithara_test_dylib as _;
 use kithara_test_utils::{bufpool::TestPools, kithara};
@@ -282,7 +282,7 @@ fn sibling_capacity_is_reclaimed_only_after_it_becomes_idle() {
     assert_eq!(pools.stats().max_bytes, BUDGET);
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn own_idle_buffers_are_reclaimed_for_a_live_request_at_the_region_cap() {
     const BUFFER_BYTES: usize = 4;
     const POOL_BYTES: usize = 2 * BUFFER_BYTES;
@@ -312,7 +312,7 @@ fn own_idle_buffers_are_reclaimed_for_a_live_request_at_the_region_cap() {
     assert_eq!(pools.stats().allocated_bytes, POOL_BYTES);
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn a_dropped_buffer_above_the_retention_ceiling_returns_its_whole_charge() {
     const RETAINED_CAPACITY: usize = 8;
 
@@ -340,7 +340,7 @@ fn a_dropped_buffer_above_the_retention_ceiling_returns_its_whole_charge() {
     assert_eq!(pools.get::<u8>().capacity(), 0);
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn a_dropped_buffer_at_the_retention_ceiling_is_kept() {
     const RETAINED_CAPACITY: usize = 8;
 
@@ -365,7 +365,7 @@ fn a_dropped_buffer_at_the_retention_ceiling_is_kept() {
     assert_eq!(pools.stats().allocated_bytes, baseline);
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn a_refused_allocation_leaves_no_charge() {
     let pools = pools(usize::MAX);
 
@@ -376,7 +376,7 @@ fn a_refused_allocation_leaves_no_charge() {
     assert_eq!(pools.stats().allocated_bytes, 0);
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn growth_that_fits_the_remainder_succeeds_when_doubling_does_not() {
     let pools = pools(6);
     let mut bytes = pools

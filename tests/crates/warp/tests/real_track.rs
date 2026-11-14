@@ -5,7 +5,6 @@
 use std::num::{NonZero, NonZeroU32};
 
 use kithara::{
-    platform::time::Duration,
     signal::{AudioSpec, FrameCount, InterleavedView, SessionEpoch, SessionFrame},
     stretch::StretchKind,
     sync::{SessionAnchor, SessionBeat},
@@ -451,7 +450,7 @@ const NEWTECHNO_PHRASE: Start = Start::Beat(64);
 /// An entry on the second beat of Tunnel's first bar.
 const WEAK_BEAT: Start = Start::Bar { bar: 0, beat: 1 };
 
-#[kithara::test(timeout(Duration::from_secs(600)))]
+#[kithara::test(timeout(::std::time::Duration::from_millis(7902)))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::tunnel_signalsmith(TUNNEL, Start::bar(0), StretchKind::Signalsmith)

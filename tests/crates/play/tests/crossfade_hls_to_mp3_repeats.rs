@@ -6,7 +6,7 @@ use std::num::NonZeroU32;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     host::{HostConfig, HostSettings},
-    platform::{sync::Arc, time::Duration},
+    platform::sync::Arc,
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
@@ -66,7 +66,7 @@ async fn hls_server(saw_segments: &'static [u8]) -> CreatedHls {
 /// wait is a hang instead of a slow block.
 #[kithara::test(
     tokio,
-    timeout(Duration::from_secs(30)),
+    timeout(::std::time::Duration::from_millis(27830)),
     hang_timeout_secs(10),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]

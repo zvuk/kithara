@@ -1,4 +1,4 @@
-use kithara_platform::{CancelToken, time::Duration};
+use kithara_platform::CancelToken;
 use kithara_storage::{
     Active, DriverIo, MemResource, MmapOptions, MmapResource, Resource, ResourceRead, StorageError,
 };
@@ -6,7 +6,7 @@ use kithara_test_utils::{
     TestTempDir, bufpool::pools, cancel_token, cancel_token_cancelled, kithara, temp_dir,
 };
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 #[case::failed_mem(false, Some("broken"), false)]
 #[case::failed_mmap(true, Some("broken"), false)]
 #[case::cancelled_mem(false, None, false)]

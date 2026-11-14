@@ -332,7 +332,7 @@ async fn run_seek_scenario(ladders: &[Ladder], select_index: usize, backend: Sto
     tracing("kithara_queue=debug,kithara_hls=debug,kithara_stream=debug"),
     tokio,
     multi_thread,
-    timeout(Duration::from_secs(120))
+    timeout(::std::time::Duration::from_millis(4500))
 )]
 #[case::one_track(&[Ladder::Plain], 0)]
 #[case::first_of_two(&[Ladder::Plain, Ladder::Encrypted], 0)]
@@ -379,7 +379,7 @@ async fn queue_seek_same_url_twice_index0(temp_dir: TestTempDir) {
     tracing("kithara_queue=debug,kithara_hls=debug,kithara_stream=debug"),
     tokio,
     multi_thread,
-    timeout(Duration::from_secs(180))
+    timeout(::std::time::Duration::from_millis(5488))
 )]
 async fn queue_seek_long_cold_cache_far_segment(
     temp_dir: TestTempDir,
@@ -476,7 +476,7 @@ async fn queue_seek_long_cold_cache_far_segment(
     tracing("kithara_queue=debug,kithara_hls=debug,kithara_stream=debug"),
     tokio,
     multi_thread,
-    timeout(Duration::from_secs(180))
+    timeout(::std::time::Duration::from_millis(5336))
 )]
 async fn queue_seek_multi_variant_cold_far(
     temp_dir: TestTempDir,

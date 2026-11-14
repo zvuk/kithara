@@ -62,7 +62,7 @@ fn arm_panic_marker(marker: &'static str) -> Arc<AtomicBool> {
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(20)),
+    timeout(::std::time::Duration::from_millis(15014)),
     hang_timeout_secs(2)
 )]
 async fn idle_does_not_panic_hang_detector(
@@ -156,7 +156,12 @@ fn count_files_recursive(root: &Path) -> usize {
 /// behavior, free of ABR-switch noise. The assertion's upper bound is
 /// generous — it catches the "no cap at all" regression rather than a
 /// tight tuning number.
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(20)))]
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(::std::time::Duration::from_millis(9194))
+)]
 async fn idle_prefetch_is_capped(
     temp_dir: TestTempDir,
     #[future(awt)] capped_hls: (TestServerHelper, url::Url),

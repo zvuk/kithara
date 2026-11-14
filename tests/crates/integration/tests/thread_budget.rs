@@ -47,7 +47,7 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
     }
 }
 
-#[kithara::test(serial)]
+#[kithara::test(serial, timeout(Short))]
 fn thread_budget_audio_worker_is_one_thread() {
     let before = active_named_thread_count();
     let pools = pools();
@@ -78,7 +78,7 @@ fn thread_budget_audio_worker_is_one_thread() {
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_secs(15)),
+    timeout(::std::time::Duration::from_millis(2002)),
     hang_timeout_secs(3)
 )]
 async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
@@ -136,7 +136,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_secs(20)),
+    timeout(::std::time::Duration::from_millis(2034)),
     hang_timeout_secs(3)
 )]
 async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {

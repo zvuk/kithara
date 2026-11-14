@@ -81,7 +81,7 @@ mod tests {
     use super::*;
 
     #[cfg(feature = "flash")]
-    #[kithara::test(native, timeout(Duration::from_secs(2)))]
+    #[kithara::test(native)]
     fn a_macro_sync_driver_keeps_deadlines_behind_its_work() {
         use std::{
             future::Future,

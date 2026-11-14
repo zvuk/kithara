@@ -127,20 +127,20 @@ mod tests {
     use super::CancelToken;
     use crate::sync::Arc;
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn fresh_token_not_cancelled() {
         let c = CancelToken::root();
         assert!(!c.is_cancelled());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn cancel_sets_lock_free_flag() {
         let c = CancelToken::root();
         c.cancel();
         assert!(c.is_cancelled());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn child_cancel_does_not_cancel_parent() {
         // WHY: cancelling a child sets only the child's subtree, never the
         let parent = CancelToken::root();
@@ -153,7 +153,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn child_cancel_does_not_cancel_sibling() {
         let parent = CancelToken::root();
         let a = parent.child();
@@ -164,7 +164,7 @@ mod tests {
         assert!(!parent.is_cancelled());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn clone_shares_cancel_identity() {
         // WHY: Clone is the SAME token (same node), so cancelling a clone is
         // observed by the original — distinct from child().
@@ -177,7 +177,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn child_observes_own_cancel() {
         let parent = CancelToken::root();
         let child = parent.child();
@@ -188,7 +188,7 @@ mod tests {
     /// A worker token derived via `child()` must observe a master `cancel()`
     /// through its lock-free read, even though nobody calls the worker token's
     /// own `cancel()`.
-    #[kithara::test(native, timeout(Duration::from_secs(5)))]
+    #[kithara::test(native)]
     fn child_observes_parent_cancel_lock_free() {
         let master = CancelToken::root();
         let worker = master.child();
@@ -204,7 +204,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn grandchild_observes_master_cancel_lock_free() {
         let master = CancelToken::root();
         let mid = master.child();
@@ -219,7 +219,7 @@ mod tests {
     /// cancel the root — the grandchild (held alive) must still observe it. The
     /// legacy grandchild test keeps `mid` alive and would not catch a missing
     /// `parent` liveness field; this one drops it.
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn root_cancel_reaches_grandchild_after_intermediate_dropped() {
         let master = CancelToken::root();
         let leaf = {
@@ -235,7 +235,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn repeat_cancel_is_idempotent() {
         let c = CancelToken::root();
         c.cancel();
@@ -243,7 +243,7 @@ mod tests {
         assert!(c.is_cancelled());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn late_child_born_cancelled() {
         let master = CancelToken::root();
         master.cancel();
@@ -254,7 +254,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn child_churn_then_cancel_reaches_survivors() {
         // End-to-end: after heavy per-fetch/epoch child churn, a master cancel
         // still reaches the live children. The dead-Weak sweep BOUND itself is
@@ -270,7 +270,7 @@ mod tests {
         assert!(survivor.is_cancelled());
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn async_cancelled_resolves_on_self_cancel() {
         use crate::tokio::task;
 
@@ -300,7 +300,7 @@ mod tests {
         })
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn on_cancel_fires_on_self_cancel() {
         let c = CancelToken::root();
         let child = c.child();
@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(fired.load(Ordering::SeqCst), 1, "waker must fire on cancel");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn on_cancel_fires_on_ancestor_cancel() {
         // WHY: a consumer holding a CHILD token must be woken when a master
         // cancels — the down-propagation drain reaches the child's node.
@@ -326,7 +326,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn on_cancel_already_cancelled_fires_immediately() {
         let c = CancelToken::never();
         c.cancel();
@@ -339,7 +339,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn on_cancel_guard_drop_unregisters() {
         let c = CancelToken::never();
         let (fired, waker) = counter();
@@ -353,7 +353,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn on_cancel_sibling_cancel_does_not_fire() {
         let parent = CancelToken::root();
         let a = parent.child();

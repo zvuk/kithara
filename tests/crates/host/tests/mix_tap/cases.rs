@@ -20,7 +20,7 @@ pub(super) const BLOCK_FRAMES: usize = 512;
 const BLOCKS: usize = 20;
 pub(crate) const ROOMY_CAPACITY: usize = 65_536;
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Long))]
 async fn deck_eq_processes_the_crossfade_sum() {
     use std::num::NonZeroU32;
 
@@ -148,7 +148,7 @@ pub(super) async fn render_effect_window(harness: &OfflinePlayer, frames: usize)
 }
 
 #[cfg(not(rtsan))]
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 async fn deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
     deck_eq_format_change(true).await;
 }
@@ -157,7 +157,8 @@ async fn deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
     tokio,
     tracing(
         "kithara_render_probe=trace,kithara_decode_probe=trace,kithara_audio_probe=trace,kithara_worker_probe=trace,kithara_test::host_rate_telemetry=info,host_rate_feed_intervals=info,warp_target_cost=debug"
-    )
+    ),
+    timeout(Short)
 )]
 async fn nonblocking_deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
     #[cfg(not(any(feature = "flash", feature = "no-block", rtsan)))]

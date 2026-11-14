@@ -25,7 +25,7 @@ fn opened(trace: &Scope) -> usize {
     trace.events_of("source_opened").len()
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio)]
 async fn a_load_opens_its_source_once_and_a_load_past_capacity_opens_nothing(
     temp_dir: TestTempDir,
 ) {
@@ -156,7 +156,7 @@ async fn answered(sender: &mut Sender<Loads>) -> Receipt<Loads> {
     receipt
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio)]
 async fn the_dispatcher_opens_each_load_once_and_answers_a_load_past_capacity_for_capacity(
     temp_dir: TestTempDir,
 ) {
@@ -233,7 +233,7 @@ async fn the_dispatcher_opens_each_load_once_and_answers_a_load_past_capacity_fo
 /// The worker refills every deck's ring, and a ring drains while its worker
 /// waits for a CPU, so the worker asks the OS to run it ahead of ordinary work.
 /// Whether the OS grants that is the machine's policy, not the worker's.
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, flash(false))]
 async fn the_play_worker_asks_the_os_to_schedule_it_as_an_audio_feed() {
     let trace = usdt_trace::scope();
     let _worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
@@ -249,7 +249,7 @@ async fn the_play_worker_asks_the_os_to_schedule_it_as_an_audio_feed() {
 }
 
 #[cfg(not(target_os = "android"))]
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(native, tokio)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reopening() {
     use std::num::NonZeroU32;
@@ -531,7 +531,7 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
 }
 
 #[cfg(not(target_os = "android"))]
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(native, tokio)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_nonzero_initial_hls_load_returns_while_its_segment_is_pending_and_admits_only_real_pcm()
 {

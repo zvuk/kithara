@@ -744,7 +744,7 @@ async fn a_close_on_an_unsettled_value_is_resumed_on_the_next_subscribe(long_wav
     run.close().await;
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio, flash(false), timeout(Short))]
 async fn a_rejected_checkpoint_opens_a_fresh_pass(long_wav: String) {
     let url = long_wav;
     let checkpoint = resumable_progress(&url).await;
@@ -1064,7 +1064,8 @@ async fn a_track_shorter_than_its_header_claims_is_done(tone_mp3: String) {
     flash(false),
     tracing(
         "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
-    )
+    ),
+    timeout(Medium)
 )]
 async fn a_resampled_track_is_covered_from_its_first_frame(rhythm_a_mp3: String) {
     the_source_gave_everything_it_can(&rhythm_a_mp3).await;
@@ -1160,7 +1161,8 @@ async fn a_track_opened_with_every_artifact_is_not_analysed(tone_mp3: String) {
     flash(false),
     tracing(
         "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
-    )
+    ),
+    timeout(Short)
 )]
 async fn a_served_waveform_leaves_only_the_beats_to_analyse(tone_mp3: String) {
     let cancel = CancelToken::root();

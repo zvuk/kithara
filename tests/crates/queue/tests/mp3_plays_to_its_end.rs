@@ -198,7 +198,7 @@ async fn mp3_track_ends_rather_than_fails(
 #[kithara::test(
     native,
     tokio,
-    timeout(Duration::from_secs(180)),
+    timeout(::std::time::Duration::from_millis(2640)),
     hang_timeout_secs(30)
 )]
 #[case::without_a_crossfade(NO_CROSSFADE_SECS, 0)]

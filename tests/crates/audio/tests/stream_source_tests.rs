@@ -70,7 +70,7 @@ async fn pump_once(
     (audio, outcome.expect("read"))
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio)]
 async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
@@ -96,7 +96,7 @@ async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
 /// examined rather than dropped: an off-thread consumer wakes the worker by
 /// reading, so the rebuild needs that read to make progress at all, and it can
 /// be the chunk the rebuild lands in.
-#[kithara::test(tokio, timeout(Duration::from_secs(15)), hang_timeout_secs(5))]
+#[kithara::test(tokio, hang_timeout_secs(5))]
 #[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
@@ -246,7 +246,6 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
 
 #[kithara::test(
     tokio,
-    timeout(Duration::from_secs(10)),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 #[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
@@ -291,7 +290,6 @@ async fn seek_during_active_decode_completes_without_hang(audio_wav_132300: &'st
 
 #[kithara::test(
     tokio,
-    timeout(Duration::from_secs(15)),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) {
@@ -338,7 +336,7 @@ async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) 
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio)]
 async fn truncated_wav_surfaces_decode_error_or_eof(audio_wav_44100: &'static [u8]) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());

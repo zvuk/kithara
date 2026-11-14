@@ -332,7 +332,7 @@ const fn hosts() -> &'static [Host] {
 }
 
 /// The empty spin: the window never sleeps and nothing on the page moves.
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn no_page_asks_for_frames_its_document_never_declared() {
     let spinning: Vec<String> = hosts()
         .iter()
@@ -386,7 +386,7 @@ fn a_page_the_application_keeps_feeding_asks_for_the_frame_after_it() {
 /// can be: `page_perf` fingerprints the first and last frame of the moving
 /// pages on both hosts.
 #[cfg(feature = "masonry")]
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn every_page_that_declares_motion_keeps_asking_for_frames() {
     let stalled: Vec<String> = Shot::all()
         .into_iter()

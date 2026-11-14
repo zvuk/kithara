@@ -186,7 +186,7 @@ mod tests {
         .expect("BUG: open test resource with hard-coded params must succeed")
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn test_create_new_resource() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
@@ -194,7 +194,7 @@ mod tests {
         assert_eq!(res.status(), ResourceStatus::Active);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn test_write_and_read() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(&buf, b"hello world");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn test_write_all_read_into() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
@@ -221,7 +221,7 @@ mod tests {
         assert_eq!(&buf[..], b"atomic data");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn test_wait_range_ready() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(outcome, WaitOutcome::Ready);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test]
     fn test_wait_range_blocks_then_ready() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
@@ -252,7 +252,7 @@ mod tests {
         let _writer = handle.join().unwrap();
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn test_wait_range_eof() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
@@ -264,7 +264,7 @@ mod tests {
         assert_eq!(outcome, WaitOutcome::Eof);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn test_fail_wakes_waiters() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
@@ -280,7 +280,7 @@ mod tests {
         handle.join().unwrap();
     }
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test]
     fn test_cancel_wakes_waiters() {
         let dir = TempDir::new().unwrap();
         let cancel = CancelToken::never();
@@ -305,7 +305,7 @@ mod tests {
         handle.join().unwrap();
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn test_open_existing_file() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("existing.dat");
@@ -338,7 +338,7 @@ mod tests {
         assert_eq!(&buf[..], b"persisted data");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn test_resize_on_large_write() {
         let dir = TempDir::new().unwrap();
         let res = create_resource_with_size(&dir, Some(16));
@@ -353,7 +353,7 @@ mod tests {
         assert!(buf.iter().all(|&b| b == 42));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn failed_post_commit_reopen_keeps_snapshot() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("original.dat");
@@ -508,7 +508,7 @@ mod tests {
         assert!(old.upgrade().is_none(), "next writer must close mapping");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     #[case::whole(None)]
     #[case::prefix(Some(7))]
     #[case::empty(Some(0))]
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(&bytes[..7], b"payload");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     #[case::failed(false)]
     #[case::cancelled(true)]
     fn backing_release_rejects_an_unhealthy_resource(#[case] cancelled: bool) {
@@ -598,7 +598,7 @@ mod tests {
 
     /// The growth factor is the caller's: at 1 a write past the mapping's end
     /// grows it to exactly that end and nothing more.
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn a_growth_factor_of_one_grows_to_exactly_the_write() {
         let started = WallInstant::now();
         tracing::info!(operation = "begin", elapsed = ?started.elapsed());
@@ -623,7 +623,7 @@ mod tests {
 
     /// Left unset, the default overshoots instead, so the same write leaves
     /// room for the next one rather than re-mapping on every write.
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn the_default_growth_factor_overshoots_the_write() {
         let dir = TempDir::new().unwrap();
         let res: MmapResource = Resource::open(
@@ -642,7 +642,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn backing_release_preserves_bytes_without_publishing_readiness() {
         let started = WallInstant::now();
         tracing::info!(operation = "begin", elapsed = ?started.elapsed());
@@ -671,7 +671,7 @@ mod tests {
     /// carries the same payload as the first one, so it must start from the
     /// same reservation — otherwise the rewrite re-maps its way back up from
     /// the default while the original never had to.
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn rewrite_generation_reuses_the_original_reservation() {
         let dir = TempDir::new().unwrap();
         let reservation = 1024 * 1024;
@@ -689,7 +689,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn test_status_transitions() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);
@@ -706,7 +706,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn test_status_failed() {
         let dir = TempDir::new().unwrap();
         let res = create_resource(&dir);

@@ -138,7 +138,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test(tokio)]
+    #[kithara::test(tokio, timeout(::std::time::Duration::from_millis(2816)))]
     async fn remote_oracle_decodes_submitted_media_and_rejects_invalid_input() {
         let server = TestHttpServer::bind("127.0.0.1:0", router()).await;
         let url = server.base_url().join("oracle/pcm").unwrap();

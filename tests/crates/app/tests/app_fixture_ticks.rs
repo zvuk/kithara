@@ -20,7 +20,7 @@ use kithara_test_utils::temp_dir;
 use url::Url;
 
 /// The native ticker uses a real timed channel receive, so its lifetime needs a real clock.
-#[kithara::test(tokio, flash(false))]
+#[kithara::test(tokio, flash(false), timeout(Short))]
 async fn app_fixture_updates_position_without_manual_ticks(
     #[future(awt)] served_mp3: (TestServerHelper, Url),
 ) {
@@ -61,7 +61,7 @@ async fn local_document() -> Config {
     .expect("load local configuration off the runtime worker")
 }
 
-#[kithara::test(tokio, flash(false))]
+#[kithara::test(tokio, flash(false), timeout(Medium))]
 async fn app_fixtures_own_separate_disk_stores() {
     let first = app_queue(local_document().await).await;
     let second = app_queue(local_document().await).await;

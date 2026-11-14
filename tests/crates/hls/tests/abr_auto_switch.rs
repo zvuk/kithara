@@ -72,7 +72,7 @@ async fn audio_server(hls_header_thirty: Vec<u8>, hls_pcm_thirty: Vec<u8>) -> Cr
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(::std::time::Duration::from_millis(1932)),
     hang_timeout_secs(3),
     tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
 )]

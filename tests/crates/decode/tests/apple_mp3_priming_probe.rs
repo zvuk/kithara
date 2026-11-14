@@ -2,7 +2,7 @@ use std::io::Cursor;
 
 use kithara::{
     decode::{DecoderBackend, DecoderConfig, DecoderFactory},
-    platform::{time::Duration, tokio::task::spawn_blocking},
+    platform::tokio::task::spawn_blocking,
     signal::AudioChunk,
 };
 use kithara_integration_tests::{
@@ -104,13 +104,7 @@ async fn measure_leading_silence(
     .expect("raw MP3 decoder task completes")
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    serial,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, serial, hang_timeout_secs(1))]
 #[cfg_attr(not(target_os = "android"), case::symphonia_default(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S, saw().await))]
 #[cfg_attr(target_os = "android", case::android_default(DecoderBackend::default(), SignalAsset::MP3_SAW_2S, saw().await))]
 #[cfg_attr(not(target_os = "android"), case::symphonia_320k(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S_320K, saw_320k().await))]
@@ -150,13 +144,7 @@ async fn mp3_raw_decoder_shift_vs_reference(
 /// Second probe: patch the LAME tag's `enc_delay` field (no re-encoding)
 /// and re-measure leading silence. Distinguishes "decoder reads tag and
 /// trims" from "decoder ignores tag, emits raw encoder priming".
-#[kithara::test(
-    native,
-    tokio,
-    serial,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, serial, hang_timeout_secs(1))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(

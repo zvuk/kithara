@@ -13,7 +13,7 @@ fn fresh_state(idx: usize) -> Arc<AbrState> {
     Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(idx)))))
 }
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, native)]
 #[serial_test::serial]
 async fn auto_commit_flips_active_variant() {
     let state = fresh_state(0);
@@ -48,7 +48,7 @@ async fn auto_commit_flips_active_variant() {
     );
 }
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, native)]
 #[serial_test::serial]
 async fn manual_set_mode_uses_same_commit_path() {
     let state = fresh_state(0);
@@ -70,7 +70,7 @@ async fn manual_set_mode_uses_same_commit_path() {
     assert_eq!(state.mode(), AbrMode::Manual(VariantIndex::new(2)));
 }
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, native)]
 #[serial_test::serial]
 async fn peek_pending_decision_returns_none_during_seek() {
     let state = fresh_state(0);
@@ -103,7 +103,7 @@ async fn peek_pending_decision_returns_none_during_seek() {
     assert_eq!(claim.decision().target(), VariantIndex::new(2));
 }
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, native)]
 #[serial_test::serial]
 async fn no_op_switch_never_surfaces_a_decision() {
     // A no-op pending (target == current) must NOT surface - peek returns
@@ -127,7 +127,7 @@ async fn no_op_switch_never_surfaces_a_decision() {
     assert_eq!(state.pending_target(), Some(VariantIndex::new(1)));
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn published_rescue_switch_lifts_the_escape_from_the_new_variant() {
     let variants: Vec<VariantInfo> = [300_000, 900_000, 3_000_000]
         .into_iter()

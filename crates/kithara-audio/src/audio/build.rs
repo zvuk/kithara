@@ -377,7 +377,7 @@ mod tests {
     use crate::test_pools::{TestPools, pools};
 
     #[cfg(feature = "symphonia")]
-    #[kithara::test(native, tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(native, tokio)]
     async fn initial_decoder_preserves_a_resident_wavs_pcm() {
         use std::io::Cursor;
 

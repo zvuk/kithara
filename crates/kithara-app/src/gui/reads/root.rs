@@ -111,7 +111,7 @@ mod tests {
     use ::kithara::{
         abr::AbrMode,
         effects::GainDb,
-        platform::{time::Duration, tokio::runtime::Handle},
+        platform::tokio::runtime::Handle,
         prelude::TrackMetadata,
         ui::render::{ReadValue, Reads, TableCell, Walk},
     };
@@ -416,12 +416,16 @@ mod tests {
 
         let mut cache = ViewCache::default();
         let runtime = Handle::current();
-        wait_until(Duration::from_secs(2), "fixture artwork is decoded", || {
-            cache.refresh(&snapshot, &runtime);
-            cache
-                .deck("a")
-                .is_some_and(|deck| deck.artwork.image().is_some())
-        })
+        wait_until(
+            kithara_test_utils::TestBudget::Quick.timeout(false),
+            "fixture artwork is decoded",
+            || {
+                cache.refresh(&snapshot, &runtime);
+                cache
+                    .deck("a")
+                    .is_some_and(|deck| deck.artwork.image().is_some())
+            },
+        )
         .await
         .expect("fixture artwork completes");
 

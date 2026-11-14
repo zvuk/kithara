@@ -192,7 +192,7 @@ async fn audio_server(
 #[kithara::test(
     tokio,
     native,
-    timeout(Duration::from_secs(60)),
+    timeout(::std::time::Duration::from_millis(2310)),
     hang_timeout_secs(1),
     tracing(
         "hls_heavy::stress_chunk_integrity=info,kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug"
@@ -258,7 +258,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     .await;
 }
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, native, timeout(::std::time::Duration::from_millis(2860)))]
 async fn native_delayed_segment_preserves_real_header_wait(
     #[future(awt)] audio_server: CreatedHls,
 ) {

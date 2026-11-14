@@ -2752,7 +2752,7 @@ impl QueueLaw {
     }
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(2)))]
+#[kithara::test(native)]
 fn queue_forward_law_checks_large_spans_across_analytic_boundaries() {
     let rate = NonZeroU32::new(48_000).expect("source rate");
     let frames = 1_000_000_000;
@@ -3475,7 +3475,13 @@ fn source_media_at(
 }
 
 #[cfg(not(target_os = "android"))]
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(::std::time::Duration::from_millis(12202))
+)]
 #[case::plain_tempo_hold(
     Provider::HlsMp3(HlsProtection::Plain),
     SyncCase { id: "tempo-hold-30hz", ride: TempoRide::Hold(120.0), ..TEMPO_DOWN_30 },

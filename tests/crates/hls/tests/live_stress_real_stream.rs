@@ -62,14 +62,6 @@ mod consts {
     pub(super) const SMALL_CACHE_MAX_SEEK_SECS: f64 = 60.0;
 }
 
-const fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
-    if cfg!(target_arch = "wasm32") {
-        Duration::from_secs(wasm_secs)
-    } else {
-        Duration::from_secs(native_secs)
-    }
-}
-
 const fn browser_usize(native: usize, wasm: usize) -> usize {
     if cfg!(target_arch = "wasm32") {
         wasm
@@ -328,7 +320,6 @@ fn poll_chunk(audio: &mut LiveAudio, stage: &str) -> Poll<Option<AudioChunk>> {
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(60, 75)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
@@ -404,11 +395,7 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
     tokio,
     browser,
     serial,
-    timeout(if cfg!(target_os = "android") {
-        Duration::from_secs(120)
-    } else {
-        browser_timeout(30, 120)
-    }),
+    timeout(::std::time::Duration::from_millis(5882)),
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
@@ -602,9 +589,9 @@ async fn live_ephemeral_revisit_sequence_regression(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(90)),
     hang_timeout_secs(3),
-    tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
+    tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info"),
+    timeout(::std::time::Duration::from_millis(3247))
 )]
 #[case::hls_fixed("HLS", SeekRegression::FixedWindow, mixed_plain().await)]
 #[case::drm_fixed("DRM", SeekRegression::FixedWindow, mixed_encrypted().await)]
@@ -667,7 +654,6 @@ async fn live_real_stream_seek_regression(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(90)),
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
@@ -752,7 +738,7 @@ async fn live_real_stream_seek_resume_native(
     tokio,
     native,
     serial,
-    timeout(browser_timeout(60, 360)),
+    timeout(::std::time::Duration::from_millis(10211)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
@@ -943,7 +929,7 @@ async fn live_stress_real_stream_seek_read_cache(
     tokio,
     browser,
     serial,
-    timeout(browser_timeout(30, 120)),
+    timeout(::std::time::Duration::from_millis(11609)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
@@ -1029,9 +1015,9 @@ async fn live_ephemeral_small_cache_playback(
     tokio,
     native,
     serial,
-    timeout(browser_timeout(30, 120)),
     hang_timeout_secs(3),
-    tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
+    tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info"),
+    timeout(::std::time::Duration::from_millis(2425))
 )]
 #[cfg_attr(not(target_os = "android"), case::hls_sw(false, "HLS", DecoderBackend::Symphonia, mixed_plain().await))]
 #[cfg_attr(target_os = "android", case::hls_android(false, "HLS", DecoderBackend::default(), mixed_plain().await))]

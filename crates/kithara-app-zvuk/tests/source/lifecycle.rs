@@ -273,7 +273,7 @@ async fn leaving_search_discards_its_queued_result_and_clears_the_query() {
 /// A new query drops the request it supersedes, which ends without a result,
 /// and shows its own; an emptied query drops the request in flight without
 /// starting another.
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 async fn a_superseding_query_cancels_the_outstanding_request() {
     let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes.next_call(matching!((_, body, _) if serde_json::from_slice::<serde_json::Value>(body).unwrap()["variables"]["query"] == "current"))

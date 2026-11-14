@@ -256,7 +256,7 @@ fn eq_band_count_tracks_a_replacement_layout_before_start() {
     assert_eq!(player.eq_band_count(), 4);
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 fn player_config_builder() {
     let mut cursor = 0;
     let config = QueueConfig::builder()

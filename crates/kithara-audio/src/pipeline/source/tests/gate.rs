@@ -6,7 +6,6 @@ use std::{
 use kithara_platform::{
     sync::{Arc, Mutex},
     thread,
-    time::Duration,
 };
 use kithara_stream::{DeferredWake, Source, SourcePhase, Stream};
 use kithara_test_utils::kithara;
@@ -26,7 +25,7 @@ async fn shared_with_phase(
     (SharedStream::new(stream), waits)
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio)]
 #[case::steady(false, false)]
 #[case::construction(true, false)]
 #[case::blocking(false, true)]
@@ -69,7 +68,7 @@ async fn position_queries_do_not_seek_or_request_bytes(
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio)]
 async fn rebuild_position_queries_preserve_the_offset_without_requesting_bytes() {
     let wake = Arc::new(DeferredWake::default());
     let source = TestSource::new(Arc::new(TestControl::new(media_info(0))))

@@ -46,21 +46,20 @@ impl fmt::Debug for CancelScope {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
 
     use kithara_test_utils::kithara;
 
     use super::CancelScope;
     use crate::common::cancel::CancelToken;
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn standalone_scope_owns_uncancelled_root() {
         let scope = CancelScope::new(None);
         assert!(!scope.is_cancelled());
         assert!(!scope.token().is_cancelled());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn standalone_cancel_cancels_own_subtree() {
         let scope = CancelScope::new(None);
         let token = scope.token();
@@ -69,7 +68,7 @@ mod tests {
         assert!(token.is_cancelled());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn composed_scope_observes_parent_cancel() {
         let parent = CancelToken::never();
         let scope = CancelScope::new(Some(parent.clone()));
@@ -80,7 +79,7 @@ mod tests {
         assert!(token.is_cancelled());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn composed_scope_cancel_does_not_cancel_parent() {
         // The single sanctioned semantic of the wave: a scope cancels only its
         // own subtree, never the token it was handed from above.
@@ -94,7 +93,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn drop_is_passive() {
         // Dropping a scope must NOT cancel its subtree — teardown is explicit.
         let parent = CancelToken::never();

@@ -88,7 +88,9 @@ Mock expansion requires test-utils `mock` and direct `unimock` (`0.6`, feature
 those wrappers does not establish browser execution.
 
 Hang helpers become no-ops when test-utils `hang` is disabled. The explicit
-`timeout(...)` flag works separately from watchdog progress checks;
+`timeout(...)` accepts a named `TestBudget` variant or a manual `Duration`.
+Tests default to `Quick`; manual overrides use `Long` under Miri. The body timeout
+works separately from watchdog progress checks;
 `hang_timeout_secs(N)` sets the budget of watchdogs entered inside a test. USDT
 disabled builds require no DTrace tools. Test-utils' empty `client-*` and `tls-*`
 compatibility features do not forward HTTP backends or introduce `kithara-events`.

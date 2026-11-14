@@ -126,7 +126,7 @@ async fn wait_for_status_matching(
 /// A `Pending` track parked behind a saturated background lane must be
 /// promoted by `select` and play, without a duplicate download session
 /// from the abandoned parked attempt.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread, timeout(Short))]
 async fn select_pending_track_parked_behind_hung_load_promotes(tone_mp3: &'static [u8]) {
     let helper = TestServerHelper::new().await;
     let (hung, fast) = register_sources(&helper, tone_mp3);
@@ -194,7 +194,7 @@ async fn select_pending_track_parked_behind_hung_load_promotes(tone_mp3: &'stati
 
 /// A follow-up selection is not blocked by a superseded hung one, and
 /// the superseded track ends `Cancelled`.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread, timeout(Short))]
 async fn superseded_hung_selection_frees_lane_for_next_select(tone_mp3: &'static [u8]) {
     let helper = TestServerHelper::new().await;
     let (hung, fast) = register_sources(&helper, tone_mp3);

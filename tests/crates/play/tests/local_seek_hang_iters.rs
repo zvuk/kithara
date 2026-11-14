@@ -217,7 +217,7 @@ async fn build_resource(
     (cfg, events)
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(7924)))]
 #[cfg_attr(
     not(target_os = "android"),
     case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))

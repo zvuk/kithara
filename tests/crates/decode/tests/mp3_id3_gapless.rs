@@ -2,7 +2,6 @@ use std::io::Cursor;
 
 use kithara::{
     decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory, GaplessTrimmer},
-    platform::time::Duration,
     resampler::NoResamplerBackend,
     stream::id3v2_tag_len,
 };
@@ -73,7 +72,7 @@ fn decode_visible(bytes: Vec<u8>) -> Vec<f32> {
     samples
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(2)), hang_timeout_secs(1))]
+#[kithara::test(native, hang_timeout_secs(1))]
 #[case::one_small_v23("one_small_v23", id3(3, false, &sync_payload(64)))]
 #[case::oversized_v23("oversized_v23", id3(3, false, &sync_payload(32 * 1024)))]
 #[case::footer_then_oversized("footer_then_oversized", [

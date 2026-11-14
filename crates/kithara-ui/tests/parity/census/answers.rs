@@ -331,7 +331,7 @@ fn every_control_answers_the_pointer_gesture_it_names_on_the_retained_host() {
 /// control that answers on one and not the other draws exactly the same
 /// picture. Driving both against the one table each declared its gestures
 /// in is what makes that visible.
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn every_control_answers_the_pointer_gesture_it_names_on_the_immediate_host() {
     let skin = skin();
 

@@ -14,7 +14,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(tokio, native, hang_timeout_secs(1))]
 async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
     let hls = TestServerHelper::new()
         .await

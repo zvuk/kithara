@@ -33,7 +33,7 @@ use crate::{
 ///
 /// So two things are held: Vello's own verdict, which is exact, and a pinned
 /// watermark per buffer, which fails while there is still room to spare.
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 fn every_page_leaves_the_renderer_room_to_spare() {
     /// Twice what the heaviest page was measured to take, per buffer, in the order
     /// the renderer reports them.

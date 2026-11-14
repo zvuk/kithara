@@ -20,7 +20,7 @@ use support::{
     search_reply, source, stream_reply, until,
 };
 
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 async fn a_query_is_debounced_and_resolves_one_batch() {
     let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes.next_call(matching!((_, body, _) if serde_json::from_slice::<serde_json::Value>(body).unwrap()["variables"]["query"] == "needle")).returns(Ok(search_reply())),
@@ -48,7 +48,7 @@ async fn a_query_is_debounced_and_resolves_one_batch() {
     release(source, &net).await;
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 async fn a_trailing_space_keeps_search_rows_without_another_request() {
     let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes

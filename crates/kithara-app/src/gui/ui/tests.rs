@@ -2245,7 +2245,7 @@ mod answered {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Long))]
     #[kithara::hang_watchdog]
     fn every_write_the_studio_declares_is_answered() {
         let mut declared = BTreeMap::new();

@@ -6,7 +6,6 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
-        time::Duration,
         tokio::task::{JoinHandle, spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig},
@@ -194,7 +193,7 @@ async fn run_mixed(
     tokio,
     browser,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(::std::time::Duration::from_millis(2313)),
     hang_timeout_secs(2)
 )]
 #[case::two_file_two_hls(2, 2)]

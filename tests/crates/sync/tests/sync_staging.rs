@@ -353,7 +353,13 @@ async fn schedule_start(harness: &mut ProductHarness, case: SyncCase) -> Operati
     }
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(::std::time::Duration::from_millis(6258))
+)]
 #[case::tunnel_unbounded_deadline(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE, STAGED_CUE)]
 #[case::tunnel_deadline_looser_than_the_ring(
     tunnel_sources().await,
@@ -485,7 +491,13 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
     drop(harness);
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(::std::time::Duration::from_millis(2028))
+)]
 #[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE)]
 #[case::tunnel_weak_beat(tunnel_sources().await, TUNNEL_RATE, TUNNEL_WEAK_CUE)]
 #[case::newtechno(newtechno_sources().await, NEWTECHNO_RATE, NEWTECHNO_PHRASE)]
@@ -527,7 +539,13 @@ async fn unloading_the_track_reports_its_installed_lane_cancelled(
     drop(harness);
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(::std::time::Duration::from_millis(6238))
+)]
 #[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE)]
 #[case::tunnel_weak_beat(tunnel_sources().await, TUNNEL_RATE, TUNNEL_WEAK_CUE)]
 #[case::newtechno(newtechno_sources().await, NEWTECHNO_RATE, NEWTECHNO_PHRASE)]
@@ -560,7 +578,13 @@ async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
     drop(harness);
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(120)))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(::std::time::Duration::from_millis(10590))
+)]
 #[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE, TUNNEL_SUPERSEDING_CUE)]
 #[case::tunnel_weak_beat(
     tunnel_sources().await,

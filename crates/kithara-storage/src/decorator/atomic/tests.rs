@@ -50,7 +50,7 @@ fn create_mem_resource() -> Atomic<MemDriver> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn mmap_write_all_read_into_roundtrip() {
     let dir = TempDir::new().unwrap();
     let atomic = create_mmap_resource(&dir, "test.bin");
@@ -65,7 +65,7 @@ fn mmap_write_all_read_into_roundtrip() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 #[case::failed(false)]
 #[case::cancelled(true)]
 fn mmap_unhealthy_resource_is_rejected_before_replacing_the_file(#[case] cancelled: bool) {
@@ -98,7 +98,7 @@ fn mmap_unhealthy_resource_is_rejected_before_replacing_the_file(#[case] cancell
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn mmap_tmp_file_cleaned_up() {
     let dir = TempDir::new().unwrap();
     let atomic = create_mmap_resource(&dir, "index.bin");
@@ -116,7 +116,7 @@ fn mmap_tmp_file_cleaned_up() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn mem_write_all_read_into_roundtrip() {
     let atomic = create_mem_resource();
 
@@ -129,7 +129,7 @@ fn mem_write_all_read_into_roundtrip() {
     assert_eq!(&buf, data);
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn mem_write_all_overwrites_committed_data() {
     let atomic = create_mem_resource();
 
@@ -143,7 +143,7 @@ fn mem_write_all_overwrites_committed_data() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn mmap_read_into_empty_returns_zero() {
     let dir = TempDir::new().unwrap();
     let atomic = create_mmap_resource(&dir, "empty.bin");
@@ -154,7 +154,7 @@ fn mmap_read_into_empty_returns_zero() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn mmap_overwrite_atomically() {
     let dir = TempDir::new().unwrap();
     let atomic = create_mmap_resource(&dir, "overwrite.bin");
@@ -169,7 +169,7 @@ fn mmap_overwrite_atomically() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn mmap_path_returns_inner_path() {
     let dir = TempDir::new().unwrap();
     let atomic = create_mmap_resource(&dir, "path_test.bin");
@@ -178,7 +178,7 @@ fn mmap_path_returns_inner_path() {
     assert_eq!(atomic.path(), Some(expected.as_path()));
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn mem_path_returns_none() {
     let atomic = create_mem_resource();
 
@@ -186,7 +186,7 @@ fn mem_path_returns_none() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test]
 fn mmap_writer_waits_for_a_reader_before_releasing_backing() {
     let dir = TempDir::new().unwrap();
     let atomic = Arc::new(create_mmap_resource(&dir, "handover.bin"));
@@ -236,7 +236,7 @@ fn mmap_writer_waits_for_a_reader_before_releasing_backing() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test]
 fn concurrent_mmap_writers_publish_one_complete_payload() {
     let dir = TempDir::new().unwrap();
     let atomic = Arc::new(create_mmap_resource(&dir, "writers.bin"));
@@ -261,7 +261,7 @@ fn concurrent_mmap_writers_publish_one_complete_payload() {
     assert!(bytes == [b'X'; 1024] || bytes == [b'Y'; 1024]);
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn failed_memory_write_releases_handover() {
     let pools = pools_with_budget(64);
     let atomic = Atomic::<MemDriver>::open(

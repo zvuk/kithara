@@ -97,6 +97,8 @@ socket2 = { workspace = true }
 blake3 = { workspace = true, features = ["pure"] }
 
 [dev-dependencies]
+kithara-test-utils = { workspace = true }
+
 proc-macro2 = { workspace = true }
 syn = { workspace = true, features = ["visit"] }
 

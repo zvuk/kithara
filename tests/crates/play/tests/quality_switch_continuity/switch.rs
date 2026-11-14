@@ -837,7 +837,7 @@ fn source_frame_preserves_the_public_nanosecond_position(
     assert_eq!(source_frame(position, "quantised position"), frame);
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Short))]
 #[case::quarter_frame(2_197.25)]
 #[case::half_frame(44_544.5)]
 #[should_panic(expected = "capture position is not an integer source frame")]

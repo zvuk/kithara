@@ -2,7 +2,7 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
-use kithara::platform::{CancelToken, time::Duration, tokio::task::spawn_blocking};
+use kithara::platform::{CancelToken, tokio::task::spawn_blocking};
 use kithara_integration_tests::{
     CreatedHls, hls_fixture::HlsStreamBuilder, hls_server::test_pattern_hls,
 };
@@ -64,7 +64,7 @@ fn run_seek_scenario(mut stream: impl Read + Seek, scenario: SeekScenario) {
     }
 }
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(tokio, native, hang_timeout_secs(1))]
 #[case::segment_0(SeekScenario::SegmentStart(0, b"V0-SEG-0:"))]
 #[case::segment_1(SeekScenario::SegmentStart(200_000, b"V0-SEG-1:"))]
 #[case::segment_2(SeekScenario::SegmentStart(400_000, b"V0-SEG-2:"))]
@@ -88,7 +88,7 @@ async fn hls_stream_seek(
         .unwrap();
 }
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(tokio, native, hang_timeout_secs(1))]
 async fn hls_with_manual_abr_uses_fixed_variant(
     #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,
@@ -111,7 +111,7 @@ async fn hls_with_manual_abr_uses_fixed_variant(
 ///
 /// This test shows that different variants produce different data at the same positions,
 /// which is the foundation for ABR switch + seek correctness.
-#[kithara::test(tokio, native, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
+#[kithara::test(tokio, native, hang_timeout_secs(1))]
 async fn hls_seek_different_variants_return_different_data(
     #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,

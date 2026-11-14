@@ -162,12 +162,12 @@ struct LruEntry {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use kithara_platform::time::Duration;
+
     use kithara_test_utils::kithara;
 
     use super::*;
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn update_bytes_keeps_clock_unchanged() {
         let mut state = LruState::default();
         state.touch("A", Some(10));

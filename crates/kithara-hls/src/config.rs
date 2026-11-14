@@ -194,7 +194,7 @@ mod document_tests {
         assert_eq!(config().size_probe_method, SizeProbeMethod::Head);
     }
 
-    #[kithara::test(tokio, native, flash(false))]
+    #[kithara::test(tokio, native, flash(false), timeout(Short))]
     async fn a_document_sets_the_batch_size_and_leaves_the_window() {
         let patch: HlsConfigPatch =
             serde_yaml_ng::from_str("download_batch_size: 6\n").expect("the document types");

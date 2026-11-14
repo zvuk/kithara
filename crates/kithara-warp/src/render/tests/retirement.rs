@@ -176,7 +176,7 @@ fn assert_continuous(tone: &[f32], scenario: &Scenario) {
 /// without a click: keylock toggles both ways, a press and its release
 /// inside the fade, keylock off inside a speed change's fade, and entry to
 /// and exit from keylocked unity.
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(8290)))]
 fn retirement_keeps_the_tone_continuous(warp_sine: Vec<f32>) {
     let backends: Vec<_> = StretchKind::supporting(BackendCapabilities::KEYLOCK).collect();
     assert!(!backends.is_empty(), "the build compiles a keylock backend");
@@ -185,7 +185,7 @@ fn retirement_keeps_the_tone_continuous(warp_sine: Vec<f32>) {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(6708)))]
 fn tempo_gestures_keep_keylocked_tone_continuous(warp_sine: Vec<f32>) {
     const UPDATE_FRAMES: usize = 882;
     const TIME_CONSTANT: f64 = 2_205.0;

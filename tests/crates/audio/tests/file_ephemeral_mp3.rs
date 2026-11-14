@@ -217,7 +217,11 @@ async fn audio_file_mp3_decodes_with_duration(
 ///
 /// The body is throttled so the reader meets the download frontier an
 /// in-memory server would otherwise hide.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(
+    tokio,
+    multi_thread,
+    timeout(::std::time::Duration::from_millis(20530))
+)]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
@@ -285,7 +289,7 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
 /// bitrate. Here eight 320 kbps frames lead a minute at 128 kbps: averaging
 /// them ends the track near 35 s, and a seek to 45 s would land on that false
 /// end instead of the audio the file holds.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, multi_thread)]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
@@ -362,7 +366,7 @@ async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
 /// Uses throttled server: Content-Length is sent immediately but body
 /// arrives in small chunks, so only a fraction is downloaded when
 /// the decoder initializes. Duration must still reflect the full track.
-#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
+#[kithara::test(tokio)]
 #[case::throttled_no_hint(None)]
 #[case::throttled_with_hint(Some("mp3"))]
 async fn mp3_duration_correct_before_decode(tone_mp3: &'static [u8], #[case] hint: Option<&str>) {
@@ -408,7 +412,7 @@ async fn mp3_duration_correct_before_decode(tone_mp3: &'static [u8], #[case] hin
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1154)))]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn audio_file_extensionless_mp3_without_hint_uses_native_probe(tone_mp3: &'static [u8]) {
     let helper = TestServerHelper::new().await;

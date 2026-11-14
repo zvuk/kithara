@@ -135,7 +135,7 @@ mod tests {
     }
 
     #[cfg(panic = "unwind")]
-    #[kithara::test(hang_timeout_secs(1))]
+    #[kithara::test(hang_timeout_secs(1), timeout(Medium))]
     fn an_unanswered_ask_fails_with_its_post_within_the_watchdog_budget() {
         struct StalledSession {
             postbox: HostPostbox<BaseCommand>,

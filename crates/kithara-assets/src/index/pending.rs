@@ -231,7 +231,7 @@ mod tests {
     mod cleanup {
         use super::*;
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn cleanup_failure_blocks_successor_publication() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -399,7 +399,7 @@ mod tests {
     mod lifecycle {
         use super::*;
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn attach_refcount_and_single_writer_election() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -459,7 +459,7 @@ mod tests {
             assert!(lease.try_take_writer().is_none());
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn watermark_is_max_over_entries() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -476,7 +476,7 @@ mod tests {
             assert_eq!(writer.max_watermark(), u64::MAX);
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn watermark_tracks_read_pos_advance() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -497,7 +497,7 @@ mod tests {
             assert_eq!(writer.max_watermark(), 600);
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn immediate_request_extends_bounded_watermark() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -511,7 +511,7 @@ mod tests {
             assert_eq!(writer.max_watermark(), 32);
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn detach_one_of_two_keeps_slot_and_writer() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -533,7 +533,7 @@ mod tests {
             assert!(!index.inner.slots.contains_key(&key));
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn reattach_after_last_detach_wins_writer_election() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -562,7 +562,7 @@ mod tests {
             );
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn dropping_writer_lets_a_survivor_take_over() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -599,7 +599,7 @@ mod tests {
     mod session {
         use super::*;
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn follower_uses_the_elected_writers_session() {
             let store = AssetStore::builder(crate::test_pools::pools())
                 .backend(StorageBackend::Memory)
@@ -649,7 +649,7 @@ mod tests {
             assert_eq!(&second_bytes, b"shared");
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn committed_session_reopens_ready_after_consumers_detach() {
             let store = test_store();
             let key = ResourceKey::relative("asset", "committed");
@@ -687,7 +687,7 @@ mod tests {
             assert_eq!(&bytes, b"ready");
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn writer_handoff_keeps_writer_and_rejects_old_epoch() {
             let store = test_store();
             let key = ResourceKey::relative("asset", "handoff");
@@ -764,7 +764,7 @@ mod tests {
             drop(first_lease);
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn follower_attach_clones_reader_before_current_failure() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -824,7 +824,7 @@ mod tests {
     mod wake {
         use super::*;
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn write_and_terminal_wake_every_attached_reader_and_peer() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -876,7 +876,7 @@ mod tests {
             assert!(writer_cancel.is_cancelled());
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn follower_attach_and_progress_wake_the_current_writer_peer() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -899,7 +899,7 @@ mod tests {
             drop(writer);
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn writer_drop_wakes_a_registered_follower_peer_once() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -916,7 +916,7 @@ mod tests {
             assert_eq!(count.0.load(Ordering::SeqCst), 1);
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn cleared_peer_registration_is_not_woken_by_progress() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -932,7 +932,7 @@ mod tests {
             assert_eq!(count.0.load(Ordering::SeqCst), 0);
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn clearing_stale_peer_waker_preserves_its_replacement() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -951,7 +951,7 @@ mod tests {
             assert_eq!(new_count.0.load(Ordering::SeqCst), 1);
         }
 
-        #[kithara::test(timeout(Duration::from_secs(1)))]
+        #[kithara::test]
         fn waker_replacement_drops_old_after_slot_unlock() {
             let index = PendingResourceIndex::new(CancelToken::never());
             let store = test_store();
@@ -996,7 +996,7 @@ mod tests {
 
     use dashmap::try_result::TryResult;
     use fixtures::{RearmReaderOnDrop, attach, counting_waker, entry, test_store};
-    use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
+    use kithara_platform::{CancelScope, CancelToken, sync::Arc};
     use kithara_storage::StorageError;
     use kithara_test_utils::kithara;
 

@@ -119,7 +119,7 @@ async fn load_and_observe(
     observe_transfer(rx, Duration::from_secs(20)).await
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(90)))]
+#[kithara::test(tokio, multi_thread)]
 async fn played_tracks_land_in_the_disk_cache(tone_mp3: &'static [u8], temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let handles: Vec<_> = (0..2)

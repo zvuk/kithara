@@ -74,7 +74,7 @@ fn test_wav_config(
     (cache, config)
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 #[case::short(wav_16())]
 #[case::regular(wav_1000())]
 async fn test_audio_new(#[case] wav_input: NamedTempFile) {
@@ -92,7 +92,7 @@ async fn test_audio_new(#[case] wav_input: NamedTempFile) {
 /// members in declaration order, so a worker that already enqueued
 /// `AudioEvent::FormatDetected` on its first pass would preempt this event on
 /// a shared receiver no matter which was published first.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
@@ -172,7 +172,7 @@ async fn test_audio_spec(wav_1000: NamedTempFile) {
     assert_eq!(spec.channels, 2);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(20)))]
+#[kithara::test(tokio)]
 async fn test_audio_read(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
@@ -346,7 +346,7 @@ async fn test_seek_complete_emitted_only_after_output_commit(
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 #[case::single(false)]
 #[case::idempotent(true)]
 async fn test_audio_preload(wav_1000: NamedTempFile, #[case] second_preload: bool) {
@@ -373,7 +373,7 @@ async fn test_audio_preload(wav_1000: NamedTempFile, #[case] second_preload: boo
     assert!(frames > 0, "preload must produce at least one frame");
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 async fn test_audio_preload_rearms_after_seek(wav_44100: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
@@ -399,7 +399,7 @@ async fn test_audio_preload_rearms_after_seek(wav_44100: NamedTempFile) {
 /// `preloaded` is a one-way latch: once set by `preload()`, it must
 /// survive seeks.  If seek resets it, the audio callback switches to
 /// blocking recv — parking the thread on every empty ringbuf poll.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 async fn preloaded_survives_seek(wav_88200: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());

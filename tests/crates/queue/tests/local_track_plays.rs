@@ -182,7 +182,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], label: &str) {
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(9880)))]
 #[cfg_attr(not(target_os = "android"), case::mp3_symphonia(local_mp3().await, 42, DecoderBackend::Symphonia, AbrMode::Auto(None)))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -491,7 +491,11 @@ fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String
 /// collapses real time. `wait_for_loader_done` accepts `Loaded |
 /// Consumed` (the loader flips straight to `Consumed` when a
 /// `pending_select` was queued for the same track).
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(45)))]
+#[kithara::test(
+    tokio,
+    multi_thread,
+    timeout(::std::time::Duration::from_millis(38408))
+)]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -740,7 +744,7 @@ async fn local_queue_playlist_behavior(
 }
 
 #[cfg(feature = "flash")]
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1182)))]
 async fn queue_event_watchdog_keeps_a_virtual_deadline() {
     let (harness, control) =
         kithara_integration_tests::offline::offline_queue_fixture(44_100).await;

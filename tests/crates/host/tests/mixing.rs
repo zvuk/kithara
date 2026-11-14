@@ -49,7 +49,7 @@ const HARD_DUCKED: f32 = 0.04;
 /// More parts than a deck's ring holds between two blocks.
 const RING_OVERFILL: usize = 64;
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Medium))]
 async fn removing_a_non_last_offline_deck_settles_without_render_and_preserves_the_survivor(
     constant_two: Asset,
 ) {
@@ -76,7 +76,7 @@ async fn removing_a_non_last_offline_deck_settles_without_render_and_preserves_t
     harness.close().await;
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Long))]
 async fn two_decks_keep_separate_effects() {
     let cut_alone = steady_level(&[assets::fixed_constant_wav_cd_fifth_1323000()], true).await;
     let other_alone = steady_level(
@@ -101,7 +101,7 @@ async fn two_decks_keep_separate_effects() {
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Long))]
 async fn deck_fx_other_deck_is_unaffected() {
     let halved = || crate::deck_fx::insert(0, crate::deck_fx::Curve(|sample| sample * 0.5));
     let alone = MixHarness::new(1).await;
@@ -449,7 +449,7 @@ async fn an_eq_layout_and_gain_show_once_the_mixer_applies_them() {
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, timeout(Medium))]
 #[case::two(vec![constant_four(), constant_two()], &[0.4, 0.2], &[0.5, 0.25], "two-player sum")]
 #[case::four(
     vec![constant_four(), constant_three(), constant_two(), constant_quiet()],
@@ -472,7 +472,7 @@ async fn players_render_exact_weighted_sum(
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, timeout(Medium))]
 async fn zeroed_players_are_silent_and_gains_are_independent(
     constant_four: Asset,
     constant_three: Asset,
@@ -490,7 +490,7 @@ async fn zeroed_players_are_silent_and_gains_are_independent(
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, timeout(Medium))]
 async fn limiter_holds_the_ceiling_when_players_overload_the_sum() {
     let values = [(); 4].map(|()| constant_unity());
     let levels = [1.0_f32; 4];
@@ -530,7 +530,7 @@ async fn limiter_holds_the_ceiling_when_players_overload_the_sum() {
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, timeout(Medium))]
 async fn sub_threshold_mix_passes_through_untouched(constant_four: Asset) {
     let harness = MixHarness::new(1).await;
     harness.apply(&[1.0]).await.expect("apply mix");
@@ -551,7 +551,7 @@ async fn sub_threshold_mix_passes_through_untouched(constant_four: Asset) {
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, timeout(Medium))]
 async fn single_player_without_a_mix_is_unchanged(constant_four: Asset) {
     let harness = MixHarness::new(1).await;
     harness.play(&[constant_four]).await;
@@ -563,7 +563,7 @@ async fn single_player_without_a_mix_is_unchanged(constant_four: Asset) {
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, timeout(Medium))]
 async fn a_mix_level_outlives_clearing_the_deck(constant_four: Asset) {
     let harness = MixHarness::new(1).await;
     harness.play(std::slice::from_ref(&constant_four)).await;
@@ -585,7 +585,7 @@ async fn a_mix_level_outlives_clearing_the_deck(constant_four: Asset) {
 }
 
 /// Closing a player silences its deck though the Host still holds it.
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, timeout(Medium))]
 async fn closing_a_playing_deck_silences_it(constant_four: Asset) {
     let harness = MixHarness::new(1).await;
     harness.play(&[constant_four]).await;
@@ -607,7 +607,7 @@ async fn closing_a_playing_deck_silences_it(constant_four: Asset) {
 
 /// A deck that refuses the clear a close sends keeps its player open and
 /// playing, so a later close still silences it.
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, timeout(Long))]
 async fn a_refused_close_leaves_the_player_open(constant_four: Asset) {
     let harness = MixHarness::new(1).await;
     harness.play(&[constant_four]).await;
@@ -648,7 +648,7 @@ async fn a_refused_close_leaves_the_player_open(constant_four: Asset) {
 
 /// Removing every item takes effect only when the deck takes the clear: a
 /// refused clear leaves the player its track and the deck playing it.
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, timeout(Long))]
 async fn a_refused_clear_keeps_the_track_the_deck_plays(constant_four: Asset) {
     let harness = MixHarness::new(1).await;
     harness.play(&[constant_four]).await;
@@ -706,7 +706,7 @@ async fn session_mix_does_not_mirror_player_content_volume(constant_four: Asset)
 
 /// Ducking set for a frame inside a block leaves every frame of the block
 /// before it as it was and lowers the output after it.
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, timeout(Medium))]
 async fn ducking_set_for_a_frame_inside_a_block_leaves_the_frames_before_it_alone(
     constant_four: Asset,
 ) {
@@ -747,7 +747,7 @@ async fn ducking_set_for_a_frame_inside_a_block_leaves_the_frames_before_it_alon
 /// Ducking lowers the whole session output to its share, `Soft` 16 dB and
 /// `Hard` 28 dB down, under the Host metronome, and `Off` restores the
 /// undocked level on a playing session.
-#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(38662)))]
 async fn ducking_lowers_and_restores_the_session_output(sine_440_long: Vec<f32>) {
     let segment_samples = TAKE_BLOCKS * BLOCK_FRAMES * CHANNELS;
     let tone: Vec<f32> = sine_440_long.into_iter().step_by(CHANNELS).collect();

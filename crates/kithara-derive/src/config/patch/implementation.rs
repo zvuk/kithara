@@ -1115,7 +1115,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn a_check_without_its_error_is_refused() {
         let input: DeriveInput = parse_quote! {
             #[patch(validate = Self::validated)]

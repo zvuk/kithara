@@ -8,6 +8,9 @@ use std::{
 
 pub use crate::time::Instant;
 
+/// Whether this platform backend provides the native Flash clock.
+pub const ENABLED: bool = false;
+
 /// Off the sim path a spawned task needs no quiescence accounting, so the
 /// participant wrapper is the future itself. Under `flash` this is the
 /// engine's gate wrapper counted in `active_async`.

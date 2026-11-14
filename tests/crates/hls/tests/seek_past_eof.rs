@@ -5,7 +5,7 @@ use std::io::{Read, Seek, SeekFrom};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
-    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
+    platform::{CancelToken, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -45,7 +45,6 @@ mod consts {
 #[kithara::test(
     tokio,
     browser,
-    timeout(Duration::from_secs(15)),
     hang_timeout_secs(1),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_decode=debug")
 )]

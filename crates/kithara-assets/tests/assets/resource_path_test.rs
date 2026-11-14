@@ -2,12 +2,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara_assets::{AcquisitionResult, ReadSide, WriteSide};
-use kithara_platform::time::Duration;
 use kithara_test_utils::{TestTempDir, kithara, temp_dir};
 
 use super::support::{asset_scope, resource};
 
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(native, hang_timeout_secs(1))]
 #[case::metadata("metadata.json")]
 #[case::media("media.bin")]
 fn asset_resource_path_method(temp_dir: TestTempDir, #[case] resource_name: &str) {
@@ -39,7 +38,7 @@ fn asset_resource_path_method(temp_dir: TestTempDir, #[case] resource_name: &str
     assert!(asset_path.file_name().unwrap() == resource_name);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(native, hang_timeout_secs(1))]
 fn asset_resource_path_consistency(temp_dir: TestTempDir) {
     let scope = asset_scope(&temp_dir, "test-asset");
     let key = scope.key(&resource("data.bin")).unwrap();
@@ -65,7 +64,7 @@ fn asset_resource_path_consistency(temp_dir: TestTempDir) {
     assert!(!asset_resource.path().unwrap().as_os_str().is_empty());
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(native, hang_timeout_secs(1))]
 fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempDir) {
     let asset_root = "my-asset";
     let resource_name = "subdir/file.txt";
@@ -93,7 +92,7 @@ fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempD
     assert!(relative_path.ends_with(resource_name));
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(native, hang_timeout_secs(1))]
 fn multiple_resources_same_asset_root_have_different_paths(temp_dir: TestTempDir) {
     let asset_root = "shared-asset";
     let scope = asset_scope(&temp_dir, asset_root);

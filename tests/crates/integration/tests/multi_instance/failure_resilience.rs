@@ -229,7 +229,7 @@ async fn run_failure_resilience(
     tokio,
     browser,
     serial,
-    timeout(Duration::from_secs(10)),
+    timeout(::std::time::Duration::from_millis(1764)),
     hang_timeout_secs(2),
     tracing("kithara_hls=debug,kithara_stream=debug")
 )]

@@ -29,7 +29,12 @@ async fn aac() -> (TestServerHelper, Vec<u8>) {
     (server, bytes)
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(
+    native,
+    tokio,
+    hang_timeout_secs(1),
+    timeout(::std::time::Duration::from_millis(1090))
+)]
 async fn aac_decoder_strips_algorithmic_delay_on_first_chunk(
     #[future(awt)] aac: (TestServerHelper, Vec<u8>),
 ) {
@@ -88,7 +93,12 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk(
 /// keeps the first packet's time; labelling it later by the dropped count
 /// moves every position this backend reports against every other decoder
 /// of the same stream.
-#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(
+    native,
+    tokio,
+    hang_timeout_secs(1),
+    timeout(::std::time::Duration::from_millis(1066))
+)]
 async fn aac_output_delay_keeps_the_first_pcm_at_the_first_packet(
     #[future(awt)] aac: (TestServerHelper, Vec<u8>),
 ) {
@@ -116,7 +126,7 @@ async fn aac_output_delay_keeps_the_first_pcm_at_the_first_packet(
     .expect("raw decoder task completes");
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, hang_timeout_secs(1))]
 async fn aac_seek_to_start_discards_previous_signal_history(
     #[future(awt)] aac: (TestServerHelper, Vec<u8>),
 ) {

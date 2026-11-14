@@ -281,7 +281,7 @@ fn pattern(len: usize) -> Bytes {
         .collect()
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn whole_body_trickle_is_bounded_per_chunk() {
     let body = pattern(READ_SIZE * 4);
     let mut plan = Plan::serving(body.clone());
@@ -313,7 +313,7 @@ fn identity() -> (String, String) {
     ("accept-encoding".to_owned(), "identity".to_owned())
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_body_larger_than_several_reads_arrives_byte_identical() {
     let body = pattern(READ_SIZE * 3 + READ_SIZE / 2);
     let (client, _, url) = client(Plan::serving(body.clone()));
@@ -332,7 +332,7 @@ async fn a_body_larger_than_several_reads_arrives_byte_identical() {
     assert_eq!(whole, body);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_body_before_the_response_is_a_fatal_violation() {
     let (client, seen, url) = client(Plan {
         on_start: OnStart::EndBeforeResponse,
@@ -352,7 +352,7 @@ async fn a_body_before_the_response_is_a_fatal_violation() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_second_response_is_a_fatal_violation() {
     let (client, seen, url) = client(Plan {
         on_read: OnRead::RespondAgain,
@@ -377,7 +377,7 @@ async fn a_second_response_is_a_fatal_violation() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_reported_violation_cancels_the_call_and_is_not_retried() {
     let (client, seen, url) = client(Plan {
         on_read: OnRead::ReportViolation,
@@ -394,7 +394,7 @@ async fn a_reported_violation_cancels_the_call_and_is_not_retried() {
     assert_eq!(seen.cancels.load(Ordering::SeqCst), 1);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_read_longer_than_the_lent_buffer_is_a_fatal_violation() {
     let (client, seen, url) = client(Plan {
         on_read: OnRead::Overfill,
@@ -411,7 +411,7 @@ async fn a_read_longer_than_the_lent_buffer_is_a_fatal_violation() {
     assert_eq!(seen.cancels.load(Ordering::SeqCst), 1);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn reports_after_the_terminal_one_change_nothing() {
     let body = pattern(READ_SIZE + 7);
     let (client, _, url) = client(Plan {
@@ -427,7 +427,7 @@ async fn reports_after_the_terminal_one_change_nothing() {
     assert_eq!(whole, body);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_transport_failure_is_retried_per_policy() {
     let (client, seen, url) = client(Plan {
         on_start: OnStart::Fail,
@@ -450,7 +450,7 @@ async fn a_transport_failure_is_retried_per_policy() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_permanent_failure_is_attempted_once() {
     let (client, seen, url) = client(Plan {
         on_start: OnStart::Refuse,
@@ -471,7 +471,7 @@ async fn a_permanent_failure_is_attempted_once() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_client_error_is_not_retried() {
     let (client, seen, url) = client(Plan {
         status: 404,
@@ -490,7 +490,7 @@ async fn a_client_error_is_not_retried() {
     assert_eq!(seen.starts.load(Ordering::SeqCst), 1);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn dropping_an_unfinished_body_cancels_the_call() {
     let (client, seen, url) = client(Plan {
         on_read: OnRead::Hold,
@@ -509,7 +509,7 @@ async fn dropping_an_unfinished_body_cancels_the_call() {
     assert_eq!(seen.cancels.load(Ordering::SeqCst), 1);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_cancelled_and_dropped_body_cancels_the_call_once() {
     let cancel = CancelToken::root();
     let (client, seen, url) = client_with(
@@ -538,7 +538,7 @@ async fn a_cancelled_and_dropped_body_cancels_the_call_once() {
     assert_eq!(seen.cancels.load(Ordering::SeqCst), 1);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn byte_addressed_requests_ask_for_identity() {
     let (head, head_seen, head_url) = client(Plan::serving(Bytes::new()));
     head.head(head_url, None).await.expect("HEAD answers");
@@ -573,7 +573,7 @@ async fn byte_addressed_requests_ask_for_identity() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_surviving_content_encoding_is_rejected() {
     let (client, seen, url) = client(Plan {
         headers: vec![("Content-Encoding".to_owned(), "gzip".to_owned())],
@@ -645,7 +645,7 @@ async fn a_refused_status_preserves_its_url_and_body() {
     assert_eq!(seen.starts.load(Ordering::SeqCst), 1);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_post_body_arrives_intact() {
     let (client, seen, url) = client(Plan::serving(Bytes::from_static(b"key")));
     let mut headers = Headers::default();
@@ -668,7 +668,7 @@ async fn a_post_body_arrives_intact() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_second_transport_is_refused_and_the_first_keeps_serving() {
     let (client, seen, url) = client(Plan::serving(Bytes::from_static(b"first")));
 
@@ -743,7 +743,7 @@ async fn fail(client: &HttpClient, url: Url, op: Op) {
     opened.expect_err("every attempt answers 500");
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 #[case::get_bytes(Op::GetBytes)]
 #[case::stream(Op::Stream)]
 #[case::range(Op::Range)]
