@@ -40,5 +40,14 @@ fn reverb(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, reverb);
+fn scratch_zero(c: &mut Criterion) {
+    c.bench_function("reverb_scratch_zero_4kib", |b| {
+        b.iter(|| {
+            let mut scratch = [[0.0_f32; 128]; 8];
+            black_box(&mut scratch);
+        });
+    });
+}
+
+criterion_group!(benches, reverb, scratch_zero);
 criterion_main!(benches);
