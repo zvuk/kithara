@@ -28,18 +28,14 @@ fn make_processor() -> (TestMixer, Control) {
 fn block(processor: &mut TestMixer) {
     render(processor, MAX_BLOCK_FRAMES as usize);
 }
-fn create_mock_player_resource(input: &'static [u8], src: &str) -> Resource {
-    create_mock_player_resource_with_duration(input, src, 60.0)
+fn create_mock_player_resource(input: &'static [u8]) -> Resource {
+    create_mock_player_resource_with_duration(input, 60.0)
 }
-fn create_mock_player_resource_with_duration(
-    input: &'static [u8],
-    src: &str,
-    seconds: f64,
-) -> Resource {
-    legacy_fixture::resource(input, src, seconds, AudioSpec::new(2, RATE))
+fn create_mock_player_resource_with_duration(input: &'static [u8], seconds: f64) -> Resource {
+    legacy_fixture::resource(input, seconds, AudioSpec::new(2, RATE))
 }
-fn create_duration_player_resource(src: &str, duration: Duration) -> Resource {
-    create_mock_player_resource_with_duration(&[0, 0, 0, 63], src, duration.as_secs_f64())
+fn create_duration_player_resource(duration: Duration) -> Resource {
+    create_mock_player_resource_with_duration(&[0, 0, 0, 63], duration.as_secs_f64())
 }
 #[kithara::test]
 fn processor_renders_silence_when_no_tracks() {
@@ -67,7 +63,7 @@ async fn start_and_stop_switch_a_loaded_deck() {
     attach(
         &mut control,
         Slot::new(0),
-        create_duration_player_resource("track.mp3", Duration::from_secs(60)),
+        create_duration_player_resource(Duration::from_secs(60)),
         false,
     );
 
@@ -106,7 +102,7 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
     attach(
         &mut control,
         item_id,
-        create_duration_player_resource("track.mp3", Duration::from_secs(60)),
+        create_duration_player_resource(Duration::from_secs(60)),
         false,
     );
     push(
@@ -205,7 +201,7 @@ async fn processor_track_command_scenarios(
     attach(
         &mut control,
         item_id,
-        create_mock_player_resource(constant_half, "track1.mp3"),
+        create_mock_player_resource(constant_half),
         false,
     );
 
@@ -215,7 +211,7 @@ async fn processor_track_command_scenarios(
             attach(
                 &mut control,
                 item_id,
-                create_mock_player_resource(constant_half, "track1.mp3"),
+                create_mock_player_resource(constant_half),
                 true,
             );
         }
@@ -262,9 +258,10 @@ async fn a_deck_holds_as_many_tracks_as_its_config_gives_it_slots(
         .map(|index| Slot::new(u16::try_from(index % slots).expect("fixture slot")))
         .collect();
 
+    let mut newest = None;
     for (idx, &item_id) in ids.iter().enumerate() {
-        let resource = create_mock_player_resource(constant_half, &format!("track-{idx}.mp3"));
-        attach(&mut control, item_id, resource, idx >= slots);
+        let resource = create_mock_player_resource(constant_half);
+        newest = Some(attach(&mut control, item_id, resource, idx >= slots));
         block(&mut processor);
     }
 
@@ -273,10 +270,12 @@ async fn a_deck_holds_as_many_tracks_as_its_config_gives_it_slots(
         slots,
         "a deck holds one track per configured slot, never more"
     );
-    assert!(
-        ids.last().is_some_and(|&newest| processor
-            .track(newest)
-            .is_some_and(|track| track.src().as_ref() == format!("track-{slots}.mp3"))),
+    assert_eq!(
+        ids.last()
+            .and_then(|&slot| processor.track(slot))
+            .and_then(|track| track.slot_binding(kithara_signal::SessionEpoch::new(0)))
+            .map(|binding| binding.attachment()),
+        newest,
         "the newest attach takes the slot an older track gave up"
     );
 }
@@ -285,7 +284,7 @@ async fn a_deck_holds_as_many_tracks_as_its_config_gives_it_slots(
 async fn processor_cleanup_finished_tracks(constant_half: &'static [u8]) {
     let (mut processor, mut control) = make_processor();
 
-    let resource = create_mock_player_resource_with_duration(constant_half, "track1.mp3", 0.01);
+    let resource = create_mock_player_resource_with_duration(constant_half, 0.01);
     let item_id = Slot::new(0);
     attach(&mut control, item_id, resource, false);
     block(&mut processor);
@@ -309,13 +308,13 @@ async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half:
     attach(
         &mut control,
         short_id,
-        create_mock_player_resource_with_duration(constant_half, "short.mp3", 0.01),
+        create_mock_player_resource_with_duration(constant_half, 0.01),
         false,
     );
     attach(
         &mut control,
         long_id,
-        create_mock_player_resource(constant_half, "long.mp3"),
+        create_mock_player_resource(constant_half),
         false,
     );
 
@@ -378,13 +377,13 @@ async fn a_prepared_delayed_final_packet_stitches_its_successor_inside_the_same_
     attach(
         &mut control,
         leading,
-        legacy_fixture::from_packets("delayed", packets),
+        legacy_fixture::from_packets(packets),
         false,
     );
     attach(
         &mut control,
         successor,
-        create_duration_player_resource("successor", Duration::from_secs(1)),
+        create_duration_player_resource(Duration::from_secs(1)),
         false,
     );
     block(&mut processor);
@@ -449,13 +448,13 @@ async fn render_audio_handover_promotes_preloading_track_without_silence(
     attach(
         &mut control,
         short_id,
-        create_mock_player_resource_with_duration(constant_half, "short.mp3", 0.01),
+        create_mock_player_resource_with_duration(constant_half, 0.01),
         false,
     );
     attach(
         &mut control,
         preload_id,
-        create_mock_player_resource(constant_half, "preload.mp3"),
+        create_mock_player_resource(constant_half),
         false,
     );
     block(&mut processor);
@@ -503,15 +502,11 @@ async fn an_ending_track_starts_only_the_track_chained_to_it(constant_half: &'st
     let other_id = Slot::new(1);
     let chained_id = Slot::new(2);
 
-    for (src, secs, item_id) in [
-        ("leading.mp3", 0.01, leading_id),
-        ("other.mp3", 60.0, other_id),
-        ("chained.mp3", 60.0, chained_id),
-    ] {
+    for (secs, item_id) in [(0.01, leading_id), (60.0, other_id), (60.0, chained_id)] {
         attach(
             &mut control,
             item_id,
-            create_mock_player_resource_with_duration(constant_half, src, secs),
+            create_mock_player_resource_with_duration(constant_half, secs),
             false,
         );
     }
@@ -556,15 +551,15 @@ async fn render_audio_handover_continues_past_a_preload_that_ends_in_its_stitch_
     let preload_id = Slot::new(2);
     let frames = 1024usize;
 
-    for (src, secs, item_id) in [
-        ("leading.mp3", 0.01, leading_id),
-        ("short-preload.mp3", 0.005, short_preload_id),
-        ("preload.mp3", 60.0, preload_id),
+    for (secs, item_id) in [
+        (0.01, leading_id),
+        (0.005, short_preload_id),
+        (60.0, preload_id),
     ] {
         attach(
             &mut control,
             item_id,
-            create_mock_player_resource_with_duration(constant_half, src, secs),
+            create_mock_player_resource_with_duration(constant_half, secs),
             false,
         );
     }
@@ -616,19 +611,19 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_hal
     attach(
         &mut control,
         short_id,
-        create_mock_player_resource_with_duration(constant_half, "short.mp3", 0.01),
+        create_mock_player_resource_with_duration(constant_half, 0.01),
         false,
     );
     attach(
         &mut control,
         fading_id,
-        create_mock_player_resource(constant_half, "fading.mp3"),
+        create_mock_player_resource(constant_half),
         false,
     );
     attach(
         &mut control,
         preload_id,
-        create_mock_player_resource(constant_half, "preload.mp3"),
+        create_mock_player_resource(constant_half),
         false,
     );
     block(&mut processor);

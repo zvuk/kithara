@@ -3,7 +3,6 @@
 use std::{collections::BTreeMap, num::NonZeroU32};
 
 use kithara_command::When;
-use kithara_platform::sync::Arc;
 use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_fixtures::{integration_fixtures::deadline_tracks, signal::peak};
 use kithara_test_utils::{
@@ -12,7 +11,7 @@ use kithara_test_utils::{
 };
 
 use super::{
-    DeckMixerConfig, DeckPart, Fade, PlayerResource, Slot, StreamShape, TestEnds, TestMixer, chunk,
+    DeckMixerConfig, DeckPart, Fade, Slot, StreamShape, TestEnds, TestMixer, chunk,
     mixer_with_shape, send,
 };
 use crate::worker::{PcmPacket, packet_tests::PacketRing};
@@ -82,10 +81,7 @@ fn load_tracks(
             kithara_platform::time::Duration::from_secs_f64(consts::TRACK_SECONDS),
             2,
         );
-        let pcm = PlayerResource::new(
-            packets.receiver.take().expect("packet receiver"),
-            Arc::from(format!("no-sync-deadline-track-{index}")),
-        );
+        let pcm = Box::new(packets.receiver.take().expect("packet receiver"));
         let slot = Slot::new(u16::try_from(index).expect("slot fits u16"));
         send(
             control,
@@ -94,7 +90,7 @@ fn load_tracks(
                 DeckPart::Attach {
                     item_id: kithara_events::TrackId::allocate(),
                     slot,
-                    pcm: Box::new(pcm),
+                    pcm,
                     segment: SegmentId::FIRST,
                 },
                 DeckPart::Start {

@@ -91,7 +91,7 @@ impl SlotTail {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_platform::time::Duration;
     use kithara_signal::{AudioSpec, SegmentId};
     use kithara_test_utils::kithara;
     use num_traits::ToPrimitive;
@@ -123,12 +123,11 @@ mod tests {
                         &vec![0.5; available * 2],
                     ))));
                 }
-                let resource =
-                    PlayerResource::new(ring.receiver.take().expect("receiver"), Arc::from("tail"));
+                let resource = Box::new(ring.receiver.take().expect("receiver"));
                 let mut track = PlayerTrack::builder()
                     .item_id(kithara_events::TrackId::allocate())
                     .sample_rate(spec.sample_rate)
-                    .build(Box::new(resource));
+                    .build(resource);
                 track.start(Fade::Crossfade(CrossfadeSettings {
                     duration: 0.0,
                     ..Default::default()

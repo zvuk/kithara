@@ -67,7 +67,9 @@ let stage = WarpSource::new(source, renderer, spec, pools, lane);
 
 `kithara-play` builds one `WarpSource` per loaded track on its worker and
 steps it from the decoder node. It retains metadata and ABR from `OpenedPcm`
-off RT and installs only the receiver in its deck's `PlayerResource`.
+off RT and transfers only the boxed receiver to its deck. The deck initializes
+the consumption cursor in its preallocated slot and returns the receiver with
+any held packet for destruction off RT.
 `kithara-host` places each deck's `PlayerNode` in the output graph.
 The crate depends on the engine layer (`kithara-audio`, `kithara-effects`,
 `kithara-warp`, `kithara-output`) and on nothing in the player.

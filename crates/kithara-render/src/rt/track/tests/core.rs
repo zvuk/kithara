@@ -48,7 +48,7 @@ fn an_adopted_segment_never_uses_a_held_obsolete_packet(#[case] check_mark: bool
         18,
         &[1.0; 8],
     ))));
-    let mut resource = PlayerResource::new(receiver, Arc::from("segments"));
+    let mut resource = PlayerResource::new(Box::new(receiver));
     resource.select_segment(intermediate);
     let mut budget = 1;
     resource.refresh_mark(&mut budget);
@@ -75,7 +75,7 @@ fn an_adopted_segment_never_uses_a_held_obsolete_packet(#[case] check_mark: bool
     assert!(
         resource
             .receiver
-            .get_mut()
+            .as_mut()
             .recycle(PcmPacket::Chunk(Box::new(chunk(spec, old, 0, 0, &[1.0]))))
             .is_err(),
         "the reverse ring is full"
@@ -244,10 +244,7 @@ fn producer_ahead_geometry_does_not_replace_a_historical_buffered_mark(
     next.meta.source_revision = 8;
     ring.push(PcmPacket::Chunk(Box::new(old)));
     ring.push(PcmPacket::Chunk(Box::new(next)));
-    let mut resource = PlayerResource::new(
-        ring.receiver.take().expect("receiver"),
-        Arc::from("promoted"),
-    );
+    let mut resource = PlayerResource::new(Box::new(ring.receiver.take().expect("receiver")));
     let mut budget = 8;
     resource.refresh_mark(&mut budget);
     assert_eq!(
@@ -260,7 +257,7 @@ fn producer_ahead_geometry_does_not_replace_a_historical_buffered_mark(
     assert_eq!(left, [0.25]);
     assert_eq!(right, left);
     assert_eq!(
-        resource.receiver.get().visible_origin(),
+        resource.receiver.as_ref().visible_origin(),
         Some(Duration::from_millis(new_origin))
     );
     assert_eq!(

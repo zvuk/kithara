@@ -25,10 +25,7 @@ use kithara::{
         node::LimiterNode,
     },
     file::{File, FileConfig, FileSrc},
-    platform::{
-        sync::Arc,
-        time::{Duration, Instant},
-    },
+    platform::time::{Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig},
     queue::TrackSource,
     signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame, TransportRevision},
@@ -51,10 +48,7 @@ use kithara_render::{
         DeckProtocol, EqGainProgram, Fade, FilterProgram, ParameterKnot, SessionInbox, Slot,
         SlotState, scope_channels,
     },
-    rt::{
-        DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context,
-        track::PlayerResource,
-    },
+    rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
 };
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
 
@@ -255,10 +249,7 @@ async fn processor(count: usize, lane: Lane, limiter: LimiterConfig) -> BenchMix
         commands.push(DeckPart::Attach {
             item_id: kithara_events::TrackId::allocate(),
             slot,
-            pcm: Box::new(PlayerResource::new(
-                pcm.receiver,
-                Arc::from(format!("bench-track-{index}")),
-            )),
+            pcm: Box::new(pcm.receiver),
             segment: SegmentId::FIRST,
         });
         commands.push(DeckPart::Start {

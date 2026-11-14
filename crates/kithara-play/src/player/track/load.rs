@@ -116,14 +116,8 @@ impl<S> PlayerImpl<S> {
         out: &mut Outbox<'_, S>,
     ) -> Settled {
         self.lane.loaded(loaded.lane);
-        let OpenedTrack {
-            pcm,
-            playhead,
-            abr,
-            metadata,
-        } = loaded.opened;
-        self.abr = abr;
-        self.metadata = metadata;
+        self.abr = loaded.opened.abr;
+        self.metadata = loaded.opened.metadata;
         if self.lane.retiring() {
             self.loading = None;
             if let Err(error) = self.release_lane(out) {
@@ -131,11 +125,12 @@ impl<S> PlayerImpl<S> {
             }
             return Settled::Pending;
         }
-        self.playhead = Some(playhead);
+        self.playhead = Some(loaded.opened.playhead);
         self.engine_latency = loaded.engine_latency;
         if self.segment.id == SegmentId::FIRST {
             self.segment.ready = true;
         }
+        let pcm = loaded.opened.pcm;
         let prepared = pcm.next_chunk_info();
         if let Some(meta) = prepared.filter(|meta| meta.segment == self.segment.id) {
             self.segment.origin = Some(meta.timestamp);

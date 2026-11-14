@@ -2,7 +2,7 @@
 
 use std::num::NonZeroU32;
 
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_stream::PlayheadRead;
 use kithara_test_fixtures::integration_fixtures::constant_half;
@@ -82,15 +82,12 @@ fn make_track_with(input: &'static [u8], seconds: f64, _slot: Slot) -> Fixture {
     let mut terminal = chunk(spec(), SegmentId::FIRST, frames, frames, &[]);
     terminal.meta.end_of_track = true;
     packets.push(PcmPacket::Chunk(Box::new(terminal)));
-    let resource = PlayerResource::new(
-        packets.receiver.take().expect("receiver"),
-        Arc::from("test.mp3"),
-    );
+    let resource = Box::new(packets.receiver.take().expect("receiver"));
     Fixture {
         track: PlayerTrack::builder()
             .item_id(kithara_events::TrackId::allocate())
             .sample_rate(spec().sample_rate)
-            .build(Box::new(resource)),
+            .build(resource),
         packets,
     }
 }
@@ -200,12 +197,6 @@ async fn track_state_transitions(
         ),
         expected_state
     );
-}
-
-#[kithara::test(tokio)]
-async fn track_src_returns_identifier(constant_half: &'static [u8]) {
-    let track = make_track(constant_half);
-    assert_eq!(&**track.src(), "test.mp3");
 }
 
 #[kithara::test(tokio)]
@@ -433,14 +424,11 @@ async fn read_outcome_matches_track_state(
 #[kithara::test]
 fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
     let mut packets = PacketRing::new(spec(), Duration::from_secs(100), 4);
-    let resource = PlayerResource::new(
-        packets.receiver.take().expect("receiver"),
-        Arc::from("frontier.flac"),
-    );
+    let resource = Box::new(packets.receiver.take().expect("receiver"));
     let track = PlayerTrack::builder()
         .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec().sample_rate)
-        .build(Box::new(resource));
+        .build(resource);
 
     assert_eq!(track.decoded_frontier(), 0.0);
     let source = u64::try_from(
@@ -534,14 +522,11 @@ async fn a_buffered_eof_corrects_an_overestimated_duration(constant_half: &'stat
     let mut terminal = chunk(spec(), SegmentId::FIRST, 900, 900, &[]);
     terminal.meta.end_of_track = true;
     packets.push(PcmPacket::Chunk(Box::new(terminal)));
-    let resource = PlayerResource::new(
-        packets.receiver.take().expect("receiver"),
-        Arc::from("misreported.mp3"),
-    );
+    let resource = Box::new(packets.receiver.take().expect("receiver"));
     let mut track = PlayerTrack::builder()
         .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec().sample_rate)
-        .build(Box::new(resource));
+        .build(resource);
     let (tx, mut rx) = HeapRb::<DeckEvent>::new(16).split();
     let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];

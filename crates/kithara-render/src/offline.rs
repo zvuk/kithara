@@ -239,7 +239,7 @@ fn read_pcm(
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_platform::time::Duration;
     use kithara_signal::{AudioSpec, SegmentId, SessionFrame};
     use kithara_test_utils::{kithara, test::usdt};
 
@@ -258,10 +258,7 @@ mod tests {
         let (mut mixer, mut ends) = mixer();
         let rate = shape().sample_rate;
         let mut packets = PacketRing::new(AudioSpec::new(2, rate), Duration::from_secs(1), 1);
-        let resource = PlayerResource::new(
-            packets.receiver.take().expect("PCM receiver"),
-            Arc::from("starved-device"),
-        );
+        let resource = Box::new(packets.receiver.take().expect("PCM receiver"));
         let slot = Slot::new(0);
         send(
             &mut ends,
@@ -270,7 +267,7 @@ mod tests {
                 DeckPart::Attach {
                     slot,
                     item_id: kithara_events::TrackId::allocate(),
-                    pcm: Box::new(resource),
+                    pcm: resource,
                     segment: SegmentId::FIRST,
                 },
                 DeckPart::Start {
@@ -324,11 +321,11 @@ mod tests {
                 ),
             )))
             .expect("first packet");
-        let resource = PlayerResource::new(receiver, Arc::from("delayed-tail"));
+        let resource = Box::new(receiver);
         let mut track = PlayerTrack::builder()
             .item_id(kithara_events::TrackId::allocate())
             .sample_rate(spec.sample_rate)
-            .build(Box::new(resource));
+            .build(resource);
         track.start(Fade::Crossfade(crate::CrossfadeSettings {
             duration: 0.0,
             ..Default::default()
@@ -405,7 +402,7 @@ mod tests {
                 ),
             )))
             .expect("physical packet");
-        let mut reader = PlayerResource::new(receiver, Arc::from("delayed-terminal"));
+        let mut reader = PlayerResource::new(Box::new(receiver));
         let trace = usdt::scope();
         let writer = thread::spawn_named("tail-terminal", move || {
             wait_until_blocking(Duration::from_secs(1), "the terminal read waits", || {
@@ -486,7 +483,7 @@ mod tests {
                 crate::worker::packet_tests::chunk(spec, segment, 1, 1, samples),
             )))
             .expect("unreadable packet");
-        let mut reader = PlayerResource::new(receiver, Arc::from("boundary-tail"));
+        let mut reader = PlayerResource::new(Box::new(receiver));
         let mut left = [99.0; 2];
         let mut right = [99.0; 2];
         let mut budget = usize::MAX;

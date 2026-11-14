@@ -254,7 +254,7 @@ impl PlayerTrack {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_platform::time::Duration;
     use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
     use kithara_test_utils::kithara;
 
@@ -288,10 +288,7 @@ mod tests {
             8_000,
             &[0.5; 2],
         ))));
-        let mut resource = PlayerResource::new(
-            ring.receiver.take().expect("receiver"),
-            Arc::from("publication"),
-        );
+        let mut resource = PlayerResource::new(Box::new(ring.receiver.take().expect("receiver")));
         resource.refresh_mark(&mut 1);
         let frontier = resource
             .mark(context.output_frames().start)

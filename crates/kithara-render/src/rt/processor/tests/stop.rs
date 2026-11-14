@@ -16,13 +16,15 @@ fn fade_frames(frames: usize) -> CrossfadeSettings {
     .expect("frame-based fixture fade")
 }
 
-fn empty_slot(mixer: &mut TestMixer, ends: &mut TestEnds, playing: bool) -> PacketRing {
+fn empty_slot(
+    mixer: &mut TestMixer,
+    ends: &mut TestEnds,
+    playing: bool,
+) -> (PacketRing, *const crate::PcmReceiver) {
     let spec = AudioSpec::new(2, shape().sample_rate);
     let mut packets = PacketRing::new(spec, Duration::from_secs(1), 2);
-    let resource = Box::new(PlayerResource::new(
-        packets.receiver.take().expect("receiver"),
-        Arc::from("empty live lane"),
-    ));
+    let resource = Box::new(packets.receiver.take().expect("receiver"));
+    let receiver = std::ptr::from_ref(resource.as_ref());
     let mut commands = vec![DeckPart::Attach {
         item_id: kithara_events::TrackId::allocate(),
         slot: A,
@@ -39,7 +41,7 @@ fn empty_slot(mixer: &mut TestMixer, ends: &mut TestEnds, playing: bool) -> Pack
     assert_eq!(render_frames(mixer, 0, 1), [0.0]);
     assert_eq!(receipts(ends).len(), 1);
     assert_eq!(mixer.track(A).expect("attached").mark(frame_at(1)), None);
-    packets
+    (packets, receiver)
 }
 
 fn assert_stop_answer(replies: &[DeckReply], seq: Seq, at: usize, slot: Slot) {
@@ -147,7 +149,7 @@ fn a_stop_without_a_mark_still_returns_its_original_sequence(#[case] playing: bo
 #[case::adopt(3)]
 fn an_interrupted_stop_without_a_mark_keeps_its_sequence_and_custody(#[case] change: u8) {
     let (mut mixer, mut ends) = mixer();
-    let _packets = empty_slot(&mut mixer, &mut ends, true);
+    let (_packets, original_receiver) = empty_slot(&mut mixer, &mut ends, true);
     let stop = send(
         &mut ends,
         at(1),
@@ -165,7 +167,7 @@ fn an_interrupted_stop_without_a_mark_keeps_its_sequence_and_custody(#[case] cha
         2 => DeckPart::Replace {
             item_id: kithara_events::TrackId::allocate(),
             slot: A,
-            pcm: pcm_samples("new lane", 1.0, &[1.0; 128], false),
+            pcm: pcm_samples(1.0, &[1.0; 128], false),
             segment: SegmentId::FIRST,
         },
         3 => DeckPart::Adopt {
@@ -185,8 +187,8 @@ fn an_interrupted_stop_without_a_mark_keeps_its_sequence_and_custody(#[case] cha
             .find(|(seq, ..)| *seq == changed)
             .expect("change");
         assert!(
-            matches!(parts.as_slice(), [DeckPart::Returned(Returned::Pcm { slot, pcm })]
-            if *slot == A && &**pcm.src() == "empty live lane")
+            matches!(parts.as_slice(), [DeckPart::Returned(Returned::Pcm { slot, pcm, packet: None })]
+            if *slot == A && std::ptr::eq(pcm.as_ref(), original_receiver))
         );
     }
     render_frames(&mut mixer, 33, 1);
@@ -361,7 +363,7 @@ fn a_multislot_stop_waits_for_the_other_slot_after_markless_completion() {
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: B,
-                pcm: pcm_samples("mapped lane", 1.0, &[1.0; 2 * BLOCK + 256], false),
+                pcm: pcm_samples(1.0, &[1.0; 2 * BLOCK + 256], false),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {
@@ -413,7 +415,7 @@ fn an_ordinary_fade_finishes_on_session_time_after_early_eof() {
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: A,
-                pcm: pcm_samples("short lane", 1.0, &vec![1.0; 2 * EOF], true),
+                pcm: pcm_samples(1.0, &vec![1.0; 2 * EOF], true),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {

@@ -10,9 +10,8 @@ use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
-    CrossfadeSettings, LaneCommand, LaneFrame, LaneId, LaneProtocol,
+    CrossfadeSettings, LaneCommand, LaneFrame, LaneId, LaneProtocol, PcmReceiver,
     bridge::{FadeDir, PlaybackFault, Slot, SlotMark, TrackClock},
-    rt::track::PlayerResource,
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
@@ -297,7 +296,7 @@ impl Lane {
 pub(super) struct Loading {
     pub(super) seq: Seq,
     /// The opened source's consumer, until a deck batch takes it.
-    pub(super) opened: Option<Box<PlayerResource>>,
+    pub(super) opened: Option<Box<PcmReceiver>>,
     pub(super) speed: Option<(SpeedCurve, f32)>,
 }
 

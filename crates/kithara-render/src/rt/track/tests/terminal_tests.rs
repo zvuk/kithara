@@ -27,7 +27,7 @@ fn spec() -> AudioSpec {
 }
 
 fn resource(receiver: PcmReceiver) -> PlayerResource {
-    PlayerResource::new(receiver, Arc::from("repeated.wav"))
+    PlayerResource::new(Box::new(receiver))
 }
 
 fn observe(reader: &mut PlayerResource) -> Option<ReadOutcome> {
@@ -474,10 +474,11 @@ async fn a_real_source_failure_keeps_its_cause_in_the_single_stop_notification()
         terminal_node(real_audio(cancel.clone()).await, spec(), false);
     cancel.cancel();
     assert_eq!(node.tick(), TickResult::Progress);
+    let item = kithara_events::TrackId::allocate();
     let mut track = PlayerTrack::builder()
-        .item_id(kithara_events::TrackId::allocate())
+        .item_id(item)
         .sample_rate(spec().sample_rate)
-        .build(Box::new(resource(receiver)));
+        .build(Box::new(receiver));
     track.start(Fade::Declick);
     let (mut events, mut received) = HeapRb::<DeckEvent>::new(8).split();
     let metrics = RtMetrics::default();
@@ -485,7 +486,7 @@ async fn a_real_source_failure_keeps_its_cause_in_the_single_stop_notification()
     let slot = Slot::new(0);
     let mut sink = RtSink::new(&mut events, &metrics, slot, SessionFrame::new(7));
     assert!(track.poll_end(0, &mut 8, &mut sink));
-    assert_eq!(track.src().as_ref(), "repeated.wav");
+    assert_eq!(track.item_id, item);
     assert_eq!(
         received.try_pop(),
         Some(DeckEvent::Failed {
@@ -587,7 +588,7 @@ fn failed_seek_commits_its_epoch_for_the_terminal_marker() {
         kind: DecodeErrorKind::Interrupted,
     };
     assert!(
-        matches!(reader.receiver.get().peek(), Some(PcmPacket::Failed { segment, failure: actual }) if *segment == selected && *actual == failure)
+        matches!(reader.receiver.as_ref().peek(), Some(PcmPacket::Failed { segment, failure: actual }) if *segment == selected && *actual == failure)
     );
     assert_eq!(
         observe(&mut reader),

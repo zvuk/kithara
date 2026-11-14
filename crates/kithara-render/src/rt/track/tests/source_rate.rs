@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_signal::{AudioSpec, SegmentId, SessionFrame, SourceSpan};
 use kithara_test_utils::kithara;
 
@@ -22,8 +22,7 @@ fn pcm_consumption_preserves_the_lanes_source_rate() {
             packet.meta.source_span = SourceSpan::new(from, until, spec.sample_rate, 4);
             ring.push(PcmPacket::Chunk(Box::new(packet)));
         }
-        let mut resource =
-            PlayerResource::new(ring.receiver.take().expect("receiver"), Arc::from("rate"));
+        let mut resource = PlayerResource::new(Box::new(ring.receiver.take().expect("receiver")));
         let mut left = [0.0; 4];
         let mut right = [0.0; 4];
         let mut budget = 8;

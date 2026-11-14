@@ -1327,5 +1327,5 @@ async fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_
     track.settle_lane();
     assert_eq!(track.source_basis, Some(original_basis));
     assert_eq!(track.snapshot().position, Duration::from_millis(media_ms));
-    assert_eq!(rig.mixer.held(A), Some("media-parked-repeat"));
+    assert_eq!(rig.mixer.held(A), Some(track.item));
 }

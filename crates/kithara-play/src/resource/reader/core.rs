@@ -16,9 +16,7 @@ use kithara_command::{Inbox, Sender};
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{CancelToken, maybe_send::BoxFuture, sync::Arc, time::Duration};
-use kithara_render::{
-    LaneProtocol, LaneStart, LoadRefusal, Open, OpenedPcm, rt::track::PlayerResource,
-};
+use kithara_render::{LaneProtocol, LaneStart, LoadRefusal, Open, OpenedPcm, PcmReceiver};
 use kithara_signal::{AudioSpec, FrameCount};
 use tracing::warn;
 
@@ -290,7 +288,8 @@ where
 
 /// The owner-facing receiver and source facts returned by a dispatcher load.
 pub struct OpenedTrack {
-    pub pcm: Box<PlayerResource>,
+    pub pcm: Box<PcmReceiver>,
+    pub src: Arc<str>,
     pub playhead: Arc<dyn kithara_stream::PlayheadRead>,
     pub abr: Option<kithara_abr::AbrHandle>,
     pub metadata: TrackMetadata,
@@ -300,7 +299,7 @@ impl Debug for OpenedTrack {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("OpenedTrack")
-            .field("src", self.pcm.src())
+            .field("src", &self.src)
             .finish_non_exhaustive()
     }
 }
@@ -313,9 +312,10 @@ impl OpenedTrack {
             metadata,
             abr,
         } = opened;
-        let pcm = Box::new(PlayerResource::new(receiver, src));
+        let pcm = Box::new(receiver);
         Self {
             pcm,
+            src,
             playhead,
             abr,
             metadata,
@@ -437,7 +437,34 @@ mod tests {
 
         assert!(released.upgrade().is_none());
         assert_eq!(opened.pcm.spec(), spec);
-        assert_eq!(opened.pcm.src().as_ref(), "source");
+        assert_eq!(opened.src.as_ref(), "source");
+    }
+
+    #[kithara::test]
+    fn pcm_payload_does_not_retain_its_opening_source_label() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("source rate"));
+        let mut packets = kithara_render::mock::PacketRing::new(spec, Duration::from_secs(1), 2);
+        packets.push(kithara_render::PcmPacket::Chunk(Box::new(
+            kithara_render::mock::chunk(spec, SegmentId::FIRST, 0, 0, &[0.25; 16]),
+        )));
+        let src: Arc<str> = Arc::from("opening-source");
+        let released = Arc::downgrade(&src);
+        let pcm = OpenedTrack::new(
+            OpenedPcm {
+                receiver: packets.receiver.take().expect("PCM receiver"),
+                metadata: TrackMetadata::default(),
+                abr: None,
+                playhead: packets.playhead(),
+            },
+            src,
+        )
+        .pcm;
+        assert!(
+            released.upgrade().is_none(),
+            "PCM must not retain off-RT source metadata"
+        );
+        assert_eq!(pcm.spec(), spec);
+        assert_eq!(pcm.next_chunk_info().expect("admitted packet").frames, 8);
     }
 
     #[kithara::test(tokio)]

@@ -201,7 +201,7 @@ impl ThresholdRig {
             let declared = Some(Duration::from_secs_f64(duration));
             let (declared_load, mut packets) = crate::mock::synthetic_loaded(
                 seq,
-                loaded.opened.pcm.src(),
+                &loaded.opened.src,
                 AudioChunkInfo {
                     media_end: declared,
                     ..source

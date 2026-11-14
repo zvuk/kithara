@@ -20,10 +20,7 @@ fn snapshot_frontier_never_trails_position() {
         656,
         &[0.5; 2],
     ))));
-    let pcm = PlayerResource::new(
-        packets.receiver.take().expect("receiver"),
-        Arc::from("frontier"),
-    );
+    let pcm = Box::new(packets.receiver.take().expect("receiver"));
     let (mut mixer, mut ends) = mixer();
     send(
         &mut ends,
@@ -31,7 +28,7 @@ fn snapshot_frontier_never_trails_position() {
         vec![DeckPart::Attach {
             item_id: kithara_events::TrackId::allocate(),
             slot: A,
-            pcm: Box::new(pcm),
+            pcm,
             segment: SegmentId::FIRST,
         }],
     );
@@ -113,10 +110,7 @@ fn snapshot_carries_the_owner_origin_without_rewriting_raw_pcm_position() {
     );
     let data = chunk(spec, SegmentId::FIRST, 0, 1_500, &[0.5; 338]);
     packets.push(PcmPacket::Chunk(Box::new(data)));
-    let pcm = PlayerResource::new(
-        packets.receiver.take().expect("receiver"),
-        Arc::from("offset"),
-    );
+    let pcm = Box::new(packets.receiver.take().expect("receiver"));
     let (mut mixer, mut ends) = mixer();
     send(
         &mut ends,
@@ -124,7 +118,7 @@ fn snapshot_carries_the_owner_origin_without_rewriting_raw_pcm_position() {
         vec![DeckPart::Attach {
             item_id: kithara_events::TrackId::allocate(),
             slot: A,
-            pcm: Box::new(pcm),
+            pcm,
             segment: SegmentId::FIRST,
         }],
     );

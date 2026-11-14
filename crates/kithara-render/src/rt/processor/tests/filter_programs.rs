@@ -162,12 +162,7 @@ fn a_program_switching_between_the_knob_ends_is_admitted_and_stays_finite() {
             DeckPart::Attach {
                 slot: A,
                 item_id: kithara_events::TrackId::allocate(),
-                pcm: pcm_samples(
-                    "normalized switched filter",
-                    1.0,
-                    &vec![1.0; (TAKE + 2) * 2],
-                    false,
-                ),
+                pcm: pcm_samples(1.0, &vec![1.0; (TAKE + 2) * 2], false),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {

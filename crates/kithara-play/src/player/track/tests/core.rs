@@ -949,7 +949,7 @@ async fn a_next_pause_of_an_attached_track_settles_only_its_native_stop(
     assert_eq!(track.snapshot().position, stopped_mark.position);
     assert_eq!(track.resume, Some(stopped_mark));
     assert!(track.playback_commands.is_empty());
-    assert_eq!(rig.deck.mixer.held(A), Some("next-pause"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 }
 
 #[kithara::test]
@@ -2119,7 +2119,7 @@ async fn a_load_opens_its_source_once_and_attaches_on_the_next_block() {
         matches!(settled.as_slice(), [Settled::Applied { seq: answered, .. }] if *answered == seq),
         "the attach answers the load: {settled:?}"
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("track"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
     assert_eq!(track.snapshot().status, TrackStatus::Loaded);
 }
 
@@ -2233,7 +2233,7 @@ async fn a_track_loaded_at_a_position_stands_there_once_attached() {
         "the attach answers the load: {settled:?}"
     );
     assert!(receipts[0].batch().commands.is_empty());
-    assert_eq!(rig.deck.mixer.held(A), Some("track"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
     assert_eq!(track.snapshot().position, Position::from_secs(3));
 }
 
@@ -2584,7 +2584,7 @@ async fn a_rejected_release_can_send_a_new_detach(#[case] stale: bool) {
             .any(|answer| { matches!(answer, Settled::Rejected { seq, .. } if *seq == first) })
     );
     assert!(track.attached());
-    assert_eq!(rig.deck.mixer.held(A), Some("track"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 
     let retry = rig
         .with_outbox(|out| track.apply(TrackCommand::Release, out))
@@ -2809,7 +2809,8 @@ async fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     );
     rig.with_outbox(|out| new.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live deck scope");
-    assert_eq!(rig.deck.mixer.held(A), Some("old"));
+    let old_receiver = std::ptr::from_ref(rig.deck.mixer.receiver(A).expect("original PCM"));
+    assert_eq!(rig.deck.mixer.held(A), Some(old.item));
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
@@ -2866,7 +2867,7 @@ async fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     };
     assert_eq!(
         rig.deck.mixer.held(A),
-        Some("old"),
+        Some(old.item),
         "the replace waits for its frame"
     );
 
@@ -2878,9 +2879,9 @@ async fn an_evicting_track_takes_the_slot_over_on_its_frame() {
         matches!(
             receipts[0].batch().commands.as_slice(),
             [
-                DeckPart::Returned(Returned::Pcm { slot, pcm }),
+                DeckPart::Returned(Returned::Pcm { slot, pcm, packet: None }),
                 DeckPart::Start { slot: started, fade: Fade::Crossfade(_) },
-            ] if *slot == A && &**pcm.src() == "old" && *started == A
+            ] if *slot == A && std::ptr::eq(pcm.as_ref(), old_receiver) && *started == A
         ),
         "{:?}",
         receipts[0].batch().commands
@@ -2889,7 +2890,7 @@ async fn an_evicting_track_takes_the_slot_over_on_its_frame() {
         matches!(settled.as_slice(), [Settled::Applied { seq: answered, at }] if *answered == seq && *at == frame(1_024)),
         "the replace answers the group: {settled:?}"
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("new"));
+    assert_eq!(rig.deck.mixer.held(A), Some(new.item));
     assert_eq!(old.snapshot().status, TrackStatus::Released);
     assert_eq!(
         new.snapshot().status,
@@ -2979,7 +2980,7 @@ async fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
                 .any(|part| matches!(part, DeckPart::Adopt { .. }))
         }));
         settle(&mut old, &mut rig, &mut receipts);
-        assert_eq!(rig.mixer.held(A), Some("old"));
+        assert_eq!(rig.mixer.held(A), Some(old.item));
         assert!(matches!(old.snapshot().status, TrackStatus::Playing { .. }));
         let mut receipts = rig.end(A, frame(1_024));
         assert!(!receipts.iter().any(|receipt| {
@@ -3097,7 +3098,7 @@ async fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
         assert!(settled.iter().any(|settled| matches!(settled,
             Settled::Rejected { seq: answer, reason: Rejection::Stale } if *answer == seq)));
         rig.block(frame(1_024), 0.0);
-        assert_eq!(rig.mixer.held(A), Some("old"));
+        assert_eq!(rig.mixer.held(A), Some(old.item));
         assert!(matches!(old.snapshot().status, TrackStatus::Playing { .. }));
     }
     assert_eq!(new.snapshot().status, TrackStatus::Released);
@@ -4735,7 +4736,7 @@ async fn a_fade_in_after_an_outstanding_native_stop_sends_a_real_start() {
         track.snapshot().status,
         TrackStatus::Playing { since: frame(128) }
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("stop-then-fade"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 }
 
 #[kithara::test]
@@ -4905,8 +4906,8 @@ async fn a_grouped_fade_in_uses_only_its_own_slots_actual_last_transport(#[case]
     settle(&mut a, &mut rig, &mut receipts);
     settle(&mut b, &mut rig, &mut receipts);
     assert!(matches!(a.snapshot().status, TrackStatus::Playing { .. }));
-    assert_eq!(rig.deck.mixer.held(A), Some("group-a"));
-    assert_eq!(rig.deck.mixer.held(B), Some("group-b"));
+    assert_eq!(rig.deck.mixer.held(A), Some(a.item));
+    assert_eq!(rig.deck.mixer.held(B), Some(b.item));
 }
 
 #[kithara::test]
@@ -4999,7 +5000,7 @@ async fn a_fade_in_after_a_stop_and_transparent_envelope_still_starts(#[case] he
         track.snapshot().status,
         TrackStatus::Playing { since: frame(256) }
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("stop-envelope-start"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 }
 
 #[kithara::test]
@@ -5057,7 +5058,7 @@ async fn a_delayed_start_answer_cannot_overwrite_its_applied_stop(#[case] stop_a
             at: Duration::from_millis(500)
         }
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("held-start-stop"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
     assert!(
         settle(&mut track, &mut rig, &mut held)
             .iter()
@@ -5159,7 +5160,7 @@ async fn an_applied_resume_keeps_its_status_when_both_older_transport_answers_ar
         track.snapshot().status,
         TrackStatus::Playing { since: frame(256) }
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("held-start-stop-resume"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 }
 
 #[kithara::test]
@@ -5183,7 +5184,7 @@ async fn a_delayed_attach_answer_keeps_its_applied_dependent_start() {
         .find(|answer| answer.seq == attached)
         .expect("actual attachment");
     assert!(matches!(attachment.outcome, Outcome::Applied { at, .. } if at == frame(0)));
-    assert_eq!(rig.deck.mixer.held(A), Some("held-attach-start"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
     assert!(
         !attachment
             .batch
@@ -5227,7 +5228,7 @@ async fn a_delayed_attach_answer_keeps_its_applied_dependent_start() {
     );
     assert!(track.seat.attaching().is_none());
     assert!(track.loading.is_none());
-    assert_eq!(rig.deck.mixer.held(A), Some("held-attach-start"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 }
 
 #[kithara::test]
@@ -5310,7 +5311,7 @@ async fn a_refused_stop_cannot_hide_the_earlier_applied_start_answer() {
         track.snapshot().status,
         TrackStatus::Playing { since: frame(0) }
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("held-start-refused-stop"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 }
 
 #[kithara::test(tokio)]

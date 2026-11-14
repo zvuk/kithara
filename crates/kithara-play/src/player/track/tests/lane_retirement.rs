@@ -391,7 +391,6 @@ fn cached_source_progress_does_not_need_a_render_turn() {
     use kithara_render::{
         PcmPacket,
         mock::{PacketRing, chunk},
-        rt::track::PlayerResource,
     };
     use kithara_signal::AudioSpec;
 
@@ -414,10 +413,8 @@ fn cached_source_progress_does_not_need_a_render_turn() {
     ))));
     let source = packets.playhead();
     let opened = OpenedTrack {
-        pcm: Box::new(PlayerResource::new(
-            packets.receiver.take().expect("PCM receiver"),
-            Arc::from("paused"),
-        )),
+        src: Arc::from("paused"),
+        pcm: Box::new(packets.receiver.take().expect("PCM receiver")),
         playhead: source.clone(),
         metadata: kithara_decode::TrackMetadata::default(),
         abr: None,

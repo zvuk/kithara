@@ -1,7 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 use std::num::NonZeroU32;
 
-use kithara_platform::sync::Arc;
 use kithara_signal::{OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
 use ringbuf::{
@@ -9,7 +8,7 @@ use ringbuf::{
     traits::{Consumer, Split},
 };
 
-use super::super::{PlayerResource, PlayerTrack, ReadOutcome, RtSink, TrackBuffers};
+use super::super::{PlayerTrack, ReadOutcome, RtSink, TrackBuffers};
 use crate::{
     bridge::{DeckEvent, Fade, RtMetrics, Slot, TrackClock},
     mock::pcm_fixture::{PcmFixture, chunk},
@@ -29,15 +28,12 @@ struct Rig {
 impl Rig {
     async fn new(clock: TrackClock) -> Self {
         let mut fixture = PcmFixture::new(8, false).await;
-        let resource = PlayerResource::new(
-            fixture.receiver.take().expect("receiver"),
-            Arc::from("dropout-clock"),
-        );
+        let resource = Box::new(fixture.receiver.take().expect("receiver"));
         let rate = NonZeroU32::new(48_000).expect("rate");
         let mut track = PlayerTrack::builder()
             .item_id(kithara_events::TrackId::allocate())
             .sample_rate(rate)
-            .build(Box::new(resource));
+            .build(resource);
         track.start(Fade::Crossfade(crate::CrossfadeSettings {
             duration: 0.0,
             ..Default::default()

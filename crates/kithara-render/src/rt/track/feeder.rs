@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use kithara_audio::FailureSource;
-use kithara_platform::{maybe_send::WasmSend, sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_signal::{
     AudioChunk, AudioChunkInfo, OutputContext, SegmentId, SessionFrame, SourceSpan,
     TransportRevision,
@@ -18,8 +18,7 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct PlayerResource {
-    src: Arc<str>,
-    pub(super) receiver: WasmSend<PcmReceiver>,
+    pub(super) receiver: Box<PcmReceiver>,
     pub(super) packet: Option<PcmPacket>,
     pub(super) offset: usize,
     pub(super) lane: LaneFrame,
@@ -63,14 +62,13 @@ impl ReadOutcome {
 impl PlayerResource {
     /// Wraps a prepared packet receiver without calling its source.
     #[must_use]
-    pub fn new(receiver: PcmReceiver, src: Arc<str>) -> Self {
+    pub fn new(receiver: Box<PcmReceiver>) -> Self {
         let observed = receiver
             .next_chunk_info()
             .filter(|info| info.segment == SegmentId::FIRST);
         let position = observed.and_then(|info| info.source_span?.for_output_range(0..0));
         Self {
-            src,
-            receiver: WasmSend::new(receiver),
+            receiver,
             packet: None,
             offset: 0,
             lane: LaneFrame {
@@ -84,11 +82,6 @@ impl PlayerResource {
             eof: false,
             failed: None,
         }
-    }
-
-    #[must_use]
-    pub fn src(&self) -> &Arc<str> {
-        &self.src
     }
 
     /// Media zero from the same immutable PCM metadata as the current raw mark.
@@ -114,7 +107,7 @@ impl PlayerResource {
         let mut observed = self
             .observed
             .filter(|info| info.segment == self.lane.segment)?;
-        if let Some(terminal) = self.receiver.get().terminal_info()
+        if let Some(terminal) = self.receiver.terminal_info()
             && terminal.segment == observed.segment
             && terminal.source_revision == observed.source_revision
         {
@@ -123,8 +116,11 @@ impl PlayerResource {
         Some(observed)
     }
 
-    pub(super) fn set_playing(&mut self, playing: bool) {
-        self.receiver.get_mut().set_playing(playing);
+    delegate::delegate! {
+        to self.receiver {
+            pub(super) fn set_playing(&mut self, playing: bool);
+            pub(crate) fn waits_offline(&self) -> bool;
+        }
     }
 
     pub(super) fn mark(&self, session: SessionFrame) -> Option<SlotMark> {
@@ -148,7 +144,7 @@ impl PlayerResource {
         let Some(packet) = self.packet.take() else {
             return true;
         };
-        match self.receiver.get_mut().recycle(packet) {
+        match self.receiver.recycle(packet) {
             Ok(()) => {
                 self.offset = 0;
                 true
@@ -191,7 +187,7 @@ impl PlayerResource {
                     return;
                 }
             }
-            let receiver = self.receiver.get_mut();
+            let receiver = self.receiver.as_mut();
             let Some(next) = receiver.peek() else {
                 return;
             };
@@ -216,7 +212,7 @@ impl PlayerResource {
         if self.packet.is_some() {
             return None;
         }
-        let receiver = self.receiver.get_mut();
+        let receiver = self.receiver.as_mut();
         let Some(next) = receiver.peek() else {
             if receiver.is_closed() {
                 self.failed = Some(FailureSource::ChannelClosed);
@@ -260,7 +256,7 @@ impl PlayerResource {
         self.recycle_obsolete(budget);
         let (next, offset) = match self.packet.as_ref() {
             Some(packet) => (Some(packet), self.offset),
-            None => (self.receiver.get().peek(), 0),
+            None => (self.receiver.peek(), 0),
         };
         if let Some(PcmPacket::Chunk(chunk)) = next
             && chunk.meta.segment == self.lane.segment
@@ -282,12 +278,8 @@ impl PlayerResource {
         if self.mapped
             && let Some(position) = self.position.and_then(|point| point.position_at(0))
         {
-            self.receiver.get_mut().set_position(position);
+            self.receiver.set_position(position);
         }
-    }
-
-    pub(crate) fn waits_offline(&self) -> bool {
-        self.receiver.get().waits_offline()
     }
 
     pub(crate) fn refill(&mut self, budget: &mut usize) -> Option<&PcmReceiver> {
@@ -298,7 +290,7 @@ impl PlayerResource {
         if self.packet.is_some() || self.eof || self.failed.is_some() {
             return None;
         }
-        let receiver = self.receiver.get();
+        let receiver = self.receiver.as_ref();
         match receiver.peek() {
             Some(PcmPacket::Chunk(chunk)) if chunk.meta.segment != self.lane.segment => None,
             _ => Some(receiver),
@@ -365,7 +357,7 @@ impl PlayerResource {
                 };
             }
             if self.packet.is_none() {
-                let receiver = self.receiver.get_mut();
+                let receiver = self.receiver.as_mut();
                 let next = receiver.peek();
                 if !next.is_some_and(|packet| {
                     matches!(packet, PcmPacket::Chunk(chunk) if chunk.meta.segment == self.lane.segment && chunk.frames() > 0)
@@ -427,7 +419,7 @@ impl PlayerResource {
         if self.mapped
             && let Some(position) = self.position.and_then(|point| point.position_at(0))
         {
-            self.receiver.get_mut().set_position(position);
+            self.receiver.set_position(position);
         }
         ReadOutcome::Full { frames: written }
     }

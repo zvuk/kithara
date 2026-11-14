@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{AudioReadError, AudioSource, Fetch, SeekOutcome, TrackStep, WaitingReason};
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_signal::{AudioSpec, SegmentId};
 use kithara_stream::PlayheadRead;
 use kithara_test_fixtures::integration_fixtures::constant_half;
@@ -32,7 +32,7 @@ fn pcm_samples(input: &'static [u8], frames: usize) -> Vec<f32> {
         .collect()
 }
 
-fn resource(src: &str, seconds: f64, samples: &[f32], ended: bool) -> (PlayerResource, PacketRing) {
+fn resource(seconds: f64, samples: &[f32], ended: bool) -> (PlayerResource, PacketRing) {
     let mut packets = PacketRing::new(spec(), Duration::from_secs_f64(seconds), 4);
     if !samples.is_empty() {
         let mut packet = chunk(spec(), SegmentId::FIRST, 0, 0, samples);
@@ -45,7 +45,7 @@ fn resource(src: &str, seconds: f64, samples: &[f32], ended: bool) -> (PlayerRes
         end.meta.end_of_track = true;
         packets.push(PcmPacket::Chunk(Box::new(end)));
     }
-    let resource = PlayerResource::new(packets.receiver.take().expect("receiver"), Arc::from(src));
+    let resource = PlayerResource::new(Box::new(packets.receiver.take().expect("receiver")));
     (resource, packets)
 }
 
@@ -54,7 +54,7 @@ fn make_player_resource(input: &'static [u8], seconds: f64) -> (PlayerResource, 
         .floor()
         .to_usize()
         .expect("fixture frame count fits usize");
-    resource("test.mp3", seconds, &pcm_samples(input, frames), true)
+    resource(seconds, &pcm_samples(input, frames), true)
 }
 
 #[kithara::test(tokio)]
@@ -101,7 +101,7 @@ fn full_read_refills_before_the_next_callback_drains_scratch() {
     for _ in 0..16 {
         node.tick();
     }
-    let mut player = PlayerResource::new(receiver, Arc::from("chunked"));
+    let mut player = PlayerResource::new(Box::new(receiver));
     let mut left = vec![0.0f32; CALLBACK_FRAMES];
     let mut right = vec![0.0f32; CALLBACK_FRAMES];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
@@ -171,7 +171,7 @@ impl AudioSource for RefillSource {
 #[kithara::test(tokio)]
 async fn reset_for_seek_drops_buffered_samples() {
     let samples = kithara_test_fixtures::unit_fixtures::render_seek_before();
-    let (mut pr, mut packets) = resource("position.mp3", 1.0, &samples, false);
+    let (mut pr, mut packets) = resource(1.0, &samples, false);
     let mut left = vec![0.0f32; 128];
     let mut right = vec![0.0f32; 128];
     {
@@ -209,7 +209,7 @@ async fn reset_for_seek_drops_buffered_samples() {
 /// through, heard as a looped/glitched frame during seek.
 #[kithara::test(tokio)]
 async fn read_zeroes_output_when_no_data_available() {
-    let (mut pr, _packets) = resource("pending", 1.0, &[], false);
+    let (mut pr, _packets) = resource(1.0, &[], false);
     let mut left = vec![0.999f32; 128];
     let mut right = vec![0.999f32; 128];
     {
@@ -233,7 +233,7 @@ async fn read_zeroes_output_when_no_data_available() {
 #[kithara::test(tokio)]
 async fn full_read_prefetches_buffered_eof(constant_half: &'static [u8]) {
     let samples = pcm_samples(constant_half, 900);
-    let (mut pr, _packets) = resource("short.mp3", 900.0 / 44100.0, &samples, true);
+    let (mut pr, _packets) = resource(900.0 / 44100.0, &samples, true);
     let mut left = vec![0.0f32; 512];
     let mut right = vec![0.0f32; 512];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];

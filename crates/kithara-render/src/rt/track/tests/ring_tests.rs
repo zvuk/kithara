@@ -1,6 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 use kithara_audio::{DecodeErrorKind, FailureSource, TrackFailureKind};
-use kithara_platform::sync::Arc;
 use kithara_signal::{SegmentId, SessionFrame};
 use kithara_test_fixtures::mock_fixtures::ring_pcm;
 use kithara_test_utils::kithara;
@@ -19,7 +18,7 @@ impl RingFixture {
         let mut transport = PcmFixture::new(8, false).await;
         let receiver = transport.receiver.take().expect("receiver");
         Self {
-            resource: PlayerResource::new(receiver, Arc::from("moved")),
+            resource: PlayerResource::new(Box::new(receiver)),
             transport,
         }
     }

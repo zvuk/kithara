@@ -21,10 +21,7 @@ fn musical_origin_follows_consumed_pcm_instead_of_the_next_producer_packet(
     next.meta.visible_origin = Some(Duration::from_millis(next_origin + 10));
     ring.push(PcmPacket::Chunk(Box::new(old)));
     ring.push(PcmPacket::Chunk(Box::new(next)));
-    let mut resource = PlayerResource::new(
-        ring.receiver.take().expect("receiver"),
-        Arc::from("musical-origin"),
-    );
+    let mut resource = PlayerResource::new(Box::new(ring.receiver.take().expect("receiver")));
     let prepared = resource.next_chunk_info().expect("admitted preload packet");
     assert_eq!(
         prepared.media_origin,
@@ -62,7 +59,7 @@ fn musical_origin_follows_consumed_pcm_instead_of_the_next_producer_packet(
     assert_eq!(left, [0.25]);
     assert_eq!(right, left);
     assert_eq!(
-        resource.receiver.get().media_origin(),
+        resource.receiver.as_ref().media_origin(),
         Some(Duration::from_millis(next_origin)),
     );
     let prepared = resource.next_chunk_info().expect("next admitted packet");

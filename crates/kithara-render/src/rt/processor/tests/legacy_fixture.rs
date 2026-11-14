@@ -2,15 +2,15 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use firewheel::node::ProcBuffers;
 use kithara_command::{ScopedReceipt, Seq, When};
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use num_traits::ToPrimitive;
 
 use super::{TestEnds, TestMixer, mixer_with_shape, send};
 use crate::{
-    CrossfadeSettings,
+    CrossfadeSettings, PcmReceiver,
     bridge::{DeckPart, Fade, Slot},
-    rt::{DeckMixerConfig, StreamShape, track::PlayerResource},
+    rt::{DeckMixerConfig, StreamShape},
     worker::{
         PcmPacket,
         packet_tests::{PacketRing, chunk},
@@ -18,7 +18,7 @@ use crate::{
 };
 
 pub(in crate::rt) const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate");
-pub(in crate::rt) type Resource = (Box<PlayerResource>, PacketRing);
+pub(in crate::rt) type Resource = (Box<PcmReceiver>, PacketRing);
 pub(in crate::rt) use crate::mock::prepared_seek;
 
 pub(in crate::rt) struct Control {
@@ -45,12 +45,7 @@ pub(in crate::rt) fn processor(
     )
 }
 
-pub(in crate::rt) fn resource(
-    input: &'static [u8],
-    src: &str,
-    seconds: f64,
-    spec: AudioSpec,
-) -> Resource {
+pub(in crate::rt) fn resource(input: &'static [u8], seconds: f64, spec: AudioSpec) -> Resource {
     let frames = (seconds * f64::from(spec.sample_rate.get()))
         .floor()
         .to_usize()
@@ -75,12 +70,12 @@ pub(in crate::rt) fn resource(
         terminal.meta.end_of_track = true;
         packets.push(PcmPacket::Chunk(Box::new(terminal)));
     }
-    from_packets(src, packets)
+    from_packets(packets)
 }
 
-pub(in crate::rt) fn from_packets(src: &str, mut packets: PacketRing) -> Resource {
-    let pcm = PlayerResource::new(packets.receiver.take().expect("receiver"), Arc::from(src));
-    (Box::new(pcm), packets)
+pub(in crate::rt) fn from_packets(mut packets: PacketRing) -> Resource {
+    let pcm = Box::new(packets.receiver.take().expect("receiver"));
+    (pcm, packets)
 }
 
 pub(in crate::rt) fn attach(

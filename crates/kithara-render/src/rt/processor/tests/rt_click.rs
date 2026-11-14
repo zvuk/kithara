@@ -8,7 +8,7 @@ use std::num::NonZeroU32;
 use firewheel::node::ProcBuffers;
 use kithara_audio::mock::TEST_PCM_DEFAULT_VALUE;
 use kithara_command::{Outcome, Receipt, ScopedReceipt, Seq, When};
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_signal::{AudioSpec, FaderValue, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_fixtures::integration_fixtures::{constant_half, constant_quarter};
 use kithara_test_utils::kithara;
@@ -17,10 +17,7 @@ use super::{TestEnds, TestMixer, frame_at, mixer_with_shape, send as send_batch}
 use crate::{
     CrossfadeSettings,
     bridge::{DeckMixSettingsChange, DeckPart, DeckProtocol, Fade, FadeDir, Returned, Slot},
-    rt::{
-        DeckMixerConfig, StreamShape,
-        track::{PlayerResource, PlayerTrack},
-    },
+    rt::{DeckMixerConfig, StreamShape, track::PlayerTrack},
     worker::{
         PcmPacket,
         packet_tests::{PacketRing, chunk},
@@ -74,7 +71,7 @@ fn samples(input: &'static [u8], frames: usize) -> Vec<f32> {
         .collect()
 }
 
-fn load(control: &mut ClickControl, src: &str, input: &'static [u8]) -> Slot {
+fn load(control: &mut ClickControl, input: &'static [u8]) -> Slot {
     let slot = Slot::new(u16::try_from(control.packets.len()).expect("fixture slot"));
     let mut packets = PacketRing::new(spec(), Duration::from_secs(60), 4);
     packets.push(PcmPacket::Chunk(Box::new(chunk(
@@ -84,10 +81,7 @@ fn load(control: &mut ClickControl, src: &str, input: &'static [u8]) -> Slot {
         0,
         &samples(input, 160_000),
     ))));
-    let pcm = Box::new(PlayerResource::new(
-        packets.receiver.take().expect("receiver"),
-        Arc::from(src),
-    ));
+    let pcm = Box::new(packets.receiver.take().expect("receiver"));
     control.packets.push(packets);
     push(
         control,
@@ -199,7 +193,7 @@ fn across(before: &[f32], after: &[f32]) -> Vec<f32> {
 #[kithara::test]
 fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
-    let item_id = load(&mut control, "a.mp3", constant_half);
+    let item_id = load(&mut control, constant_half);
     push(
         &mut control,
         DeckPart::Start {
@@ -256,7 +250,7 @@ fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
 #[kithara::test]
 fn resuming_fades_the_output_in(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
-    let item_id = load(&mut control, "a.mp3", constant_half);
+    let item_id = load(&mut control, constant_half);
     push(
         &mut control,
         DeckPart::Start {
@@ -311,7 +305,7 @@ fn resuming_fades_the_output_in(constant_half: &'static [u8]) {
 #[kithara::test]
 fn a_start_inside_a_block_sounds_from_its_frame(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
-    let item_id = load(&mut control, "a.mp3", constant_half);
+    let item_id = load(&mut control, constant_half);
     block(&mut processor);
     assert!(
         pump(&mut processor, 2, None)
@@ -368,8 +362,8 @@ fn stopping_one_track_inside_a_block_holds_it_from_its_frame(
     constant_quarter: &'static [u8],
 ) {
     let (mut processor, mut control) = processor();
-    let first = load(&mut control, "a.mp3", constant_half);
-    let second = load(&mut control, "b.mp3", constant_quarter);
+    let first = load(&mut control, constant_half);
+    let second = load(&mut control, constant_quarter);
     push(
         &mut control,
         DeckPart::Start {
@@ -498,7 +492,7 @@ fn half_volume() -> DeckPart {
 #[kithara::test]
 fn a_volume_change_inside_a_block_moves_the_gain_from_its_frame(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
-    let item_id = load(&mut control, "a.mp3", constant_half);
+    let item_id = load(&mut control, constant_half);
     push(
         &mut control,
         DeckPart::Start {
@@ -555,7 +549,7 @@ fn a_crossfader_change_inside_a_block_scales_the_volume_from_its_frame(
     constant_half: &'static [u8],
 ) {
     let (mut processor, mut control) = processor();
-    let item_id = load(&mut control, "a.mp3", constant_half);
+    let item_id = load(&mut control, constant_half);
     push(
         &mut control,
         DeckPart::Start {
@@ -619,7 +613,7 @@ fn a_crossfader_change_inside_a_block_scales_the_volume_from_its_frame(
 #[kithara::test]
 fn a_muted_deck_is_silent_at_any_volume_and_unmutes_to_it(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
-    let item_id = load(&mut control, "a.mp3", constant_half);
+    let item_id = load(&mut control, constant_half);
     push(
         &mut control,
         DeckPart::Start {
@@ -659,7 +653,7 @@ fn a_muted_deck_is_silent_at_any_volume_and_unmutes_to_it(constant_half: &'stati
 
 fn fading_in(constant_half: &'static [u8]) -> (TestMixer, ClickControl, Vec<f32>, Slot) {
     let (mut processor, mut control) = processor();
-    let item_id = load(&mut control, "a.mp3", constant_half);
+    let item_id = load(&mut control, constant_half);
     push(
         &mut control,
         DeckPart::Start {
@@ -800,7 +794,7 @@ fn each_fade_runs_under_its_own_settings(
         last(&settled)
     );
 
-    let second_id = load(&mut control, "b.mp3", constant_quarter);
+    let second_id = load(&mut control, constant_quarter);
     push(
         &mut control,
         DeckPart::Fade {
@@ -831,7 +825,7 @@ fn a_track_started_without_a_crossfade_is_instant(
     constant_half: &'static [u8],
 ) {
     let (mut processor, mut control) = processor();
-    let first_id = load(&mut control, "a.mp3", constant_half);
+    let first_id = load(&mut control, constant_half);
     push(
         &mut control,
         DeckPart::Start {
@@ -849,7 +843,7 @@ fn a_track_started_without_a_crossfade_is_instant(
         last(&playing)
     );
 
-    let second_id = load(&mut control, "b.mp3", constant_quarter);
+    let second_id = load(&mut control, constant_quarter);
     block(&mut processor);
     start(&mut processor, second_id);
     let handover = pump(&mut processor, 1, None);

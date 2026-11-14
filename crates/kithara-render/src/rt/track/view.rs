@@ -5,7 +5,7 @@ use crate::worker::PcmPacket;
 
 impl PlayerResource {
     delegate::delegate! {
-        to self.receiver.get() {
+        to self.receiver.as_ref() {
             #[must_use]
             pub fn spec(&self) -> AudioSpec;
         }
@@ -14,12 +14,12 @@ impl PlayerResource {
     /// Immutable next-producer metadata, independent of the consumed raw mark.
     #[must_use]
     pub fn next_chunk_info(&self) -> Option<AudioChunkInfo> {
-        self.receiver.get().next_chunk_info()
+        self.receiver.next_chunk_info()
     }
 
     #[must_use]
     pub fn decoded_frontier(&self) -> f64 {
-        self.receiver.get().decoded_frontier().as_secs_f64()
+        self.receiver.decoded_frontier().as_secs_f64()
     }
 
     pub(super) fn segment(&self) -> SegmentId {
@@ -29,7 +29,7 @@ impl PlayerResource {
     pub(crate) fn frames_until_boundary(&self) -> Option<usize> {
         let (packet, offset) = match self.packet.as_ref() {
             Some(packet) => (packet, self.offset),
-            None => (self.receiver.get().peek()?, 0),
+            None => (self.receiver.peek()?, 0),
         };
         match packet {
             PcmPacket::Chunk(chunk) if chunk.meta.segment == self.lane.segment => {

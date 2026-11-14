@@ -309,11 +309,20 @@ impl HandoverRig {
             .slot
     }
 
-    fn source(&self, index: usize) -> &str {
+    fn held_item(&self, index: usize) -> TrackId {
         self.deck
             .mixer
             .held(self.slot(index))
-            .expect("opened resource source URI")
+            .expect("opened track identity")
+    }
+
+    fn held_receiver(&self, index: usize) -> *const kithara_render::PcmReceiver {
+        std::ptr::from_ref(
+            self.deck
+                .mixer
+                .receiver(self.slot(index))
+                .expect("opened PCM"),
+        )
     }
 
     fn armed(&self) -> Option<TrackId> {
@@ -547,7 +556,7 @@ async fn a_pause_over_a_held_native_chain_stops_the_stitched_successor(
     let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let outgoing = rig.slot(0);
     let incoming = rig.arm(1).await;
-    let source = rig.source(1).to_owned();
+    let source = rig.held_item(1);
     let mut observed = rig.queue.control().subscribe::<QueueEvent>();
     rig.chain();
     let expected = rig
@@ -597,7 +606,7 @@ async fn a_pause_over_a_held_native_chain_stops_the_stitched_successor(
             .all(|part| !matches!(part,
             DeckPart::Returned(Returned::Pcm { slot, .. }) if *slot == incoming))
     );
-    assert_eq!(rig.deck.mixer.held(incoming), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(incoming), Some(source));
 
     if stop_first {
         rig.settle(std::mem::take(&mut stops));
@@ -613,7 +622,7 @@ async fn a_pause_over_a_held_native_chain_stops_the_stitched_successor(
         rig.queue.current_track().expect("stitched successor owner").snapshot().as_ref().status,
         PlayingStatus::Paused { at } if at == Duration::from_millis(500)
     ));
-    assert_eq!(rig.deck.mixer.held(incoming), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(incoming), Some(source));
     assert!(matches!(
         rig.settle_batch(expected, &outcome, &mut batch),
         kithara_play::Settled::Pending
@@ -644,9 +653,9 @@ async fn removing_a_successor_over_a_held_native_chain_enters_the_next_item(
 
     let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let outgoing = rig.slot(0);
-    let outgoing_source = rig.source(0).to_owned();
+    let outgoing_source = rig.held_item(0);
     let incoming = rig.arm(1).await;
-    let incoming_source = rig.source(1).to_owned();
+    let incoming_source_pcm = rig.held_receiver(1);
     let source = fixture_uri(rig.dir.path(), "item-3.wav");
     rig.apply(QueueCommand::Append {
         position: Position::ZERO,
@@ -655,7 +664,7 @@ async fn removing_a_successor_over_a_held_native_chain_enters_the_next_item(
     })
     .expect("append the held successor after B");
     let following = rig.arm(2).await;
-    let following_source = rig.source(2).to_owned();
+    let following_source = rig.held_item(2);
     let following_lane = rig.last_lane.expect("opened following lane");
     let mut observed = rig.queue.control().subscribe::<QueueEvent>();
     rig.chain();
@@ -694,23 +703,21 @@ async fn removing_a_successor_over_a_held_native_chain_enters_the_next_item(
         .iter()
         .flat_map(|receipt| receipt.batch().commands.iter())
         .filter_map(|part| match part {
-            DeckPart::Returned(Returned::Pcm { slot, pcm }) => Some((*slot, &**pcm.src())),
+            DeckPart::Returned(Returned::Pcm {
+                slot,
+                pcm,
+                packet: None,
+            }) => Some((*slot, std::ptr::from_ref(pcm.as_ref()))),
             _ => None,
         })
         .collect::<Vec<_>>();
     assert_eq!(
         returned,
-        vec![(incoming, incoming_source.as_str())],
+        vec![(incoming, incoming_source_pcm)],
         "removing B returns only B's original consumer"
     );
-    assert_eq!(
-        rig.deck.mixer.held(outgoing),
-        Some(outgoing_source.as_str())
-    );
-    assert_eq!(
-        rig.deck.mixer.held(following),
-        Some(following_source.as_str())
-    );
+    assert_eq!(rig.deck.mixer.held(outgoing), Some(outgoing_source));
+    assert_eq!(rig.deck.mixer.held(following), Some(following_source));
 
     if remove_first {
         for receipt in std::mem::take(&mut removals) {
@@ -771,10 +778,7 @@ async fn removing_a_successor_over_a_held_native_chain_enters_the_next_item(
     assert_eq!(rig.queue.current, Some(rig.ids[2]));
     assert!(rig.queue.track(rig.ids[1]).is_none());
     assert_eq!(rig.slot(2), following);
-    assert_eq!(
-        rig.deck.mixer.held(following),
-        Some(following_source.as_str())
-    );
+    assert_eq!(rig.deck.mixer.held(following), Some(following_source));
 
     rig.deck.opens.drain();
     loop {
@@ -841,9 +845,9 @@ async fn removing_an_unstarted_chain_target_keeps_the_confirmed_current(
 
     let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let outgoing = rig.slot(0);
-    let outgoing_source = rig.source(0).to_owned();
+    let outgoing_source = rig.held_item(0);
     let incoming = rig.arm(1).await;
-    let incoming_source = rig.source(1).to_owned();
+    let incoming_source_pcm = rig.held_receiver(1);
     let following_item = rig.ids[2];
     let source = fixture_uri(rig.dir.path(), "item-3.wav");
     rig.apply(QueueCommand::Append {
@@ -853,7 +857,7 @@ async fn removing_an_unstarted_chain_target_keeps_the_confirmed_current(
     })
     .expect("append following C");
     let following = rig.arm(2).await;
-    let following_source = rig.source(2).to_owned();
+    let following_source = rig.held_item(2);
     let mut observed = rig.queue.control().subscribe::<QueueEvent>();
     rig.chain();
     let pending = rig.queue.pending_handover.expect("parked native Chain");
@@ -937,11 +941,15 @@ async fn removing_an_unstarted_chain_target_keeps_the_confirmed_current(
         .iter()
         .flat_map(|receipt| receipt.batch().commands.iter())
         .filter_map(|part| match part {
-            DeckPart::Returned(Returned::Pcm { slot, pcm }) => Some((*slot, &**pcm.src())),
+            DeckPart::Returned(Returned::Pcm {
+                slot,
+                pcm,
+                packet: None,
+            }) => Some((*slot, std::ptr::from_ref(pcm.as_ref()))),
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(returned, vec![(incoming, incoming_source.as_str())]);
+    assert_eq!(returned, vec![(incoming, incoming_source_pcm)]);
     assert!(
         removals
             .iter()
@@ -1024,10 +1032,7 @@ async fn removing_an_unstarted_chain_target_keeps_the_confirmed_current(
             && receipt.batch().commands.iter().any(|part| matches!(part, DeckPart::Start { slot, .. } if *slot == following))));
         rig.settle(entries);
         assert_eq!(rig.queue.current, Some(following_item));
-        assert_eq!(
-            rig.deck.mixer.held(following),
-            Some(following_source.as_str())
-        );
+        assert_eq!(rig.deck.mixer.held(following), Some(following_source));
         assert!(rig.queue.track(removed_item).is_none());
         assert_eq!(events(&mut observed).iter().filter(|event| matches!(event,
             QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::UserSelect } if *id == following_item)).count(), 1);
@@ -1046,14 +1051,8 @@ async fn removing_an_unstarted_chain_target_keeps_the_confirmed_current(
         rig.queue.active.get(preloaded).expect("C owner").slot,
         following
     );
-    assert_eq!(
-        rig.deck.mixer.held(outgoing),
-        Some(outgoing_source.as_str())
-    );
-    assert_eq!(
-        rig.deck.mixer.held(following),
-        Some(following_source.as_str())
-    );
+    assert_eq!(rig.deck.mixer.held(outgoing), Some(outgoing_source));
+    assert_eq!(rig.deck.mixer.held(following), Some(following_source));
     let next = rig
         .deck
         .block(SessionFrame::new(384), 0.5)
@@ -1094,12 +1093,12 @@ async fn removing_an_unstarted_staged_replacement_does_not_select_its_neighbor(
     )
     .await;
     let old_slot = rig.slot(0);
-    let old_source = rig.source(0).to_owned();
+    let old_source_pcm = rig.held_receiver(0);
     rig.arm(1).await;
     let entry = rig.entry(1, Transition::Crossfade);
     rig.settle(entry);
     let current_slot = rig.slot(1);
-    let current_source = rig.source(1).to_owned();
+    let current_source = rig.held_item(1);
     assert_eq!(rig.queue.current, Some(rig.ids[1]));
     rig.queue.deck.mixer.slots[usize::from(old_slot.get())].state = SlotState::Playing;
     let following_item = rig.ids[2];
@@ -1177,7 +1176,7 @@ async fn removing_an_unstarted_staged_replacement_does_not_select_its_neighbor(
         },
     );
     assert_eq!(replies.iter().flat_map(|receipt| &receipt.batch().commands).filter(|part| matches!(part,
-        DeckPart::Returned(Returned::Pcm { slot, pcm }) if *slot == old_slot && &**pcm.src() == old_source.as_str())).count(), 1);
+        DeckPart::Returned(Returned::Pcm { slot, pcm, packet: None }) if *slot == old_slot && std::ptr::eq(pcm.as_ref(), old_source_pcm))).count(), 1);
     replies.push(replacement);
     rig.settle(replies);
     assert_eq!(rig.queue.current, Some(rig.ids[1]));
@@ -1185,10 +1184,7 @@ async fn removing_an_unstarted_staged_replacement_does_not_select_its_neighbor(
     assert!(rig.queue.pending_handover.is_none());
     assert!(rig.queue.track(removed_item).is_none());
     assert_eq!(rig.deck.mixer.held(old_slot), None);
-    assert_eq!(
-        rig.deck.mixer.held(current_slot),
-        Some(current_source.as_str())
-    );
+    assert_eq!(rig.deck.mixer.held(current_slot), Some(current_source));
     rig.deck.opens.drain();
     while let Some(due) = rig.deck.opens.next_due((), 1) {
         hang_tick!();
@@ -1217,7 +1213,7 @@ async fn a_rejected_removal_detach_finishes_its_custody_gate(
 
     let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let incoming = rig.arm(1).await;
-    let incoming_source = rig.source(1).to_owned();
+    let incoming_source = rig.held_item(1);
     let following_item = rig.ids[2];
     let source = fixture_uri(rig.dir.path(), "item-3.wav");
     rig.apply(QueueCommand::Append {
@@ -1227,7 +1223,7 @@ async fn a_rejected_removal_detach_finishes_its_custody_gate(
     })
     .expect("append C");
     let following = rig.arm(2).await;
-    let following_source = rig.source(2).to_owned();
+    let following_source = rig.held_item(2);
     rig.chain();
     let pending = rig.queue.pending_handover.expect("original Chain");
     let held = rig.stitch();
@@ -1319,10 +1315,7 @@ async fn a_rejected_removal_detach_finishes_its_custody_gate(
             due.defer();
             basis
         };
-        assert_eq!(
-            rig.deck.mixer.held(incoming),
-            Some(incoming_source.as_str())
-        );
+        assert_eq!(rig.deck.mixer.held(incoming), Some(incoming_source));
         let superseded = rig
             .deck
             .ring
@@ -1436,10 +1429,7 @@ async fn a_rejected_removal_detach_finishes_its_custody_gate(
     );
     assert!(rig.queue.pending_handover.is_none());
     assert_eq!(rig.queue.current, Some(removed_item));
-    assert_eq!(
-        rig.deck.mixer.held(incoming),
-        Some(incoming_source.as_str())
-    );
+    assert_eq!(rig.deck.mixer.held(incoming), Some(incoming_source));
     if !explicit {
         let preload = rig
             .queue
@@ -1450,10 +1440,7 @@ async fn a_rejected_removal_detach_finishes_its_custody_gate(
             rig.queue.active.get(preload).expect("C owner").slot,
             following
         );
-        assert_eq!(
-            rig.deck.mixer.held(following),
-            Some(following_source.as_str())
-        );
+        assert_eq!(rig.deck.mixer.held(following), Some(following_source));
     }
     let next = rig
         .deck
@@ -1731,12 +1718,12 @@ async fn returning_to_an_outgoing_item_commits_its_new_native_slot(
 ) {
     let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let old_slot = rig.slot(0);
-    let source = rig.source(0).to_owned();
+    let source = rig.held_item(0);
     rig.arm(1).await;
     let entry = rig.entry(1, Transition::Crossfade);
     rig.settle(entry);
     assert_eq!(rig.queue.current, Some(rig.ids[1]));
-    assert_eq!(rig.deck.mixer.held(old_slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(old_slot), Some(source));
     rig.select(0, Transition::Crossfade).expect("return to A");
     rig.load(0, 64.295).await;
     let incoming = rig.queue.incoming_index(rig.ids[0]).expect("new A owner");
@@ -1744,7 +1731,7 @@ async fn returning_to_an_outgoing_item_commits_its_new_native_slot(
     assert_ne!(new_slot, old_slot);
     let pending = rig.queue.pending_handover.expect("new A native entry");
     assert_eq!(pending.slot, new_slot);
-    assert_eq!(rig.deck.mixer.held(old_slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(old_slot), Some(source));
     let mut receiver = rig.queue.control().subscribe::<QueueEvent>();
     let receipts = rig
         .deck
@@ -1779,7 +1766,7 @@ async fn returning_to_an_outgoing_item_commits_its_new_native_slot(
             .slot,
         Some(new_slot)
     );
-    assert_eq!(rig.deck.mixer.held(new_slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(new_slot), Some(source));
     assert_eq!(events(&mut receiver).iter().filter(|event| matches!(event,
         QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::UserSelect } if *id == rig.ids[0]
     )).count(), 1);
@@ -1840,12 +1827,13 @@ async fn returning_to_an_outgoing_item_replaces_its_old_owner_in_the_same_slot(
     .await;
     let old_slot = rig.slot(0);
     let old_lane = rig.last_lane.expect("original A lane");
-    let source = rig.source(0).to_owned();
+    let source = rig.held_item(0);
+    let source_pcm = rig.held_receiver(0);
     rig.arm(1).await;
     let entry = rig.entry(1, Transition::Crossfade);
     rig.settle(entry);
     assert_eq!(rig.queue.current, Some(rig.ids[1]));
-    assert_eq!(rig.deck.mixer.held(old_slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(old_slot), Some(source));
     rig.queue.deck.mixer.slots[usize::from(old_slot.get())].state = SlotState::Playing;
     rig.select(0, Transition::Crossfade)
         .expect("return to A on a full deck");
@@ -1894,8 +1882,8 @@ async fn returning_to_an_outgoing_item_replaces_its_old_owner_in_the_same_slot(
             .commands
             .iter()
             .filter(|part| matches!(part,
-                DeckPart::Returned(Returned::Pcm { slot, pcm })
-                    if *slot == old_slot && &**pcm.src() == source.as_str()
+                DeckPart::Returned(Returned::Pcm { slot, pcm, packet: None })
+                    if *slot == old_slot && std::ptr::eq(pcm.as_ref(), source_pcm)
             ))
             .count(),
         1
@@ -1919,7 +1907,7 @@ async fn returning_to_an_outgoing_item_replaces_its_old_owner_in_the_same_slot(
             .count(),
         1
     );
-    assert_eq!(rig.deck.mixer.held(old_slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(old_slot), Some(source));
     assert_eq!(events(&mut receiver).iter().filter(|event| matches!(event,
         QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::UserSelect } if *id == rig.ids[0]
     )).count(), 1);
@@ -1958,12 +1946,13 @@ async fn a_held_applied_replacement_commits_its_active_owner_before_a_supersedin
     )
     .await;
     let old_slot = rig.slot(0);
-    let source = rig.source(0).to_owned();
+    let source = rig.held_item(0);
+    let source_pcm = rig.held_receiver(0);
     rig.arm(1).await;
     let entry = rig.entry(1, Transition::Crossfade);
     rig.settle(entry);
     assert_eq!(rig.queue.current, Some(rig.ids[1]));
-    assert_eq!(rig.deck.mixer.held(old_slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(old_slot), Some(source));
     let outgoing = rig
         .queue
         .active
@@ -2001,8 +1990,8 @@ async fn a_held_applied_replacement_commits_its_active_owner_before_a_supersedin
             .commands
             .iter()
             .filter(|part| matches!(part,
-                DeckPart::Returned(Returned::Pcm { slot, pcm })
-                    if *slot == old_slot && &**pcm.src() == source.as_str()
+                DeckPart::Returned(Returned::Pcm { slot, pcm, packet: None })
+                    if *slot == old_slot && std::ptr::eq(pcm.as_ref(), source_pcm)
             ))
             .count(),
         1,
@@ -2078,10 +2067,11 @@ async fn a_replacement_settles_returned_pcm_before_the_queue_replaces_its_owner(
     .await;
     let old_lane = rig.last_lane.expect("original opened lane");
     let old_slot = rig.slot(0);
-    let source = fixture_uri(rig.dir.path(), "item-1.wav");
+    let source = rig.ids[0];
+    let source_pcm = rig.held_receiver(0);
     assert_eq!(
         rig.deck.mixer.held(old_slot),
-        Some(source.as_str()),
+        Some(source),
         "the existing executor owns the original consumer"
     );
     rig.queue.deck.mixer.slots[usize::from(old_slot.get())].state = SlotState::Playing;
@@ -2107,8 +2097,8 @@ async fn a_replacement_settles_returned_pcm_before_the_queue_replaces_its_owner(
             .commands
             .iter()
             .filter(|part| matches!(part,
-                DeckPart::Returned(Returned::Pcm { slot, pcm })
-                if *slot == old_slot && &**pcm.src() == source.as_str()
+                DeckPart::Returned(Returned::Pcm { slot, pcm, packet: None })
+                if *slot == old_slot && std::ptr::eq(pcm.as_ref(), source_pcm)
             ))
             .count(),
         1,
@@ -2366,7 +2356,7 @@ async fn arm_next_loads_item_and_returns_src(#[by_ref] worker_owner: &WorkerOwne
     let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let slot = rig.arm(1).await;
     assert_eq!(rig.armed(), Some(rig.ids[1]));
-    assert_eq!(rig.source(1), fixture_uri(rig.dir.path(), "item-2.wav"));
+    assert_eq!(rig.held_item(1), rig.ids[1]);
     assert_eq!(rig.queue.active.get(1).expect("armed track").slot, slot);
     assert_eq!(
         rig.queue.track(rig.ids[1]).expect("record").status,
@@ -2417,7 +2407,7 @@ async fn a_rejected_retained_chain_does_not_rewrite_the_new_selection(
 async fn arm_next_idempotent_for_same_index(#[by_ref] worker_owner: &WorkerOwner) {
     let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let first = rig.arm(1).await;
-    let before = rig.source(1).to_owned();
+    let before = rig.held_item(1);
     let count = rig.queue.active.len();
     with_outbox(&mut rig.queue, &mut rig.deck, |queue, out| {
         queue.load_track(
@@ -2429,7 +2419,7 @@ async fn arm_next_idempotent_for_same_index(#[by_ref] worker_owner: &WorkerOwner
     })
     .expect("repeat preload");
     assert_eq!(rig.slot(1), first);
-    assert_eq!(rig.source(1), before);
+    assert_eq!(rig.held_item(1), before);
     assert_eq!(rig.armed(), Some(rig.ids[1]));
     assert_eq!(rig.queue.active.len(), count);
     rig.deck.opens.drain();
@@ -2465,11 +2455,11 @@ async fn arm_next_returns_none_for_empty_slot(#[by_ref] worker_owner: &WorkerOwn
 async fn arm_next_replaces_previously_armed_slot(#[by_ref] worker_owner: &WorkerOwner) {
     let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
-    let before = rig.source(1).to_owned();
+    let before = rig.held_item(1);
     rig.select(2, Transition::None)
         .expect("replace preload through selection");
     rig.load(2, 162.0).await;
-    assert_ne!(before, rig.source(2));
+    assert_ne!(before, rig.held_item(2));
     assert_eq!(rig.armed(), Some(rig.ids[2]));
     rig.finish().await;
 }
@@ -2612,7 +2602,7 @@ async fn pending_next_state_maps_activated_bool(#[by_ref] worker_owner: &WorkerO
 async fn select_item_on_armed_index_promotes_armed_slot(#[by_ref] worker_owner: &WorkerOwner) {
     let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let armed = rig.arm(1).await;
-    let source = rig.source(1).to_owned();
+    let source = rig.held_item(1);
     let receipts = rig.entry(1, Transition::None);
     assert!(receipts.iter().all(
         |receipt| !receipt.batch().commands.iter().any(|part| matches!(
@@ -2624,7 +2614,7 @@ async fn select_item_on_armed_index_promotes_armed_slot(#[by_ref] worker_owner: 
     assert_eq!(rig.queue.control().current_index(), Some(1));
     assert_eq!(rig.armed(), None);
     assert_eq!(rig.slot(1), armed);
-    assert_eq!(rig.source(1), source);
+    assert_eq!(rig.held_item(1), source);
     rig.assert_no_pending_load();
     rig.finish().await;
 }
@@ -2646,11 +2636,11 @@ async fn the_promotion_reuse_check_rejects_an_additional_load(
 async fn unarm_next_clears_when_not_activated_and_unloads(#[by_ref] worker_owner: &WorkerOwner) {
     let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
-    let source = rig.source(1).to_owned();
+    let source = rig.held_item(1);
     with_outbox(&mut rig.queue, &mut rig.deck, Queue::cancel_auto).expect("unarm preload");
     let parts = rig.pending_parts();
     assert_eq!(rig.armed(), None);
-    assert_eq!(source, fixture_uri(rig.dir.path(), "item-2.wav"));
+    assert_eq!(source, rig.ids[1]);
     assert!(
         parts
             .iter()
@@ -2665,7 +2655,7 @@ async fn select_item_clears_pending_next_and_unloads_preloaded_track(
 ) {
     let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let armed_slot = rig.arm(1).await;
-    let source = rig.source(1).to_owned();
+    let source = rig.held_item(1);
     rig.select(2, Transition::None)
         .expect("select another item");
     let parts = rig.pending_parts();
@@ -2674,7 +2664,7 @@ async fn select_item_clears_pending_next_and_unloads_preloaded_track(
     crate::mock::finish(&mut rig.queue, &mut rig.deck);
     assert_eq!(rig.armed(), None);
     assert_eq!(rig.queue.control().current_index(), Some(2));
-    assert_eq!(source, fixture_uri(rig.dir.path(), "item-2.wav"));
+    assert_eq!(source, rig.ids[1]);
     rig.finish().await;
 }
 
@@ -3042,7 +3032,7 @@ async fn end_of_the_held_slot_is_the_leading_track(#[by_ref] worker_owner: &Work
         (current.as_ref().item, current.as_ref().slot),
         (rig.ids[0], Some(held))
     );
-    assert_eq!(rig.source(0), fixture_uri(rig.dir.path(), "item-1.wav"));
+    assert_eq!(rig.held_item(0), rig.ids[0]);
     assert_eq!(
         rig.queue.active.get(0).expect("held track").role,
         Role::Current
@@ -3080,7 +3070,7 @@ async fn end_of_a_slot_the_phase_does_not_hold_is_a_background_track(
         (rig.ids[1], background, Role::Preloaded)
     );
     assert_ne!(background, rig.slot(0));
-    assert_eq!(rig.source(1), fixture_uri(rig.dir.path(), "item-2.wav"));
+    assert_eq!(rig.held_item(1), rig.ids[1]);
     let mut receiver = rig.queue.control().subscribe();
     rig.event(DeckEvent::Ended {
         slot: background,
@@ -3096,8 +3086,8 @@ async fn the_outgoing_half_of_a_crossfade_is_not_the_leading_track(
     #[by_ref] worker_owner: &WorkerOwner,
 ) {
     let mut rig = HandoverRig::playing_with_sources(&worker_owner.0, ["item-1.wav"; 3]).await;
-    let same = rig.source(0).to_owned();
-    rig.queue.tracks.records_mut()[1].source = TrackSource::Uri(same.clone());
+    let same = fixture_uri(rig.dir.path(), "item-1.wav");
+    rig.queue.tracks.records_mut()[1].source = TrackSource::Uri(same);
     rig.arm(1).await;
     let receipts = rig.entry(1, Transition::Crossfade);
     rig.settle(receipts);
@@ -3112,8 +3102,8 @@ async fn the_outgoing_half_of_a_crossfade_is_not_the_leading_track(
         (active.item, active.slot, active.role),
         (rig.ids[0], outgoing, Role::Outgoing)
     );
-    assert_eq!(rig.source(0), same);
-    assert_eq!(rig.source(1), same);
+    assert_eq!(rig.held_item(0), rig.ids[0]);
+    assert_eq!(rig.held_item(1), rig.ids[1]);
     let mut receiver = rig.queue.control().subscribe();
     rig.event(DeckEvent::Ended {
         slot: outgoing,
@@ -3132,8 +3122,8 @@ async fn the_promoted_half_of_a_crossfade_is_the_leading_track(
     #[by_ref] worker_owner: &WorkerOwner,
 ) {
     let mut rig = HandoverRig::playing_with_sources(&worker_owner.0, ["item-1.wav"; 3]).await;
-    let same = rig.source(0).to_owned();
-    rig.queue.tracks.records_mut()[1].source = TrackSource::Uri(same.clone());
+    let same = fixture_uri(rig.dir.path(), "item-1.wav");
+    rig.queue.tracks.records_mut()[1].source = TrackSource::Uri(same);
     rig.arm(1).await;
     let receipts = rig.entry(1, Transition::Crossfade);
     rig.settle(receipts);
@@ -3148,8 +3138,8 @@ async fn the_promoted_half_of_a_crossfade_is_the_leading_track(
         (active.item, active.slot, active.role),
         (rig.ids[1], promoted, Role::Current)
     );
-    assert_eq!(rig.source(0), same);
-    assert_eq!(rig.source(1), same);
+    assert_eq!(rig.held_item(0), rig.ids[0]);
+    assert_eq!(rig.held_item(1), rig.ids[1]);
     rig.only_current(1);
     let mut receiver = rig.queue.control().subscribe();
     rig.event(DeckEvent::Ended {
@@ -3208,7 +3198,7 @@ async fn start_of_a_slot_the_phase_does_not_hold_is_a_background_item(
         active.track.snapshot().as_ref().status,
         PlayingStatus::Playing { .. }
     ));
-    assert_eq!(rig.source(1), fixture_uri(rig.dir.path(), "item-2.wav"));
+    assert_eq!(rig.held_item(1), rig.ids[1]);
     assert_eq!(rig.queue.current, Some(rig.ids[0]));
     assert!(events(&mut receiver).is_empty());
     rig.finish().await;
@@ -3398,7 +3388,7 @@ async fn a_late_applied_previous_commits_its_original_history_before_the_new_tar
     let slot = rig.queue.active.get(incoming).expect("incoming C").slot;
     assert_eq!(
         rig.deck.mixer.held(slot),
-        Some(fixture_uri(rig.dir.path(), "item-1.wav").as_str()),
+        Some(rig.ids[0]),
         "the replacement victim still owns its actual PCM"
     );
     rig.queue.deck.mixer.slots[usize::from(slot.get())].state = SlotState::Playing;
@@ -3452,7 +3442,7 @@ async fn a_current_reselect_restores_its_resource_after_a_held_applied_previous(
 ) {
     let mut rig = HandoverRig::with_previous_history(&worker_owner.0).await;
     let original_slot = rig.slot(0);
-    let original_source = rig.source(0).to_owned();
+    let original_source = rig.held_item(0);
     rig.arm(1).await;
     rig.arm(2).await;
     let mut observed = rig.queue.control().subscribe::<QueueEvent>();
@@ -3499,10 +3489,7 @@ async fn a_current_reselect_restores_its_resource_after_a_held_applied_previous(
         rig.queue.active.get(restored).expect("restored A").slot,
         original_slot
     );
-    assert_eq!(
-        rig.deck.mixer.held(original_slot),
-        Some(original_source.as_str())
-    );
+    assert_eq!(rig.deck.mixer.held(original_slot), Some(original_source));
     assert_eq!(
         rig.queue
             .active
@@ -3539,7 +3526,7 @@ async fn reselecting_current_keeps_an_automatic_chain_owned_by_its_receipt(
     rig.arm(1).await;
     rig.chain();
     let slot = rig.slot(0);
-    let source = rig.source(0).to_owned();
+    let source = rig.held_item(0);
     let pending = rig.queue.pending_handover.expect("pending automatic Chain");
     assert!(rig.queue.target.is_some_and(|target| target.auto
         && target.chained
@@ -3552,7 +3539,7 @@ async fn reselecting_current_keeps_an_automatic_chain_owned_by_its_receipt(
         .expect("same confirmed current");
     assert_eq!(rig.queue.current, Some(rig.ids[0]));
     assert_eq!(rig.slot(0), slot);
-    assert_eq!(rig.deck.mixer.held(slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(slot), Some(source));
     assert_eq!(
         rig.queue.pending_handover.map(|pending| pending.seq),
         Some(pending.seq)
@@ -3588,7 +3575,7 @@ async fn reselecting_current_preserves_a_held_applied_automatic_chain_and_its_hi
 ) {
     let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let old_slot = rig.slot(0);
-    let source = rig.source(0).to_owned();
+    let source = rig.held_item(0);
     rig.arm(1).await;
     rig.chain();
     let pending = rig.queue.pending_handover.expect("pending automatic Chain");
@@ -3618,7 +3605,7 @@ async fn reselecting_current_preserves_a_held_applied_automatic_chain_and_its_hi
         rig.queue.track(rig.ids[1]).map(|entry| entry.status),
         Some(TrackStatus::Loaded)
     );
-    assert_eq!(rig.deck.mixer.held(old_slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(old_slot), Some(source));
     rig.assert_no_pending_load();
     assert!(events(&mut receiver).iter().all(|event| !matches!(
         event,
@@ -3662,7 +3649,7 @@ async fn reselecting_current_without_a_pending_handover_keeps_the_shortcut(
     rig.arm(1).await;
     rig.arm(2).await;
     let slot = rig.slot(0);
-    let source = rig.source(0).to_owned();
+    let source = rig.held_item(0);
     let mut observed = rig.queue.control().subscribe::<QueueEvent>();
     rig.select(0, Transition::None).expect("same current");
     assert!(rig.queue.target.is_none());
@@ -3673,7 +3660,7 @@ async fn reselecting_current_without_a_pending_handover_keeps_the_shortcut(
     rig.settle(applied);
     assert_eq!(rig.queue.current, Some(rig.ids[0]));
     assert_eq!(rig.slot(0), slot);
-    assert_eq!(rig.deck.mixer.held(slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(slot), Some(source));
     rig.assert_no_pending_load();
     assert!(
         events(&mut observed)
@@ -3694,7 +3681,7 @@ async fn a_current_reselect_keeps_pause_control_until_the_previous_answer(
     rig.arm(1).await;
     rig.arm(2).await;
     let slot = rig.slot(0);
-    let source = rig.source(0).to_owned();
+    let source = rig.held_item(0);
     let original = rig
         .apply(QueueCommand::Previous(Transition::None))
         .expect("previous request")
@@ -3725,7 +3712,7 @@ async fn a_current_reselect_keeps_pause_control_until_the_previous_answer(
             .target
             .is_some_and(|target| target.to == rig.ids[0] && !target.playing)
     );
-    assert_eq!(rig.deck.mixer.held(slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(slot), Some(source));
     rig.assert_no_pending_load();
     rig.settle(applied);
     assert_eq!(
@@ -3778,7 +3765,7 @@ async fn a_current_reselect_keeps_pause_control_until_the_previous_answer(
         active.track.snapshot().as_ref().status,
         PlayingStatus::Paused { .. }
     ));
-    assert_eq!(rig.deck.mixer.held(slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(slot), Some(source));
     rig.assert_no_pending_load();
     rig.finish().await;
 }
@@ -3790,9 +3777,9 @@ async fn a_rejected_previous_leaves_the_reselected_current_and_history_intact(
     let mut rig = HandoverRig::with_previous_history(&worker_owner.0).await;
     rig.arm(1).await;
     let released_slot = rig.arm(2).await;
-    let released_source = rig.source(2).to_owned();
+    let released_source_pcm = rig.held_receiver(2);
     let slot = rig.slot(0);
-    let source = rig.source(0).to_owned();
+    let source = rig.held_item(0);
     let mut observed = rig.queue.control().subscribe::<QueueEvent>();
     let original = rig
         .apply(QueueCommand::Previous(Transition::None))
@@ -3808,8 +3795,8 @@ async fn a_rejected_previous_leaves_the_reselected_current_and_history_intact(
             .iter()
             .flat_map(|receipt| &receipt.batch().commands)
             .filter(|part| matches!(part,
-                DeckPart::Returned(Returned::Pcm { slot, pcm })
-                if *slot == released_slot && &**pcm.src() == released_source.as_str()
+                DeckPart::Returned(Returned::Pcm { slot, pcm, packet: None })
+                if *slot == released_slot && std::ptr::eq(pcm.as_ref(), released_source_pcm)
             ))
             .count(),
         1,
@@ -3840,7 +3827,7 @@ async fn a_rejected_previous_leaves_the_reselected_current_and_history_intact(
     assert_eq!(rig.queue.current, Some(rig.ids[0]));
     assert!(rig.queue.target.is_none());
     assert_eq!(rig.slot(0), slot);
-    assert_eq!(rig.deck.mixer.held(slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(slot), Some(source));
     assert!(
         events(&mut observed)
             .iter()
@@ -3861,7 +3848,7 @@ async fn cancelling_a_current_reselect_preserves_current_until_the_original_verd
     rig.arm(1).await;
     rig.arm(2).await;
     let slot = rig.slot(0);
-    let source = rig.source(0).to_owned();
+    let source = rig.held_item(0);
     let original = rig
         .apply(QueueCommand::Previous(Transition::None))
         .expect("previous request")
@@ -3894,7 +3881,7 @@ async fn cancelling_a_current_reselect_preserves_current_until_the_original_verd
         active.load.is_none(),
         "current A did not request another Load"
     );
-    assert_eq!(rig.deck.mixer.held(slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(slot), Some(source));
     assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[2]));
     rig.settle(applied);
     assert_eq!(
@@ -3914,7 +3901,7 @@ async fn a_current_reselect_can_resume_while_its_pause_answer_is_pending(
     rig.arm(1).await;
     rig.arm(2).await;
     let slot = rig.slot(0);
-    let source = rig.source(0).to_owned();
+    let source = rig.held_item(0);
     let mut observed = rig.queue.control().subscribe::<QueueEvent>();
     let original = rig
         .apply(QueueCommand::Previous(Transition::None))
@@ -3982,8 +3969,12 @@ async fn a_current_reselect_can_resume_while_its_pause_answer_is_pending(
                     DeckPart::Returned(Returned::Stopped { slot, resume }) => {
                         format!("Stopped({slot:?}, {resume:?})")
                     }
-                    DeckPart::Returned(Returned::Pcm { slot, pcm }) => {
-                        format!("Pcm({slot:?}, {})", &**pcm.src())
+                    DeckPart::Returned(Returned::Pcm {
+                        slot,
+                        pcm,
+                        packet: None,
+                    }) => {
+                        format!("Pcm({slot:?}, {:p})", pcm.as_ref())
                     }
                     other => format!("{other:?}"),
                 })
@@ -4011,7 +4002,7 @@ async fn a_current_reselect_can_resume_while_its_pause_answer_is_pending(
         "A={:?}, before_resume={before_resume:?}, pause={pause:?}, entry={entry:?}, native={trace:#?}",
         active.track.snapshot().as_ref().status
     );
-    assert_eq!(rig.deck.mixer.held(slot), Some(source.as_str()));
+    assert_eq!(rig.deck.mixer.held(slot), Some(source));
     rig.assert_no_pending_load();
     let changed = events(&mut observed)
         .into_iter()
@@ -4035,7 +4026,7 @@ async fn a_rejected_current_reselect_pause_retires_its_actual_sequence(
     rig.arm(1).await;
     rig.arm(2).await;
     let slot = rig.slot(0);
-    let source = rig.source(0).to_owned();
+    let source_pcm = rig.held_receiver(0);
     let mut observed = rig.queue.control().subscribe::<QueueEvent>();
     let original = rig
         .apply(QueueCommand::Previous(Transition::None))
@@ -4113,8 +4104,8 @@ async fn a_rejected_current_reselect_pause_retires_its_actual_sequence(
             .iter()
             .flat_map(|receipt| &receipt.batch().commands)
             .filter(
-                |part| matches!(part, DeckPart::Returned(Returned::Pcm { slot: returned, pcm })
-            if *returned == slot && &**pcm.src() == source.as_str())
+                |part| matches!(part, DeckPart::Returned(Returned::Pcm { slot: returned, pcm, packet: None })
+            if *returned == slot && std::ptr::eq(pcm.as_ref(), source_pcm))
             )
             .count(),
         1

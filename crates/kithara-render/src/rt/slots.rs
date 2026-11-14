@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use kithara_command::Target;
 
-use super::track::{PlayerResource, PlayerTrack};
+use super::track::PlayerTrack;
 use crate::bridge::Slot;
 
 /// The tracks a mixer holds, one per slot its owner assigns.
@@ -27,37 +27,22 @@ impl TrackSlots {
         self.slots.get_mut(slot.index())?.as_mut()
     }
 
-    /// Returns the resource if the slot is occupied or outside the deck.
-    pub(crate) fn put(
-        &mut self,
-        slot: Slot,
-        track: PlayerTrack,
-    ) -> Result<(), Box<PlayerResource>> {
+    /// Returns the track if the slot is occupied or outside the deck.
+    pub(crate) fn put(&mut self, slot: Slot, track: PlayerTrack) -> Option<PlayerTrack> {
         let Some(entry) = self
             .slots
             .get_mut(slot.index())
             .filter(|entry| entry.is_none())
         else {
-            return Err(track.into_resource());
+            return Some(track);
         };
         *entry = Some(track);
-        Ok(())
+        None
     }
 
     /// Take the track out of `slot`.
     pub(crate) fn take(&mut self, slot: Slot) -> Option<PlayerTrack> {
         self.slots.get_mut(slot.index())?.take()
-    }
-
-    pub(crate) fn replace(
-        &mut self,
-        slot: Slot,
-        track: PlayerTrack,
-    ) -> Result<PlayerTrack, Box<PlayerResource>> {
-        let Some(current) = self.slots.get_mut(slot.index()).and_then(Option::as_mut) else {
-            return Err(track.into_resource());
-        };
-        Ok(std::mem::replace(current, track))
     }
 
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = (Slot, &mut PlayerTrack)> {
@@ -82,20 +67,17 @@ fn slot(index: usize) -> Slot {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_platform::time::Duration;
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{rt::track::PlayerResource, worker::packet_tests::PacketRing};
+    use crate::worker::packet_tests::PacketRing;
 
-    fn track(src: Arc<str>) -> PlayerTrack {
+    fn track() -> PlayerTrack {
         let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");
         let mut ring = PacketRing::new(AudioSpec::new(2, sample_rate), Duration::from_secs(1), 2);
-        let resource = Box::new(PlayerResource::new(
-            ring.receiver.take().expect("receiver"),
-            src,
-        ));
+        let resource = Box::new(ring.receiver.take().expect("receiver"));
 
         PlayerTrack::builder()
             .item_id(kithara_events::TrackId::allocate())
@@ -105,12 +87,11 @@ mod tests {
 
     #[kithara::test]
     fn identical_sources_are_addressed_by_slot() {
-        let src: Arc<str> = Arc::from("same.mp3");
         let (first, second) = (Slot::new(0), Slot::new(1));
         let mut tracks = TrackSlots::new(NonZeroUsize::new(2).expect("two slots"));
 
-        assert!(tracks.put(first, track(Arc::clone(&src))).is_ok());
-        assert!(tracks.put(second, track(src)).is_ok());
+        assert!(tracks.put(first, track()).is_none());
+        assert!(tracks.put(second, track()).is_none());
         assert!(tracks.at(first).is_some() && tracks.at(second).is_some());
 
         assert!(tracks.take(first).is_some());
@@ -121,19 +102,18 @@ mod tests {
 
     #[kithara::test]
     fn identical_sources_are_addressed_by_track_id() {
-        let src: Arc<str> = Arc::from("same.mp3");
         let first = Slot::new(0);
         let second = Slot::new(1);
         let first_segment = kithara_signal::SegmentId::FIRST.next();
         let second_segment = first_segment.next();
-        let mut first_track = track(Arc::clone(&src));
+        let mut first_track = track();
         first_track.adopt(first_segment);
-        let mut second_track = track(src);
+        let mut second_track = track();
         second_track.adopt(second_segment);
         let mut tracks = TrackSlots::new(NonZeroUsize::new(2).expect("two slots"));
 
-        assert!(tracks.put(first, first_track).is_ok());
-        assert!(tracks.put(second, second_track).is_ok());
+        assert!(tracks.put(first, first_track).is_none());
+        assert!(tracks.put(second, second_track).is_none());
         assert_eq!(
             tracks.at(first).map(PlayerTrack::segment),
             Some(first_segment)
