@@ -134,6 +134,43 @@ fn fail_cleans_tmp() {
     assert!(!canonical.exists());
 }
 
+#[kithara::test(timeout(Duration::from_secs(2)))]
+fn reactivated_failed_write_publishes_the_replacement_file() {
+    let dir = TempDir::new().unwrap();
+    let (resource, canonical, tmp) = open_chunked(&dir, "recovered.bin");
+    resource.write_at(0, b"partial").unwrap();
+    resource.fail("interrupted download".into());
+    assert!(!tmp.exists());
+    assert!(!canonical.exists());
+
+    resource.reactivate().unwrap();
+    resource.write_at(0, b"replacement").unwrap();
+    resource.commit(Some(11)).unwrap();
+
+    assert_eq!(fs::read(&canonical).unwrap(), b"replacement");
+    assert!(!tmp.exists());
+    let mut bytes = [0; 11];
+    assert_eq!(resource.read_at(0, &mut bytes).unwrap(), bytes.len());
+    assert_eq!(&bytes, b"replacement");
+}
+
+#[kithara::test(timeout(Duration::from_secs(2)))]
+fn reactivation_preserves_a_successors_temporary_claim() {
+    let dir = TempDir::new().unwrap();
+    let (resource, canonical, _) = open_chunked(&dir, "successor.bin");
+    resource.write_at(0, b"partial").unwrap();
+    resource.fail("interrupted download".into());
+    let successor = open_chunked_result(&dir, "successor.bin").unwrap();
+    successor.write_at(0, b"successor").unwrap();
+
+    assert!(matches!(
+        resource.reactivate(),
+        Err(StorageError::TmpClaimed(_))
+    ));
+    successor.commit(Some(9)).unwrap();
+    assert_eq!(fs::read(canonical).unwrap(), b"successor");
+}
+
 /// A tmp nobody holds is an orphan: its owner is gone, so nothing will ever
 /// commit or clean it. Rejecting it would make the canonical path
 /// permanently unwritable — the segment stays unfetchable for good.
