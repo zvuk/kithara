@@ -3030,6 +3030,7 @@ platform_assets = [
   "kithara.aar",
   "kithara-okhttp.aar",
   "Kithara-macos-universal.zip",
+  "Kithara-macos-universal.zip.sha256",
 ]
 http_timeout_secs = 60
 upload_timeout_secs = 600
