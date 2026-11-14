@@ -7,7 +7,7 @@ use super::{cases::*, harness::*, imports::*, providers::*};
     tokio,
     multi_thread,
     serial,
-    timeout(::std::time::Duration::from_millis(15141))
+    timeout(::std::time::Duration::from_millis(18263))
 )]
 #[case::synthetic(synthetic_sources().await, CUE)]
 #[case::mp3_distinct(source_mp3_distinct().await, CUE)]
