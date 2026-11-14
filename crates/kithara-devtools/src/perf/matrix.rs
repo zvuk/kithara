@@ -444,6 +444,8 @@ fn unix_ms() -> Result<u64> {
 
 #[cfg(test)]
 mod collector_tests {
+    use std::collections::BTreeMap;
+
     use tempfile::TempDir;
 
     use super::*;
@@ -506,11 +508,23 @@ store-failure-output = true
         .expect("subject manifest");
         fs::write(
             temp.path().join("lib.rs"),
-            "#[test]\nfn passes() { assert_eq!(2 + 2, 4); }\n",
+            r#"#[test]
+fn passes() {
+    let home = std::env::var_os("CARGO_HOME").expect("fixture Cargo home");
+    let expected = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/cargo-home");
+    assert_eq!(
+        std::fs::canonicalize(home).expect("actual Cargo home"),
+        std::fs::canonicalize(expected).expect("expected Cargo home"),
+    );
+}
+"#,
         )
         .expect("subject test");
+        let cargo_home = temp.path().join("target/cargo-home");
+        fs::create_dir_all(&cargo_home).expect("subject Cargo home");
         let lock = Command::new("cargo")
             .args(["generate-lockfile", "--offline"])
+            .env("CARGO_HOME", &cargo_home)
             .current_dir(temp.path())
             .output()
             .expect("generate subject lockfile");
@@ -538,6 +552,10 @@ store-failure-output = true
         project.test.lanes.insert(
             "workspace".to_owned(),
             TestLaneConfig {
+                env: BTreeMap::from([(
+                    "CARGO_HOME".to_owned(),
+                    cargo_home.to_string_lossy().into_owned(),
+                )]),
                 cargo: TestCargoOptions {
                     workspace: true,
                     lib: true,

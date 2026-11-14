@@ -378,6 +378,19 @@ impl<T, S> LaneAudio<T, S> {
             .await
             .is_err()
         {
+            let queued_segment = self.pcm.peek().map(|packet| match packet {
+                PcmPacket::Chunk(chunk) => chunk.meta.segment,
+                PcmPacket::Failed { segment, .. } => *segment,
+            });
+            tracing::error!(
+                segment = self.segment.get(),
+                ready_segment = ?self.ready,
+                ?queued_segment,
+                decoded_frontier = ?self.pcm.decoded_frontier(),
+                cached_span = ?self.pcm.cached_span(),
+                closed = self.pcm.is_closed(),
+                "test lane preload timed out"
+            );
             hang_tick!(format!(
                 "{label}: lane waits for segment {:?}",
                 self.segment
