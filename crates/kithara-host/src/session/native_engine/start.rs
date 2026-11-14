@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::{context::SessionGraph, state::DeckNode};
 
 pub(crate) fn spawn<S, O>(
     root: HostRoot,
@@ -24,8 +25,8 @@ where
     });
     let inbox: Arc<dyn DeckInbox> = client.clone();
     spawn_named("host-deck-session", move || {
-        let start = move |ctx: &mut FirewheelContext, rate| {
-            start_stream_cpal(ctx, rate, output_block_frames).map(|backend| {
+        let start = move |ctx: &mut SessionGraph, rate: u32, decks: &mut [DeckNode], _previous| {
+            start_stream_cpal(ctx, rate, output_block_frames, decks).map(|backend| {
                 SessionStream::Realtime {
                     _backend: Box::new(backend),
                 }
@@ -50,11 +51,20 @@ where
 }
 
 fn start_stream_cpal(
-    ctx: &mut FirewheelContext,
+    ctx: &mut SessionGraph,
     sample_rate: u32,
     output_block_frames: Option<NonZeroU32>,
-) -> Result<CpalStream, String> {
+    _decks: &mut [DeckNode],
+) -> Result<NativeStream, String> {
     debug!(sample_rate, "starting cpal stream");
-    CpalStream::new(ctx, cpal_config(sample_rate, output_block_frames))
-        .map_err(|error| error.to_string())
+    let device = AcquiredOutput::new(&cpal_config(sample_rate, output_block_frames))?.open()?;
+    device.reserve_processor()?;
+    ctx.cycle_detected().map_err(|error| error.to_string())?;
+    if ctx.is_active() {
+        return Err(firewheel::error::ActivateError::AlreadyActive.to_string());
+    }
+    let processor = ctx
+        .activate(device.info)
+        .map_err(|error| error.to_string())?;
+    device.start(processor)
 }

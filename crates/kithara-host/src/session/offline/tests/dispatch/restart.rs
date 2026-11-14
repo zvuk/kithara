@@ -2,7 +2,7 @@ use kithara_command::Rejection;
 use kithara_signal::SessionFrame;
 
 use super::*;
-use crate::HostSettled;
+use crate::{HostSettled, session::context::SessionGraph};
 
 /// One owner pass with no command; the answers it gave.
 fn pass(state: &mut TestState) -> Vec<HostSettled> {
@@ -203,7 +203,7 @@ fn stream_loss_seen_while_draining_host_commands_restarts_the_stream() {
 #[kithara::test]
 fn empty_host_drain_publishes_a_rendered_transport_commit() {
     let sample_rate = NonZeroU32::new(48_000).expect("test sample rate");
-    let mut state = test_state(move |ctx, _| {
+    let mut state = test_state(move |ctx, _, decks| {
         OfflineStream::start(
             ctx,
             BackendConfig::builder()
@@ -211,6 +211,7 @@ fn empty_host_drain_publishes_a_rendered_transport_commit() {
                 .block_frames(NonZeroU32::new(512).expect("block"))
                 .declared_latency(Duration::ZERO)
                 .build(),
+            decks,
         )
         .map(|stream| SessionStream::Offline(Box::new(stream)))
         .map_err(|error| error.to_string())
@@ -327,7 +328,7 @@ fn two_restarts_with_a_change_between_them_leave_the_render_copy_on_the_host_set
         state
             .ctx
             .as_mut()
-            .and_then(FirewheelContext::proc_store_mut)
+            .and_then(SessionGraph::proc_store_mut)
             .and_then(|store| applied_spans(store, 1)?.last())
             .map(|(_, span)| span.settings()),
         Some(host),

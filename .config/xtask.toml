@@ -153,6 +153,8 @@ lockbud_exclude = [
   "kithara-integration-tests",
   "kithara-play-tests",
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
   "kithara-stream-tests",
   "kithara-sync-tests",
   "kithara-warp-tests",
@@ -607,6 +609,8 @@ features = []
 [test.required]
 packages = [
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
   "kithara-hls-tests",
   "kithara-sync-tests",
   "kithara-play-tests",
@@ -694,6 +698,8 @@ cargo.packages = [
   "kithara-play-tests",
   "kithara-queue",
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
 ]
 cargo.profile = "test-release"
 
@@ -748,6 +754,8 @@ cargo.packages = [
   "kithara-play-tests",
   "kithara-queue",
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
   "kithara-record",
   "kithara-render",
   "kithara-resampler",
@@ -804,6 +812,8 @@ cargo.packages = [
   "kithara-integration-tests",
   "kithara-play-tests",
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
   "kithara-stream-tests",
   "kithara-warp-tests",
   "kithara-sync-tests",
@@ -932,7 +942,12 @@ cargo.packages = ["kithara-play", "kithara-play-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.queue]
-cargo.packages = ["kithara-queue", "kithara-queue-tests"]
+cargo.packages = [
+  "kithara-queue",
+  "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
+]
 cargo.profile = "test-release"
 
 [test.lanes.storage]
@@ -1095,12 +1110,17 @@ default_flash = false
 # rather than a gate job.
 
 [test.lanes.network]
-cargo.packages = ["kithara-play-tests", "kithara-queue-tests"]
+cargo.packages = [
+  "kithara-play-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
+]
 cargo.profile = "test-release"
 cargo.tests = ["network"]
 default_features = [
   "kithara-play-tests/network",
-  "kithara-queue-tests/network",
+  "kithara-queue-network-tests/network",
+  "kithara-queue-zvuk-tests/network",
   "kithara/resample-rubato",
 ]
 default_flash = false
@@ -1110,12 +1130,17 @@ default_flash = false
 # device. No CI job runs this and none should — a runner that fails here reports
 # the fence around itself, not the code. `just test run --lane=network-manual`.
 [test.lanes.network-manual]
-cargo.packages = ["kithara-play-tests", "kithara-queue-tests"]
+cargo.packages = [
+  "kithara-play-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
+]
 cargo.profile = "test-release"
 cargo.tests = ["network_manual"]
 default_features = [
   "kithara-play-tests/network-manual",
-  "kithara-queue-tests/network-manual",
+  "kithara-queue-network-tests/network-manual",
+  "kithara-queue-zvuk-tests/network-manual",
   "kithara/resample-rubato",
 ]
 default_flash = false
@@ -1315,8 +1340,15 @@ pr_review_line_limit = 5000
 "kithara-ui::gallery::tests::the_hosted_toggles_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_toggles"
 "kithara-ui::gallery::tests::the_hosted_knobs_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_knobs"
 "kithara-ui::gallery::tests::the_hosted_meters_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_meters"
-"kithara-queue-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded" = "kithara-queue-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded_high"
-"kithara-queue-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst" = "kithara-queue-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst_main"
+"kithara-queue-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded" = "kithara-queue-zvuk-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded_high"
+"kithara-queue-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst" = "kithara-queue-zvuk-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst_main"
+"kithara-queue-tests::queue::zvuk_cipher_check::" = "kithara-queue-zvuk-tests::queue_zvuk::zvuk_cipher_check::"
+"kithara-queue-tests::network::prod_network::" = "kithara-queue-zvuk-tests::network::prod_network::"
+"kithara-queue-tests::network::zvuk_" = "kithara-queue-zvuk-tests::network::zvuk_"
+"kithara-queue-tests::network::false_eof_rapid_scrub::" = "kithara-queue-network-tests::network::false_eof_rapid_scrub::"
+"kithara-queue-tests::network::real_playlist::" = "kithara-queue-network-tests::network::real_playlist::"
+"kithara-queue-tests::network_manual::cold_seek_cpal::" = "kithara-queue-network-tests::network_manual::cold_seek_cpal::"
+"kithara-queue-tests::network_manual::zvuk_" = "kithara-queue-zvuk-tests::network_manual::zvuk_"
 "kithara-integration-tests::suite_stress::kithara_play::hls_seek_middle_stress_long::" = "kithara-integration-tests::suite_stress::hls_seek_middle_stress_long::"
 "suite_stress::kithara_play::hls_seek_middle_stress_long::" = "kithara-integration-tests::suite_stress::hls_seek_middle_stress_long::"
 "suite_light::kithara_play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
@@ -3030,6 +3062,7 @@ platform_assets = [
   "kithara.aar",
   "kithara-okhttp.aar",
   "Kithara-macos-universal.zip",
+  "Kithara-macos-universal.zip.sha256",
 ]
 http_timeout_secs = 60
 upload_timeout_secs = 600

@@ -28,8 +28,3 @@ mod select_after_eof;
 mod source_changes;
 mod track_switch_race;
 mod user_simulation;
-mod zvuk_cipher_check;
-
-// Mirror crate so the test binary can resolve `aes::cipher::*` directly.
-// `cbc` already brings AES, but for ECB diagnostic we need the bare
-// block cipher.

@@ -2900,21 +2900,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "firewheel-web-audio"
-version = "0.6.0"
-source = "git+https://github.com/gerasim13/bevy_seedling?rev=75633a05ae4656e95fc2ece238a8ca72adc9fe7e#75633a05ae4656e95fc2ece238a8ca72adc9fe7e"
-dependencies = [
- "audioadapter",
- "bevy_platform",
- "firewheel",
- "js-sys",
- "log",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "fixed-resample"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5713,6 +5698,7 @@ name = "kithara-host"
 version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
+ "audioadapter",
  "audioadapter-buffers",
  "bevy_platform",
  "bon",
@@ -5720,7 +5706,7 @@ dependencies = [
  "derive-where",
  "fieldwork",
  "firewheel",
- "firewheel-web-audio",
+ "js-sys",
  "kithara-assets",
  "kithara-audio",
  "kithara-bufpool",
@@ -5747,9 +5733,12 @@ dependencies = [
  "num-traits",
  "ringbuf",
  "send_wrapper",
+ "smallvec",
  "thiserror 2.0.21",
  "tracing",
  "triple_buffer",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
 ]
 
@@ -6100,26 +6089,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-queue-network-tests"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara",
+ "kithara-app",
+ "kithara-integration-tests",
+ "kithara-render",
+ "kithara-test-dylib",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "tracing",
+]
+
+[[package]]
 name = "kithara-queue-tests"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara",
+ "kithara-app",
+ "kithara-command",
+ "kithara-devtools-trace-format",
+ "kithara-integration-tests",
+ "kithara-test-dylib",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "num-traits",
+ "serde_json",
+ "serial_test",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "kithara-queue-zvuk-tests"
 version = "0.0.1-alpha5"
 dependencies = [
  "aes 0.9.3",
  "bytes",
  "kithara",
  "kithara-app",
- "kithara-command",
- "kithara-devtools-trace-format",
  "kithara-integration-tests",
- "kithara-render",
  "kithara-test-dylib",
- "kithara-test-fixtures",
  "kithara-test-utils",
- "num-traits",
  "reqwest",
- "serde_json",
- "serial_test",
  "tracing",
- "url",
 ]
 
 [[package]]
@@ -6150,6 +6164,7 @@ dependencies = [
  "bon",
  "delegate",
  "derive-where",
+ "derive_more",
  "fieldwork",
  "firewheel",
  "futures",
@@ -13551,3 +13566,8 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core 0.5.3",
 ]
+
+[[patch.unused]]
+name = "firewheel-web-audio"
+version = "0.6.0"
+source = "git+https://github.com/gerasim13/bevy_seedling?rev=75633a05ae4656e95fc2ece238a8ca72adc9fe7e#75633a05ae4656e95fc2ece238a8ca72adc9fe7e"

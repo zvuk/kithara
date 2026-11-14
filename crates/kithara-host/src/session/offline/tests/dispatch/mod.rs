@@ -4,7 +4,6 @@ use std::{
 };
 
 use firewheel::{
-    FirewheelContext,
     channel_config::{ChannelConfig, ChannelCount},
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
@@ -52,6 +51,7 @@ mod manual_crossfade;
 mod membership;
 #[cfg(feature = "mock")]
 mod mock;
+mod output_admission;
 mod restart;
 mod restored_engine_config;
 mod restored_graph;

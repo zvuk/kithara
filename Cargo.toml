@@ -84,6 +84,8 @@ members = [
     "tests/crates/host",
     "tests/crates/play",
     "tests/crates/queue",
+    "tests/crates/queue-network",
+    "tests/crates/queue-zvuk",
     "tests/crates/stream",
     "tests/crates/sync",
     "tests/crates/warp",
@@ -164,6 +166,8 @@ default-members = [
     "tests/crates/host",
     "tests/crates/play",
     "tests/crates/queue",
+    "tests/crates/queue-network",
+    "tests/crates/queue-zvuk",
     "tests/crates/stream",
     "tests/crates/warp",
 ]
@@ -381,6 +385,7 @@ assert_no_alloc = "1.1"
 async-trait = "0.1.92"
 
 # fast interleave/deinterleave
+audioadapter = "5"
 audioadapter-buffers = { version = "5.2", default-features = false, features = ["std"] }
 axum = "0.8.9"
 base64 = "0.23.1"
@@ -785,6 +790,12 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-queue-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-queue-network-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-queue-zvuk-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-stream-tests]
