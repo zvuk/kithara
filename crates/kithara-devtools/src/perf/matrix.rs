@@ -444,6 +444,8 @@ fn unix_ms() -> Result<u64> {
 
 #[cfg(test)]
 mod collector_tests {
+    use std::collections::BTreeMap;
+
     use tempfile::TempDir;
 
     use super::*;
@@ -509,8 +511,10 @@ store-failure-output = true
             "#[test]\nfn passes() { assert_eq!(2 + 2, 4); }\n",
         )
         .expect("subject test");
+        let cargo_home = temp.path().join("target/cargo-home");
         let lock = Command::new("cargo")
             .args(["generate-lockfile", "--offline"])
+            .env("CARGO_HOME", &cargo_home)
             .current_dir(temp.path())
             .output()
             .expect("generate subject lockfile");
@@ -538,6 +542,10 @@ store-failure-output = true
         project.test.lanes.insert(
             "workspace".to_owned(),
             TestLaneConfig {
+                env: BTreeMap::from([(
+                    "CARGO_HOME".to_owned(),
+                    cargo_home.to_string_lossy().into_owned(),
+                )]),
                 cargo: TestCargoOptions {
                     workspace: true,
                     lib: true,
@@ -724,6 +732,51 @@ store-failure-output = true
         let error = ensure_source(subject.path(), &commit)
             .expect_err("another clean revision is not admitted");
         assert!(error.to_string().contains("source revision changed"));
+    }
+
+    #[test]
+    fn collector_finishes_while_another_workspace_holds_the_package_cache() {
+        use std::{sync::mpsc, thread, time::Duration};
+
+        let shared = tempfile::tempdir().expect("unrelated Cargo home");
+        let lock = crate::lock::FileLock::try_exclusive(
+            File::create(shared.path().join(".package-cache")).expect("package-cache lock file"),
+        )
+        .expect("hold the unrelated package cache");
+        let test = "perf::matrix::collector_tests::real_collector_binds_selected_workspace_and_preserves_failed_attempts";
+        let child = Command::new(std::env::current_exe().expect("test executable"))
+            .args([test, "--exact", "--nocapture"])
+            .env("CARGO_HOME", shared.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start the real collector test");
+        let (finished, result) = mpsc::channel();
+        thread::scope(|scope| {
+            scope.spawn(move || {
+                finished
+                    .send(child.wait_with_output())
+                    .expect("collector result");
+            });
+            let held = result.recv_timeout(Duration::from_secs(30));
+            let completed_while_locked = held.is_ok();
+            drop(lock);
+            let output = held
+                .unwrap_or_else(|_| result.recv().expect("collector finishes after unlocking"))
+                .expect("collect real collector test output");
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout)
+                        .contains(&format!("test {test} ... ok")),
+                "the real collector test must execute successfully: {output:?}"
+            );
+            assert!(
+                completed_while_locked,
+                "the dependency-free collector waited for another workspace's package cache: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        });
     }
 
     #[test]
