@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use crate::backend::{self, platform};
 
 /// Index of the last sample with `abs(x) > limit`; `None` if no sample matches.
-/// NaNs do not match. No sanitization or allocation.
+/// `NaN` values do not match. No sanitization or allocation.
 #[must_use]
 pub fn last_loud(samples: &[f32], limit: f32) -> Option<usize> {
     backend::last_loud(samples, limit)
