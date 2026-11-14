@@ -1,5 +1,7 @@
 # kithara-hls-tests
 
-Integration tests for the public `kithara::hls` facade live in [`tests`](tests).
-Regular, heavy, and stress scenarios have separate binaries so edits outside
-HLS do not invalidate their cached codegen and linking.
+Tests for HLS playlist loading, byte-range reads and stream seeking.
+
+Run this package's tests with `just test run --lane=hls --narrow='package(kithara-hls-tests)'`.
+
+[HLS contracts](https://github.com/zvuk/kithara/wiki/kithara-hls).

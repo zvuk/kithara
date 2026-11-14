@@ -1,0 +1,19 @@
+[binaries]
+"kithara-hls-tests::hls" = [
+  "kithara-hls-tests::hls",
+  "kithara-hls-abr-tests::hls",
+  "kithara-hls-keys-tests::hls",
+  "kithara-hls-lifecycle-tests::hls",
+  "kithara-hls-audio-tests::hls",
+]
+"kithara-hls-tests::hls_heavy" = [
+  "kithara-hls-tests::hls_heavy",
+  "kithara-hls-abr-tests::hls_heavy",
+  "kithara-hls-keys-tests::hls_heavy",
+  "kithara-hls-audio-tests::hls_heavy",
+]
+"kithara-hls-tests::hls_stress" = [
+  "kithara-hls-abr-tests::hls_stress",
+  "kithara-hls-lifecycle-tests::hls_stress",
+  "kithara-hls-audio-tests::hls_stress",
+]

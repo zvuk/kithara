@@ -378,4 +378,4 @@ rtsan FILTER="offline_harness rt_metrics mix_tap metronome analysis_offer_is_rea
 
 rtsan-file FILTER="phase_continuity": (_rtsan "-p kithara-decode-tests --test decode_heavy" "apple-fused-src" FILTER)
 
-rtsan-hls FILTER="phase_continuity": (_rtsan "-p kithara-hls-tests --test hls_stress" "apple-fused-src" FILTER)
+rtsan-hls FILTER="phase_continuity": (_rtsan "-p kithara-hls-audio-tests --test hls_stress" "apple-fused-src" FILTER)

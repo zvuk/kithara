@@ -5671,11 +5671,65 @@ dependencies = [
 ]
 
 [[package]]
-name = "kithara-hls-tests"
+name = "kithara-hls-abr-tests"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-dylib",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "num-traits",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "kithara-hls-audio-tests"
+version = "0.0.1-alpha5"
+dependencies = [
+ "gloo-timers",
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-dylib",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "num-traits",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "kithara-hls-keys-tests"
 version = "0.0.1-alpha5"
 dependencies = [
  "bytes",
- "gloo-timers",
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-dylib",
+ "kithara-test-utils",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "kithara-hls-lifecycle-tests"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-dylib",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "num-traits",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "kithara-hls-tests"
+version = "0.0.1-alpha5"
+dependencies = [
  "kithara",
  "kithara-integration-tests",
  "kithara-test-dylib",
