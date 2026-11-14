@@ -61,8 +61,20 @@ pub(in crate::rt) struct Deck {
     pub(in crate::rt) epoch: Option<SessionEpoch>,
 }
 
+pub(in crate::rt) struct PreparedDeck {
+    pub(in crate::rt) shape: StreamShape,
+    scratch: [SampleBuffer; crate::consts::MIN_STEREO],
+    tracks: TrackSlots,
+    armed: Vec<Option<Armed>>,
+    tails: Vec<SlotTail>,
+    held: Vec<Option<SegmentId>>,
+    recycle: Vec<usize>,
+    render: RenderPass,
+}
+
 impl<E: SessionInbox> DeckMixer<E> {
     /// Allocates every slot tail and the fixed render scratch before stream processing.
+    /// The scope snapshot is published by the first actual render.
     ///
     /// # Errors
     /// Returns a pool error if either scratch or any required tail cannot be allocated.
@@ -74,43 +86,74 @@ impl<E: SessionInbox> DeckMixer<E> {
     where
         S: HasPool<f32>,
     {
+        let prepared = Self::prepare(&inputs, shape, pools)?;
+        Ok(Self::assemble(inputs, prepared))
+    }
+
+    pub(in crate::rt) fn prepare<S>(
+        inputs: &MixerInputs,
+        shape: StreamShape,
+        pools: &PoolRegion<S>,
+    ) -> Result<PreparedDeck, PoolError>
+    where
+        S: HasPool<f32>,
+    {
+        let config = inputs.config;
+        let slots = config.slots();
+        let capacity = usize::try_from(shape.max_block_frames.get()).unwrap_or(usize::MAX);
+        let tail_frames = FrameCount::new(
+            config
+                .declick_frames(shape.sample_rate)
+                .get()
+                .max(config.evict_fade().get()),
+        );
+        Ok(PreparedDeck {
+            shape,
+            tails: (0..slots.get())
+                .map(|_| SlotTail::new(pools, tail_frames))
+                .collect::<Result<Vec<_>, _>>()?,
+            scratch: [
+                pools.get_with_len::<f32>(capacity)?,
+                pools.get_with_len::<f32>(capacity)?,
+            ],
+            render: RenderPass::new(pools, shape, config)?,
+            tracks: TrackSlots::new(slots),
+            armed: vec![None; slots.get()],
+            held: vec![None; slots.get()],
+            recycle: vec![0; slots.get()],
+        })
+    }
+
+    pub(in crate::rt) fn assemble(inputs: MixerInputs, prepared: PreparedDeck) -> Self {
+        let shape = prepared.shape;
         let MixerInputs {
             scope,
             events,
             snapshot,
             config,
         } = inputs;
-        let slots = config.slots();
         let capacity = usize::try_from(shape.max_block_frames.get()).unwrap_or(usize::MAX);
         let declick_frames = config.declick_frames(shape.sample_rate).get();
         let evict_frames = config.evict_fade().get();
-        let tail_frames = FrameCount::new(declick_frames.max(evict_frames));
-        let tails = (0..slots.get())
-            .map(|_| SlotTail::new(pools, tail_frames))
-            .collect::<Result<Vec<_>, _>>()?;
-        let scratch = [
-            pools.get_with_len::<f32>(capacity)?,
-            pools.get_with_len::<f32>(capacity)?,
-        ];
         let mix = config.mix();
-        let mut mixer = Self {
+        Self {
             scope,
             snapshot,
-            scratch,
+            scratch: prepared.scratch,
             capacity,
             blocks: 0,
             recycle_per_block: config.recycle_per_block().get(),
             retired: false,
             session: PhantomData,
             deck: Deck {
-                tracks: TrackSlots::new(slots),
-                armed: vec![None; slots.get()],
-                tails,
-                held: vec![None; slots.get()],
-                recycle: vec![0; slots.get()],
+                tracks: prepared.tracks,
+                armed: prepared.armed,
+                tails: prepared.tails,
+                held: prepared.held,
+                recycle: prepared.recycle,
                 declick_frames,
                 evict_frames,
-                render: RenderPass::new(pools, shape, config)?,
+                render: prepared.render,
                 eq_programs: EqPrograms::new(scope, config.eq_bands()),
                 filter_programs: FilterPrograms::new(scope),
                 mix,
@@ -120,9 +163,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                 declick: config.declick(),
                 epoch: None,
             },
-        };
-        mixer.publish(SessionFrame::new(0));
-        Ok(mixer)
+        }
     }
 
     pub(in crate::rt) fn update_sample_rate(&mut self, rate: NonZeroU32) {

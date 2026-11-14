@@ -1,13 +1,16 @@
 use std::num::NonZeroU32;
 
-use firewheel::{FirewheelConfig, FirewheelContext, channel_config::ChannelCount};
+use firewheel::{FirewheelConfig, channel_config::ChannelCount};
 use kithara_platform::time::Duration;
 use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 
-use crate::session::offline::{
-    backend::{BackendConfig, OfflineStream},
-    task::consts::CHANNELS,
+use crate::session::{
+    context::SessionGraph,
+    offline::{
+        backend::{BackendConfig, OfflineStream},
+        task::consts::CHANNELS,
+    },
 };
 
 #[kithara::test]
@@ -15,7 +18,7 @@ fn start_hands_firewheel_the_configured_block_latency_and_rate() {
     let block_frames = NonZeroU32::new(127).expect("fixture block frames");
     let declared_latency = Duration::from_millis(7);
     let sample_rate = NonZeroU32::new(48_000).expect("fixture sample rate");
-    let mut ctx = FirewheelContext::new(FirewheelConfig {
+    let mut ctx = SessionGraph::new(FirewheelConfig {
         num_graph_outputs: ChannelCount::STEREO,
         ..FirewheelConfig::default()
     });
@@ -25,7 +28,7 @@ fn start_hands_firewheel_the_configured_block_latency_and_rate() {
         .declared_latency(declared_latency)
         .sample_rate(sample_rate)
         .build();
-    let _stream = OfflineStream::start(&mut ctx, config).expect("fixture offline stream");
+    let _stream = OfflineStream::start(&mut ctx, config, &mut []).expect("fixture offline stream");
 
     let stream = ctx
         .stream_info()
@@ -46,7 +49,7 @@ fn start_hands_firewheel_the_configured_block_latency_and_rate() {
 fn render_fills_the_requested_block() {
     let block_frames = NonZeroU32::new(64).expect("fixture block frames");
     let sample_rate = NonZeroU32::new(48_000).expect("fixture sample rate");
-    let mut ctx = FirewheelContext::new(FirewheelConfig {
+    let mut ctx = SessionGraph::new(FirewheelConfig {
         num_graph_outputs: ChannelCount::STEREO,
         ..FirewheelConfig::default()
     });
@@ -55,7 +58,8 @@ fn render_fills_the_requested_block() {
         .declared_latency(Duration::ZERO)
         .sample_rate(sample_rate)
         .build();
-    let mut stream = OfflineStream::start(&mut ctx, config).expect("fixture offline stream");
+    let mut stream =
+        OfflineStream::start(&mut ctx, config, &mut []).expect("fixture offline stream");
 
     let frames = 16;
     let mut output = vec![f32::NAN; frames * CHANNELS];
