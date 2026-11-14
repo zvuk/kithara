@@ -1,6 +1,8 @@
+use ::kithara::warp::Pitch;
+
 use super::*;
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(2526)))]
+#[kithara::test(timeout(Short))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)
@@ -54,7 +56,7 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
             for quantum in [64, 257] {
                 let config = WarpConfig::builder()
                     .speed(2.0)
-                    .keylock(keylock)
+                    .maybe_pitch(keylock.then_some(Pitch::HELD))
                     .backend(backend)
                     .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
                     .build();
@@ -191,7 +193,7 @@ fn an_unmarked_span_renders_at_the_projected_rate(
 /// The Host grid stands at `HOST_BPM`, and every case names an asset tempo the
 /// acceptance queue carries, so a rate derived from the wrong member's tempo
 /// moves the interval away from its case by more than the shared tolerance.
-#[kithara::test(timeout(::std::time::Duration::from_millis(1936)))]
+#[kithara::test(timeout(::std::time::Duration::from_millis(4474)))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

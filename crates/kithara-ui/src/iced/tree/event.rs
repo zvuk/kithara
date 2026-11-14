@@ -69,6 +69,13 @@ pub(crate) fn engine(
             |child| Some(scalar_child(path, child, value)),
         ),
         Some(EngineEvent::Activate) => activate(path, typed_outcome((), captured)),
+        Some(EngineEvent::SecondaryActivate) => step(
+            path,
+            typed_outcome(ControlAction::SecondaryActivate, captured),
+        ),
+        Some(EngineEvent::DoubleActivate) => {
+            step(path, typed_outcome(ControlAction::DoubleActivate, captured))
+        }
         Some(EngineEvent::Crossing(over)) => {
             carry(path, typed_outcome(Carry::Over(over), captured))
         }

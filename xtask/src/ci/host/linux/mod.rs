@@ -2,6 +2,7 @@ mod cleanup;
 pub(crate) mod command;
 mod compose;
 mod container;
+mod cpu;
 mod firewall;
 mod permissions;
 mod profile;

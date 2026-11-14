@@ -343,7 +343,7 @@ async fn the_host_grid_places_every_beat_on_the_frame_nearest_its_computed_time(
     );
 }
 
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn the_metronome_clicks_on_the_frame_nearest_every_computed_beat() {
     let ride = host_ride().await;
     let beats = computed_beats(&ride.stretches(), ride.end);

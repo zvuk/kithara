@@ -385,6 +385,7 @@ assert_no_alloc = "1.1"
 async-trait = "0.1.92"
 
 # fast interleave/deinterleave
+audioadapter = "5"
 audioadapter-buffers = { version = "5.2", default-features = false, features = ["std"] }
 axum = "0.8.9"
 base64 = "0.23.1"

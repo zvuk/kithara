@@ -28,7 +28,7 @@ use kithara_test_utils::kithara;
 ))]
 use super::{LaneFeed, WarpRenderer, dominant_bin, drain_tail, expected_bin, samples as concat};
 use super::{chunk, renderer, spec};
-use crate::WarpConfig;
+use crate::{Pitch, WarpConfig};
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
@@ -126,7 +126,7 @@ fn live_activation_primes_from_passthrough_history(
 ) {
     let config = WarpConfig::builder()
         .speed(1.0)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(backend)
         .render_quantum_frames(NonZeroUsize::new(32).expect("test quantum is non-zero"))
         .build();
@@ -238,7 +238,7 @@ fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
     renderer(
         &WarpConfig::builder()
             .speed(speed)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .backend(kind)
             .build(),
     )
@@ -250,13 +250,7 @@ fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
     feature = "stretch-glide"
 ))]
 pub(super) fn vinyl(kind: StretchKind, speed: f32) -> WarpRenderer {
-    renderer(
-        &WarpConfig::builder()
-            .speed(speed)
-            .keylock(false)
-            .backend(kind)
-            .build(),
-    )
+    renderer(&WarpConfig::builder().speed(speed).backend(kind).build())
 }
 
 #[cfg(any(
@@ -689,7 +683,7 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp
     let mut fx = renderer(
         &WarpConfig::builder()
             .speed(1.0)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .backend(backend)
             .build(),
     );
@@ -730,13 +724,7 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 #[kithara::hang_watchdog]
 fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
-    let mut fx = renderer(
-        &WarpConfig::builder()
-            .speed(0.5)
-            .keylock(false)
-            .backend(backend)
-            .build(),
-    );
+    let mut fx = renderer(&WarpConfig::builder().speed(0.5).backend(backend).build());
     let pools = fx.pools.clone();
     let block = warp_sine[..(4096) * 2].to_vec();
 
@@ -761,7 +749,7 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_si
         "off: vinyl pitch follows speed"
     );
 
-    fx.set_keylock(true);
+    fx.set_pitch(Pitch::HELD);
     let mut stretched: Vec<f32> = Vec::new();
     for _ in 0..24 {
         hang_tick!();
@@ -786,4 +774,303 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_si
         dominant_bin(&mono).abs_diff(expected_bin(consts::F0)) <= 3,
         "on: pitch preserved after live toggle"
     );
+}
+
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+mod transpose {
+    use kithara_signal::AudioChunk;
+    use kithara_stretch::StretchKind;
+    use kithara_test_fixtures::unit_fixtures::warp_sine;
+    use kithara_test_utils::kithara;
+
+    use super::{
+        super::{
+            LaneFeed, WarpRenderer, chunk, dominant_bin, expected_bin, f64_of, renderer, samples,
+        },
+        render,
+    };
+    use crate::{Pitch, Semitones, WarpConfig, consts};
+
+    fn semitones(value: i8) -> Semitones {
+        Semitones::checked(value).expect("fixture shift is in range")
+    }
+
+    fn transposed(backend: StretchKind, speed: f32, keylock: bool, transpose: i8) -> WarpConfig {
+        let shift = semitones(transpose);
+        WarpConfig::builder()
+            .speed(speed)
+            .pitch(if keylock {
+                Pitch::Held { shift }
+            } else {
+                Pitch::Vinyl { shift }
+            })
+            .backend(backend)
+            .build()
+    }
+
+    #[kithara::hang_watchdog]
+    fn play(
+        fx: &mut WarpRenderer,
+        feed: &mut LaneFeed,
+        input: &[f32],
+        source: &mut u64,
+        stop: u64,
+    ) -> Vec<AudioChunk> {
+        let channels = usize::from(consts::CH);
+        let pools = fx.pools.clone();
+        let stop = usize::try_from(stop).expect("source frame fits usize");
+        let mut chunks = Vec::new();
+        let mut start = usize::try_from(*source).expect("source frame fits usize");
+        while start < stop {
+            hang_tick!();
+            let end = (start + 4096).min(stop);
+            let mut decoded = chunk(&pools, &input[start * channels..end * channels]);
+            decoded.meta.frame_offset = *source;
+            chunks.extend(feed.feed(fx, decoded));
+            *source = u64::try_from(end).expect("source frame fits u64");
+            start = end;
+            hang_reset!();
+        }
+        chunks
+    }
+
+    fn assert_peak(out: &[f32], freq: f64, context: &str) {
+        let mono: Vec<f32> = out
+            .iter()
+            .step_by(usize::from(consts::CH))
+            .copied()
+            .collect();
+        assert!(mono.len() >= consts::N, "{context}: not enough output");
+        let peak = dominant_bin(&mono);
+        let want = expected_bin(freq);
+        assert!(
+            peak.abs_diff(want) <= 3,
+            "{context}: peak bin {peak}, expected {want} ({freq:.1} Hz)"
+        );
+    }
+
+    fn shift(semitones: i8) -> f64 {
+        (f64::from(semitones) / 12.0).exp2()
+    }
+
+    fn position(chunk: &AudioChunk, frame: u64) -> f64 {
+        let (numerator, denominator) = chunk
+            .meta
+            .source_span
+            .and_then(|span| span.source_ratio_at(frame))
+            .expect("mapped output position");
+        num_traits::cast::<u128, f64>(numerator).expect("numerator fits f64")
+            / num_traits::cast::<u128, f64>(denominator.get()).expect("denominator fits f64")
+    }
+
+    fn source_end(chunk: &AudioChunk) -> f64 {
+        position(
+            chunk,
+            u64::try_from(chunk.frames()).expect("frames fit u64"),
+        )
+    }
+
+    /// A steady pitch sounds at its factor of the source pitch, the speed
+    /// included only without keylock, and the timeline keeps the source's
+    /// length at the speed. At unity a shift leaves the bypass.
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith_keylock(StretchKind::Signalsmith, true, 1.08, 3)
+    )]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith_vinyl(StretchKind::Signalsmith, false, 1.08, -2)
+    )]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith_keylock_unity(StretchKind::Signalsmith, true, 1.0, 12)
+    )]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith_vinyl_unity(StretchKind::Signalsmith, false, 1.0, 12)
+    )]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee_keylock(StretchKind::Bungee, true, 1.08, 3)
+    )]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee_vinyl(StretchKind::Bungee, false, 1.08, -2)
+    )]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee_keylock_unity(StretchKind::Bungee, true, 1.0, 12)
+    )]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee_vinyl_unity(StretchKind::Bungee, false, 1.0, 12)
+    )]
+    fn a_steady_pitch_sounds_at_its_factor(
+        #[case] backend: StretchKind,
+        #[case] keylock: bool,
+        #[case] speed: f32,
+        #[case] transpose: i8,
+        warp_sine: Vec<f32>,
+    ) {
+        let config = transposed(backend, speed, keylock, transpose);
+        let mut fx = renderer(&config);
+        let chunks = play(
+            &mut fx,
+            &mut LaneFeed::default(),
+            &warp_sine,
+            &mut 0,
+            u64::from(consts::SR) * 2,
+        );
+        let timeline: usize = chunks.iter().map(AudioChunk::frames).sum();
+        let covered = source_end(chunks.last().expect("rendered output"))
+            - position(chunks.first().expect("rendered output"), 0);
+        assert!(timeline > 0);
+        assert!(
+            (covered - f64_of(timeline) * f64::from(speed)).abs() < 1e-6,
+            "{timeline} output frames at {speed} cover {covered} source frames"
+        );
+        let context = format!("keylock {keylock}, speed {speed}, {transpose:+}");
+        assert_peak(
+            &samples(&chunks),
+            consts::F0 * config.pitch().factor(f64::from(speed)),
+            &context,
+        );
+    }
+
+    /// An octave up at a speed well below the deck's 0.5 floor fits the
+    /// projected stages: the shift renders rather than failing on the render path.
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    fn an_octave_up_at_a_slow_speed_fits_the_projection(
+        #[case] backend: StretchKind,
+        warp_sine: Vec<f32>,
+    ) {
+        let input = &warp_sine[..usize::try_from(consts::SR).unwrap() * 2];
+        let out = render(&mut renderer(&transposed(backend, 0.3, true, 12)), input);
+        assert_peak(&out, consts::F0 * 2.0, "keylock on, 0.3, +12");
+    }
+
+    /// Renders two seconds at `config`, applies `change` live and renders four
+    /// more: the pitch moves from `before` to `after` while the source position
+    /// runs on without a jump.
+    fn assert_live_change(
+        warp_sine: &[f32],
+        config: &WarpConfig,
+        before: f64,
+        change: impl FnOnce(&mut WarpRenderer),
+        after: f64,
+    ) {
+        let rate = u64::from(consts::SR);
+        let mut fx = renderer(config);
+        let mut feed = LaneFeed::default();
+        let mut source = 0;
+        let first = play(&mut fx, &mut feed, warp_sine, &mut source, rate * 2);
+        assert_peak(&samples(&first), before, "before the change");
+
+        change(&mut fx);
+        let second = play(&mut fx, &mut feed, warp_sine, &mut source, rate * 6);
+        assert_peak(&samples(&second), after, "after the change");
+
+        for (previous, next) in first
+            .iter()
+            .chain(&second)
+            .zip(first.iter().chain(&second).skip(1))
+        {
+            let (end, start) = (source_end(previous), position(next, 0));
+            assert!(
+                (end - start).abs() < 1e-6,
+                "the position jumps from {end} to {start}"
+            );
+        }
+    }
+
+    /// A live pitch change moves the pitch to the new pitch's factor while the
+    /// source position runs on without a jump: a shift with keylock off,
+    /// keylock off under a shift, and a shift under keylock.
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith_vinyl_shift(StretchKind::Signalsmith, false, 0, Pitch::Vinyl { shift: semitones(5) })
+    )]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith_unlock(StretchKind::Signalsmith, true, 3, Pitch::Vinyl { shift: semitones(3) })
+    )]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith_keylock_shift(StretchKind::Signalsmith, true, 3, Pitch::Held { shift: semitones(4) })
+    )]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee_vinyl_shift(StretchKind::Bungee, false, 0, Pitch::Vinyl { shift: semitones(5) })
+    )]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee_unlock(StretchKind::Bungee, true, 3, Pitch::Vinyl { shift: semitones(3) })
+    )]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee_keylock_shift(StretchKind::Bungee, true, 3, Pitch::Held { shift: semitones(4) })
+    )]
+    fn a_live_pitch_change_moves_the_pitch_and_keeps_the_position(
+        #[case] backend: StretchKind,
+        #[case] keylock: bool,
+        #[case] transpose: i8,
+        #[case] pitch: Pitch,
+        warp_sine: Vec<f32>,
+    ) {
+        let speed = f64::from(1.08_f32);
+        let config = transposed(backend, 1.08, keylock, transpose);
+        assert_live_change(
+            &warp_sine,
+            &config,
+            consts::F0 * config.pitch().factor(speed),
+            |fx| fx.set_pitch(pitch),
+            consts::F0 * pitch.factor(speed),
+        );
+    }
+
+    /// Back to transpose 0 at unity speed the pitch returns to the source's and
+    /// the position runs on through the bypass.
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith_keylock(StretchKind::Signalsmith, true)
+    )]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith_vinyl(StretchKind::Signalsmith, false)
+    )]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee_keylock(StretchKind::Bungee, true)
+    )]
+    #[cfg_attr(
+        feature = "stretch-bungee",
+        case::bungee_vinyl(StretchKind::Bungee, false)
+    )]
+    fn a_live_return_to_no_transpose_at_unity_reenters_the_bypass(
+        #[case] backend: StretchKind,
+        #[case] keylock: bool,
+        warp_sine: Vec<f32>,
+    ) {
+        assert_live_change(
+            &warp_sine,
+            &transposed(backend, 1.0, keylock, 3),
+            consts::F0 * shift(3),
+            |fx| {
+                fx.set_pitch(if keylock {
+                    Pitch::HELD
+                } else {
+                    Pitch::default()
+                });
+            },
+            consts::F0,
+        );
+    }
 }

@@ -62,9 +62,6 @@ objc2-foundation = { workspace = true, optional = true, features = [
     "NSValue",
 ] }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
-
 [dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }

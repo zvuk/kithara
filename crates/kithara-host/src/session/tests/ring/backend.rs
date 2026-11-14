@@ -4,14 +4,12 @@ use std::{
 };
 
 use audioadapter_buffers::direct::InterleavedSlice;
-use firewheel::{
-    ActivateInfo, FirewheelContext, backend::BackendProcessInfo, node::StreamStatus,
-    processor::FirewheelProcessor,
-};
+use firewheel::{ActivateInfo, backend::BackendProcessInfo, node::StreamStatus};
 use kithara_platform::sync::Arc;
 use kithara_signal::AudioSpec;
 
 use super::buffer::RingWriter;
+use crate::session::{context::SessionGraph, processor::SessionProcessor};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -109,7 +107,7 @@ impl Default for RingBackendConfig {
 }
 
 pub(crate) struct RingBackend {
-    processor: FirewheelProcessor,
+    processor: SessionProcessor,
     session_rate: NonZeroU32,
     layout: RingLayout,
     writer: RingWriter,
@@ -202,7 +200,7 @@ impl RingBackend {
     /// Nothing drives this stream but `render_block`, so the test decides when
     /// a block happens and what clock it happens at.
     pub(crate) fn start(
-        cx: &mut FirewheelContext,
+        cx: &mut SessionGraph,
         mut config: RingBackendConfig,
     ) -> Result<Self, RingStartError> {
         let max_block_frames =

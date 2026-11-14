@@ -371,7 +371,12 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session(
     assert!(second_read > 0, "second HLS stream session must read bytes");
 }
 
-#[kithara::test(tokio, native, timeout(Medium), hang_timeout_secs(3))]
+#[kithara::test(
+    tokio,
+    native,
+    timeout(::std::time::Duration::from_millis(2794)),
+    hang_timeout_secs(3)
+)]
 #[cfg_attr(not(target_os = "android"), case::aac_symphonia(AudioCodec::AacLc, DecoderBackend::Symphonia, aac_source().await))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

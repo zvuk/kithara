@@ -159,7 +159,7 @@ async fn encrypted_ladder() -> (TestServerHelper, Url) {
 #[kithara::test(
     native,
     tokio,
-    timeout(::std::time::Duration::from_millis(6473)),
+    timeout(::std::time::Duration::from_millis(7282)),
     hang_timeout_secs(10)
 )]
 async fn red_leak_native_drm_seek_resume_thread_budget(

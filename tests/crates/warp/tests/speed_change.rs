@@ -11,7 +11,7 @@ use kithara::{
     platform::time::{self, Duration, Instant},
     play::{ResourceConfig, ResourceSrc},
     queue::Transition,
-    warp::{StretchKind, WarpConfig},
+    warp::{Pitch, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     audio_artifact::{AudioArtifactTap, artifact_label},
@@ -107,7 +107,7 @@ async fn playing_deck(
                 WarpConfig::builder()
                     .speed(START_SPEED)
                     .backend(backend)
-                    .keylock(keylock)
+                    .maybe_pitch(keylock.then_some(Pitch::HELD))
                     .build(),
             )
             .build(),

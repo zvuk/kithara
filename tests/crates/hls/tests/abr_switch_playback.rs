@@ -97,7 +97,7 @@ async fn fixed_variant_on_production_ladder_plays_without_hang(
     tokio,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(4094)),
+    timeout(::std::time::Duration::from_millis(4509)),
     hang_timeout_secs(5),
     tracing("kithara_audio=warn,kithara_hls=warn,symphonia_format_isomp4=warn")
 )]

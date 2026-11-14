@@ -12,6 +12,7 @@ mod envelope;
 mod expand_kind;
 mod module_doc;
 mod motion;
+mod mount;
 mod multi_deck;
 mod package;
 mod roundtrip;

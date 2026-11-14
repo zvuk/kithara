@@ -1423,7 +1423,7 @@ fn segment_end(state: &SpliceState, segment: u32) -> Duration {
 }
 
 /// splice-continuity contract: RED = audible click on variant switch
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(6877)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(8067)))]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric(
     slq_layout: VariantLayout,

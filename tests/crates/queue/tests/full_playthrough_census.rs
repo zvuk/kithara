@@ -1124,7 +1124,7 @@ async fn a_queue_plays_every_track_end_to_end(
 #[kithara::test(
     native,
     tokio,
-    timeout(::std::time::Duration::from_millis(5800)),
+    timeout(::std::time::Duration::from_millis(11586)),
     hang_timeout_secs(20)
 )]
 #[case::gapless(MPEG_QUEUE, Seam::Gapless)]

@@ -146,7 +146,7 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(
 #[kithara::test(
     native,
     tokio,
-    timeout(Long),
+    timeout(::std::time::Duration::from_millis(5594)),
     hang_timeout_secs(1),
     tracing("kithara_play=info")
 )]

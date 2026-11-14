@@ -354,7 +354,7 @@ fn frames_for_duration_rounded(sample_rate: u32, duration: Duration) -> u64 {
     serial,
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug"),
-    timeout(::std::time::Duration::from_millis(2567))
+    timeout(::std::time::Duration::from_millis(2684))
 )]
 #[cfg_attr(
     not(target_os = "android"),

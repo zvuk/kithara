@@ -62,6 +62,7 @@ kithara-warp = { workspace = true, default-features = false }
 kithara-worker = { workspace = true }
 
 arc-swap = { workspace = true }
+audioadapter = { workspace = true }
 audioadapter-buffers = { workspace = true }
 bevy_platform = { workspace = true }
 bon = { workspace = true }
@@ -71,6 +72,7 @@ fieldwork = { workspace = true }
 firewheel = { workspace = true }
 num-traits = { workspace = true }
 ringbuf = { workspace = true }
+smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 triple_buffer = { workspace = true }
@@ -85,8 +87,10 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 # own included — to `web-time` instead of the panicking `std` fallback.
 bevy_platform = { workspace = true, features = ["web"] }
 firewheel = { workspace = true, features = ["wasm-bindgen"] }
-firewheel-web-audio = { workspace = true }
+js-sys = { workspace = true }
 send_wrapper = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
 
 [dev-dependencies]
 kithara-assets = { workspace = true }

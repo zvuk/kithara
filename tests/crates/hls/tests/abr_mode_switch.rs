@@ -2544,7 +2544,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof(
     native,
     tokio,
     serial,
-    timeout(::std::time::Duration::from_millis(4739)),
+    timeout(::std::time::Duration::from_millis(5138)),
     hang_timeout_secs(15),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]

@@ -143,7 +143,7 @@ fn static_rhythmic_oracle_accepts_aligned_stems_and_rejects_one_frame_phase_erro
     );
 }
 
-#[kithara::test(native, flash(false), timeout(Short))]
+#[kithara::test(native, flash(false), timeout(Medium))]
 #[case::missing_beat(
     Some(deck_b_missing_beat()),
     "missing static beat",

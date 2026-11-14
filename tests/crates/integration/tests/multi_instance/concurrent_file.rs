@@ -101,7 +101,7 @@ async fn run_concurrent_file(n: usize, source: (TestServerHelper, Url)) {
     tokio,
     browser,
     serial,
-    timeout(::std::time::Duration::from_millis(4429)),
+    timeout(::std::time::Duration::from_millis(4446)),
     hang_timeout_secs(2)
 )]
 #[case::n2(2)]

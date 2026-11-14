@@ -1,6 +1,5 @@
 use std::num::NonZeroU32;
 
-use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_command::{Answer, Post, Seq};
 use kithara_config::ConfigOwner;
 use kithara_play::{
@@ -9,11 +8,12 @@ use kithara_play::{
 use tracing::{debug, trace, warn};
 
 use super::{
+    context::GraphError,
     protocol::{HostMailbox, SessionError, SessionSampleRate, StartStreamFn},
-    state::{SessionState, SessionStream},
+    state::{DeckNode, SessionState, SessionStream},
     transport::{self, RouteRestartStatus},
 };
-use crate::{DeckId, HostOwner, HostSettled, consts};
+use crate::{DeckId, HostOwner, HostSettled, consts, session::context::SessionGraph};
 
 pub(crate) fn run_host_cmd<S, O: HostOwner<S>>(
     owner: &mut O,
@@ -37,9 +37,19 @@ impl OwnerPosts {
         owner: &mut O,
         mailbox: &mut HostMailbox<O::Command>,
     ) {
+        if mailbox.is_empty() {
+            return;
+        }
+        let std::task::Poll::Ready(preparation) = owner.poll_output() else {
+            return;
+        };
         for Post { command, answer } in Self::take_posts(mailbox) {
             let releasing = O::release_id(&command);
-            match run_host_cmd(owner, command) {
+            let outcome = match &preparation {
+                Ok(()) => run_host_cmd(owner, command),
+                Err(error) => Err(error.clone()),
+            };
+            match outcome {
                 Ok(_) if releasing.is_some() => {
                     if let Some(id) = releasing {
                         self.closing.push((id, answer));
@@ -90,7 +100,7 @@ fn measured_stream_shape<T, S>(state: &SessionState<T, S>) -> Option<StreamShape
     state
         .ctx
         .as_ref()
-        .and_then(FirewheelContext::stream_info)
+        .and_then(|ctx| ctx.stream_info())
         .map(|info| StreamShape::new(info.max_block_frames, info.sample_rate))
 }
 
@@ -125,10 +135,11 @@ pub(crate) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Result<(), S
         }
     }
 
-    let update = state.ctx.as_mut().map(FirewheelContext::update);
+    let update = state.ctx.as_mut().map(SessionGraph::update);
     if let Some(Err(err)) = update {
         return Err(update_failed(&err));
     }
+    super::graph::flush_retired(state)?;
     if stream_died(state) {
         return restart_dead_stream(state);
     }
@@ -136,19 +147,22 @@ pub(crate) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Result<(), S
     Ok(())
 }
 
-fn update_failed(err: &UpdateError) -> SessionError {
+fn update_failed(err: &GraphError) -> SessionError {
     warn!(?err, "[KITHARA-ROUTE] firewheel update failed");
     SessionError::Graph(format!("{err:?}"))
 }
 
-/// An inactive context without a reserved stopped generation lost its stream.
-/// Firewheel returns the processor when it stops instead of reporting an update error.
+/// A returned stream is lost once transport reaches or passes its reserved generation.
+/// A planned pending restart is handled before this observation.
 pub(super) fn stream_died<T, S>(state: &SessionState<T, S>) -> bool {
     state.reserved_session_grid.is_none_or(|reserved| {
         state
             .transport_observation
             .as_ref()
-            .is_some_and(|observation| observation.output_buffer().session_grid() == reserved)
+            .is_some_and(|observation| {
+                let observed = observation.output_buffer().session_grid();
+                observed == reserved || observed.epoch() > reserved.epoch()
+            })
     }) && !state.stream_needs_restart
         && state.ctx.as_ref().is_some_and(|ctx| !ctx.is_active())
 }
@@ -182,6 +196,17 @@ pub(crate) fn invalidate_audio_route<T, S>(
         return Ok(());
     }
     state.stream_needs_restart = true;
+    #[cfg(target_arch = "wasm32")]
+    if state
+        .ctx
+        .as_ref()
+        .is_some_and(|ctx| ctx.output_starting() && ctx.output_ready().is_err())
+    {
+        state.stream = None;
+        if let Some(ctx) = &mut state.ctx {
+            ctx.acknowledge_output();
+        }
+    }
     restart_stream(state).map_err(|err| SessionError::RestartFailed {
         reason: reason.to_owned(),
         r#source: err.to_string(),
@@ -203,16 +228,55 @@ pub(super) fn restart_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(),
         return Err(SessionError::NoContext);
     }
     let sample_rate = state.settings.config().sample_rate().get();
+    #[cfg(target_arch = "wasm32")]
+    if let Some(ctx) = &mut state.ctx
+        && ctx.output_starting()
+        && ctx.requested_output_rate() == Some(sample_rate)
+    {
+        ctx.output_ready()
+            .map_err(|error| SessionError::StreamStart(error.to_string()))?;
+        let previous = state.stream.take();
+        let stream = start_stream(
+            &mut state.start_stream_fn,
+            ctx,
+            sample_rate,
+            &mut state.deck_nodes,
+            previous,
+        )?;
+        state.stream = Some(stream);
+        if !ctx
+            .output_ready()
+            .map_err(|error| SessionError::StreamStart(error.to_string()))?
+        {
+            return Ok(());
+        }
+        ctx.acknowledge_output();
+        state.stream_needs_restart = false;
+        state.publish_root();
+        return Ok(());
+    }
     debug!(sample_rate, "[KITHARA-ROUTE] restarting firewheel stream");
     if transport::prepare_route_restart(state)? == RouteRestartStatus::Pending {
         trace!("[KITHARA-ROUTE] waiting for the previous stream processor to stop");
         return Ok(());
     }
     let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-    let stream = start_stream(&mut state.start_stream_fn, fw_ctx, sample_rate)?;
+    let stream = start_stream(
+        &mut state.start_stream_fn,
+        fw_ctx,
+        sample_rate,
+        &mut state.deck_nodes,
+        None,
+    )?;
     state.stream = Some(stream);
-    state.reserved_session_grid = None;
-    state.stream_needs_restart = false;
+    #[cfg(target_arch = "wasm32")]
+    let starting = fw_ctx.output_starting();
+    #[cfg(not(target_arch = "wasm32"))]
+    let starting = false;
+    if !starting {
+        state.reserved_session_grid = None;
+    }
+    state.stream_needs_restart = starting;
     state.publish_root();
     trace_stream_info(state, "restart-stream");
     debug!(
@@ -228,16 +292,18 @@ pub(super) fn restart_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(),
 /// on it.
 pub(super) fn start_stream<T>(
     start: &mut StartStreamFn<T>,
-    ctx: &mut FirewheelContext,
+    ctx: &mut SessionGraph,
     sample_rate: u32,
+    decks: &mut [DeckNode],
+    previous: Option<SessionStream<T>>,
 ) -> Result<SessionStream<T>, SessionError> {
-    let stream = start(ctx, sample_rate).map_err(SessionError::StreamStart)?;
-    if let Some(info) = ctx.stream_info()
-        && info.sample_rate > consts::MAX_SAMPLE_RATE
+    let stream = start(ctx, sample_rate, decks, previous).map_err(SessionError::StreamStart)?;
+    if let Some(shape) = ctx.negotiated_shape()
+        && shape.sample_rate > consts::MAX_SAMPLE_RATE
     {
         return Err(SessionError::StreamStart(format!(
             "the output runs at {} Hz, above the {} Hz a session serves",
-            info.sample_rate,
+            shape.sample_rate,
             consts::MAX_SAMPLE_RATE
         )));
     }
@@ -245,7 +311,7 @@ pub(super) fn start_stream<T>(
 }
 
 pub(super) fn trace_stream_info<T, S>(state: &SessionState<T, S>, context: &'static str) {
-    if let Some(info) = state.ctx.as_ref().and_then(FirewheelContext::stream_info) {
+    if let Some(info) = state.ctx.as_ref().and_then(|ctx| ctx.stream_info()) {
         trace!(
             context,
             sample_rate = info.sample_rate.get(),

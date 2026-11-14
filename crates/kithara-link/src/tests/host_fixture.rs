@@ -308,6 +308,9 @@ impl HostSettingsExec<()> for ScriptedHost {
 impl HostOwner<TestPools> for ScriptedHost {
     type Command = HostCommand<TestPools, LinkedHostDeck<TestPools>>;
     type Deck = LinkedHostDeck<TestPools>;
+    fn poll_output(&mut self) -> std::task::Poll<Result<(), PlayError>> {
+        std::task::Poll::Ready(Ok(()))
+    }
     fn apply(&mut self, command: Self::Command) -> Result<Option<Seq>, PlayError> {
         match command {
             HostCommand::Register { id, deck } => self.register(id, deck).map(|()| None),
