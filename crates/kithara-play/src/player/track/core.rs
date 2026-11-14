@@ -193,10 +193,10 @@ impl<S> PlayerImpl<S> {
         out: &Outbox<'_, S>,
     ) -> Result<(), PlayError> {
         out.check_when(at)?;
-        if let When::At(_) = at {
-            if self.seat.attached_at().is_none() {
-                return Err(PlayError::Untimed);
-            }
+        if let When::At(_) = at
+            && self.seat.attached_at().is_none()
+        {
+            return Err(PlayError::Untimed);
         }
         Ok(())
     }

@@ -20,13 +20,13 @@ impl Deck {
         );
         self.programs.write(level, at, range.len());
         if let Some([left, right]) = input {
-            if self.programs.any_written() {
+            if self.programs.any_applied() {
                 self.render.finish_curves(left, right, &self.programs)?;
             } else {
                 self.render.finish(left, right)?;
             }
         } else {
-            self.render.advance(range.len(), &self.programs);
+            self.render.advance(range.len(), &self.programs)?;
             self.render.idle();
         }
         if let Some(last) = range.end.checked_sub(1) {

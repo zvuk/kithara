@@ -27,12 +27,14 @@ impl Default for SlotOutput {
 }
 
 impl SlotOutput {
-    pub(super) fn program(&self) -> Option<Seq> {
-        self.state.program.applied()
+    delegate::delegate! {
+        to self.state.program {
+            #[call(applied)]
+            pub(super) fn program(&self) -> Option<Seq>;
+            pub(super) fn active(&self) -> Option<Seq>;
+        }
     }
-    pub(super) fn active(&self) -> Option<Seq> {
-        self.state.program.active()
-    }
+
     pub(super) fn authority(&self) -> Option<Seq> {
         self.state.authority
     }
@@ -69,6 +71,7 @@ impl SlotOutput {
         }
     }
 
+    /// Multiply the combined post-effect PCM before the independent `TrackFade`.
     pub(super) fn apply(
         &mut self,
         curve: Option<&ParameterCurve>,

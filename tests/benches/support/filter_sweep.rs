@@ -69,7 +69,7 @@ async fn submit(harness: &OfflinePlayer, shape: CurveShape, frames: usize) {
     )
     .expect("prepared knob trajectory");
     harness
-        .with_queue(move |queue| queue.deck_program(program))
+        .with_queue(move |queue| queue.deck_programs(vec![program]))
         .await
         .expect("public curve submission");
 }

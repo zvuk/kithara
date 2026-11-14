@@ -70,7 +70,7 @@ async fn programmed_take(parameter: DeckParameter, callback: usize) -> Vec<f32> 
     )
     .expect("prepared native control program");
     harness
-        .with_queue(move |queue| queue.deck_program(program))
+        .with_queue(move |queue| queue.deck_programs(vec![program]))
         .await
         .expect("the mixer can apply a deck program to buffered slot PCM");
 
@@ -142,13 +142,13 @@ async fn public_deck_programs_admit_the_next_unrendered_frame_and_refuse_the_pre
     let past = program(SessionFrame::new(i64::from(frontier).saturating_sub(1)));
     assert!(matches!(
         harness
-            .with_queue(move |queue| queue.deck_program(past))
+            .with_queue(move |queue| queue.deck_programs(vec![past]))
             .await,
         Err(QueueError::Play(PlayError::Late))
     ));
     let due = program(frontier);
     harness
-        .with_queue(move |queue| queue.deck_program(due))
+        .with_queue(move |queue| queue.deck_programs(vec![due]))
         .await
         .expect("next unrendered frame needs no producer lead");
     assert_eq!(harness.render(1).await, [0.25; 2]);

@@ -24,8 +24,8 @@ use super::{
 };
 use crate::{
     bridge::{
-        DeckEvent, DeckMixSettings, DeckPart, DeckProtocol, DeckSnapshot, MixerInputs, RtMetrics,
-        SessionInbox, Slot, SlotSnapshot, SlotState,
+        DeckEvent, DeckPart, DeckProtocol, DeckSnapshot, MixerInputs, RtMetrics, SessionInbox,
+        Slot, SlotSnapshot, SlotState,
     },
     rt::{RenderPass, TrackSlots},
 };
@@ -51,7 +51,6 @@ pub(in crate::rt) struct Deck {
     pub(in crate::rt) recycle: Vec<usize>,
     pub(in crate::rt) declick_frames: usize,
     pub(in crate::rt) evict_frames: usize,
-    pub(in crate::rt) mix: DeckMixSettings,
     pub(in crate::rt) render: RenderPass,
     pub(in crate::rt) programs: DeckPrograms,
     events: HeapProd<DeckEvent>,
@@ -61,8 +60,21 @@ pub(in crate::rt) struct Deck {
     pub(in crate::rt) epoch: Option<SessionEpoch>,
 }
 
+pub(in crate::rt) struct PreparedDeck {
+    pub(in crate::rt) shape: StreamShape,
+    scratch: [SampleBuffer; crate::consts::MIN_STEREO],
+    tracks: TrackSlots,
+    armed: Vec<Option<Armed>>,
+    tails: Vec<SlotTail>,
+    held: Vec<Option<SegmentId>>,
+    recycle: Vec<usize>,
+    render: RenderPass,
+    programs: DeckPrograms,
+}
+
 impl<E: SessionInbox> DeckMixer<E> {
     /// Allocates every slot tail and the fixed render scratch before stream processing.
+    /// The scope snapshot is published by the first actual render.
     ///
     /// # Errors
     /// Returns a pool error if either scratch or any required tail cannot be allocated.
@@ -74,54 +86,87 @@ impl<E: SessionInbox> DeckMixer<E> {
     where
         S: HasPool<f32>,
     {
+        let prepared = Self::prepare(&inputs, shape, pools)?;
+        Ok(Self::assemble(inputs, prepared))
+    }
+
+    pub(in crate::rt) fn prepare<S>(
+        inputs: &MixerInputs,
+        shape: StreamShape,
+        pools: &PoolRegion<S>,
+    ) -> Result<PreparedDeck, PoolError>
+    where
+        S: HasPool<f32>,
+    {
+        let config = inputs.config;
+        let slots = config.slots();
+        let capacity = usize::try_from(shape.max_block_frames.get()).unwrap_or(usize::MAX);
+        let tail_frames = FrameCount::new(
+            config
+                .declick_frames(shape.sample_rate)
+                .get()
+                .max(config.evict_fade().get()),
+        );
+        Ok(PreparedDeck {
+            shape,
+            tails: (0..slots.get())
+                .map(|_| SlotTail::new(pools, tail_frames))
+                .collect::<Result<Vec<_>, _>>()?,
+            scratch: [
+                pools.get_with_len::<f32>(capacity)?,
+                pools.get_with_len::<f32>(capacity)?,
+            ],
+            render: RenderPass::new(pools, shape, config)?,
+            programs: DeckPrograms::new(
+                inputs.scope,
+                config.eq_bands(),
+                config.fx_units(),
+                capacity,
+            ),
+            tracks: TrackSlots::new(slots),
+            armed: vec![None; slots.get()],
+            held: vec![None; slots.get()],
+            recycle: vec![0; slots.get()],
+        })
+    }
+
+    pub(in crate::rt) fn assemble(inputs: MixerInputs, prepared: PreparedDeck) -> Self {
+        let shape = prepared.shape;
         let MixerInputs {
             scope,
             events,
             snapshot,
             config,
         } = inputs;
-        let slots = config.slots();
         let capacity = usize::try_from(shape.max_block_frames.get()).unwrap_or(usize::MAX);
         let declick_frames = config.declick_frames(shape.sample_rate).get();
         let evict_frames = config.evict_fade().get();
-        let tail_frames = FrameCount::new(declick_frames.max(evict_frames));
-        let tails = (0..slots.get())
-            .map(|_| SlotTail::new(pools, tail_frames))
-            .collect::<Result<Vec<_>, _>>()?;
-        let scratch = [
-            pools.get_with_len::<f32>(capacity)?,
-            pools.get_with_len::<f32>(capacity)?,
-        ];
-        let mix = config.mix();
-        let mut mixer = Self {
+        Self {
             scope,
             snapshot,
-            scratch,
+            scratch: prepared.scratch,
             capacity,
             blocks: 0,
             recycle_per_block: config.recycle_per_block().get(),
             retired: false,
             session: PhantomData,
             deck: Deck {
-                tracks: TrackSlots::new(slots),
-                armed: vec![None; slots.get()],
-                tails,
-                held: vec![None; slots.get()],
-                recycle: vec![0; slots.get()],
+                tracks: prepared.tracks,
+                armed: prepared.armed,
+                tails: prepared.tails,
+                held: prepared.held,
+                recycle: prepared.recycle,
                 declick_frames,
                 evict_frames,
-                render: RenderPass::new(pools, shape, config)?,
-                programs: DeckPrograms::new(scope, config.eq_bands(), config.fx_units(), capacity),
-                mix,
+                render: prepared.render,
+                programs: prepared.programs,
                 events,
                 metrics: RtMetrics::default(),
                 sample_rate: shape.sample_rate,
                 declick: config.declick(),
                 epoch: None,
             },
-        };
-        mixer.publish(SessionFrame::new(0));
-        Ok(mixer)
+        }
     }
 
     pub(in crate::rt) fn update_sample_rate(&mut self, rate: NonZeroU32) {
@@ -212,14 +257,15 @@ impl<E: SessionInbox> DeckMixer<E> {
         let mut sounded = false;
         if !self.retired {
             if let Some(mut level) = level {
-                sounded = match self.render_block_in(&mut level, context, start, buffers, frames) {
-                    Ok(sounded) => sounded,
-                    Err(_) => {
-                        for channel in buffers.outputs.iter_mut() {
-                            channel.fill(0.0);
-                        }
-                        false
+                sounded = if let Ok(sounded) =
+                    self.render_block_in(&mut level, context, start, buffers, frames)
+                {
+                    sounded
+                } else {
+                    for channel in buffers.outputs.iter_mut() {
+                        channel.fill(0.0);
                     }
+                    false
                 };
                 if level.is_closing() && self.deck.tails_quiet() {
                     self.deck.cancel_program_epoch(&mut level);

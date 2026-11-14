@@ -80,26 +80,24 @@ impl ParameterCurve {
         if knots.windows(2).any(|pair| pair[0].at >= pair[1].at) {
             return Err(ParameterCurveError::Order);
         }
-        let points = knots
-            .iter()
-            .enumerate()
-            .map(|(index, knot)| {
-                let duration = match knots.get(index.saturating_add(1)) {
-                    Some(next) => next
-                        .at
-                        .frames_since(knot.at)
-                        .and_then(NonZeroU64::new)
-                        .ok_or(ParameterCurveError::Order)?,
-                    None => NonZeroU64::MIN,
-                };
-                Ok(Point {
-                    at: knot.at,
-                    value: knot.value,
-                    shape: knot.shape,
-                    duration,
-                })
-            })
-            .collect::<Result<Vec<_>, ParameterCurveError>>()?;
+        let mut points: Vec<Point> = Vec::with_capacity(knots.len());
+        let mut knots = knots.into_iter().peekable();
+        while let Some(knot) = knots.next() {
+            let duration = match knots.peek() {
+                Some(next) => next
+                    .at
+                    .frames_since(knot.at)
+                    .and_then(NonZeroU64::new)
+                    .ok_or(ParameterCurveError::Order)?,
+                None => NonZeroU64::MIN,
+            };
+            points.push(Point {
+                at: knot.at,
+                value: knot.value,
+                shape: knot.shape,
+                duration,
+            });
+        }
         Ok(Self {
             knots: points.into_boxed_slice(),
         })

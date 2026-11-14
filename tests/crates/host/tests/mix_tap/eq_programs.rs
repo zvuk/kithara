@@ -81,7 +81,7 @@ async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] 
     )
     .expect("prepared EQ gain program");
     harness
-        .with_queue(move |queue| queue.deck_program(program))
+        .with_queue(move |queue| queue.deck_programs(vec![program]))
         .await
         .expect("public EQ control");
     assert_eq!(harness.deck_snapshot().eq.gain(0), Some(GainDb::DEFAULT));
@@ -106,7 +106,7 @@ async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] 
     )
     .expect("prepared late program");
     let late_result = harness
-        .with_queue(move |queue| queue.deck_program(late))
+        .with_queue(move |queue| queue.deck_programs(vec![late]))
         .await;
     assert!(
         matches!(late_result, Err(QueueError::Play(PlayError::Late))),
@@ -190,7 +190,7 @@ async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] 
     )
     .expect("prepared held curve");
     harness
-        .with_queue(move |queue| queue.deck_program(held))
+        .with_queue(move |queue| queue.deck_programs(vec![held]))
         .await
         .expect("reachable held curve");
     let _ = render_effect_window(&harness, 640).await;
@@ -233,7 +233,7 @@ async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] 
     .expect("prepared unavailable program");
     assert!(matches!(
         harness
-            .with_queue(move |queue| queue.deck_program(unavailable))
+            .with_queue(move |queue| queue.deck_programs(vec![unavailable]))
             .await,
         Err(QueueError::Play(PlayError::EqBandOutOfRange {
             band: 0,

@@ -1,6 +1,8 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
+use kithara_command::Seq;
+use kithara_config::LiveConfig;
 use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 use kithara_effects::{
     DeckEffect, FxParamChange, GainDb,
@@ -11,21 +13,20 @@ use num_traits::cast::AsPrimitive;
 
 use super::{command::DeckPrograms, processor::StreamShape};
 use crate::{
-    bridge::{DeckFxChange, DeckMixSettingsChange, DeckParameter, DeckPart, Returned},
+    bridge::{
+        CrossfaderGain, DeckFxChange, DeckMixSettings, DeckMixSettingsChange, DeckParameter,
+        DeckPart, Returned,
+    },
     consts::{FADE_CHUNK, GAIN_SPAN},
 };
 
 /// A deck's chain in Traktor's Insert order: trim, equaliser, FX units in
 /// series, the filter knob, then fader and crossfader.
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
 pub(crate) struct RenderPass {
-    /// Values most recently emitted by the control buffers, for the applied snapshot.
-    #[field(#[must_use] get(copy), vis = "pub(crate)")]
-    control_values: [f64; DeckParameter::CHANNELS],
-    /// The deck's trim, fader and crossfader, each ramped to its new target
-    /// from the frame it is set on.
-    controls: [SmoothedParam; DeckParameter::CHANNELS],
+    trim_value: f32,
+    mix: DeckMixSettings,
+    /// The deck's trim, ramped to each new target from the frame it is set on.
+    trim: SmoothedParam,
     control_buffers: [SampleBuffer; DeckParameter::CHANNELS],
     /// The deck's equaliser, after its trim.
     eq: StereoEq,
@@ -35,8 +36,10 @@ pub(crate) struct RenderPass {
     filter: FilterEffect,
     /// The wet signal of the unit running now.
     wet: [SampleBuffer; crate::consts::MIN_STEREO],
-    /// Mutes fader times crossfader after the units, so it cuts their tails too.
-    muted: bool,
+    /// Fader times crossfader after the units, cutting their tails; programmed factors stay outside its target.
+    output: SmoothedParam,
+    output_current: f32,
+    output_owners: [Option<Seq>; DeckParameter::CHANNELS],
     /// Set until the first range renders, which moves every ramp to its target at once.
     priming: bool,
 }
@@ -74,16 +77,12 @@ impl RenderPass {
         filter.configure(mix.filter());
         filter.reset();
         Ok(Self {
-            control_values: [
-                f64::from(f32::from(mix.trim())),
-                f64::from(f32::from(mix.volume())),
-                f64::from(f32::from(mix.crossfader())),
-            ],
-            controls: [
-                smoothed(f32::from(mix.trim()), shape.sample_rate),
-                smoothed(f32::from(mix.volume()), shape.sample_rate),
-                smoothed(f32::from(mix.crossfader()), shape.sample_rate),
-            ],
+            trim_value: f32::from(mix.trim()),
+            mix,
+            trim: smoothed(f32::from(mix.trim()), shape.sample_rate),
+            output: smoothed(mix.output_gain(), shape.sample_rate),
+            output_current: mix.output_gain(),
+            output_owners: [None; DeckParameter::CHANNELS],
             eq,
             units: (0..config.fx_units())
                 .map(|_| FxUnit {
@@ -102,7 +101,6 @@ impl RenderPass {
                 pools.get_with_len::<f32>(capacity)?,
                 pools.get_with_len::<f32>(capacity)?,
             ],
-            muted: mix.muted(),
             priming: true,
         })
     }
@@ -141,24 +139,16 @@ impl RenderPass {
         programs: Option<&DeckPrograms>,
     ) -> Result<(), GainShapeError> {
         let frames = left.len().min(right.len());
-        let controls = &mut self.control_buffers;
-        for (index, (control, output)) in self
-            .controls
-            .iter_mut()
-            .zip(controls.iter_mut())
-            .enumerate()
-        {
-            native_values(
-                control,
-                programs.and_then(|programs| programs.values(index, frames)),
-                &mut output[..frames],
-            );
-            if let Some(value) = output.get(frames.saturating_sub(1)) {
-                self.control_values[index] = f64::from(*value);
-            }
+        self.prepare_output(programs);
+        let trim_values =
+            programs.and_then(|rows| rows.values(DeckParameter::Trim.index(), frames));
+        let trim_state = trim_values.is_none().then_some(self.trim);
+        let trim = &mut self.control_buffers[DeckParameter::Trim.index()][..frames];
+        native_values(&mut self.trim, trim_values, trim);
+        if let Some(value) = trim.last() {
+            self.trim_value = *value;
         }
-        kithara_dsp::multiply_in_place(left, &controls[0][..frames]);
-        kithara_dsp::multiply_in_place(right, &controls[0][..frames]);
+        apply_gain(trim_state, left, right, trim);
         let gains = programs.map_or(&[][..], DeckPrograms::eq_values);
         self.eq.process_with_gains(left, right, gains)?;
         for unit in &mut self.units {
@@ -175,34 +165,92 @@ impl RenderPass {
                 .process(planes, 0..frames)
                 .expect("stereo planes");
         }
-        let [output, volume, crossfader] = controls;
-        output[..frames].copy_from_slice(&volume[..frames]);
-        kithara_dsp::multiply_in_place(&mut output[..frames], &volume[..frames]);
-        kithara_dsp::multiply_in_place(&mut output[..frames], &crossfader[..frames]);
-        if self.muted {
-            output[..frames].fill(0.0);
+        for parameter in [DeckParameter::Volume, DeckParameter::Crossfader] {
+            let index = parameter.index();
+            let value = match parameter {
+                DeckParameter::Volume => f32::from(self.mix.volume()),
+                _ => f32::from(self.mix.crossfader()),
+            };
+            let output = &mut self.control_buffers[index][..frames];
+            if self.output_owners[index].is_some() {
+                if let Some(values) = programs.and_then(|rows| rows.values(index, frames)) {
+                    kithara_dsp::narrow_f64(values, output);
+                } else {
+                    output.fill(value);
+                }
+                if let Some(value) = output.last() {
+                    let change = match parameter {
+                        DeckParameter::Volume => {
+                            Some(DeckMixSettingsChange::Volume((*value).into()))
+                        }
+                        _ => CrossfaderGain::checked(*value).map(DeckMixSettingsChange::Crossfader),
+                    };
+                    if let Some(change) = change {
+                        self.mix.apply_change(change);
+                    }
+                }
+            } else {
+                output.fill(1.0);
+            }
         }
-        kithara_dsp::multiply_in_place(left, &output[..frames]);
-        kithara_dsp::multiply_in_place(right, &output[..frames]);
+        let programmed = self.output_owners.iter().any(Option::is_some);
+        let state = (!programmed).then_some(self.output);
+        let [output, volume, crossfader] = &mut self.control_buffers;
+        let output = &mut output[..frames];
+        native_values(&mut self.output, None, output);
+        if self.output.has_settled() {
+            self.output_current = self.output.target_value();
+        } else if let Some(value) = output.last() {
+            self.output_current = *value;
+        }
+        if programmed {
+            kithara_dsp::multiply_squared_in_place(
+                output,
+                &volume[..frames],
+                &crossfader[..frames],
+            );
+        }
+        apply_gain(state, left, right, output);
         Ok(())
     }
 
-    pub(in crate::rt) fn advance(&mut self, frames: usize, programs: &DeckPrograms) {
-        for (index, control) in self.controls.iter_mut().enumerate() {
+    /// Move programs and the knob glide across frames that sounded nothing.
+    /// The filter holds no history then, so a program's last position is taken at once.
+    pub(in crate::rt) fn advance(
+        &mut self,
+        frames: usize,
+        programs: &DeckPrograms,
+    ) -> Result<(), GainShapeError> {
+        self.prepare_output(Some(programs));
+        for parameter in [
+            DeckParameter::Trim,
+            DeckParameter::Volume,
+            DeckParameter::Crossfader,
+        ] {
             if let Some(value) = programs
-                .values(index, frames)
-                .and_then(|values| values.last())
+                .values(parameter.index(), frames)
+                .and_then(<[f64]>::last)
             {
-                control.set_value(value.as_());
-                control.reset_to_target();
+                let value: f32 = value.as_();
+                match parameter {
+                    DeckParameter::Trim => {
+                        self.trim_value = value;
+                        self.trim.set_value(value);
+                        self.trim.reset_to_target();
+                    }
+                    DeckParameter::Volume => self
+                        .mix
+                        .apply_change(DeckMixSettingsChange::Volume(value.into())),
+                    _ => {
+                        if let Some(value) = CrossfaderGain::checked(value) {
+                            self.mix
+                                .apply_change(DeckMixSettingsChange::Crossfader(value));
+                        }
+                    }
+                }
             }
         }
-        for (band, values) in programs.eq_values().iter().enumerate() {
-            if let Some(value) = values.last() {
-                self.eq
-                    .set_gain_explicit(band, GainDb::from(AsPrimitive::<f32>::as_(*value)));
-            }
-        }
+        self.eq.advance_gains(programs.eq_values(), frames)?;
         let knobs = programs.values(DeckParameter::Filter.index(), frames);
         if let Some(value) = knobs.and_then(<[f64]>::last) {
             if let Some(knob) = FilterKnob::checked(*value) {
@@ -212,13 +260,14 @@ impl RenderPass {
         } else {
             self.filter.advance(frames);
         }
+        Ok(())
     }
 
     pub(crate) fn idle(&mut self) {
-        for (control, applied) in self.controls.iter_mut().zip(&mut self.control_values) {
-            control.reset_to_target();
-            *applied = f64::from(control.target_value());
-        }
+        self.trim.reset_to_target();
+        self.trim_value = self.trim.target_value();
+        self.output.reset_to_target();
+        self.output_current = self.output.target_value();
         for unit in &mut self.units {
             unit.mix.reset_to_target();
         }
@@ -237,18 +286,6 @@ impl RenderPass {
                             .as_ref()
                             .is_some_and(|effect| !effect.tail_exhausted()))
             })
-    }
-
-    pub(crate) fn set_mix(&mut self, change: DeckMixSettingsChange) {
-        match change {
-            DeckMixSettingsChange::Trim(value) => self.controls[0].set_value(f32::from(value)),
-            DeckMixSettingsChange::Volume(value) => self.controls[1].set_value(f32::from(value)),
-            DeckMixSettingsChange::Crossfader(value) => {
-                self.controls[2].set_value(f32::from(value))
-            }
-            DeckMixSettingsChange::Muted(value) => self.muted = value,
-            DeckMixSettingsChange::Filter(value) => self.filter.configure(value),
-        }
     }
 
     pub(crate) const fn fx_units(&self) -> usize {
@@ -333,9 +370,8 @@ impl RenderPass {
     /// Retune the deck's chain, with every effect its units hold, to
     /// `sample_rate`. A ramp in flight goes on toward its target at the new rate.
     pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        for control in &mut self.controls {
-            retune(control, sample_rate);
-        }
+        retune(&mut self.trim, sample_rate);
+        retune(&mut self.output, sample_rate);
         for unit in &mut self.units {
             retune(&mut unit.mix, sample_rate);
             if let Some(effect) = &mut unit.effect {
@@ -344,6 +380,72 @@ impl RenderPass {
         }
         self.eq.update_sample_rate(sample_rate);
         self.filter.update_sample_rate(sample_rate);
+    }
+    pub(crate) fn set_mix(&mut self, change: DeckMixSettingsChange) {
+        match change {
+            DeckMixSettingsChange::Volume(_) => self.release_output(DeckParameter::Volume),
+            DeckMixSettingsChange::Crossfader(_) => self.release_output(DeckParameter::Crossfader),
+            _ => {}
+        }
+        self.mix.apply_change(change);
+        match change {
+            DeckMixSettingsChange::Trim(value) => self.trim.set_value(f32::from(value)),
+            DeckMixSettingsChange::Filter(value) => self.set_filter_knob(value),
+            _ => {}
+        }
+        self.output
+            .set_value(output_target(self.mix, self.output_owners));
+    }
+
+    #[must_use]
+    pub(crate) fn control_values(&self) -> [f64; DeckParameter::CHANNELS] {
+        [
+            f64::from(self.trim_value),
+            f64::from(f32::from(self.mix.volume())),
+            f64::from(f32::from(self.mix.crossfader())),
+        ]
+    }
+
+    fn release_output(&mut self, parameter: DeckParameter) {
+        if self.output_owners[parameter.index()].take().is_none() {
+            return;
+        }
+        let (volume, cross) = if parameter == DeckParameter::Volume {
+            (f32::from(self.mix.volume()), 1.0)
+        } else {
+            (1.0, f32::from(self.mix.crossfader()))
+        };
+        let mut current = [self.output_current];
+        kithara_dsp::multiply_squared_in_place(&mut current, &[volume], &[cross]);
+        self.output.set_value(current[0]);
+        self.output.reset_to_target();
+        self.output_current = current[0];
+    }
+
+    /// Program entry snaps the remainder to manual targets; release folds held factors.
+    fn prepare_output(&mut self, programs: Option<&DeckPrograms>) {
+        let mut owners = [None; DeckParameter::CHANNELS];
+        for parameter in [DeckParameter::Volume, DeckParameter::Crossfader] {
+            owners[parameter.index()] = programs.and_then(|programs| programs.owner(parameter));
+        }
+        let target = output_target(self.mix, owners);
+        let entering = owners
+            .iter()
+            .zip(&self.output_owners)
+            .any(|(new, old)| new.is_some() && new != old);
+        if entering {
+            self.output.set_value(target);
+            self.output.reset_to_target();
+            self.output_current = target;
+        } else {
+            for parameter in [DeckParameter::Volume, DeckParameter::Crossfader] {
+                if owners[parameter.index()].is_none() {
+                    self.release_output(parameter);
+                }
+            }
+        }
+        self.output.set_value(target);
+        self.output_owners = owners;
     }
 }
 
@@ -416,6 +518,33 @@ fn ramp(mix: &mut SmoothedParam, mixes: &mut [f32], keeps: &mut [f32]) -> usize 
         .map_or(frames, |settled| settled + 1)
 }
 
+fn output_target(mix: DeckMixSettings, owners: [Option<Seq>; DeckParameter::CHANNELS]) -> f32 {
+    let mut remainder = mix;
+    if owners[DeckParameter::Volume.index()].is_some() {
+        remainder.apply_change(DeckMixSettingsChange::Volume(
+            kithara_signal::FaderValue::DEFAULT,
+        ));
+    }
+    if owners[DeckParameter::Crossfader.index()].is_some() {
+        remainder.apply_change(DeckMixSettingsChange::Crossfader(CrossfaderGain::DEFAULT));
+    }
+    remainder.output_gain()
+}
+
+fn apply_gain(state: Option<SmoothedParam>, left: &mut [f32], right: &mut [f32], gains: &[f32]) {
+    if state.is_some_and(|gain| gain.has_settled_at(1.0)) {
+        return;
+    }
+    let frames = left.len().min(right.len()).min(gains.len());
+    if let Some(gain) = state.filter(SmoothedParam::has_settled) {
+        kithara_dsp::scale_in_place(&mut left[..frames], gain.target_value());
+        kithara_dsp::scale_in_place(&mut right[..frames], gain.target_value());
+    } else {
+        kithara_dsp::multiply_in_place(left, gains);
+        kithara_dsp::multiply_in_place(right, gains);
+    }
+}
+
 fn smoothed(value: f32, sample_rate: NonZeroU32) -> SmoothedParam {
     SmoothedParam::new(value, GAIN_SPAN, SmootherConfig::default(), sample_rate)
 }
@@ -464,9 +593,9 @@ mod tests {
     fn apply_gain(gain: &mut SmoothedParam, left: &mut [f32], right: &mut [f32]) {
         let frames = left.len().min(right.len());
         let mut values = vec![0.0; frames];
+        let state = *gain;
         native_values(gain, None, &mut values);
-        kithara_dsp::multiply_in_place(&mut left[..frames], &values);
-        kithara_dsp::multiply_in_place(&mut right[..frames], &values);
+        super::apply_gain(Some(state), left, right, &values);
     }
 
     #[kithara::test]
@@ -618,7 +747,9 @@ mod tests {
         ])
         .expect("gain programme");
         let (mut sender, _) = kithara_command::scoped_channel::<DeckProtocol, DeckProtocol>(
-            kithara_command::ScopedConfig::builder().build(),
+            kithara_command::ScopedConfig::builder()
+                .scope(kithara_command::ChannelConfig::builder().targets(1).build())
+                .build(),
         );
         let scope = sender.open(1).expect("scope");
         let mut programs = DeckPrograms::new(scope, 1, 2, 4);
@@ -632,6 +763,93 @@ mod tests {
         let mut gains = [GainDb::DEFAULT];
         assert_eq!(render.read_eq(&mut gains), 1);
         assert_eq!(gains[0], GainDb::MAX);
+    }
+
+    #[kithara::test]
+    fn manual_output_keeps_the_main_combined_amplitude_ramp() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let mut render = RenderPass::new(
+            &pools(),
+            StreamShape::new(NonZeroU32::new(16).expect("block"), rate),
+            DeckMixerConfig::builder().eq_bands(0).build(),
+        )
+        .expect("chain");
+        let volume = kithara_signal::FaderValue::checked(0.5).expect("volume");
+        let crossfader = CrossfaderGain::checked(0.5).expect("crossfader");
+        let mix = DeckMixSettings::builder()
+            .volume(volume)
+            .crossfader(crossfader)
+            .build();
+        let mut reference = smoothed(1.0, rate);
+        reference.set_value(mix.output_gain());
+        let expected: [f32; 16] = std::array::from_fn(|_| 0.5 * reference.next_smoothed());
+        render.set_mix(DeckMixSettingsChange::Volume(volume));
+        render.set_mix(DeckMixSettingsChange::Crossfader(crossfader));
+        let (mut left, mut right) = ([0.5; 16], [0.5; 16]);
+        render.finish(&mut left, &mut right).expect("manual PCM");
+        assert_eq!(left.map(f32::to_bits), expected.map(f32::to_bits));
+        assert_eq!(right.map(f32::to_bits), expected.map(f32::to_bits));
+    }
+
+    #[kithara::test]
+    fn quiet_eq_program_keeps_each_gain_application_without_advancing_filter_history() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let config = DeckMixerConfig::builder().eq_bands(2).build();
+        let shape = StreamShape::new(NonZeroU32::new(3).expect("three frames"), rate);
+        let mut actual = RenderPass::new(&pools(), shape, config).expect("actual chain");
+        let mut reference = RenderPass::new(&pools(), shape, config).expect("reference chain");
+        for render in [&mut actual, &mut reference] {
+            render.set_eq_gain(1, GainDb::from(-6.0));
+        }
+        let (mut sender, _inbox) = kithara_command::scoped_channel::<DeckProtocol, DeckProtocol>(
+            kithara_command::ScopedConfig::builder()
+                .scope(kithara_command::ChannelConfig::builder().targets(1).build())
+                .build(),
+        );
+        let scope = sender.open(1).expect("scope");
+        let start = SessionFrame::new(0);
+        let curve = ParameterCurve::new(
+            [0.0, -6.0, 0.0]
+                .into_iter()
+                .enumerate()
+                .map(|(frame, value)| {
+                    ParameterKnot::new(
+                        SessionFrame::new(i64::try_from(frame).expect("frame")),
+                        value,
+                        kithara_dsp::curve::CurveShape::HOLD,
+                    )
+                    .expect("gain knot")
+                })
+                .collect(),
+        )
+        .expect("prepared gain program");
+        let mut programs = DeckPrograms::new(scope, 2, config.fx_units(), 3);
+        programs.write_curve(DeckParameter::eq_index(0), &curve, start, 3);
+        actual.advance(3, &programs).expect("quiet gain rows");
+        actual.idle();
+        for value in [0.0, -6.0, 0.0] {
+            reference
+                .eq
+                .advance_gains(&[[value]], 1)
+                .expect("one explicit gain frame");
+        }
+        reference.idle();
+        let (mut actual_left, mut actual_right) = ([0.5; 3], [-0.25; 3]);
+        let (mut reference_left, mut reference_right) = (actual_left, actual_right);
+        actual
+            .finish(&mut actual_left, &mut actual_right)
+            .expect("actual PCM");
+        reference
+            .finish(&mut reference_left, &mut reference_right)
+            .expect("reference PCM");
+        assert_eq!(
+            actual_left.map(f32::to_bits),
+            reference_left.map(f32::to_bits)
+        );
+        assert_eq!(
+            actual_right.map(f32::to_bits),
+            reference_right.map(f32::to_bits)
+        );
     }
 
     /// A ramp a sample-rate change catches goes on toward its target at the

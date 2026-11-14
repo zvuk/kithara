@@ -3,17 +3,18 @@
 use std::{
     f64::consts::{FRAC_1_SQRT_2, TAU},
     hint::black_box,
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
 };
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::{
+    curve::CurveShape,
     filter::{Biquad, Coefficients, Hertz, Response, StateVariableFilter, Type},
     interp::{Interpolation, interpolate, interpolate_frame, weighted_frames},
     spectrum::{Autocorrelation, Fft, FftLen, prediction_difference},
 };
 use kithara_test_utils::bufpool::pools;
-use num_traits::ToPrimitive;
+use num_traits::{AsPrimitive, ToPrimitive};
 use realfft::{RealToComplex, RealToComplexEven};
 
 mod consts {
@@ -132,6 +133,169 @@ fn vector(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("sum_squares", size), &size, |b, _| {
             b.iter(|| kithara_dsp::sum_squares(black_box(&samples)));
         });
+    }
+    group.finish();
+}
+
+fn curve(c: &mut Criterion) {
+    for (name, shape) in [
+        ("hold", CurveShape::HOLD),
+        ("linear", CurveShape::LINEAR),
+        (
+            "cubic",
+            CurveShape::cubic(0.2, 0.6).expect("ordered handles"),
+        ),
+    ] {
+        let mut group = c.benchmark_group(format!("curve_{name}"));
+        for frames in [128_u32, 512] {
+            let positions: Vec<_> = (0..frames)
+                .map(|frame| f64::from(frame) / f64::from(frames - 1))
+                .collect();
+            for native in [true, false] {
+                group.bench_with_input(
+                    BenchmarkId::new(if native { "native" } else { "scalar" }, frames),
+                    &positions,
+                    |b, positions| {
+                        b.iter_batched_ref(
+                            || positions.clone(),
+                            |values| {
+                                if native {
+                                    shape.process(black_box(values), black_box([0.75, 0.25]));
+                                } else {
+                                    scalar_curve(name, black_box(values), black_box([0.75, 0.25]));
+                                }
+                            },
+                            BatchSize::SmallInput,
+                        );
+                    },
+                );
+            }
+        }
+        group.finish();
+    }
+}
+
+fn scalar_curve(shape: &str, values: &mut [f64], [left, right]: [f64; 2]) {
+    let write = |time: f64, progress: f64| {
+        if time >= 1.0 {
+            right
+        } else if time <= 0.0 || left == right || progress == 0.0 {
+            left
+        } else if progress == 1.0 {
+            right
+        } else {
+            left + (right - left) * progress
+        }
+    };
+    match shape {
+        "hold" => {
+            for value in values {
+                *value = write(*value, 0.0);
+            }
+        }
+        "linear" => {
+            for value in values {
+                *value = write(*value, *value);
+            }
+        }
+        "cubic" => {
+            for value in values {
+                let time = *value;
+                let remaining = 1.0 - time;
+                let a = 3.0 * remaining * remaining * time * 0.2;
+                let b = 3.0 * remaining * time * time * 0.6;
+                *value = write(time, ((a + b) + time * time * time).clamp(0.0, 1.0));
+            }
+        }
+        _ => unreachable!("registered curve"),
+    }
+}
+
+fn ratio_ramp(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ratio_ramp");
+    for frames in [128, 512] {
+        let mut output = vec![0.0; frames];
+        for native in [true, false] {
+            group.bench_function(
+                BenchmarkId::new(if native { "native" } else { "scalar" }, frames),
+                |b| {
+                    b.iter(|| {
+                        let output = black_box(&mut output);
+                        let first = black_box((1_u64 << 25) + 3);
+                        let divisor = black_box(NonZeroU64::new(997).expect("positive"));
+                        if native {
+                            kithara_dsp::ratio_ramp(output, first, divisor);
+                        } else {
+                            let divisor: f64 = divisor.get().as_();
+                            for (index, value) in output.iter_mut().enumerate() {
+                                let numerator: f64 = first.saturating_add(index.as_()).as_();
+                                *value = numerator / divisor;
+                            }
+                        }
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+fn narrow_f64(c: &mut Criterion) {
+    let mut group = c.benchmark_group("narrow_f64");
+    for frames in [128, 512] {
+        let input: Vec<_> = tone(frames).into_iter().map(f64::from).collect();
+        let mut output = vec![0.0; frames];
+        for native in [true, false] {
+            group.bench_function(
+                BenchmarkId::new(if native { "native" } else { "scalar" }, frames),
+                |b| {
+                    b.iter(|| {
+                        let (input, output) = (black_box(&input), black_box(&mut output));
+                        if native {
+                            kithara_dsp::narrow_f64(input, output);
+                        } else {
+                            for (value, input) in output.iter_mut().zip(input) {
+                                *value = input.as_();
+                            }
+                        }
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+fn multiply_squared(c: &mut Criterion) {
+    let mut group = c.benchmark_group("multiply_squared_in_place");
+    for frames in [128, 512] {
+        let input = tone(frames);
+        let square = vec![0.7; frames];
+        let gains = vec![0.3; frames];
+        for native in [true, false] {
+            group.bench_function(
+                BenchmarkId::new(if native { "native" } else { "scalar" }, frames),
+                |b| {
+                    b.iter_batched_ref(
+                        || input.clone(),
+                        |output| {
+                            let (output, square, gains) =
+                                (black_box(output), black_box(&square), black_box(&gains));
+                            if native {
+                                kithara_dsp::multiply_squared_in_place(output, square, gains);
+                            } else {
+                                for ((value, square), gain) in
+                                    output.iter_mut().zip(square).zip(gains)
+                                {
+                                    *value = (*value * (square * square)) * gain;
+                                }
+                            }
+                        },
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -544,6 +708,10 @@ criterion_group!(
     crossfade,
     kernels,
     vector,
+    curve,
+    ratio_ramp,
+    narrow_f64,
+    multiply_squared,
     downmix,
     biquad,
     biquad_decay,

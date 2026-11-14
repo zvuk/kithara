@@ -190,15 +190,15 @@ impl<'a, S> Outbox<'a, S> {
         };
         let pass = self.pass.ok_or(PlayError::NotReady)?;
         let epoch = pass.deck.epoch.ok_or(PlayError::NotReady)?;
-        let mut parts = Vec::with_capacity(programs.len());
+        let mut parts: Vec<DeckPart> = Vec::with_capacity(programs.len());
         for program in programs {
-            if let crate::DeckParameter::EqBand { band, .. } = program.parameter() {
-                if band >= pass.deck.eq.bands() {
-                    return Err(PlayError::EqBandOutOfRange {
-                        band,
-                        bands: pass.deck.eq.bands(),
-                    });
-                }
+            if let crate::DeckParameter::EqBand { band, .. } = program.parameter()
+                && band >= pass.deck.eq.bands()
+            {
+                return Err(PlayError::EqBandOutOfRange {
+                    band,
+                    bands: pass.deck.eq.bands(),
+                });
             }
             let field = pass
                 .deck

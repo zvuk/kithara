@@ -409,6 +409,7 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for Lin
 
     delegate::delegate! {
         to self.inner {
+            fn poll_output(&mut self) -> std::task::Poll<Result<(), PlayError>>;
             fn each_deck(
                 &mut self,
                 visit: &mut dyn FnMut(DeckId, &mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),

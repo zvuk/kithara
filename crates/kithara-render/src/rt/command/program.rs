@@ -37,6 +37,12 @@ impl DeckPrograms {
             .any(|field| field.program.active() == Some(seq))
     }
 
+    pub(in crate::rt) fn owner(&self, parameter: DeckParameter) -> Option<Seq> {
+        self.fields
+            .get(parameter.index())
+            .and_then(|field| field.program.applied())
+    }
+
     pub(in crate::rt) fn begin(&mut self, parameter: DeckParameter, seq: Seq) {
         if let Some(field) = self.fields.get_mut(parameter.index()) {
             field.begin(seq);
@@ -52,11 +58,10 @@ impl DeckPrograms {
     ) {
         if let (Some(field), Some(values)) =
             (self.fields.get_mut(index), self.values.get_mut(index))
+            && frames <= values.capacity()
         {
-            if frames <= values.capacity() {
-                values.resize(frames, 0.0);
-                field.write(curve, at, values);
-            }
+            values.resize(frames, 0.0);
+            field.write(curve, at, values);
         }
     }
 
@@ -83,8 +88,10 @@ impl DeckPrograms {
         }
     }
 
-    pub(in crate::rt) fn any_written(&self) -> bool {
-        self.values.iter().any(|values| !values.is_empty())
+    pub(in crate::rt) fn any_applied(&self) -> bool {
+        self.fields
+            .iter()
+            .any(|field| field.program.applied().is_some())
     }
 
     pub(in crate::rt) fn values(&self, index: usize, frames: usize) -> Option<&[f64]> {
@@ -216,12 +223,12 @@ impl Deck {
         at: SessionFrame,
     ) -> Result<(), DeckRefusal> {
         for part in commands {
-            if let DeckPart::Program { program, .. } = part {
-                if program.start() != at {
-                    return Err(DeckRefusal::ProgramClock {
-                        parameter: program.parameter(),
-                    });
-                }
+            if let DeckPart::Program { program, .. } = part
+                && program.start() != at
+            {
+                return Err(DeckRefusal::ProgramClock {
+                    parameter: program.parameter(),
+                });
             }
         }
         Ok(())
@@ -244,13 +251,12 @@ impl Deck {
             if !matches!(part, DeckPart::Program { .. }) {
                 field.authority = Some(due.seq());
             }
-            if let Some(seq) = previous {
-                if due
+            if let Some(seq) = previous
+                && due
                     .committed_mut(seq)
                     .is_some_and(|commands| self.output_finished(commands, seq))
-                {
-                    due.complete(seq, ());
-                }
+            {
+                due.complete(seq, ());
             }
         }
         match part {

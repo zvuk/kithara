@@ -16,12 +16,6 @@ where
         self.call(QueueCommand::GainProgram { item, program })
     }
 
-    /// Submit a prepared gain trajectory for one control of this deck.
-    /// # Errors
-    /// Refuses unavailable/full control delivery; the owner checks layout and clock identity.
-    pub fn deck_program(&self, program: DeckProgram) -> Result<(), QueueError> {
-        self.deck_programs(vec![program])
-    }
     /// Submit programs together; a refusal changes none of the addressed controls.
     /// # Errors
     /// Returns preparation or delivery refusal from the deck owner.

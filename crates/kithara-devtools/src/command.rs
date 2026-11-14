@@ -52,6 +52,8 @@ pub enum CoreCommand {
     Semver(semver::SemverArgs),
     /// Run workspace tests through `cargo nextest`.
     Test(test::TestArgs),
+    /// Compare nextest test identities across a package split.
+    TestCensus(test::CensusArgs),
     /// Execute or independently verify a repeated-test evidence run.
     Stress {
         #[command(subcommand)]
@@ -93,6 +95,7 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         CoreCommand::Scope(args) => scope::run(args),
         CoreCommand::Semver(args) => semver::run(args, ctx),
         CoreCommand::Test(args) => test::run(args, ctx),
+        CoreCommand::TestCensus(args) => test::census(args),
         CoreCommand::Stress { command } => stress::run(command, ctx),
         CoreCommand::Health(args) => health::run(args, ctx),
         CoreCommand::CiReport(args) => ci_report::run(args, ctx),

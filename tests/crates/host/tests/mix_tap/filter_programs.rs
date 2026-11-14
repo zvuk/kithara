@@ -135,7 +135,7 @@ async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u
     let curve = harness.host().position() + 529 + phase;
     let manual = curve + 129;
     harness
-        .with_queue(move |queue| queue.deck_program(s_program(curve, 512, -0.2, -0.8)))
+        .with_queue(move |queue| queue.deck_programs(vec![s_program(curve, 512, -0.2, -0.8)]))
         .await
         .expect("public S-shaped program");
     harness
@@ -144,13 +144,13 @@ async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u
         .expect("public manual takeover");
     let stale = s_program(curve + 256, 64, 1.0, 1.0);
     harness
-        .with_queue(move |queue| queue.deck_program(stale))
+        .with_queue(move |queue| queue.deck_programs(vec![stale]))
         .await
         .expect("stale request is queued before manual authority applies");
     let late = s_program(start, 64, 0.5, 0.5);
     assert!(matches!(
         harness
-            .with_queue(move |queue| queue.deck_program(late))
+            .with_queue(move |queue| queue.deck_programs(vec![late]))
             .await,
         Err(QueueError::Play(PlayError::Late))
     ));
@@ -254,7 +254,7 @@ async fn filter_tail_and_programme_outlive_source_eof_and_close_while_owned() {
     let source_end = source_start + 4410;
     let curve = harness.host().position() + 529;
     harness
-        .with_queue(move |queue| queue.deck_program(s_program(curve, 4096, -0.2, -0.8)))
+        .with_queue(move |queue| queue.deck_programs(vec![s_program(curve, 4096, -0.2, -0.8)]))
         .await
         .expect("public programme");
     let drained = render_effect_window(&harness, 8192).await;
@@ -300,7 +300,7 @@ async fn filter_tail_and_programme_outlive_source_eof_and_close_while_owned() {
     assert!(snapshot.filter.program().is_some());
     let future = harness.host().position() + 529;
     harness
-        .with_queue(move |queue| queue.deck_program(s_program(future, 8192, -0.8, -0.8)))
+        .with_queue(move |queue| queue.deck_programs(vec![s_program(future, 8192, -0.8, -0.8)]))
         .await
         .expect("programme on empty deck");
     let empty = render_effect_window(&harness, 640).await;

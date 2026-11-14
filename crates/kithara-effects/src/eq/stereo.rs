@@ -57,6 +57,14 @@ impl EqLayout {
         self.right.set_explicit(band, gain_db);
     }
 
+    fn apply_gains(&mut self, gains: &[impl AsRef<[f64]>], frame: usize) {
+        for (band, values) in gains.iter().enumerate() {
+            if let Some(value) = values.as_ref().get(frame) {
+                self.set_explicit(band, GainDb::from(AsPrimitive::<f32>::as_(*value)));
+            }
+        }
+    }
+
     delegate::delegate! {
         to self.left {
             /// Number of bands prepared in this layout.
@@ -191,13 +199,6 @@ impl StereoEq {
                 .is_some_and(|layout| band < layout.band_count())
     }
 
-    /// Apply one admitted trajectory value without manual-target smoothing.
-    pub fn set_gain_explicit(&mut self, band: usize, gain_db: GainDb) {
-        if let Some(layout) = self.active.as_mut() {
-            layout.set_explicit(band, gain_db);
-        }
-    }
-
     /// Retunes every layout this EQ holds, and its crossover, to `sample_rate`.
     pub fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.sample_rate = sample_rate;
@@ -223,24 +224,31 @@ impl StereoEq {
     /// Apply one prepared dB row per band; an empty row leaves that band under manual control.
     /// # Errors
     /// Refuses a nonempty row whose length differs from the common channel prefix, before mutation.
-    pub fn process_with_gains(
+    pub fn process_with_gains<G: AsRef<[f64]>>(
         &mut self,
         left: &mut [f32],
         right: &mut [f32],
-        gains: &[impl AsRef<[f64]>],
+        gains: &[G],
     ) -> Result<(), GainShapeError> {
-        let expected = left.len().min(right.len());
-        for (band, values) in gains.iter().enumerate() {
-            let actual = values.as_ref().len();
-            if actual != 0 && actual != expected {
-                return Err(GainShapeError {
-                    band,
-                    expected,
-                    actual,
-                });
+        validate_gains(gains, left.len().min(right.len()))?;
+        self.process_gains(left, right, gains);
+        Ok(())
+    }
+
+    /// Apply gain values for silent frames without advancing filter or crossover history.
+    /// # Errors
+    /// Refuses a nonempty row whose length differs from `frames`, before mutation.
+    pub fn advance_gains<G: AsRef<[f64]>>(
+        &mut self,
+        gains: &[G],
+        frames: usize,
+    ) -> Result<(), GainShapeError> {
+        validate_gains(gains, frames)?;
+        if let Some(active) = self.active.as_deref_mut() {
+            for frame in 0..frames {
+                active.apply_gains(gains, frame);
             }
         }
-        self.process_gains(left, right, gains);
         Ok(())
     }
 
@@ -276,6 +284,20 @@ impl StereoEq {
     }
 }
 
+fn validate_gains(gains: &[impl AsRef<[f64]>], expected: usize) -> Result<(), GainShapeError> {
+    for (band, values) in gains.iter().enumerate() {
+        let actual = values.as_ref().len();
+        if actual != 0 && actual != expected {
+            return Err(GainShapeError {
+                band,
+                expected,
+                actual,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn render_stereo(
     active: &mut EqLayout,
     mut retiring: Option<&mut EqLayout>,
@@ -285,11 +307,7 @@ fn render_stereo(
     gains: &[impl AsRef<[f64]>],
 ) {
     for (frame, (left, right)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
-        for (band, values) in gains.iter().enumerate() {
-            if let Some(value) = values.as_ref().get(frame) {
-                active.set_explicit(band, GainDb::from(AsPrimitive::<f32>::as_(*value)));
-            }
-        }
+        active.apply_gains(gains, frame);
         let (dry_left, dry_right) = (*left, *right);
         let mut wet_left = [active.left.process_sample(dry_left)];
         let mut wet_right = [active.right.process_sample(dry_right)];

@@ -1,5 +1,4 @@
 use kithara_command::{Due, Seq, Target};
-use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_signal::{SegmentId, SessionFrame};
 #[cfg(feature = "usdt")]
@@ -12,9 +11,7 @@ use super::{
     },
     state::*,
 };
-use crate::bridge::{
-    DeckEqChange, DeckMixSettingsChange, DeckPart, DeckProtocol, Fade, Returned, Slot,
-};
+use crate::bridge::{DeckEqChange, DeckPart, DeckProtocol, Fade, Returned, Slot};
 
 impl Deck {
     pub(in crate::rt) fn apply(
@@ -75,12 +72,7 @@ impl Deck {
                 Some(DeckPart::Clock { slot, clock })
             }
             DeckPart::Mix(change) => {
-                self.mix.apply_change(change);
-                if let DeckMixSettingsChange::Filter(knob) = change {
-                    self.render.set_filter_knob(knob);
-                } else {
-                    self.render.set_mix(change);
-                }
+                self.render.set_mix(change);
                 Some(DeckPart::Mix(change))
             }
             DeckPart::Eq(DeckEqChange::Gain { band, gain }) => {

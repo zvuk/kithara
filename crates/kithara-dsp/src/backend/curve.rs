@@ -59,6 +59,8 @@ fn write_with<S: Simd>(
         let value = progress.simd_eq(one).select(end, interpolated);
         let value = (time.simd_le(zero) | progress.simd_eq(zero)).select(origin, value);
         let value = time.simd_ge(one).select(end, value);
-        chunk.copy_from_slice(&value.as_slice()[..chunk.len()]);
+        if let Some(values) = value.as_slice().get(..chunk.len()) {
+            chunk.copy_from_slice(values);
+        }
     }
 }

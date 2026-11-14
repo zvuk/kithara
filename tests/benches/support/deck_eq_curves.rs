@@ -56,7 +56,7 @@ async fn submit(harness: &OfflinePlayer, shape: CurveShape, frames: usize) {
     )
     .expect("EQ curve");
     harness
-        .with_queue(move |queue| queue.deck_program(program))
+        .with_queue(move |queue| queue.deck_programs(vec![program]))
         .await
         .expect("curve submission");
 }
