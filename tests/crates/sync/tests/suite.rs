@@ -3,6 +3,7 @@
 
 use kithara_test_dylib as _;
 
+mod progressive_continuity;
 #[cfg(not(target_arch = "wasm32"))]
 mod providers;
 mod sync_fixture_census;

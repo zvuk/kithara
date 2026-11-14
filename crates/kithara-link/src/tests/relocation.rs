@@ -1,8 +1,8 @@
 use kithara_beat::BeatGridModel;
 use kithara_command::{Rejection, Seq, When};
 use kithara_play::{
-    CrossfadeSettings, FadeDir, HostedDeck, PlayError, Player, Settled, Track, TrackCommand,
-    TrackStatus,
+    CrossfadeSettings, FadeDir, HostedDeck, PlayError, Player, Position, Settled, Track,
+    TrackCommand, TrackStatus,
 };
 use kithara_signal::{ExponentialApproach, FrameCount, SessionFrame};
 use kithara_sync::SpeedCurve;
@@ -13,6 +13,13 @@ use super::fixtures::{
     synced, trajectory,
 };
 use crate::{LinkedPlayer, SyncStatus};
+
+fn unity_alignment(seq: Seq, to: Position, at: SessionFrame) -> [(Seq, Command); 2] {
+    [
+        (seq, Command::Speed(SpeedCurve::Constant(1.0), When::At(at))),
+        (seq, Command::Jump(to, at)),
+    ]
+}
 
 /// A final grid of a track with no beats, as a silent recording gets.
 fn final_grid_without_beats() -> BeatGridModel {
@@ -67,7 +74,7 @@ fn aligned_seek_uses_the_committed_host_tempo_at_its_landing() {
             (
                 seq,
                 Command::Jump(
-                    kithara_play::Position::from_nanos(4_860_694_444),
+                    Position::from_nanos(4_860_694_444),
                     SessionFrame::new(400_000)
                 )
             )
@@ -191,7 +198,7 @@ fn aligned_seek_preserves_playback_until_its_receipt() {
         .expect("jump sequence");
     assert_eq!(
         control.commands(),
-        [(seq, Command::Jump(position(0), SessionFrame::new(96_000)))]
+        unity_alignment(seq, position(0), SessionFrame::new(96_000))
     );
     assert_eq!(deck.snapshot().as_ref().position, before.as_ref().position);
     assert_eq!(deck.snapshot().as_ref().status, before.as_ref().status);
@@ -217,10 +224,7 @@ fn aligned_seek_respects_lane_lead_and_refusal_keeps_the_pending_jump() {
         .expect("seek")
         .expect("pending jump");
     let at = SessionFrame::new(96_480);
-    assert_eq!(
-        control.commands(),
-        [(seq, Command::Jump(position(480), at))]
-    );
+    assert_eq!(control.commands(), unity_alignment(seq, position(480), at));
     control.edit(|script| script.reject = Some(PlayError::Full("lane")));
     assert!(matches!(
         rig.run(|out| deck.apply(
@@ -231,7 +235,7 @@ fn aligned_seek_respects_lane_lead_and_refusal_keeps_the_pending_jump() {
         )),
         Err(PlayError::Full("lane"))
     ));
-    assert_eq!(control.commands().len(), 1);
+    assert_eq!(control.commands().len(), 2);
     rig.apply(&mut deck, seq, 96_480);
     assert_eq!(deck.snapshot().as_ref().position, position(480));
 }
@@ -285,10 +289,10 @@ fn aligned_seek_waits_for_a_grid_covering_its_cue() {
     assert!(control.commands().is_empty());
     answer(&mut deck, &mut rig, grid(24_000, 0, None, 480_000));
     let commands = control.commands();
-    assert_eq!(commands.len(), 1);
+    assert_eq!(commands.len(), 2);
     assert_eq!(
-        commands[0].1,
-        Command::Jump(position(288_128), SessionFrame::new(128))
+        commands,
+        unity_alignment(commands[0].0, position(288_128), SessionFrame::new(128))
     );
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
     assert_eq!(deck.snapshot().as_ref().position, position(0));
@@ -469,7 +473,7 @@ fn synchronized_transport_intercepts_seek_and_resume_but_admits_pause() {
         .expect("jump");
     assert_eq!(
         control.commands(),
-        [(jump, Command::Jump(position(128), SessionFrame::new(128)))]
+        unity_alignment(jump, position(128), SessionFrame::new(128))
     );
     let pause = rig
         .run(|out| deck.apply(TrackCommand::Pause { at: When::Next }, out))
@@ -593,7 +597,7 @@ fn rejected_jump_keeps_active_playback_and_cannot_be_resurrected() {
         .expect("jump");
     assert_eq!(
         control.commands(),
-        [(seq, Command::Jump(position(0), SessionFrame::new(96_000)))]
+        unity_alignment(seq, position(0), SessionFrame::new(96_000))
     );
     assert!(matches!(
         rig.settle(
@@ -615,6 +619,14 @@ fn rejected_jump_keeps_active_playback_and_cannot_be_resurrected() {
         Settled::Pending
     ));
     assert_eq!(deck.snapshot().as_ref().position, before.as_ref().position);
+    control.clear();
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert!(
+        control.commands().is_empty(),
+        "a refused manual seek cannot be resurrected by its speed receipt"
+    );
+    assert_eq!(deck.snapshot().as_ref().position, before.as_ref().position);
+    assert_eq!(deck.snapshot().as_ref().status, before.as_ref().status);
 }
 
 #[kithara::test]
@@ -653,7 +665,7 @@ fn a_capacity_rejection_drops_the_relocation_and_keeps_the_applied_map() {
         .expect("jump");
     assert_eq!(
         control.commands(),
-        [(seq, Command::Jump(position(0), SessionFrame::new(96_000)))]
+        unity_alignment(seq, position(0), SessionFrame::new(96_000))
     );
 }
 
@@ -727,10 +739,7 @@ fn a_relocation_starts_on_the_exact_cue_and_keeps_the_applied_map() {
     assert_ne!(relocation, loading);
     assert_eq!(
         control.commands(),
-        [(
-            relocation,
-            Command::Jump(position(0), SessionFrame::new(96_000))
-        )]
+        unity_alignment(relocation, position(0), SessionFrame::new(96_000))
     );
     assert_eq!(deck.snapshot().as_ref().position, before.as_ref().position);
     assert_eq!(deck.snapshot().as_ref().status, before.as_ref().status);
@@ -761,17 +770,14 @@ fn a_relocation_starts_no_earlier_than_the_frame_after_its_frontier() {
         .expect("jump");
     assert_eq!(
         control.commands(),
-        [(
-            relocation,
-            Command::Jump(position(1), SessionFrame::new(96_001))
-        )]
+        unity_alignment(relocation, position(1), SessionFrame::new(96_001))
     );
     control.edit(|script| script.reject = Some(PlayError::Late));
     assert!(matches!(
         rig.run(|out| deck.apply(TrackCommand::Seek { to: position(0) }, out)),
         Err(PlayError::Late)
     ));
-    assert_eq!(control.commands().len(), 1);
+    assert_eq!(control.commands().len(), 2);
     assert!(
         matches!(rig.apply(&mut deck, relocation, 96_001), Settled::Applied { seq, .. } if seq == relocation)
     );
@@ -788,10 +794,7 @@ fn an_applied_member_refuses_a_destructive_transport() {
         .expect("jump");
     assert_eq!(
         control.commands(),
-        [(
-            relocation,
-            Command::Jump(position(128), SessionFrame::new(128))
-        )]
+        unity_alignment(relocation, position(128), SessionFrame::new(128))
     );
     assert_eq!(deck.snapshot().as_ref().position, before.as_ref().position);
     assert_eq!(deck.snapshot().as_ref().status, before.as_ref().status);
@@ -799,8 +802,8 @@ fn an_applied_member_refuses_a_destructive_transport() {
         .run(|out| deck.apply(TrackCommand::Pause { at: When::Next }, out))
         .expect("ordinary pause")
         .expect("pause sequence");
-    assert_eq!(control.commands()[1], (pause, Command::Pause(When::Next)));
-    assert_eq!(control.commands().len(), 2);
+    assert_eq!(control.commands()[2], (pause, Command::Pause(When::Next)));
+    assert_eq!(control.commands().len(), 3);
 }
 
 #[kithara::test]
@@ -844,10 +847,7 @@ fn a_tempo_commit_withdraws_the_relocation_and_retargets_under_a_new_operation()
         .expect("jump sequence");
     assert_eq!(
         control.commands(),
-        [(
-            relocation,
-            Command::Jump(position(208_000), SessionFrame::new(400_000))
-        )]
+        unity_alignment(relocation, position(208_000), SessionFrame::new(400_000))
     );
     let mut host = trajectory(120.0, 4);
     host.push(
@@ -857,14 +857,14 @@ fn a_tempo_commit_withdraws_the_relocation_and_retargets_under_a_new_operation()
     .expect("step");
     rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[SessionFrame::new(96_000)], out));
     let commands = control.commands();
-    assert_eq!(commands.len(), 2);
-    assert_ne!(commands[1].0, relocation);
+    assert_eq!(commands.len(), 3);
+    assert_ne!(commands[2].0, relocation);
     assert!(
-        matches!(commands[1].1, Command::Speed(_, When::At(frame)) if frame == SessionFrame::new(96_000))
+        matches!(commands[2].1, Command::Speed(_, When::At(frame)) if frame == SessionFrame::new(96_000))
     );
     assert_eq!(deck.snapshot().as_ref().position, before.as_ref().position);
     assert_eq!(deck.snapshot().as_ref().status, before.as_ref().status);
-    rig.apply(&mut deck, commands[1].0, 96_000);
+    rig.apply(&mut deck, commands[2].0, 96_000);
     assert_eq!(deck.snapshot().as_ref().position, before.as_ref().position);
     assert!(
         matches!(rig.apply(&mut deck, relocation, 400_000), Settled::Applied { seq, .. } if seq == relocation)

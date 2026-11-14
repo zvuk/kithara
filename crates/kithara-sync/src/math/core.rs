@@ -35,31 +35,27 @@ pub enum SlewCause {
     /// A tempo command: the slew starts at the new reference speed and closes
     /// the phase at any size.
     Commanded,
-    /// Phase drift: the slew ramps from the deck's speed and closes the phase
-    /// up to a limit.
+    /// Phase drift: the slew ramps from the deck's current speed.
     Drift {
         /// Speed the deck plays at when the slew starts.
         from: f64,
-        /// Largest phase, in beats, the slew closes.
-        limit: f32,
     },
 }
 
 /// How a sounding deck closes its source beat phase.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Slew {
-    /// Bounded speed steps close the phase.
-    Closes {
+    /// Bounded speed steps correct phase within the planned window.
+    Corrects {
         /// Speed law from the correction start.
         curve: SpeedCurve,
-        /// Frames from the correction start to the closed phase.
+        /// Frames from the correction start to the end of this correction window.
         frames: u64,
         /// How far the law follows the source grid.
         coverage: Coverage,
     },
-    /// The drift is over its limit, or the slew needs source beats past the
-    /// grid's end: the deck relocates.
-    Relocate,
+    /// The planned window needs source geometry that is not available yet.
+    Uncovered,
 }
 
 /// Whether a position lies inside the grid's inclusive observed beat span.
@@ -123,8 +119,6 @@ pub fn speed_curve(
 
 /// What a slew starts from at its frame.
 struct SlewStart {
-    /// Source seconds per Host beat at the position.
-    local: f64,
     /// Speed that holds the Host tempo at the position.
     reference: f64,
     /// Speed steps from the slew's start speed to the reference.
@@ -133,8 +127,7 @@ struct SlewStart {
     error: PhaseError,
 }
 
-/// Plans the slew that replaces the remaining correction and closes source
-/// beat phase from `at`, `horizon` output frames past the closed phase;
+/// Plans bounded speed correction from `at`, renewing long corrections after `horizon` frames;
 /// `None` when the grid has no speed law there.
 #[must_use]
 pub fn slew(
@@ -147,11 +140,6 @@ pub fn slew(
     horizon: u64,
 ) -> Option<Slew> {
     let start = slew_start(host, grid, position, at, epsilon, cause)?;
-    if let SlewCause::Drift { limit, .. } = cause
-        && drift_phase(grid, position, &start)?.abs() > f64::from(limit)
-    {
-        return Some(Slew::Relocate);
-    }
     let span = Span {
         start: at,
         landing: None,
@@ -160,8 +148,7 @@ pub fn slew(
     close_slew(host, grid, position, span, epsilon, cause, &start)
 }
 
-/// The speed law that closes the phase from `start`, or a relocation when it
-/// needs source beats past the grid.
+/// The speed law correcting phase from `start` within its source geometry.
 fn close_slew(
     host: &TempoTrajectory,
     grid: &SourceGrid,
@@ -185,12 +172,12 @@ fn close_slew(
         epsilon,
     };
     match source::curve(host, grid, position, span, &offsets, Some(&correction)) {
-        Ok((curve, frames, coverage)) => Some(Slew::Closes {
+        Ok((curve, frames, coverage)) => Some(Slew::Corrects {
             curve,
             frames,
             coverage,
         }),
-        Err(CurveError::PastGrid) => Some(Slew::Relocate),
+        Err(CurveError::PastGrid) => Some(Slew::Uncovered),
         Err(CurveError::NoLaw) => None,
     }
 }
@@ -210,30 +197,10 @@ fn slew_start(
         SlewCause::Drift { from, .. } => from,
     };
     Some(SlewStart {
-        local,
         reference,
         plan: checked_correction(from, reference, epsilon)?,
         error: phase_error(host, grid, position, at)?,
     })
-}
-
-/// Source beats ahead of the Host a drift slew closes: the standing error, to
-/// the nearest bar when both sides count the same bar, plus what the speed
-/// ramp accrues before the closing starts.
-fn drift_phase(grid: &SourceGrid, position: Duration, start: &SlewStart) -> Option<f64> {
-    let ramp: f64 = start
-        .plan
-        .steps
-        .iter()
-        .map(|step| (step.speed - start.reference) * step.seconds)
-        .sum();
-    let (_, stride, _) = grid.phase_axes(position.as_secs_f64())?;
-    let bar = if stride == start.error.period {
-        stride
-    } else {
-        1.0
-    };
-    Some(start.error.wrapped(bar) + ramp / start.local)
 }
 
 /// The nearest in-phase entry on the requested side of a frame.

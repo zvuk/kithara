@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroU128};
 
 use kithara_command::{Seq, When};
-use kithara_config::LiveConfig;
+use kithara_config::{ConfigOwner, LiveConfig};
 use kithara_render::{
     LaneCommand, LaneFrame,
     bridge::{DeckPart, SlotMark},
@@ -41,15 +41,7 @@ impl<S> Track<S> for PlayerImpl<S> {
     }
 
     fn projected(&self) -> TrackSettings {
-        let mut settings = self.settings.projected();
-        if let Some((_, target)) = self
-            .loading
-            .as_ref()
-            .and_then(|loading| loading.speed.as_ref())
-        {
-            settings.apply_change(TrackSettingsChange::Speed(*target));
-        }
-        settings
+        self.projected_settings()
     }
 
     fn prepared_speed(&self) -> Option<&SpeedCurve> {
@@ -314,6 +306,30 @@ impl<S> Track<S> for PlayerImpl<S> {
 }
 
 impl<S> PlayerImpl<S> {
+    pub(super) fn projected_settings(&self) -> TrackSettings {
+        let mut operations = self.lane_history.projected(self.lane.as_ref());
+        operations.sort_unstable_by_key(|operation| operation.seq);
+        let mut pending: Vec<_> = self.settings.pending().collect();
+        pending.sort_by_key(|&(seq, when, _)| (when, seq));
+        let mut settings = *self.settings.config();
+        for (seq, _, change) in pending {
+            if operations
+                .binary_search_by_key(&seq, |operation| operation.seq)
+                .is_ok()
+            {
+                settings.apply_change(change);
+            }
+        }
+        if let Some((_, target)) = self
+            .loading
+            .as_ref()
+            .and_then(|loading| loading.speed.as_ref())
+        {
+            settings.apply_change(TrackSettingsChange::Speed(*target));
+        }
+        settings
+    }
+
     pub(super) fn consumed_speed(&self) -> Result<f32, PlayError> {
         let frame = match self
             .resume
@@ -391,10 +407,8 @@ impl<S> PlayerImpl<S> {
     ) -> Result<Vec<(u64, Seq, PlannedChange<'_>)>, PlayError> {
         let mut commands: Vec<(u64, Seq, PlannedChange<'_>)> =
             Vec::with_capacity(self.lane_history.commands.len());
-        for operation in &self.lane_history.commands {
-            if operation.applied() == Some(false) {
-                continue;
-            }
+        let operations = self.lane_history.projected(self.lane.as_ref());
+        for operation in &operations {
             let frame = match &operation.command {
                 LaneCommand::Segment { id, .. } if *id == segment => 0,
                 _ => match operation.when {
@@ -422,7 +436,7 @@ impl<S> PlayerImpl<S> {
                     let landing = frame
                         .checked_add(self.geometry.declick.get() as u64)
                         .ok_or(PlayError::Untimed)?;
-                    let superseded = self.lane_history.commands.iter().any(|next| next.seq != operation.seq && next.applied() != Some(false)
+                    let superseded = operations.iter().any(|next| next.seq != operation.seq
                         && matches!(next.command, LaneCommand::Jump { .. })
                         && matches!(next.when, When::At(at) if at.segment == segment && (at.frame > frame || at.frame == frame && next.seq > operation.seq) && at.frame < landing));
                     if !superseded {

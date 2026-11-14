@@ -120,7 +120,10 @@ impl<S> PlayWorker<S> {
             .build();
         let dispatcher = base.dispatcher(dispatcher_config);
         Self(Arc::new(WorkerOwner {
-            lane: ChannelConfig::builder().capacity(lane_capacity).build(),
+            lane: ChannelConfig::builder()
+                .capacity(lane_capacity)
+                .targets(1)
+                .build(),
             capacity,
             dispatcher,
             pools,

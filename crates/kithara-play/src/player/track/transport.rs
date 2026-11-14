@@ -87,7 +87,7 @@ impl<S> PlayerImpl<S> {
         let to = self.raw_position(to)?;
         let change = TrackSettings::check(TrackSettingsChange::Speed(check_curve(&mut speed)?))?;
         let when = self.jump_when(at, out)?;
-        let seq = self.send_lane_batch(
+        let seq = self.send_speed_programme(
             vec![LaneCommand::SetSpeed(speed), LaneCommand::Jump { to }],
             when,
         )?;
@@ -380,7 +380,7 @@ impl<S> PlayerImpl<S> {
             }
             return self.segment_with(self.speed_position()?, None, speed, out);
         }
-        let seq = self.send_lane(LaneCommand::SetSpeed(speed), when)?;
+        let seq = self.send_speed_programme(vec![LaneCommand::SetSpeed(speed)], when)?;
         self.settings
             .track(seq, when, TrackSettingsChange::Speed(target));
         Ok(Some(seq))

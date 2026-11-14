@@ -219,6 +219,25 @@ impl ScriptedTrack {
         }
         Ok(sent)
     }
+
+    fn prepare_source(&mut self, sent: Option<Seq>) {
+        self.lane_commands.retain(|(seq, _, _)| Some(*seq) == sent);
+        self.control.edit(|script| {
+            for (seq, commands, current) in &mut script.pending {
+                if commands
+                    .iter()
+                    .any(|command| matches!(command, Command::Play(_)))
+                    || (Some(*seq) != sent
+                        && commands
+                            .iter()
+                            .any(|command| matches!(command, Command::Seek(_))))
+                {
+                    *current = false;
+                }
+            }
+            script.snapshot.pending_lane = true;
+        });
+    }
 }
 
 impl Player<TestPools> for ScriptedTrack {
@@ -244,6 +263,14 @@ impl Player<TestPools> for ScriptedTrack {
         command: Self::Command,
         _out: &mut Outbox<'_, TestPools>,
     ) -> Result<Option<Seq>, PlayError> {
+        let held_speed = match &command {
+            TrackCommand::Seek { .. }
+                if !matches!(self.snapshot().status, TrackStatus::Playing { .. }) =>
+            {
+                Some(SpeedCurve::Constant(self.projected().speed()))
+            }
+            _ => None,
+        };
         let command = match command {
             TrackCommand::Align { to, speed, at } => {
                 return self.send(vec![
@@ -292,6 +319,9 @@ impl Player<TestPools> for ScriptedTrack {
                     script.snapshot.position = position;
                 }
             });
+        } else if let (Some(seq), Some(speed)) = (sent, held_speed) {
+            self.lane_commands.push((seq, speed, When::Next));
+            self.prepare_source(sent);
         }
         Ok(sent)
     }
@@ -500,22 +530,7 @@ impl Track<TestPools> for ScriptedTrack {
             Command::Speed(speed, When::Next),
             Command::Seek(position),
         ])?;
-        self.lane_commands.retain(|(seq, _, _)| Some(*seq) == sent);
-        self.control.edit(|script| {
-            for (seq, commands, current) in &mut script.pending {
-                if commands
-                    .iter()
-                    .any(|command| matches!(command, Command::Play(_)))
-                    || (Some(*seq) != sent
-                        && commands
-                            .iter()
-                            .any(|command| matches!(command, Command::Seek(_))))
-                {
-                    *current = false;
-                }
-            }
-            script.snapshot.pending_lane = true;
-        });
+        self.prepare_source(sent);
         Ok(sent)
     }
 }

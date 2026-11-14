@@ -1,6 +1,6 @@
 use std::task::Waker;
 
-use kithara_beat::BeatGridModel;
+use kithara_beat::{BeatGridModel, BeatGridState};
 use kithara_command::{Rejection, Seq, When};
 use kithara_play::{
     Bound, DeckControl, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, Player, Position,
@@ -26,7 +26,9 @@ fn resolves(waiting: Waiting, grid: &BeatGridModel, required: Position) -> bool 
             place(grid, Cue::Covered(required), PastEnd::LastBeat),
             Placement::Wait
         ),
-        Waiting::Load { .. } | Waiting::Sync { .. } => covers(grid.geometry(), required),
+        Waiting::Load { .. } | Waiting::Sync { .. } | Waiting::Align { .. } => {
+            covers(grid.geometry(), required)
+        }
     }
 }
 
@@ -75,7 +77,7 @@ impl<P> Linked<P> {
         }
 
         let required = match waiting {
-            Waiting::Play { .. } | Waiting::Sync { .. } => {
+            Waiting::Play { .. } | Waiting::Sync { .. } | Waiting::Align { .. } => {
                 cue_position(self.inner.snapshot().as_ref())
             }
             Waiting::Load { .. } | Waiting::Seek { .. } => waiting.required(),
@@ -88,6 +90,8 @@ impl<P> Linked<P> {
         {
             if let Waiting::Sync { .. } = waiting {
                 self.waiting = Some(Waiting::Sync { required });
+            } else if let Waiting::Align { .. } = waiting {
+                self.waiting = Some(Waiting::Align { required });
             }
             return;
         }
@@ -131,8 +135,19 @@ impl<P> Linked<P> {
         match waiting {
             Waiting::Play { at, .. } => self.apply(TrackCommand::Play { at }, out),
             Waiting::Seek { required } => self.reissue_seek(required, out),
-            Waiting::Sync { .. } if self.synced() => self.enter_sync(out),
-            Waiting::Load { .. } | Waiting::Sync { .. } => Ok(None),
+            Waiting::Sync { .. } if self.synced() => {
+                if matches!(
+                    self.inner.snapshot().as_ref().status,
+                    TrackStatus::Playing { .. }
+                ) {
+                    let at = self.earliest(out)?;
+                    self.correct(at, Cause::Drift, out)
+                } else {
+                    self.enter_sync(out)
+                }
+            }
+            Waiting::Align { .. } if self.synced() => self.align(out),
+            Waiting::Load { .. } | Waiting::Sync { .. } | Waiting::Align { .. } => Ok(None),
         }
     }
 
@@ -160,11 +175,13 @@ impl<P> Linked<P> {
         P: Track<S>,
     {
         let sent = self.dispatch_seek(to, out)?;
-        if let (Some(relocation), Some(batch)) = (&mut self.relocation, sent) {
-            relocation.sent = Some(match batch {
-                SeekBatch::Lane(seq) => Reissued::Lane(seq),
-                SeekBatch::Deck(seq) => Reissued::Deck { seq, applied: None },
+        if let Some(batch) = sent {
+            let relocation = self.relocation.get_or_insert_with(|| Relocation {
+                caller: batch.seq(),
+                required: to,
+                sent: None,
             });
+            relocation.sent = Some(batch.into());
         }
         Ok(sent.map(SeekBatch::seq))
     }
@@ -210,7 +227,15 @@ impl<P> Linked<P> {
     where
         P: Track<S>,
     {
-        self.mode = SyncMode::Unsyncable;
+        self.mode = if self
+            .grid
+            .as_ref()
+            .is_some_and(|grid| matches!(grid.as_raw().state, BeatGridState::Provisional))
+        {
+            SyncMode::NoGrid
+        } else {
+            SyncMode::Unsyncable
+        };
         self.cue = None;
         self.alignment = None;
         self.plan_end = None;
@@ -231,6 +256,7 @@ impl<P> Linked<P> {
                 self.mode = SyncMode::On;
                 let required = cue_position(track.as_ref());
                 self.waiting.get_or_insert(Waiting::Sync { required });
+                self.resume_wait(out);
             }
             SyncMode::On if playing && self.waiting.is_none() => {
                 self.alignment = Some(Cause::Drift);
@@ -554,9 +580,14 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
         to: Position,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<SeekBatch>, PlayError> {
-        self.relocation = None;
+        let sent = self.dispatch_seek(to, out)?;
         self.paused_in_place = false;
-        self.dispatch_seek(to, out)
+        self.relocation = sent.map(|batch| Relocation {
+            caller: batch.seq(),
+            required: to,
+            sent: Some(batch.into()),
+        });
+        Ok(sent)
     }
 
     fn seek_applied(&mut self, seq: Seq) -> Option<bool> {
@@ -565,12 +596,16 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
             Some(Relocation {
                 caller,
                 sent: Some(Reissued::Lane(sent)),
+                ..
             }) if caller == seq => self.inner.seek_applied(sent),
             Some(Relocation {
                 caller,
                 sent: Some(Reissued::Deck { applied, .. }),
+                ..
             }) if caller == seq => applied,
-            Some(Relocation { caller, sent: None }) if caller == seq => {
+            Some(Relocation {
+                caller, sent: None, ..
+            }) if caller == seq => {
                 if matches!(self.waiting, Some(Waiting::Seek { .. })) {
                     None
                 } else {

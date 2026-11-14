@@ -11,11 +11,11 @@ use kithara_test_utils::kithara;
 use super::{
     fixtures::{
         A_THIRD_OF_A_BEAT_BEHIND, Command, NEAR_THE_COVERED_END, deck as new_deck, grid, jumps,
-        loaded, ordinary, position, sound, sounding, synced, trajectory,
+        loaded, ordinary, position, provisional, sound, sounding, synced, trajectory,
     },
     host_fixture::{Host, Probe, finish, host, next_tempo, register, register_ordinary, tempo},
 };
-use crate::{GridAnswer, LinkedHostCommand, LinkedPlayer, SyncStatus};
+use crate::{GridAnswer, LinkConfig, LinkedHostCommand, LinkedHostDeck, LinkedPlayer, SyncStatus};
 
 fn beats(probe: &Probe, frame: i64) -> f64 {
     f64::from(probe.trajectory().beat_at(SessionFrame::new(frame)))
@@ -205,6 +205,73 @@ fn registration_projects_the_canonical_member_grid() {
 }
 
 #[kithara::test]
+fn a_later_grid_recovers_sync_at_the_tempo_changed_while_the_grid_was_unsupported() {
+    let (mut host, clock) = host();
+    let (deck, control, _, _) = sounding();
+    let (id, probe) = register(&mut host, deck, &control);
+    let item = probe.read(|observation| observation.snapshot.as_ref().item);
+    host.apply(LinkedHostCommand::Grid {
+        deck: id,
+        answer: GridAnswer {
+            item,
+            model: Ok(provisional(&grid(120_000, 0, None, 960_000))),
+        },
+    })
+    .expect("the provisional grid reaches its owner");
+    probe.read(|observation| assert_eq!(observation.snapshot.sync, SyncStatus::Unsyncable));
+    assert!(control.commands().is_empty());
+    probe.clear();
+
+    let change = tempo(&mut host, 110.0, 48_000)
+        .expect("the Host accepts a tempo while the grid is unsupported")
+        .expect("tempo sequence");
+    clock.answer(change, 110.0, Ok(SessionFrame::new(48_000)));
+    assert!(matches!(
+        finish(&mut host).as_slice(),
+        [HostSettled::Settings { seq, outcome: Ok(_), .. }] if *seq == change
+    ));
+    assert!(
+        control.commands().is_empty(),
+        "an unsyncable deck gets no tempo fanout"
+    );
+    probe.read(|observation| assert!(observation.trajectories.is_empty()));
+
+    clock.at(96_000);
+    host.begin_pass();
+    host.apply(LinkedHostCommand::Grid {
+        deck: id,
+        answer: GridAnswer {
+            item,
+            model: Ok(grid(24_000, 0, Some((4, 0)), 960_000)),
+        },
+    })
+    .expect("the later usable grid reaches its owner");
+    let commands = control.commands();
+    let [(_, Command::Speed(curve, When::At(at)))] = commands.as_slice() else {
+        panic!("recovery must send only a timed speed law: {commands:?}");
+    };
+    assert_eq!(*at, SessionFrame::new(96_128));
+    let first = match curve {
+        SpeedCurve::Constant(speed) => f64::from(*speed),
+        SpeedCurve::Approach(law) => law.initial(),
+        SpeedCurve::ApproachSteps(laws) => laws.first().expect("recovery speed law").1.initial(),
+        other => panic!("recovery must preserve an analytic speed law: {other:?}"),
+    };
+    assert!(
+        (1.0 - f64::from(LinkConfig::default().epsilon())..1.0).contains(&first),
+        "recovery must start slowing toward 110/120, not retain the stale 120 BPM: {first}"
+    );
+    probe.read(|observation| assert_eq!(observation.snapshot.sync, SyncStatus::On));
+    host.with_deck(id, &mut |member, _, _| {
+        let LinkedHostDeck::Linked(deck) = member else {
+            panic!("the registered deck stays linked");
+        };
+        assert!(deck.synced(), "the good grid restores Host tempo fanout");
+    })
+    .expect("registered deck");
+}
+
+#[kithara::test]
 fn route_axis_reanchors_at_the_observed_stop_beat() {
     let (mut host, clock) = host();
     let (deck, control) = new_deck(trajectory(120.0, 4));
@@ -344,32 +411,27 @@ fn an_observation_cannot_replace_geometry_without_a_new_route_axis() {
     assert_eq!(beats(&observed, 48_000), 2.0);
 }
 
-/// A tempo action moves a sounding deck once, onto the host's bar, when a
-/// slew cannot close its phase, and keeps a slew for every frame of a deck
-/// already in phase.
 #[kithara::test]
 #[case::off_the_beat_near_the_covered_end(
     480_000,
     NEAR_THE_COVERED_END,
     A_THIRD_OF_A_BEAT_BEHIND,
     477_000,
-    476_000,
-    true
+    476_000
 )]
-#[case::in_phase(960_000, 0, 0, 96_000, 48_000, false)]
-fn a_tempo_action_moves_a_deck_once_only_past_what_a_slew_closes(
+#[case::in_phase(960_000, 0, 0, 96_000, 48_000)]
+fn a_tempo_action_corrects_speed_without_relocating_audio(
     #[case] covered: u32,
     #[case] now: u32,
     #[case] at: u32,
     #[case] later: i64,
     #[case] step: i64,
-    #[case] moves: bool,
 ) {
     let (mut host, clock) = host();
     clock.at(i64::from(now));
     let (deck, control, mut rig, _) = synced(grid(24_000, 0, Some((4, 0)), covered));
     sound(&control, &mut rig, now, at);
-    let (_, probe) = register(&mut host, deck, &control);
+    let _ = register(&mut host, deck, &control);
     let committed = tempo(&mut host, 120.5, later)
         .expect("later tempo")
         .expect("later sequence");
@@ -380,25 +442,14 @@ fn a_tempo_action_moves_a_deck_once_only_past_what_a_slew_closes(
         .expect("tempo")
         .expect("sequence");
     let commands = control.commands();
-    if moves {
-        let landings = jumps(&control);
-        let [(to, at)] = landings.as_slice() else {
-            panic!("one jump: {commands:?}");
-        };
-        let bar = (to.as_secs_f64() * 2.0 - beats(&probe, i64::from(*at))).rem_euclid(4.0);
-        assert!(
-            bar.min(4.0 - bar) < 1e-3,
-            "{to:?} on {at:?} lands {bar} beats off the host bar: {commands:?}"
-        );
-    } else {
-        assert_eq!(commands.len(), 2, "{commands:?}");
-        assert!(
-            commands
-                .iter()
-                .all(|(_, command)| matches!(command, Command::Speed(..))),
-            "{commands:?}"
-        );
-    }
+    assert_eq!(commands.len(), 2, "{commands:?}");
+    assert!(
+        commands
+            .iter()
+            .all(|(_, command)| matches!(command, Command::Speed(..))),
+        "{commands:?}"
+    );
+    assert!(jumps(&control).is_empty());
 }
 
 #[kithara::test]

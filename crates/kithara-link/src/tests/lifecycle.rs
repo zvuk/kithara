@@ -8,7 +8,7 @@ use super::fixtures::{
     Command, Control, Deck, Rig, answer, consume, grid, horizon, load, loaded, position, sounding,
     source_grid, trajectory,
 };
-use crate::{LinkConfig, LinkedPlayer, SyncStatus};
+use crate::{LinkedPlayer, SyncStatus};
 
 fn silent() -> (Deck, Control, Rig, Seq) {
     let (mut deck, control, mut rig, loading) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
@@ -851,12 +851,9 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     let start = rig.now + LinkedPlayer::<TestPools>::lead(&deck, rig.delivery).expect("lane lead");
     let (media, from) = kithara_play::Track::<TestPools>::planned(&deck, start, host.sample_rate())
         .expect("planned source");
-    let drift = SlewCause::Drift {
-        from,
-        limit: LinkConfig::default().slew_limit(),
-    };
+    let drift = SlewCause::Drift { from };
     let uncovered = grid(24_000, 12_000, Some((4, 0)), 960_000);
-    assert_eq!(
+    assert!(matches!(
         slew(
             &host,
             &source_grid(&uncovered),
@@ -866,16 +863,12 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
             drift,
             horizon()
         ),
-        Some(Slew::Relocate),
-        "a half-beat drift is past the slew limit"
-    );
+        Some(Slew::Corrects { .. })
+    ));
     answer(&mut deck, &mut rig, uncovered);
     assert!(
-        control
-            .commands()
-            .iter()
-            .any(|(_, command)| matches!(command, Command::Jump(..))),
-        "a correction that cannot finish relocates the deck"
+        matches!(control.commands().as_slice(), [(_, Command::Speed(..))]),
+        "a revised grid corrects speed and preserves the sounding position"
     );
     control.clear();
     assert_track_unchanged(deck.snapshot().as_ref(), armed_snapshot.as_ref());
@@ -910,7 +903,7 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
         applied.sync,
         "grid refinement remains pending"
     );
-    let Some(Slew::Closes {
+    let Some(Slew::Corrects {
         curve: expected_curve,
         frames: frame_count,
         ..

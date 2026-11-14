@@ -536,34 +536,98 @@ fn landed_interval(
 fn correction_terminal(
     host: &TempoTrajectory,
     source: &SourceGrid,
-    start: SessionFrame,
+    span: Span,
     first_beat: f64,
     beat: f64,
     frame: u64,
     correction: &Correction,
 ) -> Result<(u64, f64), CurveError> {
     let rate = f64::from(host.sample_rate().get());
-    let from = session_frame(start, frame).ok_or(CurveError::NoLaw)?;
+    let from = session_frame(span.start, frame).ok_or(CurveError::NoLaw)?;
     let phase = correction.phase + beat
         - first_beat
-        - host_advance(host, start, from).ok_or(CurveError::NoLaw)?;
-    let frames = (phase.abs() * rate * correction.scale / f64::from(correction.epsilon))
-        .ceil()
-        .to_u64()
-        .ok_or(CurveError::NoLaw)?;
-    let end = frame.checked_add(frames).ok_or(CurveError::NoLaw)?;
-    let span = frames.to_f64().ok_or(CurveError::NoLaw)?;
-    let offset = if frames == 0 {
+        - host_advance(host, span.start, from).ok_or(CurveError::NoLaw)?;
+    let (slope, _) = source.interval_at(beat).ok_or(CurveError::NoLaw)?;
+    let reference = host_law(host, from, 0.0).ok_or(CurveError::NoLaw)?;
+    let (phase, allowance) = correction_rate(phase, reference, slope, correction);
+    let frames = if phase == 0.0 {
+        0
+    } else if allowance == 0.0 {
+        span.horizon.saturating_sub(frame)
+    } else {
+        (phase.abs() * rate / allowance)
+            .ceil()
+            .to_u64()
+            .ok_or(CurveError::NoLaw)?
+    };
+    let duration = frames.to_f64().ok_or(CurveError::NoLaw)?;
+    let offset = if frames == 0 || allowance == 0.0 {
         0.0
     } else {
-        -phase * rate / span
+        -phase * rate / duration
     };
 
-    let to = session_frame(start, end).ok_or(CurveError::NoLaw)?;
-    let target =
-        beat + host_advance(host, from, to).ok_or(CurveError::NoLaw)? + offset * span / rate;
-    source.media_at(target).ok_or(CurveError::PastGrid)?;
+    let covered = covered_correction_frames(
+        host,
+        source,
+        from,
+        beat,
+        offset,
+        frames.min(span.horizon.saturating_sub(frame)),
+    )?;
+    let end = frame.checked_add(covered).ok_or(CurveError::NoLaw)?;
     Ok((end, offset))
+}
+
+fn covered_correction_frames(
+    host: &TempoTrajectory,
+    source: &SourceGrid,
+    from: SessionFrame,
+    beat: f64,
+    offset: f64,
+    frames: u64,
+) -> Result<u64, CurveError> {
+    let rate = f64::from(host.sample_rate().get());
+    let covered = |end| -> Result<bool, CurveError> {
+        let to = session_frame(from, end).ok_or(CurveError::NoLaw)?;
+        let frames = end.to_f64().ok_or(CurveError::NoLaw)?;
+        let target =
+            beat + host_advance(host, from, to).ok_or(CurveError::NoLaw)? + offset * frames / rate;
+        Ok(source.media_at(target).is_some())
+    };
+    if covered(frames)? {
+        return Ok(frames);
+    }
+    let mut low = 0;
+    let mut high = frames;
+    while high - low > 1 {
+        let middle = low + (high - low) / 2;
+        if covered(middle)? {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    Ok(low)
+}
+
+fn correction_rate(
+    mut phase: f64,
+    reference: ExponentialApproach,
+    slope: f64,
+    correction: &Correction,
+) -> (f64, f64) {
+    let limit = f64::from(correction.epsilon) / correction.scale;
+    let slower = (reference.initial().min(reference.target()) - f64::from(MIN_SPEED) / slope)
+        .clamp(0.0, limit);
+    let faster = (f64::from(MAX_SPEED) / slope - reference.initial().max(reference.target()))
+        .clamp(0.0, limit);
+    if phase < 0.0 && faster == 0.0 && slower > 0.0 {
+        phase = phase.rem_euclid(1.0);
+    } else if phase > 0.0 && slower == 0.0 && faster > 0.0 {
+        phase = -(-phase).rem_euclid(1.0);
+    }
+    (phase, if phase < 0.0 { faster } else { slower })
 }
 
 fn source_law(
@@ -697,8 +761,8 @@ fn reached_horizon(
     correction: Option<&Correction>,
     horizon: u64,
 ) -> bool {
-    if correction.is_some() && terminal.is_none() {
-        return false;
+    if correction.is_some() && terminal.is_none_or(|(end, _)| end >= horizon) {
+        return frame >= horizon;
     }
     let settled = terminal
         .map_or(0, |(end, _)| end)
@@ -728,6 +792,11 @@ pub(super) fn curve(
         mut boundaries,
         landing,
     } = curve_boundaries(host, start, landing, offsets, correction).ok_or(CurveError::NoLaw)?;
+    if correction.is_some_and(|correction| correction.starts >= horizon) {
+        boundaries.push(horizon);
+        boundaries.sort_unstable();
+        boundaries.dedup();
+    }
     let mut frame = 0;
     let mut terminal = None;
     let mut laws = Vec::new();
@@ -737,10 +806,10 @@ pub(super) fn curve(
         beat = landed;
         if let Some(correction) = &correction
             && frame >= correction.starts
-            && terminal.is_none()
+            && terminal.is_none_or(|(end, _)| frame < end)
         {
             let (end, offset) =
-                correction_terminal(host, source, start, first_beat, beat, frame, correction)?;
+                correction_terminal(host, source, span, first_beat, beat, frame, correction)?;
             terminal = Some((end, offset));
             boundaries.push(end);
             boundaries.sort_unstable();
@@ -772,7 +841,10 @@ pub(super) fn curve(
         .ok_or(CurveError::NoLaw)?;
         frame = through;
     }
-    let frames = terminal.map_or(0, |(end, _)| end);
+    let frames = terminal.map_or_else(
+        || correction.map_or(0, |correction| correction.starts.min(horizon)),
+        |(end, _)| end,
+    );
     Ok((
         speed_curve(laws).ok_or(CurveError::NoLaw)?,
         frames,
