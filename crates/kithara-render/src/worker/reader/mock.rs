@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use kithara_platform::{
-    sync::{Arc, ThreadGate, WaitGate},
+    sync::{Arc, ThreadGate, WaitGate, Weak},
     time::Duration,
 };
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
@@ -152,7 +152,7 @@ impl PacketRing {
                 forward: forward_rx,
                 reverse: reverse_tx,
                 playing: playing_tx,
-                ready: ready.clone(),
+                ready: ready.as_ref().map(Arc::downgrade),
                 wake,
                 position: Duration::ZERO,
                 frontier: Duration::ZERO,
@@ -292,7 +292,7 @@ pub(in crate::worker) fn packet_fixture(
             spec,
             forward: received,
             reverse: returned,
-            ready: ready.clone(),
+            ready: ready.as_ref().map(Arc::downgrade),
             wake: StreamWake::new(dispatcher.wake_handle()),
             position: Duration::ZERO,
             frontier: Duration::ZERO,
@@ -321,7 +321,7 @@ fn unframed(capacity: usize) -> PcmLead {
 /// Waits for fixture PCM or producer closure under the test liveness policy.
 #[kithara::hang_watchdog(ctx = String)]
 pub fn wait_for_packet(receiver: &PcmReceiver) {
-    let Some(ready) = &receiver.ready else {
+    let Some(ready) = receiver.ready.as_ref().and_then(Weak::upgrade) else {
         return;
     };
     let context = |stage: &str, waited: Option<(u64, bool)>| {

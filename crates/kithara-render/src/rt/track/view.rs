@@ -26,7 +26,7 @@ impl PlayerResource {
         self.lane.segment
     }
 
-    pub(super) fn frames_until_boundary(&self) -> Option<usize> {
+    pub(crate) fn frames_until_boundary(&self) -> Option<usize> {
         let (packet, offset) = match self.packet.as_ref() {
             Some(packet) => (packet, self.offset),
             None => (self.receiver.get().peek()?, 0),

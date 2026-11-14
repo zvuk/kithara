@@ -41,6 +41,14 @@ pub enum ReadOutcome {
     Failed(FailureSource),
 }
 
+pub(crate) type ReadPcm = fn(
+    &mut PlayerResource,
+    Option<&OutputContext>,
+    &mut [&mut [f32]],
+    Range<usize>,
+    &mut usize,
+) -> ReadOutcome;
+
 impl ReadOutcome {
     #[must_use]
     pub const fn ended_at(&self, range: &Range<usize>) -> Option<usize> {
@@ -197,11 +205,7 @@ impl PlayerResource {
         }
     }
 
-    pub(super) fn poll_end(
-        &mut self,
-        budget: &mut usize,
-        wait_for_pcm: bool,
-    ) -> Option<ReadOutcome> {
+    pub(super) fn poll_end(&mut self, budget: &mut usize) -> Option<ReadOutcome> {
         self.recycle_obsolete(budget);
         if self.eof {
             return Some(ReadOutcome::Eof);
@@ -213,9 +217,6 @@ impl PlayerResource {
             return None;
         }
         let receiver = self.receiver.get_mut();
-        if wait_for_pcm {
-            receiver.wait_for_packet();
-        }
         let Some(next) = receiver.peek() else {
             if receiver.is_closed() {
                 self.failed = Some(FailureSource::ChannelClosed);
@@ -285,51 +286,34 @@ impl PlayerResource {
         }
     }
 
-    pub(in crate::rt) fn waits_offline(&self) -> bool {
+    pub(crate) fn waits_offline(&self) -> bool {
         self.receiver.get().waits_offline()
     }
 
-    pub(super) fn prepare_offline(&mut self) -> bool {
+    pub(crate) fn refill(&mut self, budget: &mut usize) -> Option<&PcmReceiver> {
         if !self.waits_offline() {
-            return false;
+            return None;
         }
-        let mut budget = usize::MAX;
-        loop {
-            self.recycle_obsolete(&mut budget);
-            if self.packet.is_some() || self.eof || self.failed.is_some() {
-                break;
-            }
-            let receiver = self.receiver.get();
-            receiver.wait_for_packet();
-            if !matches!(receiver.peek(), Some(PcmPacket::Chunk(chunk)) if chunk.meta.segment < self.lane.segment)
-            {
-                break;
-            }
+        self.refresh_mark(budget);
+        if self.packet.is_some() || self.eof || self.failed.is_some() {
+            return None;
         }
-        self.refresh_mark(&mut budget);
-        true
+        let receiver = self.receiver.get();
+        match receiver.peek() {
+            Some(PcmPacket::Chunk(chunk)) if chunk.meta.segment != self.lane.segment => None,
+            _ => Some(receiver),
+        }
     }
 }
 
 /// Consuming the lane FIFO: frames either go to the output or are dropped.
 impl PlayerResource {
-    pub(super) fn read(
+    pub(crate) fn read(
         &mut self,
         context: Option<&OutputContext>,
         buffers: &mut [&mut [f32]],
         range: Range<usize>,
         budget: &mut usize,
-    ) -> ReadOutcome {
-        self.read_in(context, buffers, range, budget, false)
-    }
-
-    pub(super) fn read_in(
-        &mut self,
-        context: Option<&OutputContext>,
-        buffers: &mut [&mut [f32]],
-        range: Range<usize>,
-        budget: &mut usize,
-        wait_for_pcm: bool,
     ) -> ReadOutcome {
         let [left, right, ..] = buffers else {
             return ReadOutcome::Full { frames: 0 };
@@ -343,7 +327,7 @@ impl PlayerResource {
         }
         left[range.start..range.start + requested].fill(0.0);
         right[range.start..range.start + requested].fill(0.0);
-        self.consume(requested, budget, wait_for_pcm, |chunk, offset, written| {
+        self.consume(requested, budget, |chunk, offset, written| {
             copy_packet(
                 chunk,
                 offset,
@@ -357,7 +341,7 @@ impl PlayerResource {
 
     /// Consumes `frames` lane frames without playing them.
     pub(super) fn discard(&mut self, frames: usize, budget: &mut usize) -> ReadOutcome {
-        self.consume(frames, budget, false, |_, _, _| {})
+        self.consume(frames, budget, |_, _, _| {})
     }
 
     /// Consumes up to `requested` lane frames in order, handing each packet
@@ -367,14 +351,13 @@ impl PlayerResource {
         &mut self,
         requested: usize,
         budget: &mut usize,
-        wait_for_pcm: bool,
         mut take: impl FnMut(&AudioChunk, usize, Range<usize>),
     ) -> ReadOutcome {
         let mut written = 0;
         while written < requested {
             hang_tick!();
             self.recycle_obsolete(budget);
-            if let Some(end) = self.poll_end(budget, wait_for_pcm) {
+            if let Some(end) = self.poll_end(budget) {
                 return if written == 0 {
                     end
                 } else {

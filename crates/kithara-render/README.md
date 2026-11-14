@@ -42,7 +42,7 @@ let stage = WarpSource::new(source, renderer, spec, pools, lane);
 
 <tr><td><code>rt::DeckMixer</code></td><td>The deck on the audio thread: takes its command batches at their frames and mixes its tracks, crossfades and declicks between them</td></tr>
 
-<tr><td><code>rt::PlayerNode</code></td><td>The Firewheel node that hosts a deck in the output graph</td></tr>
+<tr><td><code>PlayerNode</code></td><td>The Firewheel node that hosts a deck in the output graph</td></tr>
 
 <tr><td><code>OpenedPcm</code></td><td>The worker's off-RT load result: a PCM receiver, initial track metadata and ABR control</td></tr>
 

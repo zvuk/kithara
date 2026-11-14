@@ -37,7 +37,7 @@ pub fn apply_initial_batch<E: SessionInbox>(
     let Some(due) = level.next_due(SessionFrame::new(0), 1) else {
         return false;
     };
-    mixer.deck.take_due(due, true, false);
+    mixer.deck.take_due(due, true, PlayerResource::read);
     true
 }
 

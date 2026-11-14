@@ -7,7 +7,7 @@ use kithara_worker::{
 use super::transport_tests::receive_notice;
 use crate::{
     mock::pcm_fixture::{PcmFixture, chunk},
-    worker::{PcmPacket, reader::PcmProducer, scheduler::StreamWake},
+    worker::{PcmPacket, reader::PcmProducer, scheduler::StreamWake, wait_for_packet},
 };
 
 struct ProducerTask {
@@ -118,7 +118,7 @@ async fn a_live_producer_serves_consumed_packets_without_underruns(#[case] block
     let mut receiver = fixture.receiver.take().expect("receiver");
     if blocking {
         receiver = kithara_platform::tokio::task::spawn_sync(move || {
-            receiver.wait_for_packet();
+            wait_for_packet(&receiver);
             receiver
         })
         .await
@@ -138,7 +138,7 @@ async fn a_live_producer_serves_consumed_packets_without_underruns(#[case] block
         hang_tick!();
         if blocking {
             receiver = kithara_platform::tokio::task::spawn_sync(move || {
-                receiver.wait_for_packet();
+                wait_for_packet(&receiver);
                 receiver
             })
             .await

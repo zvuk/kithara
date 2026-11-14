@@ -395,7 +395,8 @@ async fn a_prepared_delayed_final_packet_stitches_its_successor_inside_the_same_
     let prepared = kithara_platform::tokio::task::spawn_blocking(move || {
         processor.inbox.0.drain();
         let scope = processor.mixer.scope;
-        processor.mixer.prepare_offline(
+        crate::offline::prepare_mixer(
+            &mut processor.mixer,
             processor.inbox.0.scope(scope),
             SessionFrame::new(0),
             MAX_BLOCK_FRAMES as usize,

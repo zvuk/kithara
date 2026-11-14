@@ -17,6 +17,7 @@ use super::super::{PlayerResource, PlayerTrack, ReadOutcome, RtSink, TrackBuffer
 use crate::{
     bridge::{DeckEvent, Fade, RtMetrics, Slot},
     mock::pcm_fixture::{PcmFixture, chunk},
+    offline::prepare_track,
     worker::PcmPacket,
 };
 
@@ -71,7 +72,7 @@ fn offline_preparation_waits_for_the_lane_instead_of_underrunning() {
     let mut bus_left = [0.0; 2];
     let mut bus_right = [0.0; 2];
     let mut sink = RtSink::new(&mut events, &metrics, Slot::new(0), start);
-    assert!(track.prepare_offline());
+    assert!(prepare_track(&mut track));
     let prepared_waits = trace.events_of("pcm_wait_started").len();
     let outcome = track.render(
         Some(&context),

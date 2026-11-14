@@ -3,14 +3,14 @@ use kithara_signal::SegmentId;
 use kithara_test_utils::kithara;
 use ringbuf::traits::Observer;
 
-use super::super::core::PcmReceiver;
+use super::super::{core::PcmReceiver, wait_for_packet};
 use crate::{
     mock::pcm_fixture::{PcmFixture, chunk},
     worker::PcmPacket,
 };
 
 fn pop_blocking(reader: &mut PcmReceiver) -> Option<PcmPacket> {
-    reader.wait_for_packet();
+    wait_for_packet(reader);
     reader.pop()
 }
 
@@ -134,7 +134,7 @@ fn blocking_recv_without_preload_panics_when_no_chunk_arrives(#[case] fixture_wa
     if fixture_wait {
         crate::mock::wait_for_packet(receiver);
     } else {
-        receiver.wait_for_packet();
+        wait_for_packet(receiver);
     }
 }
 
@@ -165,7 +165,7 @@ fn ready_packet_is_checked_after_a_timed_park(#[case] fixture_wait: bool) {
     if fixture_wait {
         crate::mock::wait_for_packet(receiver);
     } else {
-        receiver.wait_for_packet();
+        wait_for_packet(receiver);
     }
     fixture.producer = Some(
         publish
@@ -509,7 +509,8 @@ async fn wake_signal() {
         .ready
         .as_ref()
         .expect("blocking readiness")
-        .clone();
+        .upgrade()
+        .expect("producer signal");
     let since = ready.current();
     assert_eq!(ready.current(), since);
     fixture
@@ -527,7 +528,8 @@ async fn wake_skipped_when_parking_in_overflow() {
         .ready
         .as_ref()
         .expect("blocking readiness")
-        .clone();
+        .upgrade()
+        .expect("producer signal");
     let since = ready.current();
     fixture
         .push(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[1.0]))))
@@ -553,7 +555,8 @@ async fn wake_fires_every_ring_push() {
         .ready
         .as_ref()
         .expect("blocking readiness")
-        .clone();
+        .upgrade()
+        .expect("producer signal");
     let since = ready.current();
     fixture
         .push(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[1.0]))))

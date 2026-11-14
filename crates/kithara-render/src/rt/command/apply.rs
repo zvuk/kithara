@@ -8,7 +8,7 @@ use kithara_test_macros as kithara;
 use super::{
     super::{
         processor::Deck,
-        track::{PlayerResource, PlayerTrack},
+        track::{PlayerResource, PlayerTrack, ReadPcm},
     },
     state::*,
 };
@@ -23,7 +23,7 @@ impl Deck {
         at: SessionFrame,
         seq: Seq,
         context_valid: bool,
-        wait_for_pcm: bool,
+        read_pcm: ReadPcm,
     ) -> Option<DeckPart> {
         self.interrupt_underrun(&part, at);
         match part {
@@ -33,7 +33,7 @@ impl Deck {
                 pcm,
                 segment,
             } => self.attach(slot, item_id, pcm, segment, at, seq),
-            DeckPart::Detach { slot } => self.detach(slot, context_valid, wait_for_pcm),
+            DeckPart::Detach { slot } => self.detach(slot, context_valid, read_pcm),
             DeckPart::Start { slot, fade } => {
                 if let Some(track) = self.tracks.at_mut(slot) {
                     track.start(fade);
@@ -42,7 +42,7 @@ impl Deck {
             }
             DeckPart::Stop { slot, fade } => self.stop_track(slot, fade, at, seq),
             DeckPart::Adopt { slot, segment } => {
-                Some(self.adopt_track(slot, segment, at, seq, context_valid, wait_for_pcm))
+                Some(self.adopt_track(slot, segment, at, seq, context_valid, read_pcm))
             }
             DeckPart::Fade {
                 slot,
@@ -65,7 +65,7 @@ impl Deck {
                 segment,
             } => {
                 let track = self.track(pcm, segment, item_id, seq);
-                Some(self.replace_track(slot, track, context_valid, wait_for_pcm))
+                Some(self.replace_track(slot, track, context_valid, read_pcm))
             }
             DeckPart::Chain { from, to } => Some(self.chain_tracks(from, to)),
             DeckPart::Clock { slot, clock } => {
@@ -191,15 +191,14 @@ impl Deck {
         }
     }
 
-    fn detach(&mut self, slot: Slot, context_valid: bool, wait_for_pcm: bool) -> Option<DeckPart> {
+    fn detach(&mut self, slot: Slot, context_valid: bool, read_pcm: ReadPcm) -> Option<DeckPart> {
         let mut track = self.tracks.take(slot)?;
         if context_valid {
             self.tails[slot.index()].fill(
                 &mut track,
                 self.declick_frames,
-                &self.metrics,
                 &mut self.recycle[slot.index()],
-                wait_for_pcm,
+                read_pcm,
             );
         }
         Some(returned_pcm(slot, track.into_resource()))
@@ -228,7 +227,7 @@ impl Deck {
         at: SessionFrame,
         seq: Seq,
         context_valid: bool,
-        wait_for_pcm: bool,
+        read_pcm: ReadPcm,
     ) -> DeckPart {
         #[cfg(not(feature = "usdt"))]
         let _ = (at, seq);
@@ -237,9 +236,8 @@ impl Deck {
                 self.tails[slot.index()].fill(
                     track,
                     self.declick_frames,
-                    &self.metrics,
                     &mut self.recycle[slot.index()],
-                    wait_for_pcm,
+                    read_pcm,
                 );
             }
             track.adopt(segment);
@@ -261,7 +259,7 @@ impl Deck {
         slot: Slot,
         mut track: PlayerTrack,
         context_valid: bool,
-        wait_for_pcm: bool,
+        read_pcm: ReadPcm,
     ) -> DeckPart {
         track.start(Fade::Declick);
         track.snap_gate();
@@ -274,9 +272,8 @@ impl Deck {
                     self.tails[slot.index()].fill(
                         &mut old,
                         self.evict_frames,
-                        &self.metrics,
                         &mut self.recycle[slot.index()],
-                        wait_for_pcm,
+                        read_pcm,
                     );
                 }
                 returned_pcm(slot, old.into_resource())

@@ -92,7 +92,8 @@ impl PlayerTrack {
 
     delegate::delegate! {
         to self.resource {
-            pub(in crate::rt) fn waits_offline(&self) -> bool;
+            pub(crate) fn waits_offline(&self) -> bool;
+            pub(crate) fn refill(&mut self, budget: &mut usize) -> Option<&crate::worker::PcmReceiver>;
             #[must_use]
             pub(crate) fn source_info(&self) -> Option<kithara_signal::AudioChunkInfo>;
             #[must_use]

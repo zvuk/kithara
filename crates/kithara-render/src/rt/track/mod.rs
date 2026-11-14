@@ -12,6 +12,7 @@ mod legacy_tests;
 
 pub use core::PlayerTrack;
 
+pub(crate) use feeder::ReadPcm;
 pub use feeder::{PlayerResource, ReadOutcome};
 pub(crate) use read::TrackBuffers;
 pub use sink::RtSink;

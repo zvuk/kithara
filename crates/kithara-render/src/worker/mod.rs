@@ -27,6 +27,7 @@ pub(crate) use fixture::{terminal_node, terminal_ring};
 pub use load::{EngineLoad, EngineLoadSnapshot};
 pub use node::DecoderNode;
 pub use opened::OpenedPcm;
+pub(crate) use reader::wait_for_packet;
 pub use reader::{PcmPacket, PcmReceiver};
 pub use scheduler::StreamWake;
 pub use track::{TrackConfig, TrackConfigPatch, pcm_quantum};

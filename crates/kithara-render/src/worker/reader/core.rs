@@ -3,12 +3,11 @@ use std::fmt;
 use kithara_audio::{Audio, AudioEvent, AudioSession};
 use kithara_events::EventBus;
 use kithara_platform::{
-    sync::{Arc, ThreadGate, WaitGate},
+    sync::{Arc, ThreadGate, WaitGate, Weak},
     time::Duration,
 };
 use kithara_signal::AudioSpec;
 use kithara_stream::WorkerWake;
-use kithara_test_utils::kithara;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Consumer, Observer, Producer, Split},
@@ -82,7 +81,8 @@ pub struct PcmReceiver {
     pub(super) forward: HeapCons<PcmPacket>,
     pub(super) reverse: HeapProd<PcmPacket>,
     pub(super) playing: Input<bool>,
-    pub(super) ready: Option<Arc<ThreadGate>>,
+    // The producer and active off-RT waiters own the signal.
+    pub(super) ready: Option<Weak<ThreadGate>>,
     pub(super) wake: StreamWake,
     pub(super) spec: AudioSpec,
     pub(super) position: Duration,
@@ -108,7 +108,7 @@ impl PcmReceiver {
                 forward: forward_rx,
                 reverse: reverse_tx,
                 playing: playing_tx,
-                ready: ready.clone(),
+                ready: ready.as_ref().map(Arc::downgrade),
                 wake,
                 spec: audio.spec(),
                 position,
@@ -201,33 +201,6 @@ impl PcmReceiver {
 
     pub(crate) fn waits_offline(&self) -> bool {
         self.ready.is_some()
-    }
-
-    /// Wait for a packet or producer closure only when offline blocking is enabled.
-    #[kithara::flash(true)]
-    #[kithara::measure(label = "render.pcm.wait")]
-    #[kithara::hang_watchdog]
-    pub(crate) fn wait_for_packet(&self) {
-        let Some(ready) = &self.ready else {
-            return;
-        };
-        loop {
-            let since = ready.current();
-            let expired = __hang_detector.remaining().is_zero();
-            if self.forward.try_peek().is_some() || !self.forward.write_is_held() {
-                hang_reset!();
-                return;
-            }
-            if expired {
-                hang_tick!();
-            }
-            self.wake.wake();
-            let _real_io = kithara_platform::flash::real_io();
-            let remaining = __hang_detector.remaining();
-            kithara::probe_event!(pcm_wait_started);
-            ready.wait_timeout(since, remaining);
-            kithara::probe_event!(pcm_wait_finished);
-        }
     }
 
     /// Try to take one packet without waiting, regardless of blocking policy.

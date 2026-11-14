@@ -5,8 +5,8 @@ use kithara_signal::OutputContext;
 use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 
-use super::{PlayerTrack, ReadOutcome, RtSink};
-use crate::bridge::{DeckEvent, ParameterCurve, PlaybackFault, RtMetrics, SlotState};
+use super::{PlayerTrack, ReadOutcome, ReadPcm, RtSink};
+use crate::bridge::{DeckEvent, ParameterCurve, PlaybackFault, SlotState};
 
 pub(crate) struct TrackBuffers<'block, 'scratch, 'bus> {
     pub(crate) scratch: &'block mut [&'scratch mut [f32]],
@@ -23,7 +23,7 @@ impl PlayerTrack {
         if self.state != SlotState::Playing {
             return false;
         }
-        let Some(outcome) = self.resource.poll_end(budget, false) else {
+        let Some(outcome) = self.resource.poll_end(budget) else {
             return false;
         };
         let event = match outcome {
@@ -76,7 +76,7 @@ impl PlayerTrack {
         if self.state == SlotState::Ended {
             return ReadOutcome::Eof;
         }
-        if self.state != SlotState::Playing || self.gate.is_shut() {
+        if !self.can_read() {
             return ReadOutcome::Full { frames: 0 };
         }
         let valid =
@@ -200,8 +200,8 @@ impl PlayerTrack {
         }
     }
 
-    pub(in crate::rt) fn prepare_offline(&mut self) -> bool {
-        self.state == SlotState::Playing && !self.gate.is_shut() && self.resource.prepare_offline()
+    pub(crate) fn can_read(&self) -> bool {
+        self.state == SlotState::Playing && !self.gate.is_shut()
     }
 
     /// Reads a fading tail; `usize` frame counts fit within `f32`'s finite range.
@@ -209,9 +209,8 @@ impl PlayerTrack {
         &mut self,
         left: &mut [f32],
         right: &mut [f32],
-        _metrics: &RtMetrics,
         budget: &mut usize,
-        wait_for_pcm: bool,
+        read_pcm: ReadPcm,
     ) -> usize {
         let length = left.len().min(right.len());
         if self.state != SlotState::Playing || length == 0 {
@@ -224,14 +223,10 @@ impl PlayerTrack {
                 .to_f32()
                 .expect("prepared output gain fits f32");
         let mut buffers = [&mut left[..length], &mut right[..length]];
-        let written =
-            match self
-                .resource
-                .read_in(None, &mut buffers, 0..length, budget, wait_for_pcm)
-            {
-                ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
-                ReadOutcome::Eof | ReadOutcome::Failed(_) => 0,
-            };
+        let written = match read_pcm(&mut self.resource, None, &mut buffers, 0..length, budget) {
+            ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
+            ReadOutcome::Eof | ReadOutcome::Failed(_) => 0,
+        };
         let mut gains = [0.0; crate::consts::FADE_CHUNK];
         for (block, (left, right)) in left[..written]
             .chunks_mut(crate::consts::FADE_CHUNK)
