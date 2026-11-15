@@ -203,6 +203,17 @@ pub(super) fn render_frames(mixer: &mut TestMixer, start: usize, frames: usize) 
         outputs: &mut outputs,
     };
     mixer.inbox.0.drain();
+    render_realtime(mixer, start, frames, &mut buffers);
+    left
+}
+
+#[kithara::rtsan_forbid_blocking]
+pub(super) fn render_realtime(
+    mixer: &mut TestMixer,
+    start: usize,
+    frames: usize,
+    buffers: &mut ProcBuffers,
+) {
     let level = mixer.inbox.scope(mixer.mixer.scope).expect("live scope");
     let context = OutputContext::new(
         frame_at(start)..frame_at(start + frames),
@@ -215,10 +226,9 @@ pub(super) fn render_frames(mixer: &mut TestMixer, start: usize, frames: usize) 
         Some(level),
         Some(&context),
         frame_at(start),
-        &mut buffers,
+        buffers,
         frames,
     );
-    left
 }
 
 pub(super) use crate::mock::{assert_applied_at, outcome_of, receipts};
