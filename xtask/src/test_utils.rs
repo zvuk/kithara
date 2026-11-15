@@ -75,6 +75,13 @@ impl Consumer<'_> {
                     artifact.target.name != "kithara_test_args",
                     "test argument compiler reached production instrumentation"
                 );
+                ensure!(
+                    !matches!(
+                        artifact.target.name.as_str(),
+                        "serial_test" | "serial_test_derive"
+                    ),
+                    "test serialization runtime reached production instrumentation"
+                );
                 if artifact.target.name == "kithara_test_macros" {
                     ensure!(library.is_none(), "multiple instrumentation macro units");
                     library = artifact.filenames.into_iter().next();

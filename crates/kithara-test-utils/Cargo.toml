@@ -10,7 +10,7 @@ categories = ["development-tools::testing"]
 
 [features]
 default = ["hang", "test"]
-test = ["kithara-test-macros/test"]
+test = ["dep:kithara-bufpool", "dep:serial_test", "kithara-test-macros/test"]
 flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
 # Local axum HTTP server for tests (native only).
@@ -20,7 +20,7 @@ temp-dir = ["dep:tempfile", "test"]
 mock = ["dep:unimock", "test"]
 # One spinning thread per CPU for the body of every `#[kithara::test]`;
 # enabled by `just test run --load=on`.
-load = []
+load = ["test"]
 no-block = ["kithara-platform/no-block"]
 # The test log subscriber on wasm32, where `test::setup_tracing*` exist only
 # with it. Native builds always carry the subscriber.
@@ -32,7 +32,7 @@ tls-rustls = []
 tls-native = []
 
 [dependencies]
-kithara-bufpool = { workspace = true }
+kithara-bufpool = { workspace = true, optional = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 
@@ -49,7 +49,7 @@ url = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 arrayvec = { workspace = true }
 axum = { workspace = true, optional = true }
-serial_test = { workspace = true }
+serial_test = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
