@@ -61,6 +61,7 @@ fn workspace(optional: &str) -> (tempfile::TempDir, Ctx) {
     let cargo_home = root.join("cargo-home");
     fs::create_dir(&cargo_home).unwrap();
     env.insert("CARGO_HOME".to_owned(), cargo_home.display().to_string());
+    env.insert("NEXTEST_PROFILE".to_owned(), "default".to_owned());
     for (name, key) in [
         ("RUSTUP_TOOLCHAIN", "stable_toolchain"),
         ("KITHARA_NIGHTLY_TOOLCHAIN", "nightly_toolchain"),
