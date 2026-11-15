@@ -40,11 +40,11 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 kithara-net = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-net = { workspace = true, features = ["mock"] }
-kithara-test-utils = { workspace = true, features = ["http-server", "temp-dir"] }
+kithara-test-utils = { workspace = true, features = ["test", "http-server", "temp-dir"] }
 
 async-trait = { workspace = true }
 axum = { workspace = true }

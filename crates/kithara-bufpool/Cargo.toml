@@ -34,7 +34,7 @@ tracing = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "hang", "mock"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

@@ -45,16 +45,89 @@ pub(crate) fn run(ctx: &Ctx) -> Result<()> {
         target: target.path(),
     };
     consumer.prepare(&ctx.root)?;
+    consumer.instrumentation()?;
     consumer.closure()?;
     consumer.capabilities()
 }
 
 impl Consumer<'_> {
+    fn instrumentation(&self) -> Result<()> {
+        for features in ["", "facade", "instrumented"] {
+            let report = self.checked(
+                &mut self.cargo(&[
+                    "build",
+                    "--example",
+                    "instrumentation",
+                    "--message-format=json",
+                    "--locked",
+                    "--features",
+                    features,
+                ]),
+                &format!("instrumentation-build-{features}"),
+                None,
+            )?;
+            let mut library = None;
+            for message in Message::parse_stream(report.as_bytes()) {
+                let Message::CompilerArtifact(artifact) = message? else {
+                    continue;
+                };
+                ensure!(
+                    artifact.target.name != "kithara_test_args",
+                    "test argument compiler reached production instrumentation"
+                );
+                if artifact.target.name == "kithara_test_macros" {
+                    ensure!(library.is_none(), "multiple instrumentation macro units");
+                    library = artifact.filenames.into_iter().next();
+                }
+            }
+            let library = library.context("instrumentation macro artifact")?;
+            let name = library
+                .file_stem()
+                .and_then(|name| name.strip_prefix("lib"))
+                .context("native macro library name")?;
+            let inputs = fs::read_to_string(library.with_file_name(format!("{name}.d")))?;
+            ensure!(
+                inputs.contains("/src/lib.rs"),
+                "missing macro source inputs"
+            );
+            ensure!(
+                !["/src/test/", "/src/asset/", "/src/fixture.rs"]
+                    .iter()
+                    .any(|path| inputs.contains(path)),
+                "test-only compiler inputs reached production instrumentation:\n{inputs}"
+            );
+            info!(features, "production macro inputs exclude the test DSL");
+            self.checked(
+                &mut self.cargo(&[
+                    "run",
+                    "--example",
+                    "instrumentation",
+                    "--locked",
+                    "--features",
+                    features,
+                ]),
+                &format!("instrumentation-run-{features}"),
+                Some(300),
+            )?;
+        }
+        Ok(())
+    }
+
     fn capabilities(&self) -> Result<()> {
         let toolchain = self.checked(Command::new("rustc").arg("-vV"), "toolchain", Some(30))?;
         info!(toolchain = toolchain.trim(), "test utilities toolchain");
         for offline in [false, true] {
-            for features in ["", "mock", "multithread", "hang", "devtools"] {
+            for features in [
+                "test",
+                "defaults",
+                "mock",
+                "temp-dir",
+                "http-server",
+                "test,multithread",
+                "test,hang",
+                "test,devtools",
+                "facade-test",
+            ] {
                 let label = format!("native-{features}-offline-{offline}");
                 let report = self.checked(
                     self.cargo(&[
@@ -72,24 +145,26 @@ impl Consumer<'_> {
                 let binary = test_binary(&report)?;
                 let report = self.checked(&mut Command::new(&binary), &label, Some(300))?;
                 info!(label, report = report.trim(), "native consumer passed");
-                if !offline && features == "hang" {
+                if !offline && features == "test,hang" {
                     self.watchdog(&binary)?;
                 }
             }
-            self.checked(
-                self.cargo(&[
-                    "check",
-                    "--tests",
-                    "--locked",
-                    "--target",
-                    "wasm32-unknown-unknown",
-                    "--features",
-                    "devtools,mock",
-                ])
-                .env("CARGO_NET_OFFLINE", offline.to_string()),
-                &format!("wasm-compile-only-offline-{offline}"),
-                None,
-            )?;
+            for features in ["test,devtools,mock", "facade-test"] {
+                self.checked(
+                    self.cargo(&[
+                        "check",
+                        "--tests",
+                        "--locked",
+                        "--target",
+                        "wasm32-unknown-unknown",
+                        "--features",
+                        features,
+                    ])
+                    .env("CARGO_NET_OFFLINE", offline.to_string()),
+                    &format!("wasm-compile-only-{features}-offline-{offline}"),
+                    None,
+                )?;
+            }
         }
         Ok(())
     }
@@ -141,7 +216,15 @@ impl Consumer<'_> {
             "aarch64-apple-darwin",
             "wasm32-unknown-unknown",
         ] {
-            for features in ["", "devtools", "mock,multithread,hang,devtools"] {
+            for features in [
+                "",
+                "test",
+                "defaults",
+                "facade",
+                "facade-test",
+                "devtools",
+                "mock,multithread,hang,devtools",
+            ] {
                 let label = format!("closure-{triple}-{features}");
                 let tree = self.checked(
                     self.cargo(&[
@@ -244,6 +327,11 @@ impl Consumer<'_> {
             root.join("xtask/tests/fixtures/test_utils.rs"),
             self.directory.join("src/lib.rs"),
         )?;
+        fs::create_dir(self.directory.join("examples"))?;
+        fs::copy(
+            root.join("xtask/tests/fixtures/instrumentation.rs"),
+            self.directory.join("examples/instrumentation.rs"),
+        )?;
         fs::write(
             self.directory.join("Cargo.toml"),
             manifest(
@@ -325,11 +413,19 @@ edition = "2024"
 publish = false
 [features]
 default = []
+defaults = ["kithara-test-utils/default"]
+facade = ["dep:kithara"]
+facade-test = ["facade", "kithara/test"]
+instrumented = ["kithara-test-utils/flash", "kithara-test-utils/hang", "kithara-test-utils/no-block", "kithara-test-utils/usdt"]
+http-server = ["kithara-test-utils/http-server"]
 mock = ["dep:unimock", "kithara-test-utils/mock"]
+temp-dir = ["kithara-test-utils/temp-dir"]
+test = ["kithara-test-utils/test"]
 multithread = ["dep:kithara-platform", "kithara-platform/tokio-rt-multi-thread"]
 hang = ["kithara-test-utils/hang"]
 devtools = ["dep:kithara-config", "dep:kithara-derive"]
 [dependencies]
+kithara = { default-features = false, optional = true }
 kithara-config = { optional = true }
 kithara-derive = { features = ["config"], optional = true }
 kithara-test-utils = { default-features = false }
@@ -355,7 +451,7 @@ wasm-bindgen-test = { workspace = true }
     }
     let replace = |consumer: &mut toml::Value| -> Result<()> {
         for (name, dependency) in consumer.as_table_mut().context("consumer dependencies")? {
-            if name.starts_with("kithara-") {
+            if name == "kithara" || name.starts_with("kithara-") {
                 let table = dependency
                     .as_table_mut()
                     .context("Kithara dependency table")?;
@@ -533,8 +629,8 @@ mod tests {
                 "0123456789abcdef0123456789abcdef01234567",
             )),
         )?;
-        assert_eq!(rendered.matches("git = ").count(), 5);
-        assert_eq!(rendered.matches("rev = ").count(), 5);
+        assert_eq!(rendered.matches("git = ").count(), 6);
+        assert_eq!(rendered.matches("rev = ").count(), 6);
         assert!(!rendered.contains("path = "));
         let parsed: toml::Value = toml::from_str(&rendered)?;
         assert_eq!(parsed["workspace"]["resolver"].as_str(), Some("2"));
@@ -586,10 +682,7 @@ mod tests {
             "[workspace.dependencies]\nunimock = \"0.6\"\nwasm-bindgen-test = \"0.3\"\nkithara-config = { version = \"0.0.0\" }\n",
         )?;
         let error = manifest(root.path(), None).expect_err("missing dependency path");
-        assert_eq!(
-            error.to_string(),
-            "workspace dependency path for kithara-config"
-        );
+        assert_eq!(error.to_string(), "workspace dependency path for kithara");
         Ok(())
     }
 

@@ -6464,6 +6464,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-platform",
  "kithara-test-macros",
+ "kithara-test-utils",
  "num-traits",
  "pin-project-lite",
  "rtsan-standalone",
