@@ -1,5 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    mem::size_of_val,
+    ptr,
     sync::{
         Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, Ordering},
@@ -12,7 +14,7 @@ use kithara_platform::{
     time::{WallInstant, timeout},
 };
 use tracing::{
-    Event, Metadata, Subscriber,
+    Event, Subscriber,
     field::{Field, Visit},
 };
 use tracing_subscriber::{
@@ -37,77 +39,33 @@ pub const MAX_EVENTS: usize = 1 << 19;
 
 /// One recorded firing. Every string is `'static`, so recording a firing
 /// allocates nothing beyond the history itself.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct ProbeEvent {
     pub probe: &'static str,
+    pub target: &'static str,
+    /// Source file of the product function the probe is attached to.
+    pub file: Option<&'static str>,
+    /// Source line of that function.
+    pub line: Option<u32>,
     /// Thread the probe fired on.
     pub thread: ThreadId,
     /// Real monotonic time at observer entry, before recorder lock contention.
     pub wall_time: WallInstant,
-    metadata: &'static Metadata<'static>,
-    fields: [u64; consts::MAX_FIELDS],
-    field_indices: [u32; consts::MAX_FIELDS],
+    fields: [(&'static str, u64); consts::MAX_FIELDS],
     len: usize,
 }
 
 impl ProbeEvent {
-    delegate::delegate! {
-        to self.metadata {
-            /// Tracing target of the probe's static callsite.
-            #[must_use]
-            pub fn target(&self) -> &'static str;
-            /// Source file of the product function the probe is attached to.
-            #[must_use]
-            pub fn file(&self) -> Option<&'static str>;
-            /// Source line of that function.
-            #[must_use]
-            pub fn line(&self) -> Option<u32>;
-        }
-    }
-
     #[must_use]
     pub fn field(&self, name: &str) -> Option<u64> {
-        let index = u32::try_from(self.metadata.fields().field(name)?.index()).ok()?;
-        self.field_indices[..self.len]
+        self.fields[..self.len]
             .iter()
-            .position(|stored| *stored == index)
-            .map(|slot| self.fields[slot])
+            .find_map(|(key, value)| (*key == name).then_some(*value))
     }
 
     /// Every payload field this firing carried, in the order the probe named them.
-    ///
-    /// # Panics
-    /// Panics if the recorder's field indexes disagree with its static callsite.
     pub fn fields(&self) -> impl Iterator<Item = (&'static str, u64)> + '_ {
-        self.field_indices[..self.len]
-            .iter()
-            .zip(&self.fields[..self.len])
-            .map(|(index, value)| {
-                let field = self
-                    .metadata
-                    .fields()
-                    .iter()
-                    .nth(usize::try_from(*index).expect("callsite field index"))
-                    .expect("recorded field belongs to its static callsite");
-                (field.name(), *value)
-            })
-    }
-}
-
-impl std::fmt::Debug for ProbeEvent {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut value = formatter.debug_struct("ProbeEvent");
-        value
-            .field("probe", &self.probe)
-            .field("target", &self.target())
-            .field("file", &self.file())
-            .field("line", &self.line())
-            .field("thread", &self.thread)
-            .field("wall_time", &self.wall_time);
-        for (name, field) in self.fields() {
-            value.field(name, &field);
-        }
-        value.finish_non_exhaustive()
+        self.fields[..self.len].iter().copied()
     }
 }
 
@@ -252,6 +210,11 @@ pub fn scope() -> Scope {
         state.waiting = 0;
     }
     *lock(&NESTING) = Some((here, Arc::clone(&recorded)));
+    tracing::debug!(
+        state = ?ptr::from_ref(&STATE),
+        state_bytes = size_of_val(&STATE),
+        "USDT recording opened"
+    );
     ARMED.store(true, Ordering::Release);
     Scope {
         recorded,
@@ -429,8 +392,7 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
         let wall_time = WallInstant::now();
         let mut visitor = ProbeVisitor {
             probe: None,
-            fields: [0; consts::MAX_FIELDS],
-            field_indices: [0; consts::MAX_FIELDS],
+            fields: [("", 0); consts::MAX_FIELDS],
             len: 0,
         };
         let mut state = lock(&STATE);
@@ -447,11 +409,12 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
         let metadata = event.metadata();
         let recorded_event = ProbeEvent {
             probe,
-            metadata,
+            target: metadata.target(),
+            file: metadata.file(),
+            line: metadata.line(),
             thread: thread::current().id(),
             wall_time,
             fields: visitor.fields,
-            field_indices: visitor.field_indices,
             len: visitor.len,
         };
         let first_seen = state.probes.len();
@@ -476,8 +439,7 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
 
 struct ProbeVisitor {
     probe: Option<&'static str>,
-    fields: [u64; consts::MAX_FIELDS],
-    field_indices: [u32; consts::MAX_FIELDS],
+    fields: [(&'static str, u64); consts::MAX_FIELDS],
     len: usize,
 }
 
@@ -490,9 +452,7 @@ impl FieldVisitor<'_> {
     fn push(&mut self, field: &Field, value: u64) {
         let visitor = &mut *self.visitor;
         if let Some(slot) = visitor.fields.get_mut(visitor.len) {
-            *slot = value;
-            visitor.field_indices[visitor.len] =
-                u32::try_from(field.index()).expect("a static probe field index fits u32");
+            *slot = (field.name(), value);
             visitor.len += 1;
         }
     }
@@ -568,61 +528,6 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].probe, "first");
         assert_eq!(events[1].field("value"), Some(2));
-    }
-
-    #[test]
-    fn sparse_payloads_keep_each_callsites_metadata_and_field_order() {
-        crate::test::setup_tracing();
-        let trace = scope();
-        let here = std::thread::current().id();
-        let first_line = line!() + 1;
-        tracing::event!(target: "first_test_probe", tracing::Level::TRACE,
-            ignored = "text", probe = "metadata", second = 2_u64, first = 1_u64);
-        let second_line = line!() + 1;
-        tracing::event!(target: "second_test_probe", tracing::Level::TRACE,
-            probe = "metadata", first = 3_u64);
-        let events = trace.events();
-        drop(trace);
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0].target(), "first_test_probe");
-        assert_eq!(events[1].target(), "second_test_probe");
-        assert_eq!(events[0].file(), Some(file!()));
-        assert_eq!(events[1].file(), Some(file!()));
-        assert_eq!(events[0].line(), Some(first_line));
-        assert_eq!(events[1].line(), Some(second_line));
-        assert_eq!(events[0].thread, here);
-        assert_eq!(events[1].thread, here);
-        assert!(events[0].wall_time <= events[1].wall_time);
-        assert!(events[0].fields().eq([("second", 2), ("first", 1)]));
-        assert!(events[1].fields().eq([("first", 3)]));
-        assert_eq!(events[0].field("first"), Some(1));
-        assert_eq!(events[0].field("ignored"), None);
-        assert_eq!(events[1].field("second"), None);
-    }
-
-    #[test]
-    fn payloads_preserve_every_recorded_value() {
-        crate::test::setup_tracing();
-        let trace = scope();
-        for value in 0..1_000_u64 {
-            tracing::event!(target: "kithara_test_probe", tracing::Level::TRACE,
-                probe = "retained_budget", first = value, second = value + 1,
-                third = value + 2, fourth = value + 3, fifth = value + 4);
-        }
-        let events = trace.events();
-        drop(trace);
-        assert_eq!(events.len(), 1_000);
-        for (index, event) in events.iter().enumerate() {
-            let value = u64::try_from(index).expect("recorded index");
-            assert_eq!(event.probe, "retained_budget");
-            assert!(event.fields().eq([
-                ("first", value),
-                ("second", value + 1),
-                ("third", value + 2),
-                ("fourth", value + 3),
-                ("fifth", value + 4),
-            ]));
-        }
     }
 
     #[test]

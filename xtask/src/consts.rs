@@ -799,7 +799,8 @@ pub(crate) const REPORT_DIR: &str = ".ci-artifacts/junit";
 /// catalog already validates by name for the same reason: the executor's enum
 /// lives in `ci::run`, and a lane is refused at configuration load, before any
 /// executor is consulted. `lane_config.rs` pins the two lists together.
-pub(crate) const PIPELINE_KINDS: [&str; 8] = [
+pub(crate) const PIPELINE_KINDS: [&str; 9] = [
+    "bench",
     "branch",
     "platforms",
     "merge-request",

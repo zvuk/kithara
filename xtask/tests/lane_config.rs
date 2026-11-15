@@ -49,6 +49,16 @@ fn publication_is_a_verified_gate_for_review_main_and_dispatch() {
 }
 
 #[test]
+fn deep_bench_keeps_one_executor_for_both_hosts() {
+    let config = xtask_config();
+    let lane = &config["ext"]["ci"]["lanes"]["deep-bench"];
+    assert_eq!(strings(&lane["os"]), ["linux", "macos"]);
+    assert_eq!(lane["cache_group"].as_str(), Some("host"));
+    assert_eq!(lane["timeout_minutes"].as_integer(), Some(120));
+    assert_eq!(strings(&lane["steps"][0]["args"]), ["perf", "bench", "ci"]);
+}
+
+#[test]
 fn config_reads_follow_the_running_checkout() {
     if std::env::var_os("KITHARA_LANE_CONFIG_RELOCATION_TEST").is_some() {
         assert_eq!(xtask_config()["relocated"].as_bool(), Some(true));
@@ -229,6 +239,7 @@ fn the_catalog_accepts_exactly_the_pipeline_kinds_the_executor_knows() {
     assert_eq!(
         listed,
         vec![
+            "bench",
             "branch",
             "platforms",
             "merge-request",
@@ -250,7 +261,7 @@ fn xtask_pipeline_kind_names() -> Vec<String> {
         .find("pub(crate) const PIPELINE_KINDS")
         .expect("PIPELINE_KINDS is declared");
     let body = &source[start..];
-    // Skip past the `: [&str; 8]` type annotation first, so the brackets found
+    // Skip past the type annotation first, so the brackets found
     // below are the array literal's, not the type's.
     let assigned = body.find('=').expect("PIPELINE_KINDS is assigned a value");
     let body = &body[assigned..];

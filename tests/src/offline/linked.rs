@@ -215,7 +215,6 @@ pub struct LinkCue {
     pub position: Position,
     pub curve: kithara::sync::SpeedCurve,
     pub before: TrackSnapshot,
-    pub before_segment: Option<SegmentId>,
     pub consumed: Option<SlotSnapshot>,
     pub host_input: Option<usize>,
     pub native: Option<LinkReceiptOrigin>,
@@ -273,14 +272,6 @@ fn speed_trace_evidence(
 }
 
 impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
-    fn bound_segment(snapshot: &TrackSnapshot, out: &Outbox<'_, S>) -> Option<SegmentId> {
-        let pass = out.pass()?;
-        let slot = pass.deck.slots.get(usize::from(snapshot.slot?.get()))?;
-        slot.binding
-            .filter(|binding| binding.item() == snapshot.item)
-            .map(|binding| binding.segment())
-    }
-
     fn trace_entry(
         &self,
         event: &str,
@@ -362,7 +353,6 @@ impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
         seq: Option<Seq>,
         native: Option<(Position, TrackSnapshot)>,
         origin: Option<LinkReceiptOrigin>,
-        out: &Outbox<'_, S>,
     ) {
         if let Some(seq) = seq
             && let Some((position, before)) = native
@@ -378,7 +368,6 @@ impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
                 seq,
                 position,
                 curve,
-                before_segment: Self::bound_segment(&before, out),
                 before,
                 consumed: None,
                 host_input,
@@ -674,7 +663,7 @@ where
             observation.timeline.push(admission);
         }
         let seq = result?;
-        self.record_native_seek(seq, native, seek_origin, out);
+        self.record_native_seek(seq, native, seek_origin);
         if let Some(seq) = seq
             && let Some(origin) = seek_origin
         {
@@ -891,7 +880,7 @@ where
                 SeekBatch::Deck(_) => LinkReceiptOrigin::Deck,
                 SeekBatch::Lane(_) => LinkReceiptOrigin::Lane,
             };
-            self.record_native_seek(Some(batch.seq()), native, Some(origin), out);
+            self.record_native_seek(Some(batch.seq()), native, Some(origin));
             self.observation
                 .lock()
                 .seeks
@@ -944,7 +933,6 @@ where
                 seq,
                 position,
                 curve,
-                before_segment: Self::bound_segment(&before, out),
                 before,
                 consumed: None,
                 host_input,
