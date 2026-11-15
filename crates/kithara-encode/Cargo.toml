@@ -56,7 +56,7 @@ ffmpeg-next = { workspace = true, optional = true, features = ["static"] }
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "hang", "mock"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-decode = { workspace = true, features = ["fdk-aac"] }

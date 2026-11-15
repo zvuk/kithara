@@ -72,7 +72,7 @@ windows-sys = { workspace = true, features = ["Win32_System_Threading"] }
 
 [dev-dependencies]
 kithara-platform = { path = ".", default-features = false, features = ["tokio-rt-multi-thread"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "subscriber"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang", "subscriber"] }
 
 assert_no_alloc = { workspace = true }
 # Which sink a census line reaches is only observable through a subscriber; the

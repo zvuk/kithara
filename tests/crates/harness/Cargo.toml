@@ -17,16 +17,16 @@ load = ["kithara-integration-tests/load"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
-kithara = { workspace = true, features = ["platform"] }
+kithara = { workspace = true, features = ["test", "platform"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "hang", "mock"] }
 num-traits = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true, features = ["assets", "mock", "offline", "signal", "stretch-glide", "warp"] }
+kithara = { workspace = true, features = ["test", "assets", "mock", "offline", "signal", "stretch-glide", "warp"] }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
 
 cochlea-features = { workspace = true }
