@@ -515,6 +515,7 @@ store-failure-output = true
         let lock = Command::new("cargo")
             .args(["generate-lockfile", "--offline"])
             .env("CARGO_HOME", &cargo_home)
+            .stderr(Stdio::inherit())
             .current_dir(temp.path())
             .output()
             .expect("generate subject lockfile");
@@ -735,7 +736,7 @@ store-failure-output = true
     }
 
     #[test]
-    fn collector_finishes_while_another_workspace_holds_the_package_cache() {
+    fn collector_does_not_wait_for_another_workspaces_package_cache() {
         use std::{sync::mpsc, thread, time::Duration};
 
         let shared = tempfile::tempdir().expect("unrelated Cargo home");
@@ -760,11 +761,11 @@ store-failure-output = true
                     .expect("collector result");
             });
             let held = result.recv_timeout(Duration::from_secs(30));
-            let completed_while_locked = held.is_ok();
             drop(lock);
             let output = held
                 .unwrap_or_else(|_| result.recv().expect("collector finishes after unlocking"))
                 .expect("collect real collector test output");
+            let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
                 output.status.success()
                     && String::from_utf8_lossy(&output.stdout)
@@ -772,9 +773,8 @@ store-failure-output = true
                 "the real collector test must execute successfully: {output:?}"
             );
             assert!(
-                completed_while_locked,
-                "the dependency-free collector waited for another workspace's package cache: {}",
-                String::from_utf8_lossy(&output.stderr)
+                !stderr.contains("waiting for file lock on package cache"),
+                "the dependency-free collector waited for another workspace's package cache: {stderr}"
             );
         });
     }
