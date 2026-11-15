@@ -232,11 +232,12 @@ async fn surface_dependent_commands_share_owner_order_before_publication() {
         .map(|item| num_traits::cast(item.queue_id().as_u64()).expect("safe id"))
         .collect();
     assert_eq!(ids, [first, tail]);
-    assert!(
-        events
-            .lock()
-            .iter()
-            .all(|event| !matches!(event, FfiPlayerEvent::Error { .. })),
+    let error = events.lock().iter().find_map(|event| match event {
+        FfiPlayerEvent::Error { error } => Some(error.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        error, None,
         "known pending command targets must reach owner validation in order"
     );
 }

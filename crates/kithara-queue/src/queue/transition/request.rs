@@ -158,10 +158,10 @@ where
         {
             return self.retarget_request(request, settings, out);
         }
-        let bound = if auto && reason == AdvanceReason::NaturalEof {
-            self.auto_bound(settings)?
-        } else {
-            Some(Bound::AtOrAfter(self.earliest()?))
+        let bound = match self.clock {
+            None => None,
+            Some(_) if auto && reason == AdvanceReason::NaturalEof => self.auto_bound(settings)?,
+            Some((now, delivery)) => Some(Bound::AtOrAfter(now + delivery)),
         };
         self.begin_transition(request, settings, bound, output, out)
     }
@@ -297,6 +297,15 @@ where
         &mut self,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
+        let Some((now, delivery)) = self.clock else {
+            return Ok(None);
+        };
+        if let Some(target) = &mut self.target
+            && !target.auto
+            && target.bound.is_none()
+        {
+            target.bound = Some(Bound::AtOrAfter(now + delivery));
+        }
         let Some(target) = self.target.filter(|target| {
             target.stale.is_none()
                 && target.repeat.is_none()

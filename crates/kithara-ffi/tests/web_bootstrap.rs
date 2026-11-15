@@ -2,10 +2,14 @@
 
 use admission::Admission;
 use kithara::platform::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     thread,
     time::{Duration, timeout},
 };
-use kithara_ffi::{player::AudioPlayer, web::bindings};
+use kithara_ffi::{observer::SeekCallback, player::AudioPlayer, web::bindings};
 use kithara_test_utils::wait_until;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -67,6 +71,40 @@ async fn worklet_import_waits_for_worker_bootstrap_admission() {
         started_within_lease,
         "the worklet processor starts its thread within the bootstrap admission",
     );
+    drop(admission);
+    let mut admission = Admission::hold()
+        .await
+        .expect("hold unrelated worker bootstrap");
+    let completion = Arc::new(Completion(AtomicUsize::new(0)));
+    player.seek(0.0, None, completion.clone());
+    let answered = wait_until(
+        Duration::from_secs(5),
+        "queue answer under held bootstrap",
+        || {
+            player.tick_js();
+            completion.0.load(Ordering::Acquire) != 0
+        },
+    )
+    .await;
+    admission
+        .release()
+        .await
+        .expect("release bootstrap before assertion");
+    answered.expect("an owner reply must not need another worker to bootstrap");
+    assert_eq!(
+        completion.0.load(Ordering::Acquire),
+        2,
+        "the owner confirms the empty queue seek"
+    );
+}
+
+struct Completion(AtomicUsize);
+
+impl SeekCallback for Completion {
+    fn on_complete(&self, finished: bool) {
+        self.0
+            .store(if finished { 2 } else { 1 }, Ordering::Release);
+    }
 }
 
 mod admission {
