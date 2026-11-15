@@ -85,7 +85,8 @@ enum JournalAction {
 const fn journal_action(kind: PipelineKind) -> JournalAction {
     match kind {
         PipelineKind::Main | PipelineKind::Nightly => JournalAction::Record,
-        PipelineKind::Branch
+        PipelineKind::Bench
+        | PipelineKind::Branch
         | PipelineKind::Platforms
         | PipelineKind::MergeRequest
         | PipelineKind::Quarantine

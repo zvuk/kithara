@@ -162,7 +162,7 @@ async fn wait_for_current_track(
 /// `ReadinessGate` per resource that has to be re-armed for every fresh
 /// `PlayWorker::load`. If the shortcut bypasses re-arming, the new read path
 /// observes a still-closed gate and never makes progress.
-#[kithara::test(tokio, multi_thread)]
+#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(1105)))]
 #[case::plain(replay_plain().await)]
 #[case::aes128(replay_encrypted().await)]
 async fn replay_track_after_switch_does_not_hang_loader(

@@ -399,7 +399,7 @@ async fn test_audio_preload_rearms_after_seek(wav_44100: NamedTempFile) {
 /// `preloaded` is a one-way latch: once set by `preload()`, it must
 /// survive seeks.  If seek resets it, the audio callback switches to
 /// blocking recv — parking the thread on every empty ringbuf poll.
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1772)))]
 async fn preloaded_survives_seek(wav_88200: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());

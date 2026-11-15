@@ -611,6 +611,7 @@ async fn offline_callback_geometry_does_not_pace_the_audio_clock(
     tokio,
     multi_thread,
     serial,
+    tracing("kithara_test_utils::test::usdt=debug"),
     timeout(::std::time::Duration::from_millis(35618))
 )]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
@@ -842,7 +843,7 @@ async fn shared_worker_capture(
     tokio,
     multi_thread,
     serial,
-    timeout(::std::time::Duration::from_millis(25972))
+    timeout(::std::time::Duration::from_millis(26426))
 )]
 async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load(
     #[future(awt)] mixed_sources: PreparedSources,

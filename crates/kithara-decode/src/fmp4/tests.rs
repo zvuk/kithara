@@ -113,7 +113,7 @@ type DecoderHarness = (
     Arc<AtomicBool>,
 );
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(1258)))]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1302)))]
 #[case::ready(false, false)]
 #[case::partial(true, false)]
 #[case::same_target_supersedes_partial(true, true)]

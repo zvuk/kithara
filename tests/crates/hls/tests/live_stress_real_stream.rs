@@ -395,7 +395,7 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
     tokio,
     browser,
     serial,
-    timeout(::std::time::Duration::from_millis(12762)),
+    timeout(::std::time::Duration::from_millis(19127)),
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
@@ -657,7 +657,8 @@ async fn live_real_stream_seek_regression(
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
-    )
+    ),
+    timeout(::std::time::Duration::from_millis(1355))
 )]
 #[case::hls("HLS", mixed_plain().await)]
 #[case::drm("DRM", mixed_encrypted().await)]

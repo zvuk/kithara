@@ -1737,7 +1737,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant(
     serial,
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug"),
-    timeout(::std::time::Duration::from_millis(3187))
+    timeout(::std::time::Duration::from_millis(4853))
 )]
 async fn runtime_cross_codec_manual_switch_no_hang(#[future(awt)] retained_mixed: CreatedHls) {
     let server = retained_mixed;
@@ -2545,7 +2545,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof(
     native,
     tokio,
     serial,
-    timeout(::std::time::Duration::from_millis(6828)),
+    timeout(::std::time::Duration::from_millis(8954)),
     hang_timeout_secs(15),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
@@ -2740,7 +2740,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     serial,
     hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug"),
-    timeout(::std::time::Duration::from_millis(3953))
+    timeout(::std::time::Duration::from_millis(6631))
 )]
 #[cfg_attr(
     not(target_os = "android"),

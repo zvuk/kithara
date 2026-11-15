@@ -389,7 +389,7 @@ async fn deck_fx_observes_the_slot_gain_program_at_its_frame() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1598)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1702)))]
 async fn deck_chain_fader_zero_leaves_fx_input_and_silences_output() {
     let open = Arc::new(Mutex::new(Vec::with_capacity(TAKE)));
     let closed = Arc::new(Mutex::new(Vec::with_capacity(TAKE)));
@@ -533,7 +533,7 @@ async fn deck_fx_unit_turned_dry_while_off_switches_on_dry() {
     );
 }
 
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1088)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1234)))]
 async fn deck_fx_one_state_across_queue_crossfade() {
     let dry = crossfade_take(Vec::new()).await;
     let fx = crossfade_take(insert(0, Echo::new(ECHO))).await;

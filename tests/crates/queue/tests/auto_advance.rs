@@ -228,10 +228,11 @@ async fn crossfade_started_requires_a_live_predecessor() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1798)))]
+#[kithara::test(tokio, timeout(Short))]
 async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -1695,7 +1696,7 @@ async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
 
 /// A short autoplayed track opens its prefetch lead at once; the reload it
 /// prompts must not arm slot 0 against the decoder already playing it.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1020)))]
 async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     const TRACK_SECS: f64 = 0.4;
 

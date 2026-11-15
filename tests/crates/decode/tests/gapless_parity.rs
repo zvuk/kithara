@@ -25,7 +25,12 @@ use crate::gapless_common::{
 
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 
-#[kithara::test(native, tokio, hang_timeout_secs(1))]
+#[kithara::test(
+    native,
+    tokio,
+    hang_timeout_secs(1),
+    timeout(::std::time::Duration::from_millis(1451))
+)]
 async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory_paths(
     #[future(awt)] gapless_aac: (TestServerHelper, GaplessFixture),
 ) {

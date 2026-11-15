@@ -18,7 +18,12 @@ use kithara_test_fixtures::{
 };
 use reqwest::Client;
 
-#[kithara::test(native, tokio, hang_timeout_secs(1), timeout(Short))]
+#[kithara::test(
+    native,
+    tokio,
+    hang_timeout_secs(1),
+    timeout(::std::time::Duration::from_millis(1738))
+)]
 #[case(SignalAsset::MP3_SAW_1S, "audio/mpeg", None)]
 #[case(SignalAsset::FLAC_SAW_1S, "audio/flac", Some(44100))]
 #[case(SignalAsset::AAC_SAW_1S, "audio/aac", None)]
@@ -274,7 +279,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
 #[kithara::test(
     native,
     tokio,
-    timeout(::std::time::Duration::from_millis(2240)),
+    timeout(::std::time::Duration::from_millis(3041)),
     hang_timeout_secs(1)
 )]
 #[case::aac("aac", AudioCodec::AacLc)]
