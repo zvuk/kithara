@@ -6,8 +6,8 @@ use std::{
 use ::kithara::{
     analysis::{
         AnalysisFingerprint, AnalysisProgress, AnalysisToken, BeatArtifact, BeatGridModel,
-        BeatGridState, BeatSnapshot, BeatState, Bucket, GRID_SCHEMA_VERSION, GridBeat, RangeSet,
-        RawBeatGrid, Waveform,
+        BeatGridState, BeatSnapshot, BeatState, Bucket, GRID_SCHEMA_VERSION, GridBeat, Mode,
+        MusicalKey, PitchClass, RangeSet, RawBeatGrid, Waveform,
     },
     assets::StorageBackend,
     download::{Downloader, DownloaderConfig},
@@ -244,6 +244,14 @@ pub(crate) fn served_waveform() -> Waveform {
     Waveform::try_from(vec![Bucket::new(0.25, 0.5, 0.75); 8]).expect("fixture bands are in range")
 }
 
+/// A key the caller hands over.
+pub(crate) const fn served_key() -> MusicalKey {
+    MusicalKey {
+        tonic: PitchClass::D,
+        mode: Mode::Major,
+    }
+}
+
 /// Append a track the caller opened with artifacts already in hand.
 pub(crate) async fn track_prepared(
     host: &OffThread<(AppHost, AppQueueControl)>,
@@ -252,6 +260,7 @@ pub(crate) async fn track_prepared(
     app: &AppConfig,
     beat_grid: Option<BeatGridModel>,
     waveform: Option<Waveform>,
+    key: Option<MusicalKey>,
 ) -> (TrackId, AppTrackSource) {
     track_sourced(
         host,
@@ -260,6 +269,7 @@ pub(crate) async fn track_prepared(
         app,
         beat_grid.map(|grid| ArtifactSource::from(Arc::new(grid))),
         waveform.map(|wave| ArtifactSource::from(Arc::new(wave))),
+        key.map(|key| ArtifactSource::from(Arc::new(key))),
     )
     .await
 }
@@ -273,6 +283,7 @@ pub(crate) async fn track_sourced(
     app: &AppConfig,
     beat_grid: Option<ArtifactSource<BeatGridModel>>,
     waveform: Option<ArtifactSource<Waveform>>,
+    key: Option<ArtifactSource<MusicalKey>>,
 ) -> (TrackId, AppTrackSource) {
     let track_id = TrackId::from(id);
     let src = ResourceSrc::parse(url).expect("fixture url parses");
@@ -286,6 +297,7 @@ pub(crate) async fn track_sourced(
         .file(app.file.clone())
         .maybe_beat_grid(beat_grid)
         .maybe_waveform(waveform)
+        .maybe_key(key)
         .build();
     host.call(move |(_, queue)| {
         queue
@@ -492,6 +504,7 @@ pub(crate) fn supplied(grid: BeatGridModel) -> TrackArtifacts {
         None,
         super::supply::Prepared {
             beat_grid: super::supply::Supply::Ready(Arc::new(grid)),
+            key: super::supply::Supply::Missing,
             waveform: super::supply::Supply::Missing,
         },
         false,
@@ -504,6 +517,7 @@ pub(crate) fn refused() -> TrackArtifacts {
         None,
         super::supply::Prepared {
             beat_grid: super::supply::Supply::Failed,
+            key: super::supply::Supply::Missing,
             waveform: super::supply::Supply::Missing,
         },
         false,

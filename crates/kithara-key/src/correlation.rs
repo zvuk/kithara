@@ -2,7 +2,7 @@ use num_traits::cast::ToPrimitive;
 
 use crate::{
     consts,
-    key::{KeyEstimate, Mode, MusicalKey},
+    key::{KeyEstimate, Mode, MusicalKey, PitchClass},
 };
 
 struct Best {
@@ -31,9 +31,16 @@ pub(crate) fn estimate(sum: &[f64; consts::PITCH_CLASSES]) -> Option<KeyEstimate
         (Mode::Major, major)
     };
     KeyEstimate::new(
-        MusicalKey::at_rotation(best.rotation, mode),
+        at_rotation(best.rotation, mode)?,
         best.correlation.to_f32()?,
     )
+}
+
+fn at_rotation(semitones_above_a: usize, mode: Mode) -> Option<MusicalKey> {
+    let semitone =
+        (semitones_above_a + usize::from(PitchClass::A.semitone())) % consts::PITCH_CLASSES;
+    let tonic = PitchClass::try_from(u8::try_from(semitone).ok()?).ok()?;
+    Some(MusicalKey { mode, tonic })
 }
 
 fn best(profile: &[f64; consts::PITCH_CLASSES], key: &[f64; consts::PITCH_CLASSES]) -> Best {
@@ -81,4 +88,35 @@ fn correlation(
 
 fn mean(values: &[f64; consts::PITCH_CLASSES]) -> f64 {
     values.iter().sum::<f64>() / values.len().to_f64().unwrap_or(f64::NAN)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn the_24_rotations_name_the_24_keys_from_a() {
+        let mut keys = HashSet::new();
+        for mode in [Mode::Major, Mode::Minor] {
+            for rotation in 0..12 {
+                let key = at_rotation(rotation, mode).unwrap_or_else(|| panic!("{rotation}"));
+                assert_eq!(key.mode, mode);
+                assert_eq!(usize::from(key.tonic.semitone()), (rotation + 9) % 12);
+                keys.insert(key);
+            }
+        }
+        assert_eq!(keys.len(), 24);
+        assert_eq!(
+            at_rotation(0, Mode::Minor).map(|key| key.tonic),
+            Some(PitchClass::A)
+        );
+        assert_eq!(
+            at_rotation(3, Mode::Major).map(|key| key.tonic),
+            Some(PitchClass::C)
+        );
+    }
 }

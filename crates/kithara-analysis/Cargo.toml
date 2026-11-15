@@ -46,7 +46,7 @@ kithara-bufpool = { workspace = true }
 kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch"] }
 kithara-dsp = { workspace = true }
-kithara-key = { workspace = true }
+kithara-key = { workspace = true, features = ["dsp"] }
 kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
 kithara-signal = { workspace = true }

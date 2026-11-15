@@ -4,7 +4,6 @@ use std::{
 };
 
 use kithara::{
-    analysis::TrackAnalysis,
     events::TrackId,
     platform::{
         CancelToken,
@@ -144,9 +143,7 @@ impl Owner {
                     bpm: TrackArtifacts::grid_from(analysis, entry.prepared())
                         .map(|grid| grid.as_raw().bpm)
                         .filter(|bpm| bpm.is_finite() && *bpm > 0.0),
-                    key: analysis
-                        .and_then(TrackAnalysis::key)
-                        .map(|estimate| estimate.key()),
+                    key: TrackArtifacts::key_from(analysis, entry.prepared()),
                 };
                 (facts != TrackFacts::default())
                     .then(|| (entry.config().source().to_string(), facts))

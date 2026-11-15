@@ -6011,6 +6011,7 @@ dependencies = [
  "kithara-events",
  "kithara-file",
  "kithara-hls",
+ "kithara-key",
  "kithara-net",
  "kithara-platform",
  "kithara-play",
