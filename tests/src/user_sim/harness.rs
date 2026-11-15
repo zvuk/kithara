@@ -211,8 +211,8 @@ impl SimCapture {
             .into_iter()
             .map(|event| {
                 json!({
-                    "probe": event.probe, "target": event.target,
-                    "file": event.file, "line": event.line, "thread": format!("{:?}", event.thread),
+                    "probe": event.probe, "target": event.target(),
+                    "file": event.file(), "line": event.line(), "thread": format!("{:?}", event.thread),
                     "fields": event.fields().collect::<BTreeMap<_, _>>(),
                     "wall_ns": u64::try_from(event.wall_time.duration_since(
                         probe_epoch.expect("a retained event has an epoch"),

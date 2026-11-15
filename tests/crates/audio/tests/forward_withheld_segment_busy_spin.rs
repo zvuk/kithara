@@ -63,7 +63,7 @@ const MAX_PARKED_DECODE_STEPS: usize = 100;
 fn count_decode_steps(events: &[ProbeEvent]) -> usize {
     events
         .iter()
-        .filter(|event| event.target == "kithara_audio_probe" && event.probe == "decode_step")
+        .filter(|event| event.target() == "kithara_audio_probe" && event.probe == "decode_step")
         .count()
 }
 
