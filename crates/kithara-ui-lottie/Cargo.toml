@@ -22,7 +22,7 @@ tracing = { workspace = true }
 velato = { workspace = true }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 
 [[test]]
 name = "lottie"

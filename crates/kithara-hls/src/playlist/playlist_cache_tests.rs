@@ -13,7 +13,7 @@ use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Notify},
-    tokio::task::{spawn, yield_now},
+    tokio::task::spawn,
 };
 use kithara_test_utils::{TestHttpServer, kithara};
 use tempfile::tempdir;
@@ -75,8 +75,8 @@ async fn gated_playlist_server(
             async move {
                 if requests.fetch_add(1, Ordering::SeqCst) == 0 {
                     first_seen.notify_one();
+                    release.notified().await;
                 }
-                release.notified().await;
                 body
             }
         }),
@@ -256,19 +256,16 @@ async fn concurrent_caches_share_one_playlist_repair() {
     let first = spawn(async move { first_cache.master_playlist(&first_key, &first_url).await });
     first_seen.notified().await;
 
-    let second_polled = Arc::new(Notify::default());
-    let task_second_polled = Arc::clone(&second_polled);
-    let second = spawn(async move {
-        task_second_polled.notify_one();
-        second_cache.master_playlist(&key, &url).await
-    });
-    second_polled.notified().await;
-    yield_now().await;
+    let mut second = std::pin::pin!(second_cache.master_playlist(&key, &url));
+    assert!(
+        futures::poll!(second.as_mut()).is_pending(),
+        "the second cache waits for the first repair"
+    );
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     release.notify_one();
 
     let first = first.await.expect("first task").expect("first playlist");
-    let second = second.await.expect("second task").expect("second playlist");
+    let second = second.await.expect("second playlist");
     assert_eq!(first.variants.len(), 1);
     assert_eq!(second.variants.len(), 1);
     assert_eq!(requests.load(Ordering::SeqCst), 1);
