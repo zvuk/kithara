@@ -1,17 +1,15 @@
-use std::{array, collections::btree_map::Entry};
+use std::collections::btree_map::Entry;
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
-use kithara_dsp::sum_squares;
 use kithara_signal::FrameCoverage;
-use num_traits::cast::ToPrimitive;
 use rangemap::RangeSet;
 use tracing::debug;
 
 use super::{
     WaveformAnalyzer,
-    waveform::{Partial, consts},
+    waveform::{Columns, Partial, body},
 };
-use crate::Band;
+use crate::{AnalyzerError, consts};
 
 impl WaveformAnalyzer {
     pub(super) fn evict_overflow(&mut self) {
@@ -19,7 +17,7 @@ impl WaveformAnalyzer {
             let oldest = self
                 .partial
                 .iter()
-                .min_by_key(|(_, partial)| partial.seq)
+                .min_by_key(|(_, held)| held.seq)
                 .map(|(index, _)| *index);
             let Some(index) = oldest else {
                 return;
@@ -32,142 +30,127 @@ impl WaveformAnalyzer {
         }
     }
 
-    pub(super) fn hop(&self) -> u64 {
-        u64::try_from(self.window_hop).unwrap_or(1)
-    }
-
-    #[cfg(test)]
-    pub(super) fn partial_len(&self) -> usize {
-        self.partial.len()
-    }
-
-    fn reduce(&mut self, index: u64, samples: &[f32]) {
-        let bands = if self.fft.forward(samples, &mut self.spectrum).is_ok() {
-            self.window_bands()
-        } else {
-            [0.0; Band::COUNT]
-        };
-        self.bands.insert(index, bands);
-    }
-
-    pub(super) fn reduce_if_complete(&mut self, index: u64) {
-        if self.bands.contains_key(&index) {
-            return;
+    delegate::delegate! {
+        to self {
+            #[expr(u64::try_from($ / 4).unwrap_or(1))]
+            #[call(window_size)]
+            pub(super) fn hop(&self) -> u64;
+            #[expr(u64::try_from($).unwrap_or(0))]
+            #[call(window_size)]
+            pub(super) fn size(&self) -> u64;
         }
+    }
+
+    pub(super) fn window_size(&self) -> usize {
+        self.column_frames * consts::WINDOW_COLUMNS
+    }
+
+    pub(super) fn reduce_if_complete(&mut self, index: u64) -> Result<(), AnalyzerError> {
         let start = index.saturating_mul(self.hop());
-        let span = start..start.saturating_add(self.size());
+        let end = start.saturating_add(self.size());
         if !self
             .partial
             .get(&index)
-            .is_some_and(|partial| partial.written.covers(&span))
+            .is_some_and(|held| held.written.covers(&(start..end)))
         {
-            return;
+            return Ok(());
         }
-        let Some(partial) = self.partial.remove(&index) else {
-            return;
+        let Some(held) = self.partial.remove(&index) else {
+            return Ok(());
         };
-        self.reduce(index, &partial.samples);
+        let columns = self
+            .envelope
+            .reduce(&held.samples, index == 0, self.window_size())?;
+        self.columns.insert(index, columns);
+        Ok(())
     }
 
-    pub(super) fn reduce_padded(&mut self, extent: u64) {
-        if extent == 0 || extent >= self.size() {
-            return;
+    pub(super) fn tail_columns(
+        &mut self,
+        extent: Option<u64>,
+    ) -> Result<Option<(u64, Columns)>, AnalyzerError> {
+        let Some(extent) = extent.filter(|extent| *extent > 0) else {
+            return Ok(None);
+        };
+        let body = (extent - 1) / (self.hop() * 3);
+        let index = if body == 0 { 0 } else { body * 3 - 1 };
+        let Some(held) = self.partial.get(&index) else {
+            return Ok(None);
+        };
+        let start = index.saturating_mul(self.hop());
+        if !held.written.covers(&(start..extent)) {
+            return Ok(None);
         }
-        let Some(partial) = self.partial.remove(&0) else {
-            return;
-        };
-        let covered = usize::try_from(extent)
-            .unwrap_or(usize::MAX)
-            .min(partial.samples.len());
-        self.reduce(0, &partial.samples[..covered]);
+        let frames =
+            usize::try_from(extent - start).map_err(|_| kithara_dsp::filter::FilterError::Shape)?;
+        Ok(Some((
+            index,
+            self.envelope.reduce(&held.samples, index == 0, frames)?,
+        )))
     }
 
-    #[cfg(test)]
-    pub(super) fn reduced(&self, index: u64) -> Option<[f32; Band::COUNT]> {
-        self.bands.get(&index).copied()
-    }
-
-    /// The caller hands only windows whose span overlaps the clipped range, so that range is never
-    /// empty and needs no second overlap test.
     pub(super) fn scatter<S>(
         &mut self,
         pools: &PoolRegion<S>,
         index: u64,
-        mono: &[f32],
+        pcm: &[f32],
+        channels: usize,
         at: u64,
         end: u64,
     ) -> Result<(), PoolError>
     where
         S: HasPool<f32>,
     {
-        if self.bands.contains_key(&index) {
+        if self.columns.contains_key(&index) {
             return Ok(());
         }
-        let size = self.size();
         let start = index.saturating_mul(self.hop());
         let from = start.max(at);
-        let to = start.saturating_add(size).min(end);
+        let to = start.saturating_add(self.size()).min(end);
         let (Ok(offset), Ok(source), Ok(len)) = (
             usize::try_from(from - start),
             usize::try_from(from - at),
-            usize::try_from(to.saturating_sub(from)),
+            usize::try_from(to - from),
         ) else {
             return Ok(());
         };
         let window_size = self.window_size();
-
         let partial = match self.partial.entry(index) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
-                let opened = self.opened;
-                self.opened = opened.saturating_add(1);
+                let seq = self.opened;
+                self.opened = seq.saturating_add(1);
                 entry.insert(Partial {
-                    samples: pools.get_with_len::<f32>(window_size)?,
+                    samples: pools.get_with_len::<f32>(window_size * 2)?,
                     written: RangeSet::new(),
-                    seq: opened,
+                    seq,
                 })
             }
         };
-        let (Some(dst), Some(src)) = (
-            partial.samples.get_mut(offset..offset + len),
-            mono.get(source..source + len),
-        ) else {
-            return Ok(());
-        };
-        dst.copy_from_slice(src);
+        let target = &mut partial.samples[offset * 2..(offset + len) * 2];
+        let source = &pcm[source * channels..(source + len) * channels];
+        for (target, frame) in target
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .zip(source.chunks_exact(channels))
+        {
+            target.copy_from_slice(&[frame[0], frame[usize::from(channels > 1)]]);
+        }
         partial.written.insert(from..to);
         Ok(())
     }
 
-    pub(super) fn size(&self) -> u64 {
-        u64::try_from(self.window_size()).unwrap_or(0)
-    }
-
-    /// Leaves the DC bin out so a constant offset never colors the low band;
-    /// a crossover at either end of the spectrum empties its band.
-    fn window_bands(&self) -> [f32; Band::COUNT] {
-        let (re, im) = (self.spectrum.re(), self.spectrum.im());
-        let [low, mid, high] = [1, self.low_mid_bin.max(1), self.mid_high_bin.max(1)];
-        let band = [low..mid, mid..high, high..re.len()]
-            .map(|bins| sum_squares(&re[bins.clone()]) + sum_squares(&im[bins]));
-        let total: f32 = band.iter().sum();
-        let rms = (total / self.window_size().to_f32().unwrap_or(1.0)).sqrt();
-        if rms < self.params.energy_floor() {
-            return [0.0; Band::COUNT];
-        }
-        array::from_fn(|i| band[i] * self.band_bin_inv[i])
-    }
-
-    pub(super) fn window_count(&self, extent: Option<u64>) -> usize {
-        let slots = match extent {
-            Some(extent) if extent >= self.size() => (extent - self.size()) / self.hop() + 1,
-            Some(_) => u64::from(!self.bands.is_empty()),
-            None => self.bands.keys().next_back().map_or(0, |last| last + 1),
-        };
-        usize::try_from(slots).unwrap_or(usize::MAX)
-    }
-
-    pub(super) fn window_size(&self) -> usize {
-        self.fft.size().get()
+    pub(super) fn column_count(&self, extent: Option<u64>) -> usize {
+        let count = extent.map_or_else(
+            || {
+                self.columns
+                    .keys()
+                    .next_back()
+                    .map_or(0, |last| (body(*last) + 1).saturating_mul(48))
+            },
+            |extent| extent.div_ceil(u64::try_from(self.column_frames).unwrap_or(1)),
+        );
+        usize::try_from(count).unwrap_or(usize::MAX)
     }
 }

@@ -208,9 +208,9 @@ where
         )
     }
 
-    pub(crate) fn push_mono(
+    pub(crate) fn push_ingest(
         &mut self,
-        mono: &[f32],
+        pcm: &[f32],
         span: crate::producer::ring::Span,
         extent: &mut Extent,
         detector: Option<&mut beat::Detector>,
@@ -218,10 +218,10 @@ where
         if !self.take_origins(span.media_origin, span.visible_origin) {
             return Ingest::ForeignClock;
         }
-        let frames = mono.len().to_u64().unwrap_or(0);
+        let frames = (pcm.len() / span.channels).to_u64().unwrap_or(0);
         self.ingest(
-            mono,
-            1,
+            pcm,
+            span.channels,
             span.start..span.start + frames,
             Opens::Extends,
             extent,

@@ -209,7 +209,6 @@ mod tests {
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCoverage};
     use kithara_test_fixtures::analysis_fixtures::analysis_silence;
     use kithara_test_utils::kithara;
-    use kithara_waveform::Waveform;
     use num_traits::cast::ToPrimitive;
     use unimock::{MockFn, Unimock, matching};
 
@@ -769,10 +768,7 @@ mod tests {
         let after = restored.snapshot(None, false, progress.analysis().extent());
         assert_eq!(after.media_origin(), audio.meta.media_origin);
         assert_eq!(after.coverage(), progress.analysis().coverage());
-        assert_eq!(
-            after.waveform().map(Waveform::buckets),
-            progress.analysis().waveform().map(Waveform::buckets)
-        );
+        assert_eq!(after.waveform(), progress.analysis().waveform());
     }
 
     #[kithara::test]
@@ -817,10 +813,7 @@ mod tests {
             let after = pass.snapshot(None, false, None);
             assert_eq!(after.media_origin(), before.media_origin());
             assert_eq!(after.coverage(), before.coverage());
-            assert_eq!(
-                after.waveform().map(Waveform::buckets),
-                before.waveform().map(Waveform::buckets)
-            );
+            assert_eq!(after.waveform(), before.waveform());
             extent.prove_end(0);
             assert_eq!(
                 extent.frames(),
@@ -847,10 +840,10 @@ mod tests {
             spec: spec(),
             ..Default::default()
         };
-        assert!(writer.push(&metadata, 4, analysis_silence[..4].iter().copied()));
+        assert!(writer.push(&metadata, &analysis_silence[..4]));
         let span = reader.pop(&mut out).expect("the first span is accepted");
         assert_eq!(
-            pass.push_mono(&out, span, &mut extent, None),
+            pass.push_ingest(&out, span, &mut extent, None),
             Ingest::Accepted
         );
         let before = pass.snapshot(None, false, None);
@@ -865,7 +858,7 @@ mod tests {
                 frame_offset: 44_100,
                 ..metadata
             };
-            assert!(writer.push(&info, 4, analysis_silence[..4].iter().copied()));
+            assert!(writer.push(&info, &analysis_silence[..4]));
             let span = reader
                 .pop(&mut out)
                 .expect("the ring carries the source facts");
@@ -874,7 +867,7 @@ mod tests {
             } else {
                 Ingest::ForeignClock
             };
-            assert_eq!(pass.push_mono(&out, span, &mut extent, None), expected);
+            assert_eq!(pass.push_ingest(&out, span, &mut extent, None), expected);
             assert_eq!(
                 pass.snapshot(None, false, None).media_origin(),
                 metadata.media_origin

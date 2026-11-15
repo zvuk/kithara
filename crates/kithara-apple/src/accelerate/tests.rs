@@ -593,6 +593,9 @@ fn multichannel_biquad_validates_the_mutable_borrow_before_ffi() {
         MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("identity setup");
     let mut planes = [Plane([0.25; 4])];
     assert_eq!(filter.process(&mut planes, 0..4), Err(BiquadError::Shape));
-
+    assert_eq!(
+        filter.process_window(&mut planes, 0..4),
+        Err(BiquadError::Shape)
+    );
     assert_eq!(planes[0].0, [0.25; 4]);
 }

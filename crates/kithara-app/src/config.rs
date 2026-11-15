@@ -164,9 +164,9 @@ pub struct AppConfig {
     /// spelling of those knobs.
     #[config(skip = "transferred to the broadcast owner", patch(skip))]
     pub broadcast: Option<AppBroadcastConfig>,
-    /// Upper bound on waveform buckets (native = one per FFT window). Only
+    /// Upper bound on waveform buckets (native = one per peak column). Only
     /// caps very long tracks, to bound the cached blob.
-    #[config(builder(default = 96_000))]
+    #[config(builder(default = kithara::analysis::MAX_BUCKETS))]
     pub waveform_max_buckets: usize,
     /// Band count of the EQ layout every deck's player graph is built with.
     #[config(builder(default = 3))]

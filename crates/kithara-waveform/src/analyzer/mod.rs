@@ -1,3 +1,4 @@
+mod envelope;
 mod ops;
 mod waveform;
 

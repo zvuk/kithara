@@ -97,9 +97,9 @@ async fn runner_silent_wav_yields_all_zero_envelope(
         waveform.len()
     );
     assert!(
-        waveform.buckets().iter().all(|b| *b == Bucket::default()),
+        waveform.buckets().all(|b| b == Bucket::default()),
         "a silent source must yield all-zero buckets: {:?}",
-        waveform.buckets()
+        waveform
     );
 }
 
@@ -123,4 +123,17 @@ async fn runner_returns_nothing_when_cancelled_upfront(
         run_analysis(&master, config, pools, 100).await.is_none(),
         "a pre-cancelled analysis must not return an envelope"
     );
+}
+
+#[kithara::test]
+fn envelope_boundaries_equal_adjacent_four_band_eq_centres() {
+    let layout = kithara::effects::eq::generate_log_spaced_bands(4);
+    let edges = kithara::analysis::AnalysisParams::default().band_edges_hz();
+    for (edge, centres) in edges.into_iter().zip(layout.windows(2)) {
+        let expected = f64::from((centres[0].frequency() * centres[1].frequency()).sqrt());
+        assert!(
+            (edge - expected).abs() <= expected * 0.000_001,
+            "{edge} differs from {expected}"
+        );
+    }
 }

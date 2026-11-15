@@ -3,7 +3,7 @@ mod encode {
 
     use js_sys::{Float32Array, Float64Array, Object, Reflect};
     use kithara::{
-        analysis::{BeatArtifact, BeatSnapshot, BeatState, TrackAnalysis, Waveform},
+        analysis::{BeatArtifact, BeatSnapshot, BeatState, TrackAnalysis},
         queue::TrackId,
     };
     use num_traits::cast;
@@ -63,19 +63,27 @@ mod encode {
     }
 
     fn waveform(analysis: &TrackAnalysis) -> Float32Array {
-        let buckets = analysis.waveform().map_or(&[][..], Waveform::buckets);
-        let out =
-            Float32Array::new_with_length(length_of(buckets.len() * consts::BANDS_PER_BUCKET));
+        let Some(wave) = analysis.waveform() else {
+            return Float32Array::new_with_length(0);
+        };
+        let mut buckets = wave.buckets();
+        let out = Float32Array::new_with_length(length_of(wave.len() * consts::BANDS_PER_BUCKET));
         let mut staged = [0.0_f32; consts::STAGE];
         let mut written: u32 = 0;
-        for group in buckets.chunks(consts::STAGE / consts::BANDS_PER_BUCKET) {
-            for (slot, bucket) in staged.chunks_exact_mut(consts::BANDS_PER_BUCKET).zip(group) {
+        while buckets.len() > 0 {
+            let count = buckets.len().min(consts::STAGE / consts::BANDS_PER_BUCKET);
+            for (slot, bucket) in staged
+                .chunks_exact_mut(consts::BANDS_PER_BUCKET)
+                .zip(buckets.by_ref().take(count))
+            {
                 let [low, mid, high] = slot else { continue };
-                *low = bucket.low();
-                *mid = bucket.mid();
-                *high = bucket.high();
+                let left = bucket.left();
+                let right = bucket.right();
+                *low = left[0].max(right[0]);
+                *mid = left[1].max(left[2]).max(right[1]).max(right[2]);
+                *high = left[3].max(right[3]);
             }
-            let filled = group.len() * consts::BANDS_PER_BUCKET;
+            let filled = count * consts::BANDS_PER_BUCKET;
             let end = written.saturating_add(length_of(filled));
             out.subarray(written, end).copy_from(&staged[..filled]);
             written = end;

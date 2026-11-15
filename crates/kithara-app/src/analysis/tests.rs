@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use ::kithara::{
-    analysis::{AnalysisFile, AnalysisProgress, FrameCoverage, FrameSpan, TrackAnalysis, Waveform},
+    analysis::{AnalysisFile, AnalysisProgress, FrameCoverage, FrameSpan, TrackAnalysis},
     assets::{
         AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, ReadSide, StorageBackend,
     },
@@ -1281,8 +1281,8 @@ async fn a_supplied_waveform_over_cached_beats_opens_no_pass(tone_mp3: String) {
     let held = rx.borrow().clone().expect("the deck is served at once");
     assert!(held.grid().is_some(), "the cached beats are published");
     assert_eq!(
-        held.waveform().map(Waveform::buckets),
-        Some(served_waveform().buckets()),
+        held.waveform(),
+        Some(&served_waveform()),
         "and the waveform is the one the caller handed over, bucket for bucket"
     );
     cancel.cancel();

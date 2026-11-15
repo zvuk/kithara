@@ -165,6 +165,46 @@ impl MultichannelBiquad {
         Ok(())
     }
 
+    /// Section-major coefficients, with one five-coefficient row per channel.
+    pub fn coefficients(&self) -> impl ExactSizeIterator<Item = &[[f64; 5]]> {
+        self.table
+            .as_chunks::<5>()
+            .0
+            .chunks_exact(self.channels.get())
+    }
+
+    /// Filters a complete window in one native call; history carries over.
+    ///
+    /// Unlike `process`, rounding and nonfinite propagation may depend on the
+    /// window length. Callers own input admission and history reset.
+    ///
+    /// # Errors
+    /// [`BiquadError::Shape`] for mismatched planes or range.
+    pub fn process_window<P: DerefMut<Target = [f32]>>(
+        &mut self,
+        planes: &mut [P],
+        range: Range<usize>,
+    ) -> Result<(), BiquadError> {
+        self.prepare(planes, range.clone())?;
+        if range.is_empty() {
+            return Ok(());
+        }
+        let table = self.planes.as_mut_ptr();
+        // SAFETY: each checked plane covers range and the live setup's channel count.
+        // SAFETY: X and Y share the pointer table, the supported in-place form.
+        unsafe {
+            vDSP_biquadm(
+                self.setup.as_ptr(),
+                table.cast::<*const f32>(),
+                1,
+                table,
+                1,
+                range.len(),
+            );
+        }
+        Ok(())
+    }
+
     fn prepare<P: DerefMut<Target = [f32]>>(
         &mut self,
         planes: &mut [P],

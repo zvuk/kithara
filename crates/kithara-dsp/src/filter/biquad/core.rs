@@ -132,6 +132,40 @@ impl Biquad {
         Ok(())
     }
 
+    /// Filters a finite window from zero history and leaves the filter reset.
+    ///
+    /// Window arithmetic can differ from streaming arithmetic.
+    ///
+    /// # Errors
+    /// [`FilterError::Shape`] for mismatched planes or range, and
+    /// [`FilterError::Parameters`] for nonfinite input, before any mutation.
+    pub fn process_window(
+        &mut self,
+        planes: &mut [&mut [f32]],
+        range: Range<usize>,
+    ) -> Result<(), FilterError> {
+        if planes.len() != self.scratch.len()
+            || planes
+                .iter()
+                .any(|plane| plane.get(range.clone()).is_none())
+        {
+            return Err(FilterError::Shape);
+        }
+        if planes.iter().any(|plane| {
+            plane.get(range.clone()).is_some_and(|samples| {
+                !samples
+                    .iter()
+                    .fold(true, |finite, sample| finite & sample.is_finite())
+            })
+        }) {
+            return Err(FilterError::Parameters);
+        }
+        self.reset();
+        let result = self.cascade.process_window(planes, range);
+        self.reset();
+        result
+    }
+
     fn quiet_run<P: DerefMut<Target = [f32]>>(
         &mut self,
         planes: &mut [P],

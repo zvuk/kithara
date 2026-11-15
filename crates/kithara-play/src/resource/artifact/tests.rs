@@ -43,7 +43,11 @@ fn grid() -> RawBeatGrid {
 }
 
 fn waveform() -> Waveform {
-    Waveform::try_from(vec![Bucket::new(0.25, 0.5, 0.75)]).expect("BUG: bands are in range")
+    Waveform::try_from(vec![Bucket::new(
+        [0.25, 0.5, 0.5, 0.75],
+        [0.25, 0.5, 0.5, 0.75],
+    )])
+    .expect("BUG: bands are in range")
 }
 
 fn downloader() -> Downloader {

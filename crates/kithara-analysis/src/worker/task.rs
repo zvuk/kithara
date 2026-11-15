@@ -238,7 +238,7 @@ where
                 break;
             };
             let outcome =
-                analyzers.push_mono(scratch, span, &mut self.extent, detector.as_deref_mut());
+                analyzers.push_ingest(scratch, span, &mut self.extent, detector.as_deref_mut());
             if outcome != Ingest::Accepted {
                 debug!(
                     ?outcome,

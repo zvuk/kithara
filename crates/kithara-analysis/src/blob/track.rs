@@ -215,7 +215,7 @@ mod tests {
     }
 
     fn active() -> AnalysisFingerprint {
-        fingerprint("wave:native:max1500:v1", consts::BEAT_TAG)
+        fingerprint("wave:native:max1500:v2", consts::BEAT_TAG)
     }
 
     fn rate() -> NonZeroU32 {
@@ -223,8 +223,8 @@ mod tests {
     }
 
     fn wave() -> Waveform {
-        Waveform::try_from([1, 0, 0, 0, 0, 0, 0, 63, 0, 0, 0, 63, 0, 0, 0, 63].as_slice())
-            .expect("hand-built blob is valid")
+        Waveform::try_from(vec![crate::Bucket::new([0.5; 4], [0.5; 4])])
+            .expect("hand-built waveform is valid")
     }
 
     fn grid() -> BeatArtifact {
@@ -408,10 +408,7 @@ mod tests {
             assert_eq!(got.revision(), want.revision());
             assert_eq!(got.is_settled(), want.is_settled());
             assert_eq!(got.fingerprint(), want.fingerprint());
-            assert_eq!(
-                got.waveform().map(Waveform::buckets),
-                want.waveform().map(Waveform::buckets)
-            );
+            assert_eq!(got.waveform(), want.waveform());
             assert_eq!(
                 got.beat().map(BeatSnapshot::artifact),
                 want.beat().map(BeatSnapshot::artifact)

@@ -4,6 +4,7 @@ use std::{
 };
 
 use kithara_apple::accelerate::{BiquadError, MultichannelBiquad};
+use num_traits::ToPrimitive;
 
 use crate::filter::FilterError;
 
@@ -34,6 +35,32 @@ impl Cascade {
         range: Range<usize>,
     ) -> Result<(), FilterError> {
         self.0.process(planes, range).map_err(filter_error)
+    }
+
+    pub(crate) fn process_window<P: DerefMut<Target = [f32]>>(
+        &mut self,
+        planes: &mut [P],
+        range: Range<usize>,
+    ) -> Result<(), FilterError> {
+        if planes.len() >= 4 && self.0.coefficients().len() == 2 {
+            let mut sections = self.0.coefficients();
+            let first = sections.next().expect("two-section window");
+            let second = sections.next().expect("two-section window");
+            super::super::window::pair(planes, range, |plane| {
+                [
+                    *first.get(plane).expect("validated plane count"),
+                    *second.get(plane).expect("validated plane count"),
+                ]
+                .map(|section| {
+                    section.map(|coefficient| {
+                        coefficient.to_f32().expect("coefficients admitted as f32")
+                    })
+                })
+            });
+            Ok(())
+        } else {
+            self.0.process_window(planes, range).map_err(filter_error)
+        }
     }
 
     pub(crate) fn reset(&mut self) {

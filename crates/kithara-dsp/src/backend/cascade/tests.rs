@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use fearless_simd::{Level, dispatch};
-use kithara_test_fixtures::portable::harmonics;
+use kithara_test_fixtures::portable::{harmonics, sine_440};
 use kithara_test_utils::kithara;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -108,4 +108,42 @@ fn cascade_planes_equal_individual_filters_bit_for_bit() {
             filter.process(planes, range).expect("matching planes");
         }
     );
+}
+
+#[kithara::test]
+fn windows_with_distinct_sections_match_the_causal_stream() {
+    let four = NonZeroUsize::MIN.saturating_add(3);
+    let mut filter = crate::filter::Biquad::new(four, TWO).expect("four lanes");
+    let mut portable = cascade::Cascade::new(four, TWO).expect("portable lanes");
+    for (section, values) in SECTIONS.into_iter().enumerate() {
+        let [b0, b1, b2, a1, a2] = values.map(f64::from);
+        filter
+            .retune(section, crate::filter::Coefficients { b0, b1, b2, a1, a2 })
+            .expect("valid section");
+        portable
+            .set_section(section, 0..four.get(), values)
+            .expect("portable section");
+    }
+    let mut actual = std::array::from_fn::<_, 4, _>(|_| sine_440().to_vec());
+    let mut expected = actual.clone();
+    let mut shared = actual.clone();
+    let frames = actual[0].len();
+    filter
+        .process(&mut expected, 0..frames)
+        .expect("causal stream");
+    filter
+        .process_window(&mut actual.each_mut().map(Vec::as_mut_slice), 0..frames)
+        .expect("independent window");
+    portable
+        .process_window(&mut shared, 0..frames)
+        .expect("portable window");
+    for actual in [&actual, &shared] {
+        assert!(
+            actual
+                .iter()
+                .flatten()
+                .zip(expected.iter().flatten())
+                .all(|(a, b)| (a - b).abs() <= 0.000_05)
+        );
+    }
 }

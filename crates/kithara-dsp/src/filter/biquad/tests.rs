@@ -87,3 +87,63 @@ fn biquad_refused_plane_retunes_preserve_design_and_history() {
         assert_eq!(actual.to_bits(), expected.to_bits());
     }
 }
+
+#[kithara::test]
+#[case(f32::NAN)]
+#[case(f32::INFINITY)]
+#[case(f32::NEG_INFINITY)]
+fn biquad_windows_are_independent_and_refuse_nonfinite_before_mutation(#[case] nonfinite: f32) {
+    let mut filter = Biquad::new(TWO, TWO).expect("filter builds");
+    for section in 0..2 {
+        filter
+            .retune(section, coefficients(1_000.0))
+            .expect("valid section");
+    }
+    let input = [sine_440().to_vec(), sine_440().to_vec()];
+    let frames = input[0].len();
+    let mut expected = input.clone();
+    filter
+        .process_window(&mut expected.each_mut().map(Vec::as_mut_slice), 0..frames)
+        .expect("finite window");
+    let mut unrelated = [vec![0.25; frames], vec![-0.5; frames]];
+    filter
+        .process_window(&mut unrelated.each_mut().map(Vec::as_mut_slice), 0..frames)
+        .expect("finite window");
+    let mut actual = input.clone();
+    filter
+        .process_window(&mut actual.each_mut().map(Vec::as_mut_slice), 0..frames)
+        .expect("finite window");
+    assert_eq!(actual, expected);
+    filter.settle(&[0.25, -0.5]).expect("matching levels");
+    let mut control = Biquad::new(TWO, TWO).expect("filter builds");
+    for section in 0..2 {
+        control
+            .retune(section, coefficients(1_000.0))
+            .expect("valid section");
+    }
+    control.copy_state(&filter).expect("matching filters");
+    let mut invalid = [vec![1.0, 0.0, nonfinite], vec![0.0; 3]];
+    let before = invalid
+        .clone()
+        .map(|plane| plane.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
+    assert_eq!(
+        filter.process_window(&mut invalid.each_mut().map(Vec::as_mut_slice), 0..3),
+        Err(FilterError::Parameters)
+    );
+    assert_eq!(
+        invalid.map(|plane| plane.iter().map(|x| x.to_bits()).collect::<Vec<_>>()),
+        before
+    );
+    assert_eq!(
+        filter.process_window(
+            &mut actual.each_mut().map(Vec::as_mut_slice),
+            0..frames.saturating_add(1)
+        ),
+        Err(FilterError::Shape)
+    );
+    let mut tail = [vec![0.0; 128], vec![0.0; 128]];
+    let mut twin = tail.clone();
+    filter.process(&mut tail, 0..128).expect("matching planes");
+    control.process(&mut twin, 0..128).expect("matching planes");
+    assert_eq!(tail, twin);
+}

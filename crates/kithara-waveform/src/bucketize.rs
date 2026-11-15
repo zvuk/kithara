@@ -1,27 +1,32 @@
-/// Fold a fixed-rate raw series into exactly `buckets` values by normalized
-/// position, combining each bucket's range with `combine`. Bucket `b` folds the
-/// raw range `[b*R/N, (b+1)*R/N)`; an empty range yields `empty` (very short
-/// tracks). This is THE `[0, 1]` index boundary - it lives in exactly one place.
+use num_traits::ToPrimitive;
+
+/// Folds ordered covered columns on one fixed grid without allocating uncovered columns.
 pub(crate) fn bucketize<T: Copy>(
-    raw: &[T],
+    raw: impl IntoIterator<Item = (usize, T)>,
+    total: usize,
     buckets: usize,
     empty: T,
     combine: impl Fn(T, T) -> T,
 ) -> Vec<T> {
-    if buckets == 0 {
-        return Vec::new();
+    let mut out = vec![empty; buckets];
+    if total == 0 || buckets == 0 {
+        return out;
     }
-
-    let len = raw.len();
-    let mut out: Vec<T> = Vec::with_capacity(buckets);
-    for b in 0..buckets {
-        let start = b * len / buckets;
-        let end = (b + 1) * len / buckets;
-        let value = match raw[start..end].split_first() {
-            Some((first, rest)) => rest.iter().fold(*first, |acc, &v| combine(acc, v)),
-            None => empty,
+    let width = u128::try_from(buckets).expect("usize fits u128");
+    let total_wide = u128::try_from(total).expect("usize fits u128");
+    let mut previous = None;
+    for (index, value) in raw.into_iter().filter(|(index, _)| *index < total) {
+        let bucket =
+            ((u128::try_from(index).expect("usize fits u128") + 1) * width - 1) / total_wide;
+        let bucket = bucket
+            .to_usize()
+            .expect("bucket index is bounded by output length");
+        out[bucket] = if previous == Some(bucket) {
+            combine(out[bucket], value)
+        } else {
+            value
         };
-        out.push(value);
+        previous = Some(bucket);
     }
     out
 }
@@ -34,7 +39,22 @@ mod tests {
     };
     use kithara_test_utils::kithara;
 
-    use super::bucketize;
+    use super::bucketize as sparse;
+
+    fn bucketize<T: Copy>(
+        raw: &[T],
+        buckets: usize,
+        empty: T,
+        combine: impl Fn(T, T) -> T,
+    ) -> Vec<T> {
+        sparse(
+            raw.iter().copied().enumerate(),
+            raw.len(),
+            buckets,
+            empty,
+            combine,
+        )
+    }
 
     #[kithara::test]
     fn zero_buckets_is_empty(pcm_ramp: Vec<f32>) {

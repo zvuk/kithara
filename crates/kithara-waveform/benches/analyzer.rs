@@ -52,7 +52,11 @@ fn waveform_analyzer(c: &mut Criterion) {
             analyzer
                 .push(&pools, black_box(&pcm), consts::CHANNELS, 0)
                 .expect("the excerpt fits the region");
-            black_box(analyzer.snapshot(consts::BUCKETS, Some(extent)))
+            black_box(
+                analyzer
+                    .snapshot(consts::BUCKETS, Some(extent))
+                    .expect("finite fixture"),
+            )
         });
     });
     group.finish();

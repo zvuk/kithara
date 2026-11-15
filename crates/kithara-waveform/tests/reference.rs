@@ -7,21 +7,16 @@ use std::path::PathBuf;
 use kithara_test_dylib as _;
 use kithara_test_fixtures::analysis_fixtures::{analysis_pcm, waveform_mix};
 use kithara_test_utils::{bufpool::pools, kithara};
-use kithara_waveform::{AnalysisParams, WaveformAnalyzer};
+use kithara_waveform::{AnalysisParams, Waveform, WaveformAnalyzer};
 
 mod consts {
-    /// Columns one snapshot folds the band series into.
     pub(super) const BUCKETS: usize = 512;
-    /// Rate the analysis fixtures are rendered at.
     pub(super) const RATE: u32 = 44_100;
-    /// How far a band height may move and still match its reference.
     pub(super) const TOLERANCE: f32 = 1e-4;
-    /// Set to record the references instead of checking them.
     pub(super) const UPDATE_REFERENCE: &str = "KITHARA_WAVEFORM_UPDATE_REFERENCE";
 }
 
-/// Low, mid and high heights of every column the default analysis draws.
-fn heights(pcm: &[f32], channels: usize) -> Vec<[f32; 3]> {
+fn waveform(pcm: &[f32], channels: usize) -> Waveform {
     let pools = pools();
     let mut analyzer = WaveformAnalyzer::new(consts::RATE, AnalysisParams::default(), &pools)
         .expect("the analyzer builds");
@@ -31,10 +26,7 @@ fn heights(pcm: &[f32], channels: usize) -> Vec<[f32; 3]> {
     let extent = u64::try_from(pcm.len() / channels).expect("the frame count fits u64");
     analyzer
         .snapshot(consts::BUCKETS, Some(extent))
-        .buckets()
-        .iter()
-        .map(|bucket| [bucket.low(), bucket.mid(), bucket.high()])
-        .collect()
+        .expect("finite fixture")
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -43,32 +35,23 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// Checks `heights` against `name` within [`consts::TOLERANCE`]; with
-/// [`consts::UPDATE_REFERENCE`] set it records the reference instead.
-fn matches_reference(heights: &[[f32; 3]], name: &str) {
+fn matches_reference(actual: &Waveform, name: &str) {
     let path = fixture(name);
     if std::env::var_os(consts::UPDATE_REFERENCE).is_some() {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)
-                .unwrap_or_else(|error| panic!("failed to create {}: {error}", dir.display()));
-        }
-        let text = serde_json::to_string(heights).expect("band heights serialize");
-        std::fs::write(&path, text)
-            .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+        std::fs::write(&path, kithara_blob::to_bytes(actual)).expect("write waveform reference");
         return;
     }
-
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("failed to read reference {}: {error}", path.display()));
-    let expected: Vec<[f32; 3]> = serde_json::from_str(&text)
-        .unwrap_or_else(|error| panic!("failed to parse reference {}: {error}", path.display()));
+    let bytes = std::fs::read(&path).expect("read waveform reference");
+    let expected = Waveform::try_from(bytes.as_slice()).expect("versioned reference");
     assert_eq!(
-        heights.len(),
+        actual.len(),
         expected.len(),
         "column count differs from {name}"
     );
-    for (index, (got, want)) in heights.iter().zip(&expected).enumerate() {
-        for (height, recorded) in got.iter().zip(want) {
+    for (index, (actual, expected)) in actual.buckets().zip(expected.buckets()).enumerate() {
+        let actual = actual.left().into_iter().chain(actual.right());
+        let expected = expected.left().into_iter().chain(expected.right());
+        for (height, recorded) in actual.zip(expected) {
             assert!(
                 (height - recorded).abs() <= consts::TOLERANCE,
                 "column {index} reads {height}, the reference {recorded}, in {name}"
@@ -79,10 +62,29 @@ fn matches_reference(heights: &[[f32; 3]], name: &str) {
 
 #[kithara::test(native)]
 fn a_full_spectrum_mix_matches_the_reference(waveform_mix: Vec<f32>) {
-    matches_reference(&heights(&waveform_mix, 1), "reference_waveform_mix.json");
+    matches_reference(&waveform(&waveform_mix, 1), "v2_reference_waveform_mix.bin");
 }
 
 #[kithara::test(native)]
 fn a_stereo_tone_matches_the_reference(analysis_pcm: &'static [f32]) {
-    matches_reference(&heights(analysis_pcm, 2), "reference_analysis_pcm.json");
+    matches_reference(&waveform(analysis_pcm, 2), "v2_reference_analysis_pcm.bin");
+}
+
+#[kithara::test(native)]
+fn frozen_v1_reference_waveforms_are_version_errors() {
+    for name in ["reference_analysis_pcm.json", "reference_waveform_mix.json"] {
+        let text = std::fs::read_to_string(fixture(name)).expect("frozen v1 heights");
+        let heights: Vec<[f32; 3]> = serde_json::from_str(&text).expect("v1 three-band rows");
+        let mut bytes = 1_u32.to_le_bytes().to_vec();
+        for height in heights.into_iter().flatten() {
+            bytes.extend_from_slice(&height.to_le_bytes());
+        }
+        assert!(matches!(
+            Waveform::try_from(bytes.as_slice()),
+            Err(kithara_blob::BlobError::Version {
+                found: 1,
+                expected: 2
+            })
+        ));
+    }
 }

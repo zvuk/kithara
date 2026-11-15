@@ -12,9 +12,9 @@ exclude = ["tests/**"]
 
 [features]
 default = []
-# The FFT band analyzer. The model, its codec and the analysis parameters
+# The peak envelope analyzer. The model, its codec and the analysis parameters
 # are available without it.
-dsp = ["kithara-dsp/spectrum"]
+dsp = []
 
 [dependencies]
 kithara-blob = { workspace = true }

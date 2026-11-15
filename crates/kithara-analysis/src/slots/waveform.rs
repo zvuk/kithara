@@ -29,7 +29,7 @@ where
 /// The tag of a waveform built to `buckets`. No bucket ceiling is no waveform,
 /// and so no tag.
 pub(crate) fn cache_tag(buckets: Option<usize>) -> Option<String> {
-    buckets.map(|buckets| format!("wave:native:max{buckets}:v1"))
+    buckets.map(|buckets| format!("wave:native:max{buckets}:v2"))
 }
 
 pub(crate) fn push<S>(slot: &mut Slot, pools: &PoolRegion<S>, pcm: &[f32], channels: usize, at: u64)
@@ -41,18 +41,25 @@ where
         .as_mut()
         .and_then(|(analyzer, _)| analyzer.push(pools, pcm, channels, at).err());
     if let Some(error) = failure {
-        warn!(
-            ?error,
-            "waveform analysis buffer allocation failed; waveform disabled"
-        );
+        warn!(?error, "waveform input failed; waveform disabled");
         slot.0 = None;
     }
 }
 
 pub(crate) fn snapshot(slot: &mut Slot, extent: Option<u64>) -> Option<Waveform> {
-    slot.0
+    let result = slot
+        .0
         .as_mut()
-        .map(|(analyzer, buckets)| analyzer.snapshot(*buckets, extent))
+        .map(|(analyzer, buckets)| analyzer.snapshot(*buckets, extent));
+    match result {
+        Some(Ok(waveform)) => Some(waveform),
+        Some(Err(error)) => {
+            warn!(?error, "waveform window failed; waveform disabled");
+            slot.0 = None;
+            None
+        }
+        None => None,
+    }
 }
 
 pub(crate) fn write_resume(slot: &Slot) -> Option<Vec<u8>> {

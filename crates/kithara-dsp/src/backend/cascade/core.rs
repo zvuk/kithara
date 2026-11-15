@@ -81,6 +81,31 @@ impl Cascade {
         Ok(())
     }
 
+    pub(crate) fn process_window<P: DerefMut<Target = [f32]>>(
+        &mut self,
+        planes: &mut [P],
+        range: Range<usize>,
+    ) -> Result<(), FilterError> {
+        if self.sections.get() == 2 {
+            super::super::window::pair(planes, range, |plane| {
+                let offset = plane.saturating_mul(2);
+                [
+                    *self
+                        .coefficients
+                        .get(offset)
+                        .expect("validated plane count"),
+                    *self
+                        .coefficients
+                        .get(offset.saturating_add(1))
+                        .expect("two-section window"),
+                ]
+            });
+            Ok(())
+        } else {
+            self.process(planes, range)
+        }
+    }
+
     pub(crate) fn reset(&mut self) {
         self.state.fill([0.0; 4]);
     }

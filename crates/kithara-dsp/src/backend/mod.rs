@@ -21,6 +21,7 @@ mod strided;
 mod svf;
 #[cfg(test)]
 mod tests;
+mod window;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) use accelerate as platform;

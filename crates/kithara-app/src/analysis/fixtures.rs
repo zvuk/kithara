@@ -239,7 +239,14 @@ pub(crate) fn served_grid() -> BeatGridModel {
 
 /// A waveform the caller hands over.
 pub(crate) fn served_waveform() -> Waveform {
-    Waveform::try_from(vec![Bucket::new(0.25, 0.5, 0.75); 8]).expect("fixture bands are in range")
+    Waveform::try_from(vec![
+        Bucket::new(
+            [0.25, 0.5, 0.5, 0.75],
+            [0.25, 0.5, 0.5, 0.75]
+        );
+        8
+    ])
+    .expect("fixture bands are in range")
 }
 
 /// Append a track the caller opened with artifacts already in hand.

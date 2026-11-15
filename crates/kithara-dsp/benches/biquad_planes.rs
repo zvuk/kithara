@@ -25,7 +25,26 @@ fn design(plane: usize) -> Coefficients<f64> {
     .expect("valid band design")
 }
 
-fn bench(c: &mut Criterion) {
+fn process<const WINDOW: bool>(filter: &mut Biquad, planes: &mut [Vec<f32>], frames: usize) {
+    if WINDOW {
+        if planes.len() == 1 {
+            let plane = planes.first_mut().expect("one plane");
+            filter
+                .process_window(&mut [plane.as_mut_slice()], 0..frames)
+                .expect("finite window");
+        } else {
+            let planes: &mut [Vec<f32>; 8] = planes.try_into().expect("eight planes");
+            filter
+                .process_window(&mut planes.each_mut().map(Vec::as_mut_slice), 0..frames)
+                .expect("finite window");
+        }
+    } else {
+        filter.reset();
+        filter.process(planes, 0..frames).expect("matching planes");
+    }
+}
+
+fn bench_filters<const WINDOW: bool>(c: &mut Criterion) {
     let mut together = Biquad::new(PLANES, SECTIONS).expect("eight planes");
     let mut individual: Vec<_> = (0..PLANES.get())
         .map(|plane| {
@@ -40,7 +59,11 @@ fn bench(c: &mut Criterion) {
             single
         })
         .collect();
-    let mut group = c.benchmark_group("biquad_planes");
+    let mut group = c.benchmark_group(if WINDOW {
+        "biquad_windows"
+    } else {
+        "biquad_planes"
+    });
     for frames in [128, 512, 4_096] {
         let tone: Vec<_> = (0..frames)
             .map(|frame| (frame.to_f32().expect("bounded frame") * 0.0625).sin() * 0.5)
@@ -49,21 +72,19 @@ fn bench(c: &mut Criterion) {
         let mut expected = template.clone();
         let mut actual = template.clone();
         for (filter, plane) in individual.iter_mut().zip(&mut expected) {
-            filter.reset();
-            filter
-                .process(std::slice::from_mut(plane), 0..frames)
-                .expect("one plane");
+            process::<WINDOW>(filter, std::slice::from_mut(plane), frames);
         }
-        together.reset();
-        together
-            .process(&mut actual, 0..frames)
-            .expect("eight planes");
+        process::<WINDOW>(&mut together, &mut actual, frames);
         assert!(
             actual
                 .iter()
                 .flatten()
                 .zip(expected.iter().flatten())
-                .all(|(a, b)| a.to_bits() == b.to_bits())
+                .all(|(a, b)| if WINDOW {
+                    (a - b).abs() <= 0.000_05
+                } else {
+                    a.to_bits() == b.to_bits()
+                })
         );
         group.throughput(Throughput::Elements(
             u64::try_from(frames * PLANES.get()).expect("bounded samples"),
@@ -73,10 +94,7 @@ fn bench(c: &mut Criterion) {
                 || template.clone(),
                 |planes| {
                     for (filter, plane) in individual.iter_mut().zip(&mut *planes) {
-                        filter.reset();
-                        filter
-                            .process(std::slice::from_mut(plane), 0..frames)
-                            .expect("one plane");
+                        process::<WINDOW>(filter, std::slice::from_mut(plane), frames);
                     }
                     black_box(planes);
                 },
@@ -87,10 +105,7 @@ fn bench(c: &mut Criterion) {
             b.iter_batched_ref(
                 || template.clone(),
                 |planes| {
-                    together.reset();
-                    together
-                        .process(black_box(&mut *planes), 0..frames)
-                        .expect("eight planes");
+                    process::<WINDOW>(&mut together, black_box(&mut *planes), frames);
                     black_box(planes);
                 },
                 BatchSize::SmallInput,
@@ -98,6 +113,11 @@ fn bench(c: &mut Criterion) {
         });
     }
     group.finish();
+}
+
+fn bench(c: &mut Criterion) {
+    bench_filters::<false>(c);
+    bench_filters::<true>(c);
 }
 
 criterion_group!(benches, bench);
