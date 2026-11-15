@@ -8,6 +8,10 @@ description = "kithara test runtime: probe/hang/mock helpers (no-op in release).
 keywords = ["audio", "testing", "kithara", "usdt"]
 categories = ["development-tools::testing"]
 
+[package.metadata.kithara.wasm-lib-tests]
+default-features = false
+features = ["subscriber"]
+
 [features]
 default = ["hang"]
 flash = ["kithara-platform/flash"]
@@ -59,18 +63,22 @@ pin-project-lite = { workspace = true }
 rtsan-standalone = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
 tracing-subscriber = { workspace = true, optional = true, features = ["env-filter"] }
 tracing-wasm = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 usdt = { workspace = true, optional = true }
 
 [dev-dependencies]
-kithara-test-utils = { path = ".", default-features = false }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tempfile = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
 
 [lints]
 workspace = true

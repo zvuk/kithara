@@ -6460,10 +6460,10 @@ dependencies = [
  "arrayvec",
  "axum",
  "fieldwork",
+ "js-sys",
  "kithara-bufpool",
  "kithara-platform",
  "kithara-test-macros",
- "kithara-test-utils",
  "num-traits",
  "pin-project-lite",
  "rtsan-standalone",
@@ -6477,6 +6477,8 @@ dependencies = [
  "unimock",
  "url",
  "usdt",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
 ]
 
 [[package]]

@@ -195,7 +195,7 @@ impl Drop for WebOutput {
 mod tests {
     use firewheel::FirewheelConfig;
     use kithara_platform::time::Duration;
-    use kithara_test_utils::{bufpool::TestPools, wait_until};
+    use kithara_test_utils::{bufpool::TestPools, test::OutputStartupProbe, wait_until};
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
     use wasm_bindgen_test::wasm_bindgen_test;
@@ -221,6 +221,7 @@ mod tests {
 
     #[wasm_bindgen_test]
     async fn installed_output_is_ready_only_while_its_actual_context_runs() -> Result<(), JsValue> {
+        let probe = OutputStartupProbe::new()?;
         let mut graph = SessionGraph::new(FirewheelConfig::default());
         let output = WebOutput::start::<TestPools>(&mut graph, 44_100, &mut [], None)
             .expect("actual output acquisition");
@@ -232,11 +233,13 @@ mod tests {
                 .dyn_into()
         };
         JsFuture::from(invoke("resume")?).await?;
-        wait_until(Duration::from_secs(5), "actual worklet acquisition", || {
+        let acquired = wait_until(Duration::from_secs(5), "actual worklet acquisition", || {
             output.lease.acquired()
         })
-        .await
-        .expect("worklet booted");
+        .await;
+        let diagnostic = probe.snapshot().await;
+        wasm_bindgen_test::console_log!("OUTPUT_DIAGNOSTIC {diagnostic:?}");
+        acquired.expect("worklet booted");
         let output = WebOutput::start::<TestPools>(
             &mut graph,
             44_100,

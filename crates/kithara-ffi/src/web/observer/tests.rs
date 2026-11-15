@@ -18,7 +18,7 @@ use kithara_ffi::{
     observer::{PlayerObserver, SeekCallback},
     player::AudioPlayer,
 };
-use kithara_test_utils::wait_until;
+use kithara_test_utils::{test::OutputStartupProbe, wait_until};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -39,68 +39,6 @@ use types::{
 
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
-
-#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
-const contexts = [];
-const nodes = [];
-const constructors = new Map();
-const bootstrap = [];
-const lockManager = typeof window !== 'undefined' ? navigator.locks : null;
-const request = lockManager?.request;
-const requestDescriptor = lockManager && Object.getOwnPropertyDescriptor(lockManager, 'request');
-if (typeof window !== 'undefined') {
-  lockManager.request = function(...args) {
-    if (args[0] !== 'wasm_safe_thread:bootstrap') return Reflect.apply(request, this, args);
-    bootstrap.push('requested');
-    const callback = args[args.length - 1];
-    args[args.length - 1] = function(...values) {
-      bootstrap.push('granted');
-      return Reflect.apply(callback, this, values);
-    };
-    const promise = Reflect.apply(request, this, args);
-    promise.then(() => bootstrap.push('released'), () => bootstrap.push('failed'));
-    return promise;
-  };
-  for (const name of ['AudioContext', 'AudioWorkletNode']) {
-    const original = globalThis[name];
-    constructors.set(name, original);
-    globalThis[name] = new Proxy(original, {
-      construct(target, args, newTarget) {
-        const value = Reflect.construct(target, args, newTarget);
-        const events = [];
-        if (name === 'AudioContext') {
-          contexts.push({value, events});
-          value.addEventListener('statechange', () => events.push(value.state));
-        } else {
-          nodes.push({name: args[1], events});
-          value.port.addEventListener('message', ({data}) => events.push(data.kind));
-          value.addEventListener('processorerror', () => events.push('processorerror'));
-        }
-        return value;
-      }
-    });
-  }
-}
-export async function outputDiagnostic() {
-  try {
-    const locks = await navigator.locks.query();
-    return JSON.stringify({
-      contexts: contexts.map(({value, events}) => ({state: value.state, time: value.currentTime, rate: value.sampleRate, events})),
-      nodes,
-      bootstrap,
-      locks
-    });
-  } finally {
-    for (const [name, original] of constructors) globalThis[name] = original;
-    if (requestDescriptor) Object.defineProperty(lockManager, 'request', requestDescriptor);
-    else delete lockManager.request;
-  }
-}
-"#)]
-extern "C" {
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name = outputDiagnostic)]
-    fn output_diagnostic() -> js_sys::Promise;
-}
 
 fn surface_player() -> AudioPlayer {
     static STARTUP: Once = Once::new();
@@ -335,6 +273,7 @@ impl SeekCallback for Seeks {
 #[wasm_bindgen_test]
 async fn surface_settings_follow_owner_publication_and_report_refusal() {
     assert!(thread::is_main_thread());
+    let probe = OutputStartupProbe::new().expect("observe browser output startup");
     let player = Arc::new(surface_player());
     let events = Arc::new(Mutex::new(Vec::new()));
     player.set_observer(Arc::new(Events(Arc::clone(&events))));
@@ -370,11 +309,7 @@ async fn surface_settings_follow_owner_publication_and_report_refusal() {
             && player.is_muted()
     })
     .await;
-    let diagnostic = kithara::platform::time::timeout(
-        Duration::from_millis(100),
-        js_sys::futures::JsFuture::from(output_diagnostic()),
-    )
-    .await;
+    let diagnostic = probe.snapshot().await;
     wasm_bindgen_test::console_log!("OUTPUT_DIAGNOSTIC {diagnostic:?}");
     ready.unwrap_or_else(|error| {
         panic!(
