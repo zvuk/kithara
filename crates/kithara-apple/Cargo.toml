@@ -64,7 +64,7 @@ objc2-foundation = { workspace = true, optional = true, features = [
 
 [dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }

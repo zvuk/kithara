@@ -12,8 +12,8 @@ autotests = false
 ignored = ["kithara-test-utils"]
 
 [dependencies]
-kithara = { workspace = true, features = ["dsp", "host", "play", "signal", "symphonia", "stretch-identity", "client-reqwest", "tls-rustls"] }
-kithara-test-utils = { workspace = true }
+kithara = { workspace = true, features = ["test", "dsp", "host", "play", "signal", "symphonia", "stretch-identity", "client-reqwest", "tls-rustls"] }
+kithara-test-utils = { features = ["test"], workspace = true }
 
 [lints]
 workspace = true

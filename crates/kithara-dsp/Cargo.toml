@@ -41,7 +41,7 @@ rustfft = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["subscriber"] }
+kithara-test-utils = { workspace = true, features = ["test", "subscriber"] }
 
 fast-interleave = { workspace = true }
 

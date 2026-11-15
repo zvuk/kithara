@@ -4775,6 +4775,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
             position: Duration::ZERO,
             curve: SpeedCurve::Constant(1.0),
             before: before.clone(),
+            before_segment: start.binding.map(|binding| binding.segment()),
             consumed: Some(start),
             host_input: None,
             native: Some(LinkReceiptOrigin::Lane),

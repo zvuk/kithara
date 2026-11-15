@@ -305,6 +305,7 @@ beat-dsp = ["analysis", "beat", "kithara-analysis/beat-dsp"]
 ui-capture = ["ui", "kithara-ui/capture"]
 ui-iced = ["ui", "kithara-ui/iced"]
 ui-masonry = ["ui", "kithara-ui/masonry"]
+test = ["kithara-test-macros/test", "kithara-test-utils/test"]
 flash = [
     "platform",
     "dep:kithara-test-utils",
@@ -467,7 +468,7 @@ kithara-worker = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack", optional = true }
 
 [dev-dependencies]
-kithara = { path = ".", default-features = false }
+kithara = { features = ["test"], path = ".", default-features = false }
 
 [lints]
 workspace = true
