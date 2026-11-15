@@ -391,7 +391,7 @@ fn retained_tail_crossfade_preserves_identity_and_the_linear_law(#[case] backend
         renderer
             .set_speed(SpeedCurve::Constant(1.0), 1)
             .expect("unity speed");
-        renderer.set_keylock(false);
+        renderer.set_pitch(Pitch::default());
         renderer
             .prepare_engine_latency(renderer.spec)
             .expect("retired engine supplies the replacement");
