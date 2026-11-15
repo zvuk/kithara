@@ -1,5 +1,5 @@
 use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass};
-use kithara_stream::{PendingReason, SourcePhase, StreamType};
+use kithara_stream::{NotReadyCause, PendingReason, SourcePhase, StreamType};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -56,6 +56,11 @@ pub(crate) fn tick<T: StreamType>(
             }
             Ok(DecoderChunkOutcome::Pending(PendingReason::Retry)) => {
                 return DecodeAction::Progress;
+            }
+            Ok(DecoderChunkOutcome::Pending(PendingReason::NotReady(
+                NotReadyCause::OperationPending,
+            ))) => {
+                return DecodeAction::Pending(WaitingReason::OperationPending);
             }
             Ok(DecoderChunkOutcome::Pending(_)) => {
                 let reason = match ctx.stream.phase() {
