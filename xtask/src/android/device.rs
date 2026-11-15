@@ -585,6 +585,7 @@ fn await_boot_complete(
     let poll_interval = Duration::from_secs(android.boot_poll_interval_secs.context(
         "ext.android.boot_poll_interval_secs is not set; fill in the [ext.android] section of .config/xtask.toml",
     )?);
+    let mut last_probe = String::new();
 
     for _ in 0..max_attempts {
         child::check(cancel)?;
@@ -597,13 +598,14 @@ fn await_boot_complete(
                 .args(["shell", "getprop", "sys.boot_completed"]),
             cancel,
         );
-        if let Ok(output) = output
+        if let Ok(output) = &output
             && output.status.success()
             && String::from_utf8_lossy(&output.stdout).trim() == "1"
         {
             println!("==> Device boot complete");
             return Ok(());
         }
+        last_probe = format!("{output:?}");
         let deadline = Instant::now() + poll_interval;
         while Instant::now() < deadline {
             child::check(cancel)?;
@@ -611,7 +613,16 @@ fn await_boot_complete(
         }
     }
     let timeout_secs = u64::from(max_attempts).saturating_mul(poll_interval.as_secs());
-    bail!("device did not finish booting within {timeout_secs} seconds");
+    let logcat = control(
+        device
+            .adb()
+            .args(["logcat", "-d", "-t", "200", "-v", "brief"]),
+        cancel,
+    );
+    bail!(
+        "device did not finish booting within {timeout_secs} seconds; \
+         last boot probe: {last_probe}; boot logcat: {logcat:?}"
+    );
 }
 
 #[cfg(test)]
@@ -818,6 +829,34 @@ mod tests {
             assert_eq!(recorded(&trace), "");
             assert!(stranger.try_wait().unwrap().is_none());
             child::stop(&mut stranger, "stranger test emulator").unwrap();
+        }
+
+        #[test]
+        fn boot_timeout_keeps_the_last_adb_response_and_logcat() {
+            let dir = tempfile::tempdir().unwrap();
+            let adb = dir.path().join("adb");
+            install_script(
+                &adb,
+                "#!/bin/sh\ncase \"$*\" in\n*getprop*) echo 0; echo probe-stderr >&2; exit 23;;\n*logcat*) echo boot-logcat;;\nesac\n",
+            );
+            let mut device = Selected {
+                serial: "test-emulator".to_owned(),
+                adb,
+                emulator: None,
+            };
+            let android = AndroidConfig {
+                boot_wait_attempts: Some(1),
+                boot_poll_interval_secs: Some(1),
+                ..AndroidConfig::default()
+            };
+
+            let error = await_boot_complete(&mut device, &android, None)
+                .unwrap_err()
+                .to_string();
+
+            assert!(error.contains("did not finish booting"), "{error}");
+            assert!(error.contains("probe-stderr"), "{error}");
+            assert!(error.contains("boot-logcat"), "{error}");
         }
 
         #[test]

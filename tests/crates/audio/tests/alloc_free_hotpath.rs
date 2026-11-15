@@ -388,7 +388,7 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     all(
