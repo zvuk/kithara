@@ -7,7 +7,6 @@ use std::{
 };
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use fearless_simd::{Level, dispatch};
 use kithara_dsp::{
     filter::{Biquad, Coefficients, Hertz, Response, StateVariableFilter, SvfDesign, Type},
     interp::{Interpolation, interpolate, interpolate_frame, weighted_frames},
@@ -17,22 +16,14 @@ use kithara_test_utils::bufpool::pools;
 use num_traits::ToPrimitive;
 use realfft::{RealToComplex, RealToComplexEven};
 
-#[path = "../src/backend/simd/scan.rs"]
-mod loud_kernel;
-
-fn loud_fallback(samples: &[f32], limit: f32) -> Option<usize> {
-    dispatch!(Level::fallback(), simd => loud_kernel::kernel(simd, samples, limit))
-}
-
 fn loud_scalar(samples: &[f32], limit: f32) -> Option<usize> {
     samples.iter().rposition(|sample| sample.abs() > limit)
 }
 
 fn last_loud(c: &mut Criterion) {
     type Search = fn(&[f32], f32) -> Option<usize>;
-    let implementations: [(&str, Search); 3] = [
+    let implementations: [(&str, Search); 2] = [
         ("native", kithara_dsp::last_loud),
-        ("fallback", loud_fallback),
         ("rposition", loud_scalar),
     ];
     let mut group = c.benchmark_group("last_loud");

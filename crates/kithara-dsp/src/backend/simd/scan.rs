@@ -3,13 +3,25 @@ use fearless_simd::prelude::*;
 #[inline(always)]
 pub(crate) fn kernel<S: Simd>(simd: S, samples: &[f32], limit: f32) -> Option<usize> {
     let bound = S::f32s::splat(simd, limit);
-    for (block, values) in samples.chunks(S::f32s::LEN).enumerate().rev() {
-        let lanes = u32::try_from(values.len()).expect("SIMD width fits u32");
+    let chunks = samples.chunks_exact(S::f32s::LEN);
+    let tail = chunks.remainder();
+    if !tail.is_empty() {
+        let lanes = u32::try_from(tail.len()).expect("SIMD width fits u32");
         let valid = u64::MAX.wrapping_shr(u64::BITS.saturating_sub(lanes));
-        let loud = padded(simd, values).abs().simd_gt(bound).to_bitmask() & valid;
+        let loud = padded(simd, tail).abs().simd_gt(bound).to_bitmask() & valid;
         if loud != 0 {
             let lane = usize::try_from(loud.ilog2()).expect("SIMD lane fits usize");
-            return Some(block.saturating_mul(S::f32s::LEN).saturating_add(lane));
+            return Some(samples.len().wrapping_sub(tail.len()).wrapping_add(lane));
+        }
+    }
+    for (block, values) in chunks.enumerate().rev() {
+        let loud = S::f32s::from_slice(simd, values)
+            .abs()
+            .simd_gt(bound)
+            .to_bitmask();
+        if loud != 0 {
+            let lane = usize::try_from(loud.ilog2()).expect("SIMD lane fits usize");
+            return Some(block.wrapping_mul(S::f32s::LEN).wrapping_add(lane));
         }
     }
     None

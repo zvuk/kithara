@@ -495,5 +495,9 @@ pub(in crate::backend) fn first_quiet_kernel<S: Simd, P: Deref<Target = [f32]>>(
 }
 
 pub(crate) fn last_loud(samples: &[f32], limit: f32) -> Option<usize> {
+    let (last, prefix) = samples.split_last()?;
+    if last.abs() > limit {
+        return Some(prefix.len());
+    }
     dispatch!(Level::new(), simd => last_loud_kernel(simd, samples, limit))
 }
