@@ -389,6 +389,9 @@ where
         if let Some((_, delivery)) = self.clock {
             self.clock = Some((now, delivery));
         }
+        for track in self.active.tracks_mut() {
+            while track.lane_receipt().is_some() {}
+        }
         for active in self.active.iter_mut() {
             active.track.tick(now, out);
         }
@@ -404,9 +407,6 @@ where
         self.reap_released();
         if self.active.parked_len() < parked {
             self.pump_loads(output, out);
-        }
-        for track in self.active.tracks_mut() {
-            while track.lane_receipt().is_some() {}
         }
         self.publish();
     }
