@@ -16,6 +16,7 @@ async fn worklet_import_waits_for_worker_bootstrap_admission() {
     let mut admission = Admission::hold()
         .await
         .expect("hold bootstrap admission before host construction");
+    let held_locks = timeout(Duration::from_millis(100), admission.bootstrap_locks()).await;
     let setup = bindings::setup();
     let player = AudioPlayer::new_js();
     let command = player.set_volume_js(0.25);
@@ -55,7 +56,7 @@ async fn worklet_import_waits_for_worker_bootstrap_admission() {
     // A stuck snapshot query must not hold up reporting a readiness failure.
     let locks = timeout(Duration::from_millis(100), admission.bootstrap_locks()).await;
     wasm_bindgen_test::console_log!(
-        "BOOTSTRAP_READY volume={} mixer_blocks={} worklet_imports={} audio_contexts={} bootstrap={bootstrap:?} bootstrap_locks={locks:?}",
+        "BOOTSTRAP_READY volume={} mixer_blocks={} worklet_imports={} audio_contexts={} bootstrap={bootstrap:?} bootstrap_locks={locks:?} held_bootstrap_locks={held_locks:?}",
         volume,
         mixer_blocks,
         admission.worklet_imports(),
@@ -355,7 +356,9 @@ mod admission {
                 "apply",
                 move |target, receiver, args| {
                     state.imports.set(state.imports.get() + 1);
-                    apply(&target, &receiver, &args)
+                    let promise = apply(&target, &receiver, &args)?;
+                    observe(&state.bootstrap, "module", &promise)?;
+                    Ok(promise)
                 },
             )?;
             self.hooks.borrow_mut().push(Property::value(
