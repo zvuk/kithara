@@ -1,72 +1,64 @@
 use std::ops::{Deref, DerefMut};
 
-use fearless_simd::{Level, dispatch, f64x2, prelude::*};
-use num_traits::ToPrimitive;
+use fearless_simd::{Level, dispatch, f32x4, f64x2, prelude::*, u64x2};
 
 use crate::{backend::svf, consts, filter::Response};
 
 struct Section<const CHANNELS: usize> {
     state: [[f64; CHANNELS]; 2],
-    quiet: [usize; CHANNELS],
+    quiet: [u64; CHANNELS],
     coefficients: [f64; 3],
-    response: Response,
 }
 
 impl<const CHANNELS: usize> Section<CHANNELS> {
-    fn new(gain: f64, response: Response) -> Self {
+    fn new(gain: f64) -> Self {
         Self {
             state: [[0.0; CHANNELS]; 2],
             quiet: [0; CHANNELS],
             coefficients: svf::coefficients(gain, consts::CROSSOVER_DAMPING),
-            response,
         }
     }
 
     #[inline(always)]
-    fn run<S: Simd>(&mut self, simd: S, mut samples: [f32; CHANNELS]) -> [f32; CHANNELS] {
+    fn run<S: Simd, P: DerefMut<Target = [f32]>>(
+        &mut self,
+        simd: S,
+        planes: &mut [P; CHANNELS],
+        frames: usize,
+        response: Response,
+    ) {
         let [state1, state2] = &mut self.state;
-        for (((samples, memory1), memory2), quiet) in samples
-            .chunks_mut(2)
-            .zip(state1.chunks_mut(2))
-            .zip(state2.chunks_mut(2))
-            .zip(self.quiet.chunks_mut(2))
+        let (pairs, tail) = planes.as_chunks_mut::<2>();
+        let (memory1, tail1) = state1.as_chunks_mut::<2>();
+        let (memory2, tail2) = state2.as_chunks_mut::<2>();
+        let (quiet, tail_quiet) = self.quiet.as_chunks_mut::<2>();
+        for ((([left, right], memory1), memory2), quiet) in
+            pairs.iter_mut().zip(memory1).zip(memory2).zip(quiet)
         {
-            let x = f64x2::from_fn(simd, |lane| {
-                samples.get(lane).copied().map_or(0.0, f64::from)
-            });
-            let ([next1, next2], output) = svf::step(
+            let frames = prefix(left, frames)
+                .iter_mut()
+                .zip(prefix(right, frames))
+                .map(|(left, right)| [left, right]);
+            run_frames(
                 simd,
-                x,
-                [load_pair(simd, memory1), load_pair(simd, memory2)],
+                frames,
+                [memory1, memory2],
+                quiet,
                 self.coefficients,
-                consts::CROSSOVER_DAMPING,
-                self.response,
+                response,
             );
-            let memory = memory1.iter_mut().zip(memory2);
-            let next = next1.as_slice().iter().zip(next2.as_slice());
-            let output = samples.iter_mut().zip(output.as_slice());
-            for (((sample, output), (memory1, memory2)), (quiet, (next1, next2))) in
-                output.zip(memory).zip(quiet.iter_mut().zip(next))
-            {
-                let input = *sample;
-                *sample = output.to_f32().unwrap_or(f32::NAN);
-                let silent =
-                    input.abs() <= consts::SILENT_PEAK && sample.abs() <= consts::SILENT_PEAK;
-                *quiet = if silent {
-                    quiet.saturating_add(1).min(consts::SECTION_MEMORY)
-                } else {
-                    0
-                };
-                if *quiet == consts::SECTION_MEMORY {
-                    *memory1 = 0.0;
-                    *memory2 = 0.0;
-                } else {
-                    *memory1 = *next1;
-                    *memory2 = *next2;
-                }
-            }
         }
-        samples
+        if let ([plane], [memory1], [memory2], [quiet]) = (tail, tail1, tail2, tail_quiet) {
+            let frames = prefix(plane, frames).iter_mut().map(|sample| [sample]);
+            run_frames(
+                simd,
+                frames,
+                [std::slice::from_mut(memory1), std::slice::from_mut(memory2)],
+                std::slice::from_mut(quiet),
+                self.coefficients,
+                response,
+            );
+        }
     }
 
     fn reset(&mut self) {
@@ -76,10 +68,66 @@ impl<const CHANNELS: usize> Section<CHANNELS> {
 }
 
 #[inline(always)]
-fn load_pair<S: Simd>(simd: S, memory: &[f64]) -> f64x2<S> {
-    match memory {
-        [one] => f64x2::from_slice(simd, &[*one, 0.0]),
-        pair => f64x2::from_slice(simd, pair),
+fn prefix<P: DerefMut<Target = [f32]>>(plane: &mut P, frames: usize) -> &mut [f32] {
+    plane
+        .get_mut(..frames)
+        .expect("frame belongs to the validated common prefix")
+}
+
+#[inline(always)]
+fn run_frames<'a, S: Simd, const LANES: usize>(
+    simd: S,
+    frames: impl Iterator<Item = [&'a mut f32; LANES]>,
+    [memory1, memory2]: [&mut [f64]; 2],
+    quiet: &mut [u64],
+    coefficients: [f64; 3],
+    response: Response,
+) {
+    let mut s1 = f64x2::from_fn(simd, |lane| memory1.get(lane).copied().unwrap_or(0.0));
+    let mut s2 = f64x2::from_fn(simd, |lane| memory2.get(lane).copied().unwrap_or(0.0));
+    let mut count = u64x2::from_fn(simd, |lane| quiet.get(lane).copied().unwrap_or(0));
+    let zero = f64x2::splat(simd, 0.0);
+    let no_quiet = u64x2::splat(simd, 0);
+    let one = u64x2::splat(simd, 1);
+    let limit = u64x2::splat(
+        simd,
+        u64::try_from(consts::SECTION_MEMORY).expect("quiet memory fits in a SIMD lane"),
+    );
+    let threshold = f32x4::splat(simd, consts::SILENT_PEAK);
+    let coefficients = coefficients.map(|value| f64x2::splat(simd, value));
+    let damping = f64x2::splat(simd, consts::CROSSOVER_DAMPING);
+    for samples in frames {
+        let input = f32x4::from_fn(simd, |lane| {
+            samples.get(lane).map_or(0.0, |sample| **sample)
+        });
+        let ([next1, next2], output) = svf::step(
+            simd,
+            input.widen().0,
+            [s1, s2],
+            coefficients,
+            damping,
+            response,
+        );
+        let output = output.narrow(output);
+        let silent = (input.abs().simd_le(threshold) & output.abs().simd_le(threshold))
+            .widen()
+            .0;
+        count = silent.select(count.saturating_add(one).min(limit), no_quiet);
+        let retired = count.simd_eq(limit);
+        s1 = retired.select(zero, next1);
+        s2 = retired.select(zero, next2);
+        for (sample, output) in samples.into_iter().zip(output.as_slice()) {
+            *sample = *output;
+        }
+    }
+    for (memory, value) in memory1.iter_mut().zip(s1.as_slice()) {
+        *memory = *value;
+    }
+    for (memory, value) in memory2.iter_mut().zip(s2.as_slice()) {
+        *memory = *value;
+    }
+    for (quiet, value) in quiet.iter_mut().zip(count.as_slice()) {
+        *quiet = *value;
     }
 }
 
@@ -92,11 +140,9 @@ pub(crate) struct Split<const CHANNELS: usize> {
 impl<const CHANNELS: usize> Split<CHANNELS> {
     pub(crate) fn new(gain: f64, later: impl Iterator<Item = f64>) -> Self {
         Self {
-            lowpass: std::array::from_fn(|_| Section::new(gain, Response::LowPass)),
-            highpass: std::array::from_fn(|_| Section::new(gain, Response::HighPass)),
-            allpass: later
-                .map(|gain| Section::new(gain, Response::AllPass))
-                .collect(),
+            lowpass: std::array::from_fn(|_| Section::new(gain)),
+            highpass: std::array::from_fn(|_| Section::new(gain)),
+            allpass: later.map(Section::new).collect(),
         }
     }
 
@@ -136,6 +182,21 @@ pub(crate) fn process<
 }
 
 #[inline(always)]
+fn copy_planes<const CHANNELS: usize, I: Deref<Target = [f32]>, P: DerefMut<Target = [f32]>>(
+    input: &[I; CHANNELS],
+    output: &mut [P; CHANNELS],
+    frames: usize,
+) {
+    for (input, output) in input.iter().zip(output) {
+        prefix(output, frames).copy_from_slice(
+            input
+                .get(..frames)
+                .expect("frame belongs to the validated common prefix"),
+        );
+    }
+}
+
+#[inline(always)]
 fn process_kernel<
     S: Simd,
     const CHANNELS: usize,
@@ -148,34 +209,18 @@ fn process_kernel<
     bands: &mut [[P; CHANNELS]],
     frames: usize,
 ) {
-    for frame in 0..frames {
-        let mut high = input.each_ref().map(|plane| {
-            *plane
-                .get(frame)
-                .expect("frame belongs to the validated common prefix")
-        });
-        let (high_band, lower) = bands.split_last_mut().expect("validated high band");
-        for (split, band) in splits.iter_mut().zip(lower) {
-            let mut low = high;
-            for section in &mut split.lowpass {
-                low = section.run(simd, low);
-            }
-            for section in &mut split.highpass {
-                high = section.run(simd, high);
-            }
-            for section in &mut split.allpass {
-                low = section.run(simd, low);
-            }
-            for (plane, value) in band.iter_mut().zip(low) {
-                *plane
-                    .get_mut(frame)
-                    .expect("frame belongs to the validated common prefix") = value;
-            }
+    let (high, lower) = bands.split_last_mut().expect("validated high band");
+    copy_planes(input, high, frames);
+    for (split, low) in splits.iter_mut().zip(lower) {
+        copy_planes(high, low, frames);
+        for section in &mut split.lowpass {
+            section.run(simd, low, frames, Response::LowPass);
         }
-        for (plane, value) in high_band.iter_mut().zip(high) {
-            *plane
-                .get_mut(frame)
-                .expect("frame belongs to the validated common prefix") = value;
+        for section in &mut split.highpass {
+            section.run(simd, high, frames, Response::HighPass);
+        }
+        for section in &mut split.allpass {
+            section.run(simd, low, frames, Response::AllPass);
         }
     }
 }
@@ -183,6 +228,7 @@ fn process_kernel<
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use num_traits::ToPrimitive;
 
     use super::*;
 
@@ -273,6 +319,8 @@ mod tests {
         for bands in [1, 3, 10] {
             parity::<1>(bands);
             parity::<2>(bands);
+            parity::<3>(bands);
+            parity::<6>(bands);
         }
     }
 }

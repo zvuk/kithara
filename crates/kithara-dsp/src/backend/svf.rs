@@ -17,12 +17,11 @@ pub(crate) fn step<S: Simd>(
     simd: S,
     x: f64x2<S>,
     [s1, s2]: [f64x2<S>; 2],
-    coefficients: [f64; 3],
-    damping: f64,
+    coefficients: [f64x2<S>; 3],
+    damping: f64x2<S>,
     response: Response,
 ) -> ([f64x2<S>; 2], f64x2<S>) {
-    let [a1, a2, a3] = coefficients.map(|value| f64x2::splat(simd, value));
-    let damping = f64x2::splat(simd, damping);
+    let [a1, a2, a3] = coefficients;
     let two = f64x2::splat(simd, 2.0);
     let v3 = x.sub(s2);
     let v1 = a1.mul(s1).add(a2.mul(v3));
@@ -149,7 +148,8 @@ impl<const CHANNELS: usize> State<CHANNELS> {
             self.count(true);
             return;
         }
-        let coefficients = coefficients(gain, damping);
+        let coefficients = coefficients(gain, damping).map(|value| f64x2::splat(simd, value));
+        let damping = f64x2::splat(simd, damping);
         let mut frame_quiet = true;
         let [memory1, memory2] = &mut self.state;
         for ((samples, memory1), memory2) in samples
