@@ -5,7 +5,7 @@ use iced::{
     Element, Pixels, Size, Theme,
     advanced::{
         clipboard,
-        graphics::{Shell, Viewport, text::font_system},
+        graphics::{Shell, Viewport, color::GAMMA_CORRECTION, text::font_system},
         mouse::Cursor,
         renderer::Style,
     },
@@ -58,14 +58,12 @@ impl Photographer {
             .map_err(|error| format!("no wgpu adapter: {error}"))?;
         let (device, queue) = block_on(adapter.request_device(&DeviceDescriptor::default()))
             .map_err(|error| format!("no wgpu device: {error}"))?;
-        let engine = Engine::new(
-            &adapter,
-            device,
-            queue,
-            TextureFormat::Rgba8UnormSrgb,
-            None,
-            Shell::headless(),
-        );
+        let format = if GAMMA_CORRECTION {
+            TextureFormat::Rgba8UnormSrgb
+        } else {
+            TextureFormat::Rgba8Unorm
+        };
+        let engine = Engine::new(&adapter, device, queue, format, None, Shell::headless());
         Ok(Self {
             renderer: FallbackRenderer::Primary(WgpuRenderer::new(engine, SANS, Pixels(14.0))),
         })
