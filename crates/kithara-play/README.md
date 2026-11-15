@@ -72,11 +72,10 @@ For a playlist with crossfade use `kithara-queue`, which drives a player.
 
 ## Integration
 
-A player never advances to the next item on its own: its owner arms the next
-item (`arm_next`) and commits it (`commit_next`). `kithara-queue` does this
-ahead of the current item's end. Tempo and key lock come from the `WarpConfig`
-given to `PlayerConfig::builder().warp(...)`; a speed change applies on an
-exact output frame, mid-track. The output graph and audio device belong to
-`kithara-host`; the audio-thread deck to `kithara-render`.
+`ResourceConfig` carries source and decoder inputs and per-track buffer
+preferences. `ResourcePrep` binds the worker, session geometry and Warp policy
+and creates a `ResourceLoad`; direct `Resource` readers use source inputs alone.
+`kithara-queue` owns playlist progression and crossfades. The output graph and
+audio device belong to `kithara-host`; the audio-thread deck to `kithara-render`.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-play) for detailed contracts, invariants, and internals.

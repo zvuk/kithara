@@ -191,13 +191,14 @@ async fn a_selected_resource_adopts_the_session_wake_mode(#[by_ref] worker_owner
             .downloader(crate::mock::downloader())
             .store(store)
             .build();
-    let prepared = prep.prepare(config, &output).expect("prepared source");
+    let (prepared, item) = prep
+        .prepare(
+            config,
+            &output,
+            Box::new(kithara_audio::AudioObserverSlot::default().relay()),
+        )
+        .expect("prepared source");
     let bus = prepared.bus().expect("prepared event bus").clone();
-    let item = kithara_play::ResourceLoad::new(
-        prepared,
-        prep.worker.clone(),
-        Box::new(kithara_audio::AudioObserverSlot::default().relay()),
-    );
     let (_control, inbox) = prep.worker.lane_channel();
     mock::assert_requested_render_off_bus(
         LoadRequest {

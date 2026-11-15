@@ -5,8 +5,8 @@ use kithara_command::{Live, Outcome, ScopedReceipt, Seq};
 use kithara_events::TrackId;
 use kithara_play::{
     CrossfadeCurve, CrossfadeSettings, DeckMixerConfig, DeckPass, HostedDeck, Outbox, Player,
-    PlayerConfig, PlayerImpl, ResourceConfig, ResourceLoad, ResourceSrc, Settled, Track,
-    TrackCommand, TrackReceipt, TrackSettings, TrackStatus,
+    PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, Settled, Track, TrackCommand,
+    TrackReceipt, TrackSettings, TrackStatus,
 };
 use kithara_render::{
     Dispatched,
@@ -334,18 +334,18 @@ impl ManualHosts {
                                     .build(),
                             )
                             .build();
-                    let prepared = deck
+                    let (_, item) = deck
                         .prep
-                        .prepare(config, pass.output)
+                        .prepare(
+                            config,
+                            pass.output,
+                            Box::new(AudioObserverSlot::default().relay()),
+                        )
                         .expect("prepared real source");
                     let seq = deck.tracks[index]
                         .apply(
                             TrackCommand::Load {
-                                item: ResourceLoad::new(
-                                    prepared,
-                                    deck.prep.worker.clone(),
-                                    Box::new(AudioObserverSlot::default().relay()),
-                                ),
+                                item,
                                 position: Duration::ZERO,
                             },
                             out,

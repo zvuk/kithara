@@ -6,8 +6,8 @@ use kithara_command::{Batch, Inbox, Outcome, Receipt, Rejection, Seq, When};
 use kithara_host::HostOwner;
 use kithara_play::{
     Bound, DeckPass, Outbox, PlayWorker, PlayWorkerConfig, Player, PlayerConfig, PlayerImpl,
-    ResourceConfig, ResourceLoad, ResourceSrc, Track, TrackClock, TrackCommand, TrackReceipt,
-    TrackSettings, TrackStatus,
+    ResourceConfig, ResourceSrc, Track, TrackClock, TrackCommand, TrackReceipt, TrackSettings,
+    TrackStatus,
     mock::{self, DeckRig},
 };
 use kithara_render::{
@@ -63,12 +63,12 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
         .store(AssetStore::builder(pools()).build())
         .host_sample_rate(mock::SAMPLE_RATE)
         .build();
-    let source = mock::resource_tracks(&config, &worker).expect("local source");
+    let source = mock::resource_audio(&config, worker.pools()).expect("local source");
     let futures::future::Either::Left(source) = source else {
         panic!("WAV is a local source")
     };
     let fixture = mock::track_load(
-        source,
+        (source, kithara_play::TrackConfig::default()),
         Arc::from("resident"),
         worker.clone(),
         mock::SAMPLE_RATE,
@@ -93,11 +93,16 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     rig.with_outbox(|out| {
         deck.apply(
             TrackCommand::Load {
-                item: ResourceLoad::new(
-                    config,
-                    worker.clone(),
-                    Box::new(AudioObserverSlot::default().relay()),
-                ),
+                item: kithara_play::ResourcePrep::builder()
+                    .worker(worker.clone())
+                    .build()
+                    .prepare(
+                        config,
+                        &mock::output(None).get(),
+                        Box::new(AudioObserverSlot::default().relay()),
+                    )
+                    .expect("prepared source load")
+                    .1,
                 position: position(0),
             },
             out,
@@ -360,11 +365,16 @@ async fn native_linked(
     let loading = native_marked(&mut rig, SegmentId::FIRST, |out| {
         deck.apply(
             TrackCommand::Load {
-                item: ResourceLoad::new(
-                    config,
-                    worker.clone(),
-                    Box::new(AudioObserverSlot::default().relay()),
-                ),
+                item: kithara_play::ResourcePrep::builder()
+                    .worker(worker.clone())
+                    .build()
+                    .prepare(
+                        config,
+                        &mock::output(None).get(),
+                        Box::new(AudioObserverSlot::default().relay()),
+                    )
+                    .expect("prepared source load")
+                    .1,
                 position: position(0),
             },
             out,

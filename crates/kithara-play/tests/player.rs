@@ -42,14 +42,20 @@ fn an_empty_deck_rig_runs_its_mixer_block() {
     );
 }
 
-fn prepared(prep: &ResourcePrep<TestPools>) -> ResourceConfig<TestPools> {
+fn prepared(
+    prep: &ResourcePrep<TestPools>,
+) -> (ResourceConfig<TestPools>, kithara_play::ResourceLoad) {
     let config = ResourceConfig::for_src(
         ResourceSrc::parse("https://example.com/song.mp3").expect("valid fixture URI"),
     )
     .store(AssetStore::builder(pools()).build())
     .build();
-    prep.prepare(config, &mock::output(None).get())
-        .expect("unbound preparation succeeds")
+    prep.prepare(
+        config,
+        &mock::output(None).get(),
+        Box::new(kithara_audio::AudioObserverSlot::default().relay()),
+    )
+    .expect("unbound preparation succeeds")
 }
 
 #[kithara::test]
@@ -68,7 +74,7 @@ fn player_config_sets_capacity_for_a_new_event_bus() {
         .worker(worker())
         .bus(EventBus::new(2))
         .build();
-    let prepared = prepared(&player);
+    let (prepared, _load) = prepared(&player);
     let bus = prepared.bus().expect("preparation supplies the scoped bus");
     let mut rx = player.bus.subscribe::<PlayerEvent>();
 
@@ -84,7 +90,7 @@ fn injected_event_bus_keeps_its_identity_and_capacity() {
     let bus = EventBus::new(1);
     let bus_id = bus.id();
     let player = ResourcePrep::builder().worker(worker()).bus(bus).build();
-    let prepared = prepared(&player);
+    let (prepared, _load) = prepared(&player);
     let bus = prepared.bus().expect("preparation supplies the scoped bus");
     let mut rx = player.bus.subscribe::<PlayerEvent>();
 

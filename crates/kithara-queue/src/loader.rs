@@ -76,14 +76,14 @@ where
     /// - [`TrackSource::Config`] is passed through untouched (DRM keys,
     ///   headers, format hints preserved).
     ///
-    /// Both paths finish with the deck's preparation of session output and
-    /// a bus labelled with the track. The open takes the deck's worker separately.
-    pub(crate) fn build_config(
+    /// Both paths use the deck's preparation owner and a bus labelled with the track.
+    pub(crate) fn prepare_source(
         &self,
         id: TrackId,
         source: TrackSource<S>,
         output: &OutputSnapshot,
-    ) -> Result<ResourceConfig<S>, QueueError> {
+        observer: Box<dyn AudioObserver>,
+    ) -> Result<(ResourceConfig<S>, ResourceLoad), QueueError> {
         let mut config = match source {
             TrackSource::Uri(url) => {
                 let src = ResourceSrc::parse(&url)
@@ -101,7 +101,9 @@ where
                 ..ScopeLabel::default()
             }));
         }
-        self.prep.prepare(config, output).map_err(QueueError::from)
+        self.prep
+            .prepare(config, output, observer)
+            .map_err(QueueError::from)
     }
 
     /// The open of `id` from `source`, its decoder reaching `observer`, and
@@ -114,15 +116,12 @@ where
         observer: Box<dyn AudioObserver>,
         output: &OutputSnapshot,
     ) -> Result<(ResourceLoad, TrackLoad), QueueError> {
-        let config = self.build_config(id, source, output)?;
+        let (config, item) = self.prepare_source(id, source, output, observer)?;
         let load = TrackLoad::new(&config)?;
         let runtime = self.runtime.as_ref().ok_or(QueueError::NoRuntime)?;
         self.read_cover(runtime, id, &config, &load);
         self.watch_for_slow_transfer(runtime, id, &config, &load);
-        Ok((
-            ResourceLoad::new(config, self.prep.worker.clone(), observer),
-            load,
-        ))
+        Ok((item, load))
     }
 
     /// Read the track's cover beside its audio, over the load's transport and
@@ -354,11 +353,12 @@ mod tests {
         .store(supplied_store.clone())
         .discriminator("caller-source")
         .build();
-        let returned = loader
-            .build_config(
+        let (returned, _load) = loader
+            .prepare_source(
                 TrackId(1),
                 TrackSource::Config(Box::new(given)),
                 &mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("build_config should succeed");
         assert_eq!(returned.discriminator(), Some("caller-source"));
@@ -376,11 +376,12 @@ mod tests {
             .beat_grid(ArtifactSource::from(grid.clone()))
             .waveform(ArtifactSource::Value(Arc::default()))
             .build();
-        let returned = loader
-            .build_config(
+        let (returned, _load) = loader
+            .prepare_source(
                 TrackId(7),
                 TrackSource::Config(Box::new(given)),
                 &mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("build_config should succeed");
         assert!(
@@ -397,11 +398,12 @@ mod tests {
     async fn build_config_labels_default_bus_with_track_id(#[by_ref] worker_owner: &WorkerOwner) {
         let (loader, _mailbox) = fixture(&worker_owner.0);
         let mut rx = loader.prep.bus.subscribe::<QueueEvent>();
-        let config = loader
-            .build_config(
+        let (config, _load) = loader
+            .prepare_source(
                 TrackId(42),
                 TrackSource::Uri("https://example.com/a.mp3".into()),
                 &mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("build_config should succeed");
         let bus = config
@@ -418,10 +420,11 @@ mod tests {
     #[kithara::test(tokio)]
     async fn build_config_invalid_uri_errors(#[by_ref] worker_owner: &WorkerOwner) {
         let (loader, _mailbox) = fixture(&worker_owner.0);
-        let Err(err) = loader.build_config(
+        let Err(err) = loader.prepare_source(
             TrackId(1),
             TrackSource::Uri("not-a-url".into()),
             &mock::output(None).get(),
+            Box::new(AudioObserverSlot::default().relay()),
         ) else {
             panic!("should reject relative path");
         };

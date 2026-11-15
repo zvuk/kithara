@@ -12,21 +12,13 @@ use kithara_events::EventBus;
 use kithara_file::FileConfigPatch;
 use kithara_hls::{HlsConfigPatch, KeyOptions};
 use kithara_net::Headers;
-use kithara_platform::{CancelToken, CancelWakerGuard, sync::Arc};
-use kithara_warp::WarpConfig;
+use kithara_platform::CancelToken;
 use kithara_waveform::Waveform;
 use url::Url;
 
 use super::{ArtifactSource, ResourceSrc, resampler::PlaybackResamplerBackend};
-use crate::EngineLoad;
 
-/// Unified configuration for opening an audio resource.
-///
-/// Holds the per-call wiring and per-stream input this resource is opened
-/// with, the runtime-owned audio capabilities a player overwrites, and what a
-/// configuration document says about each of the three configurations this
-/// resource builds — carried as patches, because none of those configurations
-/// can exist before the track does.
+/// Source and decoder inputs, artifacts and per-track buffering preferences.
 #[derive(Config)]
 #[config(construction, builder(on(String, into), start_fn = for_src))]
 #[non_exhaustive]
@@ -98,18 +90,12 @@ where
     /// standalone scope (see [`CancelScope::new`](kithara_platform::CancelScope)).
     #[config(skip = "composed into the resource cancel scope")]
     pub(crate) cancel: Option<CancelToken>,
-    /// Keeps the deck's cancellation connected to this track's subtree.
-    #[config(skip = "retained until the resource lane is released", builder(skip))]
-    pub(crate) cancel_link: Option<Arc<CancelWakerGuard>>,
     /// Optional cache discriminator mixed into the asset root.
     #[config(skip = "transferred to the asset key")]
     pub(crate) discriminator: Option<String>,
     /// Required for URL sources; the file or HLS owner refuses one without it.
     #[config(skip = "transferred to the selected stream")]
     pub(crate) downloader: Option<Downloader>,
-    /// Shared live audio-engine cost meter (decode + effects).
-    #[config(skip = "transferred to the play-owned producer")]
-    pub(crate) engine_load: Option<Arc<EngineLoad>>,
     /// Additional HTTP headers to include in all network requests.
     #[config(skip = "transferred to network requests")]
     pub(crate) headers: Option<Headers>,
@@ -121,9 +107,8 @@ where
     /// Base URL for resolving relative HLS playlist/segment URLs.
     #[config(skip = "transferred to HLS URL resolution")]
     pub(crate) hls_base_url: Option<Url>,
-    /// Rate the audio host actually opened, handed to the built audio
-    /// pipeline. The player overwrites it from its engine, so it is not a
-    /// document key.
+    /// Desired decoded sample rate. Playback preparation binds it to the
+    /// session's output rate; direct readers can request it independently.
     #[config(skip = "transferred to the audio host-rate owner")]
     pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// A waveform this track already has, on the same terms as
@@ -139,16 +124,6 @@ where
     /// default.
     #[config(skip = "transferred to the render lane's packet rings")]
     pub(crate) audio_buffer_chunks: Option<NonZeroUsize>,
-    /// Resident Warp resources and live temporal controls. Not a document
-    /// key: a player-managed resource has this overwritten with the player's
-    /// own `warp`, which is where a document's `player.warp:` section lands.
-    #[config(skip = "transferred to the play-owned warp lane", builder(default = WarpConfig::builder().build()))]
-    pub(crate) warp: WarpConfig,
-    /// Whether audio-thread reads block on a producer-ring underrun. Only an
-    /// offline harness or a player's own policy sets this, so it is not a
-    /// document key.
-    #[config(value, builder(default))]
-    pub(crate) block_on_underrun: bool,
 }
 
 #[cfg(test)]
@@ -430,12 +405,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn config_stretch_defaults_to_unity() {
-        let config = test_config("https://example.com/song.mp3").unwrap();
-        assert!((config.warp.speed() - 1.0).abs() < f32::EPSILON);
-    }
-
-    #[kithara::test]
     fn file_hint_none_for_url_without_extension() {
         let config = test_config("https://cdn-edge.zvq.me/track/streamhq?id=125475417").unwrap();
         let audio_config = config.build_file_config(None);
@@ -453,7 +422,6 @@ mod tests {
     fn defaults_match_the_documented_values() {
         let config = test_config("https://example.com/song.mp3").expect("valid config");
 
-        assert!(!config.block_on_underrun);
         assert!(config.host_sample_rate.is_none());
         assert!(
             config.hls.download_batch_size.is_none(),

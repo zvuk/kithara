@@ -102,15 +102,22 @@ pub(super) fn grid(
 }
 
 pub(super) fn resource() -> ResourceLoad {
-    ResourceLoad::new(
-        ResourceConfig::<TestPools>::for_src(
-            ResourceSrc::parse("https://example.com/track.mp3").expect("test source"),
+    kithara_play::ResourcePrep::builder()
+        .worker(PlayWorker::new(
+            kithara_play::PlayWorkerConfig::builder(pools()).build(),
+        ))
+        .build()
+        .prepare(
+            ResourceConfig::<TestPools>::for_src(
+                ResourceSrc::parse("https://example.com/track.mp3").expect("test source"),
+            )
+            .store(AssetStore::builder(pools()).build())
+            .build(),
+            &kithara_play::mock::output(None).get(),
+            Box::new(AudioObserverSlot::default().relay()),
         )
-        .store(AssetStore::builder(pools()).build())
-        .build(),
-        PlayWorker::new(kithara_play::PlayWorkerConfig::builder(pools()).build()),
-        Box::new(AudioObserverSlot::default().relay()),
-    )
+        .expect("prepared source load")
+        .1
 }
 
 #[derive(Clone, Debug, PartialEq)]

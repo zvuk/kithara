@@ -242,20 +242,16 @@ async fn load_track_propagates_host_sample_rate() {
                 .build(),
         )
         .build();
-    let prepared = prep
-        .prepare(config, &output.get())
+    let (_, load) = prep
+        .prepare(
+            config,
+            &output.get(),
+            Box::new(AudioObserverSlot::default().relay()),
+        )
         .expect("prepared source");
     let mut rig = DeckRig::new(DeckMixerConfig::default()).expect("deck scope");
     let loaded = rig
-        .load_fixture(
-            &prep.worker,
-            ResourceLoad::new(
-                prepared,
-                prep.worker.clone(),
-                Box::new(AudioObserverSlot::default().relay()),
-            ),
-            Duration::ZERO,
-        )
+        .load_fixture(&prep.worker, load, Duration::ZERO)
         .await
         .expect("worker opened source");
     assert_eq!(loaded.opened.pcm.spec().sample_rate.get(), host_rate);

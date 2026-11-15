@@ -144,7 +144,7 @@ pub(super) async fn open_resource(
     backend: DecoderBackend,
 ) -> Resource {
     let config = resource_config(url, store, backend, Some("mp3"));
-    kithara_integration_tests::mock::open_resource(&config, &worker)
+    kithara_integration_tests::mock::open_resource(&config, &worker, TrackConfig::default())
         .await
         .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
 }

@@ -38,6 +38,7 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
         let result = kithara_integration_tests::mock::open_resource(
             &resource_config(&bad_url, store.clone(), backend, Some("mp3")),
             &play_worker(&region),
+            kithara::play::TrackConfig::default(),
         )
         .await;
         assert!(
@@ -197,6 +198,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
         let result = kithara_integration_tests::mock::open_resource(
             &resource_config(&bad_url, store.clone(), backend, Some("mp3")),
             &worker,
+            kithara::play::TrackConfig::default(),
         )
         .await;
         assert!(

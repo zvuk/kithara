@@ -192,6 +192,7 @@ async fn live_remote_resource_decodes_with_duration(
     let mut resource = kithara_integration_tests::mock::open_resource(
         &config,
         &PlayWorker::new(PlayWorkerConfig::builder(pools).build()),
+        kithara::play::TrackConfig::default(),
     )
     .await
     .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));

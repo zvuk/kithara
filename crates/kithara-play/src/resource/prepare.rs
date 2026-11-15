@@ -1,16 +1,20 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_audio::{AudioDecoderConfig, DecoderResamplerSettings, ResamplerOptions};
+use kithara_audio::{
+    AudioDecoderConfig, AudioObserver, DecoderResamplerSettings, ResamplerBackend, ResamplerOptions,
+};
 use kithara_bufpool::HasPool;
 use kithara_config::bon::Builder;
 use kithara_decode::GaplessMode;
 use kithara_derive::Patch;
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
-use kithara_render::rt::BufferGeometryError;
+use kithara_render::{TrackConfig, TrackConfigPatch, rt::BufferGeometryError};
 use kithara_warp::{WarpConfig, WarpConfigPatch};
 
-use crate::{EngineLoad, OutputSnapshot, PlayError, PlayWorker, resource::ResourceConfig};
+use crate::{
+    EngineLoad, OutputSnapshot, PlayError, PlayWorker, ResourceLoad, resource::ResourceConfig,
+};
 
 /// What every track a deck loads opens with: the worker it renders on, the
 /// deck's own playback policy.
@@ -49,32 +53,70 @@ impl<S> ResourcePrep<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Prepares `config` to play on the deck's worker into its session.
-    /// Once the session knows its output shape, a renderer without a render
-    /// quantum renders one output block per lane packet. Before the session
-    /// measures its output no deadline can be checked, so buffer depths sized
-    /// to the render quantum and response budget overwrite whatever `audio:`
-    /// configured only under a response budget; without one they only fill
-    /// depths `audio:` left unset.
+    /// Binds source inputs to the deck's worker and playback policy.
+    /// The returned inputs share the load's cancellation scope and event bus
+    /// so artifacts and owner observations follow the same track lifetime.
     ///
     /// # Errors
-    ///
     /// Returns the session output's refusal of the buffer geometry.
     pub fn prepare<B>(
         &self,
-        config: ResourceConfig<S, B>,
+        mut config: ResourceConfig<S, B>,
         output: &OutputSnapshot,
-    ) -> Result<ResourceConfig<S, B>, PlayError>
+        observer: Box<dyn AudioObserver>,
+    ) -> Result<(ResourceConfig<S, B>, ResourceLoad), PlayError>
     where
-        B: Clone + Default,
+        B: Clone + Default + ResamplerBackend,
     {
-        let bus = config.bus.or_else(|| Some(self.bus.scoped()));
+        let bus = config.bus.take().or_else(|| Some(self.bus.scoped()));
         let cancel =
             CancelScope::new(config.cancel.clone().or_else(|| self.cancel.clone())).token();
         let cancel_link = self.cancel.as_ref().map(|parent| {
             let track = cancel.clone();
-            Arc::new(parent.on_cancel(move || track.cancel()))
+            parent.on_cancel(move || track.cancel())
         });
+        let track = self.track_config(&mut config, output)?;
+        let resampler = match config.decoder.resampler().cloned() {
+            Some(settings) => Some(settings),
+            None => output
+                .stream_shape
+                .map(|shape| {
+                    let chunk_size =
+                        usize::try_from(shape.max_block_frames.get()).map_err(|_| {
+                            PlayError::Internal("session output block exceeds usize".into())
+                        })?;
+                    Ok::<_, PlayError>(
+                        DecoderResamplerSettings::builder()
+                            .backend(B::default())
+                            .options(ResamplerOptions::builder().chunk_size(chunk_size).build())
+                            .build(),
+                    )
+                })
+                .transpose()?,
+        };
+        config.decoder = AudioDecoderConfig::builder()
+            .backend(config.decoder.backend())
+            .gapless_mode(self.gapless_mode)
+            .maybe_resampler(resampler)
+            .build();
+        config.bus = bus;
+        config.cancel = Some(cancel);
+        config.host_sample_rate = NonZeroU32::new(output.sample_rate.output());
+        let load = ResourceLoad::prepared(
+            config.clone(),
+            track,
+            self.worker.clone(),
+            observer,
+            cancel_link,
+        );
+        Ok((config, load))
+    }
+
+    fn track_config<B: Default>(
+        &self,
+        config: &mut ResourceConfig<S, B>,
+        output: &OutputSnapshot,
+    ) -> Result<TrackConfig, PlayError> {
         let mut warp = self.warp.clone();
         if warp.render_quantum_frames().is_none()
             && let Some(shape) = output.stream_shape
@@ -100,42 +142,18 @@ where
             ),
             (None, _) => (config.preload_chunks, config.audio_buffer_chunks),
         };
-        let resampler = match config.decoder.resampler().cloned() {
-            Some(settings) => Some(settings),
-            None => output
-                .stream_shape
-                .map(|shape| {
-                    let chunk_size =
-                        usize::try_from(shape.max_block_frames.get()).map_err(|_| {
-                            PlayError::Internal("session output block exceeds usize".into())
-                        })?;
-                    Ok::<_, PlayError>(
-                        DecoderResamplerSettings::builder()
-                            .backend(B::default())
-                            .options(ResamplerOptions::builder().chunk_size(chunk_size).build())
-                            .build(),
-                    )
-                })
-                .transpose()?,
-        };
-        let decoder = AudioDecoderConfig::builder()
-            .backend(config.decoder.backend())
-            .gapless_mode(self.gapless_mode)
-            .maybe_resampler(resampler)
+        config.preload_chunks = preload_chunks;
+        config.audio_buffer_chunks = audio_buffer_chunks;
+        let mut track = TrackConfig::builder()
+            .block_on_underrun(self.block_on_underrun)
+            .engine_load(Arc::clone(&self.engine_load))
+            .warp(warp)
             .build();
-        Ok(ResourceConfig {
-            bus,
-            cancel: Some(cancel),
-            cancel_link,
-            block_on_underrun: self.block_on_underrun,
-            preload_chunks,
-            audio_buffer_chunks,
-            host_sample_rate: NonZeroU32::new(output.sample_rate.output()),
-            decoder,
-            warp,
-            engine_load: Some(Arc::clone(&self.engine_load)),
-            ..config
-        })
+        let mut patch = TrackConfigPatch::default();
+        patch.preload_chunks = preload_chunks;
+        patch.audio_buffer_chunks = audio_buffer_chunks;
+        track.apply(patch);
+        Ok(track)
     }
 }
 
@@ -144,6 +162,7 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use kithara_assets::AssetStore;
+    use kithara_audio::AudioObserverSlot;
     use kithara_render::rt::{BufferGeometryError, StreamShape};
     use kithara_test_utils::{TestTempDir, kithara};
     use kithara_warp::WarpConfig;
@@ -173,17 +192,24 @@ mod tests {
     }
 
     #[kithara::test]
+    fn preparation_stretch_defaults_to_unity() {
+        let prep = ResourcePrep::builder()
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .build();
+        assert!((prep.warp.speed() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test]
     fn default_response_budget_leaves_the_deadline_to_the_application() {
         let config = prep(WarpConfig::builder().build());
 
         assert_eq!(config.response_budget_frames, None);
         assert!(!config.block_on_underrun);
         let mut source = resource_config("https://example.com/song.mp3");
-        source.block_on_underrun = true;
         let prepared = config
-            .prepare(source, &mock::output(None).get())
+            .track_config(&mut source, &mock::output(None).get())
             .expect("default playback policy prepares the resource");
-        assert!(!prepared.block_on_underrun);
+        assert!(!prepared.block_on_underrun());
     }
 
     #[kithara::test]
@@ -192,10 +218,11 @@ mod tests {
             gapless_mode: GaplessMode::Disabled,
             ..prep(WarpConfig::builder().build())
         };
-        let config = prep
+        let (config, load) = prep
             .prepare(
                 resource_config("https://example.com/song.mp3"),
                 &mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("test output answers stream-shape queries");
 
@@ -204,6 +231,7 @@ mod tests {
             config.cancel.is_some(),
             "prepare_config must inject a per-track cancel child"
         );
+        assert!(load.lane_geometry().is_ok());
     }
 
     #[kithara::test(native)]
@@ -212,10 +240,11 @@ mod tests {
             .expect("the document types");
         let mut prep = prep(WarpConfig::builder().build());
         prep.apply(patch);
-        let config = prep
+        let (config, _load) = prep
             .prepare(
                 resource_config("https://example.com/song.mp3"),
                 &mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("test output answers stream-shape queries");
 
@@ -233,10 +262,11 @@ mod tests {
         let mut prep = prep(WarpConfig::builder().build());
         prep.warp = WarpConfig::builder().speed(2.5).build();
         prep.apply(patch);
-        let config = prep
+        let (mut config, _load) = prep
             .prepare(
                 resource_config("https://example.com/song.mp3"),
                 &mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("test output answers stream-shape queries");
 
@@ -246,7 +276,16 @@ mod tests {
             (prep.warp.speed() - 2.5).abs() < f32::EPSILON,
             "a sibling field must survive the patch"
         );
-        assert!((config.warp.speed() - 2.5).abs() < f32::EPSILON);
+        assert!(
+            (prep
+                .track_config(&mut config, &mock::output(None).get())
+                .expect("producer config")
+                .warp()
+                .speed()
+                - 2.5)
+                .abs()
+                < f32::EPSILON
+        );
     }
 
     fn prep_with_geometry(
@@ -276,10 +315,11 @@ mod tests {
             NonZeroU32::new(128).expect("test block is non-zero"),
             mock::SAMPLE_RATE,
         );
-        let prepared = prep(WarpConfig::builder().build())
+        let (prepared, _load) = prep(WarpConfig::builder().build())
             .prepare(
                 resource_config("https://example.com/song.mp3"),
                 &mock::output(Some(shape)).get(),
+                Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("test session answers stream-shape queries");
 
@@ -296,10 +336,11 @@ mod tests {
 
     #[kithara::test]
     fn prepare_config_without_a_session_keeps_default_resampling_work() {
-        let prepared = prep(WarpConfig::builder().build())
+        let (prepared, _load) = prep(WarpConfig::builder().build())
             .prepare(
                 resource_config("https://example.com/song.mp3"),
                 &mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("resources may be prepared before the session measures its output");
 
@@ -321,11 +362,19 @@ mod tests {
         let mut config = resource_config("https://example.com/song.mp3");
         config.preload_chunks = NonZeroUsize::new(7);
         config.audio_buffer_chunks = NonZeroUsize::new(11);
-        let prepared = prep
-            .prepare(config, &mock::output(None).get())
+        let (mut prepared, _load) = prep
+            .prepare(
+                config,
+                &mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
+            )
             .expect("unmeasured preparation");
         assert_eq!(
-            prepared.warp.render_quantum_frames().map(NonZeroUsize::get),
+            prep.track_config(&mut prepared, &mock::output(None).get())
+                .expect("producer config")
+                .warp()
+                .render_quantum_frames()
+                .map(NonZeroUsize::get),
             expected
         );
         assert_eq!(prepared.preload_chunks.map(NonZeroUsize::get), Some(7));
@@ -349,8 +398,12 @@ mod tests {
             mock::SAMPLE_RATE,
         );
 
-        let prepared = prep(WarpConfig::builder().build())
-            .prepare(config, &mock::output(Some(shape)).get())
+        let (prepared, _load) = prep(WarpConfig::builder().build())
+            .prepare(
+                config,
+                &mock::output(Some(shape)).get(),
+                Box::new(AudioObserverSlot::default().relay()),
+            )
             .expect("test session answers stream-shape queries");
 
         assert_eq!(
@@ -367,10 +420,11 @@ mod tests {
     #[kithara::test(native, tokio)]
     async fn prepare_config_carries_the_sessions_rate_and_wake_mode() {
         let prep = prep(WarpConfig::builder().build());
-        let prepared = prep
+        let (prepared, _load) = prep
             .prepare(
                 resource_config("https://example.com/song.mp3"),
                 &mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("unmeasured preparation");
 
@@ -400,8 +454,12 @@ mod tests {
         #[case] expected_ring: usize,
     ) {
         let (prep, output) = prep_with_geometry(quantum, output_buffer, response_budget);
-        let prepared = prep
-            .prepare(resource_config("https://example.com/song.mp3"), &output)
+        let (prepared, _load) = prep
+            .prepare(
+                resource_config("https://example.com/song.mp3"),
+                &output,
+                Box::new(AudioObserverSlot::default().relay()),
+            )
             .expect("fixture geometry fits the response budget");
 
         assert_eq!(
@@ -422,12 +480,22 @@ mod tests {
         );
         let mut config = resource_config("https://example.com/song.mp3");
         config.audio_buffer_chunks = NonZeroUsize::new(1);
-        let prepared = prep(WarpConfig::builder().build())
-            .prepare(config, &mock::output(Some(shape)).get())
+        let prep = prep(WarpConfig::builder().build());
+        let output = mock::output(Some(shape)).get();
+        let (mut prepared, _load) = prep
+            .prepare(
+                config,
+                &output,
+                Box::new(AudioObserverSlot::default().relay()),
+            )
             .expect("a measured output prepares the resource");
 
         assert_eq!(
-            prepared.warp.render_quantum_frames().map(NonZeroUsize::get),
+            prep.track_config(&mut prepared, &output)
+                .expect("producer config")
+                .warp()
+                .render_quantum_frames()
+                .map(NonZeroUsize::get),
             Some(512)
         );
         assert_eq!(
@@ -442,12 +510,20 @@ mod tests {
     fn response_budget_bounds_the_default_render_quantum() {
         let (mut prep, output) = prep_with_geometry(32, 128, 441);
         prep.warp = WarpConfig::builder().build();
-        let prepared = prep
-            .prepare(resource_config("https://example.com/song.mp3"), &output)
+        let (mut prepared, _load) = prep
+            .prepare(
+                resource_config("https://example.com/song.mp3"),
+                &output,
+                Box::new(AudioObserverSlot::default().relay()),
+            )
             .expect("the session block fits the response budget");
 
         assert_eq!(
-            prepared.warp.render_quantum_frames().map(NonZeroUsize::get),
+            prep.track_config(&mut prepared, &output)
+                .expect("producer config")
+                .warp()
+                .render_quantum_frames()
+                .map(NonZeroUsize::get),
             Some(128)
         );
         assert_eq!(prepared.preload_chunks.map(NonZeroUsize::get), Some(1));
@@ -456,7 +532,11 @@ mod tests {
 
         prep.response_budget_frames = NonZeroUsize::new(382);
         assert!(matches!(
-            prep.prepare(resource_config("https://example.com/song.mp3"), &output),
+            prep.prepare(
+                resource_config("https://example.com/song.mp3"),
+                &output,
+                Box::new(AudioObserverSlot::default().relay())
+            ),
             Err(PlayError::Session(SessionError::BufferGeometry(
                 BufferGeometryError::BudgetExceeded {
                     required_frames: 383,
@@ -479,7 +559,7 @@ mod tests {
         let (prep, output) = prep_with_geometry(quantum, output_buffer, response_budget);
 
         assert!(matches!(
-            prep.prepare(resource_config("https://example.com/song.mp3"), &output),
+            prep.prepare(resource_config("https://example.com/song.mp3"), &output, Box::new(AudioObserverSlot::default().relay())),
             Err(PlayError::Session(SessionError::BufferGeometry(
                 BufferGeometryError::BudgetExceeded {
                     max_block_frames,
@@ -492,5 +572,50 @@ mod tests {
                 && actual_required_frames == required_frames
                 && budget_frames == response_budget
         ));
+    }
+    #[kithara::test(tokio)]
+    #[case::hls("https://example.com/live.m3u8")]
+    #[case::file("https://example.com/song.mp3")]
+    async fn preload_count_reaches_producer_config_without_opening_the_source(
+        #[case] source: &str,
+    ) {
+        let mut config = resource_config(source);
+        config.preload_chunks = NonZeroUsize::new(9);
+
+        let built = prep(WarpConfig::builder().build())
+            .track_config(&mut config, &mock::output(None).get())
+            .expect("producer geometry");
+
+        assert_eq!(built.preload_chunks().get(), 9);
+    }
+
+    #[kithara::test(tokio)]
+    async fn ring_depth_reaches_producer_config_without_opening_the_source() {
+        let mut config = resource_config("https://example.com/live.m3u8");
+        config.audio_buffer_chunks = NonZeroUsize::new(24);
+
+        let built = prep(WarpConfig::builder().build())
+            .track_config(&mut config, &mock::output(None).get())
+            .expect("producer geometry");
+
+        assert_eq!(built.audio_buffer_chunks().get(), 24);
+    }
+
+    #[kithara::test(tokio)]
+    #[case::hls("https://example.com/live.m3u8")]
+    #[case::file("https://example.com/song.mp3")]
+    async fn underrun_policy_reaches_producer_config_without_opening_the_source(
+        #[case] source: &str,
+    ) {
+        let mut config = resource_config(source);
+        let prep = ResourcePrep {
+            block_on_underrun: true,
+            ..prep(WarpConfig::builder().build())
+        };
+        let built = prep
+            .track_config(&mut config, &mock::output(None).get())
+            .expect("producer geometry");
+
+        assert!(built.block_on_underrun());
     }
 }

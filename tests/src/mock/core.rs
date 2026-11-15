@@ -32,14 +32,15 @@ use super::dispatcher::{LaneLoader, LaneOpen, ReleaseLane};
 pub async fn open_resource(
     config: &kithara::play::ResourceConfig<crate::bufpool_ext::TestPools>,
     worker: &PlayWorker<crate::bufpool_ext::TestPools>,
+    producer: TrackConfig,
 ) -> Result<kithara::play::Resource, LoadRefusal> {
-    let track = kithara::play::mock::resource_tracks(config, worker)?;
+    let track = kithara::play::mock::resource_audio(config, worker.pools())?;
     let resource = match track {
         futures::future::Either::Left(track) => {
-            kithara::play::Resource::from_reader(load_audio(worker, track).await?, None)
+            kithara::play::Resource::from_reader(load_audio(worker, (track, producer)).await?, None)
         }
         futures::future::Either::Right(track) => {
-            kithara::play::Resource::from_reader(load_audio(worker, track).await?, None)
+            kithara::play::Resource::from_reader(load_audio(worker, (track, producer)).await?, None)
         }
     };
     Ok(resource)

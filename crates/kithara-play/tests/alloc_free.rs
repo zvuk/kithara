@@ -97,14 +97,19 @@ async fn a_deck_attaches_fades_and_retires_without_allocating() {
     )
     .expect("prepared float WAV");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-    let load: ResourceLoad = ResourceLoad::new(
-        ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
-            .store(AssetStore::builder(pools()).build())
-            .host_sample_rate(SAMPLE_RATE)
-            .build(),
-        worker.clone(),
-        Box::new(AudioObserverSlot::default().relay()),
-    );
+    let load: ResourceLoad = kithara_play::ResourcePrep::builder()
+        .worker(worker.clone())
+        .build()
+        .prepare(
+            ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
+                .store(AssetStore::builder(pools()).build())
+                .host_sample_rate(SAMPLE_RATE)
+                .build(),
+            &kithara_play::SessionOutputView::new(SAMPLE_RATE).get(),
+            Box::new(AudioObserverSlot::default().relay()),
+        )
+        .expect("prepared source load")
+        .1;
     let (_sender, lane_inbox) = worker.lane_channel();
     let (opened, _lane, _latency) = {
         // WHY: Disk preparation runs on a real worker, outside the virtual scheduler.

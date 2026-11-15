@@ -38,7 +38,7 @@ use kithara_sync::{SessionBeat, Tempo, TempoStep, TempoTrajectory};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-pub use crate::resource::source_mock::{resource_tracks, track_load};
+pub use crate::resource::source_mock::{resource_audio, track_load};
 use crate::{
     DeckPass, OpenedTrack, PlayError, ResourceLoad, TrackSettings, player::Outbox,
     session::SessionOutputView,
@@ -213,13 +213,12 @@ where
                     .build(),
             )
             .build();
-    let prepared = prep.prepare(config, output)?;
-    let bus = prepared.bus.clone().ok_or(PlayError::Closed)?;
-    let item = ResourceLoad::new(
-        prepared,
-        prep.worker.clone(),
+    let (prepared, item) = prep.prepare(
+        config,
+        output,
         Box::new(AudioObserverSlot::default().relay()),
-    );
+    )?;
+    let bus = prepared.bus.clone().ok_or(PlayError::Closed)?;
     let (_control, inbox) = item.lane_channel();
     assert_requested_render_off_bus(
         LoadRequest {

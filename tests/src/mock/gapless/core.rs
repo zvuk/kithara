@@ -141,7 +141,6 @@ pub async fn create_apple_fused_resource(
     .downloader(create_test_downloader())
     .store(store)
     .host_sample_rate(NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("device rate"))
-    .block_on_underrun(true)
     .decoder(
         AudioDecoderConfig::builder()
             .backend(DecoderBackend::Apple)

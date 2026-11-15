@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use futures::future::Either;
 use kithara_audio::{AudioConfig, ResamplerBackend};
-use kithara_bufpool::HasPool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_command::Inbox;
 use kithara_events::EventBus;
 use kithara_platform::{maybe_send::BoxFuture, sync::Arc, time::Duration};
@@ -16,36 +16,27 @@ use super::{
 };
 use crate::PlayWorker;
 
-type ResourceTrack<S> = Either<
-    (
-        AudioConfig<kithara_file::File<S>, PlaybackResamplerBackend>,
-        TrackConfig,
-    ),
-    (
-        AudioConfig<kithara_hls::Hls<S>, PlaybackResamplerBackend>,
-        TrackConfig,
-    ),
+type ResourceAudio<S> = Either<
+    AudioConfig<kithara_file::File<S>, PlaybackResamplerBackend>,
+    AudioConfig<kithara_hls::Hls<S>, PlaybackResamplerBackend>,
 >;
 type OpenedLane<L> = Result<(OpenedPcm, L, FrameCount), LoadRefusal>;
 
-pub fn resource_tracks<S>(
+pub fn resource_audio<S>(
     config: &ResourceConfig<S>,
-    worker: &PlayWorker<S>,
-) -> Result<ResourceTrack<S>, LoadRefusal>
+    pools: &PoolRegion<S>,
+) -> Result<ResourceAudio<S>, LoadRefusal>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    let track = config.build_track_config();
     let track = match SourceType::detect(&config.src)? {
         SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
             let audio = config.clone().build_file_config(None);
-            Either::Left((audio, track))
+            Either::Left(audio)
         }
         SourceType::HlsStream(_) => {
-            let audio = config
-                .clone()
-                .build_hls_config(worker.pools().clone(), None)?;
-            Either::Right((audio, track))
+            let audio = config.clone().build_hls_config(pools.clone(), None)?;
+            Either::Right(audio)
         }
     };
     Ok(track)

@@ -431,18 +431,19 @@ pub(crate) mod tests {
                 .loader
                 .as_ref()
                 .expect("prepared queue has a loader")
-                .build_config(
+                .prepare_source(
                     TrackId(id),
                     crate::TrackSource::Uri("https://example.com/track.mp3".into()),
                     &output,
+                    Box::new(kithara_audio::AudioObserverSlot::default().relay()),
                 )
                 .expect("build a bare URI track config")
         };
         let first = queue(None);
         let second = queue(None);
-        let first_track = track_config(&first, 1);
-        let next_track = track_config(&first, 2);
-        let second_track = track_config(&second, 3);
+        let (first_track, _first_track_load) = track_config(&first, 1);
+        let (next_track, _next_track_load) = track_config(&first, 2);
+        let (second_track, _second_track_load) = track_config(&second, 3);
         assert!(first_track.store().is_same(next_track.store()));
         assert_ne!(
             first_track.store().root_dir(),
@@ -452,6 +453,7 @@ pub(crate) mod tests {
         let shared = queue(Some(first_track.store().clone()));
         assert!(
             track_config(&shared, 4)
+                .0
                 .store()
                 .is_same(first_track.store())
         );

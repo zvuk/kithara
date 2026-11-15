@@ -17,8 +17,12 @@ async fn a_remote_hls_resource_without_a_downloader_is_refused() {
         .store(AssetStore::builder(region.clone()).build())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
-    let Err(error) =
-        kithara_integration_tests::mock::open_resource(&config, &play_worker(&region)).await
+    let Err(error) = kithara_integration_tests::mock::open_resource(
+        &config,
+        &play_worker(&region),
+        kithara::play::TrackConfig::default(),
+    )
+    .await
     else {
         panic!("a remote HLS resource opened without a Downloader");
     };

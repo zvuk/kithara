@@ -141,10 +141,13 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     let path = url.as_str();
 
     let config = resource_config(&url, store, backend, None);
-    let mut resource =
-        kithara_integration_tests::mock::open_resource(&config, &play_worker(&region))
-            .await
-            .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));
+    let mut resource = kithara_integration_tests::mock::open_resource(
+        &config,
+        &play_worker(&region),
+        kithara::play::TrackConfig::default(),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));
 
     let duration = resource.duration();
     assert!(
@@ -247,10 +250,13 @@ async fn local_resource_decodes_with_duration(
             )
             .build();
 
-    let mut resource =
-        kithara_integration_tests::mock::open_resource(&config, &play_worker(&region))
-            .await
-            .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
+    let mut resource = kithara_integration_tests::mock::open_resource(
+        &config,
+        &play_worker(&region),
+        kithara::play::TrackConfig::default(),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 
     let duration = resource.duration();
     assert!(duration.is_some(), "{url}: duration must be reported");

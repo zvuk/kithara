@@ -3,7 +3,6 @@ use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::DecodeError;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
-use kithara_render::{TrackConfig, TrackConfigPatch};
 use url::Url;
 
 use super::{ResourceConfig, ResourceSrc};
@@ -108,25 +107,11 @@ where
         audio_config.apply(self.audio.clone());
         Ok(audio_config)
     }
-
-    /// Transfers playback geometry to one render lane.
-    pub(crate) fn build_track_config(&self) -> TrackConfig {
-        let mut config = TrackConfig::builder()
-            .block_on_underrun(self.block_on_underrun)
-            .maybe_engine_load(self.engine_load.clone())
-            .warp(self.warp.clone())
-            .build();
-        let mut patch = TrackConfigPatch::default();
-        patch.preload_chunks = self.preload_chunks;
-        patch.audio_buffer_chunks = self.audio_buffer_chunks;
-        config.apply(patch);
-        config
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Read, num::NonZeroUsize};
+    use std::io::Read;
 
     use kithara_assets::{AcquisitionResult, AssetResource, AssetStore, StorageBackend, WriteSide};
     use kithara_config::Config as _;
@@ -294,43 +279,5 @@ mod tests {
             .read_exact(&mut read)
             .expect("read cached source bytes");
         assert_eq!(read, bytes);
-    }
-
-    #[kithara::test(tokio)]
-    #[case::hls("https://example.com/live.m3u8")]
-    #[case::file("https://example.com/song.mp3")]
-    async fn preload_count_reaches_producer_config_without_opening_the_source(
-        #[case] source: &str,
-    ) {
-        let mut config = config(source);
-        config.preload_chunks = NonZeroUsize::new(9);
-
-        let built = config.build_track_config();
-
-        assert_eq!(built.preload_chunks().get(), 9);
-    }
-
-    #[kithara::test(tokio)]
-    async fn ring_depth_reaches_producer_config_without_opening_the_source() {
-        let mut config = config("https://example.com/live.m3u8");
-        config.audio_buffer_chunks = NonZeroUsize::new(24);
-
-        let built = config.build_track_config();
-
-        assert_eq!(built.audio_buffer_chunks().get(), 24);
-    }
-
-    #[kithara::test(tokio)]
-    #[case::hls("https://example.com/live.m3u8")]
-    #[case::file("https://example.com/song.mp3")]
-    async fn underrun_policy_reaches_producer_config_without_opening_the_source(
-        #[case] source: &str,
-    ) {
-        let mut config = config(source);
-        config.block_on_underrun = true;
-
-        let built = config.build_track_config();
-
-        assert!(built.block_on_underrun());
     }
 }

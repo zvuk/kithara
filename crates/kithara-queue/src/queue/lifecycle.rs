@@ -1161,13 +1161,12 @@ mod tests {
         }
         queue.publish();
         let output = kithara_play::mock::output(None).get();
-        let Err(expected) =
-            queue
-                .loader
-                .as_ref()
-                .expect("loader")
-                .build_config(TrackId(42), source, &output)
-        else {
+        let Err(expected) = queue.loader.as_ref().expect("loader").prepare_source(
+            TrackId(42),
+            source,
+            &output,
+            Box::new(kithara_audio::AudioObserverSlot::default().relay()),
+        ) else {
             panic!("fixture source must be rejected");
         };
         assert!(matches!(expected, QueueError::InvalidUrl(_)));
