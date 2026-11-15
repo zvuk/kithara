@@ -1,6 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-use fearless_simd::{Level, dispatch, f32x4, f64x2, prelude::*, u64x2};
+use fearless_simd::{Level, dispatch, f32x4, f64x2, mask64x2, prelude::*, u64x2};
 
 use crate::{backend::svf, consts, filter::Response};
 
@@ -35,13 +35,13 @@ impl<const CHANNELS: usize> Section<CHANNELS> {
         for ((([left, right], memory1), memory2), quiet) in
             pairs.iter_mut().zip(memory1).zip(memory2).zip(quiet)
         {
-            let frames = prefix(left, frames)
-                .iter_mut()
-                .zip(prefix(right, frames))
+            let chunks = prefix(left, frames)
+                .chunks_mut(consts::CROSSOVER_CHUNK_FRAMES)
+                .zip(prefix(right, frames).chunks_mut(consts::CROSSOVER_CHUNK_FRAMES))
                 .map(|(left, right)| [left, right]);
-            run_frames(
+            run_chunks(
                 simd,
-                frames,
+                chunks,
                 [memory1, memory2],
                 quiet,
                 self.coefficients,
@@ -49,10 +49,12 @@ impl<const CHANNELS: usize> Section<CHANNELS> {
             );
         }
         if let ([plane], [memory1], [memory2], [quiet]) = (tail, tail1, tail2, tail_quiet) {
-            let frames = prefix(plane, frames).iter_mut().map(|sample| [sample]);
-            run_frames(
+            let chunks = prefix(plane, frames)
+                .chunks_mut(consts::CROSSOVER_CHUNK_FRAMES)
+                .map(|plane| [plane]);
+            run_chunks(
                 simd,
-                frames,
+                chunks,
                 [std::slice::from_mut(memory1), std::slice::from_mut(memory2)],
                 std::slice::from_mut(quiet),
                 self.coefficients,
@@ -75,27 +77,127 @@ fn prefix<P: DerefMut<Target = [f32]>>(plane: &mut P, frames: usize) -> &mut [f3
 }
 
 #[inline(always)]
-fn run_frames<'a, S: Simd, const LANES: usize>(
+fn run_chunks<'a, S: Simd, const LANES: usize>(
     simd: S,
-    frames: impl Iterator<Item = [&'a mut f32; LANES]>,
+    chunks: impl Iterator<Item = [&'a mut [f32]; LANES]>,
     [memory1, memory2]: [&mut [f64]; 2],
     quiet: &mut [u64],
     coefficients: [f64; 3],
     response: Response,
 ) {
-    let mut s1 = f64x2::from_fn(simd, |lane| memory1.get(lane).copied().unwrap_or(0.0));
-    let mut s2 = f64x2::from_fn(simd, |lane| memory2.get(lane).copied().unwrap_or(0.0));
+    let mut state = [
+        f64x2::from_fn(simd, |lane| memory1.get(lane).copied().unwrap_or(0.0)),
+        f64x2::from_fn(simd, |lane| memory2.get(lane).copied().unwrap_or(0.0)),
+    ];
     let mut count = u64x2::from_fn(simd, |lane| quiet.get(lane).copied().unwrap_or(0));
+    let zero = u64x2::splat(simd, 0);
+    let active = u64x2::from_fn(simd, |lane| u64::from(lane < LANES)).simd_ne(zero);
+    let coefficients = coefficients.map(|value| f64x2::splat(simd, value));
+    let damping = f64x2::splat(simd, consts::CROSSOVER_DAMPING);
+    for mut chunk in chunks {
+        let original = chunk.each_ref().map(|plane| {
+            let mut input = [0.0; consts::CROSSOVER_CHUNK_FRAMES];
+            input
+                .get_mut(..plane.len())
+                .expect("span fits the crossover scratch")
+                .copy_from_slice(plane);
+            input
+        });
+        let snapshot = (state, count);
+        let (candidate, candidate_count, retired) = run_span::<S, false>(
+            simd,
+            &mut chunk,
+            state,
+            count,
+            coefficients,
+            damping,
+            response,
+        );
+        if (retired & active).any_true() {
+            for (plane, input) in chunk.iter_mut().zip(&original) {
+                let len = plane.len();
+                plane.copy_from_slice(input.get(..len).expect("saved span input"));
+            }
+            (state, count, _) = run_span::<S, true>(
+                simd,
+                &mut chunk,
+                snapshot.0,
+                snapshot.1,
+                coefficients,
+                damping,
+                response,
+            );
+        } else {
+            state = candidate;
+            count = candidate_count;
+        }
+    }
+    let [state1, state2] = state;
+    for (memory, value) in memory1.iter_mut().zip(state1.as_slice()) {
+        *memory = *value;
+    }
+    for (memory, value) in memory2.iter_mut().zip(state2.as_slice()) {
+        *memory = *value;
+    }
+    for (quiet, value) in quiet.iter_mut().zip(count.as_slice()) {
+        *quiet = *value;
+    }
+}
+
+#[inline(always)]
+fn run_span<S: Simd, const EXACT: bool>(
+    simd: S,
+    planes: &mut [&mut [f32]],
+    state: [f64x2<S>; 2],
+    count: u64x2<S>,
+    coefficients: [f64x2<S>; 3],
+    damping: f64x2<S>,
+    response: Response,
+) -> ([f64x2<S>; 2], u64x2<S>, mask64x2<S>) {
+    match planes {
+        [left, right] => run_frames::<S, 2, EXACT>(
+            simd,
+            left.iter_mut()
+                .zip(right.iter_mut())
+                .map(|(left, right)| [left, right]),
+            state,
+            count,
+            coefficients,
+            damping,
+            response,
+        ),
+        [plane] => run_frames::<S, 1, EXACT>(
+            simd,
+            plane.iter_mut().map(|sample| [sample]),
+            state,
+            count,
+            coefficients,
+            damping,
+            response,
+        ),
+        _ => unreachable!("crossover spans contain one channel pair or a mono tail"),
+    }
+}
+
+#[inline(always)]
+fn run_frames<'a, S: Simd, const LANES: usize, const EXACT: bool>(
+    simd: S,
+    frames: impl Iterator<Item = [&'a mut f32; LANES]>,
+    [mut s1, mut s2]: [f64x2<S>; 2],
+    mut count: u64x2<S>,
+    coefficients: [f64x2<S>; 3],
+    damping: f64x2<S>,
+    response: Response,
+) -> ([f64x2<S>; 2], u64x2<S>, mask64x2<S>) {
     let zero = f64x2::splat(simd, 0.0);
     let no_quiet = u64x2::splat(simd, 0);
+    let mut retired_any = no_quiet.simd_ne(no_quiet);
     let one = u64x2::splat(simd, 1);
     let limit = u64x2::splat(
         simd,
         u64::try_from(consts::SECTION_MEMORY).expect("quiet memory fits in a SIMD lane"),
     );
     let threshold = f32x4::splat(simd, consts::SILENT_PEAK);
-    let coefficients = coefficients.map(|value| f64x2::splat(simd, value));
-    let damping = f64x2::splat(simd, consts::CROSSOVER_DAMPING);
     for samples in frames {
         let input = f32x4::from_fn(simd, |lane| {
             samples.get(lane).map_or(0.0, |sample| **sample)
@@ -114,21 +216,19 @@ fn run_frames<'a, S: Simd, const LANES: usize>(
             .0;
         count = silent.select(count.saturating_add(one).min(limit), no_quiet);
         let retired = count.simd_eq(limit);
-        s1 = retired.select(zero, next1);
-        s2 = retired.select(zero, next2);
+        retired_any |= retired;
+        if EXACT {
+            s1 = retired.select(zero, next1);
+            s2 = retired.select(zero, next2);
+        } else {
+            s1 = next1;
+            s2 = next2;
+        }
         for (sample, output) in samples.into_iter().zip(output.as_slice()) {
             *sample = *output;
         }
     }
-    for (memory, value) in memory1.iter_mut().zip(s1.as_slice()) {
-        *memory = *value;
-    }
-    for (memory, value) in memory2.iter_mut().zip(s2.as_slice()) {
-        *memory = *value;
-    }
-    for (quiet, value) in quiet.iter_mut().zip(count.as_slice()) {
-        *quiet = *value;
-    }
+    ([s1, s2], count, retired_any)
 }
 
 pub(crate) struct Split<const CHANNELS: usize> {
@@ -231,6 +331,63 @@ mod tests {
     use num_traits::ToPrimitive;
 
     use super::*;
+
+    #[kithara::test]
+    #[case(Response::LowPass)]
+    #[case(Response::HighPass)]
+    #[case(Response::AllPass)]
+    fn replay_restores_pcm_and_per_frame_retirement(#[case] response: Response) {
+        for level in [Level::new(), Level::fallback()] {
+            dispatch!(level, simd => {
+                for frames in [3, 31, 32, 33, 63, 64, 65, 97] {
+                    let make = || {
+                        let mut section = Section::<2>::new(0.01);
+                        section.state = [[1e-12, -1e-12], [3e-13, -3e-13]];
+                        section.quiet = [1, 0];
+                        section
+                    };
+                    let input = [
+                        [-0.0, 0.0, f32::from_bits(1), -f32::from_bits(1), 1e-11]
+                            .into_iter().cycle().take(frames).collect::<Vec<_>>(),
+                        [0.5, 0.25, -0.5, -0.25, 0.0]
+                            .into_iter().cycle().take(frames).collect(),
+                    ];
+                    let Section { state: [s1, s2], quiet, coefficients } = make();
+                    let state = [f64x2::from_slice(simd, &s1), f64x2::from_slice(simd, &s2)];
+                    let count = u64x2::from_slice(simd, &quiet);
+                    let coefficients = coefficients.map(|value| f64x2::splat(simd, value));
+                    let damping = f64x2::splat(simd, consts::CROSSOVER_DAMPING);
+                    let mut expected = input.clone();
+                    let [left, right] = &mut expected;
+                    let (expected_state, expected_count, _) = run_span::<_, true>(
+                        simd, &mut [left.as_mut_slice(), right.as_mut_slice()],
+                        state, count, coefficients, damping, response,
+                    );
+                    let mut unreplayed = input.clone();
+                    let [left, right] = &mut unreplayed;
+                    let (_, _, retired) = run_span::<_, false>(
+                        simd, &mut [left.as_mut_slice(), right.as_mut_slice()],
+                        state, count, coefficients, damping, response,
+                    );
+                    assert!(retired.any_true(), "retirement is load-bearing");
+                    assert!(unreplayed.iter().flatten().zip(expected.iter().flatten())
+                        .any(|(actual, expected)| actual.to_bits() != expected.to_bits()));
+                    let mut actual = input;
+                    let mut section = make();
+                    section.run(simd, &mut actual, frames, response);
+                    for (actual, expected) in actual.iter().flatten().zip(expected.iter().flatten()) {
+                        assert_eq!(actual.to_bits(), expected.to_bits(), "{response:?} frames{frames}");
+                    }
+                    for (actual, expected) in section.state.iter().zip(&expected_state) {
+                        for (actual, expected) in actual.iter().zip(expected.as_slice()) {
+                            assert_eq!(actual.to_bits(), expected.to_bits());
+                        }
+                    }
+                    assert_eq!(section.quiet.as_slice(), expected_count.as_slice());
+                }
+            });
+        }
+    }
 
     fn parity<const CHANNELS: usize>(bands: usize) {
         let gains: Vec<_> = (0..bands.checked_sub(1).expect("one high band"))
