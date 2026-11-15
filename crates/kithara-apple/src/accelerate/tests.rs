@@ -574,3 +574,25 @@ fn add_accumulates_the_common_prefix() {
     );
     assert_eq!(add_f32(&[], &mut acc), 0, "an empty source");
 }
+
+#[kithara::test]
+fn multichannel_biquad_validates_the_mutable_borrow_before_ffi() {
+    struct Plane([f32; 4]);
+    impl std::ops::Deref for Plane {
+        type Target = [f32];
+        fn deref(&self) -> &[f32] {
+            &self.0
+        }
+    }
+    impl std::ops::DerefMut for Plane {
+        fn deref_mut(&mut self) -> &mut [f32] {
+            &mut self.0[..0]
+        }
+    }
+    let mut filter =
+        MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("identity setup");
+    let mut planes = [Plane([0.25; 4])];
+    assert_eq!(filter.process(&mut planes, 0..4), Err(BiquadError::Shape));
+
+    assert_eq!(planes[0].0, [0.25; 4]);
+}

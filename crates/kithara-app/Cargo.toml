@@ -163,11 +163,11 @@ kithara = { workspace = true, default-features = false, features = ["download", 
 kithara-app-document = { workspace = true }
 
 [dev-dependencies]
-kithara = { workspace = true, default-features = false, features = ["usdt", "download", "offline", "ui-capture"] }
+kithara = { workspace = true, default-features = false, features = ["test", "usdt", "download", "offline", "ui-capture"] }
 kithara-app = { path = ".", default-features = false, features = ["mock", "usdt"] }
 kithara-encode = { workspace = true, default-features = false }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang", "temp-dir"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "mock", "hang", "temp-dir"] }
 
 async-trait = { workspace = true }
 futures = { workspace = true }
@@ -176,7 +176,7 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dev-dependencies]
-kithara = { workspace = true, default-features = false, features = ["download", "client-reqwest", "net", "tls-rustls"] }
+kithara = { workspace = true, default-features = false, features = ["test", "download", "client-reqwest", "net", "tls-rustls"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "wav"] }
@@ -187,7 +187,7 @@ kithara-test-fixtures = { workspace = true, default-features = false, features =
 # split a fixed client-reqwest dev-dep would unify with the macOS wreq
 # production path and compile both stacks into the test binary.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-kithara = { workspace = true, default-features = false, features = ["download", "client-wreq", "net"] }
+kithara = { workspace = true, default-features = false, features = ["test", "download", "client-wreq", "net"] }
 
 [lints]
 workspace = true

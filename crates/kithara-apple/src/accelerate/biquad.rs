@@ -140,18 +140,9 @@ impl MultichannelBiquad {
         planes: &mut [P],
         range: Range<usize>,
     ) -> Result<(), BiquadError> {
-        if planes.len() != self.channels.get()
-            || planes
-                .iter()
-                .any(|plane| plane.get(range.clone()).is_none())
-        {
-            return Err(BiquadError::Shape);
-        }
+        self.prepare(planes, range.clone())?;
         // A fixed native call size preserves stream prefixes across caller chunks.
-        for frame in range {
-            for (slot, plane) in self.planes.iter_mut().zip(planes.iter_mut()) {
-                *slot = plane[frame..].as_mut_ptr();
-            }
+        for _ in range {
             let table = self.planes.as_mut_ptr();
             // SAFETY: setup is live and was created for self.channels channels.
             // SAFETY: every validated plane has one writable sample at frame.
@@ -166,6 +157,25 @@ impl MultichannelBiquad {
                     1,
                 );
             }
+            for plane in &mut self.planes {
+                // SAFETY: each pointer advances within its checked range, at most one past its end.
+                *plane = unsafe { (*plane).add(1) };
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare<P: DerefMut<Target = [f32]>>(
+        &mut self,
+        planes: &mut [P],
+        range: Range<usize>,
+    ) -> Result<(), BiquadError> {
+        if planes.len() != self.channels.get() {
+            return Err(BiquadError::Shape);
+        }
+        for (slot, plane) in self.planes.iter_mut().zip(planes) {
+            let samples = plane.get_mut(range.clone()).ok_or(BiquadError::Shape)?;
+            *slot = samples.as_mut_ptr();
         }
         Ok(())
     }
