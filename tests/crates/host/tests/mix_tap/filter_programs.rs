@@ -65,7 +65,7 @@ fn bits(pcm: &[f32]) -> Vec<u32> {
 
 async fn loaded_filter_source(source: String) -> (OfflinePlayer, Underruns) {
     let options = OfflinePlayerOptions::builder()
-        .block_on_underrun(false)
+        .block_on_underrun(true)
         .output_block_frames(NonZeroU32::new(64).expect("callback"))
         .warp(
             WarpConfig::builder()
