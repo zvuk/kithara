@@ -6,8 +6,6 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use kithara_dsp::delay::DelayLine;
 use kithara_test_utils::bufpool::pools;
 
-#[path = "support/mod.rs"]
-mod backend;
 mod reverb_primitives;
 
 mod consts {

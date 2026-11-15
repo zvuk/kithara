@@ -1,17 +1,13 @@
 use std::{hint::black_box, num::NonZeroUsize};
 
-use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
-use fearless_simd::{Level, dispatch};
+use criterion::{
+    BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput, measurement::WallTime,
+};
 use kithara_dsp::{
     delay::{DelayDiffuser, DelayLine},
     filter::OnePoleLowPass,
 };
 use kithara_test_utils::bufpool::pools;
-
-use crate::backend;
-
-type Diffuse = fn(&mut [f32], &[f32], f32, &mut [f32]) -> usize;
-type Blend = fn(&[f32], &[f32], f32, &mut [f32]) -> usize;
 
 fn tone(frames: usize) -> Vec<f32> {
     [0.25, -0.125, 0.375, -0.5, 0.0625, 0.75, -0.25]
@@ -21,104 +17,120 @@ fn tone(frames: usize) -> Vec<f32> {
         .collect()
 }
 
-fn scalar_diffuse(x: &mut [f32], d: &[f32], gain: f32, w: &mut [f32]) -> usize {
-    for ((x, d), w) in x.iter_mut().zip(d).zip(w) {
-        *w = gain.mul_add(*d, *x);
-        *x = *d - *x;
-    }
-    x.len()
+fn assert_bits(actual: &[f32], expected: &[f32]) {
+    assert_eq!(
+        actual.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+        expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+    );
 }
 
-fn scalar_blend(x: &[f32], d: &[f32], fraction: f32, output: &mut [f32]) -> usize {
-    for ((x, d), y) in x.iter().zip(d).zip(output.iter_mut()) {
-        *y = fraction.mul_add(*d - *x, *x);
+fn scalar_diffuse(samples: &mut [f32], history: &mut [f32], gain: f32) {
+    for (sample, delayed) in samples.iter_mut().zip(history) {
+        let d = *delayed;
+        *delayed = gain.mul_add(d, *sample);
+        *sample = d - *sample;
     }
-    output.len()
+}
+
+fn scalar_blend(newer: &[f32], older: &[f32], fraction: f32, output: &mut [f32]) {
+    for ((newer, older), output) in newer.iter().zip(older).zip(output) {
+        *output = fraction.mul_add(older - newer, *newer);
+    }
+}
+
+fn diffuse(group: &mut BenchmarkGroup<'_, WallTime>, frames: usize) {
+    let input = tone(frames);
+    let mut history = input.clone();
+    history.rotate_left(3);
+    let region = pools();
+    let mut line = DelayLine::new(
+        NonZeroUsize::MIN,
+        NonZeroUsize::new(frames).expect("block capacity"),
+        &region,
+    )
+    .expect("history");
+    line.write(&[history.as_slice()], 0..frames)
+        .expect("fill history");
+    let mut diffuser = DelayDiffuser::<1>::new(line, 0.5).expect("diffuser");
+    let mut actual = input.clone();
+    let mut expected = input.clone();
+    diffuser
+        .process(&mut [actual.as_mut_slice()], 0..frames)
+        .expect("shape");
+    scalar_diffuse(&mut expected, &mut history, 0.5);
+    assert_bits(&actual, &expected);
+    group.bench_function(BenchmarkId::new("diffuse/native", frames), |b| {
+        b.iter_batched_ref(
+            || input.clone(),
+            |samples| {
+                diffuser
+                    .process(&mut [black_box(samples.as_mut_slice())], 0..frames)
+                    .expect("shape");
+                black_box(samples);
+            },
+            BatchSize::NumIterations(64),
+        );
+    });
+    group.bench_function(BenchmarkId::new("diffuse/scalar", frames), |b| {
+        b.iter_batched_ref(
+            || input.clone(),
+            |samples| {
+                scalar_diffuse(black_box(samples.as_mut_slice()), &mut history, 0.5);
+                black_box(samples);
+            },
+            BatchSize::NumIterations(64),
+        );
+    });
+}
+
+fn blend(group: &mut BenchmarkGroup<'_, WallTime>, frames: usize) {
+    let history = tone(2048);
+    let region = pools();
+    let mut line = DelayLine::new(
+        NonZeroUsize::MIN,
+        NonZeroUsize::new(history.len()).expect("capacity"),
+        &region,
+    )
+    .expect("line");
+    line.write(&[history.as_slice()], 0..history.len())
+        .expect("fill history");
+    let fraction = 0.37;
+    let tap = line.tap(1024.0 + f64::from(fraction)).expect("tap");
+    let newer = history.get(1024..1024 + frames).expect("newer span");
+    let older = history.get(1023..1023 + frames).expect("older span");
+    let mut output = vec![0.0; frames];
+    let mut expected = output.clone();
+    line.read(0, tap, &mut output).expect("read span");
+    scalar_blend(newer, older, fraction, &mut expected);
+    assert_bits(&output, &expected);
+    group.bench_function(BenchmarkId::new("delay_blend/native", frames), |b| {
+        b.iter(|| {
+            line.read(0, tap, black_box(&mut output))
+                .expect("read span");
+            black_box(&output);
+        });
+    });
+    group.bench_function(BenchmarkId::new("delay_blend/scalar", frames), |b| {
+        b.iter(|| {
+            scalar_blend(
+                black_box(newer),
+                black_box(older),
+                fraction,
+                black_box(&mut output),
+            );
+            black_box(&output);
+        });
+    });
 }
 
 fn kernels(c: &mut Criterion) {
-    let diffuse: &[(&str, Diffuse)] = &[
-        (
-            "native",
-            |x, d, g, w| dispatch!(Level::new(), s => backend::delay::diffuse_kernel(s,x,d,g,w)),
-        ),
-        (
-            "fallback",
-            |x, d, g, w| dispatch!(Level::fallback(), s => backend::delay::diffuse_kernel(s,x,d,g,w)),
-        ),
-        ("scalar", scalar_diffuse),
-    ];
-    let blend: &[(&str, Blend)] = &[
-        (
-            "native",
-            |x, d, f, y| dispatch!(Level::new(), s => backend::delay::blend_kernel(s,x,d,f,y)),
-        ),
-        (
-            "fallback",
-            |x, d, f, y| dispatch!(Level::fallback(), s => backend::delay::blend_kernel(s,x,d,f,y)),
-        ),
-        ("scalar", scalar_blend),
-    ];
     let mut group = c.benchmark_group("reverb_kernels");
     for frames in [128, 512] {
         group.throughput(Throughput::Elements(
             u64::try_from(frames).expect("bench frames"),
         ));
-        let x = tone(frames);
-        let mut d = x.clone();
-        d.rotate_left(3);
-        let template = (x, d, vec![0.0; frames]);
-        let mut expected = template.clone();
-        scalar_diffuse(&mut expected.0, &expected.1, 0.5, &mut expected.2);
-        for (name, kernel) in diffuse {
-            let mut actual = template.clone();
-            kernel(&mut actual.0, &actual.1, 0.5, &mut actual.2);
-            assert_eq!(
-                actual.0.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
-                expected.0.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
-            );
-            assert_eq!(
-                actual.2.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
-                expected.2.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
-            );
-            group.bench_function(BenchmarkId::new(format!("diffuse/{name}"), frames), |b| {
-                b.iter_batched_ref(
-                    || template.clone(),
-                    |(x, d, w)| {
-                        black_box(kernel(
-                            black_box(x),
-                            black_box(d.as_slice()),
-                            0.5,
-                            black_box(w),
-                        ));
-                    },
-                    BatchSize::NumIterations(64),
-                );
-            });
-        }
-        let mut expected = vec![0.0; frames];
-        scalar_blend(&template.0, &template.1, 0.37, &mut expected);
-        for (name, kernel) in blend {
-            let mut output = vec![0.0; frames];
-            kernel(&template.0, &template.1, 0.37, &mut output);
-            assert_eq!(
-                output.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
-                expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
-            );
-            group.bench_function(
-                BenchmarkId::new(format!("delay_blend/{name}"), frames),
-                |b| {
-                    b.iter(|| {
-                        black_box(kernel(
-                            black_box(&template.0),
-                            black_box(&template.1),
-                            0.37,
-                            black_box(&mut output),
-                        ));
-                    });
-                },
-            );
-        }
+        diffuse(&mut group, frames);
+        blend(&mut group, frames);
     }
     group.finish();
 }
@@ -142,32 +154,22 @@ fn one_pole<const CHANNELS: usize>(c: &mut Criterion) {
         let mut expected = template.clone();
         let mut expected_state = [0.0; CHANNELS];
         scalar_pole(&mut expected, &mut expected_state);
-        for (name, level) in [("native", Level::new()), ("fallback", Level::fallback())] {
-            let mut actual = template.clone();
-            let mut state = [0.0; CHANNELS];
-            let mut slices = actual.each_mut().map(Vec::as_mut_slice);
-            dispatch!(level, s => backend::one_pole::low_pass_kernel(s, 0.2, &mut state, &mut slices, frames));
-            assert_eq!(
-                actual
-                    .iter()
-                    .flatten()
-                    .map(|x| x.to_bits())
-                    .collect::<Vec<_>>(),
-                expected
-                    .iter()
-                    .flatten()
-                    .map(|x| x.to_bits())
-                    .collect::<Vec<_>>()
-            );
-            assert_eq!(state.map(f32::to_bits), expected_state.map(f32::to_bits));
-            state.fill(0.0);
+        let mut actual = template.clone();
+        let mut oracle = OnePoleLowPass::<CHANNELS>::new(0.2).expect("bench coefficient");
+        oracle.process(&mut actual, 0..frames).expect("bench shape");
+        for (actual, expected) in actual.iter().zip(&expected) {
+            assert_bits(actual, expected);
+        }
+        for name in ["native", "process"] {
+            let mut filter = OnePoleLowPass::<CHANNELS>::new(0.2).expect("bench coefficient");
             group.bench_function(BenchmarkId::new(name, frames), |b| {
                 b.iter_batched_ref(
                     || template.clone(),
                     |planes| {
-                        let mut slices = black_box(&mut *planes).each_mut().map(Vec::as_mut_slice);
-                        dispatch!(level, s => backend::one_pole::low_pass_kernel(s, 0.2, &mut state, &mut slices, frames));
-                        black_box((planes, &state));
+                        filter
+                            .process(black_box(planes), 0..frames)
+                            .expect("bench shape");
+                        black_box(planes);
                     },
                     BatchSize::NumIterations(64),
                 );
@@ -180,19 +182,6 @@ fn one_pole<const CHANNELS: usize>(c: &mut Criterion) {
                 |planes| {
                     scalar_pole(black_box(&mut *planes), &mut scalar_state);
                     black_box((planes, &scalar_state));
-                },
-                BatchSize::NumIterations(64),
-            );
-        });
-        let mut filter = OnePoleLowPass::<CHANNELS>::new(0.2).expect("bench coefficient");
-        group.bench_function(BenchmarkId::new("process", frames), |b| {
-            b.iter_batched_ref(
-                || template.clone(),
-                |planes| {
-                    filter
-                        .process(black_box(planes), 0..frames)
-                        .expect("bench shape");
-                    black_box(planes);
                 },
                 BatchSize::NumIterations(64),
             );
