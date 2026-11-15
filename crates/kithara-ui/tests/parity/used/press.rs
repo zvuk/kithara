@@ -56,8 +56,8 @@ struct Played {
 /// An application that answers nothing and keeps every event published to it:
 /// what a press reaches here is the host's own doing, which is the question.
 #[derive(Default)]
-struct Menu {
-    published: Vec<UiEvent>,
+pub(super) struct Menu {
+    pub(super) published: Vec<UiEvent>,
 }
 
 impl Reads for Menu {

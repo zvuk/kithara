@@ -11,6 +11,7 @@ mod segment;
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
+mod pitch;
 mod warp;
 
 pub use beat_grid::{
@@ -26,6 +27,7 @@ pub use coordinate::{
 pub(crate) use kithara_signal::{SessionEpoch, SessionFrame};
 #[cfg(feature = "render")]
 pub use kithara_stretch::{BackendCapabilities as WarpCapabilities, StretchKind};
+pub use pitch::{Pitch, PitchStep, Semitones};
 #[cfg(feature = "render")]
 pub use render::{SourceTrajectory, WarpRenderError, WarpRenderer};
 pub use segment::{

@@ -162,15 +162,24 @@ fn diagonal_cursor_shapes_map_to_their_iced_orientations() {
 }
 
 #[kithara::test]
-fn only_the_left_button_arms_a_gesture() {
-    for button in [Button::Right, Button::Middle] {
+fn the_right_button_presses_secondary_and_the_middle_stays_with_the_child() {
+    let Some(Input::Pointer(pressed)) =
+        input(&Event::Mouse(mouse::Event::ButtonPressed(Button::Right)))
+    else {
+        panic!("a right press must reach the gesture");
+    };
+    assert_eq!(
+        (pressed.phase, pressed.button),
+        (PointerPhase::Down, Some(PointerButton::Secondary))
+    );
+    assert!(!pressed.presses_primary());
+    for event in [
+        mouse::Event::ButtonPressed(Button::Middle),
+        mouse::Event::ButtonReleased(Button::Middle),
+    ] {
         assert!(
-            input(&Event::Mouse(mouse::Event::ButtonPressed(button))).is_none(),
-            "{button:?} must stay with the child"
-        );
-        assert!(
-            input(&Event::Mouse(mouse::Event::ButtonReleased(button))).is_none(),
-            "{button:?} must stay with the child"
+            input(&Event::Mouse(event)).is_none(),
+            "{event:?} must stay with the child"
         );
     }
 }
