@@ -347,10 +347,9 @@ fn lane_outcomes_settled(
     };
     observation.cue_curves.iter().all(|cue| {
         let adopted = cue
-            .before
-            .mark
+            .before_segment
             .zip(bound_segment(cue.item))
-            .is_some_and(|(before, segment)| segment > before.lane.segment);
+            .is_some_and(|(before, segment)| segment > before);
         !adopted || observation.ready_cues.contains(&(cue.item, cue.seq))
     }) && observation.speeds.iter().all(|speed| {
         !matches!(
@@ -410,6 +409,7 @@ fn silent_cues_hold_the_manual_clock_until_their_lane_outcomes() {
             position: Duration::ZERO,
             curve: kithara::sync::SpeedCurve::Constant(1.0),
             before,
+            before_segment: Some(old),
             consumed: None,
             host_input: None,
             native: None,
@@ -427,6 +427,16 @@ fn silent_cues_hold_the_manual_clock_until_their_lane_outcomes() {
         !settled(&observation, old.next()),
         "an admitted silent cue must settle before the manual clock advances"
     );
+    observation.cue_curves[0].before.mark = None;
+    assert!(
+        settled(&observation, old),
+        "a silent binding still needs its Adopt callback without a PCM mark"
+    );
+    assert!(
+        !settled(&observation, old.next()),
+        "an adopted cue without a prior PCM mark must hold the manual clock"
+    );
+    observation.cue_curves[0].before.mark = Some(mark);
     observation.placement_receipts.push((
         item,
         LinkReceiptOrigin::Deck,
@@ -449,6 +459,7 @@ fn silent_cues_hold_the_manual_clock_until_their_lane_outcomes() {
         position: Duration::ZERO,
         curve: kithara::sync::SpeedCurve::Constant(1.0),
         before: observation.cue_curves[0].before.clone(),
+        before_segment: Some(old.next()),
         consumed: None,
         host_input: None,
         native: None,
@@ -2254,7 +2265,17 @@ fn assert_transport(
         "nonblocking source playback has no underrun/fault: {:?}",
         capture.faults
     );
-    assert_eq!(capture.faded.len(), 4, "four real outgoing crossfades");
+    assert_eq!(
+        capture.faded.len(),
+        4,
+        "four real outgoing crossfades; cues={:?}; ready={:?}; cue_inputs={:?}",
+        o.cue_curves,
+        o.ready_cues,
+        o.timeline
+            .iter()
+            .filter(|entry| entry["event"] == "cue")
+            .collect::<Vec<_>>(),
+    );
     match kind {
         MusicCase::Natural => {
             assert_eq!(capture.ended.len(), 1, "last source reaches natural end");
