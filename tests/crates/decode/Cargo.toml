@@ -22,11 +22,11 @@ no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 apple-fused-src = ["kithara/apple-fused-src", "kithara-integration-tests/apple-fused-src"]
 
 [dependencies]
-kithara = { workspace = true, features = ["usdt", "mock", "offline", "resample-rubato", "signal", "tokio-net", "tokio-rt-multi-thread"] }
+kithara = { workspace = true, features = ["test", "usdt", "mock", "offline", "resample-rubato", "signal", "tokio-net", "tokio-rt-multi-thread"] }
 kithara-integration-tests = { workspace = true, features = ["all"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "packaged", "signal", "wav"] }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "temp-dir"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "hang", "mock", "temp-dir"] }
 
 derive_more = { workspace = true }
 futures = { workspace = true }
@@ -37,10 +37,10 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, features = ["apple", "client-wreq"] }
+kithara = { workspace = true, features = ["test", "apple", "client-wreq"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-kithara = { workspace = true, features = ["full", "symphonia", "fdk-aac"] }
+kithara = { workspace = true, features = ["test", "full", "symphonia", "fdk-aac"] }
 
 [lints]
 workspace = true

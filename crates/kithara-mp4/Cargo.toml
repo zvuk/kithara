@@ -18,7 +18,7 @@ tracing = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-kithara-test-utils = { path = "../kithara-test-utils", features = ["hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "hang"] }
 
 [lints]
 workspace = true
