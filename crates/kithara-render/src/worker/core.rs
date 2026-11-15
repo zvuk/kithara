@@ -234,6 +234,7 @@ where
                 self.pools().clone(),
             ))
             .await;
+            tracing::debug!(phase = "audio_prepared", succeeded = prepared.is_ok());
             self.check_load_cancelled(cancel.as_ref())?;
             let mut audio = prepared.map_err(decode_refusal)?;
             let position = initial_position(&mut audio, position)?;
@@ -260,20 +261,26 @@ where
             let dispatch = tracing::dispatcher::get_default(Clone::clone);
             let span = tracing::Span::current();
             // Cold engine allocation must not stop service of resident lanes.
+            tracing::debug!(phase = "renderer_queued");
             let prepared = spawn_blocking(move || {
                 tracing::dispatcher::with_default(&dispatch, || {
                     let _entered = span.enter();
+                    tracing::debug!(phase = "renderer_entered");
                     let mut renderer = warp.renderer(spec, pools);
+                    tracing::debug!(phase = "renderer_created");
                     renderer.set_speed(start.speed, 0).map_err(|error| {
                         DecodeError::audio_stream("initial lane speed curve", error)
                     })?;
+                    tracing::debug!(phase = "renderer_speed_set");
                     renderer.prepare_engine_latency(spec).map_err(|error| {
                         DecodeError::audio_stream("lane engine preparation", error)
                     })?;
+                    tracing::debug!(phase = "renderer_returned");
                     Ok::<_, DecodeError>(renderer)
                 })
             })
             .await;
+            tracing::debug!(phase = "renderer_joined", succeeded = prepared.is_ok());
             self.check_load_cancelled(cancel.as_ref())?;
             let renderer = prepared
                 .map_err(|error| DecodeError::audio_stream("lane renderer preparation task", error))
