@@ -75,7 +75,7 @@ where
             let track = cancel.clone();
             parent.on_cancel(move || track.cancel())
         });
-        let track = self.track_config(&mut config, output)?;
+        let track = self.track_config(&config, output)?;
         let resampler = match config.decoder.resampler().cloned() {
             Some(settings) => Some(settings),
             None => output
@@ -114,7 +114,7 @@ where
 
     fn track_config<B: Default>(
         &self,
-        config: &mut ResourceConfig<S, B>,
+        config: &ResourceConfig<S, B>,
         output: &OutputSnapshot,
     ) -> Result<TrackConfig, PlayError> {
         let mut warp = self.warp.clone();
@@ -142,8 +142,6 @@ where
             ),
             (None, _) => (config.preload_chunks, config.audio_buffer_chunks),
         };
-        config.preload_chunks = preload_chunks;
-        config.audio_buffer_chunks = audio_buffer_chunks;
         let mut track = TrackConfig::builder()
             .block_on_underrun(self.block_on_underrun)
             .engine_load(Arc::clone(&self.engine_load))
@@ -205,9 +203,9 @@ mod tests {
 
         assert_eq!(config.response_budget_frames, None);
         assert!(!config.block_on_underrun);
-        let mut source = resource_config("https://example.com/song.mp3");
+        let source = resource_config("https://example.com/song.mp3");
         let prepared = config
-            .track_config(&mut source, &mock::output(None).get())
+            .track_config(&source, &mock::output(None).get())
             .expect("default playback policy prepares the resource");
         assert!(!prepared.block_on_underrun());
     }
@@ -262,7 +260,7 @@ mod tests {
         let mut prep = prep(WarpConfig::builder().build());
         prep.warp = WarpConfig::builder().speed(2.5).build();
         prep.apply(patch);
-        let (mut config, _load) = prep
+        let (config, _load) = prep
             .prepare(
                 resource_config("https://example.com/song.mp3"),
                 &mock::output(None).get(),
@@ -278,7 +276,7 @@ mod tests {
         );
         assert!(
             (prep
-                .track_config(&mut config, &mock::output(None).get())
+                .track_config(&config, &mock::output(None).get())
                 .expect("producer config")
                 .warp()
                 .speed()
@@ -362,7 +360,7 @@ mod tests {
         let mut config = resource_config("https://example.com/song.mp3");
         config.preload_chunks = NonZeroUsize::new(7);
         config.audio_buffer_chunks = NonZeroUsize::new(11);
-        let (mut prepared, _load) = prep
+        let (prepared, _load) = prep
             .prepare(
                 config,
                 &mock::output(None).get(),
@@ -370,7 +368,7 @@ mod tests {
             )
             .expect("unmeasured preparation");
         assert_eq!(
-            prep.track_config(&mut prepared, &mock::output(None).get())
+            prep.track_config(&prepared, &mock::output(None).get())
                 .expect("producer config")
                 .warp()
                 .render_quantum_frames()
@@ -461,15 +459,12 @@ mod tests {
                 Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("fixture geometry fits the response budget");
+        let track = prep
+            .track_config(&prepared, &output)
+            .expect("producer geometry");
 
-        assert_eq!(
-            prepared.preload_chunks.map(NonZeroUsize::get),
-            Some(expected_preload)
-        );
-        assert_eq!(
-            prepared.audio_buffer_chunks.map(NonZeroUsize::get),
-            Some(expected_ring)
-        );
+        assert_eq!(track.preload_chunks().get(), expected_preload);
+        assert_eq!(track.audio_buffer_chunks().get(), expected_ring);
     }
 
     #[kithara::test]
@@ -482,52 +477,72 @@ mod tests {
         config.audio_buffer_chunks = NonZeroUsize::new(1);
         let prep = prep(WarpConfig::builder().build());
         let output = mock::output(Some(shape)).get();
-        let (mut prepared, _load) = prep
+        let (prepared, _load) = prep
             .prepare(
                 config,
                 &output,
                 Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("a measured output prepares the resource");
+        let track = prep
+            .track_config(&prepared, &output)
+            .expect("producer config");
 
         assert_eq!(
-            prep.track_config(&mut prepared, &output)
-                .expect("producer config")
-                .warp()
-                .render_quantum_frames()
-                .map(NonZeroUsize::get),
+            track.warp().render_quantum_frames().map(NonZeroUsize::get),
             Some(512)
         );
         assert_eq!(
-            prepared.audio_buffer_chunks.map(NonZeroUsize::get),
-            Some(1),
+            track.audio_buffer_chunks().get(),
+            1,
             "without a response budget the track's ring depth stands"
         );
-        assert!(prepared.preload_chunks.is_some());
+        assert_eq!(track.preload_chunks().get(), 3);
+    }
+
+    #[kithara::test]
+    fn repreparing_source_inputs_uses_the_current_output_geometry() {
+        let prep = prep(
+            WarpConfig::builder()
+                .render_quantum_frames(NonZeroUsize::new(32).expect("nonzero quantum"))
+                .build(),
+        );
+        let source = resource_config("https://example.com/song.mp3");
+        for (block, preload, ring) in [(4096, 128, 129), (8192, 256, 257)] {
+            let output = mock::output(Some(StreamShape::new(
+                NonZeroU32::new(block).expect("nonzero callback"),
+                mock::SAMPLE_RATE,
+            )))
+            .get();
+            let track = prep
+                .track_config(&source, &output)
+                .expect("callback geometry fits");
+            assert_eq!(track.preload_chunks().get(), preload);
+            assert_eq!(track.audio_buffer_chunks().get(), ring);
+        }
     }
 
     #[kithara::test]
     fn response_budget_bounds_the_default_render_quantum() {
         let (mut prep, output) = prep_with_geometry(32, 128, 441);
         prep.warp = WarpConfig::builder().build();
-        let (mut prepared, _load) = prep
+        let (prepared, _load) = prep
             .prepare(
                 resource_config("https://example.com/song.mp3"),
                 &output,
                 Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("the session block fits the response budget");
+        let track = prep
+            .track_config(&prepared, &output)
+            .expect("producer config");
 
         assert_eq!(
-            prep.track_config(&mut prepared, &output)
-                .expect("producer config")
-                .warp()
-                .render_quantum_frames()
-                .map(NonZeroUsize::get),
+            track.warp().render_quantum_frames().map(NonZeroUsize::get),
             Some(128)
         );
-        assert_eq!(prepared.preload_chunks.map(NonZeroUsize::get), Some(1));
-        assert_eq!(prepared.audio_buffer_chunks.map(NonZeroUsize::get), Some(2));
+        assert_eq!(track.preload_chunks().get(), 1);
+        assert_eq!(track.audio_buffer_chunks().get(), 2);
         assert_eq!(prep.warp.render_quantum_frames(), None);
 
         prep.response_budget_frames = NonZeroUsize::new(382);
@@ -583,7 +598,7 @@ mod tests {
         config.preload_chunks = NonZeroUsize::new(9);
 
         let built = prep(WarpConfig::builder().build())
-            .track_config(&mut config, &mock::output(None).get())
+            .track_config(&config, &mock::output(None).get())
             .expect("producer geometry");
 
         assert_eq!(built.preload_chunks().get(), 9);
@@ -595,7 +610,7 @@ mod tests {
         config.audio_buffer_chunks = NonZeroUsize::new(24);
 
         let built = prep(WarpConfig::builder().build())
-            .track_config(&mut config, &mock::output(None).get())
+            .track_config(&config, &mock::output(None).get())
             .expect("producer geometry");
 
         assert_eq!(built.audio_buffer_chunks().get(), 24);
@@ -607,13 +622,13 @@ mod tests {
     async fn underrun_policy_reaches_producer_config_without_opening_the_source(
         #[case] source: &str,
     ) {
-        let mut config = resource_config(source);
+        let config = resource_config(source);
         let prep = ResourcePrep {
             block_on_underrun: true,
             ..prep(WarpConfig::builder().build())
         };
         let built = prep
-            .track_config(&mut config, &mock::output(None).get())
+            .track_config(&config, &mock::output(None).get())
             .expect("producer geometry");
 
         assert!(built.block_on_underrun());

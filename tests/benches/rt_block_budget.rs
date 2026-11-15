@@ -29,8 +29,6 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     queue::TrackSource,
     signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame, TransportRevision},
-    sync::SpeedCurve,
-    warp::StretchKind,
 };
 use kithara_command::{
     Batch, ChannelConfig, LevelInbox, Port, ScopeId, ScopedConfig, ScopedInbox, ScopedSender,
@@ -229,11 +227,7 @@ async fn processor(count: usize, lane: Lane, limiter: LimiterConfig) -> BenchMix
                 .build(),
         );
         let (sender, inbox) = worker.lane_channel();
-        let start = LaneStart {
-            speed: SpeedCurve::Constant(1.0),
-            keylock: false,
-            backend: StretchKind::default(),
-        };
+        let start = LaneStart::default();
         let (pcm, task, _) = {
             let _real_io = kithara::platform::flash::real_io();
             kithara::platform::time::timeout(

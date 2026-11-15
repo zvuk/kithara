@@ -19,8 +19,6 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, SessionDuckingMode, TrackConfig},
     queue::TrackSource,
     signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame},
-    sync::SpeedCurve,
-    warp::StretchKind,
 };
 use kithara_command::{Batch, Outcome, ScopedReceipt, Seq, When};
 use kithara_dsp::param::{DEFAULT_SMOOTH_SECONDS, MIN_SETTLE_RATIO, SmoothedParam, SmootherConfig};
@@ -343,11 +341,7 @@ async fn jump_fixture() -> JumpFixture {
             config.0,
             config.1,
             Duration::ZERO,
-            LaneStart {
-                speed: SpeedCurve::Constant(1.0),
-                keylock: false,
-                backend: StretchKind::default(),
-            },
+            LaneStart::default(),
             inbox,
         )
         .await

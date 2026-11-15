@@ -143,8 +143,7 @@ where
             .map_or_else(TrackSettings::default, |warp| {
                 TrackSettings::builder()
                     .speed(warp.speed())
-                    .keylock(warp.keylock())
-                    .backend(warp.backend())
+                    .pitch(warp.pitch_control(warp.pitch()).unwrap_or_default())
                     .build()
             });
         let prep = ResourcePrep::builder()

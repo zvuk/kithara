@@ -10,7 +10,7 @@ use super::core::WarpRenderer;
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
     pub(in crate::render) fn projection_lookahead(&self) -> Result<usize, ElasticError> {
-        if !self.current_keylock {
+        if !self.current_pitch_engine {
             return Ok(0);
         }
         let capabilities = self
@@ -20,7 +20,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .capabilities();
         let latency = capabilities.latency();
         if let Some((speed, maximum)) =
-            self.native_projection_rates(capabilities, self.current_keylock)?
+            self.native_projection_rates(capabilities, self.pitch_controls().keylock())?
         {
             (latency
                 .first()
@@ -36,7 +36,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .and_then(|history| history.checked_add(latency.second()))
             .ok_or(ElasticError::SampleCountOverflow)
         } else {
-            let stages = self.trajectory.projection_stages()?;
+            let stages = self.projection_stages()?;
             latency
                 .first()
                 .checked_add(latency.second())
@@ -46,7 +46,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     }
 
     fn render_mapping(&mut self, span: SourceSpan) -> Result<(), ElasticError> {
-        if self.current_keylock {
+        if self.current_pitch_engine {
             self.render_projected(span)?;
         } else {
             self.render_varispeed(span)?;

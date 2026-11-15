@@ -25,6 +25,8 @@ struct SnapshotTrack(
     Vec<(TrackSettingsChange, When<SessionFrame>)>,
     Option<usize>,
     VecDeque<Settled<LaneFrame>>,
+    /// Lane-pending state observed by the last owner tick.
+    Option<bool>,
 );
 struct SnapshotFactory;
 
@@ -54,6 +56,7 @@ impl TrackFactory for SnapshotFactory {
             Vec::new(),
             Some(0),
             VecDeque::new(),
+            None,
         ))
     }
 }
@@ -104,7 +107,9 @@ impl Player for SnapshotTrack {
         }
         Settled::Pending
     }
-    fn tick(&mut self, _now: SessionFrame, _out: &mut Outbox<'_>) {}
+    fn tick(&mut self, _now: SessionFrame, _out: &mut Outbox<'_>) {
+        self.4 = Some(self.0.pending_lane);
+    }
     fn snapshot(&self) -> Self::Snapshot {
         self.0.clone()
     }
@@ -164,7 +169,9 @@ impl Track for SnapshotTrack {
     }
 
     fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>> {
-        self.3.pop_front()
+        let receipt = self.3.pop_front()?;
+        self.0.pending_lane = !self.3.is_empty();
+        Some(receipt)
     }
 
     fn seek_applied(&mut self, _seq: Seq) -> Option<bool> {
@@ -229,6 +236,7 @@ fn every_queue_turn_drains_active_and_parked_lane_feedback() {
     for turn in 0..64 {
         let seq = fixture_seq();
         for track in queue.active.tracks_mut() {
+            track.0.pending_lane = true;
             track.3.push_back(Settled::Applied {
                 seq,
                 at: LaneFrame {
@@ -247,6 +255,13 @@ fn every_queue_turn_drains_active_and_parked_lane_feedback() {
             queue.active.tracks_mut().all(|track| track.3.is_empty()),
             "feedback cannot accumulate across owner turns"
         );
+        for track in queue.active.tracks_mut() {
+            assert_eq!(
+                track.4,
+                Some(false),
+                "track transitions must observe readiness admitted in this owner turn"
+            );
+        }
     }
 }
 

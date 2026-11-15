@@ -288,19 +288,12 @@ impl Debug for OpenedTrack {
 
 impl OpenedTrack {
     pub(super) fn new(opened: OpenedPcm, src: Arc<str>) -> Self {
-        let OpenedPcm {
-            receiver,
-            playhead,
-            metadata,
-            abr,
-        } = opened;
-        let pcm = Box::new(receiver);
         Self {
-            pcm,
+            pcm: Box::new(opened.receiver),
             src,
-            playhead,
-            abr,
-            metadata,
+            playhead: opened.playhead,
+            abr: opened.abr,
+            metadata: opened.metadata,
         }
     }
 }
@@ -1313,15 +1306,7 @@ mod tests {
             .1;
         let (_sender, inbox) = load.lane_channel();
         let refused = load
-            .open(
-                Duration::ZERO,
-                LaneStart {
-                    speed: SpeedCurve::Constant(1.0),
-                    keylock: false,
-                    backend: StretchKind::default(),
-                },
-                inbox,
-            )
+            .open(Duration::ZERO, LaneStart::default(), inbox)
             .await
             .map(|(opened, _, _)| opened);
 
@@ -1392,15 +1377,7 @@ mod tests {
             let (sender, inbox) = load.lane_channel();
             async move {
                 let opened = load
-                    .open(
-                        Duration::ZERO,
-                        LaneStart {
-                            speed: SpeedCurve::Constant(1.0),
-                            keylock: false,
-                            backend: StretchKind::default(),
-                        },
-                        inbox,
-                    )
+                    .open(Duration::ZERO, LaneStart::default(), inbox)
                     .await
                     .map(|(opened, _, _)| opened);
                 drop(sender);

@@ -222,10 +222,7 @@ impl PlayerImpl {
         }
         let when = self.lane_when(at, out)?;
         let change = TrackSettings::check(change)?;
-        if let TrackSettingsChange::Speed(speed) = change
-            && matches!(when, When::Next)
-            && self.unchanged_speed(speed)
-        {
+        if self.unchanged(change, when) {
             return Ok((Configuring::Unchanged, None));
         }
         if matches!(change, TrackSettingsChange::Speed(_)) {
@@ -236,6 +233,15 @@ impl PlayerImpl {
             return Err(PlayError::Full("lane"));
         }
         Ok((Configuring::Send(when, change), Some(0)))
+    }
+
+    fn unchanged(&self, change: TrackSettingsChange, when: When<LaneFrame>) -> bool {
+        match change {
+            TrackSettingsChange::Speed(speed) => {
+                matches!(when, When::Next) && self.unchanged_speed(speed)
+            }
+            TrackSettingsChange::Pitch(pitch) => self.settings.projected().pitch() == pitch,
+        }
     }
 
     fn unchanged_speed(&self, speed: f32) -> bool {

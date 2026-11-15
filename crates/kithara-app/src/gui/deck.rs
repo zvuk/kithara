@@ -1,4 +1,4 @@
-use kithara::effects::GainDb;
+use kithara::{effects::GainDb, play::PitchStep};
 
 use crate::{
     deck::{EqMode, TempoPercent},
@@ -29,7 +29,7 @@ pub(crate) enum DeckMsg {
     SetTempo(TempoPercent),
     SetQuality(Option<usize>),
     ToggleSync,
-    ToggleKeylock,
+    Pitch(PitchStep),
 }
 
 pub(crate) fn command(shown: &DeckSnapshot, eq_mode: EqMode, msg: &DeckMsg) -> Option<DeckCmd> {
@@ -50,7 +50,7 @@ pub(crate) fn command(shown: &DeckSnapshot, eq_mode: EqMode, msg: &DeckMsg) -> O
         DeckMsg::SetTempo(tempo) => DeckCmd::SetTempo(tempo),
         DeckMsg::SetQuality(variant) => DeckCmd::SetQuality(variant),
         DeckMsg::ToggleSync => DeckCmd::ToggleSync,
-        DeckMsg::ToggleKeylock => DeckCmd::ToggleKeylock,
+        DeckMsg::Pitch(step) => DeckCmd::Pitch(step),
     })
 }
 
