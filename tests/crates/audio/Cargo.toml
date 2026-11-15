@@ -21,11 +21,11 @@ load = ["kithara-integration-tests/load"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]
-kithara = { workspace = true, default-features = false, features = ["usdt", "assets", "audio", "bufpool", "decode", "file", "platform", "play", "resample-glide", "resample-rubato", "resampler", "signal", "stream", "stretch-signalsmith", "warp"] }
+kithara = { workspace = true, default-features = false, features = ["test", "usdt", "assets", "audio", "bufpool", "decode", "file", "platform", "play", "resample-glide", "resample-rubato", "resampler", "signal", "stream", "stretch-signalsmith", "warp"] }
 kithara-integration-tests = { workspace = true, default-features = false, features = ["audio"] }
 kithara-test-dylib = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["wav"] }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "temp-dir"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "hang", "mock", "temp-dir"] }
 
 assert_no_alloc = { workspace = true }
 num-traits = { workspace = true }
@@ -37,13 +37,13 @@ url = { workspace = true }
 # by target triple. Android stretches through Signalsmith, the backend
 # `kithara-ffi`'s `android` feature selects.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
-kithara = { workspace = true, default-features = false, features = ["stretch-bungee"] }
+kithara = { workspace = true, default-features = false, features = ["test", "stretch-bungee"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, features = ["apple", "client-wreq"] }
+kithara = { workspace = true, features = ["test", "apple", "client-wreq"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-kithara = { workspace = true, features = ["record", "symphonia"] }
+kithara = { workspace = true, features = ["test", "record", "symphonia"] }
 
 [lints]
 workspace = true

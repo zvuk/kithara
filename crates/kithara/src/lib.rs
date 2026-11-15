@@ -183,8 +183,10 @@ pub mod storage {
 }
 
 pub use kithara_test_macros::{
-    allow_block, fixture, mock, no_block, rtsan_forbid_blocking, test, test_utils_flash as flash,
+    allow_block, mock, no_block, rtsan_forbid_blocking, test_utils_flash as flash,
 };
+#[cfg(feature = "test")]
+pub use kithara_test_macros::{fixture, test};
 #[cfg(feature = "warp")]
 pub use kithara_warp::StretchKind;
 
