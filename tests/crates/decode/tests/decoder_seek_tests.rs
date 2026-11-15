@@ -15,7 +15,7 @@ use kithara::{
     events::EventBus,
     file::{File, FileConfig},
     platform::time::{self, Duration},
-    play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend},
+    play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, TrackConfig},
     signal::{AudioChunk, AudioChunkInfo},
     stream::Stream,
 };
@@ -68,7 +68,8 @@ async fn open_test_audio(
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     kithara_integration_tests::fixtures::assert_fixture_open(
         asset,
-        kithara_integration_tests::mock::load_audio(&worker, config).await,
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await,
     )
 }
 
@@ -1676,7 +1677,8 @@ async fn a_seek_onto_a_decoded_chunk_start_never_reuses_its_identity_for_other_p
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let Some(mut audio) = kithara_integration_tests::fixtures::assert_fixture_open(
         asset,
-        kithara_integration_tests::mock::load_audio(&worker, config).await,
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await,
     ) else {
         return;
     };

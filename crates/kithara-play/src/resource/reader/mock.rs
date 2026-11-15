@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use futures::future::Either;
-use kithara_audio::ResamplerBackend;
+use kithara_audio::{AudioConfig, ResamplerBackend};
 use kithara_bufpool::HasPool;
 use kithara_command::Inbox;
 use kithara_events::EventBus;
@@ -17,8 +17,14 @@ use super::{
 use crate::PlayWorker;
 
 type ResourceTrack<S> = Either<
-    TrackConfig<kithara_file::File<S>, PlaybackResamplerBackend>,
-    TrackConfig<kithara_hls::Hls<S>, PlaybackResamplerBackend>,
+    (
+        AudioConfig<kithara_file::File<S>, PlaybackResamplerBackend>,
+        TrackConfig,
+    ),
+    (
+        AudioConfig<kithara_hls::Hls<S>, PlaybackResamplerBackend>,
+        TrackConfig,
+    ),
 >;
 type OpenedLane<L> = Result<(OpenedPcm, L, FrameCount), LoadRefusal>;
 
@@ -29,16 +35,17 @@ pub fn resource_tracks<S>(
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    let track = config.build_track_config();
     let track = match SourceType::detect(&config.src)? {
         SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
             let audio = config.clone().build_file_config(None);
-            Either::Left(config.build_track_config(audio))
+            Either::Left((audio, track))
         }
         SourceType::HlsStream(_) => {
             let audio = config
                 .clone()
                 .build_hls_config(worker.pools().clone(), None)?;
-            Either::Right(config.build_track_config(audio))
+            Either::Right((audio, track))
         }
     };
     Ok(track)
@@ -46,7 +53,7 @@ where
 
 /// Opens an explicit source configuration through the real dispatcher and lane.
 pub fn track_load<T, B, S, L, F>(
-    config: TrackConfig<T, B>,
+    (audio, config): (AudioConfig<T, B>, TrackConfig),
     src: Arc<str>,
     worker: PlayWorker<S>,
     sample_rate: NonZeroU32,
@@ -60,7 +67,8 @@ where
     L: kithara_render::LaneTask + 'static,
     F: FnOnce(
             PlayWorker<S>,
-            TrackConfig<T, B>,
+            AudioConfig<T, B>,
+            TrackConfig,
             Duration,
             LaneStart,
             Inbox<LaneProtocol>,
@@ -77,8 +85,9 @@ where
     ResourceLoad {
         opener: Box::new(move |position, start, inbox| {
             Box::pin(async move {
-                let cancel = config.audio().cancel().cloned();
-                let (opened, lane, latency) = open(worker, config, position, start, inbox).await?;
+                let cancel = audio.cancel().cloned();
+                let (opened, lane, latency) =
+                    open(worker, audio, config, position, start, inbox).await?;
                 let opened = OpenedTrack::new(opened, src);
                 Ok((opened, ResourceLane::new(lane, cancel, None), latency))
             })

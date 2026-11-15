@@ -4,7 +4,6 @@ use kithara_decode::DecodeError;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
 use kithara_render::{TrackConfig, TrackConfigPatch};
-use kithara_stream::StreamType;
 use url::Url;
 
 use super::{ResourceConfig, ResourceSrc};
@@ -111,11 +110,8 @@ where
     }
 
     /// Transfers playback geometry to one render lane.
-    pub(crate) fn build_track_config<T>(&self, audio: AudioConfig<T, B>) -> TrackConfig<T, B>
-    where
-        T: StreamType,
-    {
-        let mut config = TrackConfig::for_audio(audio)
+    pub(crate) fn build_track_config(&self) -> TrackConfig {
+        let mut config = TrackConfig::builder()
             .block_on_underrun(self.block_on_underrun)
             .maybe_engine_load(self.engine_load.clone())
             .warp(self.warp.clone())
@@ -300,80 +296,40 @@ mod tests {
         assert_eq!(read, bytes);
     }
 
-    /// `preload_chunks` is both a document key and read in production, so the
-    /// value a document names has to survive the whole way to the built HLS
-    /// pipeline.
     #[kithara::test(tokio)]
-    async fn the_document_preload_count_reaches_the_built_hls_config() {
-        let mut config = config("https://example.com/live.m3u8");
+    #[case::hls("https://example.com/live.m3u8")]
+    #[case::file("https://example.com/song.mp3")]
+    async fn preload_count_reaches_producer_config_without_opening_the_source(
+        #[case] source: &str,
+    ) {
+        let mut config = config(source);
         config.preload_chunks = NonZeroUsize::new(9);
 
-        let audio = config
-            .clone()
-            .build_hls_config(pools(), None)
-            .expect("valid HLS config");
-        let built = config.build_track_config(audio);
+        let built = config.build_track_config();
 
         assert_eq!(built.preload_chunks().get(), 9);
     }
 
-    /// The file branch reads the same field from the same place.
     #[kithara::test(tokio)]
-    async fn the_document_preload_count_reaches_the_built_file_config() {
-        let mut config = config("https://example.com/song.mp3");
-        config.preload_chunks = NonZeroUsize::new(9);
-
-        let audio = config.clone().build_file_config(None);
-        let built = config.build_track_config(audio);
-
-        assert_eq!(built.preload_chunks().get(), 9);
-    }
-
-    /// `audio_buffer_chunks` reached the built `AudioConfig` through no path
-    /// while `ResourceConfig` forwarded individual audio fields one by one:
-    /// it never mirrored this one. Carrying the audio patch whole closes that
-    /// gap, the same collapse `hls` and `file` already went through.
-    #[kithara::test(tokio)]
-    async fn an_audio_knob_the_resource_never_declared_reaches_the_built_config() {
+    async fn ring_depth_reaches_producer_config_without_opening_the_source() {
         let mut config = config("https://example.com/live.m3u8");
         config.audio_buffer_chunks = NonZeroUsize::new(24);
 
-        let audio = config
-            .clone()
-            .build_hls_config(pools(), None)
-            .expect("valid HLS config");
-        let built = config.build_track_config(audio);
+        let built = config.build_track_config();
 
         assert_eq!(built.audio_buffer_chunks().get(), 24);
     }
 
-    /// `block_on_underrun` is the one audio knob no document can name, so the
-    /// only route from a caller to the producer ring is this field. An offline
-    /// suite that reads its own rendered PCM opts in through it; were the field
-    /// dropped here the opt-in would compile and read as a zero-filled range
-    /// indistinguishable from rendered silence.
     #[kithara::test(tokio)]
-    async fn the_underrun_block_choice_reaches_the_built_hls_config() {
-        let mut config = config("https://example.com/live.m3u8");
+    #[case::hls("https://example.com/live.m3u8")]
+    #[case::file("https://example.com/song.mp3")]
+    async fn underrun_policy_reaches_producer_config_without_opening_the_source(
+        #[case] source: &str,
+    ) {
+        let mut config = config(source);
         config.block_on_underrun = true;
 
-        let audio = config
-            .clone()
-            .build_hls_config(pools(), None)
-            .expect("valid HLS config");
-        let built = config.build_track_config(audio);
-
-        assert!(built.block_on_underrun());
-    }
-
-    /// The file branch reads the same field from the same place.
-    #[kithara::test(tokio)]
-    async fn the_underrun_block_choice_reaches_the_built_file_config() {
-        let mut config = config("https://example.com/song.mp3");
-        config.block_on_underrun = true;
-
-        let audio = config.clone().build_file_config(None);
-        let built = config.build_track_config(audio);
+        let built = config.build_track_config();
 
         assert!(built.block_on_underrun());
     }

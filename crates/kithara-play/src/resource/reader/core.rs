@@ -15,7 +15,9 @@ use kithara_command::{Inbox, Sender};
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{CancelToken, maybe_send::BoxFuture, sync::Arc, time::Duration};
-use kithara_render::{LaneProtocol, LaneStart, LoadRefusal, Open, OpenedPcm, PcmReceiver};
+use kithara_render::{
+    LaneProtocol, LaneStart, LoadRefusal, Open, OpenedPcm, PcmReceiver, TrackConfig,
+};
 use kithara_signal::{AudioSpec, FrameCount};
 use tracing::warn;
 
@@ -206,12 +208,15 @@ impl ResourceLoad {
         B: Default + ResamplerBackend,
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
-        let geometry = Self::config_geometry(&config);
+        let track = config.build_track_config();
+        let geometry = Self::config_geometry(&track, config.host_sample_rate);
         let channel_worker = worker.clone();
         let cancel = config.cancel.clone();
         Self {
             opener: Box::new(move |position, start, inbox| {
-                Box::pin(Self::load(config, worker, observer, position, start, inbox))
+                Box::pin(Self::load(
+                    config, track, worker, observer, position, start, inbox,
+                ))
             }),
             channel: Box::new(move || channel_worker.lane_channel()),
             cancel,
@@ -219,15 +224,12 @@ impl ResourceLoad {
         }
     }
 
-    fn config_geometry<S, B>(config: &ResourceConfig<S, B>) -> Result<LaneGeometry, PlayError>
-    where
-        B: Default + ResamplerBackend,
-        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    {
-        let audio = config.clone().build_file_config(None);
-        let track = config.build_track_config(audio);
+    fn config_geometry(
+        track: &TrackConfig,
+        rate: Option<NonZeroU32>,
+    ) -> Result<LaneGeometry, PlayError> {
         let ring_depth = geometry(track.warp(), track.audio_buffer_chunks())?;
-        let rate = config.host_sample_rate.ok_or_else(|| {
+        let rate = rate.ok_or_else(|| {
             PlayError::Internal("lane geometry requires the prepared host sample rate".into())
         })?;
         Ok(LaneGeometry {
@@ -238,6 +240,7 @@ impl ResourceLoad {
 
     async fn load<S, B>(
         config: ResourceConfig<S, B>,
+        track: TrackConfig,
         worker: PlayWorker<S>,
         observer: Box<dyn AudioObserver>,
         position: Duration,
@@ -254,9 +257,9 @@ impl ResourceLoad {
         let cancel = config.cancel.clone();
         let (opened, lane, latency) = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-                let audio = config.clone().build_file_config(Some(observer));
-                let track = config.build_track_config(audio);
-                let (opened, lane, latency) = worker.load(track, position, start, inbox).await?;
+                let audio = config.build_file_config(Some(observer));
+                let (opened, lane, latency) =
+                    worker.load(audio, track, position, start, inbox).await?;
                 (
                     opened,
                     ResourceLane::new(lane, cancel, cancel_link),
@@ -264,11 +267,9 @@ impl ResourceLoad {
                 )
             }
             SourceType::HlsStream(_) => {
-                let audio = config
-                    .clone()
-                    .build_hls_config(worker.pools().clone(), Some(observer))?;
-                let track = config.build_track_config(audio);
-                let (opened, lane, latency) = worker.load(track, position, start, inbox).await?;
+                let audio = config.build_hls_config(worker.pools().clone(), Some(observer))?;
+                let (opened, lane, latency) =
+                    worker.load(audio, track, position, start, inbox).await?;
                 (
                     opened,
                     ResourceLane::new(lane, cancel, cancel_link),

@@ -70,6 +70,8 @@ steps it from the decoder node. It retains metadata and ABR from `OpenedPcm`
 off RT and transfers only the boxed receiver to its deck. The deck initializes
 the consumption cursor in its preallocated slot and returns the receiver with
 any held packet for destruction off RT.
+`PlayWorker::load` takes source/decoder `AudioConfig` and producer `TrackConfig`
+as separate inputs; buffer and Warp geometry require no source configuration.
 `kithara-host` places each deck's `PlayerNode` in the output graph.
 The crate depends on the engine layer (`kithara-audio`, `kithara-effects`,
 `kithara-warp`, `kithara-output`) and on nothing in the player.

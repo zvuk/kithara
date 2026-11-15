@@ -19,7 +19,7 @@ use kithara::{
     audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
     file::{File, FileConfig, FileSrc},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorkerConfig, ResourceSrc},
+    play::{PlayWorkerConfig, ResourceSrc, TrackConfig},
     stream::Stream,
 };
 use kithara_app::{
@@ -90,7 +90,7 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
     // Player consumer of the same URL through the same shared store. Built
     // with `block_on_underrun(true)` so the drain parks on the virtual clock
     // until the worker delivers, instead of sleep-polling on `Pending`.
-    let player_cfg = kithara::play::TrackConfig::for_audio(
+    let player_cfg = (
         AudioConfig::<File<AppPools>>::for_stream(
             FileConfig::for_src(FileSrc::Remote(url.clone()))
                 .downloader(server.downloader())
@@ -98,9 +98,8 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
                 .build(),
         )
         .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
 
     // Run both concurrently so they cooperate on one download.
     let master = CancelToken::never();

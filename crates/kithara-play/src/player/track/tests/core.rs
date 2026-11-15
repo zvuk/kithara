@@ -1979,8 +1979,8 @@ pub(super) async fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTra
         Arc::from(src),
         worker.clone(),
         mock::SAMPLE_RATE,
-        |worker, config, position, start, inbox| {
-            Box::pin(async move { worker.load(config, position, start, inbox).await })
+        |worker, audio, config, position, start, inbox| {
+            Box::pin(async move { worker.load(audio, config, position, start, inbox).await })
         },
     );
     let opened = rig
@@ -3171,8 +3171,8 @@ fn repeat_wav_load(
         Arc::from("repeat"),
         worker.clone(),
         mock::SAMPLE_RATE,
-        |worker, config, position, start, inbox| {
-            Box::pin(async move { worker.load(config, position, start, inbox).await })
+        |worker, audio, config, position, start, inbox| {
+            Box::pin(async move { worker.load(audio, config, position, start, inbox).await })
         },
     );
     (worker, item)

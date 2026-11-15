@@ -155,12 +155,15 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
         config.cancel().is_none(),
         "only the file source owns this cancellation"
     );
-    let track = TrackConfig::for_audio(config)
-        .audio_buffer_chunks(NonZeroUsize::new(2).expect("lane capacity"))
-        .preload_chunks(NonZeroUsize::MIN)
-        .block_on_underrun(true)
-        .warp(warp)
-        .build();
+    let track = (
+        config,
+        TrackConfig::builder()
+            .audio_buffer_chunks(NonZeroUsize::new(2).expect("lane capacity"))
+            .preload_chunks(NonZeroUsize::MIN)
+            .block_on_underrun(true)
+            .warp(warp)
+            .build(),
+    );
     factory.insert(
         playing,
         kithara::play::mock::track_load(
@@ -168,8 +171,8 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
             Arc::from(source.clone()),
             harness.worker().clone(),
             NonZeroU32::new(SAMPLE_RATE).expect("deck rate"),
-            |worker, config, position, start, inbox| {
-                Box::pin(async move { worker.load(config, position, start, inbox).await })
+            |worker, audio, config, position, start, inbox| {
+                Box::pin(async move { worker.load(audio, config, position, start, inbox).await })
             },
         ),
     );

@@ -182,16 +182,15 @@ pub struct LaneAudio<T, S> {
     marker: PhantomData<fn() -> T>,
 }
 
-pub async fn load_audio<T, B, S, C>(
+pub async fn load_audio<T, B, S>(
     worker: &PlayWorker<S>,
-    config: C,
+    config: (AudioConfig<T, B>, TrackConfig),
 ) -> Result<LaneAudio<Stream<T>, S>, LoadRefusal>
 where
     T: StreamType<Events = EventBus>,
     T::Config: Send + 'static,
     B: Default + ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    C: Into<TrackConfig<T, B>>,
 {
     let mut loader = LaneLoader::new(worker)?;
     loader.load(config).await
@@ -204,14 +203,13 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3), ctx = String)]
-    pub async fn load<C>(&mut self, config: C) -> Result<LaneAudio<Stream<T>, S>, LoadRefusal>
-    where
-        C: Into<TrackConfig<T, B>>,
-    {
+    pub async fn load(
+        &mut self,
+        (audio, config): (AudioConfig<T, B>, TrackConfig),
+    ) -> Result<LaneAudio<Stream<T>, S>, LoadRefusal> {
         let worker = &self.worker;
-        let config = config.into();
-        let bus = T::event_bus(config.audio().stream())
-            .or_else(|| config.audio().bus().cloned())
+        let bus = T::event_bus(audio.stream())
+            .or_else(|| audio.bus().cloned())
             .unwrap_or_default();
         let start = LaneStart {
             speed: SpeedCurve::Constant(config.warp().speed()),
@@ -234,7 +232,7 @@ where
                         class: ServiceClass::Warm,
                         item: LaneOpen {
                             worker: worker.clone(),
-                            config,
+                            config: (audio, config),
                         },
                         position: Duration::ZERO,
                         start,

@@ -975,11 +975,11 @@ fn shipped_ring_chunks() -> u64 {
                     .build(),
             )
             .build();
-    let track = kithara_render::TrackConfig::for_audio(
+    let track = (
         kithara::audio::AudioConfig::<kithara::file::File<_>>::for_stream(stream).build(),
-    )
-    .build();
-    u64::try_from(track.audio_buffer_chunks().get()).expect("ring depth fits u64")
+        kithara_render::TrackConfig::default(),
+    );
+    u64::try_from(track.1.audio_buffer_chunks().get()).expect("ring depth fits u64")
 }
 
 #[kithara::fixture]

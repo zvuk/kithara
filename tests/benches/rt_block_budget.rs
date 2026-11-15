@@ -26,7 +26,7 @@ use kithara::{
     },
     file::{File, FileConfig, FileSrc},
     platform::time::{Duration, Instant},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     queue::TrackSource,
     signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame, TransportRevision},
     sync::SpeedCurve,
@@ -221,10 +221,13 @@ async fn processor(count: usize, lane: Lane, limiter: LimiterConfig) -> BenchMix
         )
         .hint("wav".to_owned())
         .build();
-        let config = kithara::play::TrackConfig::for_audio(audio)
-            .preload_chunks(NonZeroUsize::new(16).expect("preload chunks"))
-            .audio_buffer_chunks(NonZeroUsize::new(32).expect("ring chunks"))
-            .build();
+        let config = (
+            audio,
+            TrackConfig::builder()
+                .preload_chunks(NonZeroUsize::new(16).expect("preload chunks"))
+                .audio_buffer_chunks(NonZeroUsize::new(32).expect("ring chunks"))
+                .build(),
+        );
         let (sender, inbox) = worker.lane_channel();
         let start = LaneStart {
             speed: SpeedCurve::Constant(1.0),
@@ -235,7 +238,7 @@ async fn processor(count: usize, lane: Lane, limiter: LimiterConfig) -> BenchMix
             let _real_io = kithara::platform::flash::real_io();
             kithara::platform::time::timeout(
                 __hang_detector.remaining(),
-                worker.load(config, Duration::ZERO, start, inbox),
+                worker.load(config.0, config.1, Duration::ZERO, start, inbox),
             )
             .await
             .unwrap_or_else(|_| {

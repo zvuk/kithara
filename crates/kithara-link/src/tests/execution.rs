@@ -72,8 +72,8 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
         Arc::from("resident"),
         worker.clone(),
         mock::SAMPLE_RATE,
-        |worker, config, position, start, inbox| {
-            Box::pin(async move { worker.load(config, position, start, inbox).await })
+        |worker, audio, config, position, start, inbox| {
+            Box::pin(async move { worker.load(audio, config, position, start, inbox).await })
         },
     );
     let track: PlayerImpl = PlayerImpl::new(PlayerConfig {

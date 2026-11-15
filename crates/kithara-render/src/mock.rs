@@ -254,11 +254,7 @@ pub(crate) use crate::worker::{mock as pcm_fixture, node_fixture};
 
 /// Keep a test receiver parkable while its reader applies the underrun policy.
 #[must_use]
-pub fn with_blocking_reads<T, B>(mut config: crate::TrackConfig<T, B>) -> crate::TrackConfig<T, B>
-where
-    T: kithara_stream::StreamType,
-    B: kithara_audio::ResamplerBackend,
-{
+pub fn with_blocking_reads(mut config: crate::TrackConfig) -> crate::TrackConfig {
     config.block_on_underrun = true;
     config
 }

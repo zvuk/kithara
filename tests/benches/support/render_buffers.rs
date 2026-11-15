@@ -16,7 +16,7 @@ use kithara::{
     file::{File, FileConfig, FileSrc},
     host::{HostCommand, HostSettingsChange},
     platform::time::Duration,
-    play::{PlayWorker, PlayWorkerConfig, SessionDuckingMode},
+    play::{PlayWorker, PlayWorkerConfig, SessionDuckingMode, TrackConfig},
     queue::TrackSource,
     signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame},
     sync::SpeedCurve,
@@ -336,11 +336,12 @@ async fn jump_fixture() -> JumpFixture {
     )
     .hint("wav".to_owned())
     .build();
-    let config = kithara::play::TrackConfig::for_audio(audio).build();
+    let config = (audio, TrackConfig::default());
     let (mut sender, inbox) = worker.lane_channel();
     let (opened, lane, _) = worker
         .load(
-            config,
+            config.0,
+            config.1,
             Duration::ZERO,
             LaneStart {
                 speed: SpeedCurve::Constant(1.0),

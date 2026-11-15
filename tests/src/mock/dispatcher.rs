@@ -1,7 +1,7 @@
 use std::fmt;
 
 use kithara::{
-    audio::{Audio, ResamplerBackend},
+    audio::{Audio, AudioConfig, ResamplerBackend},
     bufpool::HasPool,
     events::EventBus,
     platform::{
@@ -67,7 +67,7 @@ where
 
 pub(super) struct LaneOpen<T: StreamType, B: ResamplerBackend, S> {
     pub(super) worker: PlayWorker<S>,
-    pub(super) config: TrackConfig<T, B>,
+    pub(super) config: (AudioConfig<T, B>, TrackConfig),
 }
 
 impl<T: StreamType, B: ResamplerBackend, S> fmt::Debug for LaneOpen<T, B, S> {
@@ -91,6 +91,8 @@ where
         start: LaneStart,
         inbox: Inbox<LaneProtocol>,
     ) -> OpenResult<Self::Opened, Self::Lane> {
-        self.worker.load(self.config, position, start, inbox).await
+        self.worker
+            .load(self.config.0, self.config.1, position, start, inbox)
+            .await
     }
 }

@@ -457,13 +457,12 @@ mod tests {
             .cancel(cancel.child())
             .initial_abr_mode(kithara::abr::AbrMode::manual(0))
             .build();
-        let config = TrackConfig::for_audio(
+        let config = (
             AudioConfig::<Hls<_>>::for_stream(hls)
                 .cancel(cancel.clone())
                 .build(),
-        )
-        .block_on_underrun(true)
-        .build();
+            TrackConfig::builder().block_on_underrun(true).build(),
+        );
         let modeled = helper.modeled_client(options(Duration::from_secs(3)), cancel_token());
         let mut loading = Box::pin(crate::mock::load_audio(&worker, config));
         let mut delayed = Box::pin(modeled.get_bytes(delayed_fixture.segment_url(0, 0), None));

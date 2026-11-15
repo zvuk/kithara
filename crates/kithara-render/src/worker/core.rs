@@ -4,7 +4,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara_audio::{Audio, AudioReadError, ResamplerBackend, SeekOutcome, TrackFailureKind};
+use kithara_audio::{
+    Audio, AudioConfig, AudioReadError, ResamplerBackend, SeekOutcome, TrackFailureKind,
+};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_command::{ChannelConfig, Inbox, Sender, channel};
 use kithara_decode::DecodeError;
@@ -194,9 +196,10 @@ where
     ///
     /// # Errors
     /// Returns cancellation, source/decoder, invalid ring geometry, or pool failures.
-    pub async fn load<T, B, C>(
+    pub async fn load<T, B>(
         &self,
-        config: C,
+        audio: AudioConfig<T, B>,
+        config: TrackConfig,
         position: Duration,
         start: LaneStart,
         inbox: Inbox<LaneProtocol>,
@@ -204,17 +207,15 @@ where
     where
         T: StreamType<Events = EventBus>,
         B: Default + ResamplerBackend,
-        C: Into<TrackConfig<T, B>>,
     {
         let TrackConfig {
-            audio,
             engine_load,
             warp,
             preload_chunks,
             declick,
             audio_buffer_chunks,
             block_on_underrun,
-        } = config.into();
+        } = config;
         let cancel = audio.cancel().cloned();
         self.check_load_cancelled(cancel.as_ref())?;
         if preload_chunks > audio_buffer_chunks {
@@ -405,8 +406,13 @@ mod tests {
             keylock: false,
             backend: StretchKind::default(),
         };
-        let preparation =
-            play.load::<File<_>, NoResamplerBackend, _>(audio(), Duration::ZERO, start, inbox);
+        let preparation = play.load(
+            audio(),
+            TrackConfig::default(),
+            Duration::ZERO,
+            start,
+            inbox,
+        );
         let source = Audio::<Stream<File<_>>>::prepare(
             audio(),
             Arc::new(StreamWake::new(play.0.dispatcher.wake_handle())),
@@ -480,12 +486,8 @@ mod tests {
             keylock: false,
             backend: StretchKind::default(),
         };
-        let mut opening = Box::pin(play.load::<GatedFailure, NoResamplerBackend, _>(
-            audio,
-            Duration::ZERO,
-            start,
-            inbox,
-        ));
+        let mut opening =
+            Box::pin(play.load(audio, TrackConfig::default(), Duration::ZERO, start, inbox));
         assert!(futures::poll!(opening.as_mut()).is_pending());
         if cancel_audio {
             audio_cancel.cancel();
