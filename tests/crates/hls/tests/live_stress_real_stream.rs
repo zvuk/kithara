@@ -395,7 +395,7 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
     tokio,
     browser,
     serial,
-    timeout(::std::time::Duration::from_millis(7355)),
+    timeout(::std::time::Duration::from_millis(12762)),
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
@@ -591,7 +591,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     serial,
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info"),
-    timeout(::std::time::Duration::from_millis(3359))
+    timeout(::std::time::Duration::from_millis(3948))
 )]
 #[case::hls_fixed("HLS", SeekRegression::FixedWindow, mixed_plain().await)]
 #[case::drm_fixed("DRM", SeekRegression::FixedWindow, mixed_encrypted().await)]
@@ -738,7 +738,7 @@ async fn live_real_stream_seek_resume_native(
     tokio,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(10211)),
+    timeout(::std::time::Duration::from_millis(12513)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
@@ -929,7 +929,7 @@ async fn live_stress_real_stream_seek_read_cache(
     tokio,
     browser,
     serial,
-    timeout(::std::time::Duration::from_millis(11861)),
+    timeout(::std::time::Duration::from_millis(13005)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]

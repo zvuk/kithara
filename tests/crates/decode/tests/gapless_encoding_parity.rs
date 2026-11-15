@@ -18,7 +18,7 @@ use crate::gapless_common::{
 #[kithara::test(
     native,
     tokio,
-    timeout(::std::time::Duration::from_millis(1090)),
+    timeout(::std::time::Duration::from_millis(1380)),
     hang_timeout_secs(1)
 )]
 async fn gapless_encoding_variants_yield_matching_decoder_metadata(

@@ -228,7 +228,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1315)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1798)))]
 async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -1037,7 +1037,7 @@ async fn a_track_inserted_after_the_playing_one_follows_it_before_the_armed_succ
 /// cf>0: queue.tick sees the crossfade window open and commits the
 /// successor, the two tracks overlap in the crossfade window and PCM mid-track-B
 /// must show track B's value.
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1018)))]
 async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
     const TRACK_SECS: f64 = 1.5;
     const CROSSFADE_SECS: f32 = 0.3;

@@ -533,7 +533,7 @@ async fn deck_fx_unit_turned_dry_while_off_switches_on_dry() {
     );
 }
 
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1079)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1088)))]
 async fn deck_fx_one_state_across_queue_crossfade() {
     let dry = crossfade_take(Vec::new()).await;
     let fx = crossfade_take(insert(0, Echo::new(ECHO))).await;

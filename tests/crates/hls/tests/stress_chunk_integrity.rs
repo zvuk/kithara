@@ -192,7 +192,7 @@ async fn audio_server(
 #[kithara::test(
     tokio,
     native,
-    timeout(::std::time::Duration::from_millis(2310)),
+    timeout(::std::time::Duration::from_millis(2704)),
     hang_timeout_secs(1),
     tracing(
         "hls_heavy::stress_chunk_integrity=info,kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug"

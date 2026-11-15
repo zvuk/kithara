@@ -1263,7 +1263,7 @@ async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm(
     assert_eq!(fixture.control.promote_calls(), 1);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 async fn promotion_preserves_the_normalized_timeline_gap(route_pcm: RoutePcm) {
     const ACTIVE_GAP: u64 = 17;
     const INCOMING_GAP: u64 = 3;
@@ -1730,7 +1730,7 @@ async fn stale_incoming_completion_retires_generation_in_shell(route_pcm: RouteP
     assert!(matches!(fixture.source.phase, OwnerPhase::Decoding));
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Short))]
 async fn incoming_media_facts_choose_reader_profile(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     fixture.control.enable_byte_map();

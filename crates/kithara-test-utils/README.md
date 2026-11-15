@@ -23,7 +23,6 @@ use kithara_test_utils::kithara;
 
 #[kithara::test(tokio, timeout(Medium))]
 async fn smoke() {
-    // Named budgets also apply with default features disabled.
 }
 ```
 
@@ -44,7 +43,7 @@ emits the same probe records through `tracing`.
 
 `TestBudget` resolves named wall-time allowances for real, Flash and Miri execution.
 Tests default to `Quick`; `timeout(<Duration>)` is a manual override outside Miri
-and uses `Long` under Miri.
+and uses `Long` under Miri. With defaults disabled, enable `test` for these APIs.
 
 ## Key Types
 
@@ -52,7 +51,7 @@ and uses `Long` under Miri.
 
 <tr><th>Module</th><th>Feature</th><th>Role</th></tr>
 
-<tr><td><code>test</code></td><td>always on; the tracing helpers need <code>subscriber</code> on <code>wasm32</code></td><td>Re-exports <code>kithara_test_macros::test</code>; <code>init_tracing</code>, <code>setup_tracing</code>, <code>setup_tracing_with_filter</code> helpers</td></tr>
+<tr><td><code>test</code></td><td><code>test</code>; tracing also needs <code>subscriber</code> on <code>wasm32</code></td><td>Test tracing, clock measurement and USDT subscriber helpers</td></tr>
 
 <tr><td><code>hang</code></td><td><code>hang</code> (default)</td><td>Hang-watchdog primitives used by <code>#[kithara::test]</code>; <code>noop</code> fallback when the feature is off</td></tr>
 
@@ -64,9 +63,7 @@ and uses `Long` under Miri.
 
 <tr><td><code>kithara_platform</code></td><td>always on</td><td>Re-export used by macro expansions that need flash control paths</td></tr>
 
-<tr><td><code>kithara</code></td><td>always on</td><td>Re-exports macros from <code>kithara-test-macros</code> so consumers can write <code>#[kithara::test]</code>, <code>#[kithara::probe]</code>, <code>#[kithara::mock]</code>, <code>#[kithara::fixture]</code>, <code>#[kithara::flash]</code>, <code>#[kithara::hang_watchdog]</code>, <code>#[kithara::rtsan_allow_blocking]</code>, <code>#[kithara::rtsan_forbid_blocking]</code>, and the <code>Probe</code> derive</td></tr>
-
-<tr><td><code>kithara_facade</code></td><td>always on</td><td>Facade-path flash macro re-export used by the public <code>kithara</code> crate</td></tr>
+<tr><td><code>kithara</code></td><td>instrumentation always; test DSL with <code>test</code></td><td>Re-exports macros from <code>kithara-test-macros</code> so consumers can write <code>#[kithara::test]</code>, <code>#[kithara::probe]</code>, <code>#[kithara::mock]</code>, <code>#[kithara::fixture]</code>, <code>#[kithara::flash]</code>, <code>#[kithara::hang_watchdog]</code>, <code>#[kithara::rtsan_allow_blocking]</code>, <code>#[kithara::rtsan_forbid_blocking]</code>, and the <code>Probe</code> derive</td></tr>
 
 </table>
 
@@ -75,6 +72,8 @@ and uses `Long` under Miri.
 <table>
 
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+
+<tr><td><code>test</code></td><td>yes</td><td>Test, fixture and asset macros, test runtime helpers and cancel-token fixtures; also enabled by <code>mock</code>, <code>http-server</code> and <code>temp-dir</code></td></tr>
 
 <tr><td><code>flash</code></td><td>no</td><td>Forward flash virtual-time support to <code>kithara-platform</code></td></tr>
 
@@ -100,20 +99,25 @@ and uses `Long` under Miri.
 
 Consumer crates enable `usdt` only when they need real USDT emission.
 
+With defaults disabled, instrumentation remains available without `test`; the
+test, fixture and asset macro entrypoints are absent. Test-utils defaults
+enable `hang` and `test`. The public `kithara` facade has its own `test`
+feature for its test and fixture exports.
+
 ## Integration
 
 Consumed by workspace `[dev-dependencies]` and independent native/wasm test suites.
 
 ### Independent consumers
 
-The minimal native consumer needs only `kithara-test-utils` with default features
-disabled. Plain tests, `#[case]` parameterization, fixture injection, `serial`, and
+The minimal native test consumer needs only `kithara-test-utils` with default
+features disabled and `test` enabled. Plain tests, `#[case]` parameterization, fixture injection, `serial`, and
 current-thread async tests use its re-exported runtime. Generated serialization
 wrappers require no direct `serial_test` dependency.
 
 ```toml
 [dev-dependencies]
-kithara-test-utils = { git = "https://github.com/zvuk/kithara", rev = "<tested-commit>", default-features = false }
+kithara-test-utils = { git = "https://github.com/zvuk/kithara", rev = "<tested-commit>", default-features = false, features = ["test"] }
 ```
 
 Use the same tested commit for all Kithara dependencies. Optional capabilities

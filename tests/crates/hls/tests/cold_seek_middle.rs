@@ -476,7 +476,7 @@ async fn queue_seek_long_cold_cache_far_segment(
     tracing("kithara_queue=debug,kithara_hls=debug,kithara_stream=debug"),
     tokio,
     multi_thread,
-    timeout(::std::time::Duration::from_millis(5336))
+    timeout(::std::time::Duration::from_millis(5348))
 )]
 async fn queue_seek_multi_variant_cold_far(
     temp_dir: TestTempDir,

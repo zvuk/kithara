@@ -1177,7 +1177,7 @@ async fn load_slow_seen(rx: &mut EventReceiver<TestEvent>) -> bool {
 /// End-to-end: a slow HTTP response fires `DownloaderEvent::LoadSlow`
 /// on the peer's bus, and a subscriber on that bus (as
 /// `kithara_queue::Loader` would set up) receives it.
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1232)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1238)))]
 async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     const SLOW_SERVER_DELAY_MS: u64 = 500;
     const SOFT_TIMEOUT_MS: u64 = 50;

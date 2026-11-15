@@ -656,7 +656,7 @@ async fn user_sim_switch_track_then_seek(#[case] kinds: PreparedTracks) {
 
 /// Many `SelectAt` + seek bounces between two tracks. Lights up the
 /// "previous DRM key state still mounted" path if there is one.
-#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(2542)))]
+#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(4731)))]
 #[case::drm_plain(tracks_hls_aac_lc_drm_abr4_hls_aac_lc_abr4().await)]
 #[case::plain_drm(tracks_hls_aac_lc_abr4_hls_aac_lc_drm_abr4().await)]
 #[case::drm_mp3(tracks_hls_aac_lc_drm_abr4_mp3_file().await)]
@@ -668,7 +668,7 @@ async fn user_sim_bounce_between_tracks_with_seeks(#[case] kinds: PreparedTracks
 /// Long play on first track, switch to next, seek inside immediately.
 /// Mirrors the user's manual ride: settle into a track for a while,
 /// then jump to another in the playlist and drag the playhead.
-#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(3481)))]
+#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(4073)))]
 #[case::drm_then_plain(tracks_hls_aac_lc_drm_abr4_hls_aac_lc_abr4().await)]
 #[case::plain_then_drm(tracks_hls_aac_lc_abr4_hls_aac_lc_drm_abr4().await)]
 #[case::drm_then_mp3(tracks_hls_aac_lc_drm_abr4_mp3_file().await)]

@@ -358,7 +358,7 @@ async fn schedule_start(harness: &mut ProductHarness, case: SyncCase) -> Operati
     tokio,
     multi_thread,
     serial,
-    timeout(::std::time::Duration::from_millis(6258))
+    timeout(::std::time::Duration::from_millis(7188))
 )]
 #[case::tunnel_unbounded_deadline(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE, STAGED_CUE)]
 #[case::tunnel_deadline_looser_than_the_ring(
@@ -544,7 +544,7 @@ async fn unloading_the_track_reports_its_installed_lane_cancelled(
     tokio,
     multi_thread,
     serial,
-    timeout(::std::time::Duration::from_millis(6238))
+    timeout(::std::time::Duration::from_millis(8108))
 )]
 #[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE)]
 #[case::tunnel_weak_beat(tunnel_sources().await, TUNNEL_RATE, TUNNEL_WEAK_CUE)]

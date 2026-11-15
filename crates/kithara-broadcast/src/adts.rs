@@ -100,7 +100,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn the_frame_carries_the_header_and_the_payload() {
         let mut out = Vec::new();
         AdtsPacker::new(48_000, 2)

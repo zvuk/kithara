@@ -559,7 +559,7 @@ impl ThresholdRig {
     }
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1269)))]
 async fn handover_emits_once_when_position_crosses_fade_threshold(
     #[by_ref] worker_owner: &WorkerOwner,
 ) {

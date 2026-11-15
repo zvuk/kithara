@@ -2,7 +2,7 @@ use ::kithara::warp::Pitch;
 
 use super::*;
 
-#[kithara::test(timeout(Short))]
+#[kithara::test(timeout(::std::time::Duration::from_millis(3114)))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

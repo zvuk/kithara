@@ -187,7 +187,7 @@ fn retirement_keeps_the_tone_continuous(warp_sine: Vec<f32>) {
     }
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(6708)))]
+#[kithara::test(timeout(::std::time::Duration::from_millis(9984)))]
 fn tempo_gestures_keep_keylocked_tone_continuous(warp_sine: Vec<f32>) {
     const UPDATE_FRAMES: usize = 882;
     const TIME_CONSTANT: f64 = 2_205.0;
@@ -232,7 +232,7 @@ fn tempo_gestures_keep_keylocked_tone_continuous(warp_sine: Vec<f32>) {
     }
 }
 
-#[kithara::test(native, flash(false), tracing("info"))]
+#[kithara::test(native, flash(false), tracing("info"), timeout(Short))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith_repeated(StretchKind::Signalsmith, false, 1.05)

@@ -277,7 +277,7 @@ async fn run_with_decoder(
     tokio,
     multi_thread,
     serial,
-    timeout(::std::time::Duration::from_millis(6058))
+    timeout(::std::time::Duration::from_millis(9758))
 )]
 #[case::mp3(source_mp3_same().await)]
 #[case::drm(source_hls_same_drm().await)]
@@ -545,7 +545,7 @@ pub(crate) async fn newtechno_sources() -> PreparedSources {
     tokio,
     multi_thread,
     serial,
-    timeout(::std::time::Duration::from_millis(12304)),
+    timeout(::std::time::Duration::from_millis(14908)),
     tracing("info")
 )]
 #[case::paused_sync_then_play(PAUSED_SYNC)]

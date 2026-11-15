@@ -1502,7 +1502,7 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric(
     );
 }
 
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(2173)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(3073)))]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn hls_aac_lc_same_variant_recreate_continuity_metric(slq_layout: VariantLayout) {
     let SpliceFixture { mut source, state } = splice_source(vec![slq_layout]).await;

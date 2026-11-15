@@ -39,7 +39,7 @@ async fn the_observation_window_carries_no_silent_block() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, timeout(Long))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(6292)))]
 async fn deck_volume_step_is_ramped() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
     let before = observe(&harness, consts::OBSERVE_BLOCKS).await;

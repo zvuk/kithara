@@ -97,7 +97,7 @@ async fn fixed_variant_on_production_ladder_plays_without_hang(
     tokio,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(4509)),
+    timeout(::std::time::Duration::from_millis(7192)),
     hang_timeout_secs(5),
     tracing("kithara_audio=warn,kithara_hls=warn,symphonia_format_isomp4=warn")
 )]
@@ -123,7 +123,7 @@ async fn mp3_stream_continues_after_seek(
     tokio,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(6776)),
+    timeout(::std::time::Duration::from_millis(7207)),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info")
 )]

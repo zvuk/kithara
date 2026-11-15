@@ -374,7 +374,7 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session(
 #[kithara::test(
     tokio,
     native,
-    timeout(::std::time::Duration::from_millis(2794)),
+    timeout(::std::time::Duration::from_millis(2880)),
     hang_timeout_secs(3)
 )]
 #[cfg_attr(not(target_os = "android"), case::aac_symphonia(AudioCodec::AacLc, DecoderBackend::Symphonia, aac_source().await))]

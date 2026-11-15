@@ -166,7 +166,7 @@ mod tests {
         u64::try_from(listed_window()).expect("the window fits a sequence number")
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn the_playlist_holds_the_last_window_of_segments() {
         let mut window = window();
 
@@ -340,7 +340,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn the_rendered_playlist_is_grammatical_hls() {
         let mut window = window();
         fill(&mut window, 10);

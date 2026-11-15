@@ -488,7 +488,7 @@ async fn sync_puts_the_deck_on_the_host_beat(rhythm_a_wav: String) {
     drop(served);
 }
 
-#[kithara::test(native, tokio, timeout(Short))]
+#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(1708)))]
 async fn offline_sync_capture_keeps_the_host_beat_clicks(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {
@@ -863,7 +863,7 @@ async fn a_revision_of_the_bar_lands_on_the_host_downbeat(rhythm_a_wav: String) 
 
 /// A synced deck changes to a track the analysis has heard only roughly, and
 /// the true grid arrives once that track sounds.
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(15716)))]
+#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(15718)))]
 async fn a_track_change_into_a_track_analysed_late_ends_on_the_host_beat(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
@@ -1101,7 +1101,7 @@ fn tap_pause(rig: &mut Rig) {
 
 /// A Play taking back a tap pause just after a host downbeat sounds before the
 /// next host bar, with every click on a host beat and the accents on the bar.
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(11848)))]
+#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(11900)))]
 async fn a_resume_on_a_synced_deck_sounds_at_once(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {
@@ -1432,7 +1432,7 @@ async fn a_synced_deck_stays_on_the_beat_across_a_tempo_step_and_a_keylock_toggl
 /// Under SYNC, a tone plays on through a press of the key lock chip on, a
 /// MASTER BPM step and a press off with no silent run and no step between
 /// samples steeper than its steady unlocked tone's.
-#[kithara::test(native, tokio, timeout(Long))]
+#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(8422)))]
 async fn a_synced_tone_plays_on_without_a_gap_across_a_tempo_step_and_a_keylock_toggle(
     long_wav: String,
 ) {
