@@ -3,7 +3,9 @@ use std::{
     ops::{Add, Deref, Div, Mul, Range, Shr, Sub},
 };
 
-use fearless_simd::{Level, dispatch, f64x2, prelude::*};
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
+use fearless_simd::f64x2;
+use fearless_simd::{Level, dispatch, prelude::*};
 use num_traits::AsPrimitive;
 
 /// Replaces `NaN`, ±infinity, subnormals and −0.0 with `+0.0` in place; every
@@ -493,17 +495,24 @@ pub(crate) fn ratio_ramp(output: &mut [f64], first: u64, divisor: NonZeroU64) ->
     output.len()
 }
 
+#[inline(always)]
 pub(super) fn ratio_kernel<S: Simd>(simd: S, output: &mut [f64], first: u64, divisor: NonZeroU64) {
-    let divisor = f64x2::splat(simd, divisor.get().as_());
-    for (index, chunk) in output.chunks_mut(2).enumerate() {
-        let values = f64x2::from_fn(simd, |lane| {
-            first
-                .saturating_add(index.saturating_mul(2).saturating_add(lane).as_())
-                .as_()
-        })
-        .div(divisor);
-        if let Some(values) = values.as_slice().get(..chunk.len()) {
-            chunk.copy_from_slice(values);
+    let origin = S::u64s::splat(simd, first);
+    let stride = S::u64s::splat(simd, S::u64s::LEN.as_());
+    let divisor = S::f64s::splat(simd, divisor.get().as_());
+    let mut offsets = S::u64s::from_fn(simd, AsPrimitive::as_);
+    let mut chunks = output.chunks_exact_mut(S::f64s::LEN);
+    for chunk in &mut chunks {
+        S::f64s::float_from(origin.saturating_add(offsets))
+            .div(divisor)
+            .store_slice(chunk);
+        offsets = offsets.add(stride);
+    }
+    let tail = chunks.into_remainder();
+    if !tail.is_empty() {
+        let values = S::f64s::float_from(origin.saturating_add(offsets)).div(divisor);
+        for (slot, value) in tail.iter_mut().zip(values.as_slice()) {
+            *slot = *value;
         }
     }
 }
