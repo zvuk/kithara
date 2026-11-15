@@ -139,37 +139,50 @@ async fn a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched() {
     }
     let cancelled = ids[1];
     let selected = ids[2];
-    {
-        let _real_io = kithara::platform::flash::real_io();
-        hang_tick!(String::from("one-slot successor loads before F"));
-        wait_for_loader_done(&harness, cancelled, Duration::from_secs(10))
-            .await
-            .expect("replacement loads before advancing the incumbent");
-        hang_reset!();
-        harness
-            .run(QueueControl::tick)
-            .await
-            .expect("arm the loaded replacement before F");
-        assert_eq!(
-            harness.control().track(cancelled).map(|track| track.status),
-            Some(TrackStatus::Loaded)
-        );
-        assert!(
-            harness
-                .control()
-                .position_seconds()
-                .is_some_and(|position| position < 0.9)
-        );
-    }
-    let pcm = harness.render(128).await;
-    let reference = mean_abs(&pcm);
-    assert!(reference > 0.1, "first track is audible");
+    let deadline = time::Instant::now() + Duration::from_secs(10);
+    let prepared_at = harness.host().position();
+    let control = harness.control();
+    let mut loading_events: EventReceiver<TestEvent> = control.subscribe();
+    hang_reset!();
+    kithara_integration_tests::waits::wait_for_loader_done_event(
+        &mut loading_events,
+        &control,
+        cancelled,
+        deadline
+            .saturating_duration_since(time::Instant::now())
+            .min(__hang_detector.remaining()),
+    )
+    .await
+    .expect("one-slot successor loads before F without consuming incumbent frames");
     assert!(
-        harness
-            .control()
+        time::Instant::now() < deadline,
+        "replacement must arm before F"
+    );
+    hang_reset!();
+    assert_eq!(
+        harness.host().position(),
+        prepared_at,
+        "waiting for the one-slot loader must not consume the before-F audio window"
+    );
+    assert_eq!(
+        control.track(cancelled).expect("one-slot successor").status,
+        TrackStatus::Loaded
+    );
+    let pcm = harness.render(128).await;
+    assert_eq!(control.current().map(|track| track.id), Some(first));
+    assert!(
+        control
             .position_seconds()
             .is_some_and(|position| position > 0.1)
     );
+    let reference = mean_abs(&pcm);
+    assert!(
+        control
+            .position_seconds()
+            .is_some_and(|position| position < 0.9)
+    );
+    assert!(reference > 0.1, "first track is audible");
+    let _ = harness.render(128).await;
     assert_eq!(
         harness.control().current().map(|track| track.id),
         Some(first)
