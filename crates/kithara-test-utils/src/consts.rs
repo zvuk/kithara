@@ -19,5 +19,9 @@ pub(crate) const BUDGET_MS: u64 = 5;
 pub(crate) const SLEEP_MS: u64 = 1;
 
 /// Verbosity order, so a merge can take the wider of two levels.
-#[cfg(not(rtsan))]
+#[cfg(all(
+    feature = "test",
+    any(not(target_arch = "wasm32"), feature = "subscriber"),
+    not(rtsan)
+))]
 pub(crate) const LEVELS: [&str; 6] = ["off", "error", "warn", "info", "debug", "trace"];
