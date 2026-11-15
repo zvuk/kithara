@@ -985,7 +985,9 @@ fn assert_incoming_consumption(
     let next_render = events[entry + 1..]
         .iter()
         .position(|event| {
-            event.thread == thread && event.probe == "render" && event.file == events[entry].file
+            event.thread == thread
+                && event.probe == "render"
+                && event.file() == events[entry].file()
         })
         .map_or(events.len(), |offset| entry + 1 + offset);
     let interval = &events[entry + 1..next_render];

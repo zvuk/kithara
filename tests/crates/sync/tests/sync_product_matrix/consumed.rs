@@ -189,12 +189,14 @@ impl Capture {
         let geometry_events = events
             .iter()
             .filter(|event| {
-                event.target == "kithara_render_probe" && event.probe == "pcm_consumed_geometry"
+                event.target() == "kithara_render_probe" && event.probe == "pcm_consumed_geometry"
             })
             .count();
         let consumed_slices = events
             .iter()
-            .filter(|event| event.target == "kithara_render_probe" && event.probe == "pcm_consumed")
+            .filter(|event| {
+                event.target() == "kithara_render_probe" && event.probe == "pcm_consumed"
+            })
             .count();
         tracing::info!(
             item,
@@ -215,7 +217,7 @@ impl Capture {
             intervals: BTreeMap::new(),
         };
         for event in events {
-            if event.target != "kithara_render_probe" {
+            if event.target() != "kithara_render_probe" {
                 continue;
             }
             let thread = threads.entry(event.thread).or_default();
@@ -375,7 +377,7 @@ pub(super) fn check_trace_negatives(
     let mut owners = HashMap::new();
     let mut missing = None;
     for (index, event) in events.iter().enumerate() {
-        if event.target != "kithara_render_probe" {
+        if event.target() != "kithara_render_probe" {
             continue;
         }
         if event.probe == "render" {
@@ -405,7 +407,7 @@ pub(super) fn check_trace_negatives(
     }
     events.remove(missing);
     events.retain(|event| {
-        event.target != "kithara_render_probe"
+        event.target() != "kithara_render_probe"
             || event.probe != "render"
             || event.field("track_id") != Some(item)
     });

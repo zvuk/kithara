@@ -1860,12 +1860,14 @@ impl QueueMusic {
         let events = usdt_trace::events();
         let consumed_slices = events
             .iter()
-            .filter(|event| event.target == "kithara_render_probe" && event.probe == "pcm_consumed")
+            .filter(|event| {
+                event.target() == "kithara_render_probe" && event.probe == "pcm_consumed"
+            })
             .count();
         let geometry_events = events
             .iter()
             .filter(|event| {
-                event.target == "kithara_render_probe" && event.probe == "pcm_consumed_geometry"
+                event.target() == "kithara_render_probe" && event.probe == "pcm_consumed_geometry"
             })
             .count();
         let mut negative_controls = vec![
@@ -2529,7 +2531,7 @@ fn native_segments(o: &LinkObservation, voices: &[Voice]) -> Vec<NativeSegment> 
     let events: Vec<_> = usdt_trace::events()
         .into_iter()
         .filter(|event| {
-            event.target == "kithara_render_probe"
+            event.target() == "kithara_render_probe"
                 && matches!(event.probe, "deck_attached" | "deck_adopted")
         })
         .collect();

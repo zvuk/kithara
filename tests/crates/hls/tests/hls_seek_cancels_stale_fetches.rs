@@ -228,7 +228,7 @@ async fn hls_seek_near_end_skips_prefix(
 
     let post_seek_resets: Vec<_> = probe_events
         .iter()
-        .filter(|e| e.target == "kithara_hls_probe" && e.probe == "rebuild")
+        .filter(|e| e.target() == "kithara_hls_probe" && e.probe == "rebuild")
         .collect();
     assert!(
         !post_seek_resets.is_empty(),
@@ -284,7 +284,7 @@ async fn hls_seek_near_end_skips_prefix(
 
     let post_seek_prefix_emissions: Vec<_> = post_reset_events
         .iter()
-        .filter(|e| e.target == "kithara_hls_probe" && e.probe == "emit_fetch_cmd")
+        .filter(|e| e.target() == "kithara_hls_probe" && e.probe == "emit_fetch_cmd")
         .filter(|e| e.field("variant") == Some(scheduler_variant))
         .filter(|e| {
             e.field("segment_index").is_some_and(|s| {
@@ -309,7 +309,7 @@ async fn hls_seek_near_end_skips_prefix(
 
     let target_emissions: Vec<_> = post_reset_events
         .iter()
-        .filter(|e| e.target == "kithara_hls_probe" && e.probe == "emit_fetch_cmd")
+        .filter(|e| e.target() == "kithara_hls_probe" && e.probe == "emit_fetch_cmd")
         .filter(|e| e.field("variant") == Some(scheduler_variant))
         .filter(|e| {
             e.field("segment_index").is_some_and(|s| {

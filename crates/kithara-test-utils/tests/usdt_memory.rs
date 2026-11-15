@@ -105,11 +105,15 @@ fn continuous_probes_keep_the_heap_bounded() {
 
     let before = memory::live_bytes();
     let history = scope();
-    let (peak, _) = hammer(None, "history");
+    let (peak, retained) = hammer(None, "history");
     let history_bytes = MAX_EVENTS * size_of::<ProbeEvent>();
     assert!(
         peak >= history_bytes,
         "a scope past MAX_EVENTS must have held the full history, peak {peak} B"
+    );
+    assert!(
+        retained <= 64 * 1024 * 1024 + STEADY_BUDGET,
+        "a full probe history retained {retained} B, over its 64 MiB recording budget"
     );
     let history_budget = history_bytes + history_bytes / 2 + STEADY_BUDGET;
     eprintln!(

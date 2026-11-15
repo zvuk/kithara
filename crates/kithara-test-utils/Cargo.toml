@@ -36,6 +36,8 @@ kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 
+delegate = { workspace = true }
+
 fieldwork = { workspace = true }
 
 num-traits = { workspace = true }
