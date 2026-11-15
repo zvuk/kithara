@@ -28,7 +28,7 @@ pub enum BiquadError {
 
 /// `vDSP_biquadm`: `sections` cascaded sections run in place on each of
 /// `channels` planes. Every section starts as identity; `set_section` gives
-/// one section the same coefficients on every channel:
+/// one section the same coefficients on a selected channel range:
 /// `H(z) = (b0 + b1 z⁻¹ + b2 z⁻²) / (1 + a1 z⁻¹ + a2 z⁻²)`.
 pub struct MultichannelBiquad {
     setup: NonNull<c_void>,
@@ -73,20 +73,28 @@ impl MultichannelBiquad {
         })
     }
 
-    /// Gives `section` the same coefficients on every channel; the state stays.
+    /// Gives `section` the same coefficients on `channels`; the state stays.
     ///
     /// # Errors
-    /// [`BiquadError::Shape`] when `section` is out of range.
+    /// [`BiquadError::Shape`] for an empty or out-of-bounds channel range,
+    /// or when `section` is out of range.
     pub fn set_section(
         &mut self,
         section: usize,
+        channels: Range<usize>,
         coefficients: [f32; consts::SECTION],
     ) -> Result<(), BiquadError> {
+        if channels.is_empty() || channels.end > self.channels.get() {
+            return Err(BiquadError::Shape);
+        }
         let span = self.channels.get().saturating_mul(consts::SECTION);
         let block = self
             .table
             .chunks_exact_mut(span)
             .nth(section)
+            .ok_or(BiquadError::Shape)?;
+        let block = block
+            .get_mut(channels.start * consts::SECTION..channels.end * consts::SECTION)
             .ok_or(BiquadError::Shape)?;
         // vDSP re-arms a section even for equal coefficients, which shifts later
         // frames; keeping retunes bit-neutral makes output independent of call pattern.
@@ -108,15 +116,15 @@ impl MultichannelBiquad {
             }
         }
         // SAFETY: setup is live; block holds one section of five coefficients per channel.
-        // SAFETY: section < sections, and the channel span 0..channels matches the setup.
+        // SAFETY: section and the channel range were checked against the setup.
         unsafe {
             vDSP_biquadm_SetCoefficientsDouble(
                 self.setup.as_ptr(),
                 block.as_ptr(),
                 section,
-                0,
+                channels.start,
                 1,
-                self.channels.get(),
+                channels.len(),
             );
         }
         Ok(())

@@ -237,7 +237,15 @@ fn multichannel_biquad_rejects_a_shape_it_was_not_built_for() {
     assert_eq!(filter.process(&mut one, 0..8), Err(BiquadError::Shape));
     assert_eq!(filter.process(&mut short, 0..8), Err(BiquadError::Shape));
     assert_eq!(
-        filter.set_section(1, [1.0, 0.0, 0.0, 0.0, 0.0]),
+        filter.set_section(1, 0..2, [1.0, 0.0, 0.0, 0.0, 0.0]),
+        Err(BiquadError::Shape)
+    );
+    assert_eq!(
+        filter.set_section(0, 0..0, [1.0, 0.0, 0.0, 0.0, 0.0]),
+        Err(BiquadError::Shape)
+    );
+    assert_eq!(
+        filter.set_section(0, 2..3, [1.0, 0.0, 0.0, 0.0, 0.0]),
         Err(BiquadError::Shape)
     );
     assert_eq!(filter.copy_state_from(&other), Err(BiquadError::Shape));
@@ -249,7 +257,7 @@ fn multichannel_biquad_keeps_a_finite_prefix_before_a_future_nan() {
     let mut filter =
         MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
     filter
-        .set_section(0, [1.0, 0.0, 0.0, -0.5, 0.0])
+        .set_section(0, 0..1, [1.0, 0.0, 0.0, -0.5, 0.0])
         .expect("one section");
     let mut plane = vec![1.0, 0.0, f32::NAN, 1.0e-10, 1.0];
     filter
@@ -271,8 +279,8 @@ fn multichannel_biquad_reapplying_equal_coefficients_is_bit_neutral() {
         MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
     let mut repeated =
         MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
-    once.set_section(0, section).expect("one section");
-    repeated.set_section(0, section).expect("one section");
+    once.set_section(0, 0..1, section).expect("one section");
+    repeated.set_section(0, 0..1, section).expect("one section");
     let input: Vec<f32> = (0_u16..256)
         .map(|frame| (f32::from(frame) * 0.142_5).sin())
         .collect();
@@ -282,7 +290,9 @@ fn multichannel_biquad_reapplying_equal_coefficients_is_bit_neutral() {
         .expect("whole stream");
     let mut actual = input;
     for frame in 0..actual.len() {
-        repeated.set_section(0, section).expect("same section");
+        repeated
+            .set_section(0, 0..1, section)
+            .expect("same section");
         repeated
             .process(&mut [actual.as_mut_slice()], frame..frame + 1)
             .expect("one frame");
@@ -299,7 +309,7 @@ fn multichannel_biquad_refuses_the_entire_shape_without_advancing_history() {
         MultichannelBiquad::new(NonZeroUsize::MIN.saturating_add(1), NonZeroUsize::MIN)
             .expect("native setup");
     filter
-        .set_section(0, [1.0, 0.0, 0.0, -0.5, 0.0])
+        .set_section(0, 0..2, [1.0, 0.0, 0.0, -0.5, 0.0])
         .expect("one section");
     let mut short = [vec![1.0, 0.0, 0.0], vec![0.0]];
     let before = short.clone();
