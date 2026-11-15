@@ -74,14 +74,24 @@ impl DraftScope {
     /// Whether a lane that builds `cargo` holds any of the scope. A block
     /// filterset may select tests of any package, so a lane always holds it.
     pub(crate) fn holds(&self, cargo: &TestCargoOptions) -> bool {
-        self.filter.is_some()
-            || self.packages.iter().any(|package| {
-                if cargo.workspace {
-                    self.members.contains(package) && !cargo.exclude.contains(package)
-                } else {
-                    cargo.packages.contains(package)
-                }
-            })
+        self.package_selection(cargo)
+            .is_none_or(|packages| !packages.is_empty())
+    }
+
+    pub(super) fn package_selection(&self, cargo: &TestCargoOptions) -> Option<BTreeSet<String>> {
+        self.filter.is_none().then(|| {
+            self.packages
+                .iter()
+                .filter(|&package| {
+                    if cargo.workspace {
+                        self.members.contains(package) && !cargo.exclude.contains(package)
+                    } else {
+                        cargo.packages.contains(package)
+                    }
+                })
+                .cloned()
+                .collect()
+        })
     }
 
     /// The one filterset a draft lane adds to its command.

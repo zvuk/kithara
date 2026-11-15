@@ -6,6 +6,7 @@ use clap::Args;
 use super::{
     draft::{DraftScope, PR_TESTS_ENV},
     inventory::admit_expected,
+    package_build,
     request::TestRequest,
     resolve::{ResolvedLane, resolve},
     selection::{requested, select_lane, validate_config},
@@ -47,11 +48,21 @@ pub(crate) fn run(args: &TestArgs, ctx: &Ctx) -> Result<()> {
             println!("{lane_name}: skipped: not required");
             Ok(())
         }
-        Plan::Draft { lane, scope } => {
-            let mut command = draft_command(test, lane, &scope, &request)?;
-            execute(test, root, lane, &mut command)
-        }
+        Plan::Draft { lane, scope } => run_draft(test, root, lane, &scope, &request),
     }
+}
+
+pub(super) fn run_draft(
+    test: &TestCommandConfig,
+    root: &Path,
+    lane: &str,
+    scope: &DraftScope,
+    request: &TestRequest,
+) -> Result<()> {
+    let resolved = requested_lane(test, lane, request)?;
+    let admitted = package_build::admit(resolved, scope, request, root)?;
+    let mut command = draft_command(admitted, scope, request)?;
+    execute(test, root, lane, &mut command)
 }
 
 /// Whether the test command given `args` runs any lane: a `--draft` run of a
@@ -172,13 +183,7 @@ pub(super) fn requested_lane(
 
 /// An admitted Draft lane's command. Nextest narrows to the Draft scope;
 /// Cargo suites keep their native selection because they cannot use filtersets.
-fn draft_command(
-    test: &TestCommandConfig,
-    lane_name: &str,
-    scope: &DraftScope,
-    request: &TestRequest,
-) -> Result<Command> {
-    let lane = requested_lane(test, lane_name, request)?;
+fn draft_command(lane: ResolvedLane, scope: &DraftScope, request: &TestRequest) -> Result<Command> {
     if matches!(&lane.runner, TestRunner::Cargo(_)) {
         return lane.command(NextestAction::Run, &request.passthrough);
     }
@@ -274,7 +279,9 @@ mod selection_tests {
         let Plan::Draft { lane, scope } = plan(&test, &root, &draft, None).unwrap() else {
             panic!("a lane that builds a required package runs its share of the draft");
         };
-        let draft_args = args_of(&draft_command(&test, lane, &scope, &draft).unwrap());
+        let draft_args = args_of(
+            &draft_command(requested_lane(&test, lane, &draft).unwrap(), &scope, &draft).unwrap(),
+        );
 
         let filter = draft_args.iter().position(|arg| arg == "-E").unwrap();
         assert_eq!(draft_args[filter + 1], "package(xtask)");
@@ -315,8 +322,9 @@ mod selection_tests {
                 let Plan::Draft { lane, scope } = plan(&test, &root, &draft, block).unwrap() else {
                     panic!("the required Cargo lane must run");
                 };
-                let command = draft_command(&test, lane, &scope, &draft)
-                    .expect("Draft scope must support native Cargo runners");
+                let command =
+                    draft_command(requested_lane(&test, lane, &draft).unwrap(), &scope, &draft)
+                        .expect("Draft scope must support native Cargo runners");
                 assert_eq!(command.get_program(), main_command.get_program());
                 assert_eq!(args_of(&command), args_of(&main_command));
                 assert_eq!(
