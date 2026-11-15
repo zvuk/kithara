@@ -57,8 +57,9 @@ async fn worklet_import_waits_for_worker_bootstrap_admission() {
     let contexts = admission.audio_contexts();
     // A stuck snapshot query must not hold up reporting a readiness failure.
     let locks = timeout(Duration::from_millis(100), admission.bootstrap_locks()).await;
+    let events = admission.bootstrap_events();
     wasm_bindgen_test::console_log!(
-        "BOOTSTRAP_READY volume={} mixer_blocks={} audio_contexts={} bootstrap_locks={locks:?}",
+        "BOOTSTRAP_READY volume={} mixer_blocks={} audio_contexts={} bootstrap_locks={locks:?} bootstrap_events={events:?}",
         volume,
         mixer_blocks,
         contexts,
@@ -275,6 +276,10 @@ mod admission {
         }
         pub(super) fn bootstrap_requests(&self) -> u32 {
             self.observation.requests.get()
+        }
+
+        pub(super) fn bootstrap_events(&self) -> Vec<String> {
+            self.observation.bootstrap.borrow().clone()
         }
 
         pub(super) fn processor_started_within_lease(&self) -> bool {
