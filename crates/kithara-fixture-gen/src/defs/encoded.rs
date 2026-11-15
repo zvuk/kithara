@@ -21,6 +21,7 @@ mod consts {
 /// 440 Hz tone encoded to MPEG audio.
 #[kithara::asset(ext = "mp3", content_type = "audio/mpeg")]
 #[case::a440_2s(consts::TWO_SECOND_FRAMES, consts::TONE_PEAK)]
+#[case::a440_half_s(consts::ONE_SECOND_FRAMES / 2, consts::TONE_PEAK)]
 fn sine_mp3(total_frames: usize, peak: i16) -> Vec<u8> {
     let pcm = Pcm::new(
         consts::SAMPLE_RATE,
@@ -43,7 +44,7 @@ fn sine_mp3(total_frames: usize, peak: i16) -> Vec<u8> {
 /// Frame-addressable 120 BPM pulse tracks for encoded-file tests.
 #[kithara::asset(ext = "mp3", content_type = "audio/mpeg")]
 #[case::deck_a_120bpm_48k(48_000, 2, 576_000, 120.0, 220.0)]
-#[case::deck_a_120bpm_48k_2s(48_000, 2, 96_000, 120.0, 220.0)]
+#[case::deck_a_120bpm_48k_half_s(48_000, 2, 24_000, 120.0, 220.0)]
 #[case::deck_b_120bpm_48k(48_000, 2, 576_000, 120.0, 880.0)]
 fn rhythm_mp3(
     sample_rate: u32,
