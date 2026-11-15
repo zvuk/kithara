@@ -716,7 +716,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_feature_parts_are_both_github_gates_and_gitlab_keeps_full() -> Result<()> {
+    fn configured_feature_parts_are_github_gates_and_gitlab_keeps_full() -> Result<()> {
         let ctx = Ctx::load()?;
         let lanes = KitharaExt::from_ctx(&ctx)?.ci.lanes;
         let feature_lanes = lanes
@@ -732,7 +732,7 @@ mod tests {
             .filter(|(_, lane)| lane.kinds.is_empty())
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(parts.len(), 2);
+        assert_eq!(parts.len(), 3);
         let full = feature_lanes
             .iter()
             .filter(|(_, lane)| !lane.kinds.is_empty())

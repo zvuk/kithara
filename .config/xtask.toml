@@ -1630,12 +1630,37 @@ program = "just"
 steps = [
   { args = [
     "deps",
-    "hack-invariants",
-  ], label = "invariant and product feature checks" },
+    "hack-invariants-part",
+    "--partition",
+    "1/2",
+  ], label = "first invariant feature partition" },
+  { args = [
+    "deps",
+    "_hack-context",
+  ], label = "product feature checks" },
 ]
 role = "gate"
 kinds = []
-# The same schedule as the workspace part: together they are the whole plan.
+# Native partitions retain every combination within the per-job budget.
+kinds_github = ["main", "nightly"]
+timeout_minutes = 60
+
+[ext.ci.lanes.deps-features-invariants-rest]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "deps",
+    "hack-invariants-part",
+    "--partition",
+    "2/2",
+  ], label = "second invariant feature partition" },
+]
+role = "gate"
+kinds = []
 kinds_github = ["main", "nightly"]
 timeout_minutes = 60
 
