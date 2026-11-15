@@ -44,7 +44,7 @@ where
 pub struct Queue<S, F = PlayerFactory>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(super) config: QueueConfig<S, F>,
     pub(super) tracks: Tracks<S>,
@@ -68,7 +68,7 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     /// Builds the owner; its host checks registration before driving it.
     #[must_use]
@@ -319,7 +319,7 @@ where
 impl<S, F> Drop for Queue<S, F>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     fn drop(&mut self) {
         self.shutdown.cancel();
@@ -460,7 +460,7 @@ pub(crate) mod tests {
     pub(in crate::queue) fn with_outbox<Value>(
         queue: &mut Queue<TestPools>,
         rig: &mut DeckRig<TestPools>,
-        run: impl FnOnce(&mut Queue<TestPools>, DeckPass<'_>, &mut Outbox<'_, TestPools>) -> Value,
+        run: impl FnOnce(&mut Queue<TestPools>, DeckPass<'_>, &mut Outbox<'_>) -> Value,
     ) -> Value {
         let output = mock::output(None).get();
         let deck = queue.deck.mixer.clone();

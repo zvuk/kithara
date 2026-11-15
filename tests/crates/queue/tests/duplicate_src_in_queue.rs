@@ -53,9 +53,7 @@ fn is_leading(role: &ItemRole) -> bool {
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn render_loop(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayer<
-        impl kithara::play::TrackFactory<TestPools, Track: Send> + Send + 'static,
-    >,
+    harness: &OfflinePlayer<impl kithara::play::TrackFactory<Track: Send> + Send + 'static>,
     block_budget: usize,
 ) -> Vec<f32> {
     let mut output = Vec::with_capacity(block_budget * BLOCK_FRAMES * 2);

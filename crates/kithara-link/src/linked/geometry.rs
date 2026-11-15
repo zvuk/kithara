@@ -65,28 +65,19 @@ fn is_final(grid: &BeatGridModel) -> bool {
     matches!(grid.as_raw().state, kithara_beat::BeatGridState::Final)
 }
 
-impl<P> Linked<P> {
+impl<P: Track> Linked<P> {
     /// The earliest frame a batch lands on: a sounding deck's lane lead, else
     /// the deck delivery of a silent start.
-    pub(super) fn earliest<S>(&self, out: &Outbox<'_, S>) -> Result<SessionFrame, PlayError>
-    where
-        P: Track<S>,
-    {
+    pub(super) fn earliest(&self, out: &Outbox<'_>) -> Result<SessionFrame, PlayError> {
         let pass = out.pass().ok_or(PlayError::Untimed)?;
         Ok(pass.now + self.lead(pass.delivery).unwrap_or(pass.deck_delivery))
     }
 
-    pub(super) fn planned<S>(&self, at: SessionFrame) -> Result<(Position, f64), PlayError>
-    where
-        P: Track<S>,
-    {
+    pub(super) fn planned(&self, at: SessionFrame) -> Result<(Position, f64), PlayError> {
         self.inner.planned(at, self.host.sample_rate())
     }
 
-    pub(super) fn jump_frame<S>(&self, out: &Outbox<'_, S>) -> Result<SessionFrame, PlayError>
-    where
-        P: Track<S>,
-    {
+    pub(super) fn jump_frame(&self, out: &Outbox<'_>) -> Result<SessionFrame, PlayError> {
         Ok(self.earliest(out)? + self.inner.snapshot().as_ref().declick)
     }
 

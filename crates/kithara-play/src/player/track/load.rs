@@ -15,12 +15,12 @@ use super::{
 };
 use crate::{OpenedTrack, PlayError, ResourceLoad};
 
-impl<S> PlayerImpl<S> {
+impl PlayerImpl {
     pub(super) fn load(
         &mut self,
-        item: ResourceLoad<S>,
+        item: ResourceLoad,
         position: Position,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         if self.status != TrackStatus::Idle {
             return Err(PlayError::Internal("a track loads once".into()));
@@ -64,8 +64,8 @@ impl<S> PlayerImpl<S> {
 
     pub(super) fn opened(
         &mut self,
-        receipt: Receipt<DispatcherProtocol<ResourceLoad<S>>>,
-        out: &mut Outbox<'_, S>,
+        receipt: Receipt<DispatcherProtocol<ResourceLoad>>,
+        out: &mut Outbox<'_>,
     ) -> Settled {
         let seq = receipt.seq();
         if self.lane.release_seq() == Some(seq) {
@@ -113,7 +113,7 @@ impl<S> PlayerImpl<S> {
         &mut self,
         seq: Seq,
         loaded: Loaded<OpenedTrack>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Settled {
         self.lane.loaded(loaded.lane);
         self.abr = loaded.opened.abr;
@@ -176,10 +176,7 @@ impl<S> PlayerImpl<S> {
         Settled::Pending
     }
 
-    pub(super) fn settle_release(
-        &mut self,
-        receipt: &Receipt<DispatcherProtocol<ResourceLoad<S>>>,
-    ) {
+    pub(super) fn settle_release(&mut self, receipt: &Receipt<DispatcherProtocol<ResourceLoad>>) {
         match receipt.outcome() {
             Outcome::Applied {
                 data: Dispatched::Released,
@@ -200,7 +197,7 @@ impl<S> PlayerImpl<S> {
         }
     }
 
-    pub(super) fn attach(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
+    pub(super) fn attach(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError> {
         if out.is_grouped() || self.seat.attaching().is_some() {
             return Ok(());
         }
@@ -293,7 +290,7 @@ impl<S> PlayerImpl<S> {
         &mut self,
         slot: Slot,
         at: When<SessionFrame>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         if matches!(at, When::Deferred) {
             return Err(PlayError::Internal(
@@ -367,7 +364,7 @@ impl<S> PlayerImpl<S> {
         }
     }
 
-    fn seat_next(&mut self, slot: Slot, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+    fn seat_next(&mut self, slot: Slot, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         if self
             .loading
             .as_ref()
@@ -390,7 +387,7 @@ impl<S> PlayerImpl<S> {
         Ok(None)
     }
 
-    pub(super) fn promote(&mut self, out: &mut Outbox<'_, S>) {
+    pub(super) fn promote(&mut self, out: &mut Outbox<'_>) {
         let class = match self.status {
             TrackStatus::Playing { .. } => ServiceClass::Audible,
             TrackStatus::Ended { .. } | TrackStatus::Faded { .. } => ServiceClass::Idle,

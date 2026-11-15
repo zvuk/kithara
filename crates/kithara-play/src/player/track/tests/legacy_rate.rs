@@ -235,7 +235,7 @@ async fn load_track_propagates_host_sample_rate() {
         ))
         .build();
     let output = crate::SessionOutputView::new(rate);
-    let config = ResourceConfig::for_src(ResourceSrc::Path(path))
+    let config = ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
         .store(
             AssetStore::builder(pools)
                 .backend(kithara_assets::StorageBackend::Memory)

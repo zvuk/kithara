@@ -1,6 +1,5 @@
 use std::{
     fmt::{self, Debug, Formatter},
-    marker::PhantomData,
     num::{NonZeroU32, NonZeroUsize},
     pin::pin,
 };
@@ -20,7 +19,7 @@ use kithara_render::{LaneProtocol, LaneStart, LoadRefusal, Open, OpenedPcm, PcmR
 use kithara_signal::{AudioSpec, FrameCount};
 use tracing::warn;
 
-use super::super::{PlaybackResamplerBackend, ResourceConfig, ResourceLane, SourceType};
+use super::super::{ResourceConfig, ResourceLane, SourceType};
 use crate::PlayError;
 
 /// A directly owned decoded reader used outside the deck's packet-ring path.
@@ -146,7 +145,6 @@ type ResourceOpen = Result<(OpenedTrack, ResourceLane, FrameCount), LoadRefusal>
 type LaneChannel = (Sender<LaneProtocol>, Inbox<LaneProtocol>);
 type ResourceOpener =
     dyn FnOnce(Duration, LaneStart, Inbox<LaneProtocol>) -> BoxFuture<'static, ResourceOpen> + Send;
-type ResourceMarker<S, B> = fn() -> (S, B);
 
 pub(super) fn geometry(
     warp: &kithara_warp::WarpConfig,
@@ -172,15 +170,14 @@ pub(crate) struct LaneGeometry {
 }
 
 /// A single-use source open and its preparation-owned lane wiring.
-pub struct ResourceLoad<S, B = PlaybackResamplerBackend> {
+pub struct ResourceLoad {
     pub(super) opener: Box<ResourceOpener>,
     pub(super) channel: Option<Box<dyn Fn() -> LaneChannel + Send>>,
     pub(super) cancel: Option<CancelToken>,
     pub(super) geometry: Result<LaneGeometry, PlayError>,
-    pub(super) marker: PhantomData<ResourceMarker<S, B>>,
 }
 
-impl<S, B> Debug for ResourceLoad<S, B> {
+impl Debug for ResourceLoad {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ResourceLoad")
@@ -188,7 +185,7 @@ impl<S, B> Debug for ResourceLoad<S, B> {
     }
 }
 
-impl<S, B> ResourceLoad<S, B> {
+impl ResourceLoad {
     /// Allocates the owner's lane sender before transferring the inbox in Load.
     pub(crate) fn lane_channel(
         &self,
@@ -202,16 +199,14 @@ impl<S, B> ResourceLoad<S, B> {
     pub(crate) fn lane_geometry(&self) -> Result<LaneGeometry, PlayError> {
         self.geometry.clone()
     }
-}
 
-impl<S, B> ResourceLoad<S, B>
-where
-    B: Default + ResamplerBackend,
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
     /// Captures the configured source and decoder observer for one open.
     #[must_use]
-    pub fn new(config: ResourceConfig<S, B>, observer: Box<dyn AudioObserver>) -> Self {
+    pub fn new<S, B>(config: ResourceConfig<S, B>, observer: Box<dyn AudioObserver>) -> Self
+    where
+        B: Default + ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    {
         let geometry = Self::config_geometry(&config);
         let channel = config.worker.clone().map(|worker| {
             Box::new(move || worker.lane_channel()) as Box<dyn Fn() -> LaneChannel + Send>
@@ -224,11 +219,14 @@ where
             channel,
             cancel,
             geometry,
-            marker: PhantomData,
         }
     }
 
-    fn config_geometry(config: &ResourceConfig<S, B>) -> Result<LaneGeometry, PlayError> {
+    fn config_geometry<S, B>(config: &ResourceConfig<S, B>) -> Result<LaneGeometry, PlayError>
+    where
+        B: Default + ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    {
         config.worker.as_ref().ok_or_else(|| {
             PlayError::Internal("ResourceConfig requires an explicit PlayWorker".into())
         })?;
@@ -244,13 +242,17 @@ where
         })
     }
 
-    async fn load(
+    async fn load<S, B>(
         config: ResourceConfig<S, B>,
         observer: Box<dyn AudioObserver>,
         position: Duration,
         start: LaneStart,
         inbox: Inbox<LaneProtocol>,
-    ) -> ResourceOpen {
+    ) -> ResourceOpen
+    where
+        B: Default + ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    {
         let src: Arc<str> = Arc::from(config.src.to_string());
         let source_type = SourceType::detect(&config.src)?;
         let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
@@ -323,7 +325,7 @@ impl OpenedTrack {
     }
 }
 
-impl<S, B> Open for ResourceLoad<S, B> {
+impl Open for ResourceLoad {
     type Opened = OpenedTrack;
     type Lane = ResourceLane;
 
@@ -477,7 +479,7 @@ mod tests {
         std::fs::write(&path, assets::fixed_constant_wav_cd_half_4096().bytes())
             .expect("float WAV");
         let mut config: ResourceConfig<TestPools> =
-            ResourceConfig::for_src(ResourceSrc::Path(path))
+            ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
                 .store(
                     AssetStore::builder(pools())
                         .backend(StorageBackend::Memory)
@@ -859,8 +861,8 @@ mod tests {
         let sample_rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("static rate");
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let warp = WarpConfig::builder().speed(speed).build();
-        let load: ResourceLoad<TestPools> = ResourceLoad::new(
-            ResourceConfig::for_src(ResourceSrc::Path(path))
+        let load: ResourceLoad = ResourceLoad::new(
+            ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
                 .store(AssetStore::builder(pools()).build())
                 .worker(worker)
                 .host_sample_rate(sample_rate)

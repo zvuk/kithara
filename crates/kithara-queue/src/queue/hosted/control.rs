@@ -10,7 +10,7 @@ use super::super::{Queue, QueueCommand, QueueControl, QueueSnapshot};
 impl<S, F> DeckControl for Queue<S, F>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     type Control = QueueControl<S>;
 
@@ -19,10 +19,10 @@ where
     }
 }
 
-impl<S, F> Player<S> for Queue<S, F>
+impl<S, F> Player for Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     type Command = QueueCommand<S>;
     type Snapshot = QueueSnapshot<S>;
@@ -34,18 +34,18 @@ where
     fn apply(
         &mut self,
         command: Self::Command,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let output = out.pass().map(|pass| *pass.output);
         self.apply_with_output(command, output.as_ref(), out)
     }
 
-    fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, out: &mut Outbox<'_>) -> Settled {
         let output = out.pass().map(|pass| *pass.output);
         self.settle_with_output(receipt, output.as_ref(), out)
     }
 
-    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
+    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_>) {
         let output = out.pass().map(|pass| *pass.output);
         self.tick_with_output(now, output.as_ref(), out);
     }

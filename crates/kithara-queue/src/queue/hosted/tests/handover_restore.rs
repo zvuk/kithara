@@ -34,7 +34,7 @@ impl HandoverRig {
     fn on_pass<Value>(
         &mut self,
         now: SessionFrame,
-        run: impl FnOnce(&mut Queue<TestPools>, &mut Outbox<'_, TestPools>) -> Value,
+        run: impl FnOnce(&mut Queue<TestPools>, &mut Outbox<'_>) -> Value,
     ) -> Value {
         let output = mock::output(None).get();
         let deck = self.queue.deck.mixer.clone();

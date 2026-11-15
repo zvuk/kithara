@@ -4,7 +4,7 @@ use kithara_events::TrackId;
 use kithara_play::{Bound, HostedDeck, Player, TrackCommand};
 use kithara_signal::SessionFrame;
 use kithara_sync::{Slew, SlewCause, slew};
-use kithara_test_utils::{bufpool::TestPools, kithara};
+use kithara_test_utils::kithara;
 
 use super::fixtures::{
     Command, answer, grid, horizon, load, loaded, position, sounding, source_grid, trajectory,
@@ -268,9 +268,9 @@ fn a_reload_takes_the_item_grid_again() {
 fn repeating_the_same_grid_does_not_restart_a_correction() {
     let (mut deck, control, mut rig, _) = sounding();
     let host = trajectory(120.0, 4);
-    let at = rig.now + LinkedPlayer::<TestPools>::lead(&deck, rig.delivery).expect("lane lead");
-    let (media, from) = kithara_play::Track::<TestPools>::planned(&deck, at, host.sample_rate())
-        .expect("planned source");
+    let at = rig.now + LinkedPlayer::lead(&deck, rig.delivery).expect("lane lead");
+    let (media, from) =
+        kithara_play::Track::planned(&deck, at, host.sample_rate()).expect("planned source");
     let uncovered = grid(32_000, 0, Some((4, 0)), 960_000);
     assert_eq!(
         slew(

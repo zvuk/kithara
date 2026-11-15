@@ -18,7 +18,7 @@ fn worker() -> PlayWorker<TestPools> {
     PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
 }
 
-fn player() -> PlayerImpl<TestPools> {
+fn player() -> PlayerImpl {
     PlayerFactory
         .track(PlayerConfig {
             item: TrackId::allocate(),

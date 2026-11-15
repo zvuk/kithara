@@ -40,12 +40,9 @@ pub(super) enum Refusal {
     Unsyncable,
 }
 
-impl<P> Linked<P> {
+impl<P: Track> Linked<P> {
     /// Sorts a refused step; an Internal refusal refuses SYNC here.
-    pub(super) fn triage<S>(&mut self, error: &PlayError, out: &mut Outbox<'_, S>) -> Refusal
-    where
-        P: Track<S>,
-    {
+    pub(super) fn triage(&mut self, error: &PlayError, out: &mut Outbox<'_>) -> Refusal {
         match error {
             PlayError::Full(_) | PlayError::Late | PlayError::NotReady | PlayError::Untimed => {
                 Refusal::Retry
@@ -63,10 +60,7 @@ impl<P> Linked<P> {
     }
 
     /// A late waiting command drops: its frame passed while it waited.
-    fn resume_wait<S>(&mut self, out: &mut Outbox<'_, S>)
-    where
-        P: Track<S>,
-    {
+    fn resume_wait(&mut self, out: &mut Outbox<'_>) {
         let Some(waiting) = self.waiting else {
             return;
         };
@@ -104,10 +98,7 @@ impl<P> Linked<P> {
     }
 
     /// Whether a loaded track with its start settled can enter on this pass.
-    fn resumable<S>(&self, out: &Outbox<'_, S>) -> bool
-    where
-        P: Track<S>,
-    {
+    fn resumable(&self, out: &Outbox<'_>) -> bool {
         let status = self.inner.snapshot().as_ref().status;
         !matches!(
             status,
@@ -120,14 +111,11 @@ impl<P> Linked<P> {
             })
     }
 
-    fn apply_waiting<S>(
+    fn apply_waiting(
         &mut self,
         waiting: Waiting,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError>
-    where
-        P: Track<S>,
-    {
+        out: &mut Outbox<'_>,
+    ) -> Result<Option<Seq>, PlayError> {
         match waiting {
             Waiting::Play { at, .. } => self.apply(TrackCommand::Play { at }, out),
             Waiting::Seek { required } => self.reissue_seek(required, out),
@@ -138,10 +126,7 @@ impl<P> Linked<P> {
 
     /// Puts the track on the host; a refused alignment restores the mode,
     /// cue and wait the track had.
-    fn enter_sync<S>(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>
-    where
-        P: Track<S>,
-    {
+    fn enter_sync(&mut self, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         let previous = (self.mode, self.cue, self.waiting);
         self.mode = SyncMode::On;
         let result = self.align(out);
@@ -151,14 +136,11 @@ impl<P> Linked<P> {
         result
     }
 
-    fn reissue_seek<S>(
+    fn reissue_seek(
         &mut self,
         to: Position,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError>
-    where
-        P: Track<S>,
-    {
+        out: &mut Outbox<'_>,
+    ) -> Result<Option<Seq>, PlayError> {
         let sent = self.dispatch_seek(to, out)?;
         if let (Some(relocation), Some(batch)) = (&mut self.relocation, sent) {
             relocation.sent = Some(match batch {
@@ -169,14 +151,11 @@ impl<P> Linked<P> {
         Ok(sent.map(SeekBatch::seq))
     }
 
-    fn dispatch_seek<S>(
+    fn dispatch_seek(
         &mut self,
         to: Position,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<SeekBatch>, PlayError>
-    where
-        P: Track<S>,
-    {
+        out: &mut Outbox<'_>,
+    ) -> Result<Option<SeekBatch>, PlayError> {
         if self.synced() {
             self.seek_synced(to, out)
         } else {
@@ -195,10 +174,7 @@ impl<P> Linked<P> {
     }
 
     /// A cue stays owed until placed, so a refusal that would drop it refuses SYNC.
-    pub(super) fn prepare_cue<S>(&mut self, out: &mut Outbox<'_, S>)
-    where
-        P: Track<S>,
-    {
+    pub(super) fn prepare_cue(&mut self, out: &mut Outbox<'_>) {
         if let Err(error) = self.cue_on_beat(out)
             && let Refusal::Drop = self.triage(&error, out)
         {
@@ -206,10 +182,7 @@ impl<P> Linked<P> {
         }
     }
 
-    pub(super) fn refuse_sync<S>(&mut self, out: &mut Outbox<'_, S>)
-    where
-        P: Track<S>,
-    {
+    pub(super) fn refuse_sync(&mut self, out: &mut Outbox<'_>) {
         self.mode = SyncMode::Unsyncable;
         self.cue = None;
         self.alignment = None;
@@ -218,10 +191,7 @@ impl<P> Linked<P> {
     }
 
     /// A new grid turns a track waiting for one to SYNC and aligns a synchronized one.
-    fn take_grid<S>(&mut self, model: BeatGridModel, out: &mut Outbox<'_, S>)
-    where
-        P: Track<S>,
-    {
+    fn take_grid(&mut self, model: BeatGridModel, out: &mut Outbox<'_>) {
         self.grid = Some(model);
 
         let track = self.inner.snapshot();
@@ -260,10 +230,7 @@ impl<P> Linked<P> {
         }
     }
 
-    fn retime_silent<S>(&mut self, at: SessionFrame, out: &mut Outbox<'_, S>)
-    where
-        P: Track<S>,
-    {
+    fn retime_silent(&mut self, at: SessionFrame, out: &mut Outbox<'_>) {
         let Some(grid) = self.grid.as_ref() else {
             return;
         };
@@ -294,13 +261,7 @@ impl<P> Linked<P> {
         }
     }
 
-    pub(super) fn cue_on_beat<S>(
-        &mut self,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError>
-    where
-        P: Track<S>,
-    {
+    pub(super) fn cue_on_beat(&mut self, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         let Some(cue) = self.cue else {
             return Ok(None);
         };
@@ -344,8 +305,8 @@ impl<P> Linked<P> {
     }
 }
 
-impl<S, P: Track<S>> Player<S> for Linked<P> {
-    type Command = TrackCommand<S>;
+impl<P: Track> Player for Linked<P> {
+    type Command = TrackCommand;
     type Snapshot = LinkedSnapshot<P::Snapshot>;
 
     fn entry(&self, bound: Bound) -> Option<SessionFrame> {
@@ -368,8 +329,8 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
 
     fn apply(
         &mut self,
-        command: TrackCommand<S>,
-        out: &mut Outbox<'_, S>,
+        command: TrackCommand,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         match command {
             TrackCommand::Load { item, position } => self.load_item(item, position, out),
@@ -400,7 +361,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
         }
     }
 
-    fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, out: &mut Outbox<'_>) -> Settled {
         let mut settled = self.inner.settle(receipt, out);
         self.answer_reissued(&settled);
         if let Settled::Rejected {
@@ -432,11 +393,11 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
         settled
     }
 
-    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
+    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_>) {
         self.keep_clock(out);
         self.inner.tick(now, out);
-        self.drain_lane_receipts::<S>();
-        self.update_correction::<S>();
+        self.drain_lane_receipts();
+        self.update_correction();
         if self.synced() {
             self.renew_plan(out);
             self.realign(out);
@@ -478,22 +439,18 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
     }
 }
 
-impl<S, P: Track<S>> Track<S> for Linked<P> {
+impl<P: Track> Track for Linked<P> {
     fn admit(
         &mut self,
         change: TrackSettingsChange,
         at: When<SessionFrame>,
-        out: &Outbox<'_, S>,
+        out: &Outbox<'_>,
     ) -> Result<Option<usize>, PlayError> {
-        self.synced_speed::<S>(change)?;
+        self.synced_speed(change)?;
         self.inner.admit(change, at, out)
     }
 
-    fn prepare_entry(
-        &mut self,
-        at: SessionFrame,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<bool, PlayError> {
+    fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_>) -> Result<bool, PlayError> {
         if !self.inner.prepare_entry(at, out)? {
             return Ok(false);
         }
@@ -542,24 +499,20 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
         &mut self,
         position: Position,
         speed: kithara_sync::SpeedCurve,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         self.paused_in_place = false;
         self.send_cue(position, speed, None, out)
     }
 
-    fn seek(
-        &mut self,
-        to: Position,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<SeekBatch>, PlayError> {
+    fn seek(&mut self, to: Position, out: &mut Outbox<'_>) -> Result<Option<SeekBatch>, PlayError> {
         self.relocation = None;
         self.paused_in_place = false;
         self.dispatch_seek(to, out)
     }
 
     fn seek_applied(&mut self, seq: Seq) -> Option<bool> {
-        self.drain_lane_receipts::<S>();
+        self.drain_lane_receipts();
         match self.relocation {
             Some(Relocation {
                 caller,
@@ -584,14 +537,14 @@ impl<S, P: Track<S>> Track<S> for Linked<P> {
         let receipt = self.inner.lane_receipt()?;
         match &receipt {
             Settled::Applied { seq, at } => self.correction_applied(*seq, *at),
-            Settled::Rejected { seq, reason } => self.speed_rejected::<S>(*seq, reason),
+            Settled::Rejected { seq, reason } => self.speed_rejected(*seq, reason),
             Settled::Pending => {}
         }
         Some(receipt)
     }
 
     fn follows_host(&self) -> bool {
-        LinkedPlayer::<S>::synced(self)
+        LinkedPlayer::synced(self)
     }
 
     delegate::delegate! {
@@ -624,47 +577,39 @@ impl<P: DeckControl> DeckControl for Linked<P> {
 
 impl<S, P> HostedDeck<S> for Linked<P>
 where
-    P: Track<S> + HostedDeck<S>,
+    P: Track + HostedDeck<S>,
 {
     delegate::delegate! {
         to self.inner {
             fn worker(&self) -> Option<&PlayWorker<S>>;
             fn resource_prep(&self) -> Option<&kithara_play::ResourcePrep<S>>;
             fn mixer_config(&self) -> DeckMixerConfig;
-            fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>);
-            fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError>;
+            fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>);
+            fn close(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError>;
             fn hold(&mut self, waker: Waker);
             fn release(&mut self);
         }
     }
 
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, S>,
-        _pass: DeckPass<'_>,
-        out: &mut Outbox<'_, S>,
-    ) {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, _pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         Player::settle(self, receipt, out);
     }
 
-    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         Player::tick(self, pass.now, out);
     }
 }
 
-impl<P> Linked<P> {
+impl<P: Track> Linked<P> {
     /// Cues `position` with `speed`; `plan` is where a speed plan of this
     /// deck's own starts and how far it reaches, `None` for a caller's speed.
-    fn send_cue<S>(
+    fn send_cue(
         &mut self,
         position: Position,
         speed: kithara_sync::SpeedCurve,
         plan: Option<(SessionFrame, kithara_sync::Coverage)>,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError>
-    where
-        P: Track<S>,
-    {
+        out: &mut Outbox<'_>,
+    ) -> Result<Option<Seq>, PlayError> {
         let sent = self.inner.cue(position, speed, out)?;
         if sent.is_some() {
             match plan {
@@ -676,8 +621,8 @@ impl<P> Linked<P> {
     }
 }
 
-impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
-    fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+impl<P: Track> LinkedPlayer for Linked<P> {
+    fn sync(&mut self, on: bool, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         if !on {
             self.mode = SyncMode::Off;
             self.waiting = None;
@@ -696,7 +641,7 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
         &mut self,
         trajectory: &TempoTrajectory,
         frames: &[SessionFrame],
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) {
         self.host = trajectory.clone();
         if !self.synced() || self.grid.is_none() {
@@ -716,7 +661,7 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
         }
     }
 
-    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>) {
+    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_>) {
         if self.inner.snapshot().as_ref().item != answer.item {
             return;
         }
@@ -780,7 +725,7 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
         )
     }
 
-    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
+    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_>) {
         if !matches!(
             self.inner.snapshot().as_ref().status,
             TrackStatus::Playing { .. }

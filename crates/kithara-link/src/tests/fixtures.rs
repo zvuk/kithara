@@ -101,9 +101,9 @@ pub(super) fn grid(
     .expect("consistent test grid")
 }
 
-pub(super) fn resource() -> ResourceLoad<TestPools> {
+pub(super) fn resource() -> ResourceLoad {
     ResourceLoad::new(
-        ResourceConfig::for_src(
+        ResourceConfig::<TestPools>::for_src(
             ResourceSrc::parse("https://example.com/track.mp3").expect("test source"),
         )
         .store(AssetStore::builder(pools()).build())
@@ -231,8 +231,8 @@ impl ScriptedTrack {
     }
 }
 
-impl Player<TestPools> for ScriptedTrack {
-    type Command = TrackCommand<TestPools>;
+impl Player for ScriptedTrack {
+    type Command = TrackCommand;
     type Snapshot = TrackSnapshot;
 
     fn entry(&self, bound: Bound) -> Option<SessionFrame> {
@@ -252,7 +252,7 @@ impl Player<TestPools> for ScriptedTrack {
     fn apply(
         &mut self,
         command: Self::Command,
-        _out: &mut Outbox<'_, TestPools>,
+        _out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let command = match command {
             TrackCommand::Align { to, speed, at } => {
@@ -306,11 +306,7 @@ impl Player<TestPools> for ScriptedTrack {
         Ok(sent)
     }
 
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, TestPools>,
-        _out: &mut Outbox<'_, TestPools>,
-    ) -> Settled {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, _out: &mut Outbox<'_>) -> Settled {
         let TrackReceipt::Deck { seq, outcome, .. } = receipt else {
             return Settled::Pending;
         };
@@ -435,19 +431,19 @@ impl Player<TestPools> for ScriptedTrack {
         settled
     }
 
-    fn tick(&mut self, _now: SessionFrame, _out: &mut Outbox<'_, TestPools>) {}
+    fn tick(&mut self, _now: SessionFrame, _out: &mut Outbox<'_>) {}
 
     fn snapshot(&self) -> Self::Snapshot {
         self.control.edit(|script| script.snapshot.clone())
     }
 }
 
-impl Track<TestPools> for ScriptedTrack {
+impl Track for ScriptedTrack {
     fn admit(
         &mut self,
         _change: TrackSettingsChange,
         _at: When<SessionFrame>,
-        _out: &Outbox<'_, TestPools>,
+        _out: &Outbox<'_>,
     ) -> Result<Option<usize>, PlayError> {
         Ok(Some(0))
     }
@@ -491,7 +487,7 @@ impl Track<TestPools> for ScriptedTrack {
     fn prepare_entry(
         &mut self,
         at: SessionFrame,
-        _out: &mut Outbox<'_, TestPools>,
+        _out: &mut Outbox<'_>,
     ) -> Result<bool, PlayError> {
         Ok(self.entry(Bound::AtOrAfter(at)).is_some())
     }
@@ -552,7 +548,7 @@ impl Track<TestPools> for ScriptedTrack {
         &mut self,
         position: Position,
         speed: SpeedCurve,
-        _out: &mut Outbox<'_, TestPools>,
+        _out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let sent = self.send(vec![
             Command::Speed(speed, When::Next),
@@ -585,19 +581,14 @@ impl HostedDeck<TestPools> for ScriptedTrack {
     fn mixer_config(&self) -> DeckMixerConfig {
         DeckMixerConfig::default()
     }
-    fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {}
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, TestPools>,
-        _pass: DeckPass<'_>,
-        out: &mut Outbox<'_, TestPools>,
-    ) {
+    fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_>) {}
+    fn settle(&mut self, receipt: TrackReceipt<'_>, _pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         Player::settle(self, receipt, out);
     }
-    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, TestPools>) {
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         Player::tick(self, pass.now, out);
     }
-    fn close(&mut self, out: &mut Outbox<'_, TestPools>) -> Result<(), PlayError> {
+    fn close(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError> {
         self.apply(TrackCommand::Release, out).map(|_| ())
     }
     fn hold(&mut self, _waker: Waker) {}
@@ -628,13 +619,13 @@ impl Rig {
         }
     }
 
-    pub(super) fn run<R>(&mut self, run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R) -> R {
+    pub(super) fn run<R>(&mut self, run: impl FnOnce(&mut Outbox<'_>) -> R) -> R {
         self.run_pass(|out, _pass| run(out))
     }
 
     pub(super) fn run_pass<R>(
         &mut self,
-        run: impl FnOnce(&mut Outbox<'_, TestPools>, DeckPass<'_>) -> R,
+        run: impl FnOnce(&mut Outbox<'_>, DeckPass<'_>) -> R,
     ) -> R {
         let mut port = self
             .queues

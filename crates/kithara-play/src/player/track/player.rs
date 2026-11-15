@@ -16,8 +16,8 @@ use super::{
 };
 use crate::PlayError;
 
-impl<S> Player<S> for PlayerImpl<S> {
-    type Command = TrackCommand<S>;
+impl Player for PlayerImpl {
+    type Command = TrackCommand;
     type Snapshot = TrackSnapshot;
 
     fn entry(&self, bound: Bound) -> Option<SessionFrame> {
@@ -41,8 +41,8 @@ impl<S> Player<S> for PlayerImpl<S> {
 
     fn apply(
         &mut self,
-        command: TrackCommand<S>,
-        out: &mut Outbox<'_, S>,
+        command: TrackCommand,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         self.observe(out);
         self.settle_lane();
@@ -74,7 +74,7 @@ impl<S> Player<S> for PlayerImpl<S> {
         }
     }
 
-    fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, out: &mut Outbox<'_>) -> Settled {
         match receipt {
             TrackReceipt::Loaded(receipt) => {
                 self.observe(out);
@@ -127,7 +127,7 @@ impl<S> Player<S> for PlayerImpl<S> {
         }
     }
 
-    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
+    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_>) {
         self.observe(out);
         self.settle_lane();
         self.fail_preparation(now);
@@ -193,10 +193,10 @@ impl<S> Player<S> for PlayerImpl<S> {
     }
 }
 
-impl<S> PlayerImpl<S> {
+impl PlayerImpl {
     /// Sends a clock the seated slot has not taken yet, such as one a full
     /// deck queue refused on an earlier pass.
-    fn retry_clock(&mut self, out: &mut Outbox<'_, S>) {
+    fn retry_clock(&mut self, out: &mut Outbox<'_>) {
         if let Err(error) = self.sync_clock(out) {
             warn!(%error, "track clock waits for deck room");
         }
@@ -204,8 +204,8 @@ impl<S> PlayerImpl<S> {
 
     fn apply_transport(
         &mut self,
-        command: TrackCommand<S>,
-        out: &mut Outbox<'_, S>,
+        command: TrackCommand,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         match command {
             TrackCommand::Play { at } => self.play(at, out),
@@ -237,7 +237,7 @@ impl<S> PlayerImpl<S> {
         at: When<SessionFrame>,
         settings: CrossfadeSettings,
         dir: FadeDir,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let slot = self.seat()?;
         if !self.joins_staged_attachment(at, dir, out) {
@@ -270,7 +270,7 @@ impl<S> PlayerImpl<S> {
         &self,
         at: When<SessionFrame>,
         dir: FadeDir,
-        out: &Outbox<'_, S>,
+        out: &Outbox<'_>,
     ) -> bool {
         dir == FadeDir::In
             && out.is_grouped()
@@ -281,7 +281,7 @@ impl<S> PlayerImpl<S> {
     }
 
     /// Whether the slot's admitted playback at `at` ends in a stop.
-    fn stop_pending(&self, slot: Slot, at: When<SessionFrame>, out: &Outbox<'_, S>) -> bool {
+    fn stop_pending(&self, slot: Slot, at: When<SessionFrame>, out: &Outbox<'_>) -> bool {
         let basis = out.deck_basis(slot, at);
         self.pending_playback_action(slot, basis, PlaybackQuery::Admission)
             .is_some_and(|(_, action)| action == PlaybackAction::Stop)
@@ -293,7 +293,7 @@ impl<S> PlayerImpl<S> {
         &mut self,
         at: When<SessionFrame>,
         fade: DeckPart,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let start_outstanding = self
             .playback_commands
@@ -311,11 +311,7 @@ impl<S> PlayerImpl<S> {
         Ok(sent)
     }
 
-    fn play_after(
-        &mut self,
-        track: Slot,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError> {
+    fn play_after(&mut self, track: Slot, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         if Some(track) == self.seat.slot() {
             return self.repeat_after(out);
         }
@@ -329,7 +325,7 @@ impl<S> PlayerImpl<S> {
         )
     }
 
-    fn repeat_after(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+    fn repeat_after(&mut self, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         let slot = self.seat()?;
         if out.is_grouped() {
             return Err(PlayError::Internal(
@@ -378,7 +374,7 @@ impl<S> PlayerImpl<S> {
         Ok(Some(seq))
     }
 
-    fn supersede(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+    fn supersede(&mut self, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         if self.adoptions.parking() && self.lane.available() == 0 {
             return Err(PlayError::Full("lane"));
         }
@@ -389,7 +385,7 @@ impl<S> PlayerImpl<S> {
         Ok(None)
     }
 
-    fn settle_returned(&mut self, seq: Seq, batch: &Batch<DeckProtocol>, out: &mut Outbox<'_, S>) {
+    fn settle_returned(&mut self, seq: Seq, batch: &Batch<DeckProtocol>, out: &mut Outbox<'_>) {
         // A batch sent before this attachment cannot return its consumer.
         if self.seat.attachment().is_some_and(|birth| seq > birth)
             && self.status != TrackStatus::Released
@@ -435,7 +431,7 @@ impl<S> PlayerImpl<S> {
         }
     }
 
-    fn settle_event(&mut self, event: DeckEvent, out: &mut Outbox<'_, S>) -> Settled {
+    fn settle_event(&mut self, event: DeckEvent, out: &mut Outbox<'_>) -> Settled {
         if !self.attached() || matches!(self.status, TrackStatus::Failed { .. }) {
             return Settled::Pending;
         }

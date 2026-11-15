@@ -20,11 +20,8 @@ pub(super) enum Corrected {
     Move,
 }
 
-impl<P> Linked<P> {
-    pub(super) fn drain_lane_receipts<S>(&mut self)
-    where
-        P: Track<S>,
-    {
+impl<P: Track> Linked<P> {
+    pub(super) fn drain_lane_receipts(&mut self) {
         while self.lane_receipt().is_some() {}
     }
 
@@ -50,10 +47,7 @@ impl<P> Linked<P> {
     }
 
     /// A synchronized track owes a refused speed's step again.
-    pub(super) fn speed_rejected<S>(&mut self, seq: Seq, reason: &Rejection<PlayError>)
-    where
-        P: Track<S>,
-    {
+    pub(super) fn speed_rejected(&mut self, seq: Seq, reason: &Rejection<PlayError>) {
         let Some(index) = self.speeds.iter().position(|(pending, _)| *pending == seq) else {
             return;
         };
@@ -79,22 +73,19 @@ impl<P> Linked<P> {
         }
     }
 
-    pub(super) fn correct<S>(
+    pub(super) fn correct(
         &mut self,
         at: SessionFrame,
         cause: Cause,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Corrected, PlayError>
-    where
-        P: Track<S>,
-    {
+        out: &mut Outbox<'_>,
+    ) -> Result<Corrected, PlayError> {
         let Some(grid) = self.grid.as_ref() else {
             return Err(PlayError::NotReady);
         };
         if self.inner.snapshot().as_ref().mark.is_none() {
             return Err(PlayError::NotReady);
         }
-        let (position, from) = self.planned::<S>(at)?;
+        let (position, from) = self.planned(at)?;
         if !covers(grid.geometry(), position) {
             return Err(PlayError::NotReady);
         }
@@ -123,16 +114,13 @@ impl<P> Linked<P> {
     }
 
     /// Sends what closes the phase: the speed law of a slew, or a relocation.
-    fn close_phase<S>(
+    fn close_phase(
         &mut self,
         planned: Option<Slew>,
         cause: Cause,
         at: SessionFrame,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Corrected, PlayError>
-    where
-        P: Track<S>,
-    {
+        out: &mut Outbox<'_>,
+    ) -> Result<Corrected, PlayError> {
         let (curve, frames, coverage) = match planned {
             Some(Slew::Closes {
                 curve,
@@ -183,10 +171,7 @@ impl<P> Linked<P> {
     /// A sounding deck owes a drift correction once the earliest frame it can
     /// command comes within half a horizon of its plan's end; in phase, that
     /// correction continues the same law.
-    pub(super) fn renew_plan<S>(&mut self, out: &Outbox<'_, S>)
-    where
-        P: Track<S>,
-    {
+    pub(super) fn renew_plan(&mut self, out: &Outbox<'_>) {
         let Some(end) = self.plan_end else {
             return;
         };
@@ -210,10 +195,7 @@ impl<P> Linked<P> {
     }
 
     /// Whether the owed correction moved the deck.
-    pub(super) fn realign<S>(&mut self, out: &mut Outbox<'_, S>) -> bool
-    where
-        P: Track<S>,
-    {
+    pub(super) fn realign(&mut self, out: &mut Outbox<'_>) -> bool {
         let Some(cause) = self.alignment else {
             return false;
         };
@@ -242,10 +224,7 @@ impl<P> Linked<P> {
 
     /// A sounding deck follows each of `frames` until one of them moves it; the
     /// landing already follows the rest of the trajectory.
-    pub(super) fn retime_sounding<S>(&mut self, frames: &[SessionFrame], out: &mut Outbox<'_, S>)
-    where
-        P: Track<S>,
-    {
+    pub(super) fn retime_sounding(&mut self, frames: &[SessionFrame], out: &mut Outbox<'_>) {
         for &at in frames {
             match self.correct(at, Cause::Commanded, out) {
                 Ok(Corrected::Slew) => {}
@@ -268,10 +247,7 @@ impl<P> Linked<P> {
     }
 
     /// An entry planned on the current grid owes that grid no correction.
-    pub(super) fn entry_planned<S>(&mut self)
-    where
-        P: Track<S>,
-    {
+    pub(super) fn entry_planned(&mut self) {
         if !matches!(
             self.inner.snapshot().as_ref().status,
             TrackStatus::Playing { .. }
@@ -280,16 +256,13 @@ impl<P> Linked<P> {
         }
     }
 
-    fn align_playing<S>(
+    fn align_playing(
         &mut self,
         source: &kithara_sync::SourceGrid,
         position: Position,
         at: SessionFrame,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError>
-    where
-        P: Track<S>,
-    {
+        out: &mut Outbox<'_>,
+    ) -> Result<Option<Seq>, PlayError> {
         if self.lane_room() == 0 {
             return Err(PlayError::Full("lane"));
         }
@@ -298,7 +271,7 @@ impl<P> Linked<P> {
         }
         let to = jump_target(&self.host, source, position, at).ok_or(PlayError::NotReady)?;
         let start = at - self.inner.snapshot().as_ref().declick;
-        let (before, _) = self.planned::<S>(start)?;
+        let (before, _) = self.planned(start)?;
         let (speed, coverage) = self.curve(source, before, start, Some((to, at)))?;
         let sent = self
             .inner
@@ -312,10 +285,7 @@ impl<P> Linked<P> {
         Ok(sent)
     }
 
-    pub(super) fn align<S>(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>
-    where
-        P: Track<S>,
-    {
+    pub(super) fn align(&mut self, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         let track = self.inner.snapshot();
         let required = cue_position(track.as_ref());
         if !matches!(track.as_ref().status, TrackStatus::Playing { .. }) {
@@ -335,7 +305,7 @@ impl<P> Linked<P> {
         };
         let source = self.source(grid)?;
         let at = self.jump_frame(out)?;
-        let (position, _speed) = self.planned::<S>(at)?;
+        let (position, _speed) = self.planned(at)?;
         if !covers(grid.geometry(), position) {
             self.waiting = Some(Waiting::Sync { required: position });
             return Ok(None);

@@ -11,14 +11,14 @@ use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 use crate::{GridAnswer, LinkError, LinkedConfig, TempoTrajectory};
 
 /// A player that can align itself and receive the Host's planned tempo trajectory.
-pub trait LinkedPlayer<S>: Player<S> {
+pub trait LinkedPlayer: Player {
     /// Enables alignment, including an explicit phase jump while sounding;
     /// an aligned track keeps its alignment and sends nothing. Disabling
     /// alignment sends nothing and preserves in-flight speeds.
     ///
     /// # Errors
     /// Returns the refusal of the speed or jump batch, if one is sent.
-    fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>;
+    fn sync(&mut self, on: bool, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError>;
 
     /// Replaces the Host trajectory, changing sounding lanes on each of `frames`,
     /// silent lanes on Next, and withdrawing and replanning any waiting start.
@@ -27,13 +27,13 @@ pub trait LinkedPlayer<S>: Player<S> {
         &mut self,
         trajectory: &TempoTrajectory,
         frames: &[SessionFrame],
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     );
 
     /// Accepts analysis for the current item only: resumes grid waits, applies
     /// silent refinements immediately, and closes sounding phase by the law of
     /// [`LinkConfig`].
-    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>);
+    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_>);
 
     /// Whether the Host should send this player tempo changes.
     fn synced(&self) -> bool;
@@ -48,7 +48,7 @@ pub trait LinkedPlayer<S>: Player<S> {
     fn scope_parts(&self) -> usize;
 
     /// Replaces the trajectory and closes phase by the law of [`LinkConfig`].
-    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
+    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_>);
 }
 
 /// How a sounding deck closes its phase error.
@@ -298,9 +298,9 @@ impl<P> Linked<P> {
 
     /// A synced track keeps session time through a PCM dropout, so it comes
     /// back on the host phase in the block its PCM returns.
-    pub(super) fn keep_clock<S>(&mut self, out: &mut Outbox<'_, S>)
+    pub(super) fn keep_clock(&mut self, out: &mut Outbox<'_>)
     where
-        P: Track<S>,
+        P: Track,
     {
         let clock = if self.synced() {
             TrackClock::Session
@@ -316,9 +316,9 @@ impl<P> Linked<P> {
         }
     }
 
-    pub(super) fn update_correction<S>(&mut self)
+    pub(super) fn update_correction(&mut self)
     where
-        P: Track<S>,
+        P: Track,
     {
         let snapshot = self.inner.snapshot();
         let Some(mark) = snapshot.as_ref().mark else {

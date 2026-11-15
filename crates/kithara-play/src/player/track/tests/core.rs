@@ -159,7 +159,7 @@ impl Rig {
             .collect()
     }
 }
-pub(super) type Track = PlayerImpl<TestPools>;
+pub(super) type Track = PlayerImpl;
 
 pub(super) fn rig() -> Rig {
     Rig {
@@ -215,9 +215,9 @@ fn unseated_track() -> Track {
     held
 }
 
-pub(super) fn item() -> ResourceLoad<TestPools> {
+pub(super) fn item() -> ResourceLoad {
     let src = ResourceSrc::parse("https://example.com/song.mp3").expect("valid test source");
-    let config = ResourceConfig::for_src(src)
+    let config = ResourceConfig::<TestPools>::for_src(src)
         .store(AssetStore::builder(pools()).build())
         .worker(crate::PlayWorker::new(
             crate::PlayWorkerConfig::builder(pools()).build(),
@@ -307,7 +307,7 @@ pub(super) fn prepared_track() -> (Track, Inbox<LaneProtocol>) {
 pub(super) fn in_pass<R>(
     rig: &mut Rig,
     now: SessionFrame,
-    run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R,
+    run: impl FnOnce(&mut Outbox<'_>) -> R,
 ) -> R {
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot::default();
@@ -333,9 +333,19 @@ pub(super) fn in_pass<R>(
 pub(super) fn command_at_zero(
     track: &mut Track,
     rig: &mut Rig,
-    command: TrackCommand<TestPools>,
+    command: TrackCommand,
 ) -> Option<Seq> {
     in_pass(rig, frame(0), |out| track.apply(command, out)).expect("admitted owner command")
+}
+
+#[kithara::test]
+fn an_idle_player_does_not_require_a_pool_schema() {
+    let config = PlayerConfig::builder()
+        .item(TrackId::allocate())
+        .settings(TrackSettings::default())
+        .build();
+    let player = PlayerImpl::new(config).expect("valid idle player");
+    assert_eq!(player.snapshot().status, TrackStatus::Idle);
 }
 
 #[kithara::test]
@@ -1978,10 +1988,7 @@ pub(super) async fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTra
 pub(super) fn open_at_position(
     rig: &mut Rig,
     opened: Loaded<OpenedTrack>,
-) -> (
-    Receipt<DispatcherProtocol<ResourceLoad<TestPools>>>,
-    Position,
-) {
+) -> (Receipt<DispatcherProtocol<ResourceLoad>>, Position) {
     rig.opens.drain();
     let due = rig.opens.next_due((), 1).expect("one open");
     let [DispatcherCommand::Load(request)] = due.commands() else {
@@ -2059,7 +2066,7 @@ pub(super) async fn loaded_with_item(
     rig: &mut Rig,
     slot: Slot,
     src: &str,
-    item: ResourceLoad<TestPools>,
+    item: ResourceLoad,
 ) -> (Track, Inbox<LaneProtocol>) {
     let (sender, inbox) = lane();
     let mut track = track(slot);
@@ -2426,7 +2433,7 @@ async fn every_part_a_track_sends_names_its_slot() {
         "{parts:?}"
     );
     assert!(receipts.iter_mut().all(|receipt| {
-        TrackReceipt::<TestPools>::Deck {
+        TrackReceipt::Deck {
             seq: receipt.seq,
             outcome: &receipt.outcome,
             batch: &mut receipt.batch,
@@ -3106,9 +3113,9 @@ async fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
 
 pub(super) fn with_mixer<R>(
     mixer: &mut mock::MixerRig,
-    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad>>,
     now: SessionFrame,
-    run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R,
+    run: impl FnOnce(&mut Outbox<'_>) -> R,
 ) -> R {
     let output = mock::output(None).get();
     let deck = mixer.ends.snapshot.read();
@@ -3131,7 +3138,7 @@ pub(super) fn with_mixer<R>(
 fn repeat_wav_load(
     dir: &TestTempDir,
     frames: usize,
-) -> (crate::PlayWorker<TestPools>, ResourceLoad<TestPools>) {
+) -> (crate::PlayWorker<TestPools>, ResourceLoad) {
     let path = dir.path().join("repeat.wav");
     let fixture = match frames {
         441 => kithara_test_fixtures::assets::fixed_constant_wav_cd_half_441(),
@@ -3321,7 +3328,7 @@ async fn a_cancelled_repeat_reaches_its_original_end(#[case] frames: usize) {
 pub(super) fn settle_mixer(
     track: &mut Track,
     mixer: &mut mock::MixerRig,
-    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad>>,
     now: SessionFrame,
 ) {
     while let Some(receipt) = mixer.ring.receipt() {

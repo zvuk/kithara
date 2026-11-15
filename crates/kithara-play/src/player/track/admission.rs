@@ -25,12 +25,12 @@ use super::{
 };
 use crate::{Bound, PlayError, Player};
 
-impl<S> Track<S> for PlayerImpl<S> {
+impl Track for PlayerImpl {
     fn admit(
         &mut self,
         change: TrackSettingsChange,
         at: When<SessionFrame>,
-        out: &Outbox<'_, S>,
+        out: &Outbox<'_>,
     ) -> Result<Option<usize>, PlayError> {
         self.observe(out);
         self.settle_lane();
@@ -90,11 +90,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         })
     }
 
-    fn prepare_entry(
-        &mut self,
-        at: SessionFrame,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<bool, PlayError> {
+    fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_>) -> Result<bool, PlayError> {
         self.observe(out);
         self.settle_lane();
         if let Some(failure) = self.preparation_failure() {
@@ -277,7 +273,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         &mut self,
         position: Position,
         speed: SpeedCurve,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         self.observe(out);
         self.settle_lane();
@@ -287,7 +283,7 @@ impl<S> Track<S> for PlayerImpl<S> {
     }
 }
 
-impl<S> PlayerImpl<S> {
+impl PlayerImpl {
     pub(super) fn consumed_speed(&self) -> Result<f32, PlayError> {
         let frame = match self
             .resume

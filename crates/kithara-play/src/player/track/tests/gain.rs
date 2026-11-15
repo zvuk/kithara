@@ -21,7 +21,7 @@ fn knot(at: i64, value: f64, shape: CurveShape) -> ParameterKnot {
 fn settle_outputs(
     tracks: &mut [Track],
     mixer: &mut mock::MixerRig,
-    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad>>,
     at: SessionFrame,
 ) {
     while let Some(reply) = mixer.ring.receipt() {
@@ -47,7 +47,7 @@ fn settle_outputs(
 
 struct PreparedOutputs {
     mixer: mock::MixerRig,
-    dispatcher: Sender<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    dispatcher: Sender<DispatcherProtocol<ResourceLoad>>,
     tracks: [Track; 2],
     _lanes: [Inbox<LaneProtocol>; 2],
 }

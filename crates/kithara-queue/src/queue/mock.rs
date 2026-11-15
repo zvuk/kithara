@@ -99,7 +99,7 @@ pub(crate) fn with_outbox<Value, Run>(
     run: Run,
 ) -> Value
 where
-    Run: FnOnce(&mut Queue<TestPools>, &mut Outbox<'_, TestPools>) -> Value,
+    Run: FnOnce(&mut Queue<TestPools>, &mut Outbox<'_>) -> Value,
 {
     let output = mock::output(None).get();
     let deck = queue.deck.mixer.clone();
@@ -253,10 +253,11 @@ async fn decoded_fixture(
         &source,
         kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
     );
-    let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
-        .downloader(downloader())
-        .store(store)
-        .build();
+    let config =
+        ResourceConfig::<TestPools>::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
+            .downloader(downloader())
+            .store(store)
+            .build();
     let prepared = prep
         .prepare(config, &mock::output(None).get())
         .expect("prepared fixture");
@@ -369,7 +370,7 @@ pub(crate) fn load_seq(queue: &Queue<TestPools>, id: TrackId) -> Seq {
 pub(crate) fn requested_load(
     rig: &mut DeckRig<TestPools>,
     seq: Seq,
-) -> kithara_render::LoadRequest<ResourceLoad<TestPools>> {
+) -> kithara_render::LoadRequest<ResourceLoad> {
     use kithara_render::DispatcherCommand;
 
     rig.opens.drain();

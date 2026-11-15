@@ -105,7 +105,7 @@ async fn a_load_opens_its_source_once_and_a_load_past_capacity_opens_nothing(
     assert_eq!(opened(&trace), 2, "the next load opens its own source");
 }
 
-type Loads = DispatcherProtocol<ResourceLoad<TestPools>>;
+type Loads = DispatcherProtocol<ResourceLoad>;
 
 /// A one-load batch opening a local MP3 from its own file under `dir`.
 fn load(worker: &PlayWorker<TestPools>, dir: &TestTempDir, name: &str) -> Batch<Loads> {
@@ -121,7 +121,7 @@ fn load(worker: &PlayWorker<TestPools>, dir: &TestTempDir, name: &str) -> Batch<
         keylock: warp.keylock(),
         backend: warp.backend(),
     };
-    let config = ResourceConfig::for_src(ResourceSrc::Path(path))
+    let config = ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
         .store(store)
         .worker(worker.clone())
         .warp(warp)
@@ -276,7 +276,7 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
         dispatcher: &mut Sender<Loads>,
         output: &OutputSnapshot,
         now: SessionFrame,
-        run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R,
+        run: impl FnOnce(&mut Outbox<'_>) -> R,
     ) -> R {
         let deck = mixer.ends.snapshot.read();
         let mut scope = mixer.ring.scope(mixer.scope).expect("live mixer scope");
@@ -335,7 +335,7 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
     let mut mixer =
         mock::MixerRig::new(DeckMixerConfig::default(), shape, worker.pools()).expect("real mixer");
     let slot = Slot::new(0);
-    let mut player = PlayerImpl::<TestPools>::new(PlayerConfig {
+    let mut player = PlayerImpl::new(PlayerConfig {
         item: TrackId::allocate(),
         slot: Some(slot),
         settings: TrackSettings::default(),
@@ -705,7 +705,7 @@ mod initial_hls {
     };
 
     pub(super) struct ObservedLoad {
-        pub(super) item: ResourceLoad<TestPools>,
+        pub(super) item: ResourceLoad,
         pub(super) returned: oneshot::Sender<()>,
     }
 
@@ -719,8 +719,8 @@ mod initial_hls {
     }
 
     impl Open for ObservedLoad {
-        type Opened = <ResourceLoad<TestPools> as Open>::Opened;
-        type Lane = <ResourceLoad<TestPools> as Open>::Lane;
+        type Opened = <ResourceLoad as Open>::Opened;
+        type Lane = <ResourceLoad as Open>::Lane;
 
         async fn open(
             self,
@@ -801,7 +801,7 @@ mod initial_hls {
         path: &Path,
         rate: NonZeroU32,
         bus: EventBus,
-    ) -> ResourceLoad<TestPools> {
+    ) -> ResourceLoad {
         let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
             ResourceSrc::parse(hls.master_url().as_str()).expect("HLS master URL"),
         )

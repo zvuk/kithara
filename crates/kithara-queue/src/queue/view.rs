@@ -128,7 +128,7 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     /// The transition target, or the track navigation advances to.
     fn upcoming(&mut self) -> Option<TrackId> {
@@ -506,7 +506,7 @@ mod tests {
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build();
         let queue = Queue::new(QueueConfig::builder().prep(prep).build());
-        let player: PlayerImpl<TestPools> = PlayerFactory
+        let player: PlayerImpl = PlayerFactory
             .track(PlayerConfig {
                 item: TrackId::allocate(),
                 slot: Some(Slot::new(0)),
@@ -572,7 +572,7 @@ mod tests {
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build();
         let queue: Queue<TestPools> = Queue::new(QueueConfig::builder().prep(prep).build());
-        let player: PlayerImpl<TestPools> = PlayerFactory
+        let player: PlayerImpl = PlayerFactory
             .track(PlayerConfig {
                 item: TrackId::allocate(),
                 slot: Some(Slot::new(0)),

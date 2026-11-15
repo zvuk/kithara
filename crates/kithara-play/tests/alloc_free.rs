@@ -97,8 +97,8 @@ async fn a_deck_attaches_fades_and_retires_without_allocating() {
     )
     .expect("prepared float WAV");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-    let load: ResourceLoad<TestPools> = ResourceLoad::new(
-        ResourceConfig::for_src(ResourceSrc::Path(path))
+    let load: ResourceLoad = ResourceLoad::new(
+        ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
             .store(AssetStore::builder(pools()).build())
             .worker(worker.clone())
             .host_sample_rate(SAMPLE_RATE)

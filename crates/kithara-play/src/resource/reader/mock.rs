@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, num::NonZeroU32};
+use std::num::NonZeroU32;
 
 use futures::future::Either;
 use kithara_audio::ResamplerBackend;
@@ -54,7 +54,7 @@ pub fn track_load<T, B, S, L, F>(
     worker: PlayWorker<S>,
     sample_rate: NonZeroU32,
     open: F,
-) -> ResourceLoad<S>
+) -> ResourceLoad
 where
     T: StreamType<Events = EventBus> + 'static,
     T::Config: Send,
@@ -89,6 +89,5 @@ where
         channel: Some(Box::new(move || channel_worker.lane_channel())),
         cancel: None,
         geometry,
-        marker: PhantomData,
     }
 }

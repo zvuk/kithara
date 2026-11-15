@@ -7,7 +7,7 @@ use crate::{Bound, TrackSettingsChange};
 fn answer_source(
     track: &mut Track,
     rig: &mut Rig,
-    receipt: Receipt<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    receipt: Receipt<DispatcherProtocol<ResourceLoad>>,
 ) -> Settled {
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live deck scope")

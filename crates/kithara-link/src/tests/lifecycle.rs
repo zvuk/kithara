@@ -2,7 +2,7 @@ use kithara_command::{Outcome, Rejection, Seq, When};
 use kithara_play::{HostedDeck, Player, Settled, Track, TrackCommand, TrackSnapshot, TrackStatus};
 use kithara_signal::{FrameCount, SessionFrame};
 use kithara_sync::{Slew, SlewCause, SpeedCurve, slew};
-use kithara_test_utils::{bufpool::TestPools, kithara};
+use kithara_test_utils::kithara;
 
 use super::fixtures::{
     Command, Control, Deck, Rig, answer, consume, grid, horizon, load, loaded, position, sounding,
@@ -882,9 +882,8 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     let armed = control.commands()[0].0;
     control.clear();
     let armed_snapshot = deck.snapshot();
-    let start = rig.now + LinkedPlayer::<TestPools>::lead(&deck, rig.delivery).expect("lane lead");
-    let (media, from) =
-        Track::<TestPools>::planned(&deck, start, host.sample_rate()).expect("planned source");
+    let start = rig.now + LinkedPlayer::lead(&deck, rig.delivery).expect("lane lead");
+    let (media, from) = Track::planned(&deck, start, host.sample_rate()).expect("planned source");
     let drift = SlewCause::Drift {
         from,
         limit: LinkConfig::default().slew_limit(),

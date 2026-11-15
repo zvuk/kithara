@@ -41,7 +41,7 @@ pub struct QueueSettings {
 pub struct QueueConfig<S, F = PlayerFactory>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     /// Builds every track this queue plays.
     #[config(

@@ -12,7 +12,7 @@ use super::{
 use crate::PlayError;
 
 /// A player of one track: what a queue drives and builds the next track from.
-pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSnapshot>> {
+pub trait Track: Player<Command = TrackCommand, Snapshot: AsRef<TrackSnapshot>> {
     /// Checks a configuration change without sending it. Receipt intake may
     /// change admission before a subsequent apply. Some contains the number of
     /// deck credits its immediate batch needs; None means no immediate batch,
@@ -24,7 +24,7 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
         &mut self,
         change: TrackSettingsChange,
         at: When<SessionFrame>,
-        out: &super::Outbox<'_, S>,
+        out: &super::Outbox<'_>,
     ) -> Result<Option<usize>, PlayError>;
 
     /// Whether the host's tempo, rather than this track's settings, drives its speed.
@@ -46,7 +46,7 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
     fn prepare_entry(
         &mut self,
         at: SessionFrame,
-        out: &mut super::Outbox<'_, S>,
+        out: &mut super::Outbox<'_>,
     ) -> Result<bool, PlayError>;
 
     /// Projects media position and instantaneous speed on the output frame.
@@ -88,7 +88,7 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
     fn seek(
         &mut self,
         to: Position,
-        out: &mut super::Outbox<'_, S>,
+        out: &mut super::Outbox<'_>,
     ) -> Result<Option<SeekBatch>, PlayError> {
         let sent = self.apply(TrackCommand::Seek { to }, out)?;
         let batch = if self.attached() {
@@ -114,13 +114,13 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
         &mut self,
         position: Position,
         speed: SpeedCurve,
-        out: &mut super::Outbox<'_, S>,
+        out: &mut super::Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError>;
 }
 
 /// How a queue builds the track that plays one item.
-pub trait TrackFactory<S> {
-    type Track: Track<S>;
+pub trait TrackFactory {
+    type Track: Track;
 
     /// # Errors
     ///
@@ -132,8 +132,8 @@ pub trait TrackFactory<S> {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlayerFactory;
 
-impl<S> TrackFactory<S> for PlayerFactory {
-    type Track = PlayerImpl<S>;
+impl TrackFactory for PlayerFactory {
+    type Track = PlayerImpl;
 
     fn track(&self, config: PlayerConfig) -> Result<Self::Track, PlayError> {
         PlayerImpl::new(config)

@@ -241,7 +241,7 @@ where
 /// Panics if either block is silent, stopped, stationary, or publishes source events.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub async fn assert_requested_render_off_bus<S>(
-    request: LoadRequest<ResourceLoad<S>>,
+    request: LoadRequest<ResourceLoad>,
     bus: &kithara_events::EventBus,
     output: &crate::OutputSnapshot,
     pools: &kithara_bufpool::PoolRegion<S>,
@@ -340,12 +340,9 @@ where
 }
 
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn open_render_request<S>(
-    request: LoadRequest<ResourceLoad<S>>,
-) -> Result<(OpenedTrack, crate::ResourceLane), PlayError>
-where
-    S: kithara_bufpool::HasPool<u8> + kithara_bufpool::HasPool<f32> + Send + Sync + 'static,
-{
+async fn open_render_request(
+    request: LoadRequest<ResourceLoad>,
+) -> Result<(OpenedTrack, crate::ResourceLane), PlayError> {
     let mut opening = std::pin::pin!(request.item.open(
         request.position,
         request.start,
@@ -631,8 +628,8 @@ pub struct DeckRig<S> {
     pub inbox: ScopedInbox<DeckProtocol, DeckProtocol>,
     pub mixer: MockDeck,
     pub events: DeckEvents,
-    pub dispatcher: Sender<DispatcherProtocol<ResourceLoad<S>>>,
-    pub opens: Inbox<DispatcherProtocol<ResourceLoad<S>>>,
+    pub dispatcher: Sender<DispatcherProtocol<ResourceLoad>>,
+    pub opens: Inbox<DispatcherProtocol<ResourceLoad>>,
     fixture_dispatcher: Option<FixtureDispatcher<S>>,
     lanes: Vec<HeldLane>,
     now: SessionFrame,
@@ -653,7 +650,7 @@ enum HeldLane {
 }
 
 struct FixtureDispatcher<S> {
-    sender: Sender<DispatcherProtocol<ResourceLoad<S>>>,
+    sender: Sender<DispatcherProtocol<ResourceLoad>>,
     _driver: kithara_worker::TaskHandle,
     _worker: crate::PlayWorker<S>,
 }
@@ -713,7 +710,7 @@ impl<S> DeckRig<S> {
     pub fn open(
         &mut self,
         opened: Result<Loaded<OpenedTrack>, LoadRefusal>,
-    ) -> Option<Receipt<DispatcherProtocol<ResourceLoad<S>>>> {
+    ) -> Option<Receipt<DispatcherProtocol<ResourceLoad>>> {
         kithara_platform::flash::participate_sync(|| {
             self.opens.drain();
             loop {
@@ -781,7 +778,7 @@ impl<S> DeckRig<S> {
     /// The queues a player sends to, lent for one pass.
     pub fn with_outbox<R, F>(&mut self, run: F) -> Result<R, PlayError>
     where
-        F: FnOnce(&mut Outbox<'_, S>) -> R,
+        F: FnOnce(&mut Outbox<'_>) -> R,
     {
         let mut scope = self.ring.scope(self.scope).ok_or(PlayError::Closed)?;
         let output = output(None).get();
@@ -815,7 +812,7 @@ where
     pub async fn load_fixture(
         &mut self,
         worker: &crate::PlayWorker<S>,
-        item: ResourceLoad<S>,
+        item: ResourceLoad,
         position: Duration,
     ) -> Result<Loaded<OpenedTrack>, PlayError> {
         let _io = kithara_platform::flash::real_io();
@@ -846,14 +843,13 @@ where
     pub async fn load_request_fixture(
         &mut self,
         worker: &crate::PlayWorker<S>,
-        request: LoadRequest<ResourceLoad<S>>,
+        request: LoadRequest<ResourceLoad>,
     ) -> Result<Loaded<OpenedTrack>, PlayError> {
         let dispatcher = match &mut self.fixture_dispatcher {
             Some(dispatcher) => dispatcher,
             missing @ None => {
-                let (sender, inbox) = channel::<DispatcherProtocol<ResourceLoad<S>>>(
-                    ChannelConfig::builder().build(),
-                );
+                let (sender, inbox) =
+                    channel::<DispatcherProtocol<ResourceLoad>>(ChannelConfig::builder().build());
                 let driver = worker
                     .start_dispatcher(inbox)
                     .map_err(|error| PlayError::Internal(format!("{error:?}")))?;

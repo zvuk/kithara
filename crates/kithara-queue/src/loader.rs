@@ -113,7 +113,7 @@ where
         source: TrackSource<S>,
         observer: Box<dyn AudioObserver>,
         output: &OutputSnapshot,
-    ) -> Result<(ResourceLoad<S>, TrackLoad), QueueError> {
+    ) -> Result<(ResourceLoad, TrackLoad), QueueError> {
         let config = self.build_config(id, source, output)?;
         let load = TrackLoad::new(&config)?;
         let runtime = self.runtime.as_ref().ok_or(QueueError::NoRuntime)?;
@@ -556,7 +556,7 @@ mod tests {
 
     #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    async fn open(item: ResourceLoad<TestPools>) -> Result<(), LoadRefusal> {
+    async fn open(item: ResourceLoad) -> Result<(), LoadRefusal> {
         let (_sender, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
         let mut opened = pin!(item.open(
             Duration::ZERO,

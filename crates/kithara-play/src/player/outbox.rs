@@ -17,7 +17,7 @@ use crate::{
 /// One loaded track or a deck built of them: it changes its own state on the
 /// owner's thread and reaches the executors only through the [`Outbox`] it is
 /// lent.
-pub trait Player<S> {
+pub trait Player {
     /// What the player is told to do.
     type Command;
     /// What the player shows of itself.
@@ -36,16 +36,16 @@ pub trait Player<S> {
     fn apply(
         &mut self,
         command: Self::Command,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError>;
 
     /// Takes what an executor answered: what the player holds from it moves in,
     /// and the outcome goes up.
-    fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled;
+    fn settle(&mut self, receipt: TrackReceipt<'_>, out: &mut Outbox<'_>) -> Settled;
 
     /// One step of session time: deadlines and the receipts of the player's
     /// own lane.
-    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>);
+    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_>);
 
     fn snapshot(&self) -> Self::Snapshot;
 }
@@ -55,9 +55,9 @@ pub trait Player<S> {
 ///
 /// Inside [`Outbox::together`] every deck part goes into one batch, so the
 /// halves of a transition two players send apply on one frame or not at all.
-pub struct Outbox<'a, S> {
+pub struct Outbox<'a> {
     deck: &'a mut dyn Port<DeckProtocol>,
-    dispatcher: &'a mut Sender<DispatcherProtocol<ResourceLoad<S>>>,
+    dispatcher: &'a mut Sender<DispatcherProtocol<ResourceLoad>>,
     group: Option<Group>,
     pass: Option<DeckPass<'a>>,
     dispatches: Option<&'a mut Vec<Seq>>,
@@ -74,7 +74,7 @@ struct Group {
 
 type GroupResult<R> = Result<(R, Option<Seq>), (PlayError, Vec<DeckPart>)>;
 
-impl<'a, S> Outbox<'a, S> {
+impl<'a> Outbox<'a> {
     pub(crate) fn lane(
         sender: &mut Sender<LaneProtocol>,
         at: When<LaneFrame>,
@@ -97,7 +97,7 @@ impl<'a, S> Outbox<'a, S> {
     #[must_use]
     pub fn new(
         deck: &'a mut dyn Port<DeckProtocol>,
-        dispatcher: &'a mut Sender<DispatcherProtocol<ResourceLoad<S>>>,
+        dispatcher: &'a mut Sender<DispatcherProtocol<ResourceLoad>>,
     ) -> Self {
         Self {
             deck,
@@ -139,7 +139,7 @@ impl<'a, S> Outbox<'a, S> {
     }
 }
 
-impl<'a, S> Outbox<'a, S> {
+impl<'a> Outbox<'a> {
     pub fn mix(
         &mut self,
         at: When<SessionFrame>,
@@ -225,7 +225,7 @@ impl<'a, S> Outbox<'a, S> {
         )
     }
 
-    pub fn eq_layout(
+    pub fn eq_layout<S>(
         &mut self,
         pools: &kithara_bufpool::PoolRegion<S>,
         bands: &[crate::EqBandConfig],
@@ -240,7 +240,7 @@ impl<'a, S> Outbox<'a, S> {
     }
 }
 
-impl<'a, S> Outbox<'a, S> {
+impl<'a> Outbox<'a> {
     pub fn notify_interruption(&mut self, kind: InterruptionKind) -> Result<bool, PlayError> {
         let (suspended_at, bus, blocks) = self.session.as_mut().ok_or(PlayError::NotReady)?;
         if matches!(kind, InterruptionKind::Began) {
@@ -438,7 +438,7 @@ impl<'a, S> Outbox<'a, S> {
     /// # Errors
     ///
     /// Returns [`PlayError::Full`] when the dispatcher has no room.
-    pub(crate) fn load(&mut self, request: LoadRequest<ResourceLoad<S>>) -> Result<Seq, PlayError> {
+    pub(crate) fn load(&mut self, request: LoadRequest<ResourceLoad>) -> Result<Seq, PlayError> {
         self.dispatch(DispatcherCommand::Load(Box::new(request)))
     }
 
@@ -455,7 +455,7 @@ impl<'a, S> Outbox<'a, S> {
         self.dispatch(DispatcherCommand::SetPriority(lane, class))
     }
 
-    fn dispatch(&mut self, command: DispatcherCommand<ResourceLoad<S>>) -> Result<Seq, PlayError> {
+    fn dispatch(&mut self, command: DispatcherCommand<ResourceLoad>) -> Result<Seq, PlayError> {
         let batch = Batch {
             basis: Vec::new(),
             commands: vec![command],
@@ -580,17 +580,17 @@ impl SeekBatch {
 /// What comes back to a player: a receipt of its deck's mixer, shared by every
 /// player whose slot the batch names; a receipt of the dispatcher; or an event
 /// of its slot. Its own lane's receipts it reads itself.
-pub enum TrackReceipt<'r, S> {
+pub enum TrackReceipt<'r> {
     Deck {
         seq: Seq,
         outcome: &'r Outcome<DeckProtocol>,
         batch: &'r mut Batch<DeckProtocol>,
     },
-    Loaded(Receipt<DispatcherProtocol<ResourceLoad<S>>>),
+    Loaded(Receipt<DispatcherProtocol<ResourceLoad>>),
     Event(DeckEvent),
 }
 
-impl<S> TrackReceipt<'_, S> {
+impl TrackReceipt<'_> {
     /// Whether this is about `slot`: a deck batch whose basis names it, or an
     /// event of it.
     #[must_use]

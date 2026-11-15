@@ -23,10 +23,10 @@ use crate::{ResourceLoad, Settled};
 pub type Position = Duration;
 
 /// What a track is told to do.
-pub enum TrackCommand<S> {
+pub enum TrackCommand {
     GainProgram(kithara_render::bridge::SlotGainProgram),
     Load {
-        item: ResourceLoad<S>,
+        item: ResourceLoad,
         position: Position,
     },
     Play {

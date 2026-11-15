@@ -30,7 +30,7 @@ use kithara_render::{
 use super::OfflineHostHarness;
 
 pub type LinkedOwner<S> = LinkedHost<S, HostCore<S, LinkedHostDeck<S>>>;
-pub type LinkedQueue<S> = Queue<S, LinkedFactory<ObservedFactory<S>>>;
+pub type LinkedQueue<S> = Queue<S, LinkedFactory<ObservedFactory>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LinkVerdict {
@@ -47,7 +47,7 @@ pub enum LinkProbeCommand<S: HasPool<u8> + Send + Sync + 'static> {
     },
     Track {
         item: TrackId,
-        command: TrackCommand<S>,
+        command: TrackCommand,
     },
     Incoming {
         item: TrackId,
@@ -221,22 +221,18 @@ pub struct LinkCue {
     pub segment: Option<SegmentId>,
 }
 
-pub struct ObservedFactory<S> {
+pub struct ObservedFactory {
     observation: Arc<Mutex<LinkObservation>>,
-    schema: std::marker::PhantomData<fn() -> S>,
 }
 
-impl<S> ObservedFactory<S> {
+impl ObservedFactory {
     pub fn new(observation: Arc<Mutex<LinkObservation>>) -> Self {
-        Self {
-            observation,
-            schema: std::marker::PhantomData,
-        }
+        Self { observation }
     }
 }
 
-pub struct ObservedTrack<S> {
-    inner: PlayerImpl<S>,
+pub struct ObservedTrack {
+    inner: PlayerImpl,
     observation: Arc<Mutex<LinkObservation>>,
     /// The owner inputs recorded when this track last ticked: the linked
     /// owner ticks its track first in its own pass, so a timed speed change
@@ -245,11 +241,8 @@ pub struct ObservedTrack<S> {
     receipts: VecDeque<Settled<LaneFrame>>,
 }
 
-impl<S> TrackFactory<S> for ObservedFactory<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    type Track = ObservedTrack<S>;
+impl TrackFactory for ObservedFactory {
+    type Track = ObservedTrack;
 
     fn track(&self, config: PlayerConfig) -> Result<Self::Track, PlayError> {
         Ok(ObservedTrack {
@@ -273,12 +266,12 @@ fn speed_trace_evidence(
     }
 }
 
-impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
+impl ObservedTrack {
     fn trace_entry(
         &self,
         event: &str,
         details: &serde_json::Value,
-        out: &Outbox<'_, S>,
+        out: &Outbox<'_>,
     ) -> serde_json::Value {
         let snapshot = self.inner.snapshot();
         let pass = out.pass();
@@ -297,16 +290,12 @@ impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
         })
     }
 
-    fn trace(&self, event: &str, details: &serde_json::Value, out: &Outbox<'_, S>) {
+    fn trace(&self, event: &str, details: &serde_json::Value, out: &Outbox<'_>) {
         let entry = self.trace_entry(event, details, out);
         self.observation.lock().timeline.push(entry);
     }
 
-    fn trace_command(
-        &self,
-        command: &TrackCommand<S>,
-        out: &Outbox<'_, S>,
-    ) -> Option<serde_json::Value> {
+    fn trace_command(&self, command: &TrackCommand, out: &Outbox<'_>) -> Option<serde_json::Value> {
         let details = match command {
             TrackCommand::Load { position, .. } => {
                 Some(serde_json::json!({"Load": {"position_ns": position.as_nanos().to_string()}}))
@@ -336,7 +325,7 @@ impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
         details.map(|details| self.trace_entry("command", &details, out))
     }
 
-    fn native_seek(&self, command: &TrackCommand<S>) -> Option<(Position, TrackSnapshot)> {
+    fn native_seek(&self, command: &TrackCommand) -> Option<(Position, TrackSnapshot)> {
         match command {
             TrackCommand::Seek { to }
                 if !matches!(
@@ -479,11 +468,8 @@ impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
     }
 }
 
-impl<S> Player<S> for ObservedTrack<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    type Command = TrackCommand<S>;
+impl Player for ObservedTrack {
+    type Command = TrackCommand;
     type Snapshot = TrackSnapshot;
 
     delegate::delegate! {
@@ -505,7 +491,7 @@ where
         result
     }
 
-    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
+    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_>) {
         self.inner.tick(now, out);
         self.ticked = Some(self.observation.lock().owner_inputs.len());
         let item = self.inner.snapshot().item;
@@ -568,7 +554,7 @@ where
     fn apply(
         &mut self,
         command: Self::Command,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let traced = self.trace_command(&command, out);
         let loading = matches!(command, TrackCommand::Load { .. });
@@ -711,7 +697,7 @@ where
         Ok(seq)
     }
 
-    fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, out: &mut Outbox<'_>) -> Settled {
         if let TrackReceipt::Event(event) = &receipt {
             let diagnostic = match event {
                 DeckEvent::UnderrunStarted { slot, item, at, .. } => Some(serde_json::json!({
@@ -846,29 +832,22 @@ where
     }
 }
 
-impl<S> Track<S> for ObservedTrack<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
+impl Track for ObservedTrack {
     delegate::delegate! {
         to self.inner {
-            fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_, S>) -> Result<Option<usize>, PlayError>;
+            fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_>) -> Result<Option<usize>, PlayError>;
             fn projected(&self) -> TrackSettings;
             fn source_request(&self) -> Option<Seq>;
             fn source_closed(&self) -> bool;
             fn prepared_speed(&self) -> Option<&kithara::sync::SpeedCurve>;
-            fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_, S>) -> Result<bool, PlayError>;
+            fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_>) -> Result<bool, PlayError>;
             fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;
             fn seek_applied(&mut self, seq: Seq) -> Option<bool>;
             fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);
         }
     }
 
-    fn seek(
-        &mut self,
-        to: Position,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<SeekBatch>, PlayError> {
+    fn seek(&mut self, to: Position, out: &mut Outbox<'_>) -> Result<Option<SeekBatch>, PlayError> {
         let command = TrackCommand::Seek { to };
         let traced = self.trace_command(&command, out);
         let native = self.native_seek(&command);
@@ -916,7 +895,7 @@ where
         &mut self,
         position: Position,
         speed: kithara::sync::SpeedCurve,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let before = self.inner.snapshot();
         let curve = speed.clone();
@@ -1113,7 +1092,7 @@ where
         }
     }
 
-    fn capture_native(&self, receipt: &TrackReceipt<'_, S>) {
+    fn capture_native(&self, receipt: &TrackReceipt<'_>) {
         if let TrackReceipt::Deck {
             seq,
             outcome: Outcome::Applied { at, .. },
@@ -1176,7 +1155,7 @@ where
         }
     }
 
-    fn capture_terminal(&self, receipt: &TrackReceipt<'_, S>) {
+    fn capture_terminal(&self, receipt: &TrackReceipt<'_>) {
         if let TrackReceipt::Event(event) = receipt {
             let boundary = match event {
                 DeckEvent::Faded { slot, at } => Some((*slot, *at, true)),
@@ -1239,7 +1218,7 @@ where
             fn worker(&self) -> Option<&PlayWorker<S>>;
             fn resource_prep(&self) -> Option<&ResourcePrep<S>>;
             fn mixer_config(&self) -> DeckMixerConfig;
-            fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError>;
+            fn close(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError>;
             fn release(&mut self);
         }
     }
@@ -1249,7 +1228,7 @@ where
         self.inner.hold(waker);
     }
 
-    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         self.publish_consumed(pass);
         self.inner.drain(pass, out);
         let commands = std::mem::take(&mut self.commands.lock().commands);
@@ -1317,12 +1296,7 @@ where
         }
         self.publish();
     }
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, S>,
-        pass: DeckPass<'_>,
-        out: &mut Outbox<'_, S>,
-    ) {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         if let TrackReceipt::Loaded(receipt) = &receipt {
             let verdict = match receipt.outcome() {
                 Outcome::Applied { .. } => LinkVerdict::Applied,
@@ -1356,13 +1330,13 @@ where
         HostedDeck::settle(&mut self.inner, receipt, pass, out);
         self.publish_pass(pass);
     }
-    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         HostedDeck::tick(&mut self.inner, pass, out);
         self.publish_pass(pass);
     }
 }
 
-impl<S> Player<S> for ObservedQueue<S>
+impl<S> Player for ObservedQueue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
@@ -1375,18 +1349,18 @@ where
     fn apply(
         &mut self,
         command: Self::Command,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let seq = Player::apply(&mut self.inner, command, out)?;
         self.publish();
         Ok(seq)
     }
-    fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, out: &mut Outbox<'_>) -> Settled {
         let settled = Player::settle(&mut self.inner, receipt, out);
         self.publish();
         settled
     }
-    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
+    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_>) {
         Player::tick(&mut self.inner, now, out);
         self.publish();
     }
@@ -1395,11 +1369,11 @@ where
     }
 }
 
-impl<S> LinkedPlayer<S> for ObservedQueue<S>
+impl<S> LinkedPlayer for ObservedQueue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+    fn sync(&mut self, on: bool, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         let (input, start) = {
             let mut observation = self.observation.lock();
             let input = observation.owner_inputs.len();
@@ -1433,7 +1407,7 @@ where
         &mut self,
         trajectory: &TempoTrajectory,
         frames: &[SessionFrame],
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) {
         self.observation
             .lock()
@@ -1447,7 +1421,7 @@ where
         LinkedPlayer::retime(&mut self.inner, trajectory, frames, out);
         self.publish();
     }
-    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>) {
+    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_>) {
         self.observation.lock().owner_inputs.push(LinkOwnerInput {
             item: Some(answer.item),
             at: None,
@@ -1471,7 +1445,7 @@ where
     fn scope_parts(&self) -> usize {
         LinkedPlayer::scope_parts(&self.inner)
     }
-    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
+    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_>) {
         self.observation.lock().owner_inputs.push(LinkOwnerInput {
             item: None,
             at: Some(at),
@@ -1540,7 +1514,7 @@ mod tests {
             );
         }
         let item = TrackId::allocate();
-        let track: ObservedTrack<crate::bufpool_ext::TestPools> =
+        let track: ObservedTrack =
             ObservedFactory::new(Arc::new(Mutex::new(LinkObservation::default())))
                 .track(PlayerConfig {
                     item,

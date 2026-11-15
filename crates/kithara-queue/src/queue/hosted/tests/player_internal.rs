@@ -186,10 +186,11 @@ async fn a_selected_resource_adopts_the_session_wake_mode(#[by_ref] worker_owner
         &source,
         kithara_test_fixtures::assets::fixed_constant_wav_cd_half_4096().bytes(),
     );
-    let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
-        .downloader(crate::mock::downloader())
-        .store(store)
-        .build();
+    let config =
+        ResourceConfig::<TestPools>::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
+            .downloader(crate::mock::downloader())
+            .store(store)
+            .build();
     let prepared = prep.prepare(config, &output).expect("prepared source");
     let bus = prepared.bus().expect("prepared event bus").clone();
     let item = kithara_play::ResourceLoad::new(

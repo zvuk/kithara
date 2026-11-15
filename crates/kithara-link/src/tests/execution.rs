@@ -33,7 +33,7 @@ use crate::{
 };
 
 fn settle(
-    deck: &mut Linked<PlayerImpl<TestPools>>,
+    deck: &mut Linked<PlayerImpl>,
     rig: &mut DeckRig<TestPools>,
     receipt: Receipt<DeckProtocol>,
 ) {
@@ -77,7 +77,7 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
             Box::pin(async move { worker.load(config, position, start, inbox).await })
         },
     );
-    let track: PlayerImpl<TestPools> = PlayerImpl::new(PlayerConfig {
+    let track: PlayerImpl = PlayerImpl::new(PlayerConfig {
         item: kithara_events::TrackId::allocate(),
         slot: Some(Slot::new(0)),
         settings: TrackSettings::default(),
@@ -328,7 +328,7 @@ fn a_receipt_reaches_the_nested_group_that_issued_it() {
 async fn native_linked(
     directory: &TestTempDir,
 ) -> (
-    Linked<PlayerImpl<TestPools>>,
+    Linked<PlayerImpl>,
     DeckRig<TestPools>,
     Inbox<LaneProtocol>,
     Seq,
@@ -341,7 +341,7 @@ async fn native_linked(
         .worker(worker.clone())
         .host_sample_rate(mock::SAMPLE_RATE)
         .build();
-    let track: PlayerImpl<TestPools> = PlayerImpl::new(PlayerConfig {
+    let track: PlayerImpl = PlayerImpl::new(PlayerConfig {
         item: kithara_events::TrackId::allocate(),
         slot: Some(Slot::new(0)),
         settings: TrackSettings::default(),
@@ -460,7 +460,7 @@ fn native_ready(inbox: &mut Inbox<LaneProtocol>, clock: SegmentId) -> SegmentId 
 fn native_marked<R>(
     rig: &mut DeckRig<TestPools>,
     segment: SegmentId,
-    run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R,
+    run: impl FnOnce(&mut Outbox<'_>) -> R,
 ) -> R {
     native_marked_at(
         rig,
@@ -476,7 +476,7 @@ fn native_marked<R>(
 fn native_marked_at<R>(
     rig: &mut DeckRig<TestPools>,
     mark: SlotMark,
-    run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R,
+    run: impl FnOnce(&mut Outbox<'_>) -> R,
 ) -> R {
     let output = mock::output(None).get();
     let spec = AudioSpec::new(2, mock::SAMPLE_RATE);
@@ -509,7 +509,7 @@ fn native_marked_at<R>(
 }
 
 fn native_settle(
-    deck: &mut Linked<PlayerImpl<TestPools>>,
+    deck: &mut Linked<PlayerImpl>,
     rig: &mut DeckRig<TestPools>,
     current: SegmentId,
     receipt: Receipt<DeckProtocol>,
@@ -536,7 +536,7 @@ fn native_settle(
 }
 
 fn native_settle_at(
-    deck: &mut Linked<PlayerImpl<TestPools>>,
+    deck: &mut Linked<PlayerImpl>,
     rig: &mut DeckRig<TestPools>,
     mark: SlotMark,
     receipt: Receipt<DeckProtocol>,
@@ -558,7 +558,7 @@ fn native_settle_at(
 async fn native_synced(
     directory: &TestTempDir,
 ) -> (
-    Linked<PlayerImpl<TestPools>>,
+    Linked<PlayerImpl>,
     DeckRig<TestPools>,
     Inbox<LaneProtocol>,
     SegmentId,
@@ -792,7 +792,7 @@ async fn paused_future_command(
     directory: &TestTempDir,
     jump: bool,
 ) -> (
-    Linked<PlayerImpl<TestPools>>,
+    Linked<PlayerImpl>,
     DeckRig<TestPools>,
     Inbox<LaneProtocol>,
     SegmentId,
