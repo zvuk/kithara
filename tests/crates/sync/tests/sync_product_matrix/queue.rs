@@ -11,7 +11,7 @@ use kithara::{
     },
     queue::{QueueSettings, Transition},
     signal::{AudioChunkInfo, SegmentId, SourceSpan},
-    warp::{Beat, BeatGrid, BeatGridQuery, BeatGridSnapshot, MapPoint, MapPosition},
+    warp::{Beat, BeatGrid, BeatGridQuery, BeatGridSnapshot, MapPoint, MapPosition, Pitch},
 };
 use kithara_command::{Seq, When};
 use kithara_integration_tests::{
@@ -750,10 +750,166 @@ struct CapturedMusic {
     supplied_grid_shift_rejected: bool,
 }
 
+fn cue_preparations_settled(observation: &LinkObservation) -> bool {
+    observation
+        .cue_curves
+        .iter()
+        .filter(|cue| {
+            cue.before.attached
+                && cue.native.is_none()
+                && observation
+                    .ready_cues
+                    .iter()
+                    .any(|(item, seq)| *item == cue.item && seq.get() < cue.seq.get())
+        })
+        .all(|cue| {
+            if observation.ready_cues.contains(&(cue.item, cue.seq))
+                || observation
+                    .placement_receipts
+                    .iter()
+                    .any(|(owner, origin, receipt)| {
+                        *owner == cue.item
+                            && *origin == LinkReceiptOrigin::Lane
+                            && matches!(receipt,
+                                kithara::play::Settled::Rejected { seq, .. }
+                                if *seq == cue.seq)
+                    })
+            {
+                return true;
+            }
+            let bases = usdt_trace::events_of("lane_source_ready");
+            let previous = bases
+                .iter()
+                .rev()
+                .find(|event| {
+                    event.field("item") == Some(u64::from(cue.item))
+                        && event
+                            .field("lane_seq")
+                            .is_some_and(|seq| seq < cue.seq.get())
+                })
+                .and_then(|event| event.field("segment"))
+                .expect("an acknowledged cue retains its actual Lane source basis");
+            let adopted = observation
+                .capture
+                .as_ref()
+                .expect("native capture")
+                .segments
+                .iter()
+                .rev()
+                .find(|(item, ..)| *item == cue.item)
+                .map(|(_, _, _, segment, _)| *segment);
+            // The consumer must retire the old FIFO before its producer can finish preparing.
+            adopted.is_none_or(|segment| segment <= previous)
+        })
+}
+
+#[kithara::test(native, serial)]
+fn a_pending_cue_allows_the_consumer_turn_that_releases_its_producer() {
+    use kithara::signal::FrameCount;
+    use kithara_integration_tests::offline::linked::LinkCue;
+
+    let _trace = usdt_trace::scope();
+    let item = TrackId::allocate();
+    let other = TrackId::allocate();
+    let (posts, _mailbox) = kithara_command::mailbox::<(), ()>();
+    let initial = posts.post(()).expect("initial cue").seq();
+    let replacement = posts.post(()).expect("replacement cue").seq();
+    let old_segment = SegmentId::FIRST;
+    let new_segment = old_segment.next();
+    tracing::event!(target: "kithara_play_probe", tracing::Level::TRACE,
+        probe = "lane_source_ready", item = u64::from(item),
+        lane_seq = initial.get(), segment = old_segment.get());
+    let before = TrackSnapshot {
+        output: kithara::play::SlotOutputSnapshot::default(),
+        item,
+        slot: Some(Slot::new(0)),
+        status: kithara::play::TrackStatus::Loaded,
+        speed: 1.0,
+        position: Duration::ZERO,
+        duration: Some(Duration::from_secs(12)),
+        abr: None,
+        metadata: kithara::decode::TrackMetadata::default(),
+        mark: None,
+        engine_latency: FrameCount::new(0),
+        ring_depth: FrameCount::new(5631),
+        lane_room: 128,
+        pending_lane: false,
+        attached: true,
+        declick: FrameCount::new(240),
+    };
+    let mut observation = LinkObservation {
+        capture: Some(LinkCapture::default()),
+        cues: vec![(item, initial), (item, replacement)],
+        cue_curves: vec![LinkCue {
+            item,
+            seq: replacement,
+            position: Duration::ZERO,
+            curve: kithara::sync::SpeedCurve::Constant(1.2),
+            before,
+            consumed: None,
+            host_input: None,
+            native: None,
+            segment: None,
+        }],
+        ready_cues: vec![(item, initial)],
+        ..LinkObservation::default()
+    };
+    let adoption = |owner, segment: SegmentId| {
+        (
+            owner,
+            Slot::new(0),
+            SessionFrame::new(0),
+            segment.get(),
+            replacement.get(),
+        )
+    };
+    observation
+        .capture
+        .as_mut()
+        .expect("native capture")
+        .segments
+        .push(adoption(item, old_segment));
+    assert!(
+        cue_preparations_settled(&observation),
+        "the full old FIFO needs its consumer's native turn before its producer can become ready"
+    );
+    observation
+        .capture
+        .as_mut()
+        .expect("native capture")
+        .segments
+        .push(adoption(other, new_segment));
+    assert!(
+        cue_preparations_settled(&observation),
+        "another item's adoption does not move this cue's native phase"
+    );
+    observation
+        .capture
+        .as_mut()
+        .expect("native capture")
+        .segments
+        .push(adoption(item, new_segment));
+    assert!(
+        !cue_preparations_settled(&observation),
+        "after native adoption this cue must acknowledge its prepared PCM"
+    );
+    observation.ready_cues.push((other, replacement));
+    assert!(
+        !cue_preparations_settled(&observation),
+        "another item's receipt cannot settle this cue"
+    );
+    observation.ready_cues.push((item, replacement));
+    assert!(cue_preparations_settled(&observation));
+}
+
 impl QueueMusic {
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-    async fn new(kind: MusicCase, track: TrackSettings) -> Self {
-        let forward_oracle = !track.keylock();
+    async fn new(
+        kind: MusicCase,
+        track: TrackSettings,
+        backend: kithara::stretch::StretchKind,
+    ) -> Self {
+        let forward_oracle = !track.pitch().keylock();
         let sample_rate = NonZeroU32::new(RATE).expect("source rate");
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
@@ -813,6 +969,7 @@ impl QueueMusic {
             ..LinkObservation::default()
         }));
         let warp = kithara::warp::WarpConfig::builder()
+            .backend(backend)
             .render_quantum_frames(NonZeroUsize::new(BLOCK).expect("one observed Warp quantum"))
             .build();
         assert!(
@@ -1451,7 +1608,7 @@ impl QueueMusic {
         self.deck.read_snapshot().await;
         kithara_test_utils::wait_until(Duration::from_secs(5), "Queue Lane outcomes", || {
             let settled = self.deck.observe(|o| {
-                o.speeds.iter().all(|speed| {
+                cue_preparations_settled(o) && o.speeds.iter().all(|speed| {
                     !matches!(
                         speed.before.status,
                         kithara::play::TrackStatus::Playing { .. }
@@ -1498,8 +1655,8 @@ impl QueueMusic {
                     .as_ref()
                     .map(|capture| (&capture.fades, &capture.faded, &capture.ended));
                 format!(
-                    "frame={now:?}; receipts={:?}; speeds={speeds:?}; fades={fades:?}; consumed={:?}",
-                    observation.placement_receipts, observation.consumed,
+                    "frame={now:?}; receipts={:?}; speeds={speeds:?}; fades={fades:?}; consumed={:?}; cues={:?}; ready={:?}",
+                    observation.placement_receipts, observation.consumed, observation.cues, observation.ready_cues,
                 )
             });
             panic!(
@@ -1511,7 +1668,16 @@ impl QueueMusic {
             position,
             "Lane settlement renders no PCM"
         );
-        self.deck.read_snapshot().await
+        let snapshot = self.deck.read_snapshot().await;
+        self.deck.observe(|observation| {
+            assert!(
+                cue_preparations_settled(observation),
+                "adopted cue preparation must settle before offline PCM advances: cues={:?}; ready={:?}",
+                observation.cues,
+                observation.ready_cues,
+            );
+        });
+        snapshot
     }
 
     fn inspect_bindings(
@@ -2884,19 +3050,19 @@ async fn capture_music(
     let _trace = usdt_trace::scope();
     let wall = Instant::now();
     tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_begin");
+    let backend = kithara::stretch::StretchKind::Signalsmith;
     let track = TrackSettings::builder()
-        .backend(kithara::stretch::StretchKind::Signalsmith)
-        .keylock(key_lock)
+        .maybe_pitch(key_lock.then_some(Pitch::HELD))
         .build();
     assert!(
-        track.backend().capabilities().contains(if key_lock {
+        backend.capabilities().contains(if key_lock {
             kithara::stretch::BackendCapabilities::KEYLOCK
         } else {
             kithara::stretch::BackendCapabilities::RATE
         }),
         "the selected backend supports the requested playback mode"
     );
-    let mut case = QueueMusic::new(kind, track).await;
+    let mut case = QueueMusic::new(kind, track, backend).await;
     case.append_sources(tracks).await;
     tracing::info!(target: "kithara_test::sync::queue321", phase = "render_begin",
         wall_s = wall.elapsed().as_secs_f64(), frame = case.host.position());
@@ -3329,7 +3495,12 @@ async fn check_keylock_music(case: &mut QueueMusic, data: CapturedMusic) {
 
 #[kithara::test(tokio, multi_thread, native, flash(false))]
 async fn queued_music_render_reports_its_engine_callback_start() {
-    let mut case = QueueMusic::new(MusicCase::Natural, TrackSettings::default()).await;
+    let mut case = QueueMusic::new(
+        MusicCase::Natural,
+        TrackSettings::default(),
+        kithara::stretch::StretchKind::default(),
+    )
+    .await;
     let (entered, waiting) = kithara::platform::tokio::sync::oneshot::channel();
     let (release, blocked) = kithara::platform::sync::mpsc::channel();
     let (finished, released) = kithara::platform::tokio::sync::oneshot::channel();

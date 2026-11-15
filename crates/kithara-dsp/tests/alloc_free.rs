@@ -364,6 +364,26 @@ fn delay_reads_writes_and_reset_never_allocate() {
 }
 
 #[kithara::test(native)]
+fn diffuser_process_and_reset_never_allocate() {
+    let line = kithara_dsp::delay::DelayLine::new(TWO, PLANE, &pools()).expect("line fits");
+    let mut section = kithara_dsp::delay::DelayDiffuser::<2>::new(line, 0.5).unwrap();
+    let mut left = [0.125; FRAMES];
+    let mut right = [-0.25; FRAMES];
+    assert_no_alloc(|| {
+        for range in [0..0, 0..1, 1..513, 513..FRAMES, 0..FRAMES] {
+            section
+                .process(&mut [&mut left[..], &mut right[..]], range)
+                .unwrap();
+        }
+        section.reset();
+        section
+            .process(&mut [&mut left[..], &mut right[..]], 0..FRAMES)
+            .unwrap();
+    });
+    assert!(left.iter().chain(&right).all(|sample| sample.is_finite()));
+}
+
+#[kithara::test(native)]
 fn fir_history_peak_linking_and_envelope_never_allocate() {
     let mut detector = kithara_dsp::filter::Fir::<17, 7, 2, 9>::new([[0.125; 17]; 7]);
     let mut envelope = kithara_dsp::envelope::AttackRelease::new(0.999);

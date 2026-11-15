@@ -208,7 +208,7 @@ libc = { version = "0.2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSAlert", "NSApplication", "NSButton", "NSControl", "NSOpenPanel", "NSPanel", "NSResponder", "NSRunningApplication", "NSSavePanel", "NSView", "NSWindow", "NSWorkspace", "block2", "std"] }
 objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSOperation", "NSPathUtilities", "NSRange", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "block2", "objc2-core-foundation", "std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSRange", "NSString", "NSThread", "NSURL", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "objc2-core-foundation", "std"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
@@ -255,7 +255,7 @@ libc = { version = "0.2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSAlert", "NSApplication", "NSButton", "NSControl", "NSOpenPanel", "NSPanel", "NSResponder", "NSRunningApplication", "NSSavePanel", "NSView", "NSWindow", "NSWorkspace", "block2", "std"] }
 objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSOperation", "NSPathUtilities", "NSRange", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "block2", "objc2-core-foundation", "std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSRange", "NSString", "NSThread", "NSURL", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "objc2-core-foundation", "std"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
@@ -300,7 +300,7 @@ libc = { version = "0.2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSAlert", "NSApplication", "NSButton", "NSControl", "NSOpenPanel", "NSPanel", "NSResponder", "NSRunningApplication", "NSSavePanel", "NSView", "NSWindow", "NSWorkspace", "block2", "std"] }
 objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSOperation", "NSPathUtilities", "NSRange", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "block2", "objc2-core-foundation", "std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSRange", "NSString", "NSThread", "NSURL", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "objc2-core-foundation", "std"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
@@ -347,7 +347,7 @@ libc = { version = "0.2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSAlert", "NSApplication", "NSButton", "NSControl", "NSOpenPanel", "NSPanel", "NSResponder", "NSRunningApplication", "NSSavePanel", "NSView", "NSWindow", "NSWorkspace", "block2", "std"] }
 objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSOperation", "NSPathUtilities", "NSRange", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "block2", "objc2-core-foundation", "std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSRange", "NSString", "NSThread", "NSURL", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "objc2-core-foundation", "std"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }

@@ -1,3 +1,5 @@
+use kithara_warp::Pitch;
+
 use super::*;
 
 #[kithara::test]
@@ -416,6 +418,67 @@ fn keylock_speed_changes_known_a_latency_ahead_keep_the_engine() {
     }
 }
 
+/// A transpose under keylock on lane frame X starts on X and its source
+/// frame, and the lane renders a different pitch from the unshifted one.
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+#[kithara::test]
+fn a_transpose_lands_on_its_frame_and_moves_the_pitch() {
+    for backend in keylock_backends() {
+        const ENGAGE: u64 = 1_024;
+        const AT: u64 = 4_099;
+        const SETTLE: u64 = 16_384;
+        const WINDOW: usize = 4_096;
+        let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
+        let pools = pools();
+        let engaged = |at_change: Option<Vec<LaneCommand>>| {
+            let (mut source, mut lane) = stretch_lane(&pools, (backend, true), &signal);
+            lane.send(
+                When::At(LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: ENGAGE,
+                }),
+                speed_batch(0.8),
+            )
+            .expect("the lane has room for the engaging batch");
+            if let Some(commands) = at_change {
+                lane.send(
+                    When::At(LaneFrame {
+                        segment: SegmentId::FIRST,
+                        frame: AT,
+                    }),
+                    Batch {
+                        basis: Vec::new(),
+                        commands,
+                    },
+                )
+                .expect("the lane has room for the change");
+            }
+            emit(&mut source, 0, AT + SETTLE + WINDOW as u64)
+        };
+        let emitted = engaged(Some(vec![LaneCommand::SetPitch(Pitch::Held {
+            shift: kithara_warp::Semitones::checked(3).expect("fixture shift is in range"),
+        })]));
+        let cue = ENGAGE + (AT - ENGAGE) * 4 / 5;
+        assert_eq!(
+            emitted
+                .iter()
+                .find(|chunk| chunk.lane_start == AT)
+                .map(|chunk| chunk.source_start),
+            Some(cue),
+            "the transpose starts on its exact lane and source frame",
+        );
+        let unshifted = engaged(None);
+
+        let rendered = &lane_pcm(&emitted)[pcm_index(AT + SETTLE)..][..WINDOW];
+        let (_, unshifted) = alignment(rendered, &lane_pcm(&unshifted), pcm_index(AT + SETTLE), 0);
+        assert!(
+            unshifted < 0.5,
+            "{backend:?}: the transposed lane still matches the unshifted one, \
+             correlation {unshifted:.3}"
+        );
+    }
+}
+
 /// A batch that changes the engine on lane frame X renders from X on what
 /// the new engine started at X's source frame renders: the engine changes
 /// on its frame, the source does not jump, and the receipt names X. The
@@ -430,7 +493,7 @@ fn an_engine_batch_renders_on_as_its_engine_started_on_its_frame() {
     const WINDOW: usize = 4_096;
     const REACH: usize = 2_048;
     for backend in keylock_backends() {
-        let command = LaneCommand::SetKeylock(true);
+        let command = LaneCommand::SetPitch(Pitch::HELD);
         let to = (backend, true);
         let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
         let pools = pools();
@@ -474,7 +537,7 @@ fn an_engine_batch_renders_on_as_its_engine_started_on_its_frame() {
             )
             .expect("the lane has room for the reference history");
         let mut start = speed_batch(1.25);
-        start.commands.push(LaneCommand::SetKeylock(true));
+        start.commands.push(LaneCommand::SetPitch(Pitch::HELD));
         fresh
             .send(
                 When::At(LaneFrame {
@@ -542,7 +605,7 @@ fn an_engine_and_a_speed_batch_on_one_frame_engage_the_new_engine() {
                 segment: SegmentId::FIRST,
                 frame: AT,
             }),
-            command_batch(LaneCommand::SetKeylock(true)),
+            command_batch(LaneCommand::SetPitch(Pitch::HELD)),
         )
         .expect("the lane has room for the engine change");
         lane.send(
@@ -598,7 +661,7 @@ fn identity_source_preserves_buffers_despite_initial_and_live_controls(quarter: 
     let config = kithara_warp::WarpConfig::builder()
         .backend(StretchKind::Identity)
         .speed(0.5)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         // A decoded chunk the size of a lane packet renders as itself.
         .render_quantum_frames(NonZeroUsize::new(64).expect("quantum"))
         .build();
@@ -623,7 +686,7 @@ fn identity_source_preserves_buffers_despite_initial_and_live_controls(quarter: 
                     basis: Vec::new(),
                     commands: vec![
                         LaneCommand::SetSpeed(SpeedCurve::Constant(2.0)),
-                        LaneCommand::SetKeylock(false),
+                        LaneCommand::SetPitch(Pitch::default()),
                     ],
                 },
             )

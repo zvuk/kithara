@@ -354,7 +354,7 @@ pub(in crate::source) fn lane_over<'a>(
     let (lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
     let config = kithara_warp::WarpConfig::builder()
         .speed(speed)
-        .keylock(keylock)
+        .maybe_pitch(keylock.then_some(kithara_warp::Pitch::HELD))
         .backend(backend)
         .render_quantum_frames(NonZeroUsize::new(256).expect("test quantum is non-zero"))
         .build();

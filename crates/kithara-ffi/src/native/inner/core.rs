@@ -9,7 +9,7 @@ use kithara::{
     },
     play::{DeckMixerConfig, PlayWorkerConfig, ResourcePrep, TrackSettings},
     queue::{QueueConfig, QueueSettings},
-    warp::{StretchKind, WarpCapabilities, WarpConfig},
+    warp::{Pitch, WarpConfig},
 };
 
 use super::resource::ResourceFactory;
@@ -24,13 +24,12 @@ use crate::{
 };
 
 /// The Warp configuration every FFI player starts its tracks on: keylocked on
-/// Apple when the selected backend preserves pitch.
+/// Apple.
 fn player_warp() -> WarpConfig {
-    let keylock = cfg!(all(feature = "apple", target_vendor = "apple"))
-        && StretchKind::default()
-            .capabilities()
-            .contains(WarpCapabilities::KEYLOCK);
-    WarpConfig::builder().keylock(keylock).build()
+    let keylock = cfg!(all(feature = "apple", target_vendor = "apple"));
+    WarpConfig::builder()
+        .maybe_pitch(keylock.then_some(Pitch::HELD))
+        .build()
 }
 
 /// Build the default `NetOptions`. The `dev` feature enables the
@@ -87,7 +86,9 @@ impl NativeInner {
         );
         let queue_store = store.handle().clone();
         let warp = player_warp();
-        let track = TrackSettings::builder().keylock(warp.keylock()).build();
+        let track = TrackSettings::builder()
+            .pitch(warp.pitch_control(warp.pitch()).unwrap_or_default())
+            .build();
         let prep = ResourcePrep::builder()
             .worker(worker)
             .warp(warp)

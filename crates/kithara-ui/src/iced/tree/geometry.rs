@@ -10,7 +10,7 @@ use super::{
     host::ModuleHost,
 };
 use crate::{
-    engine::{Descriptor, Engine, PickerSnapshot, Target},
+    engine::{Descriptor, Engine, PickerSnapshot, Presses, Target},
     expand::{ExpandedNode, header_path},
     hosts::{
         hosted::{HostedControlPlan, Resolving},
@@ -165,6 +165,11 @@ pub(super) enum HostedLayout {
     },
     Control(Option<HostedControl>),
     SelfMeasuredControl(Option<HostedControl>),
+    Pressable {
+        sized: bool,
+        plan: HostedControlPlan<()>,
+        child: Option<Box<Self>>,
+    },
 }
 
 impl HostedLayout {
@@ -248,15 +253,53 @@ impl HostedLayout {
                 child: Box::new(Self::new(anchor, ctx, skin)),
             },
             ExpandedNode::Modal { .. } => Self::Control(None),
-            ExpandedNode::Pressable { child, .. } => Self::Wrapper {
+            ExpandedNode::Pressable {
+                path,
+                secondary,
+                double,
+                child,
+                ..
+            } => Self::Pressable {
                 sized: effective_size(node, skin, snapshot).is_some(),
-                child: Box::new(Self::new(child, ctx, skin)),
+                plan: HostedControlPlan::Activation {
+                    path: ctx.ui.resolve(*path).to_owned(),
+                    presses: Presses {
+                        secondary: secondary.is_some(),
+                        double: double.is_some(),
+                    },
+                },
+                child: Some(Box::new(Self::new(child, ctx, skin))),
             },
             ExpandedNode::Placed { child, .. } | ExpandedNode::Scroll { child, .. } => {
                 Self::Scroll {
                     child: Box::new(Self::new(child, ctx, skin)),
                 }
             }
+        }
+    }
+
+    pub(super) fn pressable(path: &str, presses: Presses) -> Self {
+        Self::Pressable {
+            sized: false,
+            plan: HostedControlPlan::Activation {
+                path: path.to_owned(),
+                presses,
+            },
+            child: None,
+        }
+    }
+
+    pub(super) fn module(spec: ModuleHost<'_>) -> Self {
+        let ModuleHost {
+            instance,
+            chrome,
+            collapsed,
+            drop,
+        } = spec;
+        Self::Chrome {
+            collapsed,
+            drop: drop.map(|_| HostedControlPlan::crossing(instance)),
+            header: (chrome == ChromeStyle::Full).then(|| header_path(instance)),
         }
     }
 
@@ -267,7 +310,7 @@ impl HostedLayout {
                     descriptors.append(&mut plan.descriptors());
                 }
                 if let Some(path) = header {
-                    descriptors.push(Descriptor::activation(path.clone()));
+                    descriptors.push(Descriptor::pressable(path.clone(), Presses::default()));
                 }
             }
             Self::Group { children, .. }
@@ -283,6 +326,12 @@ impl HostedLayout {
             }
             Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
                 append_control_descriptors(control, descriptors);
+            }
+            Self::Pressable { plan, child, .. } => {
+                descriptors.append(&mut plan.descriptors());
+                if let Some(child) = child {
+                    child.append_descriptors(descriptors);
+                }
             }
             Self::Control(None) | Self::SelfMeasuredControl(None) => {}
         }
@@ -356,7 +405,13 @@ impl HostedLayout {
                     pickers.push(picker);
                 }
             }
-            Self::Chrome { .. } | Self::Control(None) | Self::SelfMeasuredControl(None) => {}
+            Self::Pressable {
+                child: Some(child), ..
+            } => child.append_pickers(pickers),
+            Self::Chrome { .. }
+            | Self::Pressable { child: None, .. }
+            | Self::Control(None)
+            | Self::SelfMeasuredControl(None) => {}
         }
     }
 
@@ -434,15 +489,9 @@ impl HostedLayout {
                 }
             }
             Self::Wrapper { sized, child } => {
-                let layout = if *sized {
-                    let Some(layout) = first_child(layout) else {
-                        return;
-                    };
-                    layout
-                } else {
-                    layout
-                };
-                child.append_targets(layout, cursor, engine, targets);
+                if let Some(layout) = sized_child(layout, *sized) {
+                    child.append_targets(layout, cursor, engine, targets);
+                }
             }
             Self::Scroll { child } => {
                 let cursor = if engine.is_some_and(Engine::captures_pointer) {
@@ -464,6 +513,18 @@ impl HostedLayout {
             Self::SelfMeasuredControl(Some(control)) => {
                 append_control_targets(control, layout, cursor, engine, targets);
             }
+            Self::Pressable { sized, plan, child } => {
+                let Some(layout) = sized_child(layout, *sized) else {
+                    return;
+                };
+                targets.push(Target::new(
+                    plan.path(),
+                    iced_interact::hit(layout.bounds(), cursor),
+                ));
+                if let Some(child) = child {
+                    child.append_targets(layout, cursor, engine, targets);
+                }
+            }
             Self::Control(None) | Self::SelfMeasuredControl(None) => {}
         }
     }
@@ -472,20 +533,6 @@ impl HostedLayout {
         let mut descriptors = Vec::new();
         self.append_descriptors(&mut descriptors);
         descriptors
-    }
-
-    pub(super) fn module(spec: ModuleHost<'_>) -> Self {
-        let ModuleHost {
-            instance,
-            chrome,
-            collapsed,
-            drop,
-        } = spec;
-        Self::Chrome {
-            collapsed,
-            drop: drop.map(|_| HostedControlPlan::crossing(instance)),
-            header: (chrome == ChromeStyle::Full).then(|| header_path(instance)),
-        }
     }
 
     pub(super) fn picker_snapshots<'a>(
@@ -558,6 +605,14 @@ pub(super) fn slot_children(mut layout: Layout<'_>, sized: bool) -> Option<Layou
         layout = first_child(layout)?;
     }
     first_child(layout)
+}
+
+fn sized_child(layout: Layout<'_>, sized: bool) -> Option<Layout<'_>> {
+    if sized {
+        first_child(layout)
+    } else {
+        Some(layout)
+    }
 }
 
 pub(super) fn first_child(layout: Layout<'_>) -> Option<Layout<'_>> {
@@ -692,6 +747,8 @@ mod tests {
         let pressable = ExpandedNode::Pressable {
             path: interner.intern("bank", &origin).unwrap(),
             press: model(interner.intern("deck.eq.menu", &origin).unwrap()),
+            secondary: None,
+            double: None,
             child: Box::new(ExpandedNode::Adaptive {
                 measure: MeasureSpec::Read(model(
                     interner.intern("deck.eq.bands", &origin).unwrap(),
@@ -760,6 +817,8 @@ mod tests {
         let pressable = ExpandedNode::Pressable {
             path: interner.intern("row", &origin).unwrap(),
             press: model(interner.intern("ui.menu.toggle", &origin).unwrap()),
+            secondary: None,
+            double: None,
             child: Box::new(control(&mut interner, &origin, "cell", content)),
         };
 

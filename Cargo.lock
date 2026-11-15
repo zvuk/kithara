@@ -4855,7 +4855,6 @@ dependencies = [
  "kithara-platform",
  "kithara-test-fixtures",
  "kithara-test-utils",
- "kithara-workspace-hack",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
  "thiserror 2.0.21",
