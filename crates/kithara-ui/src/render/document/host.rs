@@ -11,6 +11,13 @@ use crate::{
     size::SizeSpec,
 };
 
+/// The presses a pressable declares besides its primary one.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Presses {
+    pub secondary: bool,
+    pub double: bool,
+}
+
 /// Mounts the toolkit-neutral document walk into one host's output tree.
 ///
 /// The facade owns recursion and state-dependent document selection. A host
@@ -103,6 +110,8 @@ pub trait Host {
     fn pressable(
         &mut self,
         path: InternId,
+        presses: Presses,
+        owner: InputOwner,
         child: Self::Output,
         size: Option<SizeSpec>,
     ) -> Self::Output;

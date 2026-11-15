@@ -53,6 +53,7 @@ impl<S, O: HostOwner<S>> HostOwner<S> for RenderClock<O> {
 
     delegate::delegate! {
         to self.inner {
+            fn poll_output(&mut self) -> std::task::Poll<Result<(), PlayError>>;
             fn apply(&mut self, command: Self::Command) -> Result<Option<Seq>, PlayError>;
             fn register(&mut self, id: DeckId, deck: Box<Self::Deck>) -> Result<(), PlayError>;
             fn each_deck(

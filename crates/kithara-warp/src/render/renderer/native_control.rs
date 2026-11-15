@@ -137,8 +137,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     fn native_stream_live(&self) -> bool {
         self.active
             && self.mapped_render
-            && self.current_keylock
-            && self.stretch_target() == (self.current_kind, self.current_keylock)
+            && self.pitch_controls().keylock()
+            && self.stretch_target() == (self.current_kind, self.current_pitch_engine)
             && self.terminal_source_end.is_none()
             && self.pending_unity_meta.is_none()
             && !self.backend_transition_pending

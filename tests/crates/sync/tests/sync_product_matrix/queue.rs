@@ -11,7 +11,7 @@ use kithara::{
     },
     queue::{QueueSettings, Transition},
     signal::{AudioChunkInfo, SegmentId, SourceSpan},
-    warp::{Beat, BeatGrid, BeatGridQuery, BeatGridSnapshot, MapPoint, MapPosition},
+    warp::{Beat, BeatGrid, BeatGridQuery, BeatGridSnapshot, MapPoint, MapPosition, Pitch},
 };
 use kithara_command::{Seq, When};
 use kithara_integration_tests::{
@@ -752,8 +752,12 @@ struct CapturedMusic {
 
 impl QueueMusic {
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-    async fn new(kind: MusicCase, track: TrackSettings) -> Self {
-        let forward_oracle = !track.keylock();
+    async fn new(
+        kind: MusicCase,
+        track: TrackSettings,
+        backend: kithara::stretch::StretchKind,
+    ) -> Self {
+        let forward_oracle = !track.pitch().keylock();
         let sample_rate = NonZeroU32::new(RATE).expect("source rate");
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
@@ -813,6 +817,7 @@ impl QueueMusic {
             ..LinkObservation::default()
         }));
         let warp = kithara::warp::WarpConfig::builder()
+            .backend(backend)
             .render_quantum_frames(NonZeroUsize::new(BLOCK).expect("one observed Warp quantum"))
             .build();
         assert!(
@@ -2884,19 +2889,19 @@ async fn capture_music(
     let _trace = usdt_trace::scope();
     let wall = Instant::now();
     tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_begin");
+    let backend = kithara::stretch::StretchKind::Signalsmith;
     let track = TrackSettings::builder()
-        .backend(kithara::stretch::StretchKind::Signalsmith)
-        .keylock(key_lock)
+        .maybe_pitch(key_lock.then_some(Pitch::HELD))
         .build();
     assert!(
-        track.backend().capabilities().contains(if key_lock {
+        backend.capabilities().contains(if key_lock {
             kithara::stretch::BackendCapabilities::KEYLOCK
         } else {
             kithara::stretch::BackendCapabilities::RATE
         }),
         "the selected backend supports the requested playback mode"
     );
-    let mut case = QueueMusic::new(kind, track).await;
+    let mut case = QueueMusic::new(kind, track, backend).await;
     case.append_sources(tracks).await;
     tracing::info!(target: "kithara_test::sync::queue321", phase = "render_begin",
         wall_s = wall.elapsed().as_secs_f64(), frame = case.host.position());
@@ -3329,7 +3334,12 @@ async fn check_keylock_music(case: &mut QueueMusic, data: CapturedMusic) {
 
 #[kithara::test(tokio, multi_thread, native, flash(false))]
 async fn queued_music_render_reports_its_engine_callback_start() {
-    let mut case = QueueMusic::new(MusicCase::Natural, TrackSettings::default()).await;
+    let mut case = QueueMusic::new(
+        MusicCase::Natural,
+        TrackSettings::default(),
+        kithara::stretch::StretchKind::default(),
+    )
+    .await;
     let (entered, waiting) = kithara::platform::tokio::sync::oneshot::channel();
     let (release, blocked) = kithara::platform::sync::mpsc::channel();
     let (finished, released) = kithara::platform::tokio::sync::oneshot::channel();

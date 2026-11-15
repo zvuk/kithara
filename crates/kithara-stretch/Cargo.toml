@@ -61,7 +61,7 @@ signalsmith-stretch = { workspace = true, optional = true }
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "hang", "tls-rustls"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "client-reqwest", "hang", "tls-rustls"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }

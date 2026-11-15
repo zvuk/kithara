@@ -57,7 +57,8 @@ impl GaplessBlender {
             usize::from(*frame),
             usize::from(*frames),
         );
-        *frame = frame.saturating_add(u16::try_from(processed).unwrap_or(u16::MAX));
+        let processed = u16::try_from(processed).unwrap_or(u16::MAX);
+        *frame = frame.saturating_add(processed);
         if *frame >= *frames {
             self.join = JoinState::Steady;
             kithara_test_macros::probe_event!(
@@ -70,6 +71,15 @@ impl GaplessBlender {
                     .and_then(|end| u64::try_from(end.as_nanos()).ok()),
             );
         }
+        kithara_test_macros::probe_event!(
+            audio_join_processed,
+            source_start = chunk.meta.frame_offset,
+            frames = u64::from(processed),
+            remaining = match &self.join {
+                JoinState::Steady => 0,
+                JoinState::Active { frame, frames } => u64::from(frames.saturating_sub(*frame)),
+            }
+        );
     }
 
     #[cfg(test)]

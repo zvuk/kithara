@@ -77,7 +77,7 @@ impl Component for ItemComponent {
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
         if matches!(
             input,
-            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down
+            Input::Pointer(pointer) if pointer.presses_primary()
         ) {
             self.drag = ItemDrag::default();
             self.index = if hit.over() {
@@ -100,9 +100,7 @@ impl Component for ItemComponent {
             return (outcome, None);
         }
         let outcome = match input {
-            Input::Pointer(pointer)
-                if pointer.phase == PointerPhase::Down && self.index.is_some() =>
-            {
+            Input::Pointer(pointer) if pointer.presses_primary() && self.index.is_some() => {
                 Outcome::captured()
             }
             Input::Pointer(pointer) if pointer.phase == PointerPhase::Up => {

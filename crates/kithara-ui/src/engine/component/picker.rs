@@ -196,9 +196,7 @@ impl Component for PickerComponent {
         _now: Instant,
     ) -> (Outcome<EngineEvent>, Option<&'static str>) {
         let outcome = match input {
-            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down => {
-                self.pointer_down(hit, index)
-            }
+            Input::Pointer(pointer) if pointer.presses_primary() => self.pointer_down(hit, index),
             Input::Pointer(pointer) if pointer.phase == PointerPhase::Move => {
                 self.pointer_moved(hit, index)
             }

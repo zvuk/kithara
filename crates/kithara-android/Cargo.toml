@@ -34,7 +34,7 @@ dashmap = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true, features = ["hang"] }
+kithara-test-utils = { workspace = true, features = ["test", "hang"] }
 
 [lints]
 workspace = true

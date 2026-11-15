@@ -13,6 +13,11 @@ test-utils:
 run *ARGS:
     just _xtask test "$@"
 
+# Compare complete nextest inventories through package and binary renames.
+[positional-arguments]
+census *ARGS:
+    just _xtask test-census "$@"
+
 all:
     just test
     just test run --lane=doc

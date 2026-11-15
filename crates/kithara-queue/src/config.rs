@@ -8,8 +8,8 @@ use kithara_download::Downloader;
 use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle as RuntimeHandle};
 use kithara_play::{
     CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError, DeckMixerConfig,
-    DeckMixerConfigPatch, DeckMixerConfigPatchError, PlayerFactory, ResourcePrep, TrackFactory,
-    TrackSettings, TrackSettingsPatch, TrackSettingsPatchError,
+    DeckMixerConfigPatch, DeckMixerConfigPatchError, Pitch, PlayerFactory, ResourcePrep,
+    TrackFactory, TrackSettings, TrackSettingsPatch, TrackSettingsPatchError,
 };
 
 use crate::{ActionAtItemEnd, PlaybackOrder, consts};
@@ -67,7 +67,7 @@ where
     pub(crate) preload_lead: Duration,
 
     /// The settings a new track starts with; a track change moves them.
-    #[config(builder(default), patch(nested, fallible), debug(skip))]
+    #[config(builder(default), patch(nested, fallible), debug(skip), get(copy))]
     pub(crate) track: TrackSettings,
 
     /// What every track the queue loads opens with: the worker and playback policy.
@@ -125,6 +125,18 @@ where
     /// to the queue.
     #[config(sdk, builder(default))]
     pub(crate) action_at_item_end: ActionAtItemEnd,
+}
+
+impl<S, F> QueueConfig<S, F>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+    F: TrackFactory<S>,
+{
+    /// The deck's pitch, `None` when its backend has no keylock to move it.
+    pub(crate) fn pitch(&self) -> Option<Pitch> {
+        let prep = self.prep.as_ref()?;
+        prep.warp.pitch_control(self.track.pitch())
+    }
 }
 
 impl<S> QueueConfig<S, PlayerFactory>

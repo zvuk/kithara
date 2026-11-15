@@ -43,7 +43,7 @@ ron = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true, features = ["usdt", "client-reqwest", "tls-rustls"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "client-reqwest", "tls-rustls"] }
 kithara-ui-gallery = { path = ".", features = ["mock"] }
 
 futures-lite = { workspace = true }

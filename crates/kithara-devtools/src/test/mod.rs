@@ -1,3 +1,4 @@
+mod census;
 mod command;
 mod draft;
 mod inventory;
@@ -14,6 +15,8 @@ pub(crate) mod repository_tests;
 #[cfg(test)]
 mod tests;
 
+pub use census::CensusArgs;
+pub(crate) use census::run as census;
 pub(crate) use command::run;
 pub use command::{NextestAction, TestArgs, nextest_command_for_lane, selects_any_lane};
 pub use draft::{PR_TESTS_ENV, validate_pr_tests};

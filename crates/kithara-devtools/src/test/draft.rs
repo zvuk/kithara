@@ -38,17 +38,17 @@ impl DraftScope {
     /// The draft scope of the workspace at `root`, with the pull request's
     /// block `block` when it carries one.
     pub(crate) fn load(test: &TestCommandConfig, root: &Path, block: Option<&str>) -> Result<Self> {
-        let graph = workspace_graph(root)?;
-        Self::of(test, &graph, block)
+        let (graph, named) = read_scope(root, block)?;
+        Self::of(test, &graph, named)
     }
 
-    fn of(test: &TestCommandConfig, graph: &PackageGraph, block: Option<&str>) -> Result<Self> {
+    fn of(test: &TestCommandConfig, graph: &PackageGraph, named: PrTests) -> Result<Self> {
         let members: BTreeSet<String> = graph
             .workspace()
             .iter()
             .map(|package| package.name().to_owned())
             .collect();
-        let named = parse_block(graph, &members, block)?;
+        validate_block(graph, &members, &named)?;
         if test.required.packages.is_empty() {
             bail!("test.required.packages in .config/xtask.toml names no package");
         }
@@ -103,34 +103,31 @@ impl DraftScope {
 /// Returns the first thing wrong with the block, or why the workspace could
 /// not be read.
 pub fn validate_pr_tests(root: &Path, block: &str) -> Result<()> {
-    let graph = workspace_graph(root)?;
+    let (graph, named) = read_scope(root, Some(block))?;
     let members = graph
         .workspace()
         .iter()
         .map(|package| package.name().to_owned())
         .collect();
-    parse_block(&graph, &members, Some(block)).map(drop)
+    validate_block(&graph, &members, &named)
 }
 
-fn workspace_graph(root: &Path) -> Result<PackageGraph> {
+fn read_scope(root: &Path, block: Option<&str>) -> Result<(PackageGraph, PrTests)> {
+    let named: PrTests = toml::from_str(block.unwrap_or_default())
+        .context("the pull request's kithara-tests block")?;
     let mut command = MetadataCommand::new();
     command.current_dir(root);
-    command
+    // Package lists need only members; a filter may query dependency edges.
+    if named.filter.is_none() {
+        command.no_deps();
+    }
+    let graph = command
         .build_graph()
-        .context("reading the workspace package graph")
+        .context("reading the workspace package graph")?;
+    Ok((graph, named))
 }
 
-/// The block's request, checked the way the runner would check it. An empty
-/// or absent block asks for nothing.
-fn parse_block(
-    graph: &PackageGraph,
-    members: &BTreeSet<String>,
-    block: Option<&str>,
-) -> Result<PrTests> {
-    let Some(block) = block.filter(|block| !block.trim().is_empty()) else {
-        return Ok(PrTests::default());
-    };
-    let named: PrTests = toml::from_str(block).context("the pull request's kithara-tests block")?;
+fn validate_block(graph: &PackageGraph, members: &BTreeSet<String>, named: &PrTests) -> Result<()> {
     for package in &named.packages {
         if !members.contains(package) {
             bail!(
@@ -159,21 +156,24 @@ fn parse_block(
             )
         })?;
     }
-    Ok(named)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
+    use std::{fs, sync::OnceLock};
 
     use super::*;
-    use crate::common::project::TestRequiredConfig;
+    use crate::{
+        common::project::TestRequiredConfig, test::repository_tests::root as workspace_root,
+    };
 
     fn graph() -> &'static PackageGraph {
         static GRAPH: OnceLock<PackageGraph> = OnceLock::new();
         GRAPH.get_or_init(|| {
-            workspace_graph(&crate::test::repository_tests::root())
+            read_scope(&workspace_root(), None)
                 .expect("the workspace package graph")
+                .0
         })
     }
 
@@ -187,7 +187,7 @@ mod tests {
     }
 
     fn scope(block: Option<&str>) -> Result<DraftScope> {
-        DraftScope::of(&config(&["xtask"]), graph(), block)
+        DraftScope::load(&config(&["xtask"]), &workspace_root(), block)
     }
 
     fn rejected(block: &str) -> String {
@@ -209,6 +209,36 @@ mod tests {
         let scope = scope(None).unwrap();
 
         assert_eq!(scope.filterset(), "package(xtask)");
+    }
+
+    #[test]
+    fn package_scope_does_not_resolve_unrequested_dependencies() {
+        let temp = tempfile::tempdir().expect("fixture workspace");
+        let root = temp.path();
+        fs::create_dir(root.join("src")).expect("fixture sources");
+        fs::create_dir(root.join(".cargo")).expect("fixture Cargo configuration");
+        fs::create_dir(root.join("empty")).expect("empty dependency source");
+        fs::write(root.join("src/lib.rs"), "").expect("fixture library");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\n[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[dependencies]\nnot-in-fixture-registry = \"=0.0.0\"\n",
+        )
+        .expect("fixture manifest");
+        fs::write(
+            root.join(".cargo/config.toml"),
+            "[source.crates-io]\nreplace-with = \"fixture\"\n[source.fixture]\ndirectory = \"empty\"\n",
+        )
+        .expect("local dependency source");
+
+        for block in [None, Some("packages = [\"probe\"]")] {
+            let scope = DraftScope::load(&config(&["probe"]), root, block)
+                .expect("package selection needs only workspace members");
+            assert_eq!(scope.filterset(), "package(probe)");
+        }
+
+        let error = DraftScope::load(&config(&["probe"]), root, Some("filter = \"deps(probe)\""))
+            .expect_err("dependency filters still resolve dependencies");
+        assert!(format!("{error:#}").contains("not-in-fixture-registry"));
     }
 
     #[test]
@@ -274,7 +304,7 @@ mod tests {
 
     #[test]
     fn a_required_package_outside_the_workspace_is_rejected() {
-        let error = DraftScope::of(&config(&["kithara-nothing"]), graph(), None)
+        let error = DraftScope::of(&config(&["kithara-nothing"]), graph(), PrTests::default())
             .expect_err("the required list names a workspace package");
 
         assert!(format!("{error:#}").contains("`kithara-nothing`"));
@@ -308,10 +338,9 @@ mod tests {
     /// The reviewed list names packages of this workspace.
     #[test]
     fn the_repository_required_list_names_workspace_packages() {
-        let config =
-            crate::common::project::ProjectConfig::load(&crate::test::repository_tests::root())
-                .expect("the repository configuration");
+        let config = crate::common::project::ProjectConfig::load(&workspace_root())
+            .expect("the repository configuration");
 
-        DraftScope::of(&config.test, graph(), None).expect("the required list loads");
+        DraftScope::of(&config.test, graph(), PrTests::default()).expect("the required list loads");
     }
 }

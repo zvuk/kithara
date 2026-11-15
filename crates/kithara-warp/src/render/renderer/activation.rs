@@ -7,6 +7,7 @@ use super::{
     core::{PreparedQuantum, WarpRenderer},
     mapping::source_demand,
 };
+use crate::Semitones;
 
 impl<S> WarpRenderer<S>
 where
@@ -71,8 +72,9 @@ where
         output_limit: usize,
     ) -> Result<PreparedQuantum, ElasticError> {
         if !self.requires_staging()
-            || self.trajectory.constant_unity()
-            || (!self.current_keylock && self.trajectory.unity_interval())
+            || (self.pitch_controls().shift() == Semitones::DEFAULT
+                && (self.trajectory.constant_unity()
+                    || (!self.current_pitch_engine && self.trajectory.unity_interval())))
         {
             return self.prepare_unity_quantum(meta, remaining, output_limit);
         }

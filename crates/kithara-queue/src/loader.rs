@@ -297,9 +297,7 @@ mod tests {
     use kithara_platform::time::{Duration, WallInstant, sleep, timeout};
     use kithara_play::{ArtifactSource, PlayWorker, PlayWorkerConfig, mock};
     use kithara_render::{LaneProtocol, LaneStart, Open};
-    use kithara_sync::SpeedCurve;
     use kithara_test_utils::{TestTempDir, kithara, temp_dir};
-    use kithara_warp::StretchKind;
     use kithara_worker::Worker;
 
     use super::*;
@@ -561,15 +559,7 @@ mod tests {
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     async fn open(item: ResourceLoad<TestPools>) -> Result<(), LoadRefusal> {
         let (_sender, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
-        let mut opened = pin!(item.open(
-            Duration::ZERO,
-            LaneStart {
-                speed: SpeedCurve::Constant(1.0),
-                keylock: false,
-                backend: StretchKind::default(),
-            },
-            inbox,
-        ));
+        let mut opened = pin!(item.open(Duration::ZERO, LaneStart::default(), inbox,));
         loop {
             hang_tick!();
             if let Ok(result) = timeout(Duration::from_millis(10), opened.as_mut()).await {
