@@ -358,7 +358,6 @@ async fn a_prepared_delayed_final_packet_stitches_its_successor_inside_the_same_
     use crate::worker::{
         PcmPacket,
         packet_tests::{PacketRing, chunk},
-        scheduler::StreamWake,
     };
 
     let (mut processor, mut control) = make_processor();
@@ -366,14 +365,7 @@ async fn a_prepared_delayed_final_packet_stitches_its_successor_inside_the_same_
     let successor = Slot::new(1);
     let spec = AudioSpec::new(2, RATE);
     let wake = kithara_worker::Wake::default();
-    let packets = PacketRing::with_wake(
-        spec,
-        Duration::from_secs(1),
-        8,
-        8,
-        true,
-        StreamWake::new(wake.clone()),
-    );
+    let packets = PacketRing::with_wake(spec, Duration::from_secs(1), 8, 8, true, wake.clone());
     attach(
         &mut control,
         leading,

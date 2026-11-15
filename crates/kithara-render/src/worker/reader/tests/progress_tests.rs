@@ -7,7 +7,7 @@ use kithara_worker::{
 use super::transport_tests::receive_notice;
 use crate::{
     mock::pcm_fixture::{PcmFixture, chunk},
-    worker::{PcmPacket, reader::PcmProducer, scheduler::StreamWake, wait_for_packet},
+    worker::{PcmPacket, reader::PcmProducer, wait_for_packet},
 };
 
 struct ProducerTask {
@@ -103,7 +103,7 @@ async fn a_live_producer_serves_consumed_packets_without_underruns(#[case] block
     );
     let wake = dispatcher.wake_handle();
     assert!(wake_slot.set(wake.clone()).is_ok());
-    let mut fixture = PcmFixture::with_wake(4, blocking, StreamWake::new(wake.clone())).await;
+    let mut fixture = PcmFixture::with_wake(4, blocking, wake.clone()).await;
     let producer = fixture.producer.take().expect("producer owner");
     let _task = dispatcher
         .register(TaskConfig::new(), move |_| ProducerTask {

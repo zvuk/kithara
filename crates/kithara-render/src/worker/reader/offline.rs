@@ -1,5 +1,4 @@
 use kithara_platform::sync::{WaitGate, Weak};
-use kithara_stream::WorkerWake;
 use kithara_test_utils::kithara;
 use ringbuf::traits::{Consumer, Observer};
 

@@ -5,7 +5,8 @@ use std::{
 };
 
 use kithara_audio::{
-    Audio, AudioConfig, AudioReadError, ResamplerBackend, SeekOutcome, TrackFailureKind,
+    Audio, AudioConfig, AudioReadError, AudioSession, ResamplerBackend, SeekOutcome,
+    TrackFailureKind,
 };
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_command::{ChannelConfig, Inbox, Sender, channel};
@@ -22,8 +23,8 @@ use kithara_worker::{
 };
 
 use super::{
-    DecoderNode, OpenedPcm, PcmReceiver, PlayWorkerConfig, TrackConfig,
-    reader::PcmLead,
+    DecoderNode, OpenedPcm, PlayWorkerConfig, TrackConfig,
+    reader::{PcmLead, PcmProducer},
     scheduler::{PlaybackObserver, StreamWake},
     track::pcm_quantum,
 };
@@ -224,11 +225,11 @@ where
             }));
         }
         let (opened, lane) = {
-            let wake = StreamWake::new(self.0.dispatcher.wake_handle());
+            let wake = self.0.dispatcher.wake_handle();
             // Keep cold source preparation out of the callers' inline future state.
             let prepared = Box::pin(Audio::<Stream<T>>::prepare(
                 audio,
-                Arc::new(wake.clone()),
+                Arc::new(StreamWake::new(wake.clone())),
                 self.pools().clone(),
             ))
             .await;
@@ -245,12 +246,13 @@ where
                 end_timestamp: position,
                 ..AudioChunkInfo::default()
             };
-            let (receiver, port) = PcmReceiver::new(
+            let (receiver, port) = PcmProducer::new(
                 PcmLead::new(audio_buffer_chunks, pcm_quantum(&warp)),
                 block_on_underrun,
                 wake,
-                &audio,
+                spec,
                 position,
+                AudioSession::event_bus(&audio).clone(),
             );
             let opened = OpenedPcm {
                 receiver,

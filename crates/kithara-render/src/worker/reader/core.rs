@@ -1,20 +1,20 @@
 use std::fmt;
 
-use kithara_audio::{Audio, AudioEvent, AudioSession};
+use kithara_audio::AudioEvent;
 use kithara_events::EventBus;
 use kithara_platform::{
     sync::{Arc, ThreadGate, WaitGate, Weak},
     time::Duration,
 };
 use kithara_signal::AudioSpec;
-use kithara_stream::WorkerWake;
+use kithara_worker::Wake;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Consumer, Observer, Producer, Split},
 };
 use triple_buffer::{Input, Output, triple_buffer};
 
-use super::{super::scheduler::StreamWake, lead::PcmLead, packet::PcmPacket};
+use super::{lead::PcmLead, packet::PcmPacket};
 
 pub(in crate::worker) struct PcmProducer {
     pub(in crate::worker) forward: HeapProd<PcmPacket>,
@@ -37,6 +37,43 @@ impl Drop for FinalWake {
 }
 
 impl PcmProducer {
+    /// The reverse ring fits the forward slots, the reader-held packet, and one
+    /// worker push between recycles, so returning an in-flight packet never fails.
+    pub(in crate::worker) fn new(
+        lead: PcmLead,
+        block_on_underrun: bool,
+        wake: Wake,
+        spec: AudioSpec,
+        position: Duration,
+        events: EventBus,
+    ) -> (PcmReceiver, Self) {
+        let (forward_tx, forward_rx) = HeapRb::new(lead.slots()).split();
+        let (reverse_tx, reverse_rx) = HeapRb::new(lead.slots() + 2).split();
+        let (playing_tx, playing_rx) = triple_buffer(&false);
+        let ready = block_on_underrun.then(|| Arc::new(ThreadGate::default()));
+        (
+            PcmReceiver {
+                forward: forward_rx,
+                reverse: reverse_tx,
+                playing: playing_tx,
+                ready: ready.as_ref().map(Arc::downgrade),
+                wake,
+                spec,
+                position,
+                frontier: position,
+            },
+            Self {
+                forward: forward_tx,
+                reverse: reverse_rx,
+                lead,
+                playing: playing_rx,
+                ready: FinalWake(ready),
+                events,
+                output_pending: false,
+            },
+        )
+    }
+
     /// Admit one packet into the lead, or hand it back while the lead or the
     /// ring is full.
     pub(in crate::worker) fn push(&mut self, packet: PcmPacket) -> Result<(), PcmPacket> {
@@ -83,49 +120,13 @@ pub struct PcmReceiver {
     pub(super) playing: Input<bool>,
     // The producer and active off-RT waiters own the signal.
     pub(super) ready: Option<Weak<ThreadGate>>,
-    pub(super) wake: StreamWake,
+    pub(super) wake: Wake,
     pub(super) spec: AudioSpec,
     pub(super) position: Duration,
     pub(super) frontier: Duration,
 }
 
 impl PcmReceiver {
-    /// The reverse ring fits the forward slots, the reader-held packet, and one
-    /// worker push between recycles, so returning an in-flight packet never fails.
-    pub(in crate::worker) fn new<T>(
-        lead: PcmLead,
-        block_on_underrun: bool,
-        wake: StreamWake,
-        audio: &Audio<T>,
-        position: Duration,
-    ) -> (Self, PcmProducer) {
-        let (forward_tx, forward_rx) = HeapRb::new(lead.slots()).split();
-        let (reverse_tx, reverse_rx) = HeapRb::new(lead.slots() + 2).split();
-        let (playing_tx, playing_rx) = triple_buffer(&false);
-        let ready = block_on_underrun.then(|| Arc::new(ThreadGate::default()));
-        (
-            Self {
-                forward: forward_rx,
-                reverse: reverse_tx,
-                playing: playing_tx,
-                ready: ready.as_ref().map(Arc::downgrade),
-                wake,
-                spec: audio.spec(),
-                position,
-                frontier: position,
-            },
-            PcmProducer {
-                forward: forward_tx,
-                reverse: reverse_rx,
-                lead,
-                playing: playing_rx,
-                ready: FinalWake(ready),
-                events: AudioSession::event_bus(audio).clone(),
-                output_pending: false,
-            },
-        )
-    }
-
     #[must_use]
     pub const fn spec(&self) -> AudioSpec {
         self.spec

@@ -5,7 +5,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
-use kithara_stream::{PlayheadRead, PlayheadState, PlayheadWrite, WorkerWake};
+use kithara_stream::{PlayheadRead, PlayheadState, PlayheadWrite};
 use kithara_test_utils::{
     bufpool::{pools, sample_buffer},
     kithara,
@@ -22,7 +22,6 @@ use super::{
     core::{FinalWake, PcmProducer},
     lead::PcmLead,
 };
-use crate::worker::scheduler::StreamWake;
 
 pub struct PacketRing {
     pub receiver: Option<PcmReceiver>,
@@ -34,14 +33,7 @@ pub struct PacketRing {
 impl PacketRing {
     #[must_use]
     pub fn new(spec: AudioSpec, duration: Duration, capacity: usize) -> Self {
-        Self::with_wake(
-            spec,
-            duration,
-            capacity,
-            capacity,
-            false,
-            StreamWake::new(Wake::default()),
-        )
+        Self::with_wake(spec, duration, capacity, capacity, false, Wake::default())
     }
 
     pub(crate) fn with_wake(
@@ -50,7 +42,7 @@ impl PacketRing {
         capacity: usize,
         reverse_capacity: usize,
         blocking: bool,
-        wake: StreamWake,
+        wake: Wake,
     ) -> Self {
         Self::with_wake_and_origin(
             spec,
@@ -76,7 +68,7 @@ impl PacketRing {
             capacity,
             capacity,
             false,
-            StreamWake::new(Wake::default()),
+            Wake::default(),
             origin,
         )
     }
@@ -90,7 +82,7 @@ impl PacketRing {
             capacity,
             capacity,
             false,
-            StreamWake::new(Wake::default()),
+            Wake::default(),
             Duration::ZERO,
         )
     }
@@ -101,7 +93,7 @@ impl PacketRing {
         capacity: usize,
         reverse_capacity: usize,
         blocking: bool,
-        wake: StreamWake,
+        wake: Wake,
         origin: Duration,
     ) -> Self {
         Self::with_lead(
@@ -115,28 +107,13 @@ impl PacketRing {
         )
     }
 
-    /// A ring whose producer bounds its lead in frames, sized like a loaded lane.
-    #[cfg(test)]
-    pub(in crate::worker) fn framed(spec: AudioSpec, lead: PcmLead, wake: StreamWake) -> Self {
-        let slots = lead.slots();
-        Self::with_lead(
-            spec,
-            Some(Duration::from_secs(1)),
-            (slots, slots + 2),
-            lead,
-            false,
-            wake,
-            Duration::ZERO,
-        )
-    }
-
     fn with_lead(
         spec: AudioSpec,
         duration: Option<Duration>,
         (capacity, reverse_capacity): (usize, usize),
         lead: PcmLead,
         blocking: bool,
-        wake: StreamWake,
+        wake: Wake,
         origin: Duration,
     ) -> Self {
         let (forward_tx, forward_rx) = HeapRb::new(capacity).split();
@@ -293,7 +270,7 @@ pub(in crate::worker) fn packet_fixture(
             forward: received,
             reverse: returned,
             ready: ready.as_ref().map(Arc::downgrade),
-            wake: StreamWake::new(dispatcher.wake_handle()),
+            wake: dispatcher.wake_handle(),
             position: Duration::ZERO,
             frontier: Duration::ZERO,
         },
