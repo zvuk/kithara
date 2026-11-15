@@ -10,8 +10,8 @@ use kithara_platform::{
     sync::{Arc, Mutex},
 };
 use kithara_stream::{
-    ByteMap, ConstructionGate, DeferredWake, MediaInfo, OpenedReader, PlayheadWrite, ReaderControl,
-    SourceProbe, SourceSeekAnchor, Stream, StreamResult, StreamType, VariantControl,
+    ByteMap, ConstructionGate, DeferredWake, MediaInfo, OpenedReader, PendingReason, PlayheadWrite,
+    ReaderControl, SourceProbe, SourceSeekAnchor, Stream, StreamResult, StreamType, VariantControl,
     format_change_segment_range, resolve_seek_target,
 };
 
@@ -143,6 +143,16 @@ impl<T: StreamType> SharedStream<T> {
         Ok(new_pos)
     }
 
+    fn is_blocking(&self) -> bool {
+        self.construction_gate
+            .as_ref()
+            .is_some_and(ConstructionGate::is_armed)
+            || self
+                .reader_control
+                .as_ref()
+                .is_some_and(ReaderControl::is_blocking)
+    }
+
     fn with_reader(
         &self,
         construction_gate: ConstructionGate,
@@ -210,15 +220,7 @@ impl<T: StreamType> Read for SharedStream<T> {
     /// the first not-ready probe.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let mut stream = self.inner.lock();
-        if self
-            .construction_gate
-            .as_ref()
-            .is_some_and(ConstructionGate::is_armed)
-            || self
-                .reader_control
-                .as_ref()
-                .is_some_and(ReaderControl::is_blocking)
-        {
+        if self.is_blocking() {
             stream.read_with_control(buf, self.reader_control.as_ref())
         } else {
             stream.probe_read(buf)
@@ -227,16 +229,23 @@ impl<T: StreamType> Read for SharedStream<T> {
 }
 
 impl<T: StreamType> Seek for SharedStream<T> {
-    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        if self
-            .construction_gate
-            .as_ref()
-            .is_some_and(ConstructionGate::is_armed)
-            || self
+    fn stream_position(&mut self) -> io::Result<u64> {
+        if self.is_blocking()
+            && self
                 .reader_control
                 .as_ref()
-                .is_some_and(ReaderControl::is_blocking)
+                .is_some_and(ReaderControl::is_cancelled)
         {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                PendingReason::SessionRetired,
+            ));
+        }
+        Ok(self.probe.position())
+    }
+
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        if self.is_blocking() {
             self.inner
                 .lock()
                 .seek_with_control(pos, self.reader_control.as_ref())

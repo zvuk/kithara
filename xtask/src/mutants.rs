@@ -426,10 +426,8 @@ mod tests {
     /// a surviving mutant, and nothing on the push gate could say so.
     #[test]
     fn the_shipped_suites_still_name_the_files_they_mutate() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask sits beside the workspace root");
-        MutationConfig::load(root).unwrap_or_else(|error| {
+        let root = crate::testing::workspace::root();
+        MutationConfig::load(&root).unwrap_or_else(|error| {
             panic!(
                 "the shipped {CONFIG_PATH} is unusable: {error:#}",
                 CONFIG_PATH = consts::CONFIG_PATH

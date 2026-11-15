@@ -4,14 +4,11 @@ use std::{
     ffi::{OsStr, OsString},
     fs,
     path::{Path as FsPath, PathBuf},
-    thread,
-    time::Instant,
 };
 
 use anyhow::{Context, Result, bail};
 use kithara_devtools::Ctx;
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 
 use super::{
     build_cache,
@@ -96,6 +93,20 @@ fn cache_lease(cache_root: &FsPath) -> Result<PathBuf> {
     Ok(cache_root.join(".kithara-ci-leases").join(job_owner()?))
 }
 
+fn kache_local_root(shared: &FsPath, var: &dyn Fn(&str) -> Option<OsString>) -> Result<PathBuf> {
+    if let Some(root) = var(consts::KACHE_LOCAL_ROOT_ENV) {
+        let root = PathBuf::from(root);
+        anyhow::ensure!(root.is_absolute(), "compiler-cache root must be absolute");
+        return Ok(root);
+    }
+    anyhow::ensure!(
+        !ci_in(var),
+        "CI executor must configure {} on its local filesystem",
+        consts::KACHE_LOCAL_ROOT_ENV
+    );
+    Ok(shared.to_path_buf())
+}
+
 /// Where the compiler cache keeps its local store, and how large it may grow.
 struct SccachePaths {
     directory: PathBuf,
@@ -103,18 +114,11 @@ struct SccachePaths {
 }
 
 impl SccachePaths {
-    /// The cache a job compiles through, or none: a Windows target builds
-    /// without it, and so does a cache group that does not use it.
-    fn for_job(
-        target_is_windows: bool,
-        cache_root: &FsPath,
-        config: &CiConfig,
-        cache_group: CacheGroup,
-    ) -> Option<Self> {
-        (!target_is_windows && cache_group.uses_sccache()).then(|| Self {
+    fn for_job(cache_root: &FsPath, config: &CiConfig) -> Self {
+        Self {
             directory: cache_root.join("sccache"),
             cache_size: config.host.sccache_size.clone(),
-        })
+        }
     }
 }
 
@@ -128,7 +132,8 @@ pub(crate) struct CiEnvironment {
     pub(crate) temp: PathBuf,
     leases: [PathBuf; 2],
     /// The job's own kache, its directory removed when the job ends.
-    kache: Option<KacheJob>,
+    #[field(get, vis = "pub(crate)")]
+    kache: KacheJob,
     /// Held for the life of the job so a reclaim — this job's own or a sibling
     /// job's — leaves the directory this one builds into alone. The ceiling
     /// still charges its bytes; the claim only says they cannot be taken back.
@@ -167,7 +172,7 @@ impl CiEnvironment {
             ensure_room_for_a_job(config, volume)?;
         }
 
-        let sccache = SccachePaths::for_job(cfg!(windows), &cache_root, config, cache_group);
+        let sccache = SccachePaths::for_job(&cache_root, config);
         let gradle_home = cache_root.join("gradle");
         let fixture_cache = shared_root.join(trust.as_str()).join("fixtures");
         let leases = [cache_lease(&cache_root)?, cache_lease(&fixture_cache)?];
@@ -186,11 +191,8 @@ impl CiEnvironment {
             fs::create_dir_all(directory)
                 .with_context(|| format!("creating CI directory {}", directory.display()))?;
         }
-        if let Some(sccache) = &sccache {
-            fs::create_dir_all(&sccache.directory).with_context(|| {
-                format!("creating CI directory {}", sccache.directory.display())
-            })?;
-        }
+        fs::create_dir_all(&sccache.directory)
+            .with_context(|| format!("creating CI directory {}", sccache.directory.display()))?;
         for lease in &leases {
             let lease_root = lease
                 .parent()
@@ -248,28 +250,27 @@ impl CiEnvironment {
             "RUSTUP_HOME",
             env::var_os("RUSTUP_HOME").unwrap_or_else(|| home.join(".rustup").into_os_string()),
         );
-        let kache = match &sccache {
-            Some(sccache) => {
-                insert_sccache_environment(
-                    &mut vars,
-                    sccache,
-                    &project_root,
-                    ctx.config.tools.program("sccache"),
-                );
-                let kache = KacheJob::prepare(
-                    temp.join("kache").join(job_owner()?),
-                    Some(LocalStore {
-                        directory: &cache_root.join("kache"),
-                        max_size: &sccache.cache_size,
-                    }),
-                )?;
-                for (name, value) in kache.environment(&ctx.config.tools) {
-                    insert(&mut vars, name, value);
-                }
-                Some(kache)
-            }
-            None => None,
-        };
+        insert_sccache_environment(
+            &mut vars,
+            &sccache,
+            &project_root,
+            ctx.config.tools.program("sccache"),
+        );
+        let kache_root = kache_local_root(&shared_root, &process_var)?;
+        let kache_store = kache_root
+            .join(trust.as_str())
+            .join(&platform)
+            .join("kache");
+        let kache = KacheJob::prepare(
+            &temp.join("kache").join(job_owner()?),
+            Some(LocalStore {
+                directory: &kache_store,
+                max_size: &sccache.cache_size,
+            }),
+        )?;
+        for (name, value) in kache.environment(&ctx.config.tools) {
+            insert(&mut vars, name, value);
+        }
         insert(&mut vars, "SWIFTPM_CACHE_PATH", &swiftpm_cache);
         insert(&mut vars, "TMPDIR", &temp);
         insert(
@@ -305,11 +306,6 @@ impl CiEnvironment {
 
     pub(crate) fn vars(&self) -> BTreeMap<OsString, OsString> {
         self.vars.clone()
-    }
-
-    /// The kache the job compiles through, when it compiles through one.
-    pub(crate) const fn kache(&self) -> Option<&KacheJob> {
-        self.kache.as_ref()
     }
 }
 
@@ -398,155 +394,25 @@ pub(super) fn process_var(name: &str) -> Option<OsString> {
     env::var_os(name)
 }
 
-/// Refuse a job only once there is nothing left to reclaim and nothing left to
-/// wait for.
-///
-/// The gate and the periodic cleanup never spoke: cleanup ran on a timer and
-/// the job arrived when it arrived, so whether a job started came down to how
-/// long ago the timer fired. A host under a build loses gigabytes a minute,
-/// enough to spend a whole pass's worth of reclaimed space before the next one,
-/// and the job landing in that window was refused while tens of gigabytes of
-/// evictable compiler cache sat beside it. Growing the disk only moves the
-/// window; asking for the space back closes it.
-///
-/// Asking once does not, because what a reclaim cannot touch is not lost — it
-/// is held. A checkout an active job leases is skipped by design, so a host
-/// whose slots are all compiling offers no candidate at all, and the refusal
-/// reads as "no room" when it means "not yet". Six merge requests were refused
-/// this way in one afternoon while the branches beside them went green on the
-/// same base; one was 53 MB short, and every one passed on a manual retry
-/// against unchanged code. So the gate re-asks until the room appears or the
-/// profile's wait runs out, and the retry it was asking a human for costs a
-/// poll instead of a whole job.
-///
-/// The room asked for is on `volume`, the one the job builds on.
+/// Admits a GitLab job by the room its host profile names, on `volume`, the
+/// one it builds on, after holding the host's build caches to their ceiling.
 fn ensure_room_for_a_job(config: &CiConfig, volume: &FsPath) -> Result<()> {
-    let required = config.host.free_bytes_for_a_job();
-    if free_bytes(volume)? >= required {
-        return Ok(());
-    }
     let workspaces = gitlab_workspaces(config.host.build_root());
     let cache = config.host.host_root.join("cache");
-    let deadline = Instant::now() + config.host.job_room_wait();
-    loop {
-        let free = free_bytes(volume)?;
-        let reclaimed_from = reclaim_build_caches(&workspaces, &cache, free, required)?;
-        let free = free_bytes(volume)?;
-        if free >= required {
-            return Ok(());
-        }
-        let Some(left) = deadline.checked_duration_since(Instant::now()) else {
-            bail!(
-                "{}",
-                refusal(volume, free, required, &workspaces, reclaimed_from)
-            );
-        };
-        warn!(
-            free_bytes = free,
-            required_bytes = required,
-            shortfall_bytes = required.saturating_sub(free),
-            seconds_left = left.as_secs(),
-            "waiting for the CI volume to give the job room"
-        );
-        thread::sleep(consts::JOB_ROOM_POLL.min(left));
-    }
+    let targets = build_cache::budget_roots(&workspaces, &cache)?;
+    build_cache::enforce_budget(&targets, config.host.build_cache_budget_bytes()?)?;
+    build_cache::admit(
+        volume,
+        &[&workspaces],
+        &|| build_cache::budget_roots(&workspaces, &cache),
+        config.host.free_bytes_for_a_job(),
+        config.host.job_room_wait(),
+    )
 }
 
 /// The checkouts whose build caches the budget owns.
 fn gitlab_workspaces(build_root: &FsPath) -> PathBuf {
     build_root.join("workspaces/gitlab")
-}
-
-/// Why the job is refused, in the terms of what the reclaim could act on.
-///
-/// Saying "after reclaiming build caches" when there was nothing to reclaim
-/// pointed every reading of this refusal at the compiler cache, which was
-/// neither holding the space nor able to give any back: a workspace a live job
-/// leases is skipped, so on a host whose only checkout is the running one the
-/// reclaim has no candidate at all and the sentence described work that never
-/// happened. What an operator needs at that point is the opposite — that the
-/// space is held somewhere this gate does not look.
-fn refusal(
-    volume: &FsPath,
-    free: u64,
-    required: u64,
-    workspaces: &FsPath,
-    reclaimed_from: usize,
-) -> String {
-    if reclaimed_from == 0 {
-        return format!(
-            "the volume holding {} has {free} bytes free and a job needs {required}; no \
-             reclaimable build cache sits under {}, so the space is held by live work or by \
-             trees the build-cache budget does not own",
-            volume.display(),
-            workspaces.display()
-        );
-    }
-    format!(
-        "the volume holding {} has {free} bytes free after reclaiming from {reclaimed_from} \
-         build cache(s); a job needs {required} bytes",
-        volume.display()
-    )
-}
-
-/// Return what this host accumulated for itself, before deciding there is no
-/// room for the job.
-///
-/// The gate and the periodic cleanup never spoke: cleanup ran on a timer and
-/// the job arrived when it arrived, so whether a job started depended on how
-/// long ago the timer fired. A host under a build loses gigabytes a minute,
-/// which is enough to spend a whole pass's worth of reclaimed space before the
-/// next one — and the job that lands in that window is refused while tens of
-/// gigabytes of evictable compiler cache sit beside it. Reclaiming here makes
-/// the refusal mean what it says: the space is held by live work, not by
-/// leftovers.
-///
-/// What is reclaimed is the shortfall, not the host's ceiling. The ceiling is
-/// the hourly pass's question and it answers "nothing to do" whenever the caches
-/// happen to sit under it — which is exactly the state a refused job finds
-/// itself in, since a full volume is rarely full of build caches alone.
-///
-/// Failing to reclaim is not itself a refusal — the gate re-reads free space
-/// and answers on that.
-fn reclaim_build_caches(
-    workspaces: &FsPath,
-    cache: &FsPath,
-    free: u64,
-    required: u64,
-) -> Result<usize> {
-    let targets = build_cache::budget_roots(workspaces, cache)?;
-    if targets.is_empty() {
-        warn!(
-            free_bytes = free,
-            required_bytes = required,
-            root = %workspaces.display(),
-            "no reclaimable build cache to free before refusing the job"
-        );
-        return Ok(0);
-    }
-    let shortfall = required.saturating_sub(free);
-    warn!(
-        free_bytes = free,
-        required_bytes = required,
-        shortfall_bytes = shortfall,
-        targets = targets.len(),
-        "reclaiming build caches before refusing the job"
-    );
-    build_cache::reclaim_at_least(&targets, shortfall)?;
-    Ok(targets.len())
-}
-
-/// How much room the cache still has. A job reads this through whatever the
-/// executor mounted the cache with — a virtiofs share into an ephemeral macOS
-/// guest, a bind mount into a container — and those report the filesystem
-/// backing the share, which is the host's whole disk rather than the CI volume.
-/// Free space survives that translation and still answers the question a job
-/// asks; occupancy does not, and comparing the host's disk against a threshold
-/// sized for the CI volume rejected every macOS job while the volume was barely
-/// half full.
-fn free_bytes(path: &FsPath) -> Result<u64> {
-    fs4::available_space(path)
-        .with_context(|| format!("reading available space for {}", path.display()))
 }
 
 fn set_path(
@@ -633,8 +499,13 @@ mod tests {
 
     use super::*;
 
+    /// Reclaims every build cache the GitLab gate weighs under `root`, and
+    /// says how many build roots it found them in.
     fn reclaim(root: &FsPath) -> usize {
-        reclaim_build_caches(&gitlab_workspaces(root), &root.join("cache"), 0, u64::MAX).unwrap()
+        let roots =
+            build_cache::budget_roots(&gitlab_workspaces(root), &root.join("cache")).unwrap();
+        build_cache::reclaim_at_least(&roots, u64::MAX).unwrap();
+        roots.len()
     }
 
     #[cfg(target_os = "macos")]
@@ -653,23 +524,22 @@ mod tests {
     }
 
     #[test]
-    fn the_windows_cache_group_compiles_without_sccache() {
+    fn the_windows_cache_group_uses_the_compiler_cache() {
         let config = super::super::config::fixture();
 
-        let paths =
-            SccachePaths::for_job(false, FsPath::new("/cache"), &config, CacheGroup::Windows);
-
-        assert!(paths.is_none());
+        let root = FsPath::new("C:/cache/review/windows-x86_64");
+        let paths = SccachePaths::for_job(root, &config);
+        assert_eq!(paths.directory, root.join("sccache"));
+        assert_eq!(paths.cache_size, config.host.sccache_size);
     }
 
     #[test]
-    fn windows_target_disables_sccache_independently_of_lane() {
+    fn windows_targets_use_the_compiler_cache_for_every_lane() {
         let config = super::super::config::fixture();
         let root = FsPath::new("/cache");
 
-        let paths = SccachePaths::for_job(true, root, &config, CacheGroup::Macos);
-
-        assert!(paths.is_none());
+        let paths = SccachePaths::for_job(root, &config);
+        assert_eq!(paths.directory, root.join("sccache"));
     }
 
     #[test]
@@ -684,8 +554,7 @@ mod tests {
         let config = super::super::config::fixture();
         let root = FsPath::new("/cache/review/macos-aarch64");
 
-        let paths = SccachePaths::for_job(false, root, &config, CacheGroup::Macos)
-            .expect("a macOS job compiles through the cache");
+        let paths = SccachePaths::for_job(root, &config);
 
         assert_eq!(paths.directory, root.join("sccache"));
         assert_eq!(paths.cache_size, config.host.sccache_size);
@@ -795,9 +664,8 @@ mod tests {
                     "{name} is the executor's to name, or nobody's"
                 );
             }
-            let cache_root =
-                root.join("review")
-                    .join(format!("{}-{}", env::consts::OS, env::consts::ARCH));
+            let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
+            let cache_root = root.join("review").join(platform);
             let kache_config = compiles_through_kache(&vars, &ctx, &config, &cache_root);
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_DIR")).map(OsString::as_os_str),
@@ -875,6 +743,7 @@ mod tests {
             .env(consts::LANE_PREPARED, "1")
             .env(consts::CACHE_ROOT, directory.path())
             .env("KITHARA_CI_CACHE_ROOT", directory.path())
+            .env(consts::KACHE_LOCAL_ROOT_ENV, directory.path())
             .env("KITHARA_CACHE_TRUST", "review")
             .env("SCCACHE_BUCKET", "kithara-review")
             .env("SCCACHE_ENDPOINT", "http://kithara-ci-cache:9000")
@@ -1092,42 +961,6 @@ mod tests {
                 .to_string()
                 .contains(&volume.path().display().to_string()),
             "the refusal must name the volume the job builds on: {error}"
-        );
-    }
-
-    #[test]
-    fn a_refusal_with_nothing_to_reclaim_does_not_claim_it_reclaimed() {
-        let message = refusal(
-            FsPath::new("/ci/builds/kithara.target/lint"),
-            10,
-            20,
-            FsPath::new("/ci/workspaces/gitlab"),
-            0,
-        );
-
-        assert!(
-            !message.contains("after reclaiming"),
-            "a reclaim that never had a candidate must not be reported as done: {message}"
-        );
-        assert!(
-            message.contains("no reclaimable build cache sits under /ci/workspaces/gitlab"),
-            "the refusal must name the root it found nothing under: {message}"
-        );
-    }
-
-    #[test]
-    fn a_refusal_that_reclaimed_says_how_much_it_had_to_work_with() {
-        let message = refusal(
-            FsPath::new("/ci/builds/kithara.target/lint"),
-            10,
-            20,
-            FsPath::new("/ci/workspaces/gitlab"),
-            3,
-        );
-
-        assert!(
-            message.contains("after reclaiming from 3 build cache(s)"),
-            "the refusal must say how many caches it emptied: {message}"
         );
     }
 

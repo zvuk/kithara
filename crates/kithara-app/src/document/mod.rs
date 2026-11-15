@@ -9,7 +9,7 @@ mod schema;
 
 pub use assemble::AssembleError;
 pub use env::MissingEnv;
-pub use load::{Config, LoadError};
+pub use load::{Config, DisabledProvider, LoadError};
 pub use policy::PolicyError;
 #[cfg(all(feature = "broadcast", test))]
 pub(crate) use schema::Document;

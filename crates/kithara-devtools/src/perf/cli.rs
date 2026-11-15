@@ -9,7 +9,7 @@ use clap::{Args, Subcommand};
 use crate::{
     Ctx,
     perf::{
-        lanes::primary_lane_name,
+        lanes::RunPaths,
         matrix::{self, MatrixParams},
         profile::{self, ProfileParams},
         report, slow,
@@ -25,6 +25,8 @@ pub struct PerfArgs {
 
 #[derive(Debug, Subcommand)]
 enum PerfCommand {
+    /// Build, select or dispatch workspace Criterion benchmarks.
+    Bench(super::bench::BenchArgs),
     /// Run the full suite across feature lanes, saving `JUnit` + metadata.
     Matrix(MatrixCli),
     /// Profile every slow-list test in isolation under samply.
@@ -68,6 +70,9 @@ struct SlowCli {
     /// Slow threshold in milliseconds.
     #[arg(long, default_value_t = 1000.0)]
     threshold_ms: f64,
+    /// Fail if any selected measurement reaches the threshold or evidence is incomplete.
+    #[arg(long)]
+    check: bool,
 }
 
 #[derive(Debug, Args)]
@@ -118,6 +123,7 @@ struct TraceCli {
 
 pub(crate) fn run(args: &PerfArgs, ctx: &Ctx) -> Result<()> {
     match &args.command {
+        PerfCommand::Bench(args) => super::bench::run(args, ctx),
         PerfCommand::Matrix(cli) => {
             let run_id = match &cli.run_id {
                 Some(id) => id.clone(),
@@ -131,33 +137,44 @@ pub(crate) fn run(args: &PerfArgs, ctx: &Ctx) -> Result<()> {
                 lanes: cli.lanes.clone(),
                 extra: cli.extra.clone(),
             };
-            matrix::run(&params, &ctx.config)
+            matrix::run(&params, &ctx.config, &ctx.root)
         }
         PerfCommand::Profile(cli) => {
+            let data_dir = ctx.root.join(&cli.data_dir);
             let lane = match &cli.lane {
                 Some(lane) => lane.clone(),
-                None => primary_lane_name(&ctx.config.perf)?,
+                None => {
+                    slow::load_report(&RunPaths::new(&data_dir, &cli.run_id), &cli.run_id)?
+                        .primary_lane
+                }
             };
             let params = ProfileParams {
                 lane,
-                data_dir: cli.data_dir.clone(),
+                data_dir,
                 run_id: cli.run_id.clone(),
-                target_root: cli.target_root.clone(),
+                target_root: ctx.root.join(&cli.target_root),
                 timeout_secs: cli.timeout_secs,
                 limit: cli.limit,
             };
             profile::run(&params, &ctx.config)
         }
         PerfCommand::Report(cli) => {
+            let data_dir = ctx.root.join(&cli.data_dir);
             let lane = match &cli.lane {
                 Some(lane) => lane.clone(),
-                None => primary_lane_name(&ctx.config.perf)?,
+                None => {
+                    slow::load_report(&RunPaths::new(&data_dir, &cli.run_id), &cli.run_id)?
+                        .primary_lane
+                }
             };
-            report::run(&ctx.config, &cli.data_dir, &cli.run_id, &lane)
+            report::run(&ctx.config, &data_dir, &cli.run_id, &lane)
         }
-        PerfCommand::Slow(cli) => {
-            slow::run(&ctx.config, &cli.data_dir, &cli.run_id, cli.threshold_ms)
-        }
+        PerfCommand::Slow(cli) => slow::run(
+            &ctx.root.join(&cli.data_dir),
+            &cli.run_id,
+            cli.threshold_ms,
+            cli.check,
+        ),
         PerfCommand::Trace(cli) => {
             let params = TraceParams {
                 data_dir: cli.data_dir.clone(),

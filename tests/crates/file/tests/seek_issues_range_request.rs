@@ -30,10 +30,9 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
+    ModeledServer,
     bufpool_ext::{TestPools, pools},
-    hls_fixture::create_test_downloader,
 };
-use kithara_test_utils::TestHttpServer;
 
 const TOTAL: usize = 4096;
 /// Bytes the stalled head fetch delivers before it goes quiet forever.
@@ -114,7 +113,6 @@ async fn serve(State(state): State<RangeState>, headers: HeaderMap) -> Response 
 #[kithara::test(
     tokio,
     multi_thread,
-    flash(false),
     timeout(Duration::from_secs(20)),
     hang_timeout_secs(5)
 )]
@@ -125,11 +123,11 @@ async fn a_forward_seek_is_served_by_a_range_request() {
         .with_state(RangeState {
             first_range_start: Arc::clone(&first_range_start),
         });
-    let server = TestHttpServer::new(app).await;
+    let server = ModeledServer::new(app);
     let pools = pools();
 
     let config = FileConfig::for_src(server.url("/audio.mp3").into())
-        .downloader(create_test_downloader())
+        .downloader(server.downloader())
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)

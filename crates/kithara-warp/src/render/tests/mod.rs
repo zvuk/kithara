@@ -7,11 +7,11 @@ mod backend;
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-glide"))]
 mod entry;
 mod exact;
-mod fixtures;
+pub(in crate::render) mod fixtures;
 #[cfg(feature = "stretch-identity")]
-mod identity;
 mod playback;
 mod projection;
+mod retirement;
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
@@ -21,13 +21,13 @@ mod target;
 mod timeline;
 mod trajectory;
 
-use fixtures::{WarpRenderer, chunk, f64_of, renderer, spec};
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
-use fixtures::{dominant_bin, expected_bin, flush_serviced, render_serviced};
+use fixtures::{LaneFeed, dominant_bin, drain_tail, expected_bin, flush_serviced, samples};
+use fixtures::{WarpRenderer, chunk, f64_of, renderer, spec};
 
 #[cfg(any(
     feature = "stretch-signalsmith",

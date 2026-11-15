@@ -1,30 +1,54 @@
 use std::num::NonZeroUsize;
 
+use async_trait::async_trait;
+use bytes::Bytes;
+use http::{Request, Response};
 use kithara_assets::{AcquisitionResult, AssetResource, AssetStore, StorageBackend, WriteSide};
 use kithara_audio::AudioObserverSlot;
 use kithara_command::{ScopedReceipt, Seq};
 use kithara_download::{Downloader, DownloaderConfig};
 use kithara_events::TrackId;
-use kithara_net::{HttpClient, NetOptions};
+use kithara_net::{HttpBody, HttpClient, HttpTransport, NetError, NetOptions};
 use kithara_platform::{
     CancelToken,
     time::{Duration, timeout},
 };
 use kithara_play::{
-    DeckMixSettings, DeckMixerConfig, DeckPart, DeckPass, HostedDeck, Outbox, PlayWorker,
-    PlayWorkerConfig, Player, ResourceConfig, ResourceLoad, ResourcePrep, ResourceSrc,
-    TrackReceipt, mock, mock::DeckRig,
+    DeckMixSettings, DeckMixerConfig, DeckPart, DeckPass, HostedDeck, Outbox, PlayWorker, Player,
+    ResourceConfig, ResourceLoad, ResourcePrep, ResourceSrc, TrackReceipt, mock, mock::DeckRig,
 };
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_render::{
+    Dispatched, DispatcherCommand, PcmPacket,
+    mock::PacketRing,
+    rt::track::{PcmConsumer, PlayerResource},
+};
+use kithara_signal::{AudioChunk, FrameCount, SessionFrame};
 pub(crate) use kithara_test_utils::bufpool::{TestPools, pools};
-use kithara_test_utils::{TestTempDir, kithara};
+use kithara_test_utils::{TestTempDir, bufpool::sample_buffer, kithara};
+use kithara_warp::WarpConfig;
+use kithara_worker::Worker;
 
+pub(crate) use super::fixture::QueueFixture;
 use crate::{Queue, QueueCommand, QueueConfig, TrackSource};
 
+/// Fixtures are seeded into the store under `.invalid` hosts, so no request
+/// has a server to reach and none needs a real HTTP stack.
+struct NoNetwork;
+
+#[async_trait]
+impl HttpTransport for NoNetwork {
+    async fn open(&self, request: Request<Bytes>) -> Result<Response<HttpBody>, NetError> {
+        Err(NetError::Refused(format!(
+            "queue fixtures have no network: {}",
+            request.uri()
+        )))
+    }
+}
+
 pub(crate) fn downloader() -> Downloader {
-    let config = DownloaderConfig::for_client(HttpClient::new(
+    let config = DownloaderConfig::for_client(HttpClient::new_with_transport(
         NetOptions::default(),
-        pools(),
+        NoNetwork,
         CancelToken::never(),
     ));
     #[cfg(not(target_arch = "wasm32"))]
@@ -89,8 +113,10 @@ where
         suspended: false,
         now: SessionFrame::new(0),
         delivery: FrameCount::new(128),
+        deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
     let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
@@ -102,14 +128,16 @@ where
 /// # Panics
 /// Panics if fixture creation, path conversion, or command admission fails.
 #[must_use]
-pub(crate) fn pending_selection() -> (
+pub(crate) fn pending_selection(
+    worker: &Worker,
+) -> (
     Queue<TestPools>,
     TrackId,
     TrackId,
     DeckRig<TestPools>,
-    TestTempDir,
+    QueueFixture,
 ) {
-    let (mut queue, mut rig, dir) = empty_queue();
+    let (mut queue, mut rig, dir) = empty_queue(worker);
     let source = fixture_uri(dir.path(), "entry.wav");
     let first = TrackId::allocate();
     let second = TrackId::allocate();
@@ -139,18 +167,88 @@ pub(crate) fn pending_selection() -> (
     (queue, first, second, rig, dir)
 }
 
-/// Opens the fixture source through the retained decoder dispatcher.
+/// Frames in the prepared fixture WAV.
+const FIXTURE_FRAMES: u64 = 1_024;
+/// Frames Warp renders per fixture chunk.
+const FIXTURE_QUANTUM: u64 = 256;
+
+/// Where a hosted test's opened track comes from.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum FixtureSource {
+    /// The prepared WAV, decoded and rendered through Warp on the fixture worker.
+    Decoded,
+    /// In-memory PCM with the decoded fixture's first-chunk facts; no decoder or Warp runs.
+    Synthetic,
+}
+
+/// Source facts of the first chunk Warp renders from the prepared fixture WAV.
+///
+/// # Panics
+/// Panics if the fixture geometry has no source span.
+#[must_use]
+pub(crate) fn fixture_chunk() -> kithara_signal::AudioChunkInfo {
+    let rate = mock::SAMPLE_RATE;
+    let at = |frames: u64| Duration::from_nanos(frames * 1_000_000_000 / u64::from(rate.get()));
+    let unit = std::num::NonZeroU128::MIN;
+    kithara_signal::AudioChunkInfo {
+        spec: kithara_signal::AudioSpec::new(2, rate),
+        end_timestamp: at(FIXTURE_QUANTUM),
+        media_origin: Some(Duration::ZERO),
+        media_end: Some(at(FIXTURE_FRAMES)),
+        visible_origin: Some(Duration::ZERO),
+        source_span: Some(
+            kithara_signal::SourceSpan::try_from((0, 1, unit, rate, FIXTURE_QUANTUM))
+                .expect("fixture source span"),
+        ),
+        frames: u32::try_from(FIXTURE_QUANTUM).expect("fixture quantum fits u32"),
+        ..kithara_signal::AudioChunkInfo::default()
+    }
+}
+
+fn fixture_prep(worker: PlayWorker<TestPools>) -> ResourcePrep<TestPools> {
+    let block = |frames: u64| {
+        NonZeroUsize::new(usize::try_from(frames).expect("fixture block fits usize"))
+            .expect("fixture block")
+    };
+    let warp = WarpConfig::builder()
+        .source_block_frames(block(FIXTURE_FRAMES))
+        .render_quantum_frames(block(FIXTURE_QUANTUM))
+        .build();
+    ResourcePrep::builder().worker(worker).warp(warp).build()
+}
+
+/// Opens the fixture source for the owner's load `seq` from `source`.
+///
+/// A decoded fixture opens through the retained decoder dispatcher, whose lane
+/// identity is its own; a synthetic one answers on the lane `seq` admits.
 ///
 /// # Panics
 /// Panics if fixture preparation or opening fails, or opening makes no progress.
-#[kithara::flash(io)]
-#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub(crate) async fn loaded_fixture(
     worker: &PlayWorker<TestPools>,
     rig: &mut DeckRig<TestPools>,
     dir: &TestTempDir,
+    seq: Seq,
+    source: FixtureSource,
 ) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
-    let prep = ResourcePrep::builder().worker(worker.clone()).build();
+    let mut loaded = match source {
+        FixtureSource::Decoded => decoded_fixture(worker, rig, dir).await,
+        FixtureSource::Synthetic => {
+            synthetic_loaded(seq, &fixture_uri(dir.path(), "entry.wav"), fixture_chunk()).0
+        }
+    };
+    loaded.opened.metadata.title = Some("Loaded fixture".to_owned());
+    loaded
+}
+
+#[kithara::flash(io)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+async fn decoded_fixture(
+    worker: &PlayWorker<TestPools>,
+    rig: &mut DeckRig<TestPools>,
+    dir: &TestTempDir,
+) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
+    let prep = fixture_prep(worker.clone());
     let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .build();
@@ -169,34 +267,28 @@ pub(crate) async fn loaded_fixture(
         .expect("prepared fixture");
     let item = ResourceLoad::new(prepared, Box::new(AudioObserverSlot::default().relay()));
     let mut opening = std::pin::pin!(rig.load_fixture(worker, item, Duration::ZERO));
-    let mut loaded = loop {
+    loop {
         hang_tick!();
         if let Ok(loaded) = timeout(Duration::from_millis(10), opening.as_mut()).await {
             hang_reset!();
             break loaded.expect("opened fixture");
         }
-    };
-    loaded.opened.metadata.title = Some("Loaded fixture".to_owned());
-    loaded
+    }
 }
 
-/// Builds orchestration PCM whose immutable source facts are supplied by the test.
+/// Answers load `seq` of `src` with one in-memory chunk carrying `source`'s
+/// facts, returning the producer that can feed it more.
 ///
 /// # Panics
 /// Panics for invalid chunk geometry or exhausted fixture pools.
-#[cfg(test)]
-pub(crate) fn opened_with_source(
-    opened: kithara_play::OpenedTrack,
+pub(crate) fn synthetic_loaded(
+    seq: Seq,
+    src: &str,
     source: kithara_signal::AudioChunkInfo,
-) -> (kithara_play::OpenedTrack, kithara_render::mock::PacketRing) {
-    use kithara_render::{
-        PcmPacket,
-        mock::PacketRing,
-        rt::track::{PcmConsumer, PlayerResource},
-    };
-    use kithara_signal::AudioChunk;
-    use kithara_test_utils::bufpool::sample_buffer;
-
+) -> (
+    kithara_render::Loaded<kithara_play::OpenedTrack>,
+    PacketRing,
+) {
     let frames = usize::try_from(source.frames).expect("fixture frames fit usize");
     let samples = vec![0.5; frames * usize::from(source.spec.channels)];
     let region = pools();
@@ -205,14 +297,17 @@ pub(crate) fn opened_with_source(
         source,
         sample_buffer(&region, &samples),
     ))));
-    let kithara_play::OpenedTrack { pcm, abr, metadata } = opened;
-    let src = pcm.src().clone();
     let receiver = packets.receiver.take().expect("fixture receiver");
     let pcm = Box::new(
-        PlayerResource::new(PcmConsumer::new(receiver), src, &region)
+        PlayerResource::new(PcmConsumer::new(receiver), src.into(), &region)
             .expect("fixture playback resource"),
     );
-    (kithara_play::OpenedTrack { pcm, abr, metadata }, packets)
+    let opened = kithara_play::OpenedTrack {
+        pcm,
+        abr: None,
+        metadata: kithara_decode::TrackMetadata::default(),
+    };
+    (kithara_render::mock::loaded(seq, opened), packets)
 }
 
 /// Opens and settles the queue's pending fixture load.
@@ -223,35 +318,60 @@ pub(crate) fn opened_with_source(
 pub(crate) async fn answer_load(
     queue: &mut Queue<TestPools>,
     rig: &mut DeckRig<TestPools>,
-    _dir: &TestTempDir,
+    source: FixtureSource,
 ) {
     hang_tick!();
-    let seq = queue
-        .target
-        .and_then(|target| queue.incoming_index(target.to))
-        .and_then(|index| queue.active.get(index))
-        .and_then(|active| active.load)
-        .expect("selected load")
-        .seq();
-    let mut loaded = loaded_request(queue.worker().expect("fixture worker"), rig, seq).await;
+    let seq = selected_load_seq(queue);
+    let mut loaded = loaded_request(queue, rig, seq, source).await;
     loaded.opened.metadata.title = Some("Loaded fixture".to_owned());
     hang_reset!();
     answer_loaded(queue, rig, loaded);
 }
 
-/// Opens the owner's requested source while retaining its lane inbox.
+/// The sequence of the load the owner holds for its selection target.
 ///
 /// # Panics
-/// Panics if the requested load is missing, refused, or stalls.
-#[kithara::flash(io)]
+/// Panics if the selection target is not loading.
+pub(crate) fn selected_load_seq(queue: &Queue<TestPools>) -> Seq {
+    queue
+        .target
+        .and_then(|target| queue.incoming_index(target.to))
+        .and_then(|index| queue.active.get(index))
+        .and_then(|active| active.load)
+        .expect("the selection target is loading")
+        .seq()
+}
+
+/// The sequence of the load the owner holds for track `id`.
+///
+/// # Panics
+/// Panics if the track has no load.
+pub(crate) fn load_seq(queue: &Queue<TestPools>, id: TrackId) -> Seq {
+    queue
+        .active
+        .iter()
+        .find(|active| active.item == id)
+        .and_then(|active| active.load)
+        .or_else(|| {
+            queue
+                .active
+                .parked_iter()
+                .find(|parked| parked.item == id)
+                .and_then(|parked| parked.load)
+        })
+        .expect("track has a load")
+        .seq()
+}
+
+/// The load request the owner dispatched for `seq`, taken from its lane inbox.
+///
+/// # Panics
+/// Panics if the requested load is missing or stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub(crate) async fn loaded_request(
-    worker: &PlayWorker<TestPools>,
+pub(crate) fn requested_load(
     rig: &mut DeckRig<TestPools>,
     seq: Seq,
-) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
-    use kithara_render::DispatcherCommand;
-
+) -> kithara_render::LoadRequest<ResourceLoad<TestPools>> {
     rig.opens.drain();
     while let Some(due) = rig.opens.next_due((), 1) {
         hang_tick!();
@@ -264,13 +384,69 @@ pub(crate) async fn loaded_request(
     };
     assert!(due.commands().is_empty(), "one load per batch");
     due.defer();
-    hang_tick!();
-    let loaded = rig
-        .load_request_fixture(worker, *request)
-        .await
-        .expect("opened owner source");
-    hang_reset!();
-    loaded
+    *request
+}
+
+/// Opens the owner's requested source from `source`; a decoded open retains
+/// its lane inbox on the fixture worker.
+///
+/// # Panics
+/// Panics if the requested load is missing, refused, or stalls.
+#[kithara::flash(io)]
+pub(crate) async fn loaded_request(
+    queue: &Queue<TestPools>,
+    rig: &mut DeckRig<TestPools>,
+    seq: Seq,
+    source: FixtureSource,
+) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
+    match source {
+        FixtureSource::Decoded => {
+            let request = requested_load(rig, seq);
+            rig.load_request_fixture(queue.worker().expect("fixture worker"), request)
+                .await
+                .expect("opened owner source")
+        }
+        FixtureSource::Synthetic => synthetic_request(queue, rig, seq, fixture_chunk()).0,
+    }
+}
+
+/// Takes the owner's request `seq` and answers it in memory with `source`'s facts.
+///
+/// # Panics
+/// Panics if the requested load or its track source is missing.
+pub(crate) fn synthetic_request(
+    queue: &Queue<TestPools>,
+    rig: &mut DeckRig<TestPools>,
+    seq: Seq,
+    source: kithara_signal::AudioChunkInfo,
+) -> (
+    kithara_render::Loaded<kithara_play::OpenedTrack>,
+    PacketRing,
+) {
+    let request = requested_load(rig, seq);
+    rig.hold_lane(request.inbox);
+    synthetic_loaded(seq, &load_src(queue, seq), source)
+}
+
+/// The resource source the owner's load `seq` opens, as its opener names it.
+fn load_src(queue: &Queue<TestPools>, seq: Seq) -> String {
+    let id = queue
+        .active
+        .iter()
+        .find(|active| active.load.is_some_and(|load| load.seq() == seq))
+        .map(|active| active.item)
+        .or_else(|| {
+            queue
+                .active
+                .parked_iter()
+                .find(|parked| parked.load.is_some_and(|load| load.seq() == seq))
+                .map(|parked| parked.item)
+        })
+        .expect("load has a track");
+    match queue.tracks.source(id).expect("queued track source") {
+        TrackSource::Uri(uri) => ResourceSrc::parse(&uri).expect("fixture URI").to_string(),
+        TrackSource::Config(config) => config.source().to_string(),
+    }
 }
 
 /// Settles pending dispatcher commands through the first fixture load.
@@ -283,16 +459,8 @@ pub(crate) fn answer_loaded(
     rig: &mut DeckRig<TestPools>,
     loaded: kithara_render::Loaded<kithara_play::OpenedTrack>,
 ) {
-    use kithara_render::{Dispatched, DispatcherCommand};
-
     rig.opens.drain();
-    let wanted = queue
-        .target
-        .and_then(|target| queue.incoming_index(target.to))
-        .and_then(|index| queue.active.get(index))
-        .and_then(|active| active.load)
-        .expect("the selected fixture is loading")
-        .seq();
+    let wanted = selected_load_seq(queue);
     loop {
         hang_tick!();
         let Some(mut due) = rig.opens.next_due((), 1) else {
@@ -380,8 +548,8 @@ pub(crate) fn answer_deck(
 /// # Panics
 /// Panics if the PCM fixture cannot be written or the command rig cannot be created.
 #[must_use]
-pub(crate) fn empty_queue() -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
-    queue_with_load_settings(NonZeroUsize::new(3).expect("default cap"), false)
+pub(crate) fn empty_queue(worker: &Worker) -> (Queue<TestPools>, DeckRig<TestPools>, QueueFixture) {
+    queue_with_load_settings(worker, NonZeroUsize::new(3).expect("default cap"), false)
 }
 
 /// Creates an empty queue with the given loader cap and autoplay setting, its
@@ -391,13 +559,12 @@ pub(crate) fn empty_queue() -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDi
 /// Panics if the PCM fixture cannot be written or the command rig cannot be created.
 #[must_use]
 pub(crate) fn queue_with_load_settings(
+    worker: &Worker,
     max_concurrent_loads: NonZeroUsize,
     should_autoplay: bool,
-) -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
-    let dir = TestTempDir::new();
-    let prep = ResourcePrep::builder()
-        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-        .build();
+) -> (Queue<TestPools>, DeckRig<TestPools>, QueueFixture) {
+    let dir = QueueFixture::new(worker);
+    let prep = fixture_prep(dir.worker().clone());
     let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .build();
@@ -436,8 +603,10 @@ pub(crate) fn tick_fixture(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestP
         suspended: false,
         now: SessionFrame::new(0),
         delivery: FrameCount::new(128),
+        deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
     let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
@@ -492,16 +661,19 @@ pub(crate) fn finish(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>)
 /// # Panics
 /// Panics if fixture creation, load admission, or deck entry fails or stalls.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-pub(crate) async fn selected() -> (
+pub(crate) async fn selected(
+    worker: &Worker,
+    source: FixtureSource,
+) -> (
     Queue<TestPools>,
     TrackId,
     TrackId,
     DeckRig<TestPools>,
-    TestTempDir,
+    QueueFixture,
 ) {
-    let (mut queue, first, second, mut rig, dir) = pending_selection();
+    let (mut queue, first, second, mut rig, dir) = pending_selection(worker);
     hang_tick!();
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, source).await;
     hang_reset!();
     finish(&mut queue, &mut rig);
     (queue, first, second, rig, dir)

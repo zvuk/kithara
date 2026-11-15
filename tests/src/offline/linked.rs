@@ -14,7 +14,7 @@ use kithara::{
     },
     play::{
         Bound, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, Player, PlayerConfig,
-        PlayerFactory, PlayerImpl, Position, ResourcePrep, Settled, Track, TrackCommand,
+        PlayerFactory, PlayerImpl, Position, ResourcePrep, SeekBatch, Settled, Track, TrackCommand,
         TrackFactory, TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot,
     },
     queue::{Queue, QueueCommand, QueueControl, TrackSource, Transition},
@@ -198,8 +198,14 @@ pub struct LinkOwnerInput {
 pub enum LinkOwnerInputKind {
     Retime,
     Realign,
-    Sync { on: bool },
-    Grid { answer: Box<GridAnswer> },
+    /// A sounding deck renewed its speed plan on its own pass.
+    Renewal,
+    Sync {
+        on: bool,
+    },
+    Grid {
+        answer: Box<GridAnswer>,
+    },
 }
 
 #[derive(Debug)]
@@ -232,6 +238,10 @@ impl<S> ObservedFactory<S> {
 pub struct ObservedTrack<S> {
     inner: PlayerImpl<S>,
     observation: Arc<Mutex<LinkObservation>>,
+    /// The owner inputs recorded when this track last ticked: the linked
+    /// owner ticks its track first in its own pass, so a timed speed change
+    /// sent before any further input renews the owner's plan.
+    ticked: Option<usize>,
 }
 
 impl<S> TrackFactory<S> for ObservedFactory<S>
@@ -244,6 +254,7 @@ where
         Ok(ObservedTrack {
             inner: PlayerFactory.track(config)?,
             observation: self.observation.clone(),
+            ticked: None,
         })
     }
 }
@@ -366,6 +377,26 @@ impl<S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static> ObservedTrack<S> {
         }
     }
 
+    fn record_renewal(
+        ticked: &mut Option<usize>,
+        observation: &mut LinkObservation,
+        item: TrackId,
+        at: When<SessionFrame>,
+        landing: Option<(Position, SessionFrame)>,
+    ) {
+        if let (When::At(at), None) = (at, landing)
+            && *ticked == Some(observation.owner_inputs.len())
+        {
+            observation.owner_inputs.push(LinkOwnerInput {
+                item: Some(item),
+                at: Some(at),
+                trajectory: None,
+                kind: LinkOwnerInputKind::Renewal,
+            });
+            *ticked = Some(observation.owner_inputs.len());
+        }
+    }
+
     fn record(&self, settled: &Settled, origin: Option<LinkReceiptOrigin>) {
         if !matches!(settled, Settled::Pending) {
             let item = self.inner.snapshot().item;
@@ -408,6 +439,7 @@ where
 
     fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
         self.inner.tick(now, out);
+        self.ticked = Some(self.observation.lock().owner_inputs.len());
         let item = self.inner.snapshot().item;
         let pending_seeks: Vec<_> = {
             let observation = self.observation.lock();
@@ -604,6 +636,7 @@ where
                 Some((curve, at, landing, before, consumed, sample_rate, planned)),
             ) = (&result, speed)
             {
+                Self::record_renewal(&mut self.ticked, &mut observation, before.item, at, landing);
                 let input = observation
                     .owner_inputs
                     .iter()
@@ -820,8 +853,40 @@ where
             fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_, S>) -> Result<bool, PlayError>;
             fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;
             fn speed_applied(&mut self, seq: Seq) -> Option<bool>;
+            fn seek_applied(&mut self, seq: Seq) -> Option<bool>;
             fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);
         }
+    }
+
+    fn seek(
+        &mut self,
+        to: Position,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<SeekBatch>, PlayError> {
+        let command = TrackCommand::Seek { to };
+        let traced = self.trace_command(&command, out);
+        let native = self.native_seek(&command);
+        let result = self.inner.seek(to, out);
+        if let Some(entry) = traced {
+            let admission =
+                self.trace_entry("admission", &serde_json::json!(format!("{result:?}")), out);
+            let mut observation = self.observation.lock();
+            observation.timeline.push(entry);
+            observation.timeline.push(admission);
+        }
+        let batch = result?;
+        if let Some(batch) = batch {
+            let origin = match batch {
+                SeekBatch::Deck(_) => LinkReceiptOrigin::Deck,
+                SeekBatch::Lane(_) => LinkReceiptOrigin::Lane,
+            };
+            self.record_native_seek(Some(batch.seq()), native, Some(origin));
+            self.observation
+                .lock()
+                .seeks
+                .push((self.inner.snapshot().item, origin, batch.seq()));
+        }
+        Ok(batch)
     }
 
     fn planned(
@@ -1357,14 +1422,22 @@ where
         self.publish();
         Ok(seq)
     }
-    fn retime(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
-        self.observation.lock().owner_inputs.push(LinkOwnerInput {
-            item: None,
-            at: Some(at),
-            trajectory: Some(trajectory.clone()),
-            kind: LinkOwnerInputKind::Retime,
-        });
-        LinkedPlayer::retime(&mut self.inner, trajectory, at, out);
+    fn retime(
+        &mut self,
+        trajectory: &TempoTrajectory,
+        frames: &[SessionFrame],
+        out: &mut Outbox<'_, S>,
+    ) {
+        self.observation
+            .lock()
+            .owner_inputs
+            .extend(frames.iter().map(|at| LinkOwnerInput {
+                item: None,
+                at: Some(*at),
+                trajectory: Some(trajectory.clone()),
+                kind: LinkOwnerInputKind::Retime,
+            }));
+        LinkedPlayer::retime(&mut self.inner, trajectory, frames, out);
         self.publish();
     }
     fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>) {

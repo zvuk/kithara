@@ -1,4 +1,4 @@
-use kithara_play::DeckMixSettingsChange;
+use kithara_play::{CrossfaderGain, DeckMixSettingsChange};
 
 use super::*;
 
@@ -6,7 +6,7 @@ fn levels(state: &mut TestState) -> Vec<f32> {
     let mut values = Vec::new();
     state
         .owner
-        .each_deck(&mut |_, _, _, pass| values.push(pass.mix.level()));
+        .each_deck(&mut |_, _, _, pass| values.push(f32::from(pass.mix.crossfader())));
     values
 }
 
@@ -18,11 +18,12 @@ fn apply_levels(
 ) {
     state.owner.begin_pass();
     for &(index, level) in changes {
+        let level = CrossfaderGain::checked(level).expect("fixture levels are crossfader gains");
         state
             .owner
             .with_deck(ids[index], &mut |_, out, _| {
                 assert!(
-                    out.mix(When::Next, DeckMixSettingsChange::Level(level))
+                    out.mix(When::Next, DeckMixSettingsChange::Crossfader(level))
                         .is_ok()
                 );
             })

@@ -1,0 +1,17 @@
+Kithara native browser profile attribution
+
+The Safari18 and Chrome137 configuration data and the Zlib/Brotli TLS
+certificate compressors in src/backend/reqwest/emulate.rs and certificate.rs
+are derived from wreq-util 3.0.0-rc.14:
+https://github.com/0x676e67/wreq-util
+Upstream revision: 1f8fe6ea957271b07ebeb949123fc3aa6cd25222
+Copyright 2026 0x676e67 <gngppz@gmail.com>
+
+These portions remain licensed under the Apache License, Version 2.0.
+Kithara extracted the two configured macOS profiles,
+adapted their construction to its private adapter, and retained only the
+certificate compression algorithms used by those profiles.
+
+The package uses the repository's LICENSE-APACHE. Other Kithara code retains
+its MIT OR Apache-2.0 licensing. This notice does not relicense the
+Apache-only portions.

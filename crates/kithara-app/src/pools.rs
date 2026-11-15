@@ -1,8 +1,9 @@
 use kithara::{
     assets::AssetStore,
     bufpool::{OverallBudget, PoolConfig, PoolConfigPatch, PoolError, PoolRegion, pool_schema},
-    host::Host,
-    play::{PlayWorker, PlaybackResamplerBackend, ResourceConfig},
+    host::{Host, HostConfig, HostCore, HostSettings},
+    link::{LinkedConfig, LinkedFactory, LinkedHost, LinkedHostConfig, LinkedHostDeck},
+    play::{PlayError, PlayWorker, PlaybackResamplerBackend, PlayerFactory, ResourceConfig},
     queue::{Queue, QueueControl, TrackSource},
 };
 use serde::Deserialize;
@@ -31,8 +32,11 @@ pub type Pools = PoolRegion<AppPools>;
 /// App-owned asset-store shape.
 pub type AppStore = AssetStore<AppPools>;
 
+/// App-owned session owner: the host core with deck sync on top.
+pub type AppHostOwner = LinkedHost<AppPools, HostCore<AppPools, LinkedHostDeck<AppPools>>>;
+
 /// App-owned audio host shape.
-pub type AppHost = Host<AppPools>;
+pub type AppHost = Host<AppPools, AppHostOwner>;
 
 /// App-owned playback worker shape.
 pub type AppWorker = PlayWorker<AppPools>;
@@ -40,14 +44,34 @@ pub type AppWorker = PlayWorker<AppPools>;
 /// App-owned resource configuration shape.
 pub type AppResourceConfig<B = PlaybackResamplerBackend> = ResourceConfig<AppPools, B>;
 
-/// App-owned queue shape.
-pub type AppQueue = Queue<AppPools>;
+/// App-owned queue shape: every track can follow the host tempo.
+pub type AppQueue = Queue<AppPools, LinkedFactory<PlayerFactory>>;
 
 /// App-owned queue control shape.
 pub type AppQueueControl = QueueControl<AppPools>;
 
 /// App-owned track-source shape.
 pub type AppTrackSource = TrackSource<AppPools>;
+
+/// Builds the application's audio host.
+///
+/// # Errors
+/// Returns [`PlayError`] when the host rejects `config` or cannot start.
+pub fn host(config: HostConfig<AppPools>) -> Result<AppHost, PlayError> {
+    AppHost::layered(config, |core| {
+        LinkedHost::new(LinkedHostConfig::builder().inner(core).build())
+    })
+}
+
+/// The track factory of a deck queue on a host running `settings`.
+pub(crate) fn factory(settings: HostSettings) -> LinkedFactory<PlayerFactory> {
+    LinkedFactory::new(
+        LinkedConfig::builder()
+            .inner(PlayerFactory)
+            .trajectory(settings.trajectory())
+            .build(),
+    )
+}
 
 /// What a document can say about this application's buffer pools: the region's
 /// own byte budget, then one field per pool the `pool_schema!` invocation above

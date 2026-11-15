@@ -5,7 +5,7 @@ use kithara_signal::{ExponentialApproach, SessionFrame};
 use num_traits::ToPrimitive;
 
 use super::interval::{self, Interval};
-use crate::{MIN_SPEED, Meter, SpeedCurve, TempoTrajectory, TrackGrid};
+use crate::{MIN_SPEED, Meter, SpeedCurve, TempoTrajectory, TrackGrid, consts::MAX_SPEED};
 
 /// Native preparation cannot preserve the recording's musical geometry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -80,7 +80,7 @@ impl SourceGrid {
         })
     }
 
-    fn by_frame(&self, frame: f64) -> Option<&Interval> {
+    fn frame_index(&self, frame: f64) -> Option<usize> {
         if !frame.is_finite()
             || frame < 0.0
             || self
@@ -90,22 +90,36 @@ impl SourceGrid {
         {
             return None;
         }
-        self.intervals
+        let index = self
+            .intervals
             .partition_point(|interval| *interval.frames.start() <= frame)
-            .checked_sub(1)
-            .and_then(|index| self.intervals.get(index))
+            .checked_sub(1)?;
+        self.intervals
+            .get(index)
             .filter(|interval| interval.frames.contains(&frame))
+            .map(|_| index)
     }
 
-    fn by_beat(&self, beat: f64) -> Option<&Interval> {
+    fn by_frame(&self, frame: f64) -> Option<&Interval> {
+        self.intervals.get(self.frame_index(frame)?)
+    }
+
+    fn beat_index(&self, beat: f64) -> Option<usize> {
         if !beat.is_finite() {
             return None;
         }
-        self.intervals
+        let index = self
+            .intervals
             .partition_point(|interval| *interval.beats.start() <= beat)
-            .checked_sub(1)
-            .and_then(|index| self.intervals.get(index))
+            .checked_sub(1)?;
+        self.intervals
+            .get(index)
             .filter(|interval| interval.beats.contains(&beat))
+            .map(|_| index)
+    }
+
+    fn by_beat(&self, beat: f64) -> Option<&Interval> {
+        self.intervals.get(self.beat_index(beat)?)
     }
 
     delegate::delegate! {
@@ -198,19 +212,19 @@ impl SourceGrid {
     }
 
     pub(super) fn maximum_slope(&self) -> Option<f64> {
-        let mut frame = self.observed.as_ref()?.start().as_secs_f64() * f64::from(self.rate.get());
+        let frame = self.observed.as_ref()?.start().as_secs_f64() * f64::from(self.rate.get());
+        let mut intervals = self.intervals.get(self.frame_index(frame)?..)?.iter();
+        let mut interval = intervals.next()?;
         let mut maximum: f64 = 0.0;
         loop {
-            maximum = maximum.max(60.0 / self.bpm_at_frame(frame)?);
-            let interval = self.by_frame(frame)?;
-            let end = *interval.frames.end();
-            let Some(next) = self.by_frame(end) else {
+            maximum = maximum.max(60.0 / interval.bpm(self.rate)?);
+            let Some(next) = intervals
+                .next()
+                .filter(|next| next.frames.start() == interval.frames.end())
+            else {
                 return Some(maximum);
             };
-            if *next.frames.end() == end {
-                return Some(maximum);
-            }
-            frame = end;
+            interval = next;
         }
     }
 
@@ -241,16 +255,18 @@ impl SourceGrid {
     }
 
     fn interval_at(&self, beat: f64) -> Option<(f64, Option<f64>)> {
-        let mut interval = self.by_beat(beat)?;
+        let mut intervals = self.intervals.get(self.beat_index(beat)?..)?.iter();
+        let mut interval = intervals.next()?;
         let slope = 60.0 / interval.bpm(self.rate)?;
         loop {
-            let end = *interval.frames.end();
-            let next = self.by_frame(end)?;
-            if *next.frames.end() == end {
+            let Some(next) = intervals
+                .next()
+                .filter(|next| next.frames.start() == interval.frames.end())
+            else {
                 return Some((slope, None));
-            }
+            };
             if 60.0 / next.bpm(self.rate)? != slope {
-                return Some((slope, Some(self.beat_at_frame(end)?)));
+                return Some((slope, Some(next.beat_at(*interval.frames.end())?)));
             }
             interval = next;
         }
@@ -328,11 +344,8 @@ fn push_law(
     frame: u64,
     law: ExponentialApproach,
 ) -> Option<()> {
-    if law.initial() < f64::from(MIN_SPEED)
-        || law.target() < f64::from(MIN_SPEED)
-        || law.initial() > 4.0
-        || law.target() > 4.0
-    {
+    let playable = f64::from(MIN_SPEED)..=f64::from(MAX_SPEED);
+    if !playable.contains(&law.initial()) || !playable.contains(&law.target()) {
         return None;
     }
     if let Some((at, previous)) = laws.last_mut()
@@ -370,6 +383,36 @@ pub(super) struct Correction {
     pub(super) starts: u64,
     pub(super) scale: f64,
     pub(super) epsilon: f32,
+}
+
+/// How far a speed plan follows the source grid.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Coverage {
+    /// The plan's last law starts on this output frame, counted from its
+    /// start, and holds from there until a renewal.
+    Until(u64),
+    /// The plan follows the source grid to its end.
+    GridEnd,
+}
+
+/// Where a curve starts, where it lands, and how far past its correction
+/// and landing it is planned.
+#[derive(Clone, Copy)]
+pub(super) struct Span {
+    pub(super) start: SessionFrame,
+    pub(super) landing: Option<(Duration, SessionFrame)>,
+    /// Output frames planned past the later of the correction end and the
+    /// landing.
+    pub(super) horizon: u64,
+}
+
+/// Why a source curve could not be planned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CurveError {
+    /// The curve needs source beats past the grid's end.
+    PastGrid,
+    /// The grid has no speed law on the curve's span.
+    NoLaw,
 }
 
 fn bridge_beat(
@@ -466,19 +509,28 @@ fn curve_boundaries(
     })
 }
 
+/// The source interval the curve stands in at `frame`; past the first frame a
+/// missing interval lies past the grid's end.
 fn landed_interval(
     source: &SourceGrid,
     mut beat: f64,
     frame: u64,
     landing: Option<(Duration, u64)>,
-) -> Option<(f64, f64, Option<f64>)> {
+) -> Result<(f64, f64, Option<f64>), CurveError> {
+    let missing = if frame == 0 {
+        CurveError::NoLaw
+    } else {
+        CurveError::PastGrid
+    };
+
     if let Some((position, at)) = landing
         && frame == at
     {
-        beat = source.beat_at(position.as_secs_f64())?;
+        beat = source.beat_at(position.as_secs_f64()).ok_or(missing)?;
     }
-    let (slope, source_end) = source.interval_at(beat)?;
-    Some((beat, slope, source_end))
+
+    let (slope, source_end) = source.interval_at(beat).ok_or(missing)?;
+    Ok((beat, slope, source_end))
 }
 
 fn correction_terminal(
@@ -489,28 +541,29 @@ fn correction_terminal(
     beat: f64,
     frame: u64,
     correction: &Correction,
-) -> Option<(u64, f64)> {
+) -> Result<(u64, f64), CurveError> {
     let rate = f64::from(host.sample_rate().get());
+    let from = session_frame(start, frame).ok_or(CurveError::NoLaw)?;
     let phase = correction.phase + beat
         - first_beat
-        - host_advance(host, start, session_frame(start, frame)?)?;
+        - host_advance(host, start, from).ok_or(CurveError::NoLaw)?;
     let frames = (phase.abs() * rate * correction.scale / f64::from(correction.epsilon))
         .ceil()
-        .to_u64()?;
-    let end = frame.checked_add(frames)?;
+        .to_u64()
+        .ok_or(CurveError::NoLaw)?;
+    let end = frame.checked_add(frames).ok_or(CurveError::NoLaw)?;
+    let span = frames.to_f64().ok_or(CurveError::NoLaw)?;
     let offset = if frames == 0 {
         0.0
     } else {
-        -phase * rate / frames.to_f64()?
+        -phase * rate / span
     };
+
+    let to = session_frame(start, end).ok_or(CurveError::NoLaw)?;
     let target =
-        beat + host_advance(
-            host,
-            session_frame(start, frame)?,
-            session_frame(start, end)?,
-        )? + offset * frames.to_f64()? / rate;
-    source.media_at(target)?;
-    Some((end, offset))
+        beat + host_advance(host, from, to).ok_or(CurveError::NoLaw)? + offset * span / rate;
+    source.media_at(target).ok_or(CurveError::PastGrid)?;
+    Ok((end, offset))
 }
 
 fn source_law(
@@ -552,15 +605,17 @@ fn next_curve_frame(
     beat: f64,
     rate: f64,
     frame: u64,
-) -> Result<Option<CurveCrossing>, ()> {
+) -> Result<Option<CurveCrossing>, CurveError> {
     let source_crossing = match source_end {
-        Some(end) => Some(crossing(law, end - beat, rate).ok_or(())?),
+        Some(end) => Some(crossing(law, end - beat, rate).ok_or(CurveError::NoLaw)?),
         None => None,
     };
     let through = match (next, source_crossing) {
-        (Some(next), Some(crossing)) => next.min(frame.checked_add(crossing).ok_or(())?),
+        (Some(next), Some(crossing)) => {
+            next.min(frame.checked_add(crossing).ok_or(CurveError::NoLaw)?)
+        }
         (Some(next), None) => next,
-        (None, Some(crossing)) => frame.checked_add(crossing).ok_or(())?,
+        (None, Some(crossing)) => frame.checked_add(crossing).ok_or(CurveError::NoLaw)?,
         (None, None) => return Ok(None),
     };
     Ok(Some(CurveCrossing {
@@ -588,7 +643,8 @@ fn bridge_source_law(
         offset,
         rate,
     )?;
-    let speed = (source.media_at(reached)? - source.media_at(preceding)?) * rate;
+    let advance = source.frame_at_beat(reached)? - source.frame_at_beat(preceding)?;
+    let speed = advance * (rate / f64::from(source.rate.get()));
     Some((reached, speed))
 }
 
@@ -632,25 +688,50 @@ fn speed_curve(laws: Vec<(u64, ExponentialApproach)>) -> Option<SpeedCurve> {
     }
 }
 
+/// Whether the plan, holding its law from `frame`, has reached its horizon:
+/// the horizon past the correction end and the landing.
+fn reached_horizon(
+    frame: u64,
+    terminal: Option<(u64, f64)>,
+    landing: Option<(Duration, u64)>,
+    correction: Option<&Correction>,
+    horizon: u64,
+) -> bool {
+    if correction.is_some() && terminal.is_none() {
+        return false;
+    }
+    let settled = terminal
+        .map_or(0, |(end, _)| end)
+        .max(landing.map_or(0, |(_, at)| at));
+    frame > settled && frame >= settled.saturating_add(horizon)
+}
+
 pub(super) fn curve(
     host: &TempoTrajectory,
     source: &SourceGrid,
     media: Duration,
-    start: SessionFrame,
-    landing: Option<(Duration, SessionFrame)>,
+    span: Span,
     offsets: &[(u64, f64)],
     correction: Option<&Correction>,
-) -> Option<(SpeedCurve, u64)> {
+) -> Result<(SpeedCurve, u64, Coverage), CurveError> {
+    let Span {
+        start,
+        landing,
+        horizon,
+    } = span;
     let rate = f64::from(host.sample_rate().get());
-    let first_beat = source.beat_at(media.as_secs_f64())?;
+    let first_beat = source
+        .beat_at(media.as_secs_f64())
+        .ok_or(CurveError::NoLaw)?;
     let mut beat = first_beat;
     let CurveSchedule {
         mut boundaries,
         landing,
-    } = curve_boundaries(host, start, landing, offsets, correction)?;
+    } = curve_boundaries(host, start, landing, offsets, correction).ok_or(CurveError::NoLaw)?;
     let mut frame = 0;
     let mut terminal = None;
     let mut laws = Vec::new();
+    let mut coverage = Coverage::GridEnd;
     loop {
         let (landed, slope, source_end) = landed_interval(source, beat, frame, landing)?;
         beat = landed;
@@ -665,12 +746,17 @@ pub(super) fn curve(
             boundaries.sort_unstable();
             boundaries.dedup();
         }
-        let (law, offset) = source_law(host, start, frame, slope, terminal, offsets, &mut laws)?;
+        let (law, offset) = source_law(host, start, frame, slope, terminal, offsets, &mut laws)
+            .ok_or(CurveError::NoLaw)?;
+        if reached_horizon(frame, terminal, landing, correction, horizon) {
+            coverage = Coverage::Until(frame);
+            break;
+        }
         let next = boundaries.iter().copied().find(|next| *next > frame);
         let Some(CurveCrossing {
             through,
             source_crossing,
-        }) = next_curve_frame(next, source_end, law, beat, rate, frame).ok()?
+        }) = next_curve_frame(next, source_end, law, beat, rate, frame)?
         else {
             break;
         };
@@ -682,9 +768,18 @@ pub(super) fn curve(
             (beat, source_end, source_crossing),
             (law, offset),
             &mut laws,
-        )?;
+        )
+        .ok_or(CurveError::NoLaw)?;
         frame = through;
     }
     let frames = terminal.map_or(0, |(end, _)| end);
-    Some((speed_curve(laws)?, frames))
+    Ok((
+        speed_curve(laws).ok_or(CurveError::NoLaw)?,
+        frames,
+        coverage,
+    ))
 }
+
+#[cfg(test)]
+#[path = "tests/source.rs"]
+mod tests;

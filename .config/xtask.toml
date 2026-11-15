@@ -5,10 +5,18 @@
 [project]
 name = "kithara"
 
+[clippy]
+macos_features = ["kithara-ffi/apple"]
+
 [workspace-scan]
+# Preserve this project's existing default Rust scan domain.
+default_roots = ["crates"]
 # Cargo build output can also live below an individual crate (for example the
 # multi-target FFI builds). Generated bindings are not workspace source.
 exclude = ["target/**", "**/target/**"]
+
+[ast-grep]
+default_roots = ["."]
 
 [architecture.filters]
 exclude_crates = [
@@ -145,6 +153,8 @@ lockbud_exclude = [
   "kithara-integration-tests",
   "kithara-play-tests",
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
   "kithara-stream-tests",
   "kithara-sync-tests",
   "kithara-warp-tests",
@@ -321,6 +331,7 @@ line_log = "no-block.log"
 
 [stress.environment]
 remove = [
+  "KITHARA_AUDIO_ARTIFACT_DIR",
   "KITHARA_FLASH_SYNC_BT",
   "KITHARA_FLASH_SYNC_TRACE",
   "KITHARA_HANG_DUMP_DIR",
@@ -443,6 +454,8 @@ KITHARA_NO_BLOCK_LOG = "no-block.log"
 [stress.modes.reproduction-load-flash-on]
 flash = true
 load = true
+# Each test fills the CPU set; its spinners already supply concurrent pressure.
+test_threads = "1"
 
 [stress.modes.reproduction-load-flash-on.set_env]
 KITHARA_FLASH_SYNC_TRACE = "1"
@@ -458,6 +471,7 @@ KITHARA_HANG_DUMP_DIR = "hang"
 [stress.modes.reproduction-load-flash-off]
 flash = false
 load = true
+test_threads = "1"
 
 [stress.modes.reproduction-load-flash-off.set_env]
 KITHARA_FLASH_SYNC_TRACE = "1"
@@ -587,13 +601,22 @@ known_flakes = []
 # Features shared by every lane. UI renderer features belong to the dedicated
 # `ui` lane so the general workspace run does not build those test targets.
 features = []
-# Paths no single lane owns: the routing itself. A change here runs every lane
-# that declares `owns`, because a change to what belongs where has to be tested
-# by the routes it moves.
-shared_paths = [
-  ".config/xtask.toml",
-  ".config/nextest.toml",
-  "tests/Cargo.toml",
+
+# The test packages a draft runs whatever its pull request names: the seven
+# that failed on the most branches between 2026-10-05 and 2026-11-11, above the
+# gap between 19 branches and 13. Reviewed by hand; a ready pull request and
+# `main` run everything.
+[test.required]
+packages = [
+  "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
+  "kithara-hls-tests",
+  "kithara-sync-tests",
+  "kithara-play-tests",
+  "xtask",
+  "kithara-app",
+  "kithara-decode-tests",
 ]
 
 # Cargo applies an unqualified workspace feature to every selected package
@@ -610,7 +633,7 @@ features = ["no-block"]
 
 [test.load]
 default = false
-features = ["load"]
+features = ["kithara-test-utils/load"]
 
 [test.net_backends.none]
 features = []
@@ -639,6 +662,7 @@ cargo.exclude = [
   "kithara-devtools",
   "kithara-devtools-trace-format",
   "xtask",
+  "kithara-test-args",
   "kithara-test-utils",
   "kithara-test-macros",
   "kithara-ffi-web-tests",
@@ -674,6 +698,8 @@ cargo.packages = [
   "kithara-play-tests",
   "kithara-queue",
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
 ]
 cargo.profile = "test-release"
 
@@ -728,6 +754,8 @@ cargo.packages = [
   "kithara-play-tests",
   "kithara-queue",
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
   "kithara-record",
   "kithara-render",
   "kithara-resampler",
@@ -784,6 +812,8 @@ cargo.packages = [
   "kithara-integration-tests",
   "kithara-play-tests",
   "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
   "kithara-stream-tests",
   "kithara-warp-tests",
   "kithara-sync-tests",
@@ -795,15 +825,6 @@ cargo.profile = "test-release"
 # the same low-level closure and are all exercised by one branch change.
 [test.lanes.core]
 default_features = ["kithara-platform/tokio-rt-multi-thread"]
-owns = [
-  "crates/kithara-bufpool/",
-  "crates/kithara-events/",
-  "crates/kithara-platform/",
-  "crates/kithara-signal/",
-  "crates/kithara-stream/",
-  "tests/crates/core/",
-  "tests/crates/stream/",
-]
 cargo.packages = [
   "kithara-bufpool",
   "kithara-events",
@@ -819,13 +840,6 @@ cargo.profile = "test-release"
 # dedicated tests package. It deliberately uses the lightweight fixture
 # registry declared by `kithara-audio-tests`.
 [test.lanes.audio]
-owns = [
-  "crates/kithara-audio/",
-  "crates/kithara-record/",
-  "crates/kithara-resampler/",
-  "crates/kithara-stretch/",
-  "tests/crates/audio/",
-]
 cargo.packages = [
   "kithara-audio",
   "kithara-record",
@@ -837,40 +851,28 @@ cargo.profile = "test-release"
 
 
 [test.lanes.sync]
-owns = ["crates/kithara-sync/", "crates/kithara-link/", "tests/crates/sync/"]
 cargo.packages = ["kithara-sync", "kithara-link", "kithara-sync-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.warp]
 default_backend = "none"
-owns = ["crates/kithara-warp/", "tests/crates/warp/"]
 cargo.packages = ["kithara-warp", "kithara-warp-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.render]
 default_backend = "none"
-owns = ["crates/kithara-render/"]
 cargo.packages = ["kithara-render"]
 cargo.profile = "test-release"
-undeclared_toggles = ["load"]
 
 # Each domain facade stays in `tests/`, but a branch selects it with the crate
 # that owns the production contract. The full workspace lane remains the
 # fallback and the default-branch proof.
 [test.lanes.abr]
-undeclared_toggles = ["load"]
-owns = ["crates/kithara-abr/"]
 cargo.packages = ["kithara-abr"]
 cargo.profile = "test-release"
 
 [test.lanes.analysis]
 default_features = ["kithara-beat/dsp", "kithara-waveform/dsp"]
-owns = [
-  "crates/kithara-analysis/",
-  "crates/kithara-beat/",
-  "crates/kithara-waveform/",
-  "tests/crates/analysis/",
-]
 cargo.packages = [
   "kithara-analysis",
   "kithara-beat",
@@ -880,66 +882,49 @@ cargo.packages = [
 cargo.profile = "test-release"
 
 [test.lanes.app]
-owns = [
-  "crates/kithara-app/",
-  "crates/kithara-app-document/",
-  "tests/crates/app/",
-]
 cargo.packages = ["kithara-app", "kithara-app-document", "kithara-app-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.assets]
-undeclared_toggles = ["load"]
-owns = ["crates/kithara-assets/"]
 cargo.packages = ["kithara-assets"]
 cargo.profile = "test-release"
 
 [test.lanes.decode]
-owns = ["crates/kithara-decode/", "tests/crates/decode/"]
 cargo.packages = ["kithara-decode", "kithara-decode-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.dsp]
 default_backend = "none"
 default_features = ["kithara-dsp/spectrum"]
-owns = ["crates/kithara-dsp/", "tests/crates/dsp/"]
 cargo.packages = ["kithara-dsp", "kithara-dsp-tests"]
 cargo.profile = "test-release"
 # kithara-dsp declares no `flash` feature: its kernels never wait on a clock, so
 # the virtual clock has nothing to drive. The poll-blocking detector is the same
 # kind of property, and an unqualified feature no selected package declares fails
 # the whole run, so the lane names both as toggles it cannot carry.
-undeclared_toggles = ["flash", "no-block", "load"]
+undeclared_toggles = ["flash", "no-block"]
 
 [test.lanes.effects]
-owns = ["crates/kithara-effects/", "tests/crates/effects/"]
 cargo.packages = ["kithara-effects", "kithara-effects-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.encode]
-undeclared_toggles = ["load"]
-owns = ["crates/kithara-encode/"]
 cargo.packages = ["kithara-encode"]
 cargo.profile = "test-release"
 
 [test.lanes.file]
-owns = ["crates/kithara-file/", "tests/crates/file/"]
 cargo.packages = ["kithara-file", "kithara-file-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.hls]
-owns = ["crates/kithara-hls/", "tests/crates/hls/"]
 cargo.packages = ["kithara-hls", "kithara-hls-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.host]
-owns = ["crates/kithara-host/", "tests/crates/host/"]
 cargo.packages = ["kithara-host", "kithara-host-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.net]
-undeclared_toggles = ["load"]
-owns = ["crates/kithara-net/"]
 cargo.packages = ["kithara-net"]
 cargo.profile = "test-release"
 
@@ -948,24 +933,24 @@ cargo.profile = "test-release"
 # no transport on the host.
 [test.lanes.net-host]
 default_backend = "host"
-undeclared_toggles = ["flash", "no-block", "load"]
-owns = ["crates/kithara-net/src/backend/host/"]
+undeclared_toggles = ["flash", "no-block"]
 cargo.packages = ["kithara-net"]
 cargo.profile = "test-release"
 
 [test.lanes.play]
-owns = ["crates/kithara-play/", "tests/crates/play/"]
 cargo.packages = ["kithara-play", "kithara-play-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.queue]
-owns = ["crates/kithara-queue/", "tests/crates/queue/"]
-cargo.packages = ["kithara-queue", "kithara-queue-tests"]
+cargo.packages = [
+  "kithara-queue",
+  "kithara-queue-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
+]
 cargo.profile = "test-release"
 
 [test.lanes.storage]
-undeclared_toggles = ["load"]
-owns = ["crates/kithara-storage/"]
 cargo.packages = ["kithara-storage"]
 cargo.profile = "test-release"
 
@@ -993,11 +978,6 @@ cargo.profile = "test-release"
 # and the generators that write the CI pipelines. None of it ships.
 [test.lanes.tooling]
 default_backend = "none"
-owns = [
-  "xtask/",
-  "crates/kithara-devtools-trace-format/",
-  "crates/kithara-devtools/",
-]
 cargo.packages = ["kithara-devtools-trace-format", "kithara-devtools", "xtask"]
 cargo.profile = "test-release"
 runner.nextest.ignore_default_filter = true
@@ -1005,7 +985,7 @@ runner.nextest.ignore_default_filter = true
 # the player, not of the tools that build it — so leaving flash on would fail the
 # lane on `none of the selected packages contains these features`. The
 # poll-blocking detector is the same kind of property, and the gate asks every
-# touched lane for it, so the lane names both as toggles it cannot carry.
+# lane it runs for it, so the lane names both as toggles it cannot carry.
 undeclared_toggles = ["flash", "no-block", "load"]
 
 # The harness itself: the test attribute crate, the shared test helpers, and the
@@ -1021,11 +1001,6 @@ undeclared_toggles = ["flash", "no-block", "load"]
 # not build the facade, so the shared spelling fails the lane outright on `none
 # of the selected packages contains this feature`.
 [test.lanes.harness]
-owns = [
-  "crates/kithara-test-utils/",
-  "crates/kithara-test-macros/",
-  "crates/kithara-platform/tests/flash_",
-]
 default_flash = false
 default_features = [
   "kithara-platform/flash",
@@ -1051,12 +1026,6 @@ runner.nextest.filter = "binary_id(=kithara-platform::flash_attr) + binary_id(=k
 # product tests start lying, which is why they keep a lane rather than being
 # dropped.
 [test.lanes.fixtures]
-owns = [
-  "tests/src/",
-  "tests/crates/harness/tests/suite_harness.rs",
-  "tests/crates/harness/tests/flash_lexical.rs",
-  "tests/crates/harness/tests/timeout_guard.rs",
-]
 default_backend = "none"
 # `analysis` compiles the beat-grid helper, whose unit tests live nowhere else.
 default_features = ["harness", "kithara-integration-tests/analysis"]
@@ -1067,14 +1036,6 @@ cargo.tests = ["suite_harness"]
 runner.nextest.ignore_default_filter = true
 
 [test.lanes.ui]
-owns = [
-  ".github/workflows/ui.yml",
-  "crates/kithara-ui/",
-  "crates/kithara-ui-gallery/",
-  "crates/kithara-ui-input/",
-  "crates/kithara-ui-shaping/",
-  "crates/kithara-app/src/gui/",
-]
 default_features = [
   "kithara-app/backend-cpal",
   "kithara-ui/capture",
@@ -1086,7 +1047,7 @@ default_features = [
 # The UI crates carry neither the virtual clock nor the poll-blocking detector:
 # both are properties of the player, and an unqualified feature no selected
 # package declares fails the whole run.
-undeclared_toggles = ["flash", "no-block", "load"]
+undeclared_toggles = ["flash", "no-block"]
 cargo.packages = [
   "kithara-ui",
   "kithara-ui-gallery",
@@ -1107,7 +1068,7 @@ default_features = [
   "kithara-ui-gallery/masonry",
   "kithara-ui-gallery/perf",
 ]
-undeclared_toggles = ["flash", "load"]
+undeclared_toggles = ["flash"]
 cargo.packages = ["kithara-ui", "kithara-ui-gallery"]
 cargo.profile = "test-release"
 runner.nextest.test_threads = 1
@@ -1122,12 +1083,13 @@ cargo.packages = ["kithara-ui"]
 runner.cargo.doc = true
 
 [test.lanes.loom]
-cargo.workspace = true
-cargo.exclude = ["kithara-fuzz"]
+cargo.packages = ["kithara-platform"]
 cargo.profile = "test-release"
 runner.nextest.filter = "test(/(^|::)loom_model_/)"
-default_features = ["kithara/loom"]
+default_features = ["kithara-platform/loom"]
+default_backend = "none"
 default_flash = false
+undeclared_toggles = ["load"]
 
 # `test-release` is the profile every other lane builds in, and this one ran in
 # `test`. `just test all` therefore built the whole workspace a second time to
@@ -1148,12 +1110,17 @@ default_flash = false
 # rather than a gate job.
 
 [test.lanes.network]
-cargo.packages = ["kithara-play-tests", "kithara-queue-tests"]
+cargo.packages = [
+  "kithara-play-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
+]
 cargo.profile = "test-release"
 cargo.tests = ["network"]
 default_features = [
   "kithara-play-tests/network",
-  "kithara-queue-tests/network",
+  "kithara-queue-network-tests/network",
+  "kithara-queue-zvuk-tests/network",
   "kithara/resample-rubato",
 ]
 default_flash = false
@@ -1163,12 +1130,17 @@ default_flash = false
 # device. No CI job runs this and none should — a runner that fails here reports
 # the fence around itself, not the code. `just test run --lane=network-manual`.
 [test.lanes.network-manual]
-cargo.packages = ["kithara-play-tests", "kithara-queue-tests"]
+cargo.packages = [
+  "kithara-play-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-zvuk-tests",
+]
 cargo.profile = "test-release"
 cargo.tests = ["network_manual"]
 default_features = [
   "kithara-play-tests/network-manual",
-  "kithara-queue-tests/network-manual",
+  "kithara-queue-network-tests/network-manual",
+  "kithara-queue-zvuk-tests/network-manual",
   "kithara/resample-rubato",
 ]
 default_flash = false
@@ -1176,7 +1148,6 @@ default_flash = false
 # What only the `broadcast` feature turns on, and every test of
 # `kithara-broadcast`, so a change to the crate the lane owns runs its tests.
 [test.lanes.broadcast]
-owns = ["crates/kithara-broadcast/", "tests/crates/broadcast/"]
 cargo.packages = ["kithara-app", "kithara-broadcast", "kithara-broadcast-tests"]
 cargo.profile = "test-release"
 cargo.lib = true
@@ -1221,17 +1192,14 @@ cargo.tests = ["warp_playback"]
 runner.nextest.filter = "test(/rate_response::/)"
 default_features = ["kithara-warp-tests/usdt"]
 default_flash = false
-owns = ["tests/crates/warp/tests/rate_response.rs"]
 
 [test.lanes.usdt-render-scheduler]
-undeclared_toggles = ["load"]
 cargo.packages = ["kithara-render"]
 cargo.profile = "test-release"
 cargo.lib = true
 runner.nextest.filter = "test(/worker::node::tests::scheduler_tests::probed::/)"
 default_features = ["kithara-render/usdt"]
 default_flash = false
-owns = ["crates/kithara-render/src/worker/node/"]
 
 [test.lanes.usdt-hls]
 cargo.packages = ["kithara-hls-tests"]
@@ -1240,10 +1208,6 @@ cargo.tests = ["hls"]
 runner.nextest.filter = "test(/(hls_variant_playlists_concurrent::variant_media_playlists_load_concurrently|flac_swallow_fixture)/)"
 default_features = ["kithara-hls-tests/usdt"]
 default_flash = false
-owns = [
-  "tests/crates/hls/tests/hls_variant_playlists_concurrent.rs",
-  "tests/crates/hls/tests/flac_swallow_fixture.rs",
-]
 
 [test.lanes.usdt-hls-stress]
 cargo.packages = ["kithara-hls-tests"]
@@ -1252,7 +1216,6 @@ cargo.tests = ["hls_stress"]
 runner.nextest.filter = "test(/stress_seek_audio::stress_seek_audio_hls/)"
 default_features = ["kithara-hls-tests/usdt"]
 default_flash = false
-owns = ["tests/crates/hls/tests/stress_seek_audio.rs"]
 
 [test.lanes.usdt-queue]
 cargo.packages = ["kithara-queue-tests"]
@@ -1261,7 +1224,6 @@ cargo.tests = ["queue"]
 runner.nextest.filter = "test(/full_playthrough_census/)"
 default_features = ["kithara-queue-tests/usdt"]
 default_flash = false
-owns = ["tests/crates/queue/tests/full_playthrough_census.rs"]
 
 # The harness (tests/crates/ffi-web/tests/selenium.rs) reads
 # KITHARA_SELENIUM_BROWSER to pick a browser and defaults to chrome if unset.
@@ -1300,7 +1262,7 @@ flash = false
 backend = "apple"
 
 [ext.xtask.cache]
-extra_inputs = []
+extra_inputs = ["docker/ci.Dockerfile"]
 keep_generations = 2
 generation_grace_secs = 3600
 
@@ -1319,6 +1281,7 @@ handler = "format-edited-paths"
 
 [ext.ci]
 pins = ".config/ci-pins.toml"
+pr_review_line_limit = 5000
 
 # Moving integration sources into domain packages changed nextest's package
 # and binary prefix without changing the tests. The verdict canonicalizes both
@@ -1377,8 +1340,15 @@ pins = ".config/ci-pins.toml"
 "kithara-ui::gallery::tests::the_hosted_toggles_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_toggles"
 "kithara-ui::gallery::tests::the_hosted_knobs_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_knobs"
 "kithara-ui::gallery::tests::the_hosted_meters_keep_their_descriptor_backed_controls" = "kithara-ui-gallery::gallery::tests::hosted_page_claims_meters"
-"kithara-queue-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded" = "kithara-queue-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded_high"
-"kithara-queue-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst" = "kithara-queue-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst_main"
+"kithara-queue-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded" = "kithara-queue-zvuk-tests::network::prod_network::user_sim_prod_drm_seek_immediately_after_loaded_high"
+"kithara-queue-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst" = "kithara-queue-zvuk-tests::network::prod_network::user_sim_prod_drm_auto_abr_upswitch_then_seek_burst_main"
+"kithara-queue-tests::queue::zvuk_cipher_check::" = "kithara-queue-zvuk-tests::queue_zvuk::zvuk_cipher_check::"
+"kithara-queue-tests::network::prod_network::" = "kithara-queue-zvuk-tests::network::prod_network::"
+"kithara-queue-tests::network::zvuk_" = "kithara-queue-zvuk-tests::network::zvuk_"
+"kithara-queue-tests::network::false_eof_rapid_scrub::" = "kithara-queue-network-tests::network::false_eof_rapid_scrub::"
+"kithara-queue-tests::network::real_playlist::" = "kithara-queue-network-tests::network::real_playlist::"
+"kithara-queue-tests::network_manual::cold_seek_cpal::" = "kithara-queue-network-tests::network_manual::cold_seek_cpal::"
+"kithara-queue-tests::network_manual::zvuk_" = "kithara-queue-zvuk-tests::network_manual::zvuk_"
 "kithara-integration-tests::suite_stress::kithara_play::hls_seek_middle_stress_long::" = "kithara-integration-tests::suite_stress::hls_seek_middle_stress_long::"
 "suite_stress::kithara_play::hls_seek_middle_stress_long::" = "kithara-integration-tests::suite_stress::hls_seek_middle_stress_long::"
 "suite_light::kithara_play::sync_fixture_census::" = "kithara-sync-tests::sync::sync_fixture_census::"
@@ -1547,9 +1517,9 @@ pins = ".config/ci-pins.toml"
 # Lanes that are nothing but the work they ask the executor for. A lane needs a
 # function only when a parameter cannot say what it does.
 [ext.ci.lanes.deps-deny]
-cache_group = "linux"
+cache_group = "host"
 label = "dependency audit"
-os = "linux"
+os = ["macos", "linux"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "deny"], label = "licence and advisory gate" }]
@@ -1559,9 +1529,9 @@ kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 
 [ext.ci.lanes.deps-unused]
-cache_group = "linux"
+cache_group = "host"
 label = "dependency audit"
-os = "linux"
+os = ["macos", "linux"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "machete"], label = "unused manifest entries" }]
@@ -1570,15 +1540,33 @@ kinds = ["weekly"]
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 
+[ext.ci.lanes.crates-publish]
+cache_group = "host"
+label = "publication"
+os = ["macos", "linux"]
+tools = ["cargo", "just", "sccache", "kache"]
+program = "just"
+steps = [
+  { args = [
+    "release",
+    "crates",
+    "--dry-run",
+  ], label = "crates.io publication dry run", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "gate"
+kinds = ["weekly", "quarantine"]
+kinds_github = ["main", "branch", "merge-request", "nightly"]
+timeout_minutes = 60
+
 # Its own lane, and off the push gate: `cargo shear` reads what the source
 # actually imports, so a dependency reachable only under a `cfg` this build
 # does not enable reads as unused. The workspace has dozens - wasm-only and
 # bench-only entries - and every one of them would refuse every push. Weekly
 # on GitLab, nightly here, where the report is read rather than blocking.
 [ext.ci.lanes.deps-shear]
-cache_group = "linux"
+cache_group = "host"
 label = "dependency audit"
-os = "linux"
+os = ["macos", "linux"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "shear"], label = "unused crate dependencies" }]
@@ -1588,9 +1576,9 @@ kinds_github = ["nightly"]
 timeout_minutes = 30
 
 [ext.ci.lanes.deps-features-full]
-cache_group = "linux"
+cache_group = "host"
 label = "dependency audit"
-os = "linux"
+os = ["macos", "linux"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "hack"], label = "feature powerset check" }]
@@ -1652,9 +1640,9 @@ kinds_github = ["main", "nightly"]
 timeout_minutes = 60
 
 [ext.ci.lanes.deps-semver]
-cache_group = "linux"
+cache_group = "host"
 label = "dependency audit"
-os = "linux"
+os = ["macos", "linux"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "semver"], label = "public API compatibility" }]
@@ -1683,7 +1671,7 @@ steps = [
   ], label = "Chromium WebCodecs tests", env = { CHROMEDRIVER_ARGS = "--verbose --log-path={root}/target/web-chromium.log" } },
 ]
 role = "gate"
-kinds = ["platforms", "main", "nightly"]
+kinds = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 artifact = { name = "web-chromium-driver", path = "target/web-chromium.log", when = "failure" }
@@ -1707,7 +1695,7 @@ steps = [
   ], label = "Firefox WASM tests" },
 ]
 role = "gate"
-kinds = ["platforms", "main", "nightly"]
+kinds = []
 kinds_github = ["nightly"]
 timeout_minutes = 60
 
@@ -1725,7 +1713,7 @@ steps = [
   ], label = "WASM size check" },
 ]
 role = "gate"
-kinds = ["platforms", "main", "nightly"]
+kinds = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 artifact = { name = "wasm-slim-report", path = "target/wasm-slim-result.json" }
@@ -1842,15 +1830,17 @@ kinds = ["nightly"]
 timeout_minutes = 90
 
 [ext.ci.lanes.deep-bench]
-cache_group = "macos"
-label = "deep Apple"
-os = "macos"
+cache_group = "host"
+label = "benchmarks"
+os = ["linux", "macos"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["perf", "bench", "ci"], label = "benchmark suite" }]
 role = "deep"
-kinds = ["nightly"]
+kinds = ["nightly", "bench", "branch", "merge-request", "quarantine"]
+kinds_github = ["nightly", "bench"]
 timeout_minutes = 120
+artifact = { name = "bench-results", path = "bench-results.txt\nbench-results/", when = "always" }
 
 # A shader that stopped reading what Rust writes it looks identical from the
 # outside until a frame is rendered and read back, so this is the one suite
@@ -1877,17 +1867,28 @@ timeout_minutes = 120
 # forbid `unsafe` themselves. The interpreter runs a program hundreds of times
 # slower than the machine does, so this stays weekly rather than nightly.
 [ext.ci.lanes.deep-miri]
+test_packages = [
+  "kithara-abr",
+  "kithara-bufpool",
+  "kithara-command",
+  "kithara-download",
+  "kithara-events",
+  "kithara-queue",
+  "kithara-ring",
+  "kithara-stream",
+]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-tools = ["cargo", "just"]
+tools = ["cargo", "cargo-nextest", "just"]
 program = "just"
 steps = [{ args = ["test", "miri"], label = "Miri interpreter run" }]
 role = "deep"
 kinds = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
-timeout_minutes = 240
+timeout_minutes = 60
+artifact = { name = "miri-junit", path = "target/nextest/miri/junit.xml", when = "always" }
 
 # libFuzzer needs the nightly sanitizer flags, so the targets build on the
 # pinned nightly the image links as `nightly`. Each target runs for a fixed
@@ -2051,14 +2052,7 @@ steps = [
   ], label = "repository secret scan" },
 ]
 role = "gate"
-kinds = [
-  "merge-request",
-  "quarantine",
-  "platforms",
-  "main",
-  "nightly",
-  "release",
-]
+kinds = []
 # GitHub's own answer: a ready pull request there runs what a branch push does,
 # and a GitHub branch push has never run this lane.
 kinds_github = ["main", "nightly"]
@@ -2072,14 +2066,7 @@ tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [{ args = ["check", "workspace"], label = "Linux workspace check" }]
 role = "gate"
-kinds = [
-  "merge-request",
-  "quarantine",
-  "platforms",
-  "main",
-  "nightly",
-  "release",
-]
+kinds = []
 # GitHub's own answer, for the reason `linux-secrets` gives.
 kinds_github = ["main", "nightly"]
 timeout_minutes = 60
@@ -2093,14 +2080,7 @@ program = "just"
 steps = [{ args = ["platform", "wasm"], label = "WASM portability check" }]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
-kinds = [
-  "merge-request",
-  "quarantine",
-  "platforms",
-  "main",
-  "nightly",
-  "release",
-]
+kinds = []
 timeout_minutes = 60
 
 # Every Linux test lane caps Cargo at two build jobs. The container has five
@@ -2110,14 +2090,7 @@ timeout_minutes = 60
 # diagnostic, because the compiler never reached one.
 #
 # The two clock lanes run one recipe and differ in the clock they ask for and
-# the directory they build in. Every kind runs the suite whole except a branch
-# push, which runs `--touched`: the build `main` runs, with the run narrowed to
-# the packages of the lanes the branch touched. One build per directory however
-# many lanes a branch touched, so no lane's build replaces the shared test
-# dylib another one linked. That is fail-closed: shared configuration and every
-# path without a reviewed domain owner run `workspace` whole, and a branch only
-# becomes narrow after its path is explicitly owned by one of the lanes above. A
-# lane with a configuration of its own is reached through `linux-support`.
+# the directory they build in.
 [ext.ci.lanes.linux-test-simulated-clock]
 cache_group = "linux"
 github_runner = "kithara-test-simulated"
@@ -2140,22 +2113,14 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux flash and no-block gate", args_by_kind = { branch = [
-    "test",
-    "run",
-    "--touched",
-    "--no-block=on",
-    "--profile",
-    "ci",
-    "--timings",
-  ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
   { args = [
     "test",
     "test-utils",
   ], label = "Test utilities at checked-out revision", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = ["platforms", "main", "nightly"]
+kinds = []
 kinds_github = ["main", "branch", "merge-request"]
 # The real-clock lane's budget: a build directory the host budget evicted
 # rebuilds whole at two jobs, which took 58 minutes on the trusted runner.
@@ -2175,7 +2140,7 @@ steps = [
   ], label = "Linux doc lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
-kinds = ["weekly"]
+kinds = []
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
@@ -2193,16 +2158,16 @@ steps = [
   ], label = "Linux loom lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
-kinds = ["weekly"]
+kinds = []
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
 # `just test` runs neither the build tooling nor the harness the product tests
-# are written with, so a product change can break them from the other side and
-# no branch push notices. These three run them whole on every `main` push and
-# every night; a branch push that touches their own sources runs them through
-# `linux-support`. GitLab declares them weekly behind its Linux platform gate,
-# which no schedule opens.
+# are written with, so a product change can break them from the other side.
+# These lanes, with `net-host` and `broadcast`, run them under their own
+# configuration: whole on a ready pull request, `main` and every night, and
+# the draft scope's part they hold on any other branch push. GitLab declares
+# them weekly behind its Linux platform gate, which no schedule opens.
 [ext.ci.lanes.linux-tooling]
 cache_group = "linux"
 label = "Linux"
@@ -2217,8 +2182,8 @@ steps = [
   ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = ["weekly"]
-kinds_github = ["main", "nightly"]
+kinds = []
+kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-harness]
@@ -2235,8 +2200,8 @@ steps = [
   ], label = "Linux harness lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = ["weekly"]
-kinds_github = ["main", "nightly"]
+kinds = []
+kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-fixtures]
@@ -2259,8 +2224,8 @@ steps = [
   ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
 ]
 role = "gate"
-kinds = ["weekly"]
-kinds_github = ["main", "nightly"]
+kinds = []
+kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-broadcast]
@@ -2276,16 +2241,13 @@ steps = [
     "--lane=broadcast",
   ], label = "Linux broadcast lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
-role = "deep"
-kinds = ["weekly"]
-kinds_github = ["nightly"]
+role = "gate"
+kinds = []
+kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
-# A full run carries `kithara-net`'s own tests on the Linux host under its
-# `client-host` backend only here. A branch push that touches that backend
-# runs them through `linux-support`'s `--touched` step, so this lane has no
-# `branch` kind, nor the `merge-request` kind that schedules what `branch`
-# does; Android runs the backend with a real transport.
+# `kithara-net`'s own tests run on the Linux host under its `client-host`
+# backend only here; Android runs the backend with a real transport.
 [ext.ci.lanes.linux-net-host]
 cache_group = "linux"
 label = "Linux"
@@ -2300,7 +2262,7 @@ steps = [
   ], label = "Linux net-host lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds_github = ["main"]
+kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-integration-regressions]
@@ -2317,7 +2279,7 @@ steps = [
   ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
-kinds = ["weekly"]
+kinds = []
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
@@ -2338,7 +2300,7 @@ steps = [
   ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "deep"
-kinds = ["weekly"]
+kinds = []
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
@@ -2364,7 +2326,8 @@ steps = [
   ], label = "Linux coverage", env = { CARGO_BUILD_JOBS = "2", COVERAGE_OUTPUT_DIR = "coverage" } },
 ]
 role = "deep"
-kinds = ["nightly"]
+kinds = []
+kinds_github = ["nightly"]
 timeout_minutes = 90
 
 # GitLab already runs its own equivalents of these six under other names; the
@@ -2375,6 +2338,7 @@ timeout_minutes = 90
 # Sources are platform-independent, so one object serves both fleets.
 [ext.ci.lanes.linux-lint]
 cache_group = "linux"
+target_snapshot = "linux-lint"
 label = "Linux"
 os = "linux"
 tools = ["cargo", "just"]
@@ -2448,51 +2412,11 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "real-clock suite", rebuild_check = true, args_by_kind = { branch = [
-    "test",
-    "run",
-    "--touched",
-    "--flash=off",
-    "--profile",
-    "ci",
-    "--timings",
-  ] }, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ], label = "real-clock suite", rebuild_check = true, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 120
-
-# The suites `just test` does not carry, or carries under a configuration other
-# than their own: the build tooling, the harness it is written with,
-# `kithara-net` under its host backend and the broadcast stack. A `main` push
-# and the nightly run get them whole from their own lanes; a branch push or a
-# ready pull request runs here the ones it touched, so a change to their own
-# sources does not wait for `main`. The clock lanes run the workspace build
-# only, so a branch reaches these suites here and nowhere else. The UI suite is
-# not one of them: only `ui.yml` judges it, on a graphics device, and a branch
-# run gets it by touching a UI-owned path or naming `deep-ui` among its required
-# lanes.
-[ext.ci.lanes.linux-support]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
-tools = ["cargo", "just", "sccache", "kache"]
-program = "just"
-steps = [
-  { args = [
-    "test",
-    "run",
-    "--touched",
-    "--lane=tooling",
-    "--lane=harness",
-    "--lane=fixtures",
-    "--lane=net-host",
-    "--lane=broadcast",
-  ], label = "own-configuration suites this push touches", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
-]
-role = "gate"
-kinds_github = ["branch", "merge-request"]
-timeout_minutes = 180
 
 [ext.ci.lanes.linux-usdt]
 cache_group = "linux"
@@ -2538,7 +2462,7 @@ steps = [
   ], label = "USDT queue contracts", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = ["platforms", "main", "nightly"]
+kinds = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
@@ -2837,16 +2761,21 @@ timeout_minutes = 90
 
 # Every Apple job repeats the preflight instead of inheriting it from a
 # predecessor. Each one is scheduled on its own and can be retried alone, so the
-# wrong Xcode has to fail in the job that would have used it.
+# uninitialized Xcode fails in the job that would have used it.
 [ext.ci.lanes.apple-lint]
 cache_group = "macos"
+target_snapshot = "apple-lint"
+publishes_sources = true
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 # Both chains run the checks that answer whether a change is acceptable:
@@ -2888,10 +2817,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 steps = [
@@ -2911,10 +2843,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 kinds_refused = { weekly = "weekly pipelines do not run the Apple suite" }
 program = "just"
@@ -2929,7 +2864,6 @@ steps = [
   ], label = "Apple flash and no-block gate", args_by_kind = { branch = [
     "test",
     "run",
-    "--touched",
     "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
     "--flash=on",
     "--no-block=on",
@@ -2960,10 +2894,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 steps = [
@@ -2984,10 +2921,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 steps = [
@@ -3016,10 +2956,13 @@ cache_group = "macos"
 label = "Apple"
 os = "macos"
 tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
-pinned = [
+checks = [
   { tool = "xcodebuild", args = [
     "-version",
-  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
 ]
 program = "just"
 steps = [
@@ -3074,6 +3017,34 @@ new_crate_interval_secs = 610
 http_timeout_secs = 20
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
 
+[ext.ci.lanes.release-app]
+cache_group = "host"
+label = "macOS application"
+os = "macos"
+tools = [
+  "cargo",
+  "just",
+  "security",
+  "codesign",
+  "lipo",
+  "otool",
+  "strip",
+  "sips",
+  "iconutil",
+  "ditto",
+]
+program = "just"
+steps = [
+  { args = [
+    "release",
+    "app",
+  ], label = "Signed universal macOS application" },
+]
+role = "release"
+kinds = ["nightly", "release"]
+kinds_github = []
+timeout_minutes = 180
+
 [ext.release]
 # Release flow: the `release:*` CI jobs build every artifact, and
 # `release:publish` tags, publishes and deploys them (`just ci run
@@ -3089,7 +3060,12 @@ gitlab_package = "kithara"
 nightly_tag = "nightly"
 core_asset = "KitharaFFIInternal.xcframework.zip"
 merged_asset = "Kithara.xcframework.zip"
-platform_assets = ["kithara.aar", "kithara-okhttp.aar"]
+platform_assets = [
+  "kithara.aar",
+  "kithara-okhttp.aar",
+  "Kithara-macos-universal.zip",
+  "Kithara-macos-universal.zip.sha256",
+]
 http_timeout_secs = 60
 upload_timeout_secs = 600
 # WebAssembly channel: trunk dist (`just platform wasm build`) zipped and served
@@ -3423,7 +3399,11 @@ banned_symbol_needles = [
   "symphonia_format_riff",
   "fdk_aac",
 ]
-apple_proof_needles = ["AppleCodec", "AppleAudioFileDemuxer"]
+# The release slices are fat-LTO'd and stripped, so no Rust name survives in
+# them; the proof is AudioToolbox entry points that only the Apple decode
+# backend imports: the demuxer opens files through callbacks, and the codec
+# reads the format list a magic cookie describes.
+apple_proof_needles = ["AudioFileOpenWithCallbacks", "AudioFormatGetProperty"]
 
 [ext.apple.docgen]
 # DocC documentation-extension pages generated from Rust rustdoc JSON so the

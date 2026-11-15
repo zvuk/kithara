@@ -37,9 +37,13 @@ const PRIMING_SKIP_FRAMES: usize = 4_410;
 const MAX_BLOCKS: usize = 2_000;
 
 async fn playing_harness() -> OfflinePlayer {
-    let harness =
-        OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SESSION_RATE)
-            .await;
+    let harness = OfflinePlayer::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
+            .build(),
+        SESSION_RATE,
+    )
+    .await;
     let deck_source = TrackSource::Uri(asset_source(&broadcast_tone_wav()));
     let item = append_source_loaded(&harness, harness.player(), deck_source).await;
     harness
@@ -276,6 +280,7 @@ async fn an_intake_gap_breaks_the_served_playlist() {
 
     let harness = playing_harness().await;
     let on_air = OnAir::start(&harness, ROOMY_RING, Some(GAP_AFTER_WRITES)).await;
+    let start = harness.host().position();
 
     render_tone(&harness, OVERRUN_FRAMES).await;
     on_air.wait_until_drained().await;
@@ -287,11 +292,15 @@ async fn an_intake_gap_breaks_the_served_playlist() {
     .await
     .expect("broadcast drain task completes");
 
+    let rendered_frames = harness.host().position() - start;
     let playlist = Playlist::parse(on_air.media_playlist().await);
     let after_break = playlist.uris_after_last_discontinuity().unwrap_or_else(|| {
         panic!(
-            "a gap the real-time node counted must reach the client as a break: {}",
-            playlist.text
+            "a gap the real-time node counted must reach the client as a break: {}; \
+             rendered_frames={rendered_frames}, audible_target_frames={}, segments={}",
+            playlist.text,
+            OVERRUN_FRAMES + TAIL_FRAMES,
+            on_air.handle.status().segments,
         )
     });
     assert!(

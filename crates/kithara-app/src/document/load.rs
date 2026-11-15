@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    fs, io,
+    fs, io, mem,
     num::NonZeroUsize,
     path::{Path, PathBuf},
 };
@@ -59,6 +59,16 @@ pub struct Config {
     /// The merged document before expansion. Kept so a dump can print
     /// references rather than the secrets behind them.
     source: Value,
+    disabled_providers: Vec<DisabledProvider>,
+}
+
+/// A DRM provider left out because a credential it references resolved
+/// nowhere. Tracks on its domains play without its key requests.
+#[derive(Clone, Debug, derive_more::Display)]
+#[display("DRM provider `{name}` is off: {missing}")]
+pub struct DisabledProvider {
+    name: String,
+    missing: MissingEnv,
 }
 
 /// Why a document could not be turned into a configuration.
@@ -268,7 +278,14 @@ impl Config {
         }
 
         let mut expanded = source.clone();
-        expand(&mut expanded, lookup).map_err(LoadError::Env)?;
+        let mut providers = Self::providers_mut(&mut expanded)
+            .map(mem::take)
+            .unwrap_or_default();
+        expand(&mut expanded, "", lookup).map_err(LoadError::Env)?;
+        let disabled_providers = Self::expand_providers(&mut providers, lookup);
+        if let Some(slot) = Self::providers_mut(&mut expanded) {
+            *slot = providers;
+        }
 
         let resource = overlay_path.as_deref().map_or_else(
             || consts::BAKED_PATH.to_string(),
@@ -290,7 +307,52 @@ impl Config {
             document,
             overlay,
             source,
+            disabled_providers,
         })
+    }
+
+    /// The DRM providers left out because their credentials resolved nowhere.
+    #[must_use]
+    pub fn disabled_providers(&self) -> &[DisabledProvider] {
+        &self.disabled_providers
+    }
+
+    fn providers_mut(tree: &mut Value) -> Option<&mut Vec<Value>> {
+        match tree.get_mut("drm")?.get_mut("providers")? {
+            Value::Sequence(providers) => Some(providers),
+            _ => None,
+        }
+    }
+
+    /// Expands each DRM provider on its own. A provider is credentials for one
+    /// key server, so one whose references resolve nowhere is left out rather
+    /// than stopping a build that has none of them; every other reference in
+    /// the document stays required.
+    fn expand_providers(
+        providers: &mut Vec<Value>,
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Vec<DisabledProvider> {
+        let mut disabled: Vec<DisabledProvider> = Vec::new();
+        let mut index = 0;
+        providers.retain_mut(|provider| {
+            let path = format!("drm.providers[{index}]");
+            index += 1;
+            match expand(provider, &path, lookup) {
+                Ok(()) => true,
+                Err(missing) => {
+                    let name = provider
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&path);
+                    disabled.push(DisabledProvider {
+                        name: name.to_string(),
+                        missing,
+                    });
+                    false
+                }
+            }
+        });
+        disabled
     }
 
     /// The HTTP options the document names.
@@ -434,8 +496,7 @@ mod tests {
     use super::{Config, LoadError, StorageBackend, consts::BAKED_PATH};
     use crate::{
         config::AppConfig,
-        plugins,
-        pools::{self, AppPools},
+        plugins, pools,
         theme::{Palette, Rgb},
     };
 
@@ -848,7 +909,8 @@ mod tests {
         let path = write(&dir, "output-rate", "app:\n  sample_rate: 48000\n");
 
         let document = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
-        let host = HostConfig::<AppPools>::builder()
+        let pools = pools::build(&document.pools()).expect("valid app pool policy");
+        let host = HostConfig::builder(pools)
             .settings(
                 HostSettings::builder()
                     .maybe_sample_rate(document.app().sample_rate)
@@ -1047,10 +1109,7 @@ mod tests {
         let path = write(
             &dir,
             "unresolved-reference",
-            concat!(
-                "drm:\n  providers:\n    - name: x\n      domains: [x.test]\n",
-                "      cipher_key: $KITHARA_DEFINITELY_UNSET_IN_TESTS\n",
-            ),
+            "hls:\n  size_probe_method: $KITHARA_DEFINITELY_UNSET_IN_TESTS\n",
         );
 
         let error = Config::load(Some(&path), None).expect_err("the reference resolves nowhere");
@@ -1060,6 +1119,62 @@ mod tests {
                 .to_string()
                 .contains("KITHARA_DEFINITELY_UNSET_IN_TESTS"),
             "{error}"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn the_baked_document_starts_without_credentials() {
+        let config = Config::load_with(None, None, &|_| None)
+            .expect("a build without DRM credentials still starts");
+
+        assert!(
+            config.document.drm.providers.is_empty(),
+            "no provider runs without its credentials"
+        );
+        let report: Vec<String> = config
+            .disabled_providers()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(report.len(), 2, "{report:?}");
+        assert!(report[0].contains("zvuk-prod"), "{report:?}");
+        assert!(report[0].contains("KITHARA_DRM_PROD_KEY"), "{report:?}");
+        assert!(report[1].contains("zvuk-stage"), "{report:?}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_provider_without_its_credentials_is_left_out_and_named() {
+        let dir = tempdir();
+        let path = write(
+            &dir,
+            "partial-credentials",
+            concat!(
+                "drm:\n  providers:\n",
+                "    - name: open\n      domains: [open.test]\n      cipher_key: literal\n",
+                "    - name: locked\n      domains: [locked.test]\n",
+                "      cipher_key: $KITHARA_DEFINITELY_UNSET_IN_TESTS\n",
+            ),
+        );
+
+        let config = Config::load_with(Some(&path), None, &|_| None)
+            .expect("a provider without credentials does not stop startup");
+
+        let kept: Vec<&str> = config
+            .document
+            .drm
+            .providers
+            .iter()
+            .map(|provider| provider.name.as_str())
+            .collect();
+        assert_eq!(kept, ["open"]);
+        let [disabled] = config.disabled_providers() else {
+            panic!("exactly one provider is off");
+        };
+        let report = disabled.to_string();
+        assert!(report.contains("locked"), "{report}");
+        assert!(
+            report.contains("KITHARA_DEFINITELY_UNSET_IN_TESTS (drm.providers[1].cipher_key)"),
+            "{report}"
         );
     }
 

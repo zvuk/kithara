@@ -10,14 +10,16 @@ use num_traits::ToPrimitive;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::accelerate;
-use super::{cascade, fade, portable, simd, strided};
+use super::{cascade, delay, fade, platform, portable, simd, strided};
 use crate::{
     fade::FadeCurve,
     filter::{Coefficients, Hertz, Type},
     interp::{InterpError, Interpolation},
 };
 
-const SIZES: [usize; 15] = [0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 63, 64, 1023, 4096];
+const SIZES: [usize; 19] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 63, 64, 66, 258, 1023, 4096,
+];
 const OFFSETS: [usize; 2] = [0, 1];
 const STRIDES: [usize; 5] = [1, 2, 3, 6, 9];
 const RATE: u32 = 48_000;
@@ -35,6 +37,177 @@ const SPECIALS: [f32; 9] = [
     f32::NAN,
     f32::from_bits(SIGNALING_NAN),
 ];
+
+#[kithara::test]
+fn scalar_gain_matches_ieee_multiplication_at_every_level() {
+    let fallback = |samples: &mut [f32], gain: f32| dispatch!(Level::fallback(), simd => simd::scale_in_place_kernel(simd, samples, gain));
+    for scale in [
+        crate::scale_in_place as fn(&mut [f32], f32) -> usize,
+        fallback,
+    ] {
+        for gain in [0.7, -1.5].into_iter().chain(SPECIALS) {
+            for size in SIZES {
+                for offset in OFFSETS {
+                    let input = padded_signal(size.saturating_add(offset), sine_440());
+                    let mut output = input.clone();
+                    let region = output.split_at_mut(offset).1;
+                    let count = scale(region.split_at_mut(size).0, gain);
+                    assert_prefix(
+                        &format!("gain {gain}, size {size}, offset {offset}"),
+                        count,
+                        region,
+                        size,
+                        |slot, got| {
+                            input
+                                .get(offset.saturating_add(slot))
+                                .is_some_and(|x| same(got, x * gain))
+                        },
+                    );
+                    assert!(
+                        output
+                            .iter()
+                            .zip(&input)
+                            .take(offset)
+                            .all(|(got, want)| got.to_bits() == want.to_bits())
+                    );
+                }
+            }
+        }
+    }
+}
+
+type Diffuse = fn(&mut [f32], &mut [f32], f32, &mut [f32]) -> usize;
+type DelayBlend = fn(&[f32], &[f32], f32, &mut [f32]) -> usize;
+
+fn delay_kernels() -> [(&'static str, Diffuse, DelayBlend); 3] {
+    [
+        ("platform", platform::delay_diffuse, platform::delay_blend),
+        (
+            "portable-native",
+            portable::delay_diffuse,
+            portable::delay_blend,
+        ),
+        (
+            "portable-fallback",
+            |x, d, g, w| dispatch!(Level::fallback(), simd => delay::diffuse_kernel(simd, x, d, g, w)),
+            |x, d, f, y| dispatch!(Level::fallback(), simd => delay::blend_kernel(simd, x, d, f, y)),
+        ),
+    ]
+}
+
+fn assert_delay_bits(name: &str, actual: &[f32], expected: &[f32]) {
+    assert_eq!(actual.len(), expected.len());
+    for (frame, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        assert_eq!(
+            actual.to_bits(),
+            expected.to_bits(),
+            "{name}, frame {frame}: {actual} != {expected}"
+        );
+    }
+}
+
+#[kithara::test]
+fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
+    for (name, diffuse, _) in delay_kernels() {
+        for frames in SIZES {
+            let input: Vec<_> = [0.3, -0.7, -0.0, 0.125, -1.000_488_3]
+                .into_iter()
+                .cycle()
+                .take(frames)
+                .collect();
+            let history: Vec<_> = [0.731, -0.5, 0.0, -0.125, 1.000_244_1]
+                .into_iter()
+                .cycle()
+                .take(frames)
+                .collect();
+            let mut whole = input.clone();
+            let mut whole_history = history.clone();
+            let mut writes = vec![0.0; frames];
+            assert_eq!(
+                diffuse(&mut whole, &mut whole_history, 0.731, &mut writes),
+                frames
+            );
+            let expected: Vec<_> = history.iter().zip(&input).map(|(d, x)| d - x).collect();
+            let expected_writes: Vec<_> = history
+                .iter()
+                .zip(&input)
+                .map(|(d, x)| d.mul_add(0.731, *x))
+                .collect();
+            assert_delay_bits(name, &whole, &expected);
+            assert_delay_bits(name, &whole_history, &expected);
+            assert_delay_bits(name, &writes, &expected_writes);
+            let mut split = input;
+            let mut split_history = history;
+            let mut split_writes = vec![0.0; frames];
+            let mut start = 0_usize;
+            for count in [0, 1, 3, 127, 2, 257].into_iter().cycle() {
+                let end = start.saturating_add(count).min(frames);
+                assert_eq!(
+                    diffuse(
+                        split.get_mut(start..end).unwrap(),
+                        split_history.get_mut(start..end).unwrap(),
+                        0.731,
+                        split_writes.get_mut(start..end).unwrap()
+                    ),
+                    end.wrapping_sub(start)
+                );
+                start = end;
+                if start == frames {
+                    break;
+                }
+            }
+            assert_delay_bits(name, &split, &whole);
+            assert_delay_bits(name, &split_writes, &writes);
+        }
+    }
+}
+
+#[kithara::test]
+fn delay_fraction_native_and_fallback_preserve_fused_scalar_bits() {
+    for (name, _, blend) in delay_kernels() {
+        for fraction in [0.0_f32, 0.1, 0.25, 0.731, 0.999_999_94] {
+            for frames in SIZES {
+                let newer: Vec<_> = [0.3, -0.7, -0.0, 0.125, -1.000_488_3]
+                    .into_iter()
+                    .cycle()
+                    .take(frames)
+                    .collect();
+                let older: Vec<_> = [0.731, -0.5, 0.0, -0.125, 1.000_244_1]
+                    .into_iter()
+                    .cycle()
+                    .take(frames)
+                    .collect();
+                let expected: Vec<_> = newer
+                    .iter()
+                    .zip(&older)
+                    .map(|(n, o)| fraction.mul_add(o - n, *n))
+                    .collect();
+                let mut whole = vec![0.0; frames];
+                assert_eq!(blend(&newer, &older, fraction, &mut whole), frames);
+                assert_delay_bits(name, &whole, &expected);
+                let mut split = vec![0.0; frames];
+                let mut start = 0_usize;
+                for count in [0, 1, 3, 127, 2, 257].into_iter().cycle() {
+                    let end = start.saturating_add(count).min(frames);
+                    assert_eq!(
+                        blend(
+                            newer.get(start..end).unwrap(),
+                            older.get(start..end).unwrap(),
+                            fraction,
+                            split.get_mut(start..end).unwrap()
+                        ),
+                        end.wrapping_sub(start)
+                    );
+                    start = end;
+                    if start == frames {
+                        break;
+                    }
+                }
+                assert_delay_bits(name, &split, &whole);
+            }
+        }
+    }
+}
 
 type DeinterleavePair = fn(&[f32], &mut [f32], &mut [f32]) -> usize;
 type DownmixPair = fn(&[f32], &mut [f32]) -> usize;
@@ -409,16 +582,6 @@ const CUTOFFS: [[f64; 4]; 2] = [
     [1_000.0, 2_000.0, 4_000.0, 8_000.0],
     [3_000.0, 5_000.0, 7_000.0, 9_000.0],
 ];
-/// Peak inputs: specials without `NaN` and subnormals, which `max` orders differently.
-const PEAK_SPECIALS: [f32; 6] = [
-    0.0,
-    -0.0,
-    f32::MIN_POSITIVE,
-    f32::MAX,
-    f32::INFINITY,
-    f32::NEG_INFINITY,
-];
-
 /// Section coefficients per half of the stream: the second half retunes.
 fn halves(sections: usize) -> [Vec<[f32; 5]>; 2] {
     CUTOFFS.map(|cutoffs| {
@@ -617,45 +780,6 @@ fn a_silent_channel_beside_a_playing_one_never_reaches_subnormals() {
             subnormal, 0,
             "{name}: the silent channel rang in subnormals"
         );
-    }
-}
-
-fn fallback_peak(samples: &[f32]) -> f32 {
-    dispatch!(Level::fallback(), simd => portable::peak_kernel(simd, samples))
-}
-
-#[kithara::test]
-fn peak_matches_the_scalar_maximum_on_every_backend() {
-    type Peak = fn(&[f32]) -> f32;
-    let backends: Vec<(&str, Peak)> = Vec::from([
-        ("portable-native", portable::peak as Peak),
-        ("portable-fallback", fallback_peak),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        ("accelerate", accelerate::peak),
-    ]);
-    for len in SIZES {
-        let sine: Vec<f32> = signal(len.saturating_add(SPECIALS.len()), sine_440())
-            .into_iter()
-            .skip(SPECIALS.len())
-            .collect();
-        let with_specials: Vec<f32> = PEAK_SPECIALS
-            .iter()
-            .copied()
-            .chain(sine.iter().copied())
-            .take(len)
-            .collect();
-        for samples in [&sine, &with_specials] {
-            let expected = samples
-                .iter()
-                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
-            for (name, peak) in &backends {
-                assert_eq!(
-                    peak(samples).to_bits(),
-                    expected.to_bits(),
-                    "{name} at {len}"
-                );
-            }
-        }
     }
 }
 
@@ -1063,7 +1187,7 @@ fn affine_rounds_within_one_ulp_on_every_backend() {
                     let count = (row.affine)(region.split_at_mut(size).0, scale, offset_value);
                     let input = input.split_at(offset).1;
                     assert_prefix(
-                        &format!("{name}: ·{scale} + {offset_value}, size {size}, offset {offset}"),
+                        &format!("{name}: *{scale} + {offset_value}, size {size}, offset {offset}"),
                         count,
                         region,
                         size,
@@ -1124,7 +1248,7 @@ fn scale_add_rounds_within_one_ulp_on_every_backend() {
                     let count = (row.scale_add)(x.split_at(offset).1, gain, region);
                     let (x, acc) = (x.split_at(offset).1, acc.split_at(offset).1);
                     assert_prefix(
-                        &format!("{name}: ·{gain}, size {size}, offset {offset}"),
+                        &format!("{name}: *{gain}, size {size}, offset {offset}"),
                         count,
                         region,
                         size,
@@ -1190,7 +1314,7 @@ fn mul_add_rounds_within_one_ulp_at_every_level() {
     }
 }
 
-/// `(1 + 2⁻¹²)·(1 + 2⁻¹²) − (1 + 2⁻¹¹)` is exactly 2⁻²⁴, but the product
+/// `(1 + 2^-12)*(1 + 2^-12) - (1 + 2^-11)` is exactly 2^-24, but the product
 /// rounded alone cancels to `0.0`: a kernel that rounds the product before
 /// the add loses the whole result.
 const CANCELLING_TRIPLE: [f32; 3] = [1.000_244_1, 1.000_244_1, -1.000_488_3];
@@ -1251,6 +1375,139 @@ fn add_rounds_within_one_ulp_on_every_backend() {
     }
 }
 
+type Crossfade = fn(&[f32], &mut [f32], NonZeroUsize, usize, usize) -> usize;
+
+fn crossfades() -> [(&'static str, Crossfade); 3] {
+    [
+        ("native", simd::crossfade_linear),
+        (
+            "fallback",
+            |old, output, channels, first, frames| dispatch!(Level::fallback(), simd => simd::crossfade_linear_kernel(simd, old, output, channels, first, frames)),
+        ),
+        ("public", crate::crossfade_linear),
+    ]
+}
+
+#[kithara::test]
+fn crossfade_linear_preserves_identity_and_integer_frame_gains() {
+    let u32_edge = usize::try_from(u32::MAX).expect("u32 fits usize");
+    for (name, crossfade) in crossfades() {
+        for size in SIZES {
+            for offset in OFFSETS {
+                for channels in [
+                    stride(1),
+                    stride(2),
+                    stride(3),
+                    stride(4),
+                    stride(5),
+                    stride(6),
+                    stride(8),
+                    stride(16),
+                ] {
+                    for first in [
+                        0,
+                        1,
+                        (1 << 24) - 3,
+                        (1 << 24) + 1,
+                        (1 << 31) + 1,
+                        u32_edge.saturating_sub(1024),
+                        u32_edge.saturating_sub(3),
+                        u32_edge.saturating_add(1),
+                        usize::MAX,
+                    ] {
+                        let frames = (1 << 24) + 137;
+                        let count = size / channels;
+                        let len = count.saturating_mul(channels.get());
+                        for shared in [false, true] {
+                            let old = signal(size.saturating_add(offset), sine_440());
+                            let old = old.split_at(offset).1;
+                            let input = if shared {
+                                old.to_vec()
+                            } else {
+                                shifted(old.to_vec())
+                            };
+                            let mut output = vec![UNWRITTEN; offset];
+                            output.extend_from_slice(&input);
+                            output.extend([UNWRITTEN; 2]);
+                            let written = crossfade(
+                                old,
+                                output.split_at_mut(offset).1,
+                                channels,
+                                first,
+                                frames,
+                            );
+                            assert_eq!(written, count, "{name}, size={size}, channels={channels}");
+                            let (prefix, output) = output.split_at(offset);
+                            let (signal, suffix) = output.split_at(size);
+                            let (processed, remainder) = signal.split_at(len);
+                            assert!(prefix.iter().all(|x| x.to_bits() == UNWRITTEN.to_bits()));
+                            assert_eq!(
+                                bits(remainder),
+                                bits(input.get(len..).expect("input tail"))
+                            );
+                            assert!(suffix.iter().all(|x| x.to_bits() == UNWRITTEN.to_bits()));
+                            for (index, ((&got, &old), &incoming)) in
+                                processed.iter().zip(old).zip(&input).enumerate()
+                            {
+                                if old.to_bits() == incoming.to_bits() {
+                                    assert_eq!(
+                                        got.to_bits(),
+                                        incoming.to_bits(),
+                                        "{name}: mask at {index}"
+                                    );
+                                } else {
+                                    let numerator = u128::try_from(first)
+                                        .expect("usize fits u128")
+                                        .checked_add(
+                                            u128::try_from(index / channels)
+                                                .expect("frame fits u128"),
+                                        )
+                                        .expect("two usize values fit u128");
+                                    let gain =
+                                        numerator.to_f32().expect("sum is finite") / float(frames);
+                                    let expected = old.mul_add(1.0 - gain, incoming * gain);
+                                    assert!(
+                                        same(got, expected),
+                                        "{name}: law at {index}, got={got}, expected={expected}"
+                                    );
+                                }
+                            }
+                            let mut split = input.clone();
+                            let split_at = (count / 2).saturating_mul(channels.get());
+                            let (head, tail) = split.split_at_mut(split_at);
+                            let (old_head, old_tail) = old.split_at(split_at);
+                            crossfade(old_head, head, channels, first, frames);
+                            if let Some(next) = first.checked_add(split_at / channels) {
+                                crossfade(old_tail, tail, channels, next, frames);
+                                assert_eq!(
+                                    bits(split.get(..len).expect("processed split")),
+                                    bits(processed),
+                                    "{name}: split"
+                                );
+                            }
+                        }
+                        let mut gains = vec![1.0; size.saturating_add(2)];
+                        crossfade(&vec![0.0; size], &mut gains, channels, first, frames);
+                        for (index, &gain) in gains.iter().take(len).enumerate() {
+                            let numerator = u128::try_from(first)
+                                .expect("usize fits u128")
+                                .checked_add(
+                                    u128::try_from(index / channels).expect("frame fits u128"),
+                                )
+                                .expect("two usize values fit u128");
+                            assert_eq!(
+                                gain.to_bits(),
+                                (numerator.to_f32().expect("finite") / float(frames)).to_bits(),
+                                "{name}: gain at {index}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A target shorter than its inputs bounds the prefix on every backend.
 #[kithara::test]
 fn a_short_target_bounds_every_elementwise_kernel() {
@@ -1270,10 +1527,31 @@ fn a_short_target_bounds_every_elementwise_kernel() {
         let mut target = [0.0_f32; 5];
         assert_eq!(mul_add(&input, &input, &mut target), 5, "{name}: mul_add");
     }
+    for (name, crossfade) in crossfades() {
+        let mut target = [0.0_f32; 5];
+        assert_eq!(
+            crossfade(&input, &mut target, stride(2), 1, 7),
+            2,
+            "{name}: short output"
+        );
+        let mut target = [0.25_f32; 9];
+        assert_eq!(
+            crossfade(
+                input.get(..5).expect("short input"),
+                &mut target,
+                stride(2),
+                1,
+                7
+            ),
+            2,
+            "{name}: short outgoing"
+        );
+        assert_eq!(target[4..], [0.25; 5]);
+    }
 }
 
 /// Edges first, then a band just below the incoming edge where the cosine
-/// side tends to zero, then an even grid over `[−1/8, 9/8]`.
+/// side tends to zero, then an even grid over `[-1/8, 9/8]`.
 fn fade_positions() -> Vec<f32> {
     const GRID: u16 = 4_096;
     let start = 0.000_01_f32;
@@ -1346,6 +1624,54 @@ const CURVES: [FadeCurve; 4] = [
     FadeCurve::SquareRoot,
     FadeCurve::Linear,
 ];
+
+#[kithara::test]
+fn in_place_product_preserves_ieee_prefixes_at_every_level() {
+    type Product = fn(&mut [f32], &[f32]) -> usize;
+    let fallback: Product = |samples, gains| dispatch!(Level::fallback(), simd => portable::multiply_in_place_kernel(simd, samples, gains));
+    let mut products: Vec<(&str, Product)> = vec![
+        ("native", portable::multiply_in_place),
+        ("fallback", fallback),
+        ("public", crate::multiply_in_place),
+    ];
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
+        products.push(("platform", platform::multiply_in_place));
+    }
+    for (name, product) in products {
+        for size in SIZES {
+            for offset in OFFSETS {
+                for gain in SPECIALS.into_iter().chain([1.0, -0.7, 1.000_000_1]) {
+                    let input = padded_signal(size.saturating_add(offset), sine_440());
+                    for shorter in [false, true] {
+                        let count = if shorter {
+                            size.saturating_sub(1)
+                        } else {
+                            size
+                        };
+                        let gains = vec![gain; count];
+                        let mut actual = input.clone();
+                        assert_eq!(
+                            product(actual.split_at_mut(offset).1, &gains),
+                            count,
+                            "{name}: short side controls the FFI count"
+                        );
+                        for (index, (&got, &original)) in actual.iter().zip(&input).enumerate() {
+                            if (offset..offset.checked_add(count).unwrap()).contains(&index) {
+                                assert!(same(got, original * gain), "{name}: {index}, gain {gain}");
+                            } else {
+                                assert_eq!(
+                                    got.to_bits(),
+                                    original.to_bits(),
+                                    "{name}: tail {index}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 type Gains = fn(FadeCurve, &[f32], &mut [f32], &mut [f32]) -> usize;
 

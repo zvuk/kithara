@@ -2,10 +2,11 @@ use std::num::NonZeroU32;
 
 use arc_swap::ArcSwap;
 use firewheel::{
-    FirewheelConfig, FirewheelContext,
+    FirewheelConfig,
     channel_config::ChannelCount,
     node::{AudioNode, NodeID},
 };
+use kithara_bufpool::HasPool;
 use kithara_command::{Live, ScopedConfig, ScopedSender, Seq, When};
 use kithara_config::ConfigOwner;
 use kithara_events::EventBus;
@@ -21,22 +22,25 @@ use tracing::{debug, warn};
 use triple_buffer::Output;
 
 use super::{
-    dispatch::{restart_stream, sample_rate, stream_shape, trace_stream_info},
+    dispatch::{restart_stream, sample_rate, start_stream, stream_shape, trace_stream_info},
     graph::tap,
     protocol::{SessionError, StartStreamFn},
     queue::HostProtocol,
+    timeline::SessionTimeline,
     transport::{SessionGridGeneration, SessionInboxReturnNode, TransportObservation, install},
 };
 use crate::{
     DeckId,
     api::Tap,
     host::HostSettings,
-    rt::{MasterNode, SessionOutput},
+    rt::{LimiterNode, MasterNode, MetronomeNode, SessionOutput},
+    session::context::SessionGraph,
 };
 
 pub(crate) enum TapSlot {
     Requested(OutputGroup),
     Installed(NodeID),
+    Retiring(NodeID),
 }
 
 #[derive(Default)]
@@ -196,14 +200,14 @@ impl RootView {
     }
 }
 
-pub(crate) enum SessionStream {
-    #[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DeviceBackend = Box<super::native_engine::NativeStream>;
+#[cfg(target_arch = "wasm32")]
+pub(crate) type DeviceBackend = super::web_output::WebOutput;
+
+pub(crate) enum SessionStream<T = DeviceBackend> {
     Realtime {
-        _backend: Box<firewheel::cpal::CpalStream>,
-    },
-    #[cfg(target_arch = "wasm32")]
-    Realtime {
-        _backend: firewheel_web_audio::WebAudioBackend,
+        _backend: T,
     },
     #[cfg(feature = "offline")]
     Offline(Box<crate::session::offline::backend::OfflineStream>),
@@ -213,6 +217,13 @@ pub(crate) struct DeckNode {
     pub(crate) id: DeckId,
     pub(crate) node: NodeID,
     pub(crate) bus: Option<EventBus>,
+    #[cfg(feature = "offline")]
+    pub(crate) offline: Option<kithara_render::rt::OfflineDeck<super::transport::TransportState>>,
+}
+
+pub(crate) struct RetiredDeck {
+    pub(crate) deck: DeckNode,
+    pub(crate) staged: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -223,18 +234,20 @@ pub(crate) struct SessionBufferConfig {
 
 pub(crate) struct SessionState<T, S> {
     pub(crate) settled: Vec<crate::HostSettled>,
-    /// The single clock read and delivery lead for the current owner pass.
-    pub(crate) iteration_clock: Option<(SessionFrame, FrameCount)>,
+    /// The single clock read and delivery leads for the current owner pass.
+    pub(crate) iteration_clock: Option<crate::PassClock>,
     /// Wall-time delivery lead, absent for a runtime that drains before rendering.
     pub(crate) delivery_delay: Option<Duration>,
     /// Graph node identities; deck state remains with the deck's owner.
     pub(crate) deck_nodes: Vec<DeckNode>,
+    pub(crate) retired_decks: Vec<RetiredDeck>,
     pub(crate) channel_config: ScopedConfig,
-    marker: std::marker::PhantomData<fn() -> S>,
     pub(crate) root: HostRoot,
-    pub(crate) output: SessionOutput,
+    pub(crate) output: SessionOutput<S>,
     pub(crate) session_metronome_node_id: Option<NodeID>,
-    pub(crate) ctx: Option<FirewheelContext>,
+    pub(crate) ctx: Option<SessionGraph>,
+    /// Detached contexts awaiting the return of their backend processor.
+    pub(super) retired_contexts: Vec<SessionGraph>,
     pub(crate) taps: Taps,
     /// The pause/resume fade length the session asks Firewheel for, in frames.
     /// `None` leaves Firewheel's own default in place.
@@ -243,7 +256,7 @@ pub(crate) struct SessionState<T, S> {
     pub(crate) reserved_session_grid: Option<SessionGridGeneration>,
     pub(crate) session_limiter_node_id: Option<NodeID>,
     pub(crate) session_output_node_id: Option<NodeID>,
-    pub(crate) stream: Option<T>,
+    pub(crate) stream: Option<SessionStream<T>>,
     /// The root and deck scopes of the session's command channel.
     pub(crate) channel: Option<ScopedSender<HostProtocol, DeckProtocol>>,
     /// What the running transport last committed.
@@ -252,6 +265,8 @@ pub(crate) struct SessionState<T, S> {
     /// The Host settings as the render graph confirmed them, with the
     /// changes still on their way to it.
     pub(crate) settings: Live<HostSettings, HostProtocol>,
+    /// The tempo map the Host accepted and the accepted changes in flight.
+    pub(crate) timeline: SessionTimeline,
     pub(crate) start_stream_fn: StartStreamFn<T>,
     /// Set when the output device is acquired once and cannot be rebuilt, so
     /// an idle session must keep it rather than release it.
@@ -259,7 +274,7 @@ pub(crate) struct SessionState<T, S> {
     pub(crate) stream_needs_restart: bool,
 }
 
-/// The stream outlives nothing: it is dropped before the context.
+/// Current and retired contexts drop after streams and before other state.
 ///
 /// Firewheel hands the stream its processor and waits, on its own drop, for
 /// that processor to come back. Declaration order would drop the context
@@ -269,6 +284,7 @@ impl<T, S> Drop for SessionState<T, S> {
     fn drop(&mut self) {
         self.stream.take();
         self.ctx.take();
+        self.retired_contexts.clear();
     }
 }
 
@@ -280,18 +296,26 @@ impl<T, S> SessionState<T, S> {
         root: HostRoot,
         root_view: RootView,
         buffers: SessionBufferConfig,
-        output: SessionOutput,
+        output: SessionOutput<S>,
         settings: Live<HostSettings, HostProtocol>,
         channel_config: ScopedConfig,
         start_stream_fn: F,
     ) -> Self
     where
-        F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
+        F: FnMut(
+                &mut SessionGraph,
+                u32,
+                &mut [DeckNode],
+                Option<SessionStream<T>>,
+            ) -> Result<SessionStream<T>, String>
+            + Send
+            + 'static,
     {
         let grid_id = root.id();
         let mut generation = SessionGridGeneration::new(grid_id);
         generation.commit_revision(BeatGridRevision::first());
         let state = Self {
+            timeline: SessionTimeline::new(settings.config().trajectory()),
             settings,
             channel_config,
             requested_max_block_frames: buffers.max_block_frames,
@@ -302,6 +326,7 @@ impl<T, S> SessionState<T, S> {
             root_view,
             start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
+            retired_contexts: Vec::new(),
             stream: None,
             channel: None,
             transport_observation: None,
@@ -315,20 +340,38 @@ impl<T, S> SessionState<T, S> {
             iteration_clock: None,
             delivery_delay: None,
             deck_nodes: Vec::new(),
-            marker: std::marker::PhantomData,
+            retired_decks: Vec::new(),
         };
         state.publish_root();
         state
     }
 
+    /// Starts an owner pass. The transport snapshot is read before the clock:
+    /// a block publishes its snapshot after the stream advanced its clock, so
+    /// the clock read next counts frames on the axis the snapshot confirms.
     pub(crate) fn begin_iteration(&mut self) {
-        self.iteration_clock = self.ctx.as_ref().and_then(|ctx| {
-            let _ = ctx.stream_info()?;
-            Some((
-                SessionFrame::new(ctx.audio_clock().samples.0),
-                self.delivery(),
-            ))
+        self.retired_contexts.retain(|ctx| ctx.is_active());
+        let snapshot = self
+            .transport_observation
+            .as_mut()
+            .and_then(|observation| observation.read().snapshot());
+        self.timeline.observe(snapshot);
+        let now = self.ctx.as_ref().and_then(|ctx| {
+            if !ctx.has_session_clock() {
+                return None;
+            }
+            Some(SessionFrame::new(ctx.audio_clock().samples.0))
         });
+        self.iteration_clock = now.map(|now| self.clock_at(now));
+    }
+
+    /// The pass clock at `now`, with the delivery leads the session has now.
+    pub(crate) fn clock_at(&self, now: SessionFrame) -> crate::PassClock {
+        crate::PassClock {
+            now,
+            delivery: self.delivery(),
+            deck_delivery: self.deck_delivery(),
+        }
     }
 
     /// Rejects a timed change that cannot reach the render executor in this pass.
@@ -336,8 +379,8 @@ impl<T, S> SessionState<T, S> {
         match when {
             When::Next => Ok(()),
             When::At(frame) => {
-                let (now, delivery) = self.iteration_clock.ok_or(PlayError::Untimed)?;
-                if frame < now + delivery {
+                let clock = self.iteration_clock.ok_or(PlayError::Untimed)?;
+                if frame < clock.now + clock.delivery {
                     Err(PlayError::Late)
                 } else {
                     Ok(())
@@ -351,7 +394,19 @@ impl<T, S> SessionState<T, S> {
 
     /// The configured owner pump and worker wake allowances, plus one output block.
     pub(crate) fn delivery(&self) -> FrameCount {
-        let duration = self.delivery_delay.unwrap_or_default();
+        self.delivery_within(self.delivery_delay.unwrap_or_default())
+    }
+
+    /// The owner pump allowance plus one output block: deck parts wake no worker.
+    pub(crate) fn deck_delivery(&self) -> FrameCount {
+        self.delivery_within(
+            self.delivery_delay
+                .unwrap_or_default()
+                .min(crate::consts::SESSION_PUMP_INTERVAL),
+        )
+    }
+
+    fn delivery_within(&self, duration: Duration) -> FrameCount {
         let publication_frames = duration
             .as_nanos()
             .saturating_mul(u128::from(sample_rate(self).output()))
@@ -370,20 +425,32 @@ impl<T, S> SessionState<T, S> {
             sample_rate(self),
         );
     }
+
+    /// Puts every batch the owner staged on the transport's ring.
+    pub(crate) fn publish_staged(&mut self) {
+        if let Some(channel) = &mut self.channel
+            && let Err(error) = channel.publish()
+        {
+            warn!(%error, "host publication gate closed");
+        }
+    }
 }
 
 /// Adds a node to the graph, turning the rejection Firewheel now reports into
 /// the session's own graph error. A node the graph refuses is a wiring bug, not
 /// a runtime condition the session can route around.
 pub(crate) fn add_graph_node<N: AudioNode + 'static>(
-    ctx: &mut FirewheelContext,
+    ctx: &mut SessionGraph,
     node: N,
 ) -> Result<NodeID, SessionError> {
     ctx.add_node(node, None)
         .map_err(|err| SessionError::Graph(format!("audio graph rejected a node: {err}")))
 }
 
-pub(crate) fn ensure_ctx<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+pub(crate) fn ensure_ctx<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     ensure_stream_ready(state)?;
     ensure_session_output(state)
 }
@@ -415,7 +482,7 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
             Duration::from_secs_f64(f64::from(declick_frames.get()) / f64::from(sample_rate))
                 .as_secs_f32();
     }
-    let mut ctx = FirewheelContext::new(config);
+    let mut ctx = SessionGraph::new(config);
     let session_grid = state
         .reserved_session_grid
         .ok_or_else(|| SessionError::Graph("session grid generation is missing".to_owned()))?;
@@ -431,67 +498,81 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
             return Err(SessionError::Graph(error.into()));
         }
     };
-    let stream = match (state.start_stream_fn)(&mut ctx, sample_rate) {
+    let stream = match start_stream(
+        &mut state.start_stream_fn,
+        &mut ctx,
+        sample_rate,
+        &mut state.deck_nodes,
+        None,
+    ) {
         Ok(stream) => stream,
         Err(error) => {
             state.reserved_session_grid = Some(session_grid);
-            return Err(SessionError::StreamStart(error));
+            return Err(error);
         }
     };
     state.ctx = Some(ctx);
     state.stream = Some(stream);
     state.channel = Some(channel);
     state.transport_observation = Some(transport_observation);
-    state.stream_needs_restart = false;
+    #[cfg(target_arch = "wasm32")]
+    let starting = state
+        .ctx
+        .as_ref()
+        .is_some_and(SessionGraph::output_starting);
+    #[cfg(not(target_arch = "wasm32"))]
+    let starting = false;
+    state.stream_needs_restart = starting;
     state.publish_root();
     trace_stream_info(state, "start-stream");
     debug!(sample_rate, "[KITHARA-ROUTE] firewheel context ready");
     Ok(())
 }
 
-fn ensure_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
-    if state.session_output_node_id.is_none() {
+/// Installs the output chain on a running context only. Firewheel builds the
+/// processors of nodes added to a stopped context in its next activation, out
+/// of reach of the rollback in `create_session_output`, so a stopped context
+/// gets the chain from the first call after its stream runs.
+fn ensure_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let running = state.ctx.as_ref().is_some_and(|ctx| ctx.is_active());
+    if running && state.session_output_node_id.is_none() {
         return create_session_output(state);
     }
 
     Ok(())
 }
 
-fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+/// Installs the output chain whole or not at all: a chain the graph rejects
+/// leaves none of its nodes behind.
+fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     debug!("[KITHARA-ROUTE] creating session output graph");
     let limiter = state.output.limiter();
     let metronome = state.output.metronome(state.settings.config().metronome());
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err(SessionError::NoContext);
     };
-    let session_id = add_graph_node(fw_ctx, MasterNode)?;
-    let limiter_id = add_graph_node(fw_ctx, limiter)?;
-    let metronome_id = add_graph_node(fw_ctx, metronome)?;
-    let inbox_return_id = add_graph_node(fw_ctx, SessionInboxReturnNode)?;
-    let graph_out = fw_ctx.graph_out_node_id();
-    fw_ctx
-        .connect(session_id, limiter_id, &[(0, 0), (1, 1)], false)
-        .map_err(|err| {
-            SessionError::Graph(format!("connect session output to limiter failed: {err}"))
-        })?;
-    fw_ctx
-        .connect(limiter_id, metronome_id, &[(0, 0), (1, 1)], false)
-        .map_err(|err| {
-            SessionError::Graph(format!("connect limiter to metronome failed: {err}"))
-        })?;
-    fw_ctx
-        .connect(metronome_id, inbox_return_id, &[(0, 0), (1, 1)], false)
-        .map_err(|err| {
-            SessionError::Graph(format!("connect metronome to inbox return failed: {err}"))
-        })?;
-    fw_ctx
-        .connect(inbox_return_id, graph_out, &[(0, 0), (1, 1)], false)
-        .map_err(|err| {
-            SessionError::Graph(format!("connect inbox return to graph_out failed: {err}"))
-        })?;
-    if let Err(err) = fw_ctx.update() {
-        warn!("session graph update after output init failed: {err:?}");
-    }
+    let mut added = Vec::with_capacity(crate::consts::SESSION_OUTPUT_NODES);
+    let [session_id, limiter_id, metronome_id] =
+        match build_session_output(fw_ctx, limiter, metronome, &mut added) {
+            Ok(nodes) => nodes,
+            Err(error) => {
+                for node in added.into_iter().rev() {
+                    if let Err(remove_error) = fw_ctx.remove_node(node) {
+                        warn!(
+                            ?remove_error,
+                            "failed to remove a rejected session output node"
+                        );
+                    }
+                }
+                return Err(error);
+            }
+        };
     state.session_output_node_id = Some(session_id);
     state.session_limiter_node_id = Some(limiter_id);
     state.session_metronome_node_id = Some(metronome_id);
@@ -505,6 +586,49 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
     Ok(())
 }
 
+/// Adds the output chain to `ctx`, each node recorded in `added` as it lands,
+/// connects it in order to the graph output and compiles the graph. Returns the
+/// master, limiter and metronome nodes.
+fn build_session_output<S>(
+    ctx: &mut SessionGraph,
+    limiter: LimiterNode<S>,
+    metronome: MetronomeNode<S>,
+    added: &mut Vec<NodeID>,
+) -> Result<[NodeID; 3], SessionError>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let session_id = add_graph_node(ctx, MasterNode)?;
+    added.push(session_id);
+    let limiter_id = add_graph_node(ctx, limiter)?;
+    added.push(limiter_id);
+    let metronome_id = add_graph_node(ctx, metronome)?;
+    added.push(metronome_id);
+    let inbox_return_id = add_graph_node(ctx, SessionInboxReturnNode)?;
+    added.push(inbox_return_id);
+    let graph_out = ctx.graph_out_node_id();
+    ctx.connect(session_id, limiter_id, &[(0, 0), (1, 1)], false)
+        .map_err(|err| {
+            SessionError::Graph(format!("connect session output to limiter failed: {err}"))
+        })?;
+    ctx.connect(limiter_id, metronome_id, &[(0, 0), (1, 1)], false)
+        .map_err(|err| {
+            SessionError::Graph(format!("connect limiter to metronome failed: {err}"))
+        })?;
+    ctx.connect(metronome_id, inbox_return_id, &[(0, 0), (1, 1)], false)
+        .map_err(|err| {
+            SessionError::Graph(format!("connect metronome to inbox return failed: {err}"))
+        })?;
+    ctx.connect(inbox_return_id, graph_out, &[(0, 0), (1, 1)], false)
+        .map_err(|err| {
+            SessionError::Graph(format!("connect inbox return to graph_out failed: {err}"))
+        })?;
+    ctx.update().map_err(|err| {
+        SessionError::Graph(format!("session output graph update failed: {err:?}"))
+    })?;
+    Ok([session_id, limiter_id, metronome_id])
+}
+
 #[cfg(all(
     test,
     feature = "offline",
@@ -514,18 +638,26 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
 mod tests {
     use std::num::NonZeroU16;
 
+    use firewheel::ActivateInfo;
     use kithara_config::Config;
+    use kithara_effects::{LimiterConfig, LookaheadMs};
     use kithara_events::TrackId;
     use kithara_platform::tokio::runtime::Builder;
     use kithara_play::{HostedDeck, PlayWorker, PlayWorkerConfig, Player, ResourcePrep};
     use kithara_queue::{Queue, QueueCommand, QueueConfig, TrackSource, Transition};
+    use kithara_render::{bridge::scope_channels, rt::DeckMixerConfig};
     use kithara_signal::AudioSpec;
-    use kithara_test_utils::{TestTempDir, bufpool::pools, kithara};
+    use kithara_test_utils::{
+        TestTempDir,
+        bufpool::{TestPools, pools, pools_with_budget},
+        kithara,
+    };
 
     use super::*;
     use crate::{
         HostCommand, HostOwner,
         mock::{TestState, ask, registration, render_block, test_state},
+        session::graph::install_deck,
     };
 
     #[kithara::test]
@@ -638,6 +770,7 @@ mod tests {
         assert!(state.ctx.is_none());
         state.owner.apply(command).expect("first registration");
         assert_eq!(state.delivery_delay, expected_delay);
+        assert_eq!(threaded_delivery, state.deck_delivery() < state.delivery());
         let ctx = state.ctx.as_ref().expect("actual activated native context");
         assert!(ctx.stream_info().is_some());
         let native = SessionFrame::new(ctx.audio_clock().samples.0);
@@ -645,7 +778,7 @@ mod tests {
             .owner
             .clock()
             .expect("started stream has a clock in this registration pass");
-        assert_eq!(clock, (native, state.delivery()));
+        assert_eq!(clock, state.clock_at(native));
         let directory = TestTempDir::new();
         let path = directory.path().join("same-pass.wav");
         kithara_play::mock::write_pcm_wav(
@@ -661,8 +794,12 @@ mod tests {
                 let actual = out
                     .pass()
                     .expect("real same-pass clock and delivery are lent");
-                assert_eq!((actual.now, actual.delivery), clock);
-                assert_eq!((pass.now, pass.delivery), clock);
+                assert_eq!(actual.now, clock.now);
+                assert_eq!(actual.delivery, clock.delivery);
+                assert_eq!(actual.deck_delivery, clock.deck_delivery);
+                assert_eq!(pass.now, clock.now);
+                assert_eq!(pass.delivery, clock.delivery);
+                assert_eq!(pass.deck_delivery, clock.deck_delivery);
                 Player::apply(
                     deck,
                     QueueCommand::Append {
@@ -704,9 +841,9 @@ mod tests {
         render_block(&mut state, 0);
         state.owner.begin_pass();
         let cached = state.owner.clock().expect("actual running stream clock");
-        assert!(cached.0 > SessionFrame::new(0));
+        assert!(cached.now > SessionFrame::new(0));
         assert_eq!(
-            cached.0,
+            cached.now,
             SessionFrame::new(
                 state
                     .ctx
@@ -719,7 +856,7 @@ mod tests {
         );
         let before_delay = state.delivery_delay.expect("threaded delivery budget");
         let position = cached
-            .0
+            .now
             .frames_since(SessionFrame::new(0))
             .expect("offline clock is nonnegative");
         render_block(&mut state, position);
@@ -733,7 +870,7 @@ mod tests {
                 .0,
         );
         assert!(
-            advanced > cached.0,
+            advanced > cached.now,
             "the real native clock moved during this pass"
         );
         assert_eq!(state.owner.clock(), Some(cached));
@@ -759,16 +896,20 @@ mod tests {
             .expect("second registration in the live pass");
 
         assert_eq!(state.delivery_delay, Some(expected_delay));
-        let expected = (cached.0, state.delivery());
-        assert!(expected.1 > cached.1);
+        let expected = state.clock_at(cached.now);
+        assert!(expected.delivery > cached.delivery);
         assert_eq!(state.owner.clock(), Some(expected));
         for id in [first_id, second_id] {
             state
                 .owner
                 .with_deck(id, &mut |_, out, pass| {
                     let actual = out.pass().expect("live registration pass");
-                    assert_eq!((actual.now, actual.delivery), expected);
-                    assert_eq!((pass.now, pass.delivery), expected);
+                    assert_eq!(actual.now, expected.now);
+                    assert_eq!(actual.delivery, expected.delivery);
+                    assert_eq!(actual.deck_delivery, expected.deck_delivery);
+                    assert_eq!(pass.now, expected.now);
+                    assert_eq!(pass.delivery, expected.delivery);
+                    assert_eq!(pass.deck_delivery, expected.deck_delivery);
                 })
                 .expect("registered deck");
         }
@@ -835,12 +976,9 @@ mod tests {
         let before = state.root_view.root.load_full();
 
         assert!(matches!(ask(&mut state, HostCommand::Close(first)), Ok(())));
-        let SessionStream::Offline(stream) = state.stream.as_mut().expect("remaining deck runs")
-        else {
-            panic!("offline fixture")
-        };
-        stream
-            .render(0, 512, &mut [0.0; 1024])
+        state
+            .owner
+            .render_offline(0, 512, &mut [0.0; 1024])
             .expect("retire first scope");
         state.owner.begin_pass();
         state.owner.pass();
@@ -857,5 +995,148 @@ mod tests {
         assert_ne!(after_second.decks, after_first.decks);
         assert!(after_second.decks.is_empty());
         assert_eq!(after_second.decks.as_ref(), canonical.as_slice());
+    }
+
+    fn lookahead() -> LimiterConfig {
+        LimiterConfig::builder()
+            .lookahead_ms(LookaheadMs::try_from(5.0).expect("fixture lookahead"))
+            .build()
+    }
+
+    /// A region without room for the limiter's lookahead makes the graph
+    /// reject the output chain. None of the chain's nodes may stay behind: a
+    /// node flagged as built without a processor would be scheduled by the
+    /// next compile and break the render.
+    #[kithara::test]
+    fn a_rejected_output_chain_leaves_none_of_its_nodes_behind() {
+        let mut state = test_state(crate::session::offline::mock::start);
+        state.output = SessionOutput::new(lookahead(), pools_with_budget(0));
+        ensure_stream_ready(&mut *state).expect("the offline stream starts");
+        let nodes = |state: &TestState| -> Vec<NodeID> {
+            state
+                .ctx
+                .as_ref()
+                .expect("started context")
+                .nodes()
+                .map(|node| node.id)
+                .collect()
+        };
+        let before = nodes(&state);
+
+        let error = ensure_ctx(&mut *state)
+            .expect_err("a region without room for the lookahead rejects the output chain");
+        assert!(matches!(error, SessionError::Graph(_)), "{error}");
+        assert_eq!(nodes(&state), before);
+        assert!(state.session_output_node_id.is_none());
+        assert!(state.session_limiter_node_id.is_none());
+        assert!(state.session_metronome_node_id.is_none());
+
+        let again = ensure_ctx(&mut *state).expect_err("the same region rejects the chain again");
+        assert!(matches!(again, SessionError::Graph(_)), "{again}");
+        assert_eq!(nodes(&state), before);
+
+        state.output = SessionOutput::new(lookahead(), pools());
+        ensure_ctx(&mut *state).expect("a region with room installs the chain");
+        render_block(&mut state, 0);
+    }
+
+    /// A device may run the stream at a rate it picks itself. The output chain
+    /// holds its lookahead for no rate above the highest a session serves, so a
+    /// faster stream is refused before the session keeps its context; the
+    /// highest rate itself is served with the whole chain.
+    #[kithara::test]
+    fn a_stream_the_device_runs_faster_than_a_session_serves_is_refused() {
+        let highest = crate::consts::MAX_SAMPLE_RATE;
+        let running_at = |device_rate: NonZeroU32| {
+            crate::session::tests::graph::state_for(
+                NonZeroU32::new(48_000).expect("fixture rate"),
+                move |ctx, _rate, _decks| {
+                    let processor = ctx
+                        .activate(ActivateInfo {
+                            sample_rate: device_rate,
+                            max_block_frames: NonZeroU32::new(512).expect("fixture block"),
+                            num_stream_in_channels: 0,
+                            num_stream_out_channels: 2,
+                            input_to_output_latency_seconds: 0.0,
+                        })
+                        .map_err(|error| error.to_string())?;
+                    Ok(SessionStream::Realtime {
+                        _backend: processor,
+                    })
+                },
+            )
+        };
+
+        let mut faster = running_at(highest.saturating_add(1));
+        let error = ensure_ctx(&mut faster).expect_err("a faster stream is refused");
+        assert!(matches!(error, SessionError::StreamStart(_)), "{error}");
+        assert!(faster.ctx.is_none());
+        assert!(faster.stream.is_none());
+
+        let mut served = running_at(highest);
+        ensure_ctx(&mut served).expect("the highest rate is served");
+        assert!(served.session_limiter_node_id.is_some());
+        assert!(served.session_metronome_node_id.is_some());
+    }
+
+    /// Firewheel builds the processors of nodes added to a stopped context in
+    /// its next activation, where no rollback reaches them. The output chain
+    /// therefore waits for a running context: until then a deck has nothing to
+    /// join, a region without room for the lookahead cannot break the
+    /// activation, and once the stream runs the chain is built whole or
+    /// rejected whole.
+    #[kithara::test]
+    fn the_output_chain_waits_for_a_running_context() {
+        let rate = NonZeroU32::new(48_000).expect("fixture rate");
+        let mut state = crate::session::tests::graph::state_for(rate, |_ctx, _rate, _decks| {
+            Ok(SessionStream::Realtime { _backend: () })
+        });
+        state.output = SessionOutput::new(lookahead(), pools_with_budget(0));
+        ensure_ctx(&mut state).expect("a stopped context starts without the output chain");
+        assert!(state.session_output_node_id.is_none());
+        let deck = DeckMixerConfig::default();
+        let scope = state
+            .channel
+            .as_mut()
+            .expect("graph channel")
+            .open(deck.slots().get())
+            .expect("fixture scope");
+        let (_ends, inputs) = scope_channels(scope, deck);
+        let id = BeatGridId::allocate().expect("fixture deck id");
+        let refused = install_deck(&mut state, id, inputs, pools(), None)
+            .expect_err("a deck has no output chain to join on a stopped context");
+        assert!(matches!(refused, SessionError::NoContext), "{refused}");
+        let node_count = |state: &SessionState<(), TestPools>| {
+            state.ctx.as_ref().expect("built context").nodes().count()
+        };
+        let stopped = node_count(&state);
+
+        let _processor = state
+            .ctx
+            .as_mut()
+            .expect("built context")
+            .activate(ActivateInfo {
+                sample_rate: rate,
+                max_block_frames: NonZeroU32::new(512).expect("fixture block"),
+                num_stream_in_channels: 0,
+                num_stream_out_channels: 2,
+                input_to_output_latency_seconds: 0.0,
+            })
+            .expect("the activation builds no output chain");
+        let error = ensure_ctx(&mut state)
+            .expect_err("a running context builds the chain and the region rejects it");
+        assert!(matches!(error, SessionError::Graph(_)), "{error}");
+        assert!(state.session_output_node_id.is_none());
+        assert_eq!(node_count(&state), stopped);
+
+        state.output = SessionOutput::new(lookahead(), pools());
+        ensure_ctx(&mut state).expect("a region with room installs the chain");
+        assert!(state.session_output_node_id.is_some());
+        assert!(state.session_limiter_node_id.is_some());
+        assert!(state.session_metronome_node_id.is_some());
+        assert_eq!(
+            node_count(&state),
+            stopped + crate::consts::SESSION_OUTPUT_NODES
+        );
     }
 }

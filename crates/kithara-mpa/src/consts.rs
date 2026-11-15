@@ -88,5 +88,7 @@ pub(crate) const XING_LAYOUT_TOC_LEN: usize = 100;
 pub(crate) const LAME_LAYOUT_DECODER_DELAY: u32 = 529;
 pub(crate) const LAME_LAYOUT_ENCODER_ID_LEN: usize = 4;
 pub(crate) const LAME_LAYOUT_ENCODER_LEN: usize = 9;
+/// The minimal LAME extension size up to the encoding delay and padding fields.
+pub(crate) const LAME_LAYOUT_MIN_EXT_LEN: u64 = 24;
 pub(crate) const LAME_LAYOUT_TRIM_BITS: u32 = 12;
 pub(crate) const VBRI_TAG_OFFSET: usize = 36;

@@ -1,6 +1,9 @@
 //! A queue is a deck: one owner drives its tracks through commands and receipts.
 
 mod command;
+#[cfg(all(not(target_arch = "wasm32"), test))]
+mod fixture;
+mod gain;
 mod handle;
 mod hosted;
 mod lifecycle;
@@ -15,6 +18,8 @@ mod types;
 mod view;
 
 pub(crate) use command::QueuePostbox;
+#[cfg(test)]
+pub(crate) use state::tests::{WorkerOwner, worker_owner};
 
 pub use self::{
     command::QueueCommand,

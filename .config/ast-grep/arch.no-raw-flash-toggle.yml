@@ -34,7 +34,7 @@ ignores:
 rule:
   any:
     - kind: identifier
-      regex: '^enter_dynamic$'
+      regex: "^enter_dynamic$"
     - pattern: flash::dynamic($$$)
     - pattern: kithara_platform::flash::dynamic($$$)
     - pattern: use kithara_platform::flash::dynamic

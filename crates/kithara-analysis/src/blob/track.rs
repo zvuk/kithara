@@ -2,6 +2,7 @@ use std::{num::NonZeroU32, ops::Range};
 
 use kithara_platform::time::Duration;
 use kithara_signal::{CoverageRead, CoverageWrite, FrameSpan};
+use rangemap::RangeSet;
 
 use crate::{
     AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, TrackAnalysis, Waveform,
@@ -61,64 +62,107 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
                 expected: consts::TRACK_ANALYSIS_BYTES_VERSION,
             });
         }
+        RawTrackSnapshot::read(&mut reader)?.into_analysis(active)
+    }
+}
 
+struct RawTrackSnapshot<'a> {
+    token: String,
+    source_sample_rate: NonZeroU32,
+    media_origin: Option<Duration>,
+    extent: Option<u64>,
+    revision: u64,
+    settled: bool,
+    coverage: RangeSet<u64>,
+    waveform_tag: String,
+    waveform_bytes: &'a [u8],
+    beat_tag: String,
+    grid_bytes: &'a [u8],
+    final_grid: bool,
+    unanalysed: Vec<Range<u64>>,
+}
+
+impl<'a> RawTrackSnapshot<'a> {
+    fn read(reader: &mut Reader<'a>) -> Result<Self, BlobError> {
         let token = reader.read_str()?;
-        let (source_sample_rate, media_origin) = read_source_axis(&mut reader)?;
+        let (source_sample_rate, media_origin) = read_source_axis(reader)?;
         let extent = reader.read_optional_u64()?;
         let revision = reader.read_u64()?;
         let settled = reader.read_bool()?;
         let coverage = reader.read_coverage()?;
-
         let waveform_tag = reader.read_str()?;
         let waveform_bytes = reader.read_section()?;
         let beat_tag = reader.read_str()?;
         let grid_bytes = reader.read_section()?;
         let final_grid = reader.read_bool()?;
-        let unanalysed = read_ranges(&mut reader)?;
+        let unanalysed = read_ranges(reader)?;
         reader.finish()?;
+        Ok(Self {
+            token,
+            source_sample_rate,
+            media_origin,
+            extent,
+            revision,
+            settled,
+            coverage,
+            waveform_tag,
+            waveform_bytes,
+            beat_tag,
+            grid_bytes,
+            final_grid,
+            unanalysed,
+        })
+    }
 
-        let waveform_ok = active.waveform().is_some_and(|tag| waveform_tag == tag);
-        let beat_ok = active.beat().is_some_and(|tag| beat_tag == tag);
+    fn matching_artifacts(&self, active: &AnalysisFingerprint) -> Result<(bool, bool), BlobError> {
+        let waveform_ok = active
+            .waveform()
+            .is_some_and(|tag| self.waveform_tag == tag);
+        let beat_ok = active.beat().is_some_and(|tag| self.beat_tag == tag);
         let empty = active.waveform().is_none()
             && active.beat().is_none()
-            && waveform_tag.is_empty()
-            && beat_tag.is_empty()
-            && waveform_bytes.is_empty()
-            && grid_bytes.is_empty()
-            && !final_grid
-            && unanalysed.is_empty();
+            && self.waveform_tag.is_empty()
+            && self.beat_tag.is_empty()
+            && self.waveform_bytes.is_empty()
+            && self.grid_bytes.is_empty()
+            && !self.final_grid
+            && self.unanalysed.is_empty();
         if !waveform_ok && !beat_ok && !empty {
             return Err(BlobError::Fingerprint);
         }
+        Ok((waveform_ok, beat_ok))
+    }
 
-        let waveform = (waveform_ok && !waveform_bytes.is_empty())
-            .then(|| Waveform::try_from(waveform_bytes))
+    fn into_analysis(self, active: &AnalysisFingerprint) -> Result<TrackAnalysis, BlobError> {
+        let (waveform_ok, beat_ok) = self.matching_artifacts(active)?;
+        let waveform = (waveform_ok && !self.waveform_bytes.is_empty())
+            .then(|| Waveform::try_from(self.waveform_bytes))
             .transpose()
             .map_err(|_| BlobError::Corrupt)?;
-        let grid = (beat_ok && !grid_bytes.is_empty())
-            .then(|| BeatArtifact::try_from(grid_bytes))
+        let grid = (beat_ok && !self.grid_bytes.is_empty())
+            .then(|| BeatArtifact::try_from(self.grid_bytes))
             .transpose()
             .map_err(|_| BlobError::Corrupt)?;
-        let state = if final_grid {
+        let state = if self.final_grid {
             BeatState::Final
         } else {
             BeatState::Provisional
         };
 
-        Ok(Self::builder()
-            .token(token.as_str().into())
-            .revision(revision)
-            .source_sample_rate(source_sample_rate)
-            .maybe_media_origin(media_origin)
-            .maybe_extent(extent)
-            .settled(settled)
-            .coverage(coverage)
+        Ok(TrackAnalysis::builder()
+            .token(self.token.as_str().into())
+            .revision(self.revision)
+            .source_sample_rate(self.source_sample_rate)
+            .maybe_media_origin(self.media_origin)
+            .maybe_extent(self.extent)
+            .settled(self.settled)
+            .coverage(self.coverage)
             .fingerprint(AnalysisFingerprint::new(
-                beat_ok.then_some(beat_tag.as_str()),
-                waveform_ok.then_some(waveform_tag.as_str()),
+                beat_ok.then_some(self.beat_tag.as_str()),
+                waveform_ok.then_some(self.waveform_tag.as_str()),
             ))
             .maybe_waveform(waveform)
-            .maybe_beat(grid.map(|grid| BeatSnapshot::new(grid, state, unanalysed)))
+            .maybe_beat(grid.map(|grid| BeatSnapshot::new(grid, state, self.unanalysed)))
             .build())
     }
 }
@@ -231,27 +275,20 @@ mod tests {
     }
 
     #[kithara::test]
-    fn frozen_v5_fixture_is_a_cache_miss() {
+    fn frozen_v5_and_v7_fixtures_are_cache_misses() {
         let active = fingerprint("wave:v1", "beat:v1");
-        assert!(matches!(
-            TrackAnalysis::try_from((consts::V5_FIXTURE, &active)),
-            Err(BlobError::Version {
-                found: 0x4b41_0005,
-                expected: consts::TRACK_ANALYSIS_BYTES_VERSION,
-            })
-        ));
-    }
-
-    #[kithara::test]
-    fn frozen_v7_fixture_is_a_cache_miss() {
-        let active = fingerprint("wave:v1", "beat:v1");
-        assert!(matches!(
-            TrackAnalysis::try_from((consts::V7_FIXTURE, &active)),
-            Err(BlobError::Version {
-                found: 0x4b41_0007,
-                expected: consts::TRACK_ANALYSIS_BYTES_VERSION,
-            })
-        ));
+        for (bytes, version) in [
+            (consts::V5_FIXTURE, 0x4b41_0005),
+            (consts::V7_FIXTURE, 0x4b41_0007),
+        ] {
+            assert!(matches!(
+                TrackAnalysis::try_from((bytes, &active)),
+                Err(BlobError::Version {
+                    found,
+                    expected: consts::TRACK_ANALYSIS_BYTES_VERSION,
+                }) if found == version
+            ));
+        }
     }
 
     #[kithara::test]
@@ -282,56 +319,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn codec_round_trips_waveform_and_beat() {
-        let bytes = encode(&analysis(Some(grid()), Some(wave()), 1_234_567));
-        let back = TrackAnalysis::try_from((&bytes[..], &active())).expect("decodes");
-        assert_eq!(
-            back.waveform().expect("waveform survives").buckets(),
-            wave().buckets()
-        );
-        assert_eq!(back.beat().expect("beat grid survives").artifact(), &grid());
-        assert_eq!(back.source_frames(), 1_234_567);
-    }
-
-    #[kithara::test]
-    fn codec_preserves_an_empty_fingerprint() {
-        let mut coverage = RangeSet::new();
-        coverage.insert(0..64);
-        let analysis = TrackAnalysis::builder()
-            .media_origin(Duration::ZERO)
-            .token("empty-fingerprint".into())
-            .revision(1)
-            .source_sample_rate(rate())
-            .extent(64)
-            .settled(true)
-            .coverage(coverage)
-            .fingerprint(AnalysisFingerprint::default())
-            .build();
-
-        let bytes = encode(&analysis);
-        let restored = TrackAnalysis::try_from((&bytes[..], &AnalysisFingerprint::default()))
-            .expect("empty-fingerprint analysis restores");
-
-        assert_eq!(restored.fingerprint(), &AnalysisFingerprint::default());
-    }
-
-    #[kithara::test]
-    fn codec_round_trips_without_beat() {
-        let bytes = encode(&analysis(None, Some(wave()), 0));
-        let back = TrackAnalysis::try_from((&bytes[..], &active())).expect("decodes");
-        assert!(back.waveform().is_some());
-        assert!(back.beat().is_none());
-    }
-
-    #[kithara::test]
-    fn codec_round_trips_beat_only() {
-        let bytes = encode(&analysis(Some(grid()), None, 0));
-        let back = TrackAnalysis::try_from((&bytes[..], &active())).expect("decodes");
-        assert!(back.waveform().is_none());
-        assert_eq!(back.beat().expect("beat grid survives").artifact(), &grid());
-    }
-
-    #[kithara::test]
     fn stale_fingerprint_is_a_miss() {
         assert!(matches!(
             TrackAnalysis::try_from((
@@ -340,6 +327,32 @@ mod tests {
             )),
             Err(BlobError::Fingerprint)
         ));
+
+        let empty = TrackAnalysis::builder()
+            .token("empty-fingerprint".into())
+            .revision(1)
+            .source_sample_rate(rate())
+            .build();
+        let bytes = encode(&empty);
+        for final_grid in [false, true] {
+            let mut inconsistent = bytes[..bytes.len() - 9].to_vec();
+            let mut writer = Writer::new(&mut inconsistent);
+            writer.write_bool(final_grid);
+            write_ranges(
+                &mut writer,
+                if final_grid {
+                    &[]
+                } else {
+                    &[Range { start: 0, end: 1 }]
+                },
+            );
+            assert!(matches!(
+                TrackAnalysis::try_from(
+                    (inconsistent.as_slice(), &AnalysisFingerprint::default(),)
+                ),
+                Err(BlobError::Fingerprint)
+            ));
+        }
     }
 
     #[kithara::test]
@@ -347,7 +360,7 @@ mod tests {
         let mut coverage = RangeSet::new();
         coverage.insert(0..400);
         coverage.insert(600..1000);
-        let want = TrackAnalysis::builder()
+        let full = TrackAnalysis::builder()
             .media_origin(Duration::ZERO)
             .token(consts::TRACK_TOKEN.into())
             .revision(11)
@@ -365,38 +378,95 @@ mod tests {
                 }],
             ))
             .build();
-        let bytes = encode(&want);
-        let got = TrackAnalysis::try_from((&bytes[..], &active())).expect("decodes");
+        let mut empty_coverage = RangeSet::new();
+        empty_coverage.insert(0..64);
+        let empty = TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
+            .token("empty-fingerprint".into())
+            .revision(1)
+            .source_sample_rate(rate())
+            .extent(64)
+            .coverage(empty_coverage)
+            .settled(true)
+            .fingerprint(AnalysisFingerprint::default())
+            .build();
+        for want in [
+            full,
+            analysis(None, Some(wave()), 0),
+            analysis(Some(grid()), None, 0),
+            empty,
+        ] {
+            let bytes = encode(&want);
+            let got = TrackAnalysis::try_from((&bytes[..], want.fingerprint())).expect("decodes");
 
-        assert_eq!(got.token(), want.token());
-        assert_eq!(got.source_sample_rate(), want.source_sample_rate());
-        assert_eq!(got.media_origin(), want.media_origin());
-        assert_eq!(got.extent(), want.extent());
-        assert_eq!(got.coverage(), want.coverage());
-        assert_eq!(got.revision(), want.revision());
-        assert_eq!(got.is_settled(), want.is_settled());
-        let (got_beat, want_beat) = (
-            got.beat().expect("beat survives"),
-            want.beat().expect("beat fixture"),
-        );
-        assert_eq!(got_beat.artifact(), want_beat.artifact());
-        assert_eq!(got_beat.state(), want_beat.state());
-        assert_eq!(got_beat.unanalysed(), want_beat.unanalysed());
+            assert_eq!(got.token(), want.token());
+            assert_eq!(got.source_sample_rate(), want.source_sample_rate());
+            assert_eq!(got.media_origin(), want.media_origin());
+            assert_eq!(got.extent(), want.extent());
+            assert_eq!(got.source_frames(), want.source_frames());
+            assert_eq!(got.coverage(), want.coverage());
+            assert_eq!(got.revision(), want.revision());
+            assert_eq!(got.is_settled(), want.is_settled());
+            assert_eq!(got.fingerprint(), want.fingerprint());
+            assert_eq!(
+                got.waveform().map(Waveform::buckets),
+                want.waveform().map(Waveform::buckets)
+            );
+            assert_eq!(
+                got.beat().map(BeatSnapshot::artifact),
+                want.beat().map(BeatSnapshot::artifact)
+            );
+            assert_eq!(
+                got.beat().map(BeatSnapshot::state),
+                want.beat().map(BeatSnapshot::state)
+            );
+            assert_eq!(
+                got.beat().map(BeatSnapshot::unanalysed),
+                want.beat().map(BeatSnapshot::unanalysed)
+            );
+        }
     }
 
     #[kithara::test]
-    fn rejects_non_boolean_flags() {
-        let mut bytes = encode(&analysis(Some(grid()), Some(wave()), 1));
+    fn rejects_non_boolean_flags_and_corrupt_sections() {
+        let bytes = encode(&analysis(Some(grid()), Some(wave()), 1));
         let origin_flag = consts::TRACK_ANALYSIS_BYTES_VERSION.to_le_bytes().len()
             + 4
             + consts::TRACK_TOKEN.len()
             + 4;
-        bytes[origin_flag] = 2;
-        assert!(matches!(
-            TrackAnalysis::try_from((&bytes[..], &active())),
-            Err(BlobError::Corrupt)
-        ));
+        let (waveform_offset, grid_offset) = {
+            let mut reader = Reader::new(&bytes);
+            reader.read_u32().expect("version");
+            reader.read_str().expect("token");
+            read_source_axis(&mut reader).expect("source axis");
+            reader.read_optional_u64().expect("extent");
+            reader.read_u64().expect("revision");
+            reader.read_bool().expect("settled");
+            reader.read_coverage().expect("coverage");
+            reader.read_str().expect("waveform fingerprint");
+            let waveform_offset = bytes.len() - reader.remaining() + 8;
+            reader.read_section().expect("waveform");
+            reader.read_str().expect("beat fingerprint");
+            let grid_offset = bytes.len() - reader.remaining() + 8;
+            (waveform_offset, grid_offset)
+        };
+        for (name, offset) in [
+            ("non-boolean origin", origin_flag),
+            ("corrupt waveform", waveform_offset),
+            ("corrupt grid", grid_offset),
+        ] {
+            let mut corrupt = bytes.clone();
+            corrupt[offset] = 0xff;
+            assert!(
+                matches!(
+                    TrackAnalysis::try_from((&corrupt[..], &active())),
+                    Err(BlobError::Corrupt)
+                ),
+                "{name}"
+            );
+        }
     }
+
     #[kithara::test]
     fn media_origin_round_trips_without_losing_subsecond_precision() {
         for origin in [

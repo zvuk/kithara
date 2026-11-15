@@ -15,7 +15,7 @@ use crate::{
     perf::{
         lanes::{Lane, RunPaths, sanitize},
         list::nextest_list,
-        slow::SlowReport,
+        slow,
     },
 };
 
@@ -309,10 +309,7 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Result<(Option<i32
 
 pub(crate) fn run(params: &ProfileParams, project: &ProjectConfig) -> Result<()> {
     let paths = RunPaths::new(&params.data_dir, &params.run_id);
-    let slow_json_path = paths.slow_json();
-    let slow_json = fs::read_to_string(&slow_json_path)
-        .with_context(|| format!("read {}", slow_json_path.display()))?;
-    let slow: SlowReport = serde_json::from_str(&slow_json).context("parse slow.json")?;
+    let slow = slow::load_report(&paths, &params.run_id)?;
     let Some(lane) = Lane::by_name(&project.perf, &params.lane) else {
         bail!("unknown lane `{}`", params.lane);
     };
@@ -378,6 +375,33 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    #[test]
+    fn cached_slow_report_requires_raw_matrix_before_listing() {
+        let temp = tempfile::tempdir().expect("profile fixture");
+        let paths = RunPaths::new(temp.path(), "run");
+        fs::create_dir(&paths.run_dir).expect("run directory");
+        fs::write(
+            paths.slow_json(),
+            r#"{"run_id":"run","threshold_ms":1000,"primary_lane":"flash-on-http","tests":[]}"#,
+        )
+        .expect("cached slow report");
+        let params = ProfileParams {
+            limit: None,
+            data_dir: temp.path().to_owned(),
+            target_root: temp.path().join("targets"),
+            lane: "flash-on-http".to_owned(),
+            run_id: "run".to_owned(),
+            timeout_secs: 1,
+        };
+
+        let error = run(&params, &ProjectConfig::default())
+            .expect_err("cached statistics cannot authorize profile execution");
+
+        assert!(format!("{error:#}").contains("matrix.json"));
+        assert!(!params.target_root.exists());
+        assert!(!paths.profiles_dir(&params.lane).exists());
+    }
 
     #[test]
     fn samply_command_shape() {

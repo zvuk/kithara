@@ -1,11 +1,11 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
-use cargo_metadata::MetadataCommand;
+use cargo_metadata::{DependencyKind, Metadata, MetadataCommand, cargo_platform::Platform};
 use clap::{Args, Subcommand};
 use toml::Value;
 
@@ -22,7 +22,7 @@ pub struct ManifestArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum ManifestCommand {
-    /// Keep internal kithara dependencies before external dependencies.
+    /// Keep workspace dependencies before external dependencies.
     DependencyOrder(DependencyOrderArgs),
 }
 
@@ -53,24 +53,26 @@ struct DependencyBlock<'a> {
     lines: Vec<&'a str>,
 }
 
-pub(crate) fn run(args: &ManifestArgs, _ctx: &Ctx) -> Result<()> {
+pub(crate) fn run(args: &ManifestArgs, ctx: &Ctx) -> Result<()> {
     match &args.command {
-        ManifestCommand::DependencyOrder(args) => dependency_order(args),
+        ManifestCommand::DependencyOrder(args) => dependency_order(args, ctx),
     }
 }
 
-fn dependency_order(args: &DependencyOrderArgs) -> Result<()> {
+fn dependency_order(args: &DependencyOrderArgs, ctx: &Ctx) -> Result<()> {
     if args.fix {
-        ensure_clean_tree(args.allow_dirty, "manifest dependency-order")?;
+        ensure_clean_tree(&ctx.root, args.allow_dirty, "manifest dependency-order")?;
     }
 
-    let manifest_set = workspace_manifests()?;
+    let metadata = ctx.metadata()?;
+    let manifest_set = workspace_manifests(metadata);
     let mut changed = Vec::new();
 
     for manifest in &manifest_set.manifests {
         let original =
             fs::read_to_string(manifest).with_context(|| format!("read {}", manifest.display()))?;
-        let rewritten = rewrite_manifest(&original);
+        let internal = internal_dependencies(metadata, manifest, &original)?;
+        let rewritten = rewrite_manifest(&original, &internal);
         if original == rewritten.content {
             continue;
         }
@@ -104,16 +106,12 @@ fn dependency_order(args: &DependencyOrderArgs) -> Result<()> {
     }
 
     bail!(
-        "Cargo manifests must list internal kithara dependencies before external dependencies and keep each dependency group sorted:\n{}",
+        "Cargo manifests must list workspace dependencies before external dependencies and keep each dependency group sorted:\n{}",
         changed.join("\n")
     )
 }
 
-fn workspace_manifests() -> Result<ManifestSet> {
-    let metadata = MetadataCommand::new()
-        .no_deps()
-        .exec()
-        .context("load cargo metadata")?;
+fn workspace_manifests(metadata: &Metadata) -> ManifestSet {
     let workspace_root = metadata.workspace_root.as_std_path().to_path_buf();
     let mut manifests = BTreeSet::new();
 
@@ -122,14 +120,18 @@ fn workspace_manifests() -> Result<ManifestSet> {
         manifests.insert(package.manifest_path.as_std_path().to_path_buf());
     }
 
-    Ok(ManifestSet {
+    ManifestSet {
         workspace_root,
         manifests: manifests.into_iter().collect(),
-    })
+    }
 }
 
 pub(crate) fn handwritten_workspace_manifest_dirs() -> Result<Vec<PathBuf>> {
-    handwritten_manifest_dirs(&workspace_manifests()?.manifests)
+    let metadata = MetadataCommand::new()
+        .no_deps()
+        .exec()
+        .context("load cargo metadata")?;
+    handwritten_manifest_dirs(&workspace_manifests(&metadata).manifests)
 }
 
 fn handwritten_manifest_dirs(manifests: &[PathBuf]) -> Result<Vec<PathBuf>> {
@@ -158,7 +160,7 @@ fn display_path(workspace_root: &Path, path: &Path) -> String {
         .to_string()
 }
 
-fn rewrite_manifest(source: &str) -> RewriteResult {
+fn rewrite_manifest(source: &str, internal: &BTreeMap<String, BTreeSet<String>>) -> RewriteResult {
     let lines: Vec<_> = source.split_inclusive('\n').collect();
     let mut output = String::with_capacity(source.len());
     let mut changed_sections = Vec::new();
@@ -187,7 +189,7 @@ fn rewrite_manifest(source: &str) -> RewriteResult {
         let body_end = section_body_end(&lines, body_start);
 
         if is_dependency_section(header) {
-            let body = rewrite_dependency_body(&lines[body_start..body_end]);
+            let body = rewrite_dependency_body(&lines[body_start..body_end], internal.get(header));
             if body.changed {
                 changed_sections.push(header.to_owned());
             }
@@ -207,7 +209,12 @@ fn rewrite_manifest(source: &str) -> RewriteResult {
     }
 }
 
-pub(crate) fn add_workspace_dependency(source: &str, dependency: &str) -> Result<Option<String>> {
+pub(crate) fn add_workspace_dependency(
+    source: &str,
+    dependency: &str,
+    manifest: &Path,
+    metadata: &Metadata,
+) -> Result<Option<String>> {
     let parsed: Value = toml::from_str(source).context("parse Cargo manifest")?;
     if parsed
         .get("dependencies")
@@ -232,7 +239,8 @@ pub(crate) fn add_workspace_dependency(source: &str, dependency: &str) -> Result
         inserted.push_str(dependency);
         inserted.push_str(" = { workspace = true }\n");
         inserted.push_str(&source[offset..]);
-        return Ok(Some(rewrite_manifest(&inserted).content));
+        let internal = internal_dependencies(metadata, manifest, &inserted)?;
+        return Ok(Some(rewrite_manifest(&inserted, &internal).content));
     }
 
     bail!("Cargo manifest has no [dependencies] section")
@@ -287,13 +295,16 @@ struct DependencyBody {
     changed: bool,
 }
 
-fn rewrite_dependency_body(lines: &[&str]) -> DependencyBody {
+fn rewrite_dependency_body(
+    lines: &[&str],
+    internal_keys: Option<&BTreeSet<String>>,
+) -> DependencyBody {
     let ParsedBody { entries, trailing } = parse_dependency_body(lines);
 
     let mut internal = Vec::new();
     let mut external = Vec::new();
     for entry in &entries {
-        if is_internal_dependency(entry.key) {
+        if internal_keys.is_some_and(|keys| keys.contains(entry.key)) {
             internal.push(entry);
         } else {
             external.push(entry);
@@ -439,8 +450,98 @@ fn is_prefix_line(line: &str) -> bool {
     trimmed.is_empty() || trimmed.starts_with('#')
 }
 
-fn is_internal_dependency(key: &str) -> bool {
-    key == "kithara" || key.starts_with("kithara-")
+fn internal_dependencies(
+    metadata: &Metadata,
+    manifest: &Path,
+    source: &str,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let members = metadata.workspace_packages();
+    let directories: BTreeSet<_> = members
+        .iter()
+        .filter_map(|package| package.manifest_path.as_std_path().parent())
+        .collect();
+    let package = members
+        .iter()
+        .find(|package| package.manifest_path.as_std_path() == manifest);
+    let mut sections = BTreeMap::new();
+    for header in source
+        .lines()
+        .filter_map(table_header)
+        .filter(|header| is_dependency_section(header))
+    {
+        if header == "workspace.dependencies" {
+            let document: Value = toml::from_str(source).context("parse workspace dependencies")?;
+            let mut keys = BTreeSet::new();
+            if let Some(dependencies) = document
+                .get("workspace")
+                .and_then(|workspace| workspace.get("dependencies"))
+                .and_then(Value::as_table)
+            {
+                let directories = directories
+                    .iter()
+                    .map(fs::canonicalize)
+                    .collect::<std::io::Result<BTreeSet<_>>>()?;
+                for (key, value) in dependencies {
+                    if let Some(path) = value.get("path").and_then(Value::as_str) {
+                        let path = metadata
+                            .workspace_root
+                            .join(path)
+                            .as_std_path()
+                            .canonicalize()
+                            .with_context(|| format!("resolve workspace dependency {key}"))?;
+                        if directories.contains(&path) {
+                            keys.insert(key.clone());
+                        }
+                    }
+                }
+            }
+            sections.insert(header.to_owned(), keys);
+            continue;
+        }
+        let section = header.rsplit('.').next().unwrap_or(header);
+        let target = if let Some(target) = header
+            .strip_prefix("target.")
+            .and_then(|target| target.strip_suffix(&format!(".{section}")))
+        {
+            let parsed: Value = toml::from_str(&format!("[target.{target}]"))?;
+            parsed
+                .get("target")
+                .and_then(Value::as_table)
+                .and_then(|table| table.keys().next())
+                .map(|target| target.parse::<Platform>())
+                .transpose()?
+        } else {
+            None
+        };
+        let mut keys = BTreeSet::new();
+        if let Some(package) = package {
+            for dependency in &package.dependencies {
+                let kind_matches = match dependency.kind {
+                    DependencyKind::Normal => section == "dependencies",
+                    DependencyKind::Development => section == "dev-dependencies",
+                    DependencyKind::Build => section == "build-dependencies",
+                    _ => false,
+                };
+                if kind_matches
+                    && dependency.target == target
+                    && dependency
+                        .path
+                        .as_ref()
+                        .is_some_and(|path| directories.contains(path.as_std_path()))
+                {
+                    keys.insert(
+                        dependency
+                            .rename
+                            .as_ref()
+                            .unwrap_or(&dependency.name)
+                            .clone(),
+                    );
+                }
+            }
+        }
+        sections.insert(header.to_owned(), keys);
+    }
+    Ok(sections)
 }
 
 #[derive(Clone, Copy)]
@@ -494,11 +595,33 @@ fn push_blank_separator(output: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
-    use super::{
-        add_workspace_dependency, handwritten_manifest_dirs, rewrite_manifest, table_header,
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fs,
     };
+
+    use cargo_metadata::MetadataCommand;
+
+    use super::{RewriteResult, add_workspace_dependency, handwritten_manifest_dirs, table_header};
+
+    fn rewrite_manifest(source: &str) -> RewriteResult {
+        let keys = BTreeSet::from(
+            [
+                "kithara",
+                "kithara-app",
+                "kithara-core",
+                "kithara-stream",
+                "kithara-test-utils",
+            ]
+            .map(str::to_owned),
+        );
+        let internal: BTreeMap<_, _> = source
+            .lines()
+            .filter_map(table_header)
+            .map(|header| (header.to_owned(), keys.clone()))
+            .collect();
+        super::rewrite_manifest(source, &internal)
+    }
 
     #[test]
     fn excludes_hakari_manifests_from_cargo_sort() -> anyhow::Result<()> {
@@ -550,13 +673,61 @@ mod tests {
 
     #[test]
     fn adds_workspace_dependency_in_canonical_order() -> anyhow::Result<()> {
-        let input = "[dependencies]\nkithara-stream = { workspace = true }\n\nanyhow = { workspace = true }\nfutures = { workspace = true }\n";
-        let rewritten = add_workspace_dependency(input, "fieldwork")?.expect("dependency added");
+        let root = tempfile::tempdir()?;
+        let prefix = "[package]\nname='consumer'\nversion='0.1.0'\nedition='2024'\n\n[workspace]\nmembers=['crates/kithara-stream']\nexclude=['vendor/anyhow','vendor/fieldwork','vendor/futures']\n\n[workspace.dependencies]\nkithara-stream={path='crates/kithara-stream'}\nanyhow={path='vendor/anyhow'}\nfieldwork={path='vendor/fieldwork'}\nfutures={path='vendor/futures'}\n\n";
+        for name in ["kithara-stream", "anyhow", "fieldwork", "futures"] {
+            let directory = if name == "kithara-stream" {
+                root.path().join("crates").join(name)
+            } else {
+                root.path().join("vendor").join(name)
+            };
+            fs::create_dir_all(directory.join("src"))?;
+            fs::write(
+                directory.join("Cargo.toml"),
+                format!(
+                    "[package]\nname='{name}'\nversion='0.1.0'\nedition='2024'\n{}",
+                    if name == "kithara-stream" {
+                        ""
+                    } else {
+                        "[workspace]\n"
+                    }
+                ),
+            )?;
+            fs::write(directory.join("src/lib.rs"), "")?;
+        }
+        fs::create_dir_all(root.path().join("src"))?;
+        fs::write(root.path().join("src/lib.rs"), "")?;
+        let input = format!(
+            "{prefix}[dependencies]\nkithara-stream = {{ workspace = true }}\n\nanyhow = {{ workspace = true }}\nfutures = {{ workspace = true }}\n"
+        );
+        let manifest = root.path().join("Cargo.toml");
+        fs::write(&manifest, &input)?;
+        let metadata = MetadataCommand::new()
+            .manifest_path(&manifest)
+            .no_deps()
+            .exec()?;
+        assert_eq!(
+            metadata
+                .workspace_packages()
+                .iter()
+                .map(|package| package.name.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["consumer", "kithara-stream"])
+        );
+        let manifest = metadata
+            .workspace_root
+            .join("Cargo.toml")
+            .as_std_path()
+            .to_path_buf();
+        let rewritten = add_workspace_dependency(&input, "fieldwork", &manifest, &metadata)?
+            .expect("dependency added");
         assert_eq!(
             rewritten,
-            "[dependencies]\nkithara-stream = { workspace = true }\n\nanyhow = { workspace = true }\nfieldwork = { workspace = true }\nfutures = { workspace = true }\n"
+            format!(
+                "{prefix}[dependencies]\nkithara-stream = {{ workspace = true }}\n\nanyhow = {{ workspace = true }}\nfieldwork = {{ workspace = true }}\nfutures = {{ workspace = true }}\n"
+            )
         );
-        assert!(add_workspace_dependency(&rewritten, "fieldwork")?.is_none());
+        assert!(add_workspace_dependency(&rewritten, "fieldwork", &manifest, &metadata)?.is_none());
         Ok(())
     }
 

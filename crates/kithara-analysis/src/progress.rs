@@ -166,6 +166,22 @@ pub(crate) struct BeatMarkResume {
 impl BeatResume {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, BlobError> {
         let origin = reader.read_bool()?.then(|| reader.read_u64()).transpose()?;
+        let runs = Self::read_runs(reader)?;
+        let taken = reader.read_coverage()?;
+        let windows = Self::read_windows(reader)?;
+        let short = Self::read_short(reader)?;
+        let resume = Self {
+            origin,
+            short,
+            taken,
+            runs,
+            windows,
+        };
+        resume.validate()?;
+        Ok(resume)
+    }
+
+    fn read_runs(reader: &mut Reader<'_>) -> Result<Vec<BeatRunResume>, BlobError> {
         let run_count = reader.read_count(24)?;
         let mut runs: Vec<BeatRunResume> = Vec::with_capacity(run_count.min(MAX_PREALLOC));
         let mut previous_end = None;
@@ -177,9 +193,10 @@ impl BeatResume {
             previous_end = Some(run.end);
             runs.push(run);
         }
+        Ok(runs)
+    }
 
-        let taken = reader.read_coverage()?;
-
+    fn read_windows(reader: &mut Reader<'_>) -> Result<Vec<(usize, RawBeatsResume)>, BlobError> {
         let window_count = reader.read_count(24)?;
         let mut windows: Vec<(usize, RawBeatsResume)> =
             Vec::with_capacity(window_count.min(MAX_PREALLOC));
@@ -196,25 +213,20 @@ impl BeatResume {
                 },
             ));
         }
+        Ok(windows)
+    }
 
+    fn read_short(reader: &mut Reader<'_>) -> Result<BTreeSet<usize>, BlobError> {
         let short_count = reader.read_count(8)?;
         let mut short = BTreeSet::new();
-        previous = None;
+        let mut previous = None;
         for _ in 0..short_count {
             let raw = reader.read_ordered(previous)?;
             let index = usize::try_from(raw).map_err(|_| BlobError::Corrupt)?;
             previous = Some(raw);
             short.insert(index);
         }
-        let resume = Self {
-            origin,
-            short,
-            taken,
-            runs,
-            windows,
-        };
-        resume.validate()?;
-        Ok(resume)
+        Ok(short)
     }
 
     fn validate(&self) -> Result<(), BlobError> {

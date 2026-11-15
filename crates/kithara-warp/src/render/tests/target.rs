@@ -2,79 +2,10 @@ use std::num::NonZero;
 
 use kithara_signal::AudioSpec;
 use kithara_stretch::StretchKind;
-#[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 
 use super::{WarpConfig, spec};
-#[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use super::{chunk, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer};
-#[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use crate::consts;
-use crate::test_pools::pools_with_budget as test_pools;
-
-/// Swapping the backend mid-stream keeps the stream flowing and pitch-locked.
-#[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-#[kithara::test]
-#[case::bungee_to_signalsmith(StretchKind::Bungee, StretchKind::Signalsmith)]
-#[case::signalsmith_to_bungee(StretchKind::Signalsmith, StretchKind::Bungee)]
-#[kithara::hang_watchdog]
-fn live_backend_swap_continues_and_keeps_pitch(
-    #[case] initial: StretchKind,
-    #[case] replacement: StretchKind,
-    warp_sine: Vec<f32>,
-) {
-    let mut fx = renderer(
-        &WarpConfig::builder()
-            .speed(0.5)
-            .keylock(true)
-            .backend(initial)
-            .build(),
-    );
-    let pools = fx.pools.clone();
-    let block = warp_sine[..(4096) * 2].to_vec();
-    let mut out: Vec<f32> = Vec::new();
-    let mut source = 0;
-    for i in 0..24 {
-        hang_tick!();
-        if i == 6 {
-            fx.set_backend(replacement);
-            fx.prepare(spec());
-            while fx.transition_pending() {
-                hang_tick!();
-                if let Some(output) = flush_serviced(&mut fx) {
-                    out.extend_from_slice(&output.samples);
-                    hang_reset!();
-                }
-            }
-        }
-        let mut input = chunk(&pools, &block);
-        input.meta.frame_offset = source;
-        source += u64::try_from(input.frames()).expect("source frames fit u64");
-        if let Some(c) = render_serviced(&mut fx, input) {
-            out.extend_from_slice(&c.samples);
-        }
-        hang_reset!();
-    }
-    while let Some(c) = flush_serviced(&mut fx) {
-        hang_tick!();
-        out.extend_from_slice(&c.samples);
-        hang_reset!();
-    }
-    let mono: Vec<f32> = out
-        .iter()
-        .step_by(usize::from(consts::CH))
-        .copied()
-        .collect();
-    assert!(
-        mono.len() >= consts::N,
-        "not enough output after swap for the FFT window"
-    );
-    assert!(
-        dominant_bin(&mono).abs_diff(expected_bin(consts::F0)) <= 3,
-        "pitch preserved after live backend swap"
-    );
-}
+use crate::{Pitch, test_pools::pools_with_budget as test_pools};
 
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -99,7 +30,7 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
             let pools = test_pools(usize::MAX);
             let config = WarpConfig::builder()
                 .speed(0.5)
-                .keylock(true)
+                .pitch(Pitch::HELD)
                 .backend(backend)
                 .build();
             let target = crate::Warp::new((), &config).renderer(target_spec, pools.clone());
@@ -113,7 +44,7 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
     let pools = test_pools(target_bytes);
     let config = WarpConfig::builder()
         .speed(0.5)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(backend)
         .build();
     let mut fx = crate::Warp::new((), &config).renderer(initial, pools.clone());
@@ -157,7 +88,7 @@ fn failed_target_rebuild_is_not_retried_without_a_new_revision(#[case] backend: 
     let pools = test_pools(0);
     let config = WarpConfig::builder()
         .speed(0.5)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(backend)
         .build();
     let mut fx = crate::Warp::new((), &config).renderer(spec(), pools.clone());

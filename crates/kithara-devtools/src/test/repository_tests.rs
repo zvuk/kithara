@@ -1,18 +1,56 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::Command,
 };
 
-use cargo_metadata::{Metadata, MetadataCommand, Package};
+use cargo_metadata::{Metadata, MetadataCommand};
 use tempfile::TempDir;
 
 use super::{NextestAction, request::TestRequest, resolve, selection::requested};
 use crate::common::project::{ProjectConfig, TestCargoOptions, TestRunner};
 
 pub(crate) fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    crate::testing::package().join("../..")
+}
+
+#[test]
+fn repository_readers_follow_the_running_checkout() {
+    let checkout = tempfile::tempdir().expect("relocated checkout");
+    let package = checkout.path().join("crates/kithara-devtools");
+    fs::create_dir_all(&package).expect("relocated package");
+    fs::create_dir(checkout.path().join(".config")).expect("relocated configuration");
+    fs::write(
+        checkout.path().join(".config/xtask.toml"),
+        "[project]\nname = 'relocated'\n",
+    )
+    .expect("relocated project policy");
+    let output = Command::new(std::env::current_exe().expect("current test binary"))
+        .args(crate::common::child_test_args(
+            module_path!(),
+            "read_relocated_project",
+        ))
+        .env("CARGO_MANIFEST_DIR", package)
+        .output()
+        .expect("run configuration reader in relocated package");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("running 1 test"),
+        "configuration reader did not execute: {stdout} {stderr}"
+    );
+    assert!(
+        output.status.success(),
+        "configuration reader used another checkout: {stdout} {stderr}"
+    );
+}
+
+#[test]
+#[ignore = "executed by the relocation subprocess"]
+fn read_relocated_project() {
+    let config = ProjectConfig::load(&root()).expect("executing checkout configuration");
+    assert_eq!(config.project.name, "relocated");
 }
 
 pub(crate) fn this_workspace() -> Metadata {
@@ -69,17 +107,6 @@ fn engine_trace_consumers_do_not_build_devtools_commands() {
     assert!(packages.contains("kithara-devtools-trace-format"));
 }
 
-/// A member's directory relative to the workspace root, with a trailing
-/// slash, the way a lane's `owns` entries spell directories.
-fn member_dir(metadata: &Metadata, package: &Package) -> String {
-    let dir = package
-        .manifest_path
-        .parent()
-        .and_then(|dir| dir.strip_prefix(&metadata.workspace_root).ok())
-        .expect("a member lives under the workspace root");
-    format!("{dir}/")
-}
-
 /// The members a lane's cargo options select.
 pub(crate) fn selected_by<'a>(
     cargo: &TestCargoOptions,
@@ -120,46 +147,6 @@ fn build_closure<'a>(selected: &BTreeSet<&'a str>, metadata: &'a Metadata) -> BT
         }
     }
     built
-}
-
-/// Every member whose sources a lane owns is a member the lane builds: the
-/// member an owned path lies in, and every member that lies under an owned
-/// directory. Otherwise `--touched` answers a change to that member with a
-/// lane that never compiles it.
-#[test]
-fn a_lane_builds_every_member_whose_sources_it_owns() {
-    let metadata = this_workspace();
-    let project = ProjectConfig::load(&root()).expect("load repository config");
-    let members = metadata
-        .workspace_packages()
-        .into_iter()
-        .map(|package| (member_dir(&metadata, package), package.name.as_str()))
-        .collect::<Vec<_>>();
-    let mut failures = BTreeSet::new();
-    for (lane_name, lane) in &project.test.lanes {
-        let selected = selected_by(&lane.cargo, &metadata);
-        for owned in &lane.owns {
-            let containing = members
-                .iter()
-                .filter(|(dir, _)| owned.starts_with(dir.as_str()))
-                .max_by_key(|(dir, _)| dir.len());
-            let contained = members
-                .iter()
-                .filter(|(dir, _)| dir.starts_with(owned.as_str()));
-            for (_, member) in containing.into_iter().chain(contained) {
-                if !selected.contains(member) {
-                    failures.insert(format!(
-                        "lane `{lane_name}` owns `{owned}` but does not build `{member}`"
-                    ));
-                }
-            }
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "{}",
-        failures.into_iter().collect::<Vec<_>>().join("\n")
-    );
 }
 
 /// Every feature a lane resolves to, at its defaults and with each toggle it
@@ -397,7 +384,7 @@ fn the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives() {
 
 #[test]
 fn the_pinned_nextest_rejects_an_earlier_failed_stress_iteration() {
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nextest-stress");
+    let fixture = crate::testing::package().join("tests/fixtures/nextest-stress");
     let temp = TempDir::new().expect("isolated stress fixture");
     for name in ["Cargo.toml", "stress.rs"] {
         fs::copy(fixture.join(name), temp.path().join(name)).expect("copy stress fixture");

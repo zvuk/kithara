@@ -92,9 +92,8 @@ async fn run_case(
     let gate = helper.register_segment_gate(fixture.token(), 0, FINAL_SEGMENT);
     let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(kithara_integration_tests::TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

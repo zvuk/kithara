@@ -44,7 +44,7 @@ ignores:
 rule:
   all:
     - kind: field_declaration
-    - regex: '^pub [a-z_][a-zA-Z0-9_]*:'
+    - regex: "^pub [a-z_][a-zA-Z0-9_]*:"
     - inside:
         stopBy: end
         kind: struct_item

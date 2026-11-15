@@ -41,28 +41,44 @@ deep:perf:
     when: always
     expire_in: 30 days
     paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - perf-results.txt
 
 deep:bench:
   extends: .deep-job
   timeout: 120 minutes
+  interruptible: false
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "branch"
+      when: manual
+      allow_failure: true
+      interruptible: true
+    - if: $KITHARA_PIPELINE_KIND == "merge-request"
+      when: manual
+      allow_failure: true
+      interruptible: true
+    - if: $KITHARA_PIPELINE_KIND == "quarantine"
+      when: manual
+      allow_failure: true
+      interruptible: true
+    - if: $KITHARA_PIPELINE_KIND == "bench"
+    - !reference [.rules-nightly, rules]
   script:
     - just ci run deep-bench
   artifacts:
     when: always
     expire_in: 30 days
     paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - bench-results.txt
-      - target/criterion/
+      - bench-results/
 
 .deps-job:
   extends:
-    - .linux-job
+    - .macos-job
     - .rules-weekly
   stage: deep
-  needs:
-    - job: linux:image
-      optional: true
+  needs: []
 
 # Advisories and licence bans are the only dependency check on the import path.
 # The bridge no longer refuses a merged pull request for moving a manifest, so
@@ -75,12 +91,27 @@ deps:deny:
     - if: $KITHARA_PIPELINE_KIND == "quarantine"
   script:
     - just ci run deps-deny
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/deps-deny/
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
 
 deps:unused:
   extends: .deps-job
   timeout: 30 minutes
   script:
     - just ci run deps-unused
+
+deps:publish:
+  extends: .deps-job
+  timeout: 60 minutes
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "weekly"
+    - if: $KITHARA_PIPELINE_KIND == "quarantine"
+  script:
+    - just ci run crates-publish
 
 deps:shear:
   extends: .deps-job

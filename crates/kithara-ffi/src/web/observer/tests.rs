@@ -1,10 +1,13 @@
 #![cfg(target_arch = "wasm32")]
 
+use std::sync::Once;
+
 use js_sys::{Array, Function, Reflect, Uint8Array};
 use kithara::{
     events::TrackId,
     platform::{
         sync::{Arc, Mutex},
+        thread,
         time::Duration,
     },
     play::PlayError,
@@ -37,6 +40,15 @@ use types::{
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 
+fn surface_player() -> AudioPlayer {
+    static STARTUP: Once = Once::new();
+    STARTUP.call_once(|| {
+        thread::set_wasm_shim_name("wasm-bindgen-test");
+        kithara_ffi::web::bindings::setup().expect("browser bindings initialized");
+    });
+    AudioPlayer::new_js()
+}
+
 fn surface_fixture_url() -> String {
     let wav = Uint8Array::from(
         &b"RIFF\x26\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x80\xbb\0\0\0\x77\x01\0\x02\0\x10\0data\x02\0\0\0\0\0"[..],
@@ -57,7 +69,7 @@ fn surface_fixture_url() -> String {
 
 async fn surface_ids_fixture() -> (AudioPlayer, String, f64) {
     let url = surface_fixture_url();
-    let player = AudioPlayer::new_js();
+    let player = surface_player();
     let id = player.insert_js(url.clone(), -1.0).expect("insert fixture");
     wait_until(Duration::from_secs(5), "fixture insertion", || {
         player.tick_js();
@@ -160,7 +172,7 @@ async fn surface_ids_malformed_observer_id_is_rejected() {
 
 #[wasm_bindgen_test]
 async fn surface_dependent_commands_share_owner_order_before_publication() {
-    let player = Arc::new(AudioPlayer::new_js());
+    let player = Arc::new(surface_player());
     let url = surface_fixture_url();
     let events = Arc::new(Mutex::new(Vec::new()));
     player.set_observer(Arc::new(Events(Arc::clone(&events))));
@@ -260,7 +272,8 @@ impl SeekCallback for Seeks {
 
 #[wasm_bindgen_test]
 async fn surface_settings_follow_owner_publication_and_report_refusal() {
-    let player = Arc::new(AudioPlayer::new_js());
+    assert!(thread::is_main_thread());
+    let player = Arc::new(surface_player());
     let events = Arc::new(Mutex::new(Vec::new()));
     player.set_observer(Arc::new(Events(Arc::clone(&events))));
     let original_rate = player.playing_rate();

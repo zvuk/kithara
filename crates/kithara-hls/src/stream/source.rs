@@ -427,7 +427,7 @@ mod tests {
         });
         let waker = Waker::from(Arc::clone(&observer));
         let opening_commands =
-            kithara_download::Peer::poll_next(peer.as_ref(), &mut Context::from_waker(&waker));
+            kithara_download::Peer::poll_next(peer.as_ref(), &mut Context::from_waker(&waker), 3);
         assert!(matches!(&opening_commands, Poll::Ready(Some(commands)) if !commands.is_empty()));
 
         observer.measuring.store(true, Ordering::Release);
@@ -460,7 +460,7 @@ mod tests {
         });
         let waker = Waker::from(Arc::clone(&forwarded));
         let opening_commands =
-            kithara_download::Peer::poll_next(peer.as_ref(), &mut Context::from_waker(&waker));
+            kithara_download::Peer::poll_next(peer.as_ref(), &mut Context::from_waker(&waker), 3);
         assert!(
             matches!(&opening_commands, Poll::Ready(Some(commands)) if !commands.is_empty()),
             "the registered peer must retain its active fetch claims through measurement"

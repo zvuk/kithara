@@ -3,29 +3,75 @@ use std::{marker::PhantomData, num::NonZeroU32};
 use kithara_command::{Rejection, Seq, When};
 use kithara_host::{
     DeckId, HostCommand, HostOwner, HostRegistration, HostSettingsChange, HostSettingsExec,
-    HostSettled, api::Tempo,
+    HostSettled, PassClock, api::Tempo,
 };
 use kithara_play::{
     DeckControl, DeckPass, HostedDeck, Outbox, PlayError, SessionTransportSnapshot,
 };
 use kithara_signal::{FrameCount, SessionEpoch, SessionFrame};
 
-use crate::{GridAnswer, LinkedDeck, LinkedHostConfig, LinkedHostDeck, TempoTrajectory, Unlinked};
+use crate::{GridAnswer, LinkedDeck, LinkedHostConfig, LinkedHostDeck, Unlinked};
 
-/// A tempo batch whose projected step is retained until the Host answers it.
-#[derive(Clone, Copy, Debug)]
-pub struct PendingTempo {
-    pub seq: Seq,
-    pub frame: SessionFrame,
-    pub value: Tempo,
-    pub at: When<SessionFrame>,
+/// Where a tempo request stands between its admission and its answer.
+#[derive(Clone, Copy)]
+enum TempoState {
+    /// The Host holds batch `seq` for `frame` on the axis of `epoch`.
+    Sent {
+        seq: Seq,
+        frame: SessionFrame,
+        epoch: Option<SessionEpoch>,
+    },
+    /// Waiting for room, with no batch at the Host.
+    Parked,
 }
 
 struct TempoOperation {
-    pending: PendingTempo,
     caller: Seq,
-    epoch: Option<SessionEpoch>,
-    awaiting_admission: bool,
+    value: Tempo,
+    at: When<SessionFrame>,
+    state: TempoState,
+}
+
+impl TempoOperation {
+    fn answers(&self, answer: Seq) -> bool {
+        matches!(self.state, TempoState::Sent { seq, .. } if seq == answer)
+    }
+
+    /// The step of a `When::Next` tempo that the commit bound has not passed.
+    fn unreached_step(
+        &self,
+        bound: SessionFrame,
+        axis: Option<SessionEpoch>,
+    ) -> Option<SessionFrame> {
+        match self.state {
+            TempoState::Sent { frame, epoch, .. }
+                if self.at == When::Next && epoch == axis && frame >= bound =>
+            {
+                Some(frame)
+            }
+            _ => None,
+        }
+    }
+
+    fn settled(&self, outcome: Result<SessionFrame, Rejection<PlayError>>) -> HostSettled {
+        HostSettled::Settings {
+            seq: self.caller,
+            change: HostSettingsChange::Tempo(self.value),
+            outcome,
+        }
+    }
+}
+
+/// A command run on one linked member in the Host pass.
+type LinkedVisit<'a, S> = dyn FnMut(
+        &mut dyn LinkedDeck<S>,
+        &mut Outbox<'_, S>,
+        DeckPass<'_>,
+    ) -> Result<Option<Seq>, PlayError>
+    + 'a;
+
+fn superseded() -> Result<SessionFrame, Rejection<PlayError>> {
+    Err(Rejection::Refused(PlayError::Superseded))
 }
 
 /// Owner commands for a linked Host and the decks it holds.
@@ -49,10 +95,10 @@ impl<S> From<HostCommand<S, LinkedHostDeck<S>>> for LinkedHostCommand<S> {
     }
 }
 
-/// Decorates the session owner with projected tempo and synchronized deck retiming.
+/// Decorates the session owner with synchronized deck retiming on the tempo
+/// map the Host accepted.
 pub struct LinkedHost<S, H> {
     inner: H,
-    trajectory: TempoTrajectory,
     tempo: Vec<TempoOperation>,
     answers: Vec<HostSettled>,
     settled: Vec<HostSettled>,
@@ -61,13 +107,12 @@ pub struct LinkedHost<S, H> {
 }
 
 impl<S, H> LinkedHost<S, H> {
-    /// Starts with the Host's configured tempo anchor and no tempo batches in flight.
+    /// Starts with no tempo batches in flight.
     #[must_use]
     pub fn new(config: LinkedHostConfig<H>) -> Self {
-        let LinkedHostConfig { inner, trajectory } = config;
+        let LinkedHostConfig { inner } = config;
         Self {
             inner,
-            trajectory,
             tempo: Vec::new(),
             answers: Vec::new(),
             settled: Vec::new(),
@@ -86,14 +131,12 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> LinkedHost<S, H> {
         if self.epoch == Some(epoch) {
             return;
         }
-        self.trajectory.reaxis_observed(transport.anchor());
         self.epoch = Some(epoch);
-        if let Some((now, delivery)) = self.inner.clock() {
+        if let Some(PassClock { now, delivery, .. }) = self.inner.clock() {
             let at = now + self.lead(delivery);
-            let trajectory = &self.trajectory;
-            self.inner.each_deck(&mut |_id, deck, out, _pass| {
+            self.inner.each_deck(&mut |_id, deck, out, pass| {
                 if let LinkedHostDeck::Linked(deck) = deck {
-                    deck.realign(trajectory, at, out);
+                    deck.realign(pass.planned_tempo, at, out);
                 }
             });
         }
@@ -113,28 +156,25 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> LinkedHost<S, H> {
     }
 
     fn retime(&mut self, frame: SessionFrame) {
-        let trajectory = &self.trajectory;
-        let frames: Vec<_> = std::iter::once(frame)
-            .chain(trajectory.changes_after(frame))
-            .collect();
-        self.inner.each_deck(&mut |_id, deck, out, _pass| {
+        let mut frames: Vec<SessionFrame> = Vec::new();
+        self.inner.each_deck(&mut |_id, deck, out, pass| {
             if let LinkedHostDeck::Linked(deck) = deck
                 && deck.synced()
             {
-                for &frame in &frames {
-                    deck.retime(trajectory, frame, out);
+                if frames.is_empty() {
+                    frames.push(frame);
+                    frames.extend(pass.planned_tempo.changes_after(frame));
                 }
+                deck.retime(pass.planned_tempo, &frames, out);
             }
         });
     }
 
     fn admit_tempo(
         &mut self,
-        now: SessionFrame,
-        delivery: FrameCount,
+        bound: SessionFrame,
         at: When<SessionFrame>,
     ) -> Result<SessionFrame, PlayError> {
-        let bound = now + self.lead(delivery);
         let frame = match at {
             When::Next => bound,
             When::At(frame) if frame < bound => return Err(PlayError::Late),
@@ -169,37 +209,41 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> LinkedHost<S, H> {
         Ok(frame)
     }
 
-    fn reschedule_tempo(&mut self, operation: &mut TempoOperation) -> Result<bool, PlayError> {
-        let Some((now, delivery)) = self.inner.clock() else {
-            return Ok(false);
+    /// Sends `value` to the Host for `frame` and retimes the synced decks on
+    /// the map the Host accepted it on.
+    fn send_step(
+        &mut self,
+        value: Tempo,
+        frame: SessionFrame,
+        cx: &mut (),
+    ) -> Result<Seq, PlayError> {
+        let seq = self
+            .inner
+            .exec_tempo(value, When::At(frame), cx)?
+            .ok_or_else(|| {
+                PlayError::Internal("a timed tempo did not produce an executor receipt".into())
+            })?;
+        self.retime(frame);
+        Ok(seq)
+    }
+
+    fn reschedule_tempo(&mut self, index: usize) -> Result<(), PlayError> {
+        let Some(PassClock { now, delivery, .. }) = self.inner.clock() else {
+            return Ok(());
         };
-        let frame = match self.admit_tempo(now, delivery, When::Next) {
+        let bound = now + self.lead(delivery);
+        let frame = match self.admit_tempo(bound, When::Next) {
             Ok(frame) => frame,
-            Err(PlayError::Full(_)) => return Ok(false),
+            Err(PlayError::Full(_)) => return Ok(()),
             Err(error) => return Err(error),
         };
-        let mut trajectory = self.trajectory.clone();
-        if operation.epoch == self.epoch {
-            trajectory.withdraw(operation.pending.frame);
-        }
-        trajectory
-            .push(frame, operation.pending.value)
-            .map_err(|error| PlayError::Internal(error.to_string()))?;
-        let Some(seq) = self
-            .inner
-            .exec_tempo(operation.pending.value, When::At(frame), &mut ())?
-        else {
-            return Err(PlayError::Internal(
-                "a timed tempo resend did not produce an executor receipt".into(),
-            ));
+        let seq = self.send_step(self.tempo[index].value, frame, &mut ())?;
+        self.tempo[index].state = TempoState::Sent {
+            seq,
+            frame,
+            epoch: self.epoch,
         };
-        self.trajectory = trajectory;
-        operation.pending.seq = seq;
-        operation.pending.frame = frame;
-        operation.epoch = self.epoch;
-        operation.awaiting_admission = false;
-        self.retime(frame);
-        Ok(true)
+        Ok(())
     }
 
     fn settle_tempos(&mut self, settled: Vec<HostSettled>) -> Vec<HostSettled> {
@@ -216,9 +260,7 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> LinkedHost<S, H> {
                     continue;
                 }
             };
-            let Some(index) = self.tempo.iter().position(|operation| {
-                operation.pending.seq == seq && !operation.awaiting_admission
-            }) else {
+            let Some(index) = self.tempo.iter().position(|op| op.answers(seq)) else {
                 answers.push(HostSettled::Settings {
                     seq,
                     change: HostSettingsChange::Tempo(value),
@@ -226,56 +268,75 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> LinkedHost<S, H> {
                 });
                 continue;
             };
-            let mut operation = self.tempo.remove(index);
-            if matches!(&outcome, Err(Rejection::Late | Rejection::Refused(_))) {
-                if operation.epoch == self.epoch {
-                    self.trajectory.withdraw(operation.pending.frame);
+            let outcome = match self.tempo[index].state {
+                // The Host put a newer tempo on its step: the decks retimed
+                // on the newer one when it was sent.
+                TempoState::Sent { .. }
+                    if matches!(&outcome, Err(Rejection::Refused(PlayError::Superseded))) =>
+                {
+                    outcome
                 }
-                let newer = self.tempo[index..]
-                    .iter()
-                    .any(|pending| pending.pending.at == When::Next);
-                let awaiting_admission = matches!(
-                    &outcome,
-                    Err(Rejection::Late | Rejection::Refused(PlayError::Full(_)))
-                );
-                if awaiting_admission && operation.pending.at == When::Next && !newer {
-                    operation.awaiting_admission = true;
-                    self.tempo.insert(index, operation);
-                    continue;
+                TempoState::Sent { .. }
+                    if matches!(&outcome, Err(Rejection::Late | Rejection::Refused(_))) =>
+                {
+                    let for_room = self.tempo[index].at == When::Next
+                        && matches!(
+                            &outcome,
+                            Err(Rejection::Late | Rejection::Refused(PlayError::Full(_)))
+                        );
+                    if for_room && index + 1 == self.tempo.len() {
+                        self.tempo[index].state = TempoState::Parked;
+                        continue;
+                    }
+                    if let Some(PassClock { now, delivery, .. }) = self.inner.clock() {
+                        let frame = now + self.lead(delivery);
+                        self.retime(frame);
+                    }
+                    if for_room { superseded() } else { outcome }
                 }
-                if let Some((now, delivery)) = self.inner.clock() {
-                    let frame = now + self.lead(delivery);
-                    self.retime(frame);
-                }
-            }
-            answers.push(HostSettled::Settings {
-                seq: operation.caller,
-                change: HostSettingsChange::Tempo(value),
-                outcome,
-            });
+                _ => outcome,
+            };
+            let operation = self.tempo.remove(index);
+            answers.push(operation.settled(outcome));
         }
         answers
     }
 
+    /// Runs `visit` on a linked member; an ordinary member refuses the named command.
+    fn with_linked(
+        &mut self,
+        id: DeckId,
+        name: &str,
+        value: f32,
+        visit: &mut LinkedVisit<'_, S>,
+    ) -> Result<Option<Seq>, PlayError> {
+        let mut sent = Ok(None);
+        self.inner.with_deck(id, &mut |deck, out, pass| {
+            sent = match deck {
+                LinkedHostDeck::Linked(deck) => visit(&mut **deck, out, pass),
+                LinkedHostDeck::Ordinary(_) => Err(PlayError::InvalidParameter {
+                    name: name.into(),
+                    value,
+                }),
+            };
+        })?;
+        sent
+    }
+
+    /// Admission retires a parked tempo, so at most one waits, and it is the newest.
     fn resume_tempos(&mut self) {
-        let mut index = 0;
-        while index < self.tempo.len() {
-            if !self.tempo[index].awaiting_admission {
-                index += 1;
-                continue;
-            }
-            let mut operation = self.tempo.remove(index);
-            if let Err(error) = self.reschedule_tempo(&mut operation) {
-                tracing::warn!(%error, seq = ?operation.caller, "tempo replan refused");
-                self.answers.push(HostSettled::Settings {
-                    seq: operation.caller,
-                    change: HostSettingsChange::Tempo(operation.pending.value),
-                    outcome: Err(Rejection::Refused(error)),
-                });
-                continue;
-            }
-            self.tempo.insert(index, operation);
-            index += 1;
+        let Some(index) = self
+            .tempo
+            .iter()
+            .position(|op| matches!(op.state, TempoState::Parked))
+        else {
+            return;
+        };
+        if let Err(error) = self.reschedule_tempo(index) {
+            let operation = self.tempo.remove(index);
+            tracing::warn!(%error, seq = ?operation.caller, "tempo replan refused");
+            self.answers
+                .push(operation.settled(Err(Rejection::Refused(error))));
         }
     }
 }
@@ -316,37 +377,19 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for Lin
             }
             LinkedHostCommand::Host(command) => self.inner.apply(H::Command::from(command)),
             LinkedHostCommand::Sync { deck, on } => {
-                let mut sent = Ok(None);
-                let trajectory = &self.trajectory;
-                self.inner.with_deck(deck, &mut |deck, out, pass| {
-                    sent = match deck {
-                        LinkedHostDeck::Linked(deck) => {
-                            if on && !deck.synced() {
-                                deck.retime(trajectory, pass.now, out);
-                            }
-                            deck.sync(on, out)
-                        }
-                        LinkedHostDeck::Ordinary(_) => Err(PlayError::InvalidParameter {
-                            name: "sync".into(),
-                            value: if on { 1.0 } else { 0.0 },
-                        }),
-                    };
-                })?;
-                sent
+                let value = if on { 1.0 } else { 0.0 };
+                self.with_linked(deck, "sync", value, &mut |deck, out, pass| {
+                    if on && !deck.synced() {
+                        deck.retime(pass.planned_tempo, &[pass.now], out);
+                    }
+                    deck.sync(on, out)
+                })
             }
             LinkedHostCommand::Grid { deck, answer } => {
-                let mut delivered = Ok(None);
-                self.inner
-                    .with_deck(deck, &mut |deck, out, _pass| match deck {
-                        LinkedHostDeck::Linked(deck) => deck.grid(answer.clone(), out),
-                        LinkedHostDeck::Ordinary(_) => {
-                            delivered = Err(PlayError::InvalidParameter {
-                                name: "grid".into(),
-                                value: 0.0,
-                            });
-                        }
-                    })?;
-                delivered
+                self.with_linked(deck, "grid", 0.0, &mut |deck, out, _| {
+                    deck.grid(answer.clone(), out);
+                    Ok(None)
+                })
             }
         }
     }
@@ -357,16 +400,16 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for Lin
         if !linked {
             return Ok(());
         }
-        let trajectory = &self.trajectory;
         self.inner.with_deck(id, &mut |deck, out, pass| {
             if let LinkedHostDeck::Linked(deck) = deck {
-                deck.retime(trajectory, pass.now, out);
+                deck.retime(pass.planned_tempo, &[pass.now], out);
             }
         })
     }
 
     delegate::delegate! {
         to self.inner {
+            fn poll_output(&mut self) -> std::task::Poll<Result<(), PlayError>>;
             fn each_deck(
                 &mut self,
                 visit: &mut dyn FnMut(DeckId, &mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
@@ -376,7 +419,7 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for Lin
                 id: DeckId,
                 visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
             ) -> Result<(), PlayError>;
-            fn clock(&self) -> Option<(SessionFrame, FrameCount)>;
+            fn clock(&self) -> Option<PassClock>;
             fn prepare_offline(&mut self) -> Result<(), PlayError>;
             fn render_offline(
                 &mut self,
@@ -405,23 +448,13 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for Lin
         }
     }
 
-    fn is_next_tempo(command: &Self::Command) -> bool {
-        matches!(
-            command,
-            LinkedHostCommand::Host(HostCommand::Configure(
-                HostSettingsChange::Tempo(_),
-                When::Next,
-            ))
-        )
-    }
-
     fn pass(&mut self) -> Vec<HostSettled> {
         let settled = self.inner.pass();
         let mut answers = std::mem::take(&mut self.answers);
         for answer in settled {
             if matches!(&answer, HostSettled::Settings {
                 seq, change: HostSettingsChange::Tempo(_), ..
-            } if self.tempo.iter().any(|operation| operation.pending.seq == *seq && !operation.awaiting_admission))
+            } if self.tempo.iter().any(|op| op.answers(*seq)))
             {
                 self.settled.push(answer);
             } else {
@@ -451,37 +484,42 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostSettingsExec<()>
                 "a tempo has no deferred executor moment".into(),
             ));
         }
-        let Some((now, delivery)) = self.inner.clock() else {
+        let Some(PassClock { now, delivery, .. }) = self.inner.clock() else {
             if matches!(at, When::At(_)) {
                 return Err(PlayError::Untimed);
             }
-            let sent = self.inner.exec_tempo(value, When::Next, cx)?;
-            self.trajectory.initial_tempo(value);
-            return Ok(sent);
+            return self.inner.exec_tempo(value, When::Next, cx);
         };
-        let frame = self.admit_tempo(now, delivery, at)?;
-        let mut trajectory = self.trajectory.clone();
-        trajectory
-            .push(frame, value)
-            .map_err(|error| PlayError::Internal(error.to_string()))?;
-        let seq = self
-            .inner
-            .exec_tempo(value, When::At(frame), cx)?
-            .ok_or_else(|| {
-                PlayError::Internal("a timed tempo did not produce an executor receipt".into())
-            })?;
-        self.trajectory = trajectory;
-        self.retime(frame);
+        let bound = now + self.lead(delivery);
+        let planned = self.admit_tempo(bound, at)?;
+        let axis = self.epoch;
+        // A Next tempo goes on the newest Next step the commit bound has not
+        // passed: the Host puts it in that step's place.
+        let frame = self
+            .tempo
+            .iter()
+            .rev()
+            .filter_map(|op| op.unreached_step(bound, axis))
+            .find(|&step| at == When::Next || step == planned)
+            .unwrap_or(planned);
+        let seq = self.send_step(value, frame, cx)?;
+        let answers = &mut self.answers;
+        self.tempo.retain(|op| {
+            let parked = matches!(op.state, TempoState::Parked);
+            if parked {
+                answers.push(op.settled(superseded()));
+            }
+            !parked
+        });
         self.tempo.push(TempoOperation {
-            pending: PendingTempo {
+            caller: seq,
+            value,
+            at,
+            state: TempoState::Sent {
                 seq,
                 frame,
-                value,
-                at,
+                epoch: self.epoch,
             },
-            caller: seq,
-            epoch: self.epoch,
-            awaiting_admission: false,
         });
         Ok(Some(seq))
     }

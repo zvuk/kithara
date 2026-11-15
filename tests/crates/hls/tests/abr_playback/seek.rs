@@ -9,7 +9,7 @@ use kithara::{
     events::{EventBus, EventReceiver},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{
         CancelToken, time,
         time::{Duration, Instant},
@@ -542,7 +542,7 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
     let server = TestServerHelper::new().await;
     let pools = pools();
     let cancel = CancelToken::never();
-    let net = HttpClient::new(NetOptions::default(), pools.clone(), cancel.child());
+    let net = TestServerHelper::shared_client(NetOptions::default(), cancel.child());
     let plain = server
         .create_hls(
             mixed_codec_ladder()
@@ -605,9 +605,8 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             cancel.child(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())
@@ -654,7 +653,6 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
     let _ = audio.preload();
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    #[kithara_test_utils::kithara::flash(io)]
     async fn next_chunk(
         audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     ) -> Option<AudioChunk> {
@@ -755,7 +753,6 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
     }
     seek_segment.release();
 
-    #[kithara_test_utils::kithara::flash(io)]
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     fn read_after_seek(
         audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,

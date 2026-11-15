@@ -3,10 +3,7 @@ use std::{num::NonZeroU16, sync::atomic::Ordering};
 use kithara_bufpool::HasPool;
 use kithara_resampler::ResamplerBackend;
 use kithara_stream::ReaderControl;
-use symphonia_core::{
-    formats::FormatReader,
-    io::{MediaSourceStream, MediaSourceStreamOptions},
-};
+use symphonia_core::{formats::FormatReader, io::MediaSourceStream};
 
 use crate::{
     DecodeResult, DecoderConfig,
@@ -34,10 +31,7 @@ where
     let byte_len = adapter.byte_len_handle();
     let byte_pos = adapter.byte_pos_handle();
     let seek_enabled = adapter.seek_enabled_handle();
-    let reader = open(MediaSourceStream::new(
-        Box::new(adapter),
-        MediaSourceStreamOptions::default(),
-    ))?;
+    let reader = open(MediaSourceStream::from(adapter))?;
     seek_enabled.store(true, Ordering::Release);
     let demuxer = SymphoniaDemuxer::from_reader_with_layout(
         reader,

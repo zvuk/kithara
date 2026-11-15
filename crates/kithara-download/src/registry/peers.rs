@@ -1,4 +1,4 @@
-use std::task::Poll;
+use std::{sync::atomic::Ordering, task::Poll};
 
 use kithara_abr::AbrPeerId;
 use kithara_events::EventBus;
@@ -39,6 +39,7 @@ struct PeerEntry {
 #[derive(Default)]
 pub(super) struct Peers {
     entries: Arena<PeerEntry>,
+    last_admitted: Option<Index>,
 }
 
 impl Peers {
@@ -81,7 +82,18 @@ impl Peers {
 
         inner.fetch_waker.register(cx.waker());
 
-        for (idx, entry) in &mut self.entries {
+        let mut order: Vec<Index> = self.entries.iter().map(|(index, _)| index).collect();
+        if let Some(last) = self.last_admitted
+            && let Some(position) = order.iter().position(|index| *index == last)
+        {
+            let next = (position + 1) % order.len();
+            order.rotate_left(next);
+        }
+        order.sort_by_key(|index| self.priority(*index) != Some(RequestPriority::High));
+        for idx in order {
+            let Some(entry) = self.entries.get_mut(idx) else {
+                continue;
+            };
             if entry.peer_cancel.is_cancelled() {
                 to_remove.push(idx);
             }
@@ -101,7 +113,12 @@ impl Peers {
                 continue;
             }
 
-            match entry.peer.poll_next(cx) {
+            let budget = inner
+                .config
+                .max_concurrent
+                .saturating_sub(inner.inflight.load(Ordering::Relaxed))
+                .saturating_sub(slots.len());
+            match entry.peer.poll_next(cx, budget) {
                 Poll::Ready(Some(batch)) => {
                     let peer_prio = entry.peer.priority();
                     let bus = entry.bus.clone();
@@ -134,6 +151,7 @@ impl Peers {
                         slots.enqueue(slot, entry_slot);
                     }
                     if batch_had_cmds {
+                        self.last_admitted = Some(idx);
                         stats.peer_batches += 1;
                     }
                 }

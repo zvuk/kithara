@@ -1,6 +1,5 @@
 use std::{num::NonZeroU32, task::Waker};
 
-use firewheel::{FirewheelContext, cpal::CpalStream};
 use kithara_bufpool::HasPool;
 use kithara_command::{Live, mailbox};
 use kithara_platform::{
@@ -17,17 +16,23 @@ use super::{
         state::{HostRoot, RootView, SessionBufferConfig, SessionState, SessionStream},
     },
     SessionClient,
-    backend::cpal_config,
+    config::cpal_config,
+    device::AcquiredOutput,
     engine::{SessionWake, engine_thread},
+    stream::NativeStream,
 };
-use crate::{HostCore, HostOwner, HostSettings, consts, rt::SessionOutput};
+use crate::{
+    HostCore, HostOwner, HostSettings, consts,
+    rt::SessionOutput,
+    session::{context::SessionGraph, state::DeckNode},
+};
 
 pub(crate) fn spawn<S, O>(
     root: HostRoot,
     view: RootView,
     output_block_frames: Option<NonZeroU32>,
     channel_config: kithara_command::ScopedConfig,
-    output: SessionOutput,
+    output: SessionOutput<S>,
     settings: Live<HostSettings, HostProtocol>,
     layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
 ) -> Arc<SessionClient<O::Command>>
@@ -46,8 +51,8 @@ where
     });
     let inbox: Arc<dyn DeckInbox> = client.clone();
     spawn_named("host-deck-session", move || {
-        let start = move |ctx: &mut FirewheelContext, rate| {
-            start_stream_cpal(ctx, rate, output_block_frames).map(|backend| {
+        let start = move |ctx: &mut SessionGraph, rate: u32, decks: &mut [DeckNode], _previous| {
+            start_stream_cpal(ctx, rate, output_block_frames, decks).map(|backend| {
                 SessionStream::Realtime {
                     _backend: Box::new(backend),
                 }
@@ -72,11 +77,20 @@ where
 }
 
 fn start_stream_cpal(
-    ctx: &mut FirewheelContext,
+    ctx: &mut SessionGraph,
     sample_rate: u32,
     output_block_frames: Option<NonZeroU32>,
-) -> Result<CpalStream, String> {
+    _decks: &mut [DeckNode],
+) -> Result<NativeStream, String> {
     debug!(sample_rate, "starting cpal stream");
-    CpalStream::new(ctx, cpal_config(sample_rate, output_block_frames))
-        .map_err(|error| error.to_string())
+    let device = AcquiredOutput::new(&cpal_config(sample_rate, output_block_frames))?.open()?;
+    device.reserve_processor()?;
+    ctx.cycle_detected().map_err(|error| error.to_string())?;
+    if ctx.is_active() {
+        return Err(firewheel::error::ActivateError::AlreadyActive.to_string());
+    }
+    let processor = ctx
+        .activate(device.info)
+        .map_err(|error| error.to_string())?;
+    device.start(processor)
 }

@@ -4,9 +4,16 @@
 //! every claim. So every workspace build script names what it reads before it
 //! can return, and none of them reads a value that changes on every commit.
 
-use std::{fs, path::Path};
+use std::{fs, path::PathBuf};
 
 use syn::{Item, Stmt, visit::Visit};
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+        .parent()
+        .expect("xtask has a workspace root")
+        .to_path_buf()
+}
 
 /// Values that differ on every commit or pipeline: a script that reads one
 /// reruns, and rebuilds everything that depends on it, on every job.
@@ -20,9 +27,7 @@ const PER_COMMIT: &[&str] = &[
 
 #[test]
 fn every_build_script_tells_cargo_what_it_reads_before_it_can_return() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let metadata = cargo_metadata::MetadataCommand::new()
         .manifest_path(root.join("Cargo.toml"))
         .no_deps()
@@ -72,9 +77,7 @@ fn every_build_script_tells_cargo_what_it_reads_before_it_can_return() {
 fn a_nested_just_hands_build_scripts_the_same_pkg_config_path() {
     use std::{env, os::unix::fs::PermissionsExt, process::Command};
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let pins =
         fs::read_to_string(root.join(".config/ci-pins.toml")).expect("the pins are readable");
     let start = pins
@@ -107,7 +110,7 @@ fn a_nested_just_hands_build_scripts_the_same_pkg_config_path() {
             .arg("--justfile")
             .arg(root.join("justfile"))
             .arg("--working-directory")
-            .arg(root)
+            .arg(&root)
             .args(["--evaluate", "PKG_CONFIG_PATH"])
             .env("PATH", &path)
             .env("PKG_CONFIG_PATH", inherited)
@@ -126,6 +129,73 @@ fn a_nested_just_hands_build_scripts_the_same_pkg_config_path() {
     assert!(outer.contains(&formula), "the keg is on the path: {outer}");
     assert!(outer.ends_with(own), "the caller's own path stays: {outer}");
     assert_eq!(evaluate(&outer), outer, "a nested just changed the value");
+}
+
+/// Browser orchestration belongs to xtask; Just only routes its arguments.
+#[test]
+fn wasm_recipe_only_dispatches_to_its_rust_owner() {
+    let root = workspace_root();
+    let source = fs::read_to_string(root.join(".config/just/test.just")).unwrap();
+    let body = source.split("wasm *ARGS:\n").nth(1).expect("wasm recipe");
+    let commands: Vec<_> = body
+        .lines()
+        .take_while(|line| line.starts_with(' '))
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    assert_eq!(commands, ["just _xtask wasm test \"$@\""]);
+}
+
+#[test]
+fn apple_recipe_only_dispatches_to_its_rust_owner() {
+    let root = workspace_root();
+    let source = fs::read_to_string(root.join(".config/just/platform.just")).unwrap();
+    let body = source
+        .split("apple MODE=\"xcframework\" *ARGS:\n")
+        .nth(1)
+        .expect("apple recipe");
+    let commands: Vec<_> = body
+        .lines()
+        .take_while(|line| line.starts_with(' '))
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    assert_eq!(commands, ["just _xtask apple \"$@\""]);
+}
+
+#[test]
+fn trunk_postbuild_hooks_use_the_cached_xtask_entry() {
+    let root = workspace_root();
+    for package in ["kithara-ffi", "kithara-app"] {
+        let source = fs::read_to_string(root.join(format!("crates/{package}/Trunk.toml")))
+            .expect("Trunk configuration is readable");
+        let config: toml::Value = toml::from_str(&source).expect("Trunk configuration parses");
+        let hook = config["hooks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|hook| hook["stage"].as_str() == Some("post_build"))
+            .expect("Trunk has a post-build hook");
+        assert_eq!(hook["command"].as_str(), Some("just"), "{package}");
+        let args: Vec<_> = hook["command_arguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "tooling",
+                "xtask",
+                "wasm",
+                "postbuild",
+                "--package",
+                package
+            ],
+            "{package}"
+        );
+    }
 }
 
 /// What is wrong with a `main` that can return, or ends, before it names a

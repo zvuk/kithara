@@ -1,4 +1,4 @@
-use firewheel::{FirewheelContext, node::NodeID};
+use firewheel::node::NodeID;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
@@ -8,13 +8,15 @@ use tracing::{debug, warn};
 
 use super::{
     SessionError,
+    context::GraphError,
     queue::settle_root_receipts,
-    state::{DeckNode, SessionState, TapSlot, add_graph_node, ensure_ctx},
+    state::{DeckNode, RetiredDeck, SessionState, TapSlot, add_graph_node, ensure_ctx},
     transport::TransportState,
 };
 use crate::{
     DeckId,
     rt::{PlayerNode, TapNode},
+    session::context::SessionGraph,
 };
 
 pub(crate) fn install_deck<T, S>(
@@ -35,9 +37,28 @@ where
         .session_output_node_id
         .ok_or(SessionError::NoContext)?;
     let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-    let node = add_graph_node(ctx, PlayerNode::<S, TransportState>::new(inputs, pools))?;
-    let installed =
-        connect_stereo(ctx, node, master, "connect deck mixer to master").and_then(|()| {
+    #[cfg(feature = "offline")]
+    let (player, offline) = if matches!(state.stream, Some(super::state::SessionStream::Offline(_)))
+    {
+        {
+            let (player, offline) = PlayerNode::<S, TransportState>::offline(inputs, pools);
+            (player, Some(offline))
+        }
+    } else {
+        (PlayerNode::<S, TransportState>::new(inputs, pools), None)
+    };
+    #[cfg(not(feature = "offline"))]
+    let player = PlayerNode::<S, TransportState>::new(inputs, pools);
+    let shape = ctx.negotiated_shape().ok_or(SessionError::NoContext)?;
+    let node = add_graph_node(ctx, player)?;
+    let installed = PlayerNode::<S, TransportState>::prepare_at(ctx, node, shape)
+        .map_err(|error| SessionError::Graph(error.to_string()))
+        .and_then(|()| connect_stereo(ctx, node, master, "connect deck mixer to master"))
+        .and_then(|()| {
+            ctx.cycle_detected()
+                .map_err(|error| SessionError::Graph(error.to_string()))
+        })
+        .and_then(|()| {
             ctx.update()
                 .map_err(|error| SessionError::Graph(format!("{error:?}")))
         });
@@ -45,9 +66,25 @@ where
         if let Err(remove_error) = ctx.remove_node(node) {
             warn!(?remove_error, "failed to remove the rejected deck node");
         }
+        state.retired_decks.push(RetiredDeck {
+            deck: DeckNode {
+                id,
+                node,
+                bus,
+                #[cfg(feature = "offline")]
+                offline,
+            },
+            staged: true,
+        });
         return Err(error);
     }
-    state.deck_nodes.push(DeckNode { id, node, bus });
+    state.deck_nodes.push(DeckNode {
+        id,
+        node,
+        bus,
+        #[cfg(feature = "offline")]
+        offline,
+    });
     Ok(())
 }
 
@@ -61,15 +98,43 @@ pub(crate) fn remove_deck<T, S>(
         .iter()
         .position(|deck| deck.id == id)
         .ok_or(SessionError::DeckNotFound(id))?;
-    let node = state.deck_nodes[index].node;
-    let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-    ctx.remove_node(node)
-        .map_err(|error| SessionError::Graph(format!("remove deck mixer failed: {error}")))?;
-    state.deck_nodes.remove(index);
-    if let Err(error) = ctx.update() {
-        warn!(?error, "graph update after deck retirement failed");
-    }
+    let removed = state.deck_nodes.remove(index);
+    #[cfg(feature = "offline")]
+    let removed = {
+        let mut removed = removed;
+        removed.offline.take();
+        removed
+    };
+    state.retired_decks.push(RetiredDeck {
+        deck: removed,
+        staged: false,
+    });
+    flush_retired(state)?;
     Ok(())
+}
+
+pub(crate) fn flush_retired<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+    let Some(ctx) = &mut state.ctx else {
+        return Ok(());
+    };
+    for retired in &mut state.retired_decks {
+        if retired.staged {
+            continue;
+        }
+        match ctx.remove_node(retired.deck.node) {
+            Ok(_) => retired.staged = true,
+            Err(GraphError::Full) => break,
+            Err(error) => return Err(SessionError::Graph(error.to_string())),
+        }
+        ctx.update()
+            .map_err(|error| SessionError::Graph(error.to_string()))?;
+    }
+    if ctx.quiescent() {
+        ctx.update()
+            .map_err(|error| SessionError::Graph(error.to_string()))?;
+        state.retired_decks.retain(|retired| !retired.staged);
+    }
+    tap::flush(state)
 }
 
 /// Stops the stream while retaining its context, scopes and applied settings.
@@ -103,19 +168,23 @@ pub(crate) fn idle<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionEr
         .publish_unavailable(stamp, axis.sample_rate(), generation.epoch());
     state.reserved_session_grid = Some(generation);
     state.iteration_clock = None;
+    // The stream's axis ends here: what the owner staged for it goes to the
+    // transport first, which refuses its frames along with the axis.
+    state.publish_staged();
+    state.stream = None;
+    #[cfg(target_arch = "wasm32")]
     state
         .ctx
         .as_mut()
         .ok_or(SessionError::NoContext)?
         .request_deactivate();
-    state.stream = None;
     state.stream_needs_restart = false;
     state.publish_root();
     Ok(())
 }
 
-/// Drops an empty, stopped context after every scope is Closed and its owner
-/// has settled the root receipts. Only a retained output keeps the context alive.
+/// Detaches an empty, stopped context after every scope is Closed and its owner
+/// has settled the root receipts. Processor return gates physical reclamation.
 pub(crate) fn drop_idle_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     if !state.deck_nodes.is_empty() || state.stream.is_some() {
         return Err(SessionError::Graph(
@@ -127,7 +196,12 @@ pub(crate) fn drop_idle_context<T, S>(state: &mut SessionState<T, S>) -> Result<
     }
     settle_root_receipts(state);
     state.settings.abandon();
-    state.ctx.take();
+    let abandoned = state.timeline.abandon();
+    state.settled.extend(abandoned);
+    state.retired_decks.clear();
+    state
+        .retired_contexts
+        .extend(state.ctx.take().filter(|ctx| ctx.is_active()));
     state.channel = None;
     state.transport_observation = None;
     state.session_output_node_id = None;
@@ -135,7 +209,7 @@ pub(crate) fn drop_idle_context<T, S>(state: &mut SessionState<T, S>) -> Result<
     state.session_metronome_node_id = None;
     for tap in [crate::api::Tap::Master, crate::api::Tap::Output] {
         let slot = state.taps.slot(tap);
-        if matches!(slot, Some(TapSlot::Installed(_))) {
+        if matches!(slot, Some(TapSlot::Installed(_) | TapSlot::Retiring(_))) {
             *slot = None;
         }
     }
@@ -144,7 +218,7 @@ pub(crate) fn drop_idle_context<T, S>(state: &mut SessionState<T, S>) -> Result<
 }
 
 fn connect_stereo(
-    fw_ctx: &mut FirewheelContext,
+    fw_ctx: &mut SessionGraph,
     from: NodeID,
     to: NodeID,
     label: &'static str,
@@ -175,18 +249,34 @@ pub(crate) mod tap {
     }
 
     pub(crate) fn detach<T, S>(state: &mut SessionState<T, S>, tap: Tap) {
-        let Some(TapSlot::Installed(tap_id)) = state.taps.slot(tap).take() else {
-            return;
-        };
-        let Some(ref mut fw_ctx) = state.ctx else {
-            return;
-        };
-        if let Err(err) = fw_ctx.remove_node(tap_id) {
-            warn!(?tap, ?err, "failed to remove session tap node");
+        let slot = state.taps.slot(tap);
+        if let Some(TapSlot::Installed(id)) = slot {
+            *slot = Some(TapSlot::Retiring(*id));
         }
-        if let Err(err) = fw_ctx.update() {
-            warn!(?tap, "graph update after tap detach failed: {err:?}");
+        if let Err(error) = flush(state) {
+            warn!(%error, ?tap, "session tap retirement failed");
         }
+    }
+
+    pub(crate) fn flush<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+        let Some(ctx) = &mut state.ctx else {
+            return Ok(());
+        };
+        for tap in [Tap::Master, Tap::Output] {
+            let slot = state.taps.slot(tap);
+            let Some(TapSlot::Retiring(id)) = slot else {
+                continue;
+            };
+            match ctx.remove_node(*id) {
+                Ok(_) => {}
+                Err(GraphError::Full) => continue,
+                Err(error) => return Err(SessionError::Graph(error.to_string())),
+            }
+            ctx.update()
+                .map_err(|error| SessionError::Graph(error.to_string()))?;
+            *slot = None;
+        }
+        Ok(())
     }
 
     pub(crate) fn install_requested<T, S>(
@@ -239,7 +329,7 @@ pub(crate) mod tap {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn retire_browser_transport(context: &mut firewheel::FirewheelContext) -> bool {
+pub(crate) fn retire_browser_transport(context: &mut SessionGraph) -> bool {
     let Some(store) = context.proc_store_mut() else {
         return false;
     };

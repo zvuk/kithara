@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 #[cfg(unix)]
 use nix::{
     errno::Errno,
@@ -114,14 +114,25 @@ pub(crate) fn supervise(
     cancel: Option<&Cancel>,
     timeout: Option<Duration>,
 ) -> Result<ExitStatus> {
+    supervise_observed(child, cancel, timeout, || Ok(()))
+}
+
+fn supervise_observed(
+    child: &mut Child,
+    cancel: Option<&Cancel>,
+    timeout: Option<Duration>,
+    mut observe: impl FnMut() -> Result<()>,
+) -> Result<ExitStatus> {
     let started = Instant::now();
     loop {
-        let proceeding = check(cancel).and_then(|()| {
-            if timeout.is_some_and(|limit| started.elapsed() >= limit) {
-                bail!("owned command exceeded its deadline");
-            }
-            Ok(())
-        });
+        let proceeding = check(cancel)
+            .and_then(|()| {
+                if timeout.is_some_and(|limit| started.elapsed() >= limit) {
+                    bail!("owned command exceeded its deadline");
+                }
+                Ok(())
+            })
+            .and_then(|()| observe());
         if let Err(error) = proceeding {
             let stopped = stop(child, "cancelled or timed-out command");
             return Err(match stopped {
@@ -143,6 +154,55 @@ pub(crate) fn supervise(
             }
         }
     }
+}
+
+/// Limit stdout while the owned command runs; diagnostic stderr is discarded.
+pub(crate) fn bounded_output(
+    command: &mut Command,
+    timeout: Duration,
+    limit: usize,
+) -> Result<Output> {
+    let bound = u64::try_from(limit)?
+        .checked_add(1)
+        .context("output bound overflows")?;
+    command.stdout(Stdio::piped()).stderr(Stdio::null());
+    let mut child = spawn(command)?;
+    let stdout = child.stdout.take().context("captured stdout")?;
+    let (send, receive) = mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.take(bound).read_to_end(&mut bytes).map(|_| bytes);
+        let _ = send.send(result);
+    });
+    let mut captured = None;
+    let status = supervise_observed(&mut child, None, Some(timeout), || {
+        if captured.is_none() {
+            match receive.try_recv() {
+                Ok(result) => captured = Some(result?),
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    bail!("command output reader disconnected")
+                }
+            }
+        }
+        ensure!(
+            captured.as_ref().is_none_or(|bytes| bytes.len() <= limit),
+            "command output exceeded its limit"
+        );
+        Ok(())
+    })?;
+    let stdout = match captured {
+        Some(bytes) => bytes,
+        None => receive
+            .recv_timeout(consts::GRACE)
+            .context("draining bounded stdout")??,
+    };
+    ensure!(stdout.len() <= limit, "command output exceeded its limit");
+    Ok(Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    })
 }
 
 pub(crate) fn run(command: &mut Command, cancel: Option<&Cancel>) -> Result<ExitStatus> {
@@ -342,6 +402,30 @@ mod tests {
         );
         assert!(result.unwrap_err().to_string().contains("deadline"));
         assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn bounded_output_stops_a_stalled_command_and_its_children() {
+        let started = Instant::now();
+        let result = bounded_output(
+            Command::new("sh").args(["-c", "sleep 30 & wait"]),
+            Duration::from_millis(100),
+            16,
+        );
+        assert!(result.unwrap_err().to_string().contains("deadline"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn bounded_output_stops_a_writer_before_it_exits() {
+        let started = Instant::now();
+        let result = bounded_output(
+            Command::new("sh").args(["-c", "printf 123456789; sleep 30 & wait"]),
+            Duration::from_secs(30),
+            8,
+        );
+        assert!(result.unwrap_err().to_string().contains("limit"));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

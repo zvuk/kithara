@@ -1,7 +1,8 @@
 use kithara_command::{Seq, When};
 use kithara_host::{HostOwner, api::Tempo};
 use kithara_play::{
-    Bound, HostedDeck, PlayError, Player, Settled, TrackCommand, TrackReceipt, TrackStatus,
+    Bound, HostedDeck, PlayError, Player, Settled, TrackClock, TrackCommand, TrackReceipt,
+    TrackStatus,
 };
 use kithara_render::bridge::{DeckEvent, Slot};
 use kithara_signal::{FrameCount, SessionFrame};
@@ -10,7 +11,8 @@ use kithara_test_utils::kithara;
 
 use super::{
     fixtures::{
-        Command, Control, Deck, Rig, answer, deck, grid, load, position, sounding, trajectory,
+        Command, Control, Deck, Rig, answer, deck, grid, load, position, provisional, sound,
+        sounding, synced, trajectory,
     },
     host_fixture::{host, register, tempo},
 };
@@ -25,12 +27,7 @@ fn pending(beat_frames: u32, cue: u32, start: i64) -> (Deck, Control, Rig, Seq, 
     let loading = load(&mut deck, &mut rig, cue);
     rig.apply(&mut deck, loading, 30_000);
     control.clear();
-    answer(
-        &mut deck,
-        &mut rig,
-        loading,
-        grid(beat_frames, 0, None, 480_000),
-    );
+    answer(&mut deck, &mut rig, grid(beat_frames, 0, None, 480_000));
     let prepared = control.commands()[0].0;
     rig.apply(&mut deck, prepared, 30_000);
     control.clear();
@@ -49,7 +46,6 @@ fn pending(beat_frames: u32, cue: u32, start: i64) -> (Deck, Control, Rig, Seq, 
     (deck, control, rig, loading, seq)
 }
 
-// Ruling: spec 4.8 replaces map revision updates with a new speed/seek Seq and preserves the entry's source and beat.
 #[kithara::test]
 fn a_tempo_commit_before_the_activation_moves_it_onto_the_live_beat() {
     let (mut deck, control, mut rig, _, old) = pending(24_000, 30_000, 48_000);
@@ -58,7 +54,7 @@ fn a_tempo_commit_before_the_activation_moves_it_onto_the_live_beat() {
     host.push(SessionFrame::new(36_000), Tempo::new(150.0).expect("tempo"))
         .expect("step");
     rig.now = SessionFrame::new(36_000);
-    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, SessionFrame::new(36_000), out));
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[SessionFrame::new(36_000)], out));
     let commands = control.commands();
     assert_eq!(commands.len(), 2);
     assert_eq!(commands[0].0, commands[1].0);
@@ -88,7 +84,6 @@ fn a_tempo_commit_before_the_activation_moves_it_onto_the_live_beat() {
     assert_eq!(deck.snapshot().as_ref().position, position(48_000));
 }
 
-// Ruling: spec 4.6/8 gives each linked player its own replacement party; no global map or operation counter remains.
 #[kithara::test]
 fn every_pending_member_moves_in_one_transaction_onto_its_own_map() {
     let mut members = [
@@ -101,7 +96,7 @@ fn every_pending_member_moves_in_one_transaction_onto_its_own_map() {
     for (deck, control, rig, _, old) in &mut members {
         rig.now = SessionFrame::new(36_000);
         let source = deck.snapshot().as_ref().position;
-        rig.run(|out| LinkedPlayer::retime(deck, &host, SessionFrame::new(36_000), out));
+        rig.run(|out| LinkedPlayer::retime(deck, &host, &[SessionFrame::new(36_000)], out));
         let commands = control.commands();
         assert_eq!(commands.len(), 2);
         assert_eq!(commands[0].0, commands[1].0);
@@ -133,7 +128,6 @@ fn every_pending_member_moves_in_one_transaction_onto_its_own_map() {
     assert_eq!(members[1].0.snapshot().as_ref().speed, 25.0 / 24.0);
 }
 
-// Ruling: spec 4.4/8 removes owner windows; the caller's inclusive entry bound detects the same missed deadline.
 #[kithara::test]
 fn an_activation_pushed_past_its_window_is_withdrawn() {
     let (mut deck, control, mut rig, _, old) = pending(24_000, 30_000, 48_000);
@@ -141,7 +135,7 @@ fn an_activation_pushed_past_its_window_is_withdrawn() {
     host.push(SessionFrame::new(36_000), Tempo::new(90.0).expect("tempo"))
         .expect("step");
     rig.now = SessionFrame::new(36_000);
-    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, SessionFrame::new(36_000), out));
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[SessionFrame::new(36_000)], out));
     let commands = control.commands();
     assert_eq!(commands.len(), 2);
     assert_eq!(
@@ -166,16 +160,10 @@ fn an_activation_pushed_past_its_window_is_withdrawn() {
     assert_eq!(deck.snapshot().as_ref().position, position(48_000));
 }
 
-// Ruling: spec 4.8 replaces a silent grid preparation with a new entry party, never the obsolete start.
 #[kithara::test]
 fn a_replaced_member_grid_withdraws_its_preparation() {
-    let (mut deck, control, mut rig, loading, old) = pending(24_000, 30_000, 48_000);
-    answer(
-        &mut deck,
-        &mut rig,
-        loading,
-        grid(24_000, 12_000, None, 480_000),
-    );
+    let (mut deck, control, mut rig, _, old) = pending(24_000, 30_000, 48_000);
+    answer(&mut deck, &mut rig, grid(24_000, 12_000, None, 480_000));
     let commands = control.commands();
     assert_eq!(commands.len(), 2);
     assert_ne!(commands[0].0, old);
@@ -190,7 +178,6 @@ fn a_replaced_member_grid_withdraws_its_preparation() {
     assert_eq!(deck.snapshot().sync, held.sync);
 }
 
-// Ruling: spec 4.6 deletes LocalSync; the Host-owned tempo still moves the pending entry onto its live beat.
 #[kithara::test]
 fn a_local_tempo_commit_moves_the_pending_member() {
     let (mut host, _) = host();
@@ -214,7 +201,6 @@ fn a_local_tempo_commit_moves_the_pending_member() {
     );
 }
 
-// Ruling: spec 4.6 removes the middle group; a registered linked deck receives the root Host's exact entry retime.
 #[kithara::test]
 fn a_root_tempo_reaches_the_pending_member_two_levels_down() {
     let (mut host, _) = host();
@@ -238,7 +224,6 @@ fn a_root_tempo_reaches_the_pending_member_two_levels_down() {
     });
 }
 
-// Ruling: spec 4.5 keeps already sent speed/start changes on off; only unsent grid waits are withdrawn.
 #[kithara::test]
 fn leaving_the_timeline_withdraws_every_preparation() {
     let (mut deck, control) = deck(trajectory(120.0, 4));
@@ -264,7 +249,7 @@ fn leaving_the_timeline_withdraws_every_preparation() {
             .expect("free"),
         None
     );
-    answer(&mut deck, &mut rig, loading, grid(24_000, 0, None, 480_000));
+    answer(&mut deck, &mut rig, grid(24_000, 0, None, 480_000));
     rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
     assert!(control.commands().is_empty());
     assert_eq!(deck.snapshot().sync, SyncStatus::Off);
@@ -272,7 +257,6 @@ fn leaving_the_timeline_withdraws_every_preparation() {
     assert_eq!(deck.snapshot().as_ref().position, position(30_000));
 }
 
-// Ruling: spec 4.6 replaces a child revision refusal with lane-capacity refusal before any party is sent.
 #[kithara::test]
 fn a_child_refusing_the_segment_keeps_every_preparation() {
     let (mut host, clock) = host();
@@ -309,19 +293,91 @@ fn a_child_refusing_the_segment_keeps_every_preparation() {
 }
 
 #[kithara::test]
-#[case::recovery(true, true, true, true)]
-#[case::closed_by_transport(false, true, true, false)]
-#[case::stale_item(true, false, true, false)]
-#[case::foreign_slot(true, true, false, false)]
-fn only_the_resident_tracks_pcm_recovery_realigns_sync(
+#[case::recovery(true, true, true)]
+#[case::closed_by_transport(false, true, true)]
+#[case::stale_item(true, false, true)]
+#[case::foreign_slot(true, true, false)]
+fn sync_sends_no_alignment_when_pcm_recovers(
     #[case] recovered: bool,
     #[case] same_item: bool,
     #[case] same_slot: bool,
-    #[case] realigns: bool,
 ) {
+    // The RT keeps a synced track on session time through the dropout.
     let (mut deck, control, mut rig, _) = sounding();
+    let event = underrun_ended(&deck, recovered, same_item, same_slot);
+    rig.now = SessionFrame::new(128);
+    rig.run(|out| Player::settle(&mut deck, TrackReceipt::Event(event), out));
+    assert!(control.commands().is_empty(), "{:?}", control.commands());
+}
+
+#[kithara::test]
+fn a_synced_track_keeps_session_time_and_a_free_one_media_time() {
+    let (mut deck, control) = deck(trajectory(120.0, 4));
+    let mut rig = Rig::new(0);
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(control.edit(|script| script.clock), TrackClock::Media);
+
+    rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync");
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(control.edit(|script| script.clock), TrackClock::Session);
+
+    rig.run(|out| LinkedPlayer::sync(&mut deck, false, out))
+        .expect("free");
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(control.edit(|script| script.clock), TrackClock::Media);
+}
+
+#[kithara::test]
+fn a_refused_clock_is_sent_on_the_next_pass() {
+    let (mut deck, control) = deck(trajectory(120.0, 4));
+    let mut rig = Rig::new(0);
+    rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync");
+    control.edit(|script| script.clock_refusal = Some(PlayError::Full("deck")));
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(control.edit(|script| script.clock), TrackClock::Media);
+
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(control.edit(|script| script.clock), TrackClock::Session);
+}
+
+#[kithara::test]
+fn sync_owns_the_clock_of_a_linked_track() {
+    let (mut deck, control) = deck(trajectory(120.0, 4));
+    let mut rig = Rig::new(0);
+    assert!(matches!(
+        rig.run(|out| deck.apply(TrackCommand::Clock(TrackClock::Session), out)),
+        Err(PlayError::InvalidConfiguration { .. })
+    ));
+    assert_eq!(control.edit(|script| script.clock), TrackClock::Media);
+}
+
+#[kithara::test]
+fn a_recovered_underrun_keeps_a_seek_waiting_for_the_grid() {
+    // Only a grid a later revision can extend leaves a seek past its end waiting.
+    let (mut deck, control, mut rig, _) =
+        synced(provisional(&grid(24_000, 0, Some((4, 0)), 960_000)));
+    sound(&control, &mut rig, 0, 0);
+    let beyond = position(2_000_000);
+    assert_eq!(
+        rig.run(|out| deck.apply(TrackCommand::Seek { to: beyond }, out))
+            .expect("seek waits for the grid"),
+        None
+    );
+    let event = underrun_ended(&deck, true, true, true);
+    rig.now = SessionFrame::new(128);
+    rig.run(|out| Player::settle(&mut deck, TrackReceipt::Event(event), out));
+    assert!(control.commands().is_empty());
+    assert_eq!(
+        deck.snapshot().sync,
+        SyncStatus::WaitingForGrid { required: beyond }
+    );
+}
+
+fn underrun_ended(deck: &Deck, recovered: bool, same_item: bool, same_slot: bool) -> DeckEvent {
     let track = deck.snapshot().track;
-    let event = DeckEvent::UnderrunEnded {
+    DeckEvent::UnderrunEnded {
         slot: if same_slot {
             track.slot.expect("resident slot")
         } else {
@@ -336,14 +392,5 @@ fn only_the_resident_tracks_pcm_recovery_realigns_sync(
         position: Some(track.position),
         frames: 128,
         recovered,
-    };
-    rig.now = SessionFrame::new(128);
-    rig.run(|out| Player::settle(&mut deck, TrackReceipt::Event(event), out));
-    assert_eq!(
-        control
-            .commands()
-            .iter()
-            .any(|(_, command)| matches!(command, Command::Speed(..))),
-        realigns
-    );
+    }
 }

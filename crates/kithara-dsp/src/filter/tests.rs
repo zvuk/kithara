@@ -1,9 +1,9 @@
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_test_fixtures::portable::sine_440;
 use kithara_test_utils::kithara;
 
-use super::{Biquad, Coefficients, FilterError, Hertz, Type};
+use super::{Biquad, Coefficients, FilterError, Hertz, Response, StateVariableFilter, Type};
 
 const RATE: f64 = 48_000.0;
 const Q: f64 = std::f64::consts::FRAC_1_SQRT_2;
@@ -174,6 +174,47 @@ fn an_empty_range_keeps_the_state() {
 }
 
 #[kithara::test]
+fn reset_clears_history_and_keeps_the_design() {
+    let mut filter = built(1_000.0);
+    let mut warmup = stereo(256);
+    filter.process(&mut warmup, 0..256).expect("shape matches");
+    filter.reset();
+    let mut actual = stereo(256);
+    let mut expected = actual.clone();
+    filter.process(&mut actual, 0..256).expect("shape matches");
+    built(1_000.0)
+        .process(&mut expected, 0..256)
+        .expect("shape matches");
+    assert_eq!(bits(&actual), bits(&expected));
+}
+
+#[kithara::test]
+fn reset_restarts_the_quiet_frame_sequence() {
+    let mut filter = Biquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("filter builds");
+    filter
+        .retune(
+            0,
+            Coefficients {
+                b0: 1.0,
+                b1: 0.5,
+                b2: 0.0,
+                a1: 0.0,
+                a2: 0.0,
+            },
+        )
+        .expect("exact FIR");
+    let amplitude = f32::from_bits(0x3000_0000);
+    filter
+        .process(&mut [vec![amplitude]], 0..1)
+        .expect("one quiet frame");
+    filter.reset();
+    let mut actual = vec![vec![amplitude, 0.0, 0.0]];
+    filter.process(&mut actual, 0..3).expect("fresh sequence");
+    let expected = vec![vec![amplitude, amplitude / 2.0, 0.0]];
+    assert_eq!(bits(&actual), bits(&expected));
+}
+
+#[kithara::test]
 fn samples_outside_the_range_keep_their_bits() {
     let mut filter = built(1_000.0);
     let original = stereo(64);
@@ -204,4 +245,474 @@ fn a_mismatched_shape_is_an_error() {
     assert_eq!(filter.retune(1, low_pass(1_000.0)), Err(FilterError::Shape));
     assert_eq!(filter.settle(&[0.0]), Err(FilterError::Shape));
     assert_eq!(filter.copy_state(&other), Err(FilterError::Shape));
+}
+
+#[kithara::test]
+#[case(1)]
+#[case(3)]
+fn recursive_samples_and_state_do_not_depend_on_chunk_boundaries(#[case] channels: usize) {
+    const FRAMES: usize = 257;
+    let source = sine_440()
+        .get(..FRAMES)
+        .expect("fixture covers requested frames")
+        .to_vec();
+    for sections in [1, 2] {
+        let build = || {
+            let mut filter = Biquad::new(
+                NonZeroUsize::new(channels).expect("positive channels"),
+                NonZeroUsize::new(sections).expect("positive sections"),
+            )
+            .expect("filter builds");
+            for (section, cutoff) in [1_000.0, 6_000.0].into_iter().take(sections).enumerate() {
+                filter
+                    .retune(section, low_pass(cutoff))
+                    .expect("valid section");
+            }
+            filter
+        };
+        let mut whole = build();
+        let mut expected = vec![source.clone(); channels];
+        whole
+            .process(&mut expected, 0..FRAMES)
+            .expect("whole input");
+        let mut expected_suffix = vec![vec![0.125; 17]; channels];
+        whole
+            .process(&mut expected_suffix, 0..17)
+            .expect("following state");
+        for chunk in [1, 7, 97] {
+            let mut split = build();
+            let mut actual = vec![source.clone(); channels];
+            for start in (0..FRAMES).step_by(chunk) {
+                let end = start
+                    .checked_add(chunk)
+                    .expect("fixture chunk endpoint fits usize")
+                    .min(FRAMES);
+                split.process(&mut actual, start..end).expect("input chunk");
+            }
+            assert_eq!(
+                bits(&actual),
+                bits(&expected),
+                "{channels}ch/{sections}sec/{chunk}frames"
+            );
+            let mut suffix = vec![vec![0.125; 17]; channels];
+            split.process(&mut suffix, 0..17).expect("following state");
+            assert_eq!(bits(&suffix), bits(&expected_suffix), "following state");
+        }
+    }
+}
+
+#[kithara::test]
+#[case::quiet_threshold(0x3000_0000)]
+#[case::memory_floor(0x0d00_0000)]
+fn quiet_fir_history_is_independent_of_chunk_boundaries(#[case] amplitude_bits: u32) {
+    let build = || {
+        let mut filter = Biquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("filter builds");
+        filter
+            .retune(
+                0,
+                Coefficients {
+                    b0: 1.0,
+                    b1: 0.5,
+                    b2: 0.0,
+                    a1: 0.0,
+                    a2: 0.0,
+                },
+            )
+            .expect("exact FIR");
+        filter
+    };
+    let amplitude = f32::from_bits(amplitude_bits);
+    let input = vec![vec![amplitude, amplitude, 0.0]];
+    let mut expected = input.clone();
+    build().process(&mut expected, 0..3).expect("whole input");
+    for chunk in [1, 2] {
+        let mut split = build();
+        let mut actual = input.clone();
+        for start in (0_usize..3).step_by(chunk) {
+            let end = start
+                .checked_add(chunk)
+                .expect("fixture chunk endpoint fits usize")
+                .min(3);
+            split.process(&mut actual, start..end).expect("quiet chunk");
+        }
+        assert_eq!(bits(&actual), bits(&expected));
+    }
+    let mut seeded = build();
+    seeded
+        .process(&mut [vec![amplitude]], 0..1)
+        .expect("one quiet frame");
+    let mut copied = build();
+    copied.copy_state(&seeded).expect("same shape");
+    let mut expected = vec![vec![amplitude, 0.0]];
+    let mut actual = expected.clone();
+    seeded
+        .process(&mut expected, 0..2)
+        .expect("source continuation");
+    copied
+        .process(&mut actual, 0..2)
+        .expect("copied continuation");
+    assert_eq!(bits(&actual), bits(&expected));
+}
+
+#[kithara::test]
+fn identity_sections_preserve_small_nonzero_output_bits() {
+    let input = [1.0e-35_f32, -1.0e-35, 1.0e-30, -1.0e-30, 3.0e-31, -3.0e-31];
+    for channels in [1, 2, 3, 4, 5, 8] {
+        for block in [1, 2, 6] {
+            let mut filter = Biquad::new(NonZeroUsize::new(channels).expect("channels"), TWO)
+                .expect("identity sections");
+            let mut planes = vec![input.to_vec(); channels];
+            for start in (0..input.len()).step_by(block) {
+                filter
+                    .process(
+                        &mut planes,
+                        start..start.saturating_add(block).min(input.len()),
+                    )
+                    .expect("complete planes");
+            }
+            assert_eq!(
+                bits(&planes),
+                vec![input.map(f32::to_bits).to_vec(); channels]
+            );
+        }
+    }
+}
+
+fn half_decay(channels: NonZeroUsize) -> Biquad {
+    let mut filter =
+        Biquad::new(channels, NonZeroUsize::MIN).expect("channel count and one section");
+    filter
+        .retune(
+            0,
+            Coefficients {
+                a1: -0.5,
+                a2: 0.0,
+                b0: 1.0,
+                b1: 0.0,
+                b2: 0.0,
+            },
+        )
+        .expect("stable exact half decay");
+    filter
+}
+
+#[kithara::test]
+fn copy_state_preserves_a_partial_quiet_run() {
+    let amplitude = 2.0e-9_f32;
+    let mut source = half_decay(NonZeroUsize::MIN);
+    let mut prefix = vec![vec![amplitude, 0.0]];
+    source.process(&mut prefix, 0..2).expect("prefix shape");
+    assert_eq!(bits(&prefix), bits(&[vec![amplitude, amplitude * 0.5]]));
+    let mut copied = half_decay(NonZeroUsize::MIN);
+    copied.copy_state(&source).expect("matching shape");
+    let mut original_tail = vec![vec![0.0; 3]];
+    let mut copied_tail = original_tail.clone();
+    source
+        .process(&mut original_tail, 0..3)
+        .expect("source tail");
+    copied.process(&mut copied_tail, 0..3).expect("copied tail");
+    let expected = vec![vec![amplitude * 0.25, 0.0, 0.0]];
+    assert_eq!(bits(&original_tail), bits(&expected));
+    assert_eq!(bits(&copied_tail), bits(&expected));
+}
+
+#[kithara::test]
+fn nan_input_is_nonquiet_under_every_partition() {
+    let mut whole = vec![vec![1.0, 0.0, f32::NAN, 1.0e-10, 1.0]];
+    let mut split = whole.clone();
+    half_decay(NonZeroUsize::MIN)
+        .process(&mut whole, 0..5)
+        .expect("whole stream");
+    let mut filter = half_decay(NonZeroUsize::MIN);
+    filter.process(&mut split, 0..2).expect("prefix");
+    filter.process(&mut split, 2..5).expect("suffix");
+    assert_eq!(bits(&whole), bits(&split));
+    assert!(
+        whole
+            .first()
+            .and_then(|plane| plane.get(4))
+            .is_some_and(|sample| sample.is_nan())
+    );
+}
+
+const SVF_RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("nonzero rate");
+
+fn variable(response: Response, planes: &mut [Vec<f32>], cutoffs: &[f64]) {
+    let mut filter = StateVariableFilter::<2>::new();
+    let frames = cutoffs.len();
+    filter
+        .process(planes, 0..frames, cutoffs, SVF_RATE, Q, response)
+        .expect("valid state-variable run");
+}
+
+/// At fixed parameters the state-variable outputs are the RBJ responses.
+#[kithara::test]
+#[case(Response::LowPass, Type::LowPass)]
+#[case(Response::HighPass, Type::HighPass)]
+fn state_variable_outputs_match_the_cookbook_biquad(
+    #[case] response: Response,
+    #[case] kind: Type<f64>,
+) {
+    let frames = 4_096;
+    let mut variable_planes = stereo(frames);
+    variable(response, &mut variable_planes, &vec![1_000.0; frames]);
+    let mut reference = stereo(frames);
+    let mut biquad = Biquad::new(TWO, NonZeroUsize::MIN).expect("filter builds");
+    biquad
+        .retune(
+            0,
+            Coefficients::from_params(
+                kind,
+                Hertz::from_hz(RATE).expect("rate"),
+                Hertz::from_hz(1_000.0).expect("cutoff"),
+                Q,
+            )
+            .expect("design"),
+        )
+        .expect("section");
+    biquad
+        .process(&mut reference, 0..frames)
+        .expect("reference");
+    for (actual, expected) in variable_planes
+        .iter()
+        .flatten()
+        .zip(reference.iter().flatten())
+    {
+        assert!(
+            (actual - expected).abs() <= 1e-5,
+            "{response:?}: {actual} against {expected}"
+        );
+    }
+}
+
+/// Zero input never grows the state, whatever the cutoff does on each frame.
+#[kithara::test]
+#[case(0.1)]
+#[case(Q)]
+#[case(10.0)]
+fn zero_input_never_grows_under_per_frame_modulation(#[case] q: f64) {
+    let mut filter = StateVariableFilter::<1>::new();
+    let mut kick = vec![1.0_f32];
+    filter
+        .process(
+            &mut [kick.as_mut_slice()],
+            0..1,
+            &[200.0],
+            SVF_RATE,
+            q,
+            Response::LowPass,
+        )
+        .expect("kick");
+    let frames = 48_000;
+    let cutoffs: Vec<_> = (0..frames)
+        .map(|frame| {
+            let hz = if frame % 3 == 0 { 20.0 } else { 20_000.0 };
+            (hz * (1.0 + f64::from(u32::try_from(frame % 7).expect("small")) / 8.0)).min(23_900.0)
+        })
+        .collect();
+    let mut plane = vec![0.0_f32; frames];
+    filter
+        .process(
+            &mut [plane.as_mut_slice()],
+            0..frames,
+            &cutoffs,
+            SVF_RATE,
+            q,
+            Response::LowPass,
+        )
+        .expect("modulated decay");
+    // `|y2| ≤ ‖y‖ ≤ ‖s‖` and the stored state starts at norm 2·|y(kick)| ≤ 2.
+    assert!(
+        plane
+            .iter()
+            .all(|sample| sample.is_finite() && sample.abs() <= 2.0)
+    );
+}
+
+/// A minute of per-frame modulation keeps normalized PCM finite and bounded.
+#[kithara::test]
+#[case(Response::HighPass, Q)]
+#[case(Response::HighPass, 10.0)]
+#[case(Response::LowPass, 10.0)]
+fn a_sixty_second_sweep_stays_bounded(#[case] response: Response, #[case] q: f64) {
+    let frames = 60 * 48_000;
+    let ratio = 8_000.0_f64 / 200.0;
+    let cutoffs: Vec<_> = (0..frames)
+        .map(|frame| {
+            let progress = f64::from(u32::try_from(frame).expect("frame"))
+                / f64::from(u32::try_from(frames - 1).expect("frames"));
+            200.0 * ratio.powf(progress)
+        })
+        .collect();
+    let mut plane: Vec<f32> = sine_440().iter().copied().cycle().take(frames).collect();
+    let mut filter = StateVariableFilter::<1>::new();
+    filter
+        .process(
+            &mut [plane.as_mut_slice()],
+            0..frames,
+            &cutoffs,
+            SVF_RATE,
+            q,
+            response,
+        )
+        .expect("sweep");
+    let peak = plane
+        .iter()
+        .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+    assert!(peak.is_finite() && peak <= 20.0, "{peak}");
+}
+
+#[kithara::test]
+fn state_variable_blocks_are_bit_identical_under_any_partition() {
+    let frames = 1_027;
+    let cutoffs: Vec<_> = (0..frames)
+        .map(|frame| 200.0 + 7.0 * f64::from(u32::try_from(frame).expect("frame")))
+        .collect();
+    let mut whole = stereo(frames);
+    variable(Response::HighPass, &mut whole, &cutoffs);
+    let mut split = stereo(frames);
+    let mut filter = StateVariableFilter::<2>::new();
+    let mut start = 0;
+    for length in [1, 7, 300, 3].into_iter().cycle() {
+        if start == frames {
+            break;
+        }
+        let end = start.saturating_add(length).min(frames);
+        filter
+            .process(
+                &mut split,
+                start..end,
+                cutoffs.get(start..end).expect("block cutoffs"),
+                SVF_RATE,
+                Q,
+                Response::HighPass,
+            )
+            .expect("block");
+        start = end;
+    }
+    assert_eq!(bits(&split), bits(&whole));
+}
+
+/// Every plane of a `CHANNELS`-wide filter runs the one-channel kernel on its
+/// own history, and a plane count other than `CHANNELS` is refused.
+fn channels_are_independent_mono_filters<const CHANNELS: usize>() {
+    let frames = 1_027;
+    let cutoffs: Vec<_> = (0..frames)
+        .map(|frame| 300.0 + 5.0 * f64::from(u32::try_from(frame).expect("frame")))
+        .collect();
+    let mut planes: Vec<Vec<f32>> = (1..=CHANNELS)
+        .map(|channel| {
+            let scale = f32::from(u8::try_from(channel).expect("channel")) / 8.0;
+            [1.0, -1.0, 0.5, 0.0]
+                .iter()
+                .cycle()
+                .take(frames)
+                .map(|sample| sample * scale)
+                .collect()
+        })
+        .collect();
+    let mut expected = planes.clone();
+    for plane in &mut expected {
+        StateVariableFilter::<1>::new()
+            .process(
+                std::slice::from_mut(plane),
+                0..frames,
+                &cutoffs,
+                SVF_RATE,
+                Q,
+                Response::LowPass,
+            )
+            .expect("mono kernel");
+    }
+    let mut filter = StateVariableFilter::<CHANNELS>::new();
+    let mut short = vec![vec![0.25; frames]; CHANNELS.saturating_sub(1)];
+    assert_eq!(
+        filter.process(
+            &mut short,
+            0..frames,
+            &cutoffs,
+            SVF_RATE,
+            Q,
+            Response::LowPass
+        ),
+        Err(FilterError::Shape)
+    );
+    filter
+        .process(
+            &mut planes,
+            0..frames,
+            &cutoffs,
+            SVF_RATE,
+            Q,
+            Response::LowPass,
+        )
+        .expect("wide kernel");
+    assert_eq!(bits(&planes), bits(&expected));
+}
+
+#[kithara::test]
+fn state_variable_channels_are_independent_at_one_two_and_six_channels() {
+    channels_are_independent_mono_filters::<1>();
+    channels_are_independent_mono_filters::<2>();
+    channels_are_independent_mono_filters::<6>();
+}
+
+#[kithara::test]
+fn state_variable_refusals_change_nothing_and_quiet_tails_reset() {
+    let mut filter = StateVariableFilter::<2>::new();
+    let mut planes = stereo(8);
+    let before = bits(&planes);
+    for (cutoffs, q, error) in [
+        (vec![1_000.0; 7], Q, FilterError::Shape),
+        (vec![f64::NAN; 8], Q, FilterError::Parameters),
+        (vec![0.0; 8], Q, FilterError::Parameters),
+        (vec![24_000.0; 8], Q, FilterError::Parameters),
+        (vec![1_000.0; 8], 0.0, FilterError::Parameters),
+        (vec![1_000.0; 8], f64::INFINITY, FilterError::Parameters),
+    ] {
+        assert_eq!(
+            filter.process(&mut planes, 0..8, &cutoffs, SVF_RATE, q, Response::LowPass),
+            Err(error)
+        );
+    }
+    assert_eq!(bits(&planes), before);
+    assert!(filter.is_reset());
+    filter
+        .process(
+            &mut planes,
+            0..8,
+            &[1_000.0; 8],
+            SVF_RATE,
+            Q,
+            Response::LowPass,
+        )
+        .expect("tone");
+    assert!(!filter.is_reset());
+    let mut silence = vec![vec![0.0; 2], vec![0.0; 2]];
+    filter
+        .process(
+            &mut silence,
+            0..2,
+            &[20_000.0; 2],
+            SVF_RATE,
+            Q,
+            Response::HighPass,
+        )
+        .expect("silence");
+    assert!(!filter.is_reset(), "a ringing tail is not quiet");
+    filter.reset();
+    assert!(filter.is_reset());
+    let mut zeros = vec![vec![0.0; 3], vec![0.0; 3]];
+    filter
+        .process(
+            &mut zeros,
+            0..3,
+            &[1_000.0; 3],
+            SVF_RATE,
+            Q,
+            Response::LowPass,
+        )
+        .expect("zeros");
+    assert!(zeros.iter().flatten().all(|sample| sample.to_bits() == 0));
+    assert!(filter.is_reset());
 }

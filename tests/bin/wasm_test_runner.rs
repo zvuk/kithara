@@ -19,10 +19,10 @@ fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn run_wasm_bindgen_runner(args: &[String], runner_timeout_secs: u64) -> process::ExitStatus {
-    let shim_dir = install_worker_shim_alias().expect("failed to prepare worker shim alias");
+    let runner_dir = prepare_browser_directory().expect("failed to prepare browser configuration");
     let mut runner = Command::new("wasm-bindgen-test-runner");
     runner
-        .current_dir(shim_dir.path())
+        .current_dir(runner_dir.path())
         .env("WASM_BINDGEN_USE_BROWSER", "1")
         .env_remove("WASM_BINDGEN_USE_NO_MODULE")
         .args(args);
@@ -67,15 +67,8 @@ fn find_in_path(binary: &str) -> Option<OsString> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn install_worker_shim_alias() -> Result<TempDir, std::io::Error> {
+fn prepare_browser_directory() -> Result<TempDir, std::io::Error> {
     let dir = tempfile::tempdir()?;
-    let alias = dir.path().join("kithara-ffi.js");
-    fs::write(
-        alias,
-        "export * from './wasm-bindgen-test.js';\n\
-         export { default } from './wasm-bindgen-test.js';\n",
-    )?;
-
     let webdriver_config = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("webdriver.json");
     if webdriver_config.exists() {
         fs::copy(&webdriver_config, dir.path().join("webdriver.json"))?;

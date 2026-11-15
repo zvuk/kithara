@@ -16,6 +16,7 @@ ignored = ["serde"]
 
 [features]
 default = ["symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
+no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = ["kithara-play/client-reqwest", "kithara-download/client-reqwest", "kithara-abr/client-reqwest"]
 client-wreq = ["kithara-play/client-wreq", "kithara-download/client-wreq", "kithara-abr/client-wreq"]
@@ -78,12 +79,16 @@ kithara-queue = { path = ".", default-features = false, features = ["usdt"] }
 kithara-render = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
 kithara-sync = { workspace = true }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "temp-dir"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang", "temp-dir"] }
 kithara-warp = { workspace = true }
 kithara-worker = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+
+async-trait = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
 [lints]

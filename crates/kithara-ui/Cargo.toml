@@ -25,6 +25,9 @@ capture = [
     "dep:iced_wgpu",
     "dep:kithara-ui-capture",
 ]
+# Photographing a Masonry page with no window, for a host that draws through
+# Masonry alone: `capture` would compile the iced backend only to reach it.
+capture-masonry = ["masonry", "dep:kithara-ui-capture"]
 masonry = [
     "dep:futures-lite",
     "dep:masonry",
@@ -113,6 +116,7 @@ iced = { workspace = true, optional = true, features = ["tiny-skia"] }
 kithara-platform = { path = "../kithara-platform" }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = [
+    "test",
     "usdt",
     "client-reqwest",
     "tls-rustls",

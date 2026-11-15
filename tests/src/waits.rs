@@ -17,7 +17,7 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio::sync::broadcast::error::RecvError,
     },
-    queue::{QueueControl, QueueEvent, TrackStatus},
+    queue::{QueueControl, TrackStatus},
 };
 use kithara_test_utils::{wait::POLL_TICK, wait_until};
 
@@ -282,6 +282,7 @@ where
 
 /// Wait for the requested loader's terminal status within `deadline`.
 /// Loading includes real I/O and need not publish intermediate status changes.
+/// Buffered events wake checks; only the current queue state completes the wait.
 #[kithara::flash(io)]
 pub async fn wait_for_loader_done_event<S>(
     rx: &mut EventReceiver<TestEvent>,
@@ -307,14 +308,7 @@ where
             let Ok(received) = timeout(POLL_TICK, rx.recv()).await else {
                 continue;
             };
-            match received.map(|env| env.event) {
-                Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged { id, status }))
-                    if id == track_id =>
-                {
-                    if let Some(res) = loader_outcome(&status) {
-                        return res;
-                    }
-                }
+            match received {
                 Ok(_) | Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             }
@@ -432,7 +426,7 @@ pub async fn render_until_position(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara::{events::EventBus, platform::time::WallInstant};
+    use kithara::{events::EventBus, platform::time::WallInstant, queue::QueueEvent};
 
     use super::*;
     use crate::{HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayerOptions};
@@ -602,14 +596,21 @@ mod tests {
         {
             let unrelated_bus = EventBus::new(4);
             let mut receiver = unrelated_bus.subscribe();
+            for status in [TrackStatus::Loaded, TrackStatus::Consumed] {
+                unrelated_bus.publish(QueueEvent::TrackStatusChanged { id, status });
+            }
             let mut waiting = std::pin::pin!(wait_for_loader_done_event(
                 &mut receiver,
                 harness.player(),
                 id,
                 Duration::from_secs(2),
             ));
-            assert!(futures::poll!(waiting.as_mut()).is_pending());
+            let pending = futures::poll!(waiting.as_mut()).is_pending();
             init.release();
+            assert!(
+                pending,
+                "stale terminal events cannot complete a pending load"
+            );
             harness
                 .render_until_current(id, 512, WallInstant::now() + Duration::from_secs(1))
                 .await;

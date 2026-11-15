@@ -24,7 +24,7 @@ use kithara::{
     decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
     host::{HostConfig, HostSettings},
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, PlayerEvent, ResourceConfig, ResourcePrep, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
@@ -225,9 +225,8 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
         })
         .build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

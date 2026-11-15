@@ -10,6 +10,7 @@ use crate::{
 pub(crate) enum Gesture {
     Press,
     Secondary,
+    Double,
     Scalar,
     Step,
     Index,
@@ -144,6 +145,11 @@ pub(crate) fn write_slots(site: ControlSite<'_>) -> Vec<WriteSlot<'_>> {
                 slots.push(slot.under("max").edge(Edge::Max));
             }
             ControlNode::ContextBar { .. } | ControlNode::Search { .. } => slots.push(slot.model()),
+            ControlNode::Row { entry: Some(_), .. }
+            | ControlNode::Column { entry: Some(_), .. } => {
+                slots.push(slot);
+                slots.push(WriteSlot::new(write, Gesture::Scalar, kind));
+            }
             _ => slots.push(slot),
         }
     }
@@ -152,6 +158,13 @@ pub(crate) fn write_slots(site: ControlSite<'_>) -> Vec<WriteSlot<'_>> {
         (
             writes.secondary,
             Gesture::Secondary,
+            ValueKind::Trigger,
+            None,
+            BindingSide::Write,
+        ),
+        (
+            writes.double,
+            Gesture::Double,
             ValueKind::Trigger,
             None,
             BindingSide::Write,

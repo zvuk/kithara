@@ -53,6 +53,12 @@ impl<P: Protocol> Docket<P> {
         self.parked.iter().any(|sent| sent.seq == seq)
     }
 
+    pub(super) fn committed(&self, seq: Seq) -> Option<&[P::Command]> {
+        self.committed
+            .iter()
+            .find_map(|(_, sent)| (sent.seq == seq).then_some(sent.batch.commands.as_slice()))
+    }
+
     pub(super) fn committed_mut(&mut self, seq: Seq) -> Option<&mut [P::Command]> {
         self.committed
             .iter_mut()

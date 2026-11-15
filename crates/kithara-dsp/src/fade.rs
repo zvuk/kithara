@@ -4,9 +4,9 @@ pub use firewheel_core::dsp::fade::FadeCurve;
 /// `positions`, as [`FadeCurve::compute_gains_0_to_1`] defines them, over the
 /// common prefix of the three slices; returns its length.
 ///
-/// Progress at or below `10⁻⁵` gives exactly `(1, 0)`, at or above `0.99999`
+/// Progress at or below `10^-5` gives exactly `(1, 0)`, at or above `0.99999`
 /// exactly `(0, 1)`. Between them, the equal-power curves stay within 2 ulp
-/// of their `f64` values at the same `f32` angle `π/2·u`; `SquareRoot` and
+/// of their `f64` values at the same `f32` angle `pi/2*u`; `SquareRoot` and
 /// `Linear` stay within 1 ulp of theirs.
 pub fn gains(
     curve: FadeCurve,

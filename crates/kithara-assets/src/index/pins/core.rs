@@ -1,18 +1,13 @@
 #![forbid(unsafe_code)]
 
-#[cfg(target_arch = "wasm32")]
-use std::sync::atomic::Ordering;
-use std::{
-    collections::HashSet,
-    sync::{OnceLock, Weak, atomic::AtomicBool},
-};
+use std::collections::HashSet;
 
 use dashmap::{DashMap, mapref::entry::Entry};
 use kithara_platform::sync::Arc;
 
 use crate::{
     error::AssetsResult,
-    index::persistence::{FlushHub, Flushable, flush_sync},
+    index::persistence::{FlushHub, Flushable, IndexCell, IndexState, flush_sync},
 };
 
 /// How long a pin has to outlive its holder.
@@ -81,29 +76,21 @@ impl PinCounts {
 /// their 0→1 / 1→0 transitions.
 #[derive(Clone)]
 pub struct PinsIndex {
-    pub(super) inner: Arc<PinsInner>,
+    pub(super) inner: Arc<IndexCell<DashMap<String, PinCounts>>>,
+}
+
+/// Only durable pins reach disk, and as bare set membership.
+impl IndexState for DashMap<String, PinCounts> {
+    const NAME: &'static str = "pins";
 }
 
 impl std::fmt::Debug for PinsIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut dbg = f.debug_struct("PinsIndex");
-        dbg.field("len", &Some(self.inner.pins.len()));
-        #[cfg(not(target_arch = "wasm32"))]
-        dbg.field("persist", &self.inner.persist.is_some());
+        dbg.field("len", &Some(self.inner.state.len()));
+        dbg.field("persist", &self.inner.is_persisted());
         dbg.finish()
     }
-}
-
-pub(super) struct PinsInner {
-    pub(super) dirty: AtomicBool,
-    pub(super) pins: DashMap<String, PinCounts>,
-    /// Set by [`FlushHub::register`]. While `None`, mutators flush
-    /// synchronously through [`Flushable::flush`] directly — matches
-    /// the historical inline-flush path for ad-hoc tests that never
-    /// attach a hub.
-    pub(super) hub: OnceLock<Arc<FlushHub>>,
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) persist: Option<super::disk::PinsPersist>,
 }
 
 impl PinsIndex {
@@ -121,7 +108,7 @@ impl PinsIndex {
     /// when the on-disk flush fails (mmap open, atomic swap, rkyv serialise).
     pub fn add(&self, asset_root: &str, durability: PinDurability) -> AssetsResult<bool> {
         let (newly_pinned, persisted_set_changed) =
-            match self.inner.pins.entry(asset_root.to_string()) {
+            match self.inner.state.entry(asset_root.to_string()) {
                 Entry::Occupied(mut e) => (false, e.get_mut().pin(durability)),
                 Entry::Vacant(e) => {
                     let mut counts = PinCounts::default();
@@ -139,10 +126,7 @@ impl PinsIndex {
     /// Bind this index to a [`FlushHub`] for coordinated flushing.
     /// Called once per index instance; subsequent calls are no-ops.
     pub(crate) fn attach_to(&self, hub: &Arc<FlushHub>) {
-        if self.inner.hub.set(Arc::clone(hub)).is_err() {
-            return;
-        }
-        hub.register(Arc::downgrade(&self.inner) as Weak<dyn Flushable>);
+        self.inner.attach_to(hub);
     }
 
     /// Construct an ephemeral index (mem backend mode).
@@ -151,13 +135,7 @@ impl PinsIndex {
     /// is written to disk.
     pub(crate) fn ephemeral() -> Self {
         Self {
-            inner: Arc::new(PinsInner {
-                pins: DashMap::new(),
-                #[cfg(not(target_arch = "wasm32"))]
-                persist: None,
-                hub: OnceLock::new(),
-                dirty: AtomicBool::new(false),
-            }),
+            inner: Arc::new(IndexCell::new(DashMap::new())),
         }
     }
 
@@ -171,8 +149,7 @@ impl PinsIndex {
     /// Propagates the first per-source flush error encountered.
     pub fn flush(&self) -> AssetsResult<()> {
         self.inner
-            .hub
-            .get()
+            .hub()
             .map_or_else(|| Flushable::flush(&*self.inner), |hub| hub.flush_now())
     }
 
@@ -190,7 +167,7 @@ impl PinsIndex {
     pub fn remove(&self, asset_root: &str, durability: PinDurability) -> AssetsResult<bool> {
         let mut persisted_set_changed = false;
         let fully_unpinned =
-            if let Entry::Occupied(mut e) = self.inner.pins.entry(asset_root.to_string()) {
+            if let Entry::Occupied(mut e) = self.inner.state.entry(asset_root.to_string()) {
                 persisted_set_changed = e.get_mut().unpin(durability);
                 if e.get().is_pinned() {
                     false
@@ -212,36 +189,7 @@ impl PinsIndex {
     /// pin exactly as it respects a writer's.
     #[must_use]
     pub fn snapshot(&self) -> HashSet<String> {
-        self.inner.pins.iter().map(|r| r.key().clone()).collect()
-    }
-}
-
-impl Flushable for PinsInner {
-    fn dirty(&self) -> &AtomicBool {
-        &self.dirty
-    }
-
-    /// Serialise the durable pinned set to `_index/pins.bin`. Refcount
-    /// is collapsed to mere set-membership on disk — the persisted
-    /// format only records keys.
-    fn flush(&self) -> AssetsResult<()> {
-        self.flush_with_durability(false)
-    }
-
-    fn flush_durable(&self) -> AssetsResult<()> {
-        self.flush_with_durability(true)
-    }
-
-    fn name(&self) -> &'static str {
-        "pins"
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-impl PinsInner {
-    fn flush_with_durability(&self, _durable: bool) -> AssetsResult<()> {
-        self.dirty.store(false, Ordering::Release);
-        Ok(())
+        self.inner.state.iter().map(|r| r.key().clone()).collect()
     }
 }
 
@@ -295,7 +243,7 @@ mod tests {
         idx.remove("asset_a", PinDurability::Durable).unwrap();
 
         assert!(
-            !disk_index(&path).inner.pins.contains_key("asset_a"),
+            !disk_index(&path).inner.state.contains_key("asset_a"),
             "dropping the last durable pin must reach disk at once"
         );
     }
@@ -357,7 +305,7 @@ mod tests {
         idx.remove("asset_a", PinDurability::Durable).unwrap();
 
         assert!(
-            idx.inner.pins.contains_key("asset_a"),
+            idx.inner.state.contains_key("asset_a"),
             "the reader still holds the asset even once the writer is done"
         );
     }
@@ -389,10 +337,10 @@ mod tests {
         idx.add("playlist", PinDurability::Durable).unwrap();
 
         assert!(!idx.remove("playlist", PinDurability::Durable).unwrap());
-        assert!(idx.inner.pins.contains_key("playlist"));
+        assert!(idx.inner.state.contains_key("playlist"));
 
         assert!(idx.remove("playlist", PinDurability::Durable).unwrap());
-        assert!(!idx.inner.pins.contains_key("playlist"));
+        assert!(!idx.inner.state.contains_key("playlist"));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -405,7 +353,7 @@ mod tests {
 
         let reopened = disk_index(&path);
 
-        assert!(reopened.inner.pins.contains_key("persistent_asset"));
+        assert!(reopened.inner.state.contains_key("persistent_asset"));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -419,7 +367,7 @@ mod tests {
         let reopened = disk_index(&path);
 
         assert!(
-            !reopened.inner.pins.contains_key("reader_only"),
+            !reopened.inner.state.contains_key("reader_only"),
             "a process-local pin must not be resurrected as a phantom"
         );
     }
@@ -439,7 +387,7 @@ mod tests {
     fn ephemeral_index_does_not_persist() {
         let idx = PinsIndex::ephemeral();
         assert!(idx.add("asset", PinDurability::Durable).unwrap());
-        assert!(idx.inner.pins.contains_key("asset"));
+        assert!(idx.inner.state.contains_key("asset"));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -451,10 +399,10 @@ mod tests {
         let idx2 = idx.clone();
 
         idx.add("from_first", PinDurability::Durable).unwrap();
-        assert!(idx2.inner.pins.contains_key("from_first"));
+        assert!(idx2.inner.state.contains_key("from_first"));
 
         idx2.remove("from_first", PinDurability::Durable).unwrap();
-        assert!(!idx.inner.pins.contains_key("from_first"));
+        assert!(!idx.inner.state.contains_key("from_first"));
     }
 
     /// Membership as `pins.bin` holds it right now, read straight off the

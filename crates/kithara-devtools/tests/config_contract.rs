@@ -169,9 +169,7 @@ features = ["cpu-pressure"]
 #[test]
 fn stress_config_owns_generic_modes_environment_and_artifacts() {
     let temp = tempdir().expect("tempdir");
-    write_config(
-        temp.path(),
-        r#"
+    let source = r#"
 [stress]
 default_modes = ["baseline"]
 default_tier = "night"
@@ -206,6 +204,7 @@ remove = ["OLD_TRACE"]
 [stress.modes.baseline]
 flash = true
 load = true
+test_threads = "1"
 
 [stress.modes.baseline.set_env]
 TRACE_LEVEL = "warn"
@@ -222,8 +221,8 @@ cargo.workspace = true
 
 [test.net_backends.http]
 features = []
-"#,
-    );
+"#;
+    write_config(temp.path(), source);
 
     let config = ProjectConfig::load(temp.path()).expect("load stress config");
     let mode = config.stress.mode("baseline").expect("configured mode");
@@ -232,12 +231,29 @@ features = []
     assert_eq!(config.stress.max_count, 10);
     assert_eq!(mode.flash, Some(true));
     assert_eq!(mode.load, Some(true));
+    assert_eq!(mode.test_threads.as_deref(), Some("1"));
     assert_eq!(mode.set_env["TRACE_LEVEL"], "warn");
     assert_eq!(mode.raw_path_env["CAPTURE_DIR"], "captures");
+
+    for value in ["", "0", "9", "1.5", "many"] {
+        write_config(
+            temp.path(),
+            &source.replace("test_threads = \"1\"", &format!("test_threads = {value:?}")),
+        );
+        let error = ProjectConfig::load(temp.path()).expect_err("invalid mode thread budget");
+        assert!(
+            format!("{error:#}").contains("stress.modes.baseline.test_threads"),
+            "{error:#}"
+        );
+    }
+    write_config(
+        temp.path(),
+        &source.replace("test_threads = \"1\"", "test_threads = \"num-cpus\""),
+    );
+    ProjectConfig::load(temp.path()).expect("mode budget supports the CPU-count selector");
 }
 
-/// A mode's toggles are asked of a test lane. A mode that runs its own command
-/// has no lane to ask, so a toggle there would be recorded and do nothing.
+/// A command mode cannot apply lane runner settings.
 #[test]
 fn a_stress_mode_that_runs_a_command_cannot_ask_for_a_toggle() {
     let template = r#"
@@ -284,21 +300,27 @@ cargo.workspace = true
 [test.net_backends.http]
 features = []
 "#;
-    for toggle in ["flash", "no_block", "load"] {
-        for value in [true, false] {
-            let temp = tempdir().expect("tempdir");
-            write_config(
-                temp.path(),
-                &template.replace("TOGGLE", &format!("{toggle} = {value}")),
-            );
+    for (setting, value) in [
+        ("flash", "true"),
+        ("flash", "false"),
+        ("no_block", "true"),
+        ("no_block", "false"),
+        ("load", "true"),
+        ("load", "false"),
+        ("test_threads", "'1'"),
+    ] {
+        let temp = tempdir().expect("tempdir");
+        write_config(
+            temp.path(),
+            &template.replace("TOGGLE", &format!("{setting} = {value}")),
+        );
 
-            let error = ProjectConfig::load(temp.path()).expect_err("a toggled command mode fails");
+        let error = ProjectConfig::load(temp.path()).expect_err("a toggled command mode fails");
 
-            assert!(
-                format!("{error:#}").contains("runs a command, so its toggles reach nothing"),
-                "{error:#}"
-            );
-        }
+        assert!(
+            format!("{error:#}").contains("runs a command, so its runner settings reach nothing"),
+            "{error:#}"
+        );
     }
 }
 

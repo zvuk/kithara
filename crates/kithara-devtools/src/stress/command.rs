@@ -95,7 +95,7 @@ mod sharding_tests {
         let project = ProjectConfig::load(&root).expect("load nightly selection");
         let config = &project.stress;
         let modes = resolve_modes(&[], config).expect("default modes");
-        let lanes = resolve_lanes(None, &[], config).expect("default lanes");
+        let lanes = resolve_lanes(None, &[], &project).expect("default lanes");
         let canonical = units(&project, config, &modes, &lanes).expect("canonical units");
         let expected = canonical
             .iter()
@@ -148,6 +148,33 @@ mod sharding_tests {
     }
 
     #[test]
+    fn a_focused_sync_lane_keeps_its_load_and_concurrency_contract() {
+        let project = ProjectConfig::load(&crate::test::repository_tests::root())
+            .expect("load diagnostic selection");
+        let lanes = resolve_lanes(None, &["sync".to_owned()], &project)
+            .expect("a configured domain may be selected directly");
+        let modes = ["reproduction-load-flash-off".to_owned()];
+        let selected = units(&project, &project.stress, &modes, &lanes).unwrap();
+        assert_eq!(selected.len(), 1);
+        let unit = &selected[0];
+        assert_eq!(unit.lane, Some("sync"));
+        assert_eq!(unit.test_threads, "1");
+        let StressRunner::Lane(runner) = &unit.runner else {
+            panic!("a diagnostic domain uses its configured test runner");
+        };
+        assert_eq!(
+            runner.cargo.packages,
+            ["kithara-sync", "kithara-link", "kithara-sync-tests"]
+        );
+        assert!(
+            runner
+                .features
+                .iter()
+                .any(|feature| feature == "kithara-test-utils/load")
+        );
+    }
+
+    #[test]
     fn command_group_follows_requested_lane_modes_even_when_a_lane_mode_is_deduplicated() {
         let root = crate::test::repository_tests::root();
         let mut project = ProjectConfig::load(&root).expect("load nightly selection");
@@ -165,7 +192,7 @@ mod sharding_tests {
         ];
         let config = &project.stress;
         let modes = resolve_modes(&requested, config).expect("interleaved requested modes");
-        let lanes = resolve_lanes(None, &[], config).expect("lanes");
+        let lanes = resolve_lanes(None, &[], &project).expect("lanes");
         let expected_modes = [
             BTreeSet::from([defaults[0].as_str(), defaults[3].as_str()]),
             BTreeSet::new(),
@@ -329,10 +356,41 @@ mod sharding_tests {
     }
 
     #[test]
+    fn the_executor_admits_the_subject_build_under_its_lease_before_unit_work() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (ctx, mut args) = empty_run(temp.path());
+        args.shard_index = None;
+        args.shard_count = None;
+        let observed = std::cell::RefCell::new(Vec::new());
+
+        let result = args.run_with_build_admission(&ctx, &|build| {
+            observed.borrow_mut().push(build.to_path_buf());
+            assert!(lease::evict(build).expect("probe live build").is_none());
+            anyhow::bail!("executor refused the subject build")
+        });
+
+        assert_eq!(
+            *observed.borrow(),
+            [args.subject_root.join("target-stress")],
+            "the executor must admit the selected subject build"
+        );
+        let error = result.expect_err("admission refusal stops the unit");
+        assert!(error.to_string().contains("executor refused"), "{error:#}");
+        assert_eq!(
+            fs::read_dir(args.output.as_ref().expect("raw root"))
+                .expect("raw transport root")
+                .count(),
+            0,
+            "no unit evidence is claimed before admission"
+        );
+    }
+
+    #[test]
     fn an_empty_shard_records_selection_without_claiming_execution_or_creating_a_build() {
         let temp = tempfile::tempdir().expect("tempdir");
         let (ctx, args) = empty_run(temp.path());
-        execute_run(&args, &ctx).expect("empty partition validates and creates transport receipt");
+        args.run_with_build_admission(&ctx, &|_| panic!("empty shards admit no build"))
+            .expect("empty partition validates and creates transport receipt");
         let raw = args.output.as_ref().expect("raw");
         let receipt = fs::read(raw.join("selection.json")).expect("receipt");
         let selected: serde_json::Value = serde_json::from_slice(&receipt).expect("selection JSON");
@@ -341,7 +399,7 @@ mod sharding_tests {
         assert_eq!(fs::read_dir(raw).expect("raw entries").count(), 1);
         assert!(!args.subject_root.join("target-stress").exists());
         assert!(
-            execute_run(&args, &ctx).is_err(),
+            execute_run(&args, &ctx, &|_| Ok(())).is_err(),
             "raw evidence must remain immutable"
         );
         assert_eq!(
@@ -382,7 +440,10 @@ mod sharding_tests {
                 }
                 _ => panic!("invalid fixture"),
             }
-            assert!(execute_run(&args, &ctx).is_err(), "accepted {invalid}");
+            assert!(
+                execute_run(&args, &ctx, &|_| Ok(())).is_err(),
+                "accepted {invalid}"
+            );
             assert!(
                 !args.output.as_ref().expect("raw").exists(),
                 "{invalid} created raw evidence"
@@ -430,6 +491,7 @@ mod sharding_tests {
                 config,
                 &selected[0],
                 &raw.join(selected[0].directory()),
+                &|_| panic!("revision validation precedes admission"),
             )
             .expect_err("a unit cannot claim the preflight revision after checkout changes");
 
@@ -759,7 +821,8 @@ mod subject {
         let (ctx, mut args) = subject_fixture(temp.path());
         args.filter = Some("test(selected)".to_owned());
 
-        let error = execute_run(&args, &ctx).expect_err("command modes cannot narrow by filterset");
+        let error = execute_run(&args, &ctx, &|_| Ok(()))
+            .expect_err("command modes cannot narrow by filterset");
 
         assert!(error.to_string().contains("--filter"), "{error:#}");
         assert!(error.to_string().contains("command"), "{error:#}");
@@ -800,7 +863,8 @@ mod subject {
         let (mut ctx, args) = subject_fixture(temp.path());
         ctx.config.stress.default_filter = "test(selected)".to_owned();
 
-        let error = execute_run(&args, &ctx).expect_err("configured command filterset");
+        let error =
+            execute_run(&args, &ctx, &|_| Ok(())).expect_err("configured command filterset");
 
         assert!(
             error.to_string().contains("stress.default_filter"),
@@ -842,6 +906,7 @@ mod subject {
             mode_name: "lane",
             mode: &mode,
             lane: Some("tests"),
+            test_threads: "1",
             runner: StressRunner::Lane(Box::new(ResolvedLane {
                 env: BTreeMap::new(),
                 backend: "local".to_owned(),
@@ -864,6 +929,7 @@ mod subject {
             mode_name: "command",
             mode: &command,
             lane: None,
+            test_threads: "1",
             runner: StressRunner::Command(command.command.clone()),
         };
 
@@ -905,7 +971,7 @@ mod subject {
             &config.artifacts,
         );
 
-        execute_run(&args, &ctx).expect("run command mode lifecycle");
+        execute_run(&args, &ctx, &|_| Ok(())).expect("run command mode lifecycle");
 
         assert_subject_report(&paths, &ctx, &args);
         let manifest = Manifest::read(&paths.manifest).expect("read command manifest");
@@ -973,7 +1039,7 @@ pub struct RunArgs {
     /// project's own list.
     #[arg(long = "mode")]
     modes: Vec<String>,
-    /// Stressed test lane the lane modes run on; repeat the flag for several,
+    /// Configured repeatable test lane; repeat the flag for several,
     /// empty for the tier's lanes. A filter aimed at one lane's tests selects
     /// nothing in the others, and a lane that selects nothing fails.
     #[arg(long = "lane", conflicts_with = "tier")]
@@ -982,6 +1048,24 @@ pub struct RunArgs {
     /// the project's default tier.
     #[arg(long)]
     tier: Option<String>,
+}
+
+impl RunArgs {
+    /// Runs each unit after its executor admits the leased subject build.
+    ///
+    /// Admission receives the validated subject build while its lease is held.
+    /// Refusal prevents unit work; empty shards request no admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, admission, execution, or evidence errors.
+    pub fn run_with_build_admission(
+        &self,
+        ctx: &Ctx,
+        admit: &dyn Fn(&Path) -> Result<()>,
+    ) -> Result<()> {
+        execute_run(self, ctx, admit)
+    }
 }
 
 #[derive(Debug, Args)]
@@ -1007,7 +1091,7 @@ pub struct ReportArgs {
     /// Mode to verify; repeat to verify several, empty for the project's list.
     #[arg(long = "mode")]
     modes: Vec<String>,
-    /// Stressed test lane to verify; repeat to verify several, empty for the
+    /// Configured repeatable test lane to verify; repeat for several, empty for the
     /// tier's lanes.
     #[arg(long = "lane", conflicts_with = "tier")]
     lanes: Vec<String>,
@@ -1023,7 +1107,7 @@ pub struct ReportArgs {
 /// Returns an error when execution, finalization, or verification fails.
 pub(crate) fn run(command: &StressCommand, ctx: &Ctx) -> Result<()> {
     match command {
-        StressCommand::Run(args) => execute_run(args, ctx),
+        StressCommand::Run(args) => args.run_with_build_admission(ctx, &|_| Ok(())),
         StressCommand::Report(args) => run_report(args, ctx),
     }
 }
@@ -1091,11 +1175,11 @@ impl Paths {
 /// the first red unit would answer that question only when the answer was
 /// already known. The first failure is what the caller sees, once every unit
 /// has finished.
-fn execute_run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
+fn execute_run(args: &RunArgs, ctx: &Ctx, admit: &dyn Fn(&Path) -> Result<()>) -> Result<()> {
     let config = &ctx.config.stress;
     ensure!(config.is_configured(), "stress run is not configured");
     let modes = resolve_modes(&args.modes, config)?;
-    let lanes = resolve_lanes(args.tier.as_deref(), &args.lanes, config)?;
+    let lanes = resolve_lanes(args.tier.as_deref(), &args.lanes, &ctx.config)?;
     let units = units(&ctx.config, config, &modes, &lanes)?;
     validate_filter(args.filter.as_deref(), &config.default_filter, &units)?;
     let shard = Shard::new(args.shard_index, args.shard_count)?;
@@ -1130,7 +1214,7 @@ fn execute_run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     }
     let mut failure = None;
     for unit in &units {
-        let outcome = run_lane(&inputs, config, unit, &root.join(unit.directory()));
+        let outcome = run_lane(&inputs, config, unit, &root.join(unit.directory()), admit);
         if let Err(error) = outcome
             && failure.is_none()
         {
@@ -1353,7 +1437,7 @@ impl RunInputs {
                 junit: self.subject_junit.clone(),
                 config_file: self.config_file.clone(),
                 filter: self.filter.clone(),
-                test_threads: config.test_threads.clone(),
+                test_threads: unit.test_threads.to_owned(),
                 profile: config.nextest_profile.clone(),
                 max_count: config.max_count,
                 max_test_threads: config.max_test_threads,
@@ -1367,7 +1451,13 @@ impl RunInputs {
 
 /// The build lease is held for the lane so the host's build-cache budget leaves these artifacts
 /// alone while the lane is still executing them.
-fn run_lane(inputs: &RunInputs, config: &StressConfig, unit: &Unit<'_>, raw: &Path) -> Result<()> {
+fn run_lane(
+    inputs: &RunInputs,
+    config: &StressConfig,
+    unit: &Unit<'_>,
+    raw: &Path,
+    admit: &dyn Fn(&Path) -> Result<()>,
+) -> Result<()> {
     revision(
         &inputs.controller_root,
         Some(&inputs.controller_sha),
@@ -1384,6 +1474,7 @@ fn run_lane(inputs: &RunInputs, config: &StressConfig, unit: &Unit<'_>, raw: &Pa
     let subject_junit = &inputs.subject_junit;
     let _build_lease = lease::hold(build)
         .with_context(|| format!("lease the stress build {}", build.display()))?;
+    admit(build)?;
     let spec = inputs.spec(unit, &paths, config);
     if spec.is_some() {
         clear_previous_lane_junit(subject_junit)?;
@@ -1405,7 +1496,7 @@ fn run_lane(inputs: &RunInputs, config: &StressConfig, unit: &Unit<'_>, raw: &Pa
             selection: Selection {
                 count,
                 filter: inputs.filter.clone(),
-                test_threads: config.test_threads.clone(),
+                test_threads: unit.test_threads.to_owned(),
             },
             policy: policy_snapshot(config, mode),
         },
@@ -1510,7 +1601,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     let config = &ctx.config.stress;
     ensure!(config.is_configured(), "stress run is not configured");
     let modes = resolve_modes(&args.modes, config)?;
-    let lanes = resolve_lanes(args.tier.as_deref(), &args.lanes, config)?;
+    let lanes = resolve_lanes(args.tier.as_deref(), &args.lanes, &ctx.config)?;
     let units = units(&ctx.config, config, &modes, &lanes)?;
     validate_filter(args.filter.as_deref(), &config.default_filter, &units)?;
     let filter = args
@@ -2052,7 +2143,7 @@ fn verify_manifest(
         subject_sha: args.expected_subject_sha.clone(),
         filter: expected.filter.to_owned(),
         count: expected.count,
-        test_threads: expected.config.test_threads.clone(),
+        test_threads: expected.unit.test_threads.to_owned(),
         mode: expected.unit.mode_name.to_owned(),
         config: ManifestConfig::new(
             expected.config.nextest_profile.clone(),
@@ -2387,8 +2478,8 @@ mod tests {
     use crate::{
         common::project::{
             ProjectConfig, StressEnvironmentConfig, StressTierConfig, TestCargoOptions,
-            TestCommandConfig, TestFlashConfig, TestLaneConfig, TestLoadConfig,
-            TestNetBackendConfig, TestNoBlockConfig,
+            TestCargoRunner, TestCommandConfig, TestFlashConfig, TestLaneConfig, TestLoadConfig,
+            TestNetBackendConfig, TestNoBlockConfig, TestRunner,
         },
         stress::selection::{unit_runner, validate_directory_name},
     };
@@ -2588,6 +2679,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn modes_with_distinct_thread_budgets_keep_distinct_execution_units() {
+        let mut project = lanes_project();
+        project.stress.test_threads = "8".to_owned();
+        project.stress.modes = toml::from_str("[parallel]\n[whole_cpu]\ntest_threads = '1'\n")
+            .expect("mode thread budgets are configuration");
+        let names = ["parallel".to_owned(), "whole_cpu".to_owned()];
+        let lanes = ["product".to_owned()];
+        let selected =
+            units(&project, &project.stress, &names, &lanes).expect("resolve execution units");
+        assert_eq!(
+            selected.len(),
+            2,
+            "distinct CPU budgets are distinct evidence"
+        );
+        let inputs = RunInputs {
+            build: PathBuf::from("build"),
+            config_file: PathBuf::from("nextest.toml"),
+            controller_root: PathBuf::from("controller"),
+            controller_sha: "a".repeat(40),
+            count: 100,
+            filter: "all()".to_owned(),
+            subject_junit: PathBuf::from("junit.xml"),
+            subject_root: PathBuf::from("subject"),
+            subject_sha: "b".repeat(40),
+        };
+        let paths = Paths::new(PathBuf::from("raw"), &project.stress.artifacts);
+        let budgets: Vec<_> = selected
+            .iter()
+            .map(|unit| {
+                let spec = inputs
+                    .spec(unit, &paths, &project.stress)
+                    .expect("lane runner");
+                assert_eq!(spec.count, 100, "admission preserves every repeat");
+                (unit.name(), spec.test_threads)
+            })
+            .collect();
+        assert_eq!(
+            budgets,
+            [
+                ("parallel/product".to_owned(), "8".to_owned()),
+                ("whole_cpu/product".to_owned(), "1".to_owned())
+            ]
+        );
+    }
+
     /// A run repeats every lane mode on every lane it names and a command mode
     /// once, each into a directory of its own. A lane that declares no flash
     /// resolves the same under both clocks, and repeating it under the second
@@ -2618,17 +2755,14 @@ mod tests {
         );
     }
 
-    /// A run repeats one tier's lanes: the tier it names, or the project's
-    /// default. A filter aimed at one lane's tests selects nothing in the
-    /// others, so a run can instead be narrowed to lanes — but only to lanes
-    /// some tier stresses.
     #[test]
-    fn a_run_repeats_a_tier_or_lanes_some_tier_stresses() {
+    fn a_run_repeats_a_tier_or_explicit_test_lanes() {
         let tier = |lanes: &[&str]| StressTierConfig {
             lanes: lanes.iter().map(|lane| (*lane).to_owned()).collect(),
             ..StressTierConfig::default()
         };
-        let config = StressConfig {
+        let mut project = lanes_project();
+        project.stress = StressConfig {
             default_tier: "nightly".to_owned(),
             tiers: BTreeMap::from([
                 ("nightly".to_owned(), tier(&["product"])),
@@ -2638,18 +2772,18 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_lanes(None, &[], &config).expect("the default tier"),
+            resolve_lanes(None, &[], &project).expect("the default tier"),
             ["product"]
         );
         assert_eq!(
-            resolve_lanes(Some("weekly"), &[], &config).expect("a named tier"),
+            resolve_lanes(Some("weekly"), &[], &project).expect("a named tier"),
             ["tools", "product"]
         );
         assert_eq!(
-            resolve_lanes(None, &["tools".to_owned()], &config).expect("a stressed lane"),
+            resolve_lanes(None, &["tools".to_owned()], &project).expect("a stressed lane"),
             ["tools"]
         );
-        let error = resolve_lanes(Some("monthly"), &[], &config)
+        let error = resolve_lanes(Some("monthly"), &[], &project)
             .expect_err("a tier the project does not configure");
         assert!(
             error
@@ -2657,14 +2791,37 @@ mod tests {
                 .contains("stress tier `monthly` is not configured"),
             "{error:#}"
         );
-        let error = resolve_lanes(None, &["detector".to_owned()], &config)
-            .expect_err("a lane the project does not stress");
-        assert!(
-            error
-                .to_string()
-                .contains("stress lane `detector` is in no stress tier"),
-            "{error:#}"
+        assert_eq!(
+            resolve_lanes(None, &["detector".to_owned()], &project)
+                .expect("a diagnostic lane outside the scheduled tiers"),
+            ["detector"]
         );
+    }
+
+    #[test]
+    fn explicit_lanes_reject_unknown_excluded_and_non_nextest_tests() {
+        let mut project = lanes_project();
+        project.stress.not_stressed.insert(
+            "detector".to_owned(),
+            "the model already explores every interleaving".to_owned(),
+        );
+        project.test.lanes.get_mut("tools").unwrap().runner =
+            TestRunner::Cargo(TestCargoRunner::default());
+        for (lane, expected) in [
+            ("unknown", "stress lane `unknown` is not configured"),
+            (
+                "detector",
+                "stress lane `detector` is excluded: the model already explores every interleaving",
+            ),
+            (
+                "tools",
+                "stress lane `tools` does not produce Nextest evidence",
+            ),
+        ] {
+            let error = resolve_lanes(None, &[lane.to_owned()], &project)
+                .expect_err("a diagnostic must produce permitted per-test evidence");
+            assert_eq!(error.to_string(), expected);
+        }
     }
 
     /// A tier and a lane list each say what to repeat; a run told both would
@@ -2714,10 +2871,15 @@ mod tests {
     #[test]
     fn a_command_mode_is_expected_to_have_run_its_own_command() {
         let (config, _) = command_lane_config();
+        let project = ProjectConfig {
+            stress: config,
+            ..ProjectConfig::default()
+        };
+        let config = &project.stress;
         let modes = ["rtsan".to_owned()];
 
-        let lanes = resolve_lanes(None, &[], &config).expect("the default tier");
-        let units = units(&ProjectConfig::default(), &config, &modes, &lanes)
+        let lanes = resolve_lanes(None, &[], &project).expect("the default tier");
+        let units = units(&project, config, &modes, &lanes)
             .expect("a command mode needs no configured test runner");
 
         assert_eq!(
@@ -3681,6 +3843,7 @@ mod engine_selection_tests {
                 module_path!(),
                 "check_pinned_engine_fixture",
             ))
+            .env("NEXTEST_PROFILE", "stress")
             .env("RUSTC_WRAPPER", &executable)
             .env("RUSTC_WORKSPACE_WRAPPER", &executable)
             .env("KITHARA_ENGINE_FIXTURE_RECEIPT", &receipt)
@@ -3739,6 +3902,7 @@ mod engine_selection_tests {
                         .get_envs()
                         .filter_map(|(key, value)| value.map(|value| (key, value))),
                 )
+                .env_remove("NEXTEST_PROFILE")
                 .env_remove("RUSTFLAGS")
                 .env_remove("CARGO_ENCODED_RUSTFLAGS")
                 .env_remove("RUSTC_WRAPPER")

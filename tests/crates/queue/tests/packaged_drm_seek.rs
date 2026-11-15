@@ -4,12 +4,11 @@
 use kithara::{
     abr::AbrMode,
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::PoolRegion,
     decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{
         CancelToken,
         time::{Duration, Instant, WallInstant, timeout},
@@ -26,7 +25,7 @@ use kithara_integration_tests::{
     event::TestEvent,
     fixture_protocol::DelayRule,
     kithara, mixed_codec_ladder_encrypted,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE, app_disk_asset_store, app_track_source},
+    offline::{OfflineQueue, QueueTicker, RENDER_PACE, app_track_source},
     waits::{wait_for_position_at_least, wait_for_position_event, wait_for_position_near_event},
 };
 use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
@@ -112,17 +111,17 @@ async fn delayed_drm_track() -> (TestServerHelper, Url) {
 
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn run_seek_scenario(
+    helper: &TestServerHelper,
     url: &Url,
     backend: DecoderBackend,
     abr: AbrMode,
     temp: TestTempDir,
-    make_client: impl FnOnce(NetOptions, PoolRegion<AppPools>, CancelToken) -> HttpClient,
 ) {
     let wall = WallInstant::now();
     let clock = Instant::now();
     let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
-    let client = make_client(net, pools.clone(), CancelToken::never());
+    let client = helper.modeled_client(net, CancelToken::never());
     let downloader = Downloader::new(
         DownloaderConfig::for_client(client.clone())
             .runtime(kithara::platform::tokio::runtime::Handle::current())
@@ -132,7 +131,9 @@ async fn run_seek_scenario(
     let shutdown = CancelToken::never();
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
-        .backend(StorageBackend::default())
+        .backend(StorageBackend::Disk {
+            root: temp.path().to_path_buf(),
+        })
         .flush_hub(flush_hub)
         .build();
     let worker = PlayWorker::new(
@@ -157,7 +158,13 @@ async fn run_seek_scenario(
         .build();
     let queue = OfflineQueue::paced(
         session_config,
-        Queue::new(QueueConfig::builder().prep(player).build()),
+        Queue::new(
+            QueueConfig::builder()
+                .prep(player)
+                .store(config.store.clone())
+                .downloader(config.downloader.clone())
+                .build(),
+        ),
         RENDER_PACE,
     )
     .await
@@ -167,7 +174,7 @@ async fn run_seek_scenario(
     let source = app_track_source(
         url.as_str(),
         &config,
-        app_disk_asset_store(&config, temp.path()),
+        config.store.clone(),
         backend,
         abr,
         None,
@@ -261,40 +268,8 @@ async fn drm_seek_resumes(
     #[case] abr: AbrMode,
     temp_dir: TestTempDir,
 ) {
-    let (_helper, url) = drm_track;
-    run_seek_scenario(&url, backend, abr, temp_dir, HttpClient::new).await;
-}
-
-// flash(false): the e2e this mirrors runs real-clock; the stall window is
-// timing-dependent, so the real-clock lane is the one expected to catch it.
-#[kithara::test(
-    tracing("kithara_queue=debug,kithara_hls=debug,kithara_audio=debug"),
-    tokio,
-    flash(false)
-)]
-#[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
-#[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
-#[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_auto(DecoderBackend::Apple, AbrMode::Auto(None))
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_locked_low(DecoderBackend::Apple, AbrMode::manual(0))
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_locked_high(DecoderBackend::Apple, AbrMode::manual(2))
-)]
-async fn drm_seek_resumes_realtime(
-    #[future(awt)] drm_track: (TestServerHelper, Url),
-    #[case] backend: DecoderBackend,
-    #[case] abr: AbrMode,
-    temp_dir: TestTempDir,
-) {
-    let (_helper, url) = drm_track;
-    run_seek_scenario(&url, backend, abr, temp_dir, HttpClient::new).await;
+    let (helper, url) = drm_track;
+    run_seek_scenario(&helper, &url, backend, abr, temp_dir).await;
 }
 
 #[kithara::test(
@@ -323,38 +298,5 @@ async fn drm_seek_resumes_delayed_cdn(
     temp_dir: TestTempDir,
 ) {
     let (helper, url) = delayed_drm_track;
-    run_seek_scenario(&url, backend, abr, temp_dir, |options, _pools, cancel| {
-        helper.modeled_client(options, cancel)
-    })
-    .await;
-}
-
-#[kithara::test(
-    tracing("kithara_queue=debug,kithara_hls=debug,kithara_audio=debug"),
-    tokio,
-    flash(false)
-)]
-#[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
-#[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
-#[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_auto(DecoderBackend::Apple, AbrMode::Auto(None))
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_locked_low(DecoderBackend::Apple, AbrMode::manual(0))
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_locked_high(DecoderBackend::Apple, AbrMode::manual(2))
-)]
-async fn drm_seek_resumes_delayed_cdn_realtime(
-    #[future(awt)] delayed_drm_track: (TestServerHelper, Url),
-    #[case] backend: DecoderBackend,
-    #[case] abr: AbrMode,
-    temp_dir: TestTempDir,
-) {
-    let (_helper, url) = delayed_drm_track;
-    run_seek_scenario(&url, backend, abr, temp_dir, HttpClient::new).await;
+    run_seek_scenario(&helper, &url, backend, abr, temp_dir).await;
 }

@@ -112,7 +112,7 @@ where
         Ok(audio_config)
     }
 
-    /// Transfers playback geometry and effects ownership to one render lane.
+    /// Transfers playback geometry to one render lane.
     pub(crate) fn build_track_config<T>(&self, audio: AudioConfig<T, B>) -> TrackConfig<T, B>
     where
         T: StreamType,

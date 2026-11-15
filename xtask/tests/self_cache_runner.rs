@@ -20,6 +20,13 @@ use nix::{
 };
 use tempfile::TempDir;
 
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+        .parent()
+        .expect("xtask has a workspace root")
+        .to_path_buf()
+}
+
 struct Fixture {
     _temp: TempDir,
     bootstrap_artifact: PathBuf,
@@ -57,17 +64,28 @@ impl Fixture {
         let cargo_home = temp.path().join("cargo-home");
         let justfile = root.join("justfile");
         fs::create_dir_all(root.join(".config"))?;
+        fs::create_dir_all(root.join(".config/ci"))?;
         fs::create_dir_all(root.join(".git/xtask-cache"))?;
         fs::create_dir_all(root.join("xtask/src"))?;
         fs::create_dir_all(&fake_bin)?;
         fs::create_dir_all(&cargo_home)?;
-        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .context("resolve repository root")?;
+        fs::write(temp.path().join("kache-host.toml"), "[cache]\n")?;
+        write_executable(
+            &fake_bin.join("kache"),
+            r#"#!/bin/sh
+case "$1 $2" in
+  'daemon start') exec "$BOOTSTRAP_FAKE_KACHE" --kache-start ;;
+  'stats --json') printf '%s' '{"remote":"s3://fixture/kache","daemon_connected":true,"daemon_remote_readonly":false}' ;;
+  'daemon stop') ;;
+  *) exec "$@" ;;
+esac
+"#,
+        )?;
+        let repository = workspace_root();
         fs::copy(repository.join("justfile"), &justfile)?;
         fs::copy(
-            repository.join("xtask/bootstrap_lease.rs"),
-            root.join("xtask/bootstrap_lease.rs"),
+            env!("CARGO_BIN_EXE_ci-bootstrap"),
+            fake_bin.join("ci-bootstrap"),
         )?;
         let module_source = repository.join(".config/just");
         let module_target = root.join(".config/just");
@@ -96,8 +114,25 @@ impl Fixture {
             &fake_bin.join("cargo"),
             r#"#!/bin/sh
 set -eu
+case "$*" in
+  *'-p xtask --no-default-features --bin ci-bootstrap'*)
+    driver_target=; driver_host=
+    while test "$#" -gt 0; do
+      case "$1" in
+        --target-dir) driver_target=$2; shift ;;
+        --target) driver_host=$2; shift ;;
+      esac
+      shift
+    done
+    if test -n "${KACHE_RUNTIME_DIR-}"; then mkdir -p "$KACHE_RUNTIME_DIR"; fi
+    mkdir -p "$driver_target/$driver_host/debug"
+    cp "$(command -v ci-bootstrap)" "$driver_target/$driver_host/debug/ci-bootstrap"
+    exit 0
+    ;;
+esac
 printf '%s\n' "$*" >> "$SELF_CACHE_CARGO_LOG"
 printf 'target=%s\n' "${CARGO_TARGET_DIR-}" >> "$SELF_CACHE_CARGO_LOG"
+printf '%s\n' 'compiler-cache diagnostic from the failed build'
 exit 97
 "#,
         )?;
@@ -140,16 +175,45 @@ exit 98
         })
     }
 
+    fn use_git_checkout(&self) -> Result<()> {
+        fs::remove_file(self.fake_bin.join("git"))?;
+        fs::write(self.root.join(".gitignore"), "/target/\n/.ci-bootstrap/\n")?;
+        for args in [["init", "--quiet"], ["add", "--all"]] {
+            let output = Command::new("git")
+                .current_dir(&self.root)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_INDEX_FILE")
+                .env_remove("GIT_WORK_TREE")
+                .args(args)
+                .output()?;
+            assert_success(&output);
+        }
+        Ok(())
+    }
+
     fn bootstrap_command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
         command
             .args(["self-cache", "bootstrap"])
             .current_dir(&self.root)
+            .env("CI", "")
+            .env("CI_JOB_ID", "")
+            .env("GITHUB_RUN_ID", "")
+            .env_remove("KITHARA_BOOTSTRAP_TARGET")
+            .env("PATH", self.fake_path().expect("fixture PATH"))
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
             .env("CARGO_HOME", &self.cargo_home)
             .env("RUSTC_WRAPPER", "")
             .env("RUSTC_WORKSPACE_WRAPPER", "")
+            .env(
+                "KACHE_HOST_CONFIG",
+                self._temp.path().join("kache-host.toml"),
+            )
+            .env("BOOTSTRAP_FAKE_KACHE", env!("CARGO_BIN_EXE_fake-tool"))
+            .env("KITHARA_TEST_STDOUT", r#"{"remote":"s3://fixture/kache","daemon_connected":true,"daemon_remote_readonly":false}"#)
+            .env("SCCACHE_BUCKET", "fixture")
+            .env("SCCACHE_ENDPOINT", "http://cache:9000")
             .env("XTASK_SELF_CACHE_CARGO", &self.bootstrap_cargo)
             .env("SELF_CACHE_BOOTSTRAP_ARTIFACT", &self.bootstrap_artifact)
             .stdin(Stdio::null());
@@ -180,6 +244,9 @@ exit 98
         command
             .args(args)
             .current_dir(&self.root)
+            .env("CI", "")
+            .env("CI_JOB_ID", "")
+            .env("GITHUB_RUN_ID", "")
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO_HOME", &self.cargo_home)
             .env("RUSTC_WRAPPER", "")
@@ -215,6 +282,9 @@ exit 98
         command
             .args(args)
             .current_dir(root)
+            .env("CI", "")
+            .env("CI_JOB_ID", "")
+            .env("GITHUB_RUN_ID", "")
             .env("CARGO", env!("CARGO"))
             .env("CARGO_HOME", &self.cargo_home)
             .env("RUSTC_WRAPPER", "")
@@ -269,7 +339,19 @@ exit 98
             .arg("--working-directory")
             .arg(root)
             .args(args)
+            .env("CI", "")
+            .env("CI_JOB_ID", "")
+            .env("GITHUB_RUN_ID", "")
             .env_remove("KITHARA_XTASK_TARGET")
+            .env_remove("KITHARA_BOOTSTRAP_TARGET")
+            .env(
+                "KACHE_HOST_CONFIG",
+                self._temp.path().join("kache-host.toml"),
+            )
+            .env("BOOTSTRAP_FAKE_KACHE", env!("CARGO_BIN_EXE_fake-tool"))
+            .env("KITHARA_TEST_STDOUT", r#"{"remote":"s3://fixture/kache","daemon_connected":true,"daemon_remote_readonly":false}"#)
+            .env("SCCACHE_BUCKET", "fixture")
+            .env("SCCACHE_ENDPOINT", "http://cache:9000")
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
             .env("CARGO_HOME", &self.cargo_home)
@@ -334,6 +416,22 @@ esac
             &self.fake_bin.join("cargo"),
             r#"#!/bin/sh
 set -eu
+case "$*" in
+  *'-p xtask --no-default-features --bin ci-bootstrap'*)
+    driver_target=; driver_host=
+    while test "$#" -gt 0; do
+      case "$1" in
+        --target-dir) driver_target=$2; shift ;;
+        --target) driver_host=$2; shift ;;
+      esac
+      shift
+    done
+    if test -n "${KACHE_RUNTIME_DIR-}"; then mkdir -p "$KACHE_RUNTIME_DIR"; fi
+    mkdir -p "$driver_target/$driver_host/debug"
+    cp "$(command -v ci-bootstrap)" "$driver_target/$driver_host/debug/ci-bootstrap"
+    exit 0
+    ;;
+esac
 printf '%s\n' "$*" >> "$SELF_CACHE_CARGO_LOG"
 while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
 [ "$#" -gt 0 ] || { printf 'fixture cargo received no run arguments\n' >&2; exit 2; }
@@ -699,6 +797,7 @@ fn ci_bootstrap_builds_where_the_executor_names() -> Result<()> {
     let xtask = fixture._temp.path().join("builds/xtask");
     let output = fixture
         .just_command(&fixture.root, &["_xtask-bootstrap", "--force"])?
+        .env("CI", "true")
         .env("KITHARA_XTASK_TARGET", &xtask)
         .output()?;
 
@@ -706,6 +805,40 @@ fn ci_bootstrap_builds_where_the_executor_names() -> Result<()> {
     assert!(
         fs::read_to_string(&fixture.cargo_log)?.contains(&format!("target={}\n", xtask.display()))
     );
+    Ok(())
+}
+
+#[test]
+fn ci_lease_driver_builds_in_its_executor_owned_cache() -> Result<()> {
+    let host = Command::new("rustc")
+        .args(["--print", "host-tuple"])
+        .output()?;
+    assert_success(&host);
+    let host = String::from_utf8(host.stdout)?;
+    for (args, expected) in [
+        (&["_xtask", "exit-status", "0"][..], 0),
+        (&["_xtask-bootstrap", "--force"][..], 97),
+    ] {
+        let fixture = Fixture::new()?;
+        fixture.install_fake_transport()?;
+        let xtask = fixture._temp.path().join("builds/xtask");
+        let bootstrap = fixture._temp.path().join("builds/bootstrap cache");
+        let output = fixture
+            .just_command(&fixture.root, args)?
+            .env("CI", "true")
+            .env("KITHARA_XTASK_TARGET", &xtask)
+            .env("KITHARA_BOOTSTRAP_TARGET", &bootstrap)
+            .output()?;
+
+        assert_eq!(output.status.code(), Some(expected));
+        assert!(
+            bootstrap
+                .join(host.trim())
+                .join("debug/ci-bootstrap")
+                .is_file()
+        );
+        assert!(!fixture.root.join(".ci-bootstrap").exists());
+    }
     Ok(())
 }
 
@@ -954,6 +1087,22 @@ esac
             &fixture.bootstrap_cargo,
             r#"#!/bin/sh
 set -eu
+case "$*" in
+  *'-p xtask --no-default-features --bin ci-bootstrap'*)
+    driver_target=; driver_host=
+    while test "$#" -gt 0; do
+      case "$1" in
+        --target-dir) driver_target=$2; shift ;;
+        --target) driver_host=$2; shift ;;
+      esac
+      shift
+    done
+    if test -n "${KACHE_RUNTIME_DIR-}"; then mkdir -p "$KACHE_RUNTIME_DIR"; fi
+    mkdir -p "$driver_target/$driver_host/debug"
+    cp "$(command -v ci-bootstrap)" "$driver_target/$driver_host/debug/ci-bootstrap"
+    exit 0
+    ;;
+esac
 printf '%s\n' "$*" >> "$SELF_CACHE_CARGO_LOG"
 printf '%s\n' "$SELF_CACHE_BOOTSTRAP_ARTIFACT"
 "#,
@@ -993,6 +1142,22 @@ fn concurrent_public_stale_refreshes_build_once() -> Result<()> {
         &fixture.bootstrap_cargo,
         r#"#!/bin/sh
 set -eu
+case "$*" in
+  *'-p xtask --no-default-features --bin ci-bootstrap'*)
+    driver_target=; driver_host=
+    while test "$#" -gt 0; do
+      case "$1" in
+        --target-dir) driver_target=$2; shift ;;
+        --target) driver_host=$2; shift ;;
+      esac
+      shift
+    done
+    if test -n "${KACHE_RUNTIME_DIR-}"; then mkdir -p "$KACHE_RUNTIME_DIR"; fi
+    mkdir -p "$driver_target/$driver_host/debug"
+    cp "$(command -v ci-bootstrap)" "$driver_target/$driver_host/debug/ci-bootstrap"
+    exit 0
+    ;;
+esac
 printf '%s\n' "$*" >> "$SELF_CACHE_CARGO_LOG"
 sleep 0.2
 printf '%s\n' "$SELF_CACHE_BOOTSTRAP_ARTIFACT"
@@ -1072,6 +1237,11 @@ fn failed_refresh_preserves_locator_and_uses_canonical_cargo_args() -> Result<()
     let refresh = fixture.cached(&["self-cache", "refresh", "--force"])?;
 
     assert!(!refresh.status.success());
+    assert!(
+        String::from_utf8_lossy(&refresh.stderr)
+            .contains("compiler-cache diagnostic from the failed build"),
+        "failed compilation stdout must remain visible on stderr"
+    );
     assert_eq!(fs::read(locator)?, before);
     let canonical_root = fs::canonicalize(&fixture.root)?;
     assert_eq!(
@@ -1130,6 +1300,7 @@ fn an_unnamed_cargo_target_directory_builds_inside_the_checkout() -> Result<()> 
 fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
     writeln!(io::stderr(), "self-cache-ci-refresh fixture:start")?;
     let fixture = Fixture::new()?;
+    fixture.use_git_checkout()?;
     writeln!(
         io::stderr(),
         "self-cache-ci-refresh bootstrap:start root={} target={}",
@@ -1173,6 +1344,7 @@ fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
     )?;
     let mut ready = fixture
         .just_command(&fixture.root, &["_xtask-ready"])?
+        .env("CI", "true")
         .env_remove("CARGO_TARGET_DIR")
         .env("KITHARA_XTASK_TARGET", &xtask)
         .env("XTASK_SELF_CACHE_CARGO", fixture.fake_bin.join("cargo"))
@@ -1206,6 +1378,53 @@ fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
         fs::read_to_string(&fixture.cargo_log)?,
         cargo_build_log(&fs::canonicalize(&fixture.root)?, &xtask)
     );
+    assert!(xtask.join("sources.tsv").is_file());
+    Ok(())
+}
+
+#[test]
+fn ci_bootstrap_driver_owns_the_target_lease() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.install_fake_transport()?;
+    let output = fixture
+        .just_command(&fixture.root, &["_xtask", "exit-status", "0"])?
+        .env("CI", "true")
+        .env("CI_JOB_ID", "42")
+        .env("KITHARA_XTASK_TARGET", &fixture.target)
+        .env_remove("KACHE_RUNTIME_DIR")
+        .env("TMPDIR", fixture._temp.path())
+        .output()?;
+    assert_success(&output);
+    assert!(fixture.target.join(".kithara-job-lease").is_file());
+    assert!(!fixture.target.join(".kithara-job-heartbeat").exists());
+    Ok(())
+}
+
+#[test]
+fn a_cached_ci_worker_refreshes_a_checkout_without_its_bootstrap_driver() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.use_git_checkout()?;
+    assert_success(&fixture.bootstrap()?);
+    assert!(!fixture.root.join("xtask/bin/ci-bootstrap.rs").exists());
+    fs::write(
+        fixture.root.join("xtask/src/main.rs"),
+        "fn main() { changed(); }\n",
+    )?;
+    let output = fixture
+        .just_command(&fixture.root, &["_xtask-ready"])?
+        .env("CI", "true")
+        .env("GITHUB_RUN_ID", "checkout-transition")
+        .env("GITHUB_ACTIONS", "true")
+        .env_remove("KACHE_RUNTIME_DIR")
+        .env("XTASK_SELF_CACHE_CARGO", fixture.fake_bin.join("cargo"))
+        .output()?;
+
+    assert!(!output.status.success(), "the fixture Cargo refuses builds");
+    assert_eq!(
+        fs::read_to_string(&fixture.cargo_log)?,
+        cargo_build_log(&fs::canonicalize(&fixture.root)?, &fixture.target)
+    );
+    assert!(fixture.target.join("sources.tsv").is_file());
     Ok(())
 }
 
@@ -1293,17 +1512,12 @@ publish_pid "$descendant" "$SELF_CACHE_DESCENDANT_PID"
 wait "$descendant"
 "#,
     )?;
-    let fake_cargo = fixture.fake_bin.join("cargo");
-    let mut command = Command::new(fixture.active_binary()?);
+    let mut command = fixture.cached_command(
+        &fixture.root,
+        &["self-cache", "refresh", "--force"],
+        Some(&fixture.target),
+    )?;
     command
-        .args(["self-cache", "refresh", "--force"])
-        .current_dir(&fixture.root)
-        .env("CARGO_TARGET_DIR", &fixture.target)
-        .env("CARGO", env!("CARGO"))
-        .env("CARGO_HOME", &fixture.cargo_home)
-        .env("RUSTC_WRAPPER", "")
-        .env("RUSTC_WORKSPACE_WRAPPER", "")
-        .env("XTASK_SELF_CACHE_CARGO", &fake_cargo)
         .env("SELF_CACHE_CARGO_PID", &cargo_pid)
         .env("SELF_CACHE_DESCENDANT_PID", &descendant_pid)
         .env("SELF_CACHE_WORKER_PID", &worker_pid)

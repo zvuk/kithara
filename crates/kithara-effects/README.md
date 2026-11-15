@@ -14,25 +14,37 @@
 
 # kithara-effects
 
-Channel and master audio effects for Kithara. The crate owns the `AudioEffect`
-contract, the effect chain and its end-of-stream drain, the band equaliser and
-the DJ isolator, the stereo equaliser a deck runs, the peak limiter, and the
+Deck and master audio effects for Kithara. The crate owns the band equaliser
+and the DJ isolator, the stereo equaliser a deck runs, the peak limiter, and the
 Firewheel node that puts the limiter on a session bus. It does not decode
 audio, own player or session state, or reach the network.
+
+`filter::FilterEffect` is the deck filter knob: transparent at its center,
+low-pass to the left and high-pass to the right, on the DSP owner's stereo
+state-variable filter. `FilterSettings` fixes the cutoff ranges and Q; the knob
+maps geometrically into them and the cutoff stays below 0.45 of the sample
+rate. A manual knob glides; a program sets one knob position per frame without
+another smoothing pass. Planar processing retains history across calls, and
+reset clears history and completes the glide. The deck runs the filter after
+FX units and before its output fader.
 
 ## Usage
 
 ```rust
+use std::num::NonZeroU32;
+
+use kithara_bufpool::HasPool;
 use kithara_effects::{
     GainDb,
-    eq::{EqConfig, EqEffect, generate_log_spaced_bands},
+    eq::{EqConfig, EqLayout, StereoEq, generate_log_spaced_bands},
 };
 
-fn boost_low_band<S>(config: &EqConfig<S>, sample_rate: u32, channels: u16) {
-    let bands = generate_log_spaced_bands(5);
-    let mut eq = EqEffect::new(config, bands, sample_rate, channels)
+fn boost_low_band<S: HasPool<f32>>(config: &EqConfig<S>, sample_rate: NonZeroU32) -> StereoEq {
+    let layout = EqLayout::new(config, &generate_log_spaced_bands(5), sample_rate)
         .expect("pool region large enough for five bands");
+    let mut eq = StereoEq::with_layout(config, sample_rate, Box::new(layout));
     eq.set_gain(0, GainDb::from(3.0));
+    eq
 }
 ```
 
@@ -42,13 +54,15 @@ fn boost_low_band<S>(config: &EqConfig<S>, sample_rate: u32, channels: u16) {
 
 <tr><th>Type</th><th>Role</th></tr>
 
-<tr><td><code>AudioEffect</code></td><td>Real-time contract every effect in a chain implements</td></tr>
+<tr><td><code>DeckEffect</code></td><td>Contract of the effect a deck FX unit holds: planar stereo wet signal, parameter changes, reset, tail exhaustion, sample-rate retune</td></tr>
 
-<tr><td><code>EqEffect</code></td><td>Multi-band equaliser over decoded-audio chunks</td></tr>
+<tr><td><code>FxParamChange</code></td><td>An effect parameter index and native-unit value, admitted by render before the batch applies</td></tr>
+
+<tr><td><code>FxParamDescriptor</code></td><td>A checked native range, unit and optional linear/log mapping; no mapping declares integer steps</td></tr>
 
 <tr><td><code>IsolatorEq</code></td><td>DJ isolator built on crossover filters</td></tr>
 
-<tr><td><code>PeakLimiter</code></td><td>Look-ahead peak limiter holding a ceiling</td></tr>
+<tr><td><code>PeakLimiter</code></td><td>Linked peak limiter holding a ceiling; a lookahead delays its output by the frames it reports</td></tr>
 
 <tr><td><code>GainDb</code></td><td>Band gain in dB, clamped to a fixed range</td></tr>
 
@@ -64,17 +78,25 @@ fn boost_low_band<S>(config: &EqConfig<S>, sample_rate: u32, channels: u16) {
 
 <tr><th>Feature</th><th>Effect</th></tr>
 
-<tr><td><code>mock</code></td><td>Exposes <code>AudioEffectMock</code> for consumers that fake a chain</td></tr>
-
 <tr><td><code>usdt</code></td><td>Joins the workspace USDT probe lane</td></tr>
 
 </table>
 
 ## Integration
 
-`kithara-play` builds a per-track effect chain and the band layouts its deck
-takes; `kithara-render` runs a `StereoEq` on every deck; `kithara-host` puts
-`LimiterNode` on the session bus. Reusable DSP building
-blocks stay private under `src/dsp/` until they become `kithara-dsp`.
+Effects belong to the deck: a track contributes only its slot gain and fader.
+`kithara-play` builds the band layouts its deck takes; `kithara-render` runs a
+`StereoEq` and the `DeckEffect` of each FX unit on every deck; `kithara-host` puts
+`LimiterNode` on the session bus. The limiter's reconstruction, input history,
+interval peaks and release recursion belong to `kithara-dsp`; effects owns its
+tap design, ceiling, channel linking and per-frame sanitization policy.
+`LimiterConfig` takes checked `Ceiling` (0.001..=1.0) and `ReleaseMs`
+(1..=5000 ms) values; their defaults are 0.98 and 50 ms.
+
+`DeckEffect::parameters` borrows descriptors prepared outside the audio thread.
+They remain valid and unchanged across every supported sample-rate retune; the
+effect reserves storage for that complete domain. Render checks manual changes
+against these domains before any batch part applies, and `set` applies the
+validated value without a second per-effect admission path.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-effects) for detailed contracts, invariants, and internals.

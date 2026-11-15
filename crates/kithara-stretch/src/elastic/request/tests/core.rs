@@ -1,12 +1,20 @@
+use kithara_test_utils::kithara;
+
 use crate::{ElasticError, ElasticRequest};
 
-pub(crate) const fn with_output_source_frames(
-    mut request: ElasticRequest,
-    frames: usize,
-) -> Result<ElasticRequest, ElasticError> {
-    if frames == 0 {
-        return Err(ElasticError::EmptySource);
-    }
-    request.output_source_frames = frames;
-    Ok(request)
+#[kithara::test]
+fn audible_advance_preserves_admission_and_rejects_an_empty_span() {
+    let physical = ElasticRequest::new(32, 16).expect("physical span");
+    let projected = physical
+        .with_output_source_frames(8)
+        .expect("audible source advance");
+
+    assert_eq!(projected.source_frames(), 32);
+    assert_eq!(projected.output_frames(), 16);
+    assert_eq!(projected.output_source_frames(), 8);
+    assert_eq!(physical.output_source_frames(), 32);
+    assert_eq!(
+        physical.with_output_source_frames(0),
+        Err(ElasticError::EmptySource)
+    );
 }

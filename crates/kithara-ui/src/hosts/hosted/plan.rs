@@ -18,7 +18,7 @@ use crate::{
         wave::zoom_math::{window_bounds, zoom_for_wheel},
     },
     draw::{Pt, Rect},
-    engine::{Descriptor, ScrollConfig, Target},
+    engine::{Descriptor, Presses, ScrollConfig, Target},
     expand::{Binding, ControlSpec, drop_path},
     hosts::{hosted::SearchPlan, model::derived, picker::picker_selected_index},
     ids::InternId,
@@ -62,6 +62,7 @@ pub(crate) trait HostedState: Clone {
 pub(crate) enum HostedControlPlan<S: HostedState> {
     Activation {
         path: String,
+        presses: Presses,
     },
     /// A box that reports the pointer crossing into and out of it.
     ///
@@ -219,7 +220,9 @@ impl DividerPaths {
 impl<S: HostedState> HostedControlPlan<S> {
     fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
         match self {
-            Self::Activation { path } => descriptors.push(Descriptor::activation(path.clone())),
+            Self::Activation { path, presses } => {
+                descriptors.push(Descriptor::pressable(path.clone(), *presses));
+            }
             Self::Crossing { path } => descriptors.push(Descriptor::crossing(path.clone())),
             Self::Segmented { path, item_count } => {
                 descriptors.push(Descriptor::segmented(path.clone(), *item_count));
@@ -311,7 +314,7 @@ impl<S: HostedState> HostedControlPlan<S> {
 
     pub(crate) fn path(&self) -> &str {
         match self {
-            Self::Activation { path }
+            Self::Activation { path, .. }
             | Self::Crossing { path }
             | Self::Segmented { path, .. }
             | Self::Picker { path, .. }
@@ -374,6 +377,7 @@ impl<S: HostedState> HostedControlPlan<S> {
                 Some(ReadValue::Bool(_)),
             ) => Some(Self::Activation {
                 path: path.to_owned(),
+                presses: Presses::default(),
             }),
             (ControlSpec::Segmented { items }, Some(ReadValue::Scalar(_))) if !items.is_empty() => {
                 Some(Self::Segmented {

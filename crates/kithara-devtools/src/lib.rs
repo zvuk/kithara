@@ -1,6 +1,7 @@
 #[cfg(feature = "lint")]
 pub mod arch;
 pub mod ast_grep;
+mod ast_rules;
 #[cfg(feature = "lint")]
 pub mod audit;
 pub mod audit_clippy;
@@ -40,7 +41,6 @@ mod stress_run;
 #[cfg(feature = "lint")]
 pub mod style;
 pub mod test;
-mod touched;
 pub mod typos;
 pub mod util;
 pub mod verdict;
@@ -50,3 +50,5 @@ pub mod viz;
 pub use command::{CoreCommand, run};
 pub use ctx::Ctx;
 mod consts;
+#[cfg(test)]
+mod testing;

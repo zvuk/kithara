@@ -21,6 +21,7 @@ use kithara::{
         tokio::task::{spawn, spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig},
+    signal::SampleCount,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -788,6 +789,7 @@ async fn read_until_manual_applied<S>(
     applied_before: usize,
     target: usize,
     label: &str,
+    pace_playback: bool,
 ) -> (LaneAudio<Stream<S>, TestPools>, PhaseReadStats)
 where
     S: StreamType + 'static,
@@ -804,6 +806,15 @@ where
         hang_tick!();
         let (next, step) = read_one_chunk_blocking(audio, label).await;
         audio = next;
+        if pace_playback && step.samples > 0 {
+            let spec = audio.spec();
+            let count = usize::try_from(step.samples).expect("read count");
+            let frames = spec.frame_count(SampleCount::new(count)).expect("frames");
+            let duration = spec.duration_for(frames.get() as u64).expect("duration");
+            let started = Instant::now();
+            kithara::platform::time::sleep(duration).await;
+            assert!(started.elapsed() >= duration, "PCM pacing");
+        }
         stats.samples = stats.samples.saturating_add(step.samples);
         if step.samples > 0 {
             hang_reset!();
@@ -938,6 +949,7 @@ async fn vod_manual_switch_affects_future_segments(
         applied_before,
         1,
         "manual switch transition",
+        true,
     )
     .await;
     assert!(!transition.saw_eof, "manual switch must apply before EOF");
@@ -1465,6 +1477,7 @@ async fn abr_switch_must_not_redownload_covered_segments(
         applied_before,
         1,
         "covered-prefix switch",
+        true,
     )
     .await;
     assert!(!transition.saw_eof, "switch must apply before EOF");
@@ -1790,6 +1803,7 @@ async fn runtime_cross_codec_manual_switch_no_hang(#[future(awt)] retained_mixed
         applied_before,
         3,
         "cross-codec manual transition",
+        true,
     )
     .await;
 
@@ -1945,6 +1959,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached(
         applied_before,
         1,
         "all-cached manual transition",
+        true,
     )
     .await;
 
@@ -2075,6 +2090,7 @@ async fn runtime_manual_switch_survives_outgoing_eof(#[future(awt)] manual_six: 
         applied_before,
         1,
         "eof-race manual transition",
+        false,
     )
     .await;
 
@@ -2236,6 +2252,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek(#[future(awt)] manual_
         applied_before,
         1,
         "cache-and-seek manual transition",
+        true,
     )
     .await;
 

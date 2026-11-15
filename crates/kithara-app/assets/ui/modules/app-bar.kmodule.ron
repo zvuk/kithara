@@ -53,6 +53,26 @@
                     ),
                 ],
             )),
+            Row(
+                id: "master-group",
+                gap: 0.0,
+                size: (w: Shrink, h: Fill),
+                children: [
+                    Divider(id: "before-master"),
+                    Column(
+                        id: "tempo",
+                        size: (w: Fixed(78.0), h: Fill),
+                        gap: 2.0,
+                        pad_x: 10.0,
+                        write: Parameter(id: "clock.tempo"),
+                        entry: Telemetry(id: "clock.bpm"),
+                        children: [
+                            Text(id: "tempo-label", style: MicroLabel, label: "@clock.tempo_label"),
+                            Text(id: "tempo-value", style: Telemetry, read: Telemetry(id: "clock.bpm")),
+                        ],
+                    ),
+                ],
+            ),
             Optional(
                 id: "broadcast-block",
                 hidden: Telemetry(id: "broadcast.hidden"),

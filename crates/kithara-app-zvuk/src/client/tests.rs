@@ -258,6 +258,60 @@ async fn a_stream_batch_resolves_every_row_or_fails_whole() {
     }
 }
 
+#[kithara::test]
+async fn a_stream_field_failure_keeps_the_other_tracks_playable() {
+    let mut envelope: Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/streams.json")).unwrap();
+    envelope["data"]["mediaContents"][1]["streamV3"] = Value::Null;
+    envelope["errors"] = serde_json::json!([{
+        "message": "Content stream unavailable",
+        "path": ["mediaContents", 1, "streamV3"],
+        "extensions": {"code": "DOWNSTREAM_SERVICE_ERROR"}
+    }]);
+    let ids = ["1000", "1003", "1006", "1008", "1010"].map(|id| TrackId(id.into()));
+    let rows = mock_client(reply(envelope.to_string()))
+        .streams(&token(), &ids)
+        .await
+        .expect("a field failure must not reject the other streams");
+    assert_eq!(rows.len(), ids.len());
+    assert_eq!(rows[1].id, ids[1]);
+    assert!(rows[1].stream_v3.is_none());
+    assert!(rows.iter().enumerate().all(|(index, row)| {
+        index == 1
+            || row
+                .stream_v3
+                .as_ref()
+                .is_some_and(|stream| stream.hls.is_some())
+    }));
+
+    for path in [
+        serde_json::json!([]),
+        serde_json::json!(["mediaContents"]),
+        serde_json::json!(["mediaContents", 0, "streamV3"]),
+        serde_json::json!(["mediaContents", 9, "streamV3"]),
+        serde_json::json!(["mediaContents", -1, "streamV3"]),
+        serde_json::json!(["mediaContents", 1, "id"]),
+    ] {
+        envelope["errors"][0]["path"] = path;
+        assert!(matches!(
+            mock_client(reply(envelope.to_string()))
+                .streams(&token(), &ids)
+                .await,
+            Err(Error::GraphQl(_))
+        ));
+    }
+    envelope["errors"] = serde_json::json!([
+        {"message": "Content stream unavailable", "path": ["mediaContents", 1, "streamV3"]},
+        {"message": "Account rejected"}
+    ]);
+    assert!(matches!(
+        mock_client(reply(envelope.to_string()))
+            .streams(&token(), &ids)
+            .await,
+        Err(Error::GraphQl(_))
+    ));
+}
+
 /// A failure is worded by its cause: structured errors win over the reply's
 /// data, only HTTP 401 rejects the token, a status keeps its body out, and a
 /// transport failure keeps its source.

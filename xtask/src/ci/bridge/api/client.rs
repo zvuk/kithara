@@ -2,6 +2,7 @@ use std::fs;
 
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use kithara_devtools::test::PR_TESTS_ENV;
 use reqwest::{Method, Url};
 use serde_json::Value;
 
@@ -10,7 +11,7 @@ use super::{
         command::BridgeConfig,
         model::{PipelineObservation, PullRequest, Scope, pipeline_observation},
     },
-    http::{Api, Payload},
+    http::{Api, Payload, paginated},
     sources::pull_request,
 };
 use crate::ci::run::PipelineKind;
@@ -44,15 +45,12 @@ impl Github {
     }
 
     pub(in crate::ci::bridge) fn merged_pull_request(&self, sha: &str) -> Result<Option<u64>> {
-        let response = self.request(
-            &Method::GET,
-            &format!("/repos/{}/commits/{sha}/pulls", self.config.github_repo),
-            None,
-        )?;
-        let pulls = response
-            .as_array()
-            .context("GitHub commit pulls response was not an array")?;
-        Ok(merged_pull_number(pulls, sha, &self.config.github_branch))
+        merged_pull_number(
+            &self.config.github_repo,
+            sha,
+            &self.config.github_branch,
+            |path| self.request(&Method::GET, path, None),
+        )
     }
 
     pub(in crate::ci::bridge) fn open_pull_requests(&self) -> Result<Vec<PullRequest>> {
@@ -86,6 +84,19 @@ impl Github {
             }
             page += 1;
         }
+    }
+
+    /// Starts the `CI` workflow of the repository a pull request's head lives
+    /// in, on its head branch. GitHub runs no fork workflow on an upstream
+    /// pull request event, so a draft that turns ready would otherwise wait
+    /// for its next push to run in full.
+    pub(in crate::ci::bridge) fn dispatch_ci(&self, repository: &str, branch: &str) -> Result<()> {
+        self.request(
+            &Method::POST,
+            &format!("/repos/{repository}/actions/workflows/ci.yml/dispatches"),
+            Some(&serde_json::json!({ "ref": branch })),
+        )
+        .map(drop)
     }
 
     pub(in crate::ci::bridge) fn git_header(&self) -> String {
@@ -142,8 +153,9 @@ impl Gitlab {
         head_sha: &str,
         base_sha: &str,
         scope: Scope,
+        pr_tests: Option<&str>,
     ) -> Result<u64> {
-        let form = pipeline_form(reference, head_sha, base_sha, scope);
+        let form = pipeline_form(reference, head_sha, base_sha, scope, pr_tests);
         let payload = Payload::Form(&form);
         let response = self.request(&Method::POST, "pipeline", Some(&payload))?;
         response["id"]
@@ -340,12 +352,14 @@ impl Gitlab {
 }
 
 /// The form that starts a verification run. A draft says so, and the parent
-/// pipeline dispatches it as a branch.
+/// pipeline dispatches it as a branch; its test block, when it has one, reaches
+/// every job of the run as `KITHARA_PR_TESTS`.
 fn pipeline_form(
     reference: &str,
     head_sha: &str,
     base_sha: &str,
     scope: Scope,
+    pr_tests: Option<&str>,
 ) -> Vec<(String, String)> {
     let mut form = vec![
         ("ref".into(), reference.into()),
@@ -360,6 +374,10 @@ fn pipeline_form(
     if scope == Scope::Draft {
         form.push(("variables[][key]".into(), "KITHARA_QUARANTINE_DRAFT".into()));
         form.push(("variables[][value]".into(), "1".into()));
+        if let Some(block) = pr_tests {
+            form.push(("variables[][key]".into(), PR_TESTS_ENV.into()));
+            form.push(("variables[][value]".into(), block.into()));
+        }
     }
     form
 }
@@ -375,15 +393,29 @@ fn read_secret(path: &std::path::Path, label: &str) -> Result<String> {
     Ok(secret)
 }
 
-fn merged_pull_number(pulls: &[Value], sha: &str, branch: &str) -> Option<u64> {
-    pulls.iter().find_map(|pull| {
+fn merged_pull_number(
+    repository: &str,
+    sha: &str,
+    branch: &str,
+    mut request: impl FnMut(&str) -> Result<Value>,
+) -> Result<Option<u64>> {
+    let pulls = paginated(
+        |page| {
+            request(&format!(
+                "/repos/{repository}/pulls?state=closed&base={branch}&sort=updated&direction=desc&per_page=100&page={page}"
+            ))
+        },
+        None,
+    )
+    .context("reading closed GitHub pull requests")?;
+    Ok(pulls.iter().find_map(|pull| {
         let exact_commit = pull["merge_commit_sha"].as_str() == Some(sha);
         let merged = pull.get("merged_at").is_some_and(|value| !value.is_null());
         let exact_branch = pull.pointer("/base/ref").and_then(Value::as_str) == Some(branch);
         (exact_commit && merged && exact_branch)
             .then(|| pull.get("number").and_then(Value::as_u64))
             .flatten()
-    })
+    }))
 }
 
 /// Whether a pipeline has reached a state it will not leave.
@@ -468,9 +500,132 @@ mod tests {
         ]);
 
         assert_eq!(
-            merged_pull_number(pulls.as_array().unwrap(), expected, "main"),
+            merged_pull_number("owner/repo", expected, "main", |_| Ok(pulls.clone())).unwrap(),
             Some(3)
         );
+    }
+
+    #[test]
+    fn merged_provenance_does_not_depend_on_the_commit_reverse_index() -> Result<()> {
+        let expected = "0123456789abcdef0123456789abcdef01234567";
+        let closed_path = "/repos/owner/repo/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100&page=1";
+        let mut requested = Vec::new();
+        let number = merged_pull_number("owner/repo", expected, "main", |path| {
+            requested.push(path.to_owned());
+            if path == format!("/repos/owner/repo/commits/{expected}/pulls") {
+                Ok(json!([]))
+            } else if path == closed_path {
+                Ok(json!([{
+                    "number": 776,
+                    "merged_at": "2026-10-29T05:37:38Z",
+                    "merge_commit_sha": expected,
+                    "base": {"ref": "main"}
+                }]))
+            } else {
+                bail!("unexpected GitHub request: {path}")
+            }
+        })?;
+
+        assert_eq!(number, Some(776));
+        assert_eq!(requested, [closed_path.to_owned()]);
+        Ok(())
+    }
+
+    #[test]
+    fn merged_provenance_is_found_on_a_later_closed_pull_page() -> Result<()> {
+        let expected = "0123456789abcdef0123456789abcdef01234567";
+        let mut requested = Vec::new();
+        let number = merged_pull_number("owner/repo", expected, "main", |path| {
+            requested.push(path.to_owned());
+            if path.ends_with("&page=1") {
+                Ok(json!(
+                    (1..=100)
+                        .map(|number| json!({"number": number, "merged_at": null}))
+                        .collect::<Vec<_>>()
+                ))
+            } else if path.ends_with("&page=2") {
+                Ok(json!([{
+                    "number": 776,
+                    "merged_at": "2026-10-29T05:37:38Z",
+                    "merge_commit_sha": expected,
+                    "base": {"ref": "main"}
+                }]))
+            } else {
+                bail!("unexpected GitHub request: {path}")
+            }
+        })?;
+
+        assert_eq!(number, Some(776));
+        assert_eq!(requested.len(), 2);
+        assert!(requested[0].ends_with("&page=1"));
+        assert!(requested[1].ends_with("&page=2"));
+        Ok(())
+    }
+
+    #[test]
+    fn merged_provenance_preserves_later_page_errors() {
+        for malformed in [false, true] {
+            let mut requested = Vec::new();
+            let result = merged_pull_number("owner/repo", "expected", "main", |path| {
+                requested.push(path.to_owned());
+                if path.ends_with("&page=1") {
+                    Ok(json!(
+                        (1..=100)
+                            .map(|number| json!({"number": number, "merged_at": null}))
+                            .collect::<Vec<_>>()
+                    ))
+                } else if malformed {
+                    Ok(json!({"message": "not a pull list"}))
+                } else {
+                    bail!("second page unavailable")
+                }
+            });
+
+            let error = format!("{:#}", result.unwrap_err());
+            assert!(error.contains(if malformed {
+                "API page was not an array"
+            } else {
+                "second page unavailable"
+            }));
+            assert_eq!(requested.len(), 2);
+        }
+    }
+
+    #[test]
+    fn merged_provenance_rejects_missing_and_invalid_proof() -> Result<()> {
+        let expected = "0123456789abcdef0123456789abcdef01234567";
+        let valid = json!({
+            "number": 776,
+            "merged_at": "2026-10-29T05:37:38Z",
+            "merge_commit_sha": expected,
+            "base": {"ref": "main"}
+        });
+        let mut unmerged = valid.clone();
+        unmerged["merged_at"] = Value::Null;
+        let mut wrong_commit = valid.clone();
+        wrong_commit["merge_commit_sha"] = json!("another commit");
+        let mut wrong_branch = valid.clone();
+        wrong_branch["base"]["ref"] = json!("other");
+        let mut invalid_number = valid.clone();
+        invalid_number["number"] = json!("776");
+        let mut missing_number = valid;
+        missing_number.as_object_mut().unwrap().remove("number");
+
+        for pulls in [
+            json!([]),
+            json!([unmerged]),
+            json!([wrong_commit]),
+            json!([wrong_branch]),
+            json!([invalid_number]),
+            json!([missing_number]),
+        ] {
+            assert_eq!(
+                merged_pull_number("owner/repo", expected, "main", |_| Ok(pulls.clone()))?,
+                None,
+                "invalid proof: {pulls}"
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -491,6 +646,7 @@ mod tests {
                 head_branch: "feature".into(),
                 scope: Scope::Full,
                 author: "octocat".into(),
+                tests: Ok(None),
             }
         );
     }
@@ -531,9 +687,46 @@ mod tests {
     }
 
     #[test]
+    fn a_description_test_block_is_read_and_a_second_one_is_an_error() {
+        let pull = |body: &str| {
+            pull_request(&json!({
+                "number": 427,
+                "draft": true,
+                "body": body,
+                "head": {"sha": "a".repeat(40), "ref": "feature"},
+                "user": {"login": "octocat"}
+            }))
+            .unwrap()
+            .tests
+        };
+
+        assert_eq!(
+            pull("Text\n```kithara-tests\npackages = [\"a\"]\n```\n"),
+            Ok(Some("packages = [\"a\"]".to_owned()))
+        );
+        assert!(pull("```kithara-tests\n```\n```kithara-tests\n```\n").is_err());
+    }
+
+    #[test]
+    fn a_draft_run_carries_its_test_block() {
+        let form = pipeline_form("ref", "head", "base", Scope::Draft, Some("filter = \"x\""));
+        let keys: Vec<&str> = form.iter().map(|(_, value)| value.as_str()).collect();
+
+        assert!(
+            keys.windows(2)
+                .any(|pair| pair == ["KITHARA_PR_TESTS", "filter = \"x\""])
+        );
+        assert!(
+            !pipeline_form("ref", "head", "base", Scope::Full, Some("filter = \"x\""))
+                .iter()
+                .any(|(_, value)| value == "KITHARA_PR_TESTS")
+        );
+    }
+
+    #[test]
     fn a_draft_run_is_marked_for_the_dispatcher() {
         assert_eq!(
-            pipeline_form("ref", "head", "base", Scope::Draft)
+            pipeline_form("ref", "head", "base", Scope::Draft, None)
                 .iter()
                 .filter(|(key, _)| key == "variables[][key]")
                 .map(|(_, value)| value.as_str())
@@ -545,7 +738,7 @@ mod tests {
             ]
         );
         assert!(
-            !pipeline_form("ref", "head", "base", Scope::Full)
+            !pipeline_form("ref", "head", "base", Scope::Full, None)
                 .iter()
                 .any(|(_, value)| value == "KITHARA_QUARANTINE_DRAFT")
         );

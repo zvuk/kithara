@@ -10,6 +10,10 @@ description = "Cross-platform primitives (sync, time, thread) for native and was
 keywords = ["platform", "wasm", "sync", "audio", "primitives"]
 categories = ["wasm", "concurrency"]
 
+[package.metadata.kithara.wasm-lib-tests]
+default-features = true
+features = []
+
 [features]
 # Virtual monotonic clock for fast, deterministic offline playback tests.
 # OFF by default and referenced by no shipping crate, so production builds are
@@ -68,7 +72,7 @@ windows-sys = { workspace = true, features = ["Win32_System_Threading"] }
 
 [dev-dependencies]
 kithara-platform = { path = ".", default-features = false, features = ["tokio-rt-multi-thread"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "subscriber"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang", "subscriber"] }
 
 assert_no_alloc = { workspace = true }
 # Which sink a census line reaches is only observable through a subscriber; the

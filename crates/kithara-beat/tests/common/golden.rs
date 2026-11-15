@@ -8,7 +8,12 @@ pub(crate) const WINDOW: f64 = 0.070;
 
 pub(crate) fn fixture(name: &str) -> PathBuf {
     let root = std::env::var_os("KITHARA_BEAT_FIXTURE_DIR").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"),
+        || {
+            PathBuf::from(
+                std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"),
+            )
+            .join("tests/fixtures")
+        },
         PathBuf::from,
     );
     assert!(
@@ -122,9 +127,51 @@ pub(crate) fn f_measure(reference: &[f32], estimated: &[f32], window: f64) -> Sc
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_os = "android"))]
+    use std::{env, process::Command};
+
+    #[cfg(not(target_os = "android"))]
+    use kithara_test_utils::TestTempDir;
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    #[cfg(not(target_os = "android"))]
+    #[kithara::test(native, flash(false))]
+    fn fixture_paths_follow_the_running_package() {
+        let package =
+            PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"));
+        if package != Path::new(env!("CARGO_MANIFEST_DIR"))
+            && env::var_os("KITHARA_BEAT_FIXTURE_DIR").is_none()
+        {
+            assert_eq!(
+                fixture("relocation-probe"),
+                package.join("tests/fixtures/relocation-probe")
+            );
+            return;
+        }
+        let package = TestTempDir::new();
+        let output = Command::new(env::current_exe().expect("current test binary"))
+            .args([
+                "--exact",
+                "common::golden::tests::fixture_paths_follow_the_running_package",
+                "--nocapture",
+            ])
+            .env("CARGO_MANIFEST_DIR", package.path())
+            .env_remove("KITHARA_BEAT_FIXTURE_DIR")
+            .output()
+            .expect("run the same binary against a different package directory");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stdout.contains("running 1 test"),
+            "relocation child did not execute: {stdout} {stderr}"
+        );
+        assert!(
+            output.status.success(),
+            "relocated fixture lookup failed: {stdout} {stderr}"
+        );
+    }
 
     #[kithara::test(native, flash(false))]
     fn identical_sequences_score_one() {

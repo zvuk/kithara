@@ -1,8 +1,10 @@
 use std::num::NonZeroU32;
 
+use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_play::{
-    DeckMixerConfig, DeckPass, EqBandConfig, HostedDeck, Outbox, TrackReceipt, mock,
+    DeckMixerConfig, DeckPass, EqBandConfig, HostedDeck, Outbox, Pitch, PitchStep, PlayError,
+    Player, Position, Semitones, TrackReceipt, mock,
 };
 use kithara_render::rt::StreamShape;
 use kithara_signal::{FrameCount, SessionFrame};
@@ -10,8 +12,15 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use crate::{
-    Queue, QueueConfig, QueueControl, QueueError,
-    mock::{TestPools, answer_loaded, finish, pending_selection, pools},
+    Queue, QueueConfig, QueueControl, QueueError, TrackSource, Transition,
+    mock::{
+        FixtureSource, TestPools, answer_loaded, finish, fixture_uri, load_seq, pending_selection,
+        pools, requested_load, selected, with_outbox,
+    },
+    queue::{
+        QueueCommand, state,
+        state::tests::{WorkerOwner, worker_owner},
+    },
 };
 
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
@@ -50,8 +59,10 @@ fn eq_call(
             suspended: false,
             now: SessionFrame::new(0),
             delivery: FrameCount::new(128),
+            deck_delivery: FrameCount::new(128),
             output: &output,
             deck,
+            planned_tempo: &mock::planned_tempo(),
         };
         let mut scope = mixer.ring.scope(mixer.scope).expect("mixer scope");
         let mut out = Outbox::new(&mut scope, &mut loads.dispatcher).in_pass(pass);
@@ -70,8 +81,10 @@ fn eq_call(
         suspended: false,
         now: SessionFrame::new(0),
         delivery: FrameCount::new(128),
+        deck_delivery: FrameCount::new(128),
         output: &output,
         deck,
+        planned_tempo: &mock::planned_tempo(),
     };
     while let Some(kithara_command::ScopedReceipt::Scope(_, receipt)) = mixer.ring.receipt() {
         hang_tick!();
@@ -97,12 +110,14 @@ fn eq_call(
 }
 
 #[kithara::test(native)]
-fn a_handle_clone_sees_the_replacement_band_array() {
+fn a_handle_clone_sees_the_replacement_band_array(#[by_ref] worker_owner: &WorkerOwner) {
     let region = pools();
     let config = DeckMixerConfig::builder().eq_bands(4).build();
     let prep = kithara_play::ResourcePrep::builder()
         .worker(kithara_play::PlayWorker::new(
-            kithara_play::PlayWorkerConfig::builder(region.clone()).build(),
+            kithara_play::PlayWorkerConfig::builder(region.clone())
+                .worker(worker_owner.0.clone())
+                .build(),
         ))
         .build();
     let mut queue = Queue::new(QueueConfig::builder().prep(prep).mixer(config).build());
@@ -166,32 +181,27 @@ fn a_handle_clone_sees_the_replacement_band_array() {
 #[case(f64::INFINITY, None, 0)]
 #[case(f64::NAN, Some(Duration::from_secs(10)), 0)]
 async fn seek_frame_index_clamps_unrepresentable_targets(
+    #[by_ref] worker_owner: &WorkerOwner,
     #[case] target: f64,
     #[case] duration: Option<Duration>,
     #[case] expected_frame: u64,
 ) {
-    let (mut queue, _, _, mut rig, _dir) = pending_selection();
+    let (mut queue, _, _, mut rig, fixture_directory) = pending_selection(&worker_owner.0);
     let seq = queue
         .active
         .iter()
         .find_map(|active| active.load)
         .expect("selected load")
         .seq();
-    let mut loaded =
-        crate::mock::loaded_request(queue.worker().expect("fixture worker"), &mut rig, seq).await;
-    let source = loaded
-        .opened
-        .pcm
-        .next_chunk_info()
-        .expect("prepared fixture source");
-    let (opened, source_packets) = crate::mock::opened_with_source(
-        loaded.opened,
+    let (loaded, source_packets) = crate::mock::synthetic_request(
+        &queue,
+        &mut rig,
+        seq,
         kithara_signal::AudioChunkInfo {
             media_end: duration,
-            ..source
+            ..crate::mock::fixture_chunk()
         },
     );
-    loaded.opened = opened;
     answer_loaded(&mut queue, &mut rig, loaded);
     finish(&mut queue, &mut rig);
     let control = queue.control();
@@ -204,19 +214,9 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
         control.clone(),
         move |control| control.seek(target),
         |queue| {
-            let output = mock::output(None).get();
-            let deck = queue.deck.mixer.clone();
-            let pass = DeckPass {
-                mix: queue.deck.mix,
-                suspended: false,
-                now: SessionFrame::new(0),
-                delivery: FrameCount::new(128),
-                output: &output,
-                deck: &deck,
-            };
-            let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
-            let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
-            HostedDeck::drain(queue, pass, &mut out);
+            state::tests::with_outbox(queue, &mut rig, |queue, pass, out| {
+                HostedDeck::drain(queue, pass, out);
+            });
         },
     );
     assert!(
@@ -232,4 +232,103 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
         expected_frame
     );
     drop(source_packets);
+    drop((queue, rig));
+    fixture_directory.finish().await;
+}
+
+/// Appends `next` to `queue`, selects it and returns where its lane starts.
+fn append_and_select(
+    queue: &mut Queue<TestPools>,
+    rig: &mut mock::DeckRig<TestPools>,
+    dir: &crate::mock::QueueFixture,
+) -> kithara_render::LaneStart {
+    let next = TrackId::allocate();
+    with_outbox(queue, rig, |queue, out| {
+        Player::apply(
+            queue,
+            QueueCommand::Append {
+                position: Position::ZERO,
+                id: next,
+                source: TrackSource::Uri(fixture_uri(dir.path(), "entry.wav")),
+            },
+            out,
+        )?;
+        Player::apply(
+            queue,
+            QueueCommand::Select {
+                id: next,
+                transition: Transition::None,
+            },
+            out,
+        )
+    })
+    .expect("append and select the next track");
+    requested_load(rig, load_seq(queue, next)).start
+}
+
+#[kithara::test(tokio)]
+async fn keylock_toggled_on_a_playing_queue_reads_back_and_reaches_a_track_appended_after_it(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, _, _, mut rig, dir) = selected(&worker_owner.0, FixtureSource::Synthetic).await;
+    let control = queue.control();
+    assert_eq!(
+        control.pitch(),
+        Some(Pitch::default()),
+        "the queue starts with keylock off"
+    );
+
+    drive_call(
+        &mut queue,
+        control.clone(),
+        |control| control.step_pitch(PitchStep::ToggleKeylock),
+        |queue| {
+            state::tests::with_outbox(queue, &mut rig, |queue, pass, out| {
+                HostedDeck::drain(queue, pass, out);
+            });
+        },
+    )
+    .expect("keylock accepted");
+    let held = Pitch::HELD;
+    assert_eq!(
+        control.pitch(),
+        Some(held),
+        "the step reads back once accepted"
+    );
+
+    let start = append_and_select(&mut queue, &mut rig, &dir);
+    assert_eq!(start.pitch, held, "the next track starts with keylock");
+    drop((queue, rig));
+    dir.finish().await;
+}
+
+/// Two steps in one pass both count: the deck reads back two semitones up
+/// and a track appended afterwards starts there.
+#[kithara::test(tokio)]
+async fn two_pitch_steps_in_one_pass_read_back_and_reach_a_track_appended_after_them(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, _, _, mut rig, dir) = selected(&worker_owner.0, FixtureSource::Synthetic).await;
+    let control = queue.control();
+
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        for _ in 0..2 {
+            Player::apply(queue, QueueCommand::StepPitch(PitchStep::Up), out)?;
+        }
+        Ok::<(), PlayError>(())
+    })
+    .expect("both steps accepted");
+    queue.publish();
+    let raised = Pitch::Vinyl {
+        shift: Semitones::checked(2).expect("fixture shift is in range"),
+    };
+    assert_eq!(control.pitch(), Some(raised), "both steps read back");
+
+    let start = append_and_select(&mut queue, &mut rig, &dir);
+    assert_eq!(
+        start.pitch, raised,
+        "the next track starts at the deck's pitch: {start:?}"
+    );
+    drop((queue, rig));
+    dir.finish().await;
 }

@@ -1,4 +1,7 @@
 use std::{
+    collections::{BTreeMap, BTreeSet},
+    mem::size_of_val,
+    ptr,
     sync::{
         Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, Ordering},
@@ -8,7 +11,7 @@ use std::{
 
 use kithara_platform::{
     sync::{Arc, Notify},
-    time::timeout,
+    time::{WallInstant, timeout},
 };
 use tracing::{
     Event, Subscriber,
@@ -46,6 +49,8 @@ pub struct ProbeEvent {
     pub line: Option<u32>,
     /// Thread the probe fired on.
     pub thread: ThreadId,
+    /// Real monotonic time at observer entry, before recorder lock contention.
+    pub wall_time: WallInstant,
     fields: [(&'static str, u64); consts::MAX_FIELDS],
     len: usize,
 }
@@ -66,11 +71,15 @@ impl ProbeEvent {
 
 struct State {
     recorded: Option<Arc<Notify>>,
+    /// [`Scope::wait_for`] calls parked on `recorded`. A firing signals only
+    /// while one waits: under the virtual clock every signal takes the
+    /// scheduler lock, and the hot probes fire once per scheduler pass.
+    waiting: usize,
     events: Vec<ProbeEvent>,
     /// Probe names seen by this process. Bounded by the probe call sites, and
     /// kept across scopes so each name is interned once.
-    names: Vec<&'static str>,
-    probes: Vec<ProbeTally>,
+    names: BTreeSet<&'static str>,
+    probes: BTreeMap<&'static str, ProbeTally>,
 }
 
 /// What the live scope saw of one probe: its latest firing and how many times
@@ -78,6 +87,7 @@ struct State {
 struct ProbeTally {
     latest: ProbeEvent,
     fired: usize,
+    first_seen: usize,
 }
 
 impl ProbeTally {
@@ -118,28 +128,35 @@ impl State {
     }
 
     fn intern(&mut self, probe: &str) -> &'static str {
-        if let Some(name) = self.names.iter().find(|name| **name == probe) {
+        if let Some(name) = self.names.get(probe) {
             return name;
         }
         let name: &'static str = Box::leak(probe.into());
-        self.names.push(name);
+        self.names.insert(name);
         name
     }
 
     fn overflowed(&self) -> impl Iterator<Item = &ProbeTally> {
-        self.probes.iter().filter(|tally| tally.overflowed())
+        let mut probes = self
+            .probes
+            .values()
+            .filter(|tally| tally.overflowed())
+            .collect::<Vec<_>>();
+        probes.sort_unstable_by_key(|tally| tally.first_seen);
+        probes.into_iter()
     }
 
     fn tally(&self, probe: &str) -> Option<&ProbeTally> {
-        self.probes.iter().find(|tally| tally.latest.probe == probe)
+        self.probes.get(probe)
     }
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
-    names: Vec::new(),
+    names: BTreeSet::new(),
     events: Vec::new(),
-    probes: Vec::new(),
+    probes: BTreeMap::new(),
     recorded: None,
+    waiting: 0,
 });
 static SCOPE: Mutex<()> = Mutex::new(());
 /// Thread that owns the live recording and the handle nested scopes join,
@@ -188,10 +205,16 @@ pub fn scope() -> Scope {
     {
         let mut state = lock(&STATE);
         state.events = Vec::new();
-        state.probes = Vec::new();
+        state.probes = BTreeMap::new();
         state.recorded = Some(Arc::clone(&recorded));
+        state.waiting = 0;
     }
     *lock(&NESTING) = Some((here, Arc::clone(&recorded)));
+    tracing::debug!(
+        state = ?ptr::from_ref(&STATE),
+        state_bytes = size_of_val(&STATE),
+        "USDT recording opened"
+    );
     ARMED.store(true, Ordering::Release);
     Scope {
         recorded,
@@ -213,7 +236,10 @@ pub fn events() -> Vec<ProbeEvent> {
 #[must_use]
 pub fn recorded() -> (Vec<ProbeEvent>, bool) {
     let state = lock(&STATE);
-    (state.events.clone(), state.overflowed().next().is_some())
+    (
+        state.events.clone(),
+        state.probes.values().any(ProbeTally::overflowed),
+    )
 }
 
 /// The latest firing of `probe` recorded by the live [`Scope`].
@@ -314,13 +340,16 @@ impl Scope {
     {
         loop {
             let recorded = self.recorded.notified();
-            if holds(&lock(&STATE).events) {
-                return;
-            }
-            if timeout(__hang_detector.remaining(), recorded)
-                .await
-                .is_err()
             {
+                let mut state = lock(&STATE);
+                if holds(&state.events) {
+                    return;
+                }
+                state.waiting += 1;
+            }
+            let woken = timeout(__hang_detector.remaining(), recorded).await;
+            lock(&STATE).waiting -= 1;
+            if woken.is_err() {
                 hang_tick!(Self::unsatisfied_wait());
             } else {
                 hang_tick!();
@@ -339,7 +368,7 @@ impl Drop for Scope {
         let mut state = lock(&STATE);
         state.recorded = None;
         state.events = Vec::new();
-        state.probes = Vec::new();
+        state.probes = BTreeMap::new();
     }
 }
 
@@ -360,15 +389,16 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
         if !ARMED.load(Ordering::Acquire) {
             return;
         }
+        let wall_time = WallInstant::now();
         let mut visitor = ProbeVisitor {
             probe: None,
             fields: [("", 0); consts::MAX_FIELDS],
             len: 0,
         };
         let mut state = lock(&STATE);
-        let Some(recorded) = state.recorded.clone() else {
+        if state.recorded.is_none() {
             return;
-        };
+        }
         event.record(&mut FieldVisitor {
             state: &mut state,
             visitor: &mut visitor,
@@ -383,29 +413,27 @@ impl<S: Subscriber> Layer<S> for UsdtLayer {
             file: metadata.file(),
             line: metadata.line(),
             thread: thread::current().id(),
+            wall_time,
             fields: visitor.fields,
             len: visitor.len,
         };
-        let fired = if let Some(tally) = state
-            .probes
-            .iter_mut()
-            .find(|tally| tally.latest.probe == probe)
-        {
-            tally.latest = recorded_event;
-            tally.fired += 1;
-            tally.fired
-        } else {
-            state.probes.push(ProbeTally {
-                latest: recorded_event,
-                fired: 1,
-            });
-            1
-        };
+        let first_seen = state.probes.len();
+        let tally = state.probes.entry(probe).or_insert_with(|| ProbeTally {
+            latest: recorded_event,
+            fired: 0,
+            first_seen,
+        });
+        tally.latest = recorded_event;
+        tally.fired += 1;
+        let fired = tally.fired;
         if fired <= MAX_EVENTS {
             state.events.push(recorded_event);
         }
+        let waiter = state.recorded.clone().filter(|_| state.waiting > 0);
         drop(state);
-        recorded.notify_one();
+        if let Some(recorded) = waiter {
+            recorded.notify_one();
+        }
     }
 }
 
@@ -453,11 +481,36 @@ impl Visit for FieldVisitor<'_> {
 }
 
 #[cfg(test)]
+#[path = "tests/usdt_keyed_parity.rs"]
+mod keyed_parity;
+
+#[cfg(test)]
 mod tests {
-    use super::{MAX_EVENTS, count, events, events_of, recorded, scope};
+    use kithara_platform::time::{Duration, WallInstant};
+
+    use super::{MAX_EVENTS, SCOPE, count, events, events_of, lock, recorded, scope};
 
     fn fire(probe: &'static str, value: u64) {
         tracing::event!(target: "kithara_test_probe", tracing::Level::TRACE, probe = probe, value = value);
+    }
+
+    #[test]
+    fn a_scope_dates_firings_on_the_real_monotonic_clock() {
+        crate::test::setup_tracing();
+        let trace = scope();
+        let before = WallInstant::now();
+        fire("first", 1);
+        crate::test::wall_sleep(Duration::from_millis(2));
+        fire("second", 2);
+        let after = WallInstant::now();
+        let events = trace.events();
+        drop(trace);
+        assert_eq!(events.len(), 2);
+        assert!(events[0].wall_time >= before);
+        assert!(events[1].wall_time <= after);
+        assert!(
+            events[1].wall_time.duration_since(events[0].wall_time) >= Duration::from_millis(2)
+        );
     }
 
     #[test]
@@ -592,6 +645,7 @@ mod tests {
 
         drop(outer);
 
+        let _serial = lock(&SCOPE);
         assert!(events().is_empty());
     }
 }

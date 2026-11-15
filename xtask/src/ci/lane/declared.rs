@@ -14,16 +14,16 @@ use kithara_devtools::{
 use toml::Value;
 use tracing::warn;
 
-use super::nextest;
+use super::{bench, nextest};
 use crate::{
     ci::{cache::snapshot, config::CiPins, process::Process, run::PipelineKind},
-    config::{CiLaneConfig, CiLanePin, CiLaneStep},
+    config::{CiLaneConfig, CiLaneStep},
     consts,
 };
 
 /// Run a lane the way `.config/xtask.toml` declares it: the pipeline kinds it
 /// declines, the platform it refuses to run anywhere but on, the tools it needs,
-/// the versions those tools have to report, then its commands in order. A step
+/// their readiness checks, then its commands in order. A step
 /// that checks its rebuild is repeated building only.
 ///
 /// A lane whose whole content is this needs no Rust of its own; the ones that
@@ -36,6 +36,7 @@ pub(crate) fn run(
     kind: PipelineKind,
     narrow: Option<&str>,
 ) -> Result<()> {
+    let drafted = kind == PipelineKind::Branch;
     let kind = kind_name(kind);
     admit(lane, &kind, narrow)?;
     if !lane.os.is_empty() {
@@ -48,8 +49,13 @@ pub(crate) fn run(
     if !lane.left_behind.is_empty() {
         process.require_left_behind(&lane.left_behind, &lane.left_behind_by)?;
     }
-    for check in &lane.pinned {
-        require_pinned_version(process, check, pins, tools)?;
+    for check in &lane.checks {
+        let args: Vec<&str> = check.args.iter().map(String::as_str).collect();
+        process.run(
+            tools.program(&check.tool),
+            &args,
+            &format!("check {}", check.tool),
+        )?;
     }
     let nextest_bin = nextest::prepare(process, pins, tools.program("cargo"))?;
     let target_snapshot_to_publish = if process.is_recording() {
@@ -77,17 +83,29 @@ pub(crate) fn run(
             .iter()
             .map(|arg| resolve(arg, process, pins))
             .collect::<Result<Vec<_>>>()?;
-        if let Some(filterset) = narrow
-            && let Some(request) = step.suite_request(lane, declared)
+        if let Some(request) = step.suite_request(lane, declared) {
+            let at = declared.len() - request.len();
+            if let Some(filterset) = narrow {
+                args.insert(at, format!("--narrow={filterset}"));
+            }
+            if drafted {
+                args.insert(at, consts::DRAFT_FLAG.to_owned());
+            }
+        } else if let Some(filterset) = narrow
+            && step.miri_request(lane, declared).is_some()
         {
-            args.insert(
-                declared.len() - request.len(),
-                format!("--narrow={filterset}"),
-            );
+            args.extend(["-E".to_owned(), filterset.to_owned()]);
         }
         let vars = step_vars(step, process, pins)?;
         let mut command = process.command(&program);
         command.args(&args).envs(&vars);
+        bench::prepare(
+            process,
+            pins,
+            tools.program("cargo"),
+            declared,
+            &mut command,
+        )?;
         if let Some(bin) = &nextest_bin {
             nextest::prepend(&mut command, bin)?;
         }
@@ -126,24 +144,30 @@ pub(crate) fn run(
     Ok(())
 }
 
-/// Whether the lane has anything to run in `kind`: any step but a suite that
-/// selects no test lane on this branch. A lane with nothing to run has nothing
-/// to build either.
+/// Whether the lane has anything to run in `kind`: any step but, in a draft,
+/// a suite whose lane holds none of the draft scope `pr_tests` completes. A lane with nothing to
+/// run has nothing to build either.
 pub(crate) fn runs_anything(
     lane: &CiLaneConfig,
     kind: PipelineKind,
     narrow: Option<&str>,
     root: &Path,
     project: &ProjectConfig,
-    base: &str,
+    pr_tests: Option<&str>,
 ) -> Result<bool> {
+    let drafted = kind == PipelineKind::Branch;
     let kind = kind_name(kind);
     admit(lane, &kind, narrow)?;
     for step in &lane.steps {
         let Some(request) = step.suite_request(lane, step.args_in(&kind)) else {
             return Ok(true);
         };
-        if selects_any_lane(root, project, request, base)? {
+        let request: Vec<String> = drafted
+            .then(|| consts::DRAFT_FLAG.to_owned())
+            .into_iter()
+            .chain(request.iter().cloned())
+            .collect();
+        if selects_any_lane(root, project, &request, pr_tests)? {
             return Ok(true);
         }
     }
@@ -156,10 +180,20 @@ fn admit(lane: &CiLaneConfig, kind: &str, narrow: Option<&str>) -> Result<()> {
     if let Some(reason) = lane.kinds_refused.get(kind) {
         bail!("{reason}");
     }
-    let has_suite = lane
-        .steps
-        .iter()
-        .any(|step| step.suite_request(lane, step.args_in(kind)).is_some());
+    let mut has_suite = false;
+    for step in &lane.steps {
+        let args = step.args_in(kind);
+        has_suite |= step.suite_request(lane, args).is_some();
+        if let Some(request) = step.miri_request(lane, args) {
+            has_suite = true;
+            if narrow.is_some() && !request.is_empty() {
+                bail!(
+                    "lane `{}` cannot narrow a Miri step with existing arguments",
+                    lane.label
+                );
+            }
+        }
+    }
     if narrow.is_some() && !has_suite {
         bail!(
             "lane `{}` runs no test suite a filterset could narrow",
@@ -234,8 +268,8 @@ fn restore_target_layer(
         Ok(None) => {
             process.note_cache(
                 "target snapshot",
-                "restored",
-                format!("{key} unpacked in {took}"),
+                "reused",
+                format!("{key} ready in {took}"),
             );
         }
         Ok(Some(fingerprint)) => {
@@ -270,7 +304,8 @@ fn restore_source_layer(process: &Process, tools: &ToolsConfig) {
         return;
     };
     let started = Instant::now();
-    let outcome = snapshot::restore_sources(process.root(), &cargo_home, &rc);
+    let outcome =
+        snapshot::restore_sources(process.root(), &cargo_home, &process.target_dir(), &rc);
     let took = format!("{:.1} s", started.elapsed().as_secs_f64());
     match outcome {
         Ok(snapshot::Restored::AlreadyPresent) => {
@@ -316,8 +351,9 @@ fn publish_source_layer(process: &Process, tools: &ToolsConfig, kind: &str) -> R
         return Ok(());
     };
     let started = Instant::now();
-    let published = snapshot::publish_sources(process.root(), &cargo_home, &rc)
-        .context("publish the dependency sources");
+    let published =
+        snapshot::publish_sources(process.root(), &cargo_home, &process.target_dir(), &rc)
+            .context("publish the dependency sources");
     let took = format!("{:.1} s", started.elapsed().as_secs_f64());
     match &published {
         Ok(()) => {
@@ -378,36 +414,6 @@ fn step_vars(
         .collect()
 }
 
-fn require_pinned_version(
-    process: &Process,
-    check: &CiLanePin,
-    pins: &CiPins,
-    tools: &ToolsConfig,
-) -> Result<()> {
-    let expected = pin(pins, &check.pin)?;
-    let args: Vec<&str> = check.args.iter().map(String::as_str).collect();
-    let label = format!("read {} version", check.tool);
-    let actual = process.capture(tools.program(&check.tool), &args, &label)?;
-    let Some(prefix) = check.line_prefix.as_deref() else {
-        if !actual.split_whitespace().any(|part| part == expected) {
-            bail!(
-                "{} version mismatch: expected {expected}, got {actual}",
-                check.tool
-            );
-        }
-        return Ok(());
-    };
-    let reported = actual
-        .lines()
-        .next()
-        .and_then(|line| line.strip_prefix(prefix))
-        .with_context(|| format!("{} did not report a version", check.tool))?;
-    if reported != expected {
-        bail!("{prefix}{expected} is required, found {reported}");
-    }
-    Ok(())
-}
-
 /// Pins are reviewed as data, so a lane names the one it wants rather than
 /// reaching for a field: a new pin costs a line in `.config/ci-pins.toml`.
 fn pin(pins: &CiPins, key: &str) -> Result<String> {
@@ -457,13 +463,22 @@ mod tests {
 
     /// The steps a lane asks for when its suite is narrowed to `narrow`.
     fn recorded_narrowed(lane: &CiLaneConfig, narrow: Option<&str>) -> Result<Vec<Step>> {
+        recorded_in(lane, PipelineKind::Main, narrow)
+    }
+
+    /// The steps a lane asks for in a `kind` pipeline.
+    fn recorded_in(
+        lane: &CiLaneConfig,
+        kind: PipelineKind,
+        narrow: Option<&str>,
+    ) -> Result<Vec<Step>> {
         let process = Process::recording(Path::new("/checkout"), Recording::default());
         run(
             &process,
             lane,
             &fixture().pins,
             &ToolsConfig::default(),
-            PipelineKind::Branch,
+            kind,
             narrow,
         )?;
         Ok(process.recorded().unwrap().steps().to_vec())
@@ -499,6 +514,57 @@ mod tests {
                 "test run --narrow=test(seek) --no-run --cargo-verbose --color never",
                 "fmt",
             ]
+        );
+    }
+
+    /// A branch pipeline is a draft: its suite runs the default branch's
+    /// command asking for the draft scope, and nothing else changes.
+    #[test]
+    fn a_branch_lane_runs_the_main_command_as_a_draft() {
+        let mut lane = suite_lane();
+        lane.steps[0].args.push("--timings".to_owned());
+        lane.steps.push(formatting_step());
+
+        let main = recorded_in(&lane, PipelineKind::Main, None).unwrap();
+        let branch = recorded_in(&lane, PipelineKind::Branch, Some("test(seek)")).unwrap();
+
+        let args = |steps: &[Step]| -> Vec<String> {
+            steps.iter().map(|step| step.args.join(" ")).collect()
+        };
+        assert_eq!(args(&main), ["test run --timings", "fmt"]);
+        assert_eq!(
+            args(&branch),
+            ["test run --draft --narrow=test(seek) --timings", "fmt"]
+        );
+    }
+
+    #[test]
+    fn a_miri_lane_hands_one_filter_argument_to_nextest() {
+        let mut lane = suite_lane();
+        lane.steps[0].args = vec!["test".to_owned(), "miri".to_owned()];
+        let filter = "package(kithara-queue) & test(selected)";
+
+        let steps = recorded_narrowed(&lane, Some(filter)).unwrap();
+
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].args, ["test", "miri", "-E", filter]);
+        assert_eq!(recorded(&lane)[0].args, ["test", "miri"]);
+    }
+
+    #[test]
+    fn a_miri_lane_with_a_legacy_selection_refuses_an_extra_filter() {
+        let mut lane = suite_lane();
+        lane.steps[0].args = ["test", "miri", "-E", "test(existing)"]
+            .map(str::to_owned)
+            .into();
+        lane.steps.extend(suite_lane().steps);
+
+        let error = recorded_narrowed(&lane, Some("test(other)")).unwrap_err();
+
+        assert!(error.to_string().contains("existing arguments"));
+        assert_eq!(
+            recorded(&lane)[0].args,
+            ["test", "miri", "-E", "test(existing)"]
         );
     }
 
@@ -635,7 +701,7 @@ mod tests {
 
         let (directory, process, pins, _) = nextest_fixture();
         let root = directory.path();
-        let fixture = crate::ci::config::workspace_root()
+        let fixture = crate::testing::workspace::root()
             .join("crates/kithara-devtools/tests/fixtures/nextest-stress");
         for file in ["Cargo.toml", "stress.rs"] {
             std::fs::copy(fixture.join(file), root.join(file)).expect("copy stress contract");
@@ -892,5 +958,7 @@ test "$1" = install
     fn only_the_default_branch_publishes_the_source_layer() {
         assert!(is_source_publisher(PipelineKind::Main.name()));
         assert!(!is_source_publisher(PipelineKind::Branch.name()));
+        assert!(!is_source_publisher(PipelineKind::MergeRequest.name()));
+        assert!(!is_source_publisher(PipelineKind::Quarantine.name()));
     }
 }

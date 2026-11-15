@@ -54,7 +54,7 @@ where
     pools: PoolRegion<S>,
     resampler: B::Resampler,
     eof_flushed: bool,
-    reanchor_output_on_next_chunk: bool,
+    reanchor: Option<Reanchor>,
     emitted_frames: u64,
     output_frame_offset: u64,
     initial_pcm_origin: Option<PcmOrigin>,
@@ -102,7 +102,7 @@ where
             pending_meta: None,
             prepared: None,
             pools: pools.clone(),
-            reanchor_output_on_next_chunk: true,
+            reanchor: Some(Reanchor::Landing),
             resampler,
             scratch: PlanarBuffer::new(pools, target_spec, empty)?,
             source_frames_seen: 0,
@@ -113,25 +113,39 @@ where
 
     fn seek_selected(
         &mut self,
-        pos: Duration,
-        prefix: bool,
+        native_bound: Duration,
+        reanchor: Reanchor,
         wait: PrepareWait,
     ) -> DecodeResult<DecoderSeekOutcome> {
-        if !pos.is_zero() {
+        if !native_bound.is_zero() {
             self.observing_initial_pcm = false;
         }
-        let outcome = if prefix {
-            self.decoder.seek_prefix_with_wait(pos, wait)?
-        } else {
-            self.decoder.seek_with_wait(pos, wait)?
-        };
+        let outcome = self.decoder.seek_prefix_with_wait(native_bound, wait)?;
         self.prepared = None;
         self.reset_resampler_state();
-        self.reanchor_output_on_next_chunk = true;
+        self.reanchor = Some(reanchor);
         Ok(self.map_seek_outcome(outcome))
     }
 
-    fn map_seek_outcome(&mut self, outcome: DecoderSeekOutcome) -> DecoderSeekOutcome {
+    /// Native prefix bound that reaches the native sample nearest to `frame` while
+    /// that sample still rounds to `frame` or earlier on the output grid. Frame
+    /// zero stays at zero so the inner decoder keeps observing its PCM origin.
+    fn nearest_native_bound(&self, frame: u64) -> DecodeResult<Duration> {
+        if frame == 0 {
+            return Ok(Duration::ZERO);
+        }
+        let half_period = self
+            .target_spec
+            .duration_for(1)?
+            .min(self.source_spec.duration_for(1)?)
+            / 2;
+        Ok(self
+            .target_spec
+            .duration_for(frame)?
+            .saturating_add(half_period.saturating_sub(Duration::from_nanos(1))))
+    }
+
+    fn map_seek_outcome(&self, outcome: DecoderSeekOutcome) -> DecoderSeekOutcome {
         match outcome {
             DecoderSeekOutcome::Pending(reason) => DecoderSeekOutcome::Pending(reason),
             DecoderSeekOutcome::Landed {
@@ -139,52 +153,32 @@ where
                 landed_byte,
                 preroll,
                 ..
-            } => {
-                self.output_frame_offset = self.target_spec.frame_at(landed_at).unwrap_or(u64::MAX);
-                DecoderSeekOutcome::Landed {
-                    landed_at,
-                    landed_byte,
-                    preroll,
-                    landed_frame: self.output_frame_offset,
-                    clock: LandingClock::Restarted,
-                }
-            }
+            } => DecoderSeekOutcome::Landed {
+                landed_at,
+                landed_byte,
+                preroll,
+                landed_frame: self.target_spec.frame_at(landed_at).unwrap_or(u64::MAX),
+                clock: LandingClock::Restarted,
+            },
             DecoderSeekOutcome::PastEof { duration } => DecoderSeekOutcome::PastEof { duration },
         }
     }
 
     fn append_chunk(&mut self, chunk: &AudioChunk) -> DecodeResult<()> {
         let spec = chunk.spec();
-        let source_spec_changed = spec != self.source_spec;
-        if source_spec_changed {
+        if spec != self.source_spec {
             self.rebuild_for_source_spec(spec)?;
-            self.reanchor_output_on_next_chunk = true;
+            self.reanchor.get_or_insert(Reanchor::Landing);
         }
         if chunk.frames() == 0 {
             return Ok(());
         }
-        if self.reanchor_output_on_next_chunk {
-            self.output_frame_offset = self.target_spec.frame_at(chunk.meta.timestamp)?;
-            self.reanchor_output_on_next_chunk = false;
-            if self.observing_initial_pcm {
-                let position = chunk
-                    .meta
-                    .source_geometry()
-                    .and_then(|span| span.position_at(0))
-                    .ok_or(DecodeError::InvalidData {
-                        detail: "resampled PCM has invalid native geometry",
-                    })?;
-                self.initial_pcm_origin = self
-                    .decoder
-                    .initial_pcm_origin()
-                    .map(|origin| PcmOrigin::new(position, origin.comparison_base()));
-                self.observing_initial_pcm = false;
-            }
+
+        if let Some(reanchor) = self.reanchor.take() {
+            self.reanchor_output(reanchor, chunk)?;
         }
         self.source_basis.get_or_insert(chunk.meta);
-        if self.pending_meta.is_none() {
-            self.pending_meta = Some(chunk.meta);
-        }
+        self.pending_meta.get_or_insert(chunk.meta);
         self.last_input_meta = Some(chunk.meta);
         let channels = self.channels();
         let frames = chunk.frames();
@@ -205,8 +199,53 @@ where
         Ok(())
     }
 
+    fn reanchor_output(&mut self, reanchor: Reanchor, chunk: &AudioChunk) -> DecodeResult<()> {
+        let landing = self.target_spec.frame_at(chunk.meta.timestamp)?;
+        self.output_frame_offset = reanchor.start(landing);
+        let trim = self.output_frame_offset - landing;
+        self.output_skip_frames += usize::try_from(trim).map_err(|_| DecodeError::InvalidData {
+            detail: "resampled seek trim overflow",
+        })?;
+        // The trimmed head is source content, so it counts toward the expected output.
+        self.emitted_frames = trim;
+
+        if self.observing_initial_pcm {
+            let position = chunk
+                .meta
+                .source_geometry()
+                .and_then(|span| span.position_at(0))
+                .ok_or(DecodeError::InvalidData {
+                    detail: "resampled PCM has invalid native geometry",
+                })?;
+            self.initial_pcm_origin = self
+                .decoder
+                .initial_pcm_origin()
+                .map(|origin| PcmOrigin::new(position, origin.comparison_base()));
+            self.observing_initial_pcm = false;
+        }
+        Ok(())
+    }
+
     fn channels(&self) -> usize {
         usize::from(self.source_spec.channels)
+    }
+}
+
+/// Output frame the first chunk after a reset starts at.
+#[derive(Clone, Copy)]
+enum Reanchor {
+    /// The output frame nearest to the first native sample.
+    Landing,
+    /// The requested output frame, or the landing when the landing lies past it.
+    Frame(u64),
+}
+
+impl Reanchor {
+    fn start(self, landing: u64) -> u64 {
+        match self {
+            Self::Landing => landing,
+            Self::Frame(frame) => landing.max(frame),
+        }
     }
 }
 
@@ -470,7 +509,6 @@ where
         self.input.clear();
         self.output.clear();
         self.pending_meta = None;
-        self.reanchor_output_on_next_chunk = false;
         self.last_input_meta = None;
         self.source_basis = None;
         self.emitted_frames = 0;
@@ -557,7 +595,7 @@ where
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
-        self.seek_selected(pos, false, PrepareWait::Wait)
+        self.seek_with_wait(pos, PrepareWait::Wait)
     }
 
     fn seek_with_wait(
@@ -565,11 +603,16 @@ where
         pos: Duration,
         wait: PrepareWait,
     ) -> DecodeResult<DecoderSeekOutcome> {
-        self.seek_selected(pos, false, wait)
+        let frame = self.target_spec.frame_at(pos)?;
+        self.seek_selected(
+            self.nearest_native_bound(frame)?,
+            Reanchor::Frame(frame),
+            wait,
+        )
     }
 
     fn seek_prefix(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
-        self.seek_selected(pos, true, PrepareWait::Wait)
+        self.seek_prefix_with_wait(pos, PrepareWait::Wait)
     }
 
     fn seek_prefix_with_wait(
@@ -577,7 +620,7 @@ where
         pos: Duration,
         wait: PrepareWait,
     ) -> DecodeResult<DecoderSeekOutcome> {
-        self.seek_selected(pos, true, wait)
+        self.seek_selected(pos, Reanchor::Landing, wait)
     }
 
     fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
@@ -793,6 +836,26 @@ mod origin_tests {
     }
 
     impl OffsetDecoder {
+        fn new(rate: u32, origin: u64, length: u64, pools: &Pools) -> Self {
+            let rate = NonZeroU32::new(rate).expect("fixture rate");
+            let spec = AudioSpec::new(1, rate);
+            let start = spec.duration_for(origin).expect("fixture origin");
+            Self {
+                rate,
+                length,
+                declared: crate::DecoderDuration::RawLength(
+                    spec.duration_for(length).expect("fixture length"),
+                ),
+                media_origin: None,
+                origin,
+                phase: Duration::ZERO,
+                next_frame: origin,
+                original: Some(PcmOrigin::new(start, start)),
+                observing_original: false,
+                pools: pools.clone(),
+            }
+        }
+
         fn position(&self, frame: u64) -> DecodeResult<Duration> {
             Ok(self.spec().duration_for(frame)? + self.phase)
         }
@@ -936,6 +999,22 @@ mod origin_tests {
         }
     }
 
+    #[kithara::hang_watchdog]
+    fn contiguous_end(decoder: &mut dyn Decoder, mut end: u64) -> u64 {
+        loop {
+            hang_tick!();
+            match decoder.next_chunk().expect("resampled suffix") {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    assert_eq!(chunk.meta.frame_offset, end);
+                    end = chunk.meta.frame_range().end;
+                    hang_reset!();
+                }
+                DecoderChunkOutcome::Pending(_) => {}
+                DecoderChunkOutcome::Eof => return end,
+            }
+        }
+    }
+
     #[kithara::test]
     fn first_resampled_pcm_keeps_the_head_basis_after_read_ahead_crosses_a_pts_gap(
         zero_packet: &'static [u8],
@@ -969,19 +1048,13 @@ mod origin_tests {
             let raw_origin = Duration::from_nanos(42_250_000);
             let native_spec = AudioSpec::new(1, native_rate);
             let source = OffsetDecoder {
-                rate: native_rate,
-                length: 128,
-                declared: crate::DecoderDuration::RawLength(Duration::from_secs(1)),
                 media_origin: Some(raw_origin),
-                origin: physical_origin,
                 phase: raw_origin
                     - native_spec
                         .duration_for(physical_origin)
                         .expect("physical native origin"),
-                next_frame: physical_origin,
                 original: Some(PcmOrigin::new(raw_origin, raw_origin)),
-                observing_original: false,
-                pools: pools.clone(),
+                ..OffsetDecoder::new(native_rate.get(), physical_origin, 128, &pools)
             };
             let config = DecoderResamplerConfig::builder()
                 .target_sample_rate(output_rate)
@@ -1082,11 +1155,13 @@ mod origin_tests {
             ));
             decoder.seek(prefix_bound).expect("ordinary nearest seek");
             let nearest = first_pcm(&mut decoder);
-            assert_eq!(nearest.samples[0], 1.0 / 2_000.0);
-            assert_eq!(
-                nearest.meta.timestamp,
-                raw_origin + native_spec.duration_for(1).expect("next native sample")
-            );
+            let frame = decoder
+                .spec()
+                .frame_at(prefix_bound)
+                .expect("nearest output frame");
+            assert_eq!(nearest.meta.frame_offset, frame);
+            let head = usize::try_from(frame - anchor).expect("frame inside the head chunk");
+            assert_eq!(nearest.samples[..factor], expected[head..head + factor]);
             decoder
                 .seek_prefix(requested)
                 .expect("owned native prefix seek");
@@ -1136,19 +1211,12 @@ mod origin_tests {
     ) {
         let pools = pools();
         let source = OffsetDecoder {
-            rate: NonZeroU32::new(1_000).expect("source rate"),
-            length: 1_000,
-            declared: crate::DecoderDuration::RawLength(Duration::from_secs(60)),
-            media_origin: None,
-            phase: Duration::ZERO,
-            origin,
-            next_frame: origin,
             original: reports_origin.then(|| {
                 let position = Duration::from_millis(origin);
                 PcmOrigin::new(position, position)
             }),
             observing_original: !reports_origin,
-            pools: pools.clone(),
+            ..OffsetDecoder::new(1_000, origin, 1_000, &pools)
         };
         let config = DecoderResamplerConfig::builder()
             .target_sample_rate(NonZeroU32::new(2_000).expect("target rate"))
@@ -1216,19 +1284,7 @@ mod origin_tests {
     #[kithara::hang_watchdog]
     fn original_resampled_basis_retains_exact_time_under_output_clock_rounding() {
         let pools = pools();
-        let original = PcmOrigin::new(Duration::from_millis(701), Duration::from_millis(701));
-        let source = OffsetDecoder {
-            rate: NonZeroU32::new(1_000).expect("source rate"),
-            length: 1_000,
-            declared: crate::DecoderDuration::RawLength(Duration::from_secs(60)),
-            media_origin: None,
-            phase: Duration::ZERO,
-            origin: 701,
-            next_frame: 701,
-            original: Some(original),
-            observing_original: false,
-            pools: pools.clone(),
-        };
+        let source = OffsetDecoder::new(1_000, 701, 1_000, &pools);
         let config = DecoderResamplerConfig::builder()
             .target_sample_rate(NonZeroU32::new(1_500).expect("target rate"))
             .backend(RubatoBackend::new())
@@ -1268,16 +1324,9 @@ mod origin_tests {
             crate::DecoderDuration::MediaEnd(length),
         ] {
             let source = OffsetDecoder {
-                rate: native_rate,
-                length: 44_105,
                 declared,
                 media_origin: Some(origin),
-                phase: Duration::ZERO,
-                origin: 1,
-                next_frame: 1,
-                original: Some(PcmOrigin::new(origin, origin)),
-                observing_original: false,
-                pools: pools.clone(),
+                ..OffsetDecoder::new(44_100, 1, 44_105, &pools)
             };
             let config = DecoderResamplerConfig::builder()
                 .target_sample_rate(NonZeroU32::new(48_000).expect("actual output rate"))
@@ -1307,21 +1356,7 @@ mod origin_tests {
                     .expect("declared physical endpoint"),
                 48_006
             );
-            let mut output_frames = u64::from(first.meta.frames);
-            let mut endpoint = first.meta.frame_range().end;
-            loop {
-                hang_tick!();
-                match decoder.next_chunk().expect("actual resampled output") {
-                    DecoderChunkOutcome::Chunk(chunk) => {
-                        output_frames += u64::from(chunk.meta.frames);
-                        endpoint = chunk.meta.frame_range().end;
-                        hang_reset!();
-                    }
-                    DecoderChunkOutcome::Pending(_) => {}
-                    DecoderChunkOutcome::Eof => break,
-                }
-            }
-            assert_eq!(output_frames, 48_005);
+            let endpoint = contiguous_end(&mut decoder, first.meta.frame_range().end);
             assert_eq!(endpoint, 48_006);
             assert_eq!(
                 decoder
@@ -1342,21 +1377,7 @@ mod origin_tests {
         #[case] expected_frame: u64,
     ) {
         let pools = pools();
-        let source = OffsetDecoder {
-            rate: NonZeroU32::new(1_000).expect("source rate"),
-            length: 1_000,
-            declared: crate::DecoderDuration::RawLength(Duration::from_secs(60)),
-            media_origin: None,
-            phase: Duration::ZERO,
-            origin: 701,
-            next_frame: 701,
-            original: Some(PcmOrigin::new(
-                Duration::from_millis(701),
-                Duration::from_millis(701),
-            )),
-            observing_original: false,
-            pools: pools.clone(),
-        };
+        let source = OffsetDecoder::new(1_000, 701, 1_000, &pools);
         let config = DecoderResamplerConfig::builder()
             .target_sample_rate(NonZeroU32::new(1_500).expect("target rate"))
             .backend(RubatoBackend::new())
@@ -1414,6 +1435,62 @@ mod origin_tests {
                 ))
             );
         }
+    }
+
+    #[cfg(feature = "resample-rubato")]
+    #[kithara::test]
+    #[kithara::hang_watchdog]
+    #[case::nearest_native_lands_after_the_frame(44_100, 0, 44_100, 24_006, 0)]
+    #[case::nearest_native_lands_before_the_frame(44_100, 0, 44_100, 24_068, 0)]
+    #[case::off_grid_below_half_a_frame(44_100, 0, 44_100, 24_006, 45)]
+    #[case::head_seek_observes_a_later_origin(44_100, 147, 44_100, 0, 0)]
+    #[case::downsampled_head(192_000, 0, 48_000, 0, 0)]
+    #[case::downsampled_interior(192_000, 0, 48_000, 6_000, 0)]
+    #[case::downsampled_off_grid(192_000, 0, 48_000, 6_000, 45)]
+    #[case::downsampled_between_native_samples(88_200, 0, 44_100, 6_001, 0)]
+    fn seek_starts_at_the_requested_output_frame_between_native_samples(
+        #[case] native_rate: u32,
+        #[case] origin: u64,
+        #[case] length: u64,
+        #[case] frame: u64,
+        #[case] percent_past_frame: u32,
+    ) {
+        let pools = pools();
+        let source = OffsetDecoder {
+            original: None,
+            observing_original: true,
+            ..OffsetDecoder::new(native_rate, origin, length, &pools)
+        };
+        let native = source.spec();
+        let config = DecoderResamplerConfig::builder()
+            .target_sample_rate(NonZeroU32::new(48_000).expect("output rate"))
+            .backend(RubatoBackend::new())
+            .build();
+        let mut decoder =
+            ResampledDecoder::new(Box::new(source), config, &pools).expect("actual resampler");
+        let spec = decoder.spec();
+        let output_period = spec.duration_for(1).expect("output period");
+        let target = spec.duration_for(frame).expect("output frame time")
+            + output_period * percent_past_frame / 100;
+        decoder.seek(target).expect("resampled seek");
+        let first = first_pcm(&mut decoder);
+        let origin_time = native.duration_for(origin).expect("native origin");
+        let start = frame.max(spec.frame_at(origin_time).expect("origin frame"));
+        assert_eq!(first.meta.frame_offset, start);
+
+        let nearest = output_period.min(native.duration_for(1).expect("native period")) / 2;
+        let start_time = spec.duration_for(start).expect("start time");
+        assert!(first.meta.timestamp.abs_diff(start_time) <= nearest);
+        assert_eq!(
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
+            (frame == 0).then_some(origin_time)
+        );
+
+        let native_end = native.duration_for(origin + length).expect("native end");
+        assert_eq!(
+            contiguous_end(&mut decoder, first.meta.frame_range().end),
+            spec.frame_at(native_end).expect("output end")
+        );
     }
 }
 
@@ -1528,6 +1605,10 @@ mod tests {
                 clock: LandingClock::Kept,
             });
             Ok(self.seek_outcome(outcome))
+        }
+
+        fn seek_prefix(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+            self.seek(pos)
         }
 
         fn prepare_seek(&mut self) -> DecodeResult<Option<DecoderSeekOutcome>> {
@@ -1763,7 +1844,7 @@ mod tests {
         let outcome = decoder.seek(target).expect("seek");
         if pending {
             assert_eq!(outcome, DecoderSeekOutcome::Pending(PendingReason::Retry));
-            assert!(decoder.reanchor_output_on_next_chunk);
+            assert!(matches!(decoder.reanchor, Some(Reanchor::Frame(48_000))));
             assert_eq!(
                 calls
                     .lock()
@@ -1786,7 +1867,7 @@ mod tests {
                 decoder.prepare_seek().expect("pending continuation"),
                 Some(outcome)
             );
-            assert!(decoder.reanchor_output_on_next_chunk);
+            assert!(matches!(decoder.reanchor, Some(Reanchor::Frame(48_000))));
             assert_eq!(
                 decoder.prepare_seek().expect("terminal continuation"),
                 Some(DecoderSeekOutcome::Landed {
@@ -1797,7 +1878,7 @@ mod tests {
                     clock: LandingClock::Restarted,
                 })
             );
-            assert!(decoder.reanchor_output_on_next_chunk);
+            assert!(matches!(decoder.reanchor, Some(Reanchor::Frame(48_000))));
             assert_eq!(decoder.prepare_seek().expect("settled continuation"), None);
             assert_eq!(decoder.emitted_frames, 0);
             assert_eq!(decoder.source_frames_seen, 0);

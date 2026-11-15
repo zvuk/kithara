@@ -2,6 +2,7 @@ use std::task::Waker;
 
 use kithara_render::{bridge::DeckSnapshot, rt::DeckMixerConfig};
 use kithara_signal::{FrameCount, SessionFrame};
+use kithara_sync::TempoTrajectory;
 
 use super::{Outbox, TrackReceipt};
 use crate::{OutputSnapshot, PlayError, PlayWorker, ResourcePrep};
@@ -64,14 +65,19 @@ pub struct DeckPass<'a> {
     pub suspended: bool,
     /// The session frame the pass stands on.
     pub now: SessionFrame,
-    /// Frames a batch sent now takes to reach the mixer: the session thread,
-    /// the worker's wake and one block. The earliest frame a press lands on is
-    /// `now + delivery`.
+    /// Frames a batch that wakes the worker takes to reach the mixer: the
+    /// session thread, the worker's wake and one block.
     pub delivery: FrameCount,
+    /// Frames a batch of deck parts takes to reach the mixer: the session
+    /// thread and one block, with no worker on its way.
+    pub deck_delivery: FrameCount,
     /// The session output observed by the owner for this pass.
     pub output: &'a OutputSnapshot,
     /// What the mixer last published of the deck's slots.
     pub deck: &'a DeckSnapshot,
+    /// The session tempo the Host accepted: the applied steps and the
+    /// accepted ones the session has not reached yet.
+    pub planned_tempo: &'a TempoTrajectory,
 }
 
 impl DeckPass<'_> {
@@ -79,5 +85,11 @@ impl DeckPass<'_> {
     #[must_use]
     pub fn earliest(&self) -> SessionFrame {
         self.now + self.delivery
+    }
+
+    /// The earliest frame a batch of deck parts sent on this pass can apply on.
+    #[must_use]
+    pub fn deck_earliest(&self) -> SessionFrame {
+        self.now + self.deck_delivery
     }
 }

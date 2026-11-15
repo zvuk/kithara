@@ -8,6 +8,7 @@ use tracing::info;
 
 use super::{
     container::{Container, container},
+    cpu,
     profile::{LinuxHost, LinuxRunner, RunnerFlavor},
 };
 use crate::{
@@ -30,6 +31,10 @@ pub(super) fn install(
     root: &Path,
 ) -> Result<()> {
     require_pinned_images(process, host, pins)?;
+    let cores = std::thread::available_parallelism()
+        .context("reading this machine's core count")?
+        .get();
+    let cpusets = cpu::assignments(host, cores)?;
     if Path::new(executable) != Path::new(consts::SERVICE_EXECUTABLE) {
         std::fs::copy(executable, consts::SERVICE_EXECUTABLE)
             .with_context(|| format!("installing {}", consts::SERVICE_EXECUTABLE))?;
@@ -37,10 +42,7 @@ pub(super) fn install(
     super::permissions::set_mode(Path::new(consts::SERVICE_EXECUTABLE), consts::EXECUTABLE)
         .with_context(|| format!("making {} executable", consts::SERVICE_EXECUTABLE))?;
 
-    let cores = std::thread::available_parallelism()
-        .context("reading this machine's core count")?
-        .get();
-    for (index, runner) in host.runners.iter().enumerate() {
+    for (runner, cpuset) in host.runners.iter().zip(cpusets) {
         client_environment(&runner.sccache_s3_env_file).with_context(|| {
             format!(
                 "validating S3 cache environment for Linux runner {}",
@@ -48,7 +50,6 @@ pub(super) fn install(
             )
         })?;
         let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(runner.service());
-        let cpuset = cpuset(index, runner.cpus, cores);
         std::fs::write(
             &path,
             unit(host, runner, &cpuset, pins, consts::SERVICE_EXECUTABLE)?,
@@ -60,7 +61,7 @@ pub(super) fn install(
         );
     }
     install_slice()?;
-    install_cleanup_timer(&installed_images(host, pins)?)?;
+    install_cleanup_timer(host, &installed_images(host, pins)?)?;
     if host.windows.is_some() {
         install_renewal_timer(root)?;
     }
@@ -119,12 +120,13 @@ fn required_images(host: &LinuxHost, pins: &CiPins) -> Result<Vec<String>> {
 /// Everything the installed fleet depends on, in the order cleanup is told it.
 /// Both spellings of each image are kept: the pin is what a rebuild compares
 /// against, and the floating tag is what the running containers hold.
+/// The collector runs the first tag, so it must be the installed one.
 fn installed_images(host: &LinuxHost, pins: &CiPins) -> Result<Vec<String>> {
     let mut images = Vec::new();
     for (toolchain, runner) in flavor_images(host, pins) {
         for image in [toolchain, runner] {
-            images.push(image.to_owned());
             images.push(floating_tag(image)?);
+            images.push(image.to_owned());
         }
     }
     Ok(images)
@@ -172,7 +174,14 @@ fn require_pinned_images(process: &Process, host: &LinuxHost, pins: &CiPins) -> 
 /// runs from a timer with no repository around it — and because what must
 /// survive is what this machine was installed to run, not what the checkout
 /// happens to pin by the time the timer next fires.
-fn cleanup_unit(keep: &[String]) -> String {
+///
+/// A oneshot has no start timeout unless it is given one, and its timer starts
+/// no second pass while one is still starting: one pass wedged on a mount that
+/// stopped answering or a Docker call that never returns would end cleanup on
+/// this machine for good. `TimeoutStartSec` is what bounds a oneshot; at the
+/// profile's deadline systemd ends the unit's processes and fails the pass, so
+/// the next tick starts a fresh one.
+fn cleanup_unit(host: &LinuxHost, keep: &[String]) -> String {
     format!(
         "[Unit]\n\
          Description=Kithara CI cleanup\n\
@@ -180,7 +189,9 @@ fn cleanup_unit(keep: &[String]) -> String {
          Requires=docker.service\n\n\
          [Service]\n\
          Type=oneshot\n\
+         TimeoutStartSec={deadline}\n\
          ExecStart={executable} ci host linux --config {config} cleanup{keep}\n",
+        deadline = host.cleanup_deadline_seconds,
         executable = consts::SERVICE_EXECUTABLE,
         config = consts::LINUX_CONFIG_PATH,
         keep = keep
@@ -190,20 +201,13 @@ fn cleanup_unit(keep: &[String]) -> String {
     )
 }
 
-/// Every two hours, because the fleet fills faster than a day. Measured across
-/// one day of this timer on the Linux host: the build caches waiting at a pass
-/// ranged from 20 GB to 515 GB, each amount accumulated inside a single
-/// two-hour window, against 3.0 TB free. A daily timer would meet twelve such
-/// windows at once, which a busy day does not fit on the volume — so the host
-/// this shipped to had been carrying a hand-written drop-in overriding the
-/// cadence, a second source of truth this file could not see. A pass over a
-/// volume already inside its budget frees nothing and costs seconds, so the
-/// frequency is only paid for when it is needed.
+/// Check budgets frequently enough to limit growth between cleanup passes.
+/// Active builds retain their leases while idle outputs can be reclaimed.
 fn cleanup_timer() -> &'static str {
     "[Unit]\n\
      Description=Kithara CI cleanup\n\n\
      [Timer]\n\
-     OnCalendar=*-*-* 00/2:00:00\n\
+     OnCalendar=*-*-* *:00/10:00\n\
      Persistent=true\n\n\
      [Install]\n\
      WantedBy=timers.target\n"
@@ -289,8 +293,8 @@ pub(super) fn install_slice() -> Result<()> {
     Ok(())
 }
 
-fn install_cleanup_timer(keep: &[String]) -> Result<()> {
-    let service = cleanup_unit(keep);
+fn install_cleanup_timer(host: &LinuxHost, keep: &[String]) -> Result<()> {
+    let service = cleanup_unit(host, keep);
     for (name, body) in [
         (consts::SERVICE_CLEANUP_UNIT, service.as_str()),
         (consts::SERVICE_CLEANUP_TIMER, cleanup_timer()),
@@ -313,24 +317,6 @@ fn install_renewal_timer(root: &Path) -> Result<()> {
         info!(unit = name, "Windows renewal unit installed");
     }
     Ok(())
-}
-
-/// Which cores this runner's jobs may use.
-///
-/// Blocks are handed out in order and wrap around the machine, so runners
-/// overlap once they outnumber the cores. The overlap is deliberate: what a set
-/// buys over a share is that `nproc` inside the container reports the size of
-/// the set, so Cargo starts that many compilations rather than one per host
-/// core. Sharing a core between two runners costs throughput; misreporting the
-/// count costs memory, and memory is what the kernel kills for.
-pub(super) fn cpuset(index: usize, cpus: u32, cores: usize) -> String {
-    let cores = u32::try_from(cores).unwrap_or(u32::MAX).max(1);
-    let cpus = cpus.clamp(1, cores);
-    let first = u32::try_from(index).unwrap_or(0).saturating_mul(cpus) % cores;
-    (0..cpus)
-        .map(|offset| ((first + offset) % cores).to_string())
-        .collect::<Vec<_>>()
-        .join(",")
 }
 
 /// The runner takes one job and exits, the container goes with it, and systemd
@@ -380,13 +366,14 @@ fn unit(
     let job = container(host, runner, cpuset.to_owned(), pins)?;
     write!(
         unit,
-        "\nExecStart=/usr/bin/docker run --rm --name {name} \
+        "\nExecStart=/usr/bin/docker run --init --rm --name {name} \
          --network {network} \
          --cpuset-cpus {cpuset} \
          --memory {memory} \
          --cgroup-parent {cgroup_parent} \
          --pids-limit {pids} \
          --ulimit nice={nice}:{nice} \
+         --tmpfs {tmpfs} \
          --security-opt no-new-privileges \
          --env-file {env_file}",
         name = job.name,
@@ -396,9 +383,10 @@ fn unit(
         cgroup_parent = job.cgroup_parent,
         pids = Container::PIDS_LIMIT,
         nice = Container::NICE_LIMIT,
+        tmpfs = Container::tmpfs(),
         env_file = job.env_file,
     )?;
-    for entry in Container::environment(runner) {
+    for entry in Container::environment(host, runner) {
         write!(unit, " --env {entry}")?;
     }
     for (volume, target) in &job.mounts {
@@ -432,25 +420,43 @@ pub(super) fn env_file(runner: &LinuxRunner) -> String {
     format!("/run/kithara-ci/{}.env", runner.name)
 }
 
-/// Report what the machine is serving. A runner that is up but unregistered
-/// looks identical to a healthy one from the host's side, so the report names
-/// the service state rather than claiming a verdict it cannot reach.
+/// Report local runner services and reject stopped or failed lifecycles.
+/// Successful ephemeral transitions remain healthy between jobs. Service
+/// health alone does not establish GitHub registration readiness.
 pub(super) fn health(process: &Process, host: &LinuxHost) -> Result<()> {
-    // Without this, a missing systemctl would read as every runner being down.
     process.require_tools(&["systemctl"])?;
+    let mut unavailable = Vec::new();
     for runner in &host.runners {
-        let state = process
+        let properties = process
             .capture(
                 "systemctl",
-                &["is-active", &runner.service()],
+                &["show", "--property=ActiveState,Result", &runner.service()],
                 "read a runner service state",
             )
-            .unwrap_or_else(|_| "inactive".to_owned());
+            .with_context(|| format!("reading service state for {}", runner.name))?;
+        let state = properties
+            .lines()
+            .find_map(|line| line.strip_prefix("ActiveState="))
+            .with_context(|| format!("missing ActiveState for {}", runner.name))?;
+        let result = properties
+            .lines()
+            .find_map(|line| line.strip_prefix("Result="))
+            .with_context(|| format!("missing Result for {}", runner.name))?;
         info!(
             runner = runner.name,
             labels = runner.labels(),
             state,
+            last_result = result,
             "runner service"
+        );
+        if result != "success" || !matches!(state, "active" | "activating" | "deactivating") {
+            unavailable.push(format!("{} ({state}, {result})", runner.name));
+        }
+    }
+    if !unavailable.is_empty() {
+        bail!(
+            "CI runner services are unavailable: {}",
+            unavailable.join(", ")
         );
     }
     Ok(())
@@ -463,25 +469,55 @@ mod tests {
     use super::*;
     use crate::{
         Cli,
-        ci::{config::fixture, host::linux::profile::tests::host_fixture},
+        ci::{config::fixture, host::linux::profile::tests::host_fixture, process::Recording},
     };
 
-    /// The container must see as many cores as it was given, because that
-    /// count is what Cargo turns into concurrent compilations.
     #[test]
-    fn a_runner_is_given_exactly_the_cores_it_asked_for() {
-        for index in 0..12 {
-            let set = cpuset(index, 3, 32);
-            let cores = set.split(',').collect::<Vec<_>>();
-            assert_eq!(cores.len(), 3, "index {index}: {set}");
-            assert_eq!(
-                cores
-                    .iter()
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len(),
-                3,
-                "index {index} repeats a core: {set}"
+    fn health_rejects_failed_or_stopped_services() {
+        let host = host_fixture();
+        for reply in [
+            "ActiveState=activating\nResult=exit-code\n",
+            "ActiveState=failed\nResult=timeout\n",
+            "ActiveState=inactive\nResult=success\n",
+            "ActiveState=deactivating\nResult=oom-kill\n",
+        ] {
+            let process = Process::recording(
+                Path::new("/"),
+                Recording::default().with_reply(&["systemctl"], reply),
             );
+            let error = health(&process, &host).expect_err("unavailable services fail health");
+            for runner in &host.runners {
+                assert!(
+                    error.to_string().contains(&runner.name),
+                    "missing {} in {error}",
+                    runner.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn health_accepts_successful_ephemeral_transitions() {
+        let host = host_fixture();
+        for state in ["active", "activating", "deactivating"] {
+            let reply = format!("Result=success\nActiveState={state}\n");
+            let process = Process::recording(
+                Path::new("/"),
+                Recording::default().with_reply(&["systemctl"], &reply),
+            );
+            health(&process, &host).expect("successful ephemeral lifecycle");
+        }
+    }
+
+    #[test]
+    fn health_rejects_missing_service_observations() {
+        let host = host_fixture();
+        for reply in ["", "ActiveState=active\n", "Result=success\n"] {
+            let process = Process::recording(
+                Path::new("/"),
+                Recording::default().with_reply(&["systemctl"], reply),
+            );
+            assert!(health(&process, &host).is_err(), "{reply:?}");
         }
     }
 
@@ -508,7 +544,10 @@ mod tests {
     fn the_cleanup_unit_is_a_command_this_executable_accepts() {
         let host = host_fixture();
         let pins = &fixture().pins;
-        let text = cleanup_unit(&installed_images(&host, pins).expect("the pins carry tags"));
+        let text = cleanup_unit(
+            &host,
+            &installed_images(&host, pins).expect("the pins carry tags"),
+        );
 
         let command = text
             .lines()
@@ -519,6 +558,46 @@ mod tests {
             .collect::<Vec<_>>();
         let argv = std::iter::once("xtask").chain(command.iter().copied());
         assert!(Cli::try_parse_from(argv).is_ok(), "{command:?}");
+    }
+
+    #[test]
+    fn cleanup_runs_the_installed_toolchain_tag_when_the_pin_is_retired() {
+        let host = host_fixture();
+        let pins = &fixture().pins;
+        let text = cleanup_unit(&host, &installed_images(&host, pins).unwrap());
+        let image = text.split_once(" cleanup --keep ").unwrap().1;
+
+        assert_eq!(
+            image.split_whitespace().next(),
+            Some(floating_tag(&pins.linux_image).unwrap().as_str())
+        );
+    }
+
+    /// One wedged pass must not end cleanup on the machine, and how long a
+    /// pass may take is the profile's to say, not this unit's.
+    #[test]
+    fn the_cleanup_unit_ends_a_wedged_pass_at_the_profile_deadline() {
+        let mut host = host_fixture();
+        host.cleanup_deadline_seconds += 45;
+        let text = cleanup_unit(
+            &host,
+            &installed_images(&host, &fixture().pins).expect("the pins carry tags"),
+        );
+
+        let deadline = text
+            .split_once("[Service]\n")
+            .expect("the unit has a service section")
+            .1
+            .lines()
+            .find_map(|line| line.strip_prefix("TimeoutStartSec="))
+            .unwrap_or_else(|| {
+                panic!("a oneshot without TimeoutStartSec never times out:\n{text}")
+            });
+        assert_eq!(
+            deadline.parse::<u64>().ok(),
+            Some(host.cleanup_deadline_seconds),
+            "{text}"
+        );
     }
 
     /// The guest is built from files the repository tracks, so the timer that
@@ -540,14 +619,11 @@ mod tests {
         assert!(Cli::try_parse_from(argv).is_ok(), "{command:?}");
     }
 
-    /// The cadence is the whole of the disk policy: the cleaner runs when the
-    /// timer says so and at no other time. A daily pass was measured arriving
-    /// at up to 515 GB of build caches, and that was one two-hour window's
-    /// worth.
+    /// Frequent passes bound idle cache growth between budget checks.
     #[test]
     fn the_cleanup_timer_outpaces_what_the_fleet_accumulates() {
         assert!(
-            cleanup_timer().contains("OnCalendar=*-*-* 00/2:00:00"),
+            cleanup_timer().contains("OnCalendar=*-*-* *:00/10:00"),
             "{}",
             cleanup_timer()
         );
@@ -565,7 +641,10 @@ mod tests {
     fn the_cleanup_unit_names_every_image_the_fleet_runs() {
         let host = host_fixture();
         let pins = &fixture().pins;
-        let text = cleanup_unit(&installed_images(&host, pins).expect("the pins carry tags"));
+        let text = cleanup_unit(
+            &host,
+            &installed_images(&host, pins).expect("the pins carry tags"),
+        );
         for pin in [
             &pins.linux_image,
             &pins.linux_runner_image,
@@ -601,7 +680,9 @@ mod tests {
             "/usr/local/bin/kithara-ci",
         )
         .expect("the unit must render");
-        for entry in Container::environment(host.runner("kithara-ci-octocat").expect("runner")) {
+        for entry in
+            Container::environment(&host, host.runner("kithara-ci-octocat").expect("runner"))
+        {
             assert!(text.contains(&format!("--env {entry}")), "{entry}:\n{text}");
         }
         assert!(
@@ -640,6 +721,22 @@ mod tests {
             text.contains(&format!("--env-file {}", env_file(runner))),
             "{text}"
         );
+    }
+
+    #[test]
+    fn every_runner_reaps_orphaned_job_processes() {
+        let host = host_fixture();
+        for runner in &host.runners {
+            let text = unit(
+                &host,
+                runner,
+                "0,1,2",
+                &fixture().pins,
+                "/usr/local/bin/kithara-ci",
+            )
+            .expect("the unit must render");
+            assert!(text.contains("docker run --init "), "{text}");
+        }
     }
 
     /// No single runner's ceiling ever fired: the host died of the sum of them.
@@ -738,17 +835,6 @@ mod tests {
             mount(&first, "/runner/_work"),
             "/var/lib/kithara-ci/workspaces/kithara-ci-octocat"
         );
-    }
-
-    /// More runners than cores is the point of the exercise: an idle listener
-    /// costs nothing, so the machine carries more of them than it has cores.
-    #[test]
-    fn the_sets_wrap_instead_of_running_out() {
-        let set = cpuset(11, 3, 32);
-        assert_eq!(set, "1,2,3", "{set}");
-        assert_eq!(cpuset(0, 4, 4), "0,1,2,3");
-        // A runner may not ask for more of the machine than it has.
-        assert_eq!(cpuset(0, 9, 4), "0,1,2,3");
     }
 
     /// A unit is a command line, and one this crate cannot parse fails only

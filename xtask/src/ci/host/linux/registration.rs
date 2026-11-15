@@ -124,10 +124,10 @@ fn runtime_environment(runner: &LinuxRunner, jit_config: &str) -> Result<String>
     Ok(contents)
 }
 
-/// Write kache's host file for `runner`'s trust: on every start, as the store
+/// Write kache's host file for `runner`'s cache scope: on every start, as the store
 /// environment is, so a bucket or budget the host changed reaches the next job.
 ///
-/// Every runner of a trust writes the same file, and they start together, so
+/// Every runner of a scope writes the same file, and they start together, so
 /// it is replaced whole: a container never reads half of one.
 pub(super) fn write_kache(host: &LinuxHost, runner: &LinuxRunner) -> Result<()> {
     let store = client_environment(&runner.sccache_s3_env_file).with_context(|| {

@@ -9,7 +9,7 @@ use kithara::{
     download::{Downloader, DownloaderConfig, DownloaderEvent},
     events::{EventBus, EventReceiver},
     file::{File, FileConfig, FileEvent, FileSrc},
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{
         CancelToken,
         flash::real_io,
@@ -106,11 +106,10 @@ async fn file_stream_closes_early_seek_still_works() {
     let pools = pools();
 
     let dl = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::builder()
                 .inactivity_timeout(Duration::from_secs(1))
                 .build(),
-            pools.clone(),
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

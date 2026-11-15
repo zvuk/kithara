@@ -42,23 +42,6 @@ impl Trajectory {
         self.curve_origin = None;
     }
 
-    pub(in crate::render) fn snap_position(&mut self) -> Result<(), ElasticError> {
-        if let Some(position) = self.position {
-            self.position = Some(
-                position
-                    .on_lattice()
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            );
-        }
-        if self.approach_at(self.elapsed).is_some() {
-            self.curve_origin = self
-                .position
-                .and_then(Phase::ratio)
-                .map(|position| (position, self.elapsed));
-        }
-        Ok(())
-    }
-
     pub(in crate::render) fn snap_to_frame(&mut self) -> Result<(), ElasticError> {
         if let Some(position) = self.position {
             let position = position.ratio().ok_or(ElasticError::SampleCountOverflow)?;
@@ -129,19 +112,6 @@ impl Trajectory {
                 .ok_or(ElasticError::SampleCountOverflow);
         }
         let position = cursor.source_position(start)?;
-        Ok((position.numerator, position.denominator))
-    }
-
-    pub(in crate::render) fn mapping_origin(
-        &self,
-        start: u64,
-    ) -> Result<(u128, NonZeroU128), ElasticError> {
-        let position = if self.approach_at(self.elapsed).is_some() {
-            self.curve_origin
-                .map_or_else(|| self.source_position(start), |(position, _)| Ok(position))?
-        } else {
-            self.source_position(start)?
-        };
         Ok((position.numerator, position.denominator))
     }
 

@@ -77,6 +77,9 @@ where
             AcquisitionResult::Ready(reader) => {
                 Ok(AcquisitionResult::Ready(self.wrap_ready(reader, ctx)))
             }
+            AcquisitionResult::Joined(reader) => {
+                Ok(AcquisitionResult::Joined(self.wrap_ready(reader, ctx)))
+            }
         }
     }
 

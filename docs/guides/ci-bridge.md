@@ -2,39 +2,66 @@
 
 ## Repository bridge
 
+The macOS host profile supplied with `ci host mac --config` defines the
+top-level `host_root` key. `<host_root>` below denotes that configured installation
+root; it is not a fixed volume name.
+
 Copy `.config/bridge/config.example.toml` to
-`/Volumes/KitharaCI/services/bridge/config.toml`; it and the two tokens belong
-to UID 504 (`kithara-sync`), mode `0600`. The GitHub token needs
-`Contents: write`, `Pull requests: read`, `Actions: read` and
-`Commit statuses: write`. Actions read access must also cover each contributing
-repository whose CI is mirrored.
+`<host_root>/services/bridge/config.toml`; it and the two tokens belong
+to the profile's `sync_user` (`sync_uid`), mode `0600`. The GitHub token needs
+`Contents: write`, `Pull requests: read`, `Actions: read`, `Checks: read` and
+`Commit statuses: write`. Reading Actions, checks and commit statuses must also
+cover each contributing repository whose CI is mirrored.
 Validate with `ci bridge validate` (no network mutation), then
 `ci host mac activate-bridge`.
 `github_branch` and `gitlab_branch` are separate keys because the sides
 disagree — GitLab `develop`, GitHub `main` — and a swap is silent: GitHub
 answers an unknown base with an empty pull list.
 
-The daemon keeps running the executable that was installed, not the one on
-`develop`: a fix changes nothing until `ci host mac install-services`
-reinstalls it from a reviewed GitLab commit, then `activate-bridge` and
-`activate`. launchd keeps the definition it loaded, so skipping `activate`
-silently leaves the maintenance agents on the old cadence; `launchctl print`
-reports what is loaded.
+The daemon runs the installed executable. Merging a fix into `develop` or
+`main` does not replace it. Initial installation and service/profile changes use
+`ci host mac install-services` from a reviewed commit, followed by loading the
+changed launchd definitions. `launchctl print` reports the loaded definition.
+
+For a binary-only update, the CI user can replace
+`<host_root>/toolchains/shared-bin/kithara-ci`, which the bridge executes
+through `/usr/bin/env` on each tick. Retain the previous binary, verify the
+reviewed artifact's source revision and checksum, transfer it beside the active
+copy, and replace that copy atomically after verifying the transferred checksum.
+Validate with `ci bridge validate` as the sync user through the existing sudo
+grant, then run one reconciliation and compare the live PR statuses with their
+source jobs. If validation fails, restore the retained binary atomically.
+This path does not require replacing the root-owned `services/bin` copy or
+restarting runners. Changing service arguments or cadence still requires loading
+the changed launchd definition.
 
 The bridge moves either default branch only by fast-forward, in whichever
 direction is behind, and never synthesizes a replacement commit or force-pushes
 a diverged branch.
 
-On each open pull-request head the bridge publishes the fork's latest `ci.yml`
-run as `kithara/github-ci` and its jobs under `GitHub /`; the exact GitLab
+On each open pull-request head the bridge reads the source repository named by
+the PR, without a configured list of fork owners or runner hosts. Its Actions
+jobs, commit statuses and check runs appear under `GitHub /`, with
+`kithara/github-ci` summarizing the reported source checks. External CI servers
+must publish their results to that source repository and exact commit. The
+standard `ci.yml`, when observed, still requires an executed successful
+`CI required`. The exact GitLab
 verification's parent and expected child jobs appear under `GitLab /`. Each
-status links to its source job. Jobs retain their actual results, including
+status retains its supplied source link and diagnostic text. An external CI
+must publish separate signals for separate jobs; unpublished private jobs cannot
+be discovered, and missing links or explanations remain diagnostic gaps.
+Jobs retain their actual results, including
 failures GitLab's verdict allows. The existing `kithara/gitlab-verification`
 remains the verdict for the merge against its recorded base. Missing runs,
 active retries and unreadable sources cannot reuse a previous green summary.
 
-`kithara/pr-size` permits at most 5000 added text lines in the pull-request diff
-from its merge-base. Deleted lines and unchanged file moves cost zero;
+`kithara/pr-size` reads its positive limit from
+`[ext.ci].pr_review_line_limit` in `.config/xtask.toml` at the current trusted
+target commit. The checked-in value is 5000. A PR cannot raise its own limit,
+and changing the target's configuration takes effect on the next observation.
+Missing or invalid policy produces an error status. Review lines are added text
+lines in the pull-request diff from its merge-base. Deleted lines and unchanged
+file moves cost zero;
 edits to moved files count their additions. All text files count, and binary
 changes have no line count. Git computes this from fetched objects, independently
 of truncated pull-request file APIs. These statuses become merge requirements
@@ -46,16 +73,25 @@ publication alone is not merge enforcement. Rules administration and bridge
 installation are separate privileges, and a missing privilege leaves rollout
 incomplete.
 
-Before installing, record the reviewed commit and the installed binary's hash,
-and retain the previous reviewed binary for rollback. Use `install-services`
-and `activate-bridge` with the reviewed executable and existing host profile;
-validate the private bridge configuration without copying tokens into evidence.
+Before installing, record the reviewed commit, trusted target policy commit and
+installed binary's hash, and retain the previous reviewed binary for rollback.
+Use `install-services` and `activate-bridge` when the service definition or host
+profile changes; binary-only updates use the shared-copy procedure above.
+Validate the private bridge configuration without copying tokens into evidence.
 Confirm the active launchd executable matches the installed artifact, then
 verify linked job statuses on a live PR. `activate` also restarts Colima and
 GitLab Runner, so coordinate it with active jobs rather than using it as a
-bridge-only restart. To roll back, reinstall the previous reviewed artifact and
-activate its bridge; keep the size requirement in place and report rollout as
-incomplete until the required statuses are produced again.
+bridge-only restart. To roll back, restore the previous reviewed artifact with
+its matching trusted target policy and activate its bridge. Policy changes use
+the normal target-branch review path. Keep the size requirement in place and
+report rollout as incomplete until the required statuses are produced again.
+
+The trusted target must contain the required positive review-limit setting
+before activating an executable that reads it. A candidate PR's setting does
+not supply target policy. Verify Actions, checks and status access for each
+source repository, then compare exact-head projected results and supplied
+failure details with their source. Local fixtures prove observation behavior;
+the installed artifact and live statuses establish runtime acceptance.
 
 GitHub pull requests are verified before merge. While both default branches are
 equal, the bridge reserves the exact head and base pair, publishes one

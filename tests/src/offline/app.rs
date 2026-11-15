@@ -1,25 +1,25 @@
-use std::path::PathBuf;
-
 use keyring_core::sample::Store;
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     audio::{AudioDecoderConfig, DecoderResamplerSettings},
+    bufpool::HasPool,
     decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
     hls::{AbrMode, KeyOptions},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio},
-    play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, ResourcePrep, ResourceSrc},
-    queue::{Queue, QueueConfig},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, ResourceConfig, ResourcePrep,
+        ResourceSrc,
+    },
+    queue::{Queue, QueueConfig, TrackSource},
 };
 use kithara_app::{
     config::{AppConfig, AppDrm},
     document::Config,
     plugins,
-    pools::{
-        AppPools, AppResourceConfig, AppStore, AppTrackSource, PoolsSection, build as app_pools,
-    },
+    pools::{AppPools, PoolsSection, build as app_pools},
     secret,
 };
 use kithara_app_library::{Environment, Secrets};
@@ -97,7 +97,7 @@ pub async fn insecure_app_queue() -> AppQueueFixture {
 pub async fn app_queue(document: Config) -> AppQueueFixture {
     let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
-    let client = HttpClient::new(net, pools.clone(), CancelToken::never());
+    let client = crate::test_server::TestServerHelper::shared_client(net, CancelToken::never());
     let downloader = Downloader::new({
         let config = DownloaderConfig::for_client(client.clone());
         #[cfg(not(target_arch = "wasm32"))]
@@ -106,9 +106,12 @@ pub async fn app_queue(document: Config) -> AppQueueFixture {
     });
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
+    let cache = TestTempDir::new();
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
-        .backend(StorageBackend::default())
+        .backend(StorageBackend::Disk {
+            root: cache.path().to_path_buf(),
+        })
         .flush_hub(flush_hub)
         .layouts(document.asset_layouts())
         .build();
@@ -148,32 +151,29 @@ pub async fn app_queue(document: Config) -> AppQueueFixture {
     AppQueueFixture {
         config,
         queue,
-        cache: TestTempDir::new(),
+        cache,
         ticker,
     }
 }
 
-/// A disk-backed asset store under `root`, built from the app pools.
-pub fn app_disk_asset_store(config: &AppConfig, root: impl Into<PathBuf>) -> AppStore {
-    AssetStore::builder(config.worker.pools().clone())
-        .backend(StorageBackend::Disk { root: root.into() })
-        .build()
-}
-
 /// A track source configured the way the app configures one: its DRM keys and
-/// headers, downloader, worker, decoder and store.
-pub fn app_track_source(
+/// headers, downloader, decoder and store. The queue that loads it supplies the
+/// playback worker, so `store` decides the pools it plays on.
+pub fn app_track_source<S>(
     url: &str,
     config: &AppConfig,
-    store: AppStore,
+    store: AssetStore<S>,
     backend: DecoderBackend,
     abr: AbrMode,
     discriminator: Option<&str>,
-) -> AppTrackSource {
+) -> TrackSource<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let Ok(src) = ResourceSrc::parse(url) else {
-        return AppTrackSource::Uri(url.to_string());
+        return TrackSource::Uri(url.to_string());
     };
-    let builder = AppResourceConfig::for_src(src);
+    let builder = ResourceConfig::<S>::for_src(src);
     let registry = config.drm.registry();
     let keys = if registry.is_empty() {
         KeyOptions::default()
@@ -197,7 +197,6 @@ pub fn app_track_source(
         .build();
     let builder = builder
         .downloader(config.downloader.clone())
-        .worker(config.worker.clone())
         .keys(keys)
         .maybe_headers(headers)
         .audio(config.audio.clone())
@@ -212,5 +211,5 @@ pub fn app_track_source(
         Some(discriminator) => builder.discriminator(discriminator).build(),
         None => builder.build(),
     };
-    AppTrackSource::Config(Box::new(config))
+    TrackSource::Config(Box::new(config))
 }

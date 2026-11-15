@@ -1,4 +1,5 @@
 mod convert;
+pub(crate) use convert::peak_bitrate_cap;
 mod records;
 
 pub use records::{

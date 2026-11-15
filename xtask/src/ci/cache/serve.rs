@@ -1,10 +1,12 @@
 use std::{
     convert::Infallible,
+    path::{Path, PathBuf},
     process::{Child, Command},
     thread::{self, JoinHandle},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
+use clap::Args;
 use reqwest::blocking::Client;
 use tiny_http::Server;
 use tracing::info;
@@ -18,22 +20,34 @@ use crate::{
     consts,
 };
 
+#[derive(Debug, Args)]
+pub(super) struct ServeArgs {
+    /// Persistent service directory containing config, data and client credentials.
+    #[arg(long, default_value = "/")]
+    root: PathBuf,
+}
+
 /// Runs the cache stack whole: the store, the setup it is served with, and
 /// the evictor that keeps it under its quotas, in one process tree that
 /// starts and stops together. The evictor listens for the store's audit log
 /// before the store starts, since the store gives up on a webhook that does
 /// not answer as it starts.
-pub(super) fn run() -> Result<()> {
+pub(super) fn run(args: &ServeArgs) -> Result<()> {
+    ensure!(
+        args.root.is_absolute(),
+        "cache service root must be absolute"
+    );
     let cancel = Cancel::install()?;
-    provision::credentials()?;
+    let config = args.root.join("config");
+    provision::prepare(&args.root)?;
     let buckets = evict::buckets()?;
     let audit = Server::http(consts::EVICT_LISTEN)
         .map_err(|error| anyhow!("listen for the store's audit log: {error}"))?;
-    let evictor = Evictor::listen(audit, buckets);
-    let mut store = child::spawn(Command::new("rustfs").args(["server", "/data"]))?;
+    let evictor = Evictor::listen(audit, buckets, config);
+    let mut store = child::spawn(&mut server(&args.root))?;
     let ready_url = format!("{}/health/ready", consts::CACHE_STORE_URL);
-    if let Err(error) =
-        ready(&mut store, &ready_url, &cancel).and_then(|()| provision::initialize(&cancel))
+    if let Err(error) = ready(&mut store, &ready_url, &cancel)
+        .and_then(|()| provision::initialize(&args.root, &cancel))
     {
         return Err(match child::terminate(&mut store, consts::GRACE) {
             Ok(_) => error,
@@ -41,6 +55,25 @@ pub(super) fn run() -> Result<()> {
         });
     }
     watch(&mut store, thread::spawn(|| evictor.run()), &cancel)
+}
+
+fn server(root: &Path) -> Command {
+    let mut command = Command::new("rustfs");
+    command
+        .arg("server")
+        .arg(root.join("data"))
+        .env("RUSTFS_ACCESS_KEY_FILE", root.join("config/admin-user"))
+        .env("RUSTFS_SECRET_KEY_FILE", root.join("config/admin-password"))
+        .env("RUSTFS_AUDIT_ENABLE", "true")
+        .env("RUSTFS_AUDIT_WEBHOOK_ENABLE_RECENCY", "on")
+        .env(
+            "RUSTFS_AUDIT_WEBHOOK_ENDPOINT_RECENCY",
+            "http://127.0.0.1:9180/",
+        )
+        .env("RUSTFS_AUDIT_WEBHOOK_QUEUE_DIR_RECENCY", root.join("audit"))
+        .env("RUSTFS_AUDIT_WEBHOOK_QUEUE_LIMIT_RECENCY", "20000")
+        .env("RUSTFS_OUTBOUND_ALLOW_ORIGINS", "http://127.0.0.1:9180");
+    command
 }
 
 /// Waits until the store answers ready: the setup that follows talks to it.
@@ -99,6 +132,8 @@ fn watch(
 #[cfg(all(test, unix))]
 mod tests {
     use std::{
+        collections::BTreeMap,
+        ffi::OsStr,
         io::{BufRead, BufReader},
         process::Stdio,
     };
@@ -109,6 +144,49 @@ mod tests {
 
     use super::*;
     use crate::testing::signals;
+
+    #[test]
+    fn the_server_uses_its_service_directory_for_data_credentials_and_audit() {
+        let root = Path::new("/Volumes/KitharaCI/services/ci-cache");
+        let command = server(root);
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [OsStr::new("server"), root.join("data").as_os_str()]
+        );
+        let environment = command.get_envs().collect::<BTreeMap<_, _>>();
+        for (name, relative) in [
+            ("RUSTFS_ACCESS_KEY_FILE", "config/admin-user"),
+            ("RUSTFS_SECRET_KEY_FILE", "config/admin-password"),
+            ("RUSTFS_AUDIT_WEBHOOK_QUEUE_DIR_RECENCY", "audit"),
+        ] {
+            assert_eq!(
+                environment[OsStr::new(name)],
+                Some(root.join(relative).as_os_str())
+            );
+        }
+    }
+
+    #[test]
+    fn the_store_sends_its_audit_log_to_the_evictor_beside_it() {
+        let command = server(Path::new("/"));
+        let environment = command.get_envs().collect::<BTreeMap<_, _>>();
+        let setting = |name: &str| environment[OsStr::new(name)].unwrap().to_str().unwrap();
+        let endpoint =
+            reqwest::Url::parse(setting("RUSTFS_AUDIT_WEBHOOK_ENDPOINT_RECENCY")).unwrap();
+        assert_eq!(setting("RUSTFS_AUDIT_ENABLE"), "true");
+        assert_eq!(setting("RUSTFS_AUDIT_WEBHOOK_ENABLE_RECENCY"), "on");
+        assert!(consts::EVICT_LISTEN.ip().is_loopback());
+        assert_eq!(
+            endpoint.host_str(),
+            Some(consts::EVICT_LISTEN.ip().to_string().as_str())
+        );
+        assert_eq!(endpoint.port(), Some(consts::EVICT_LISTEN.port()));
+        assert_eq!(
+            setting("RUSTFS_OUTBOUND_ALLOW_ORIGINS"),
+            endpoint.origin().ascii_serialization()
+        );
+        assert_eq!(setting("RUSTFS_AUDIT_WEBHOOK_QUEUE_LIMIT_RECENCY"), "20000");
+    }
 
     /// A store that says it is up, and stops cleanly when asked.
     fn store(then: &str) -> Child {

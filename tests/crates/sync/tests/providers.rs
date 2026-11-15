@@ -93,9 +93,6 @@ pub(super) async fn sources(
                         "BLOCKED_FIXTURE: library fixture `{name}` is not registered; build without KITHARA_DISABLE_REMOTE_FIXTURES"
                     )
                 });
-                asset
-                    .try_bytes()
-                    .unwrap_or_else(|error| panic!("BLOCKED_FIXTURE: {error}"));
                 asset_path(&asset)
             })
             .collect(),
@@ -141,24 +138,13 @@ pub(super) async fn sources(
 }
 
 fn cycle_paths(assets: &[Asset], count: usize) -> Vec<String> {
-    assets
-        .iter()
-        .cycle()
-        .take(count)
-        .map(|asset| {
-            asset
-                .path()
-                .expect("native product fixture is materialized on disk")
-                .to_str()
-                .expect("fixture path is UTF-8")
-                .to_owned()
-        })
-        .collect()
+    assets.iter().cycle().take(count).map(asset_path).collect()
 }
 
 fn asset_path(asset: &Asset) -> String {
     asset
-        .path()
+        .try_path()
+        .unwrap_or_else(|error| panic!("BLOCKED_FIXTURE: {error}"))
         .expect("native product fixture is materialized on disk")
         .to_str()
         .expect("fixture path is UTF-8")

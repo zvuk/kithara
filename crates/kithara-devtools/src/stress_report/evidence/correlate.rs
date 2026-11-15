@@ -682,7 +682,7 @@ pub(super) fn duration_ms(secs: f64) -> u64 {
     u64::try_from(millis).unwrap_or(u64::MAX).max(1)
 }
 
-pub(in crate::stress_report) fn parse_timestamp_ms(timestamp: &str) -> Option<u64> {
+pub(crate) fn parse_timestamp_ms(timestamp: &str) -> Option<u64> {
     static RFC3339: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
             r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$",

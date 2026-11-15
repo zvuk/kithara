@@ -38,7 +38,8 @@ controller.record_bandwidth(peer_id, bytes, duration, source);
 
 `AbrController::new` returns `Arc<Self>`. The controller is registered with multiple peers via `register(peer)`; dropping the returned `AbrHandle` unregisters the peer automatically.
 
-ABR decisions are pull-driven from peer activity through the downloader's existing run loop. Tick requests coalesce per peer. When a desired switch is held only by `min_switch_interval`, the controller records its exact eligibility deadline and that same downloader loop runs the canonical tick when it expires; no peer task or second decision path is created.
+Decisions run on the downloader's loop as peers make progress; the controller
+spawns no task of its own.
 
 ## Key Types
 

@@ -221,7 +221,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn later_slot_failure_releases_earlier_eager_payloads() {
         let mut observed = None;
         let result: Result<PoolRegion<()>, PoolError> =

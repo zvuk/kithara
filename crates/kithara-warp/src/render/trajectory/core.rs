@@ -172,25 +172,6 @@ impl Fraction {
         .ok_or(ElasticError::SampleCountOverflow)
     }
 
-    pub(in crate::render) fn correction(value: f64) -> Option<Self> {
-        if !value.is_finite() || value <= 0.0 {
-            return None;
-        }
-        let value = value.to_f32()?;
-        if !value.is_finite() || value <= 0.0 {
-            return None;
-        }
-        let bits = value.to_bits();
-        let exponent = i32::try_from((bits >> 23) & 255).ok()? - 150;
-        let mantissa = u128::from((bits & 0x7f_ffff) | 0x80_0000);
-        let (numerator, denominator) = if exponent >= 0 {
-            (mantissa.checked_shl(exponent.unsigned_abs())?, 1)
-        } else {
-            (mantissa, 1u128.checked_shl(exponent.unsigned_abs())?)
-        };
-        Self::new(numerator, denominator)
-    }
-
     pub(in crate::render) fn add(self, other: Self) -> Option<Self> {
         let common = self.common(other)?;
         Self::new(self.at(common)?.checked_add(other.at(common)?)?, common)
@@ -199,22 +180,6 @@ impl Fraction {
     pub(in crate::render) fn sub(self, other: Self) -> Option<Self> {
         let common = self.common(other)?;
         Self::new(self.at(common)?.checked_sub(other.at(common)?)?, common)
-    }
-
-    pub(in crate::render) fn mul(self, other: Self) -> Option<Self> {
-        let first = divisor(self.numerator, other.denominator.get());
-        let second = divisor(other.numerator, self.denominator.get());
-        Self::new(
-            (self.numerator / first).checked_mul(other.numerator / second)?,
-            (self.denominator.get() / second).checked_mul(other.denominator.get() / first)?,
-        )
-    }
-
-    pub(in crate::render) fn div(self, other: Self) -> Option<Self> {
-        self.mul(Self {
-            numerator: other.denominator.get(),
-            denominator: NonZeroU128::new(other.numerator)?,
-        })
     }
 
     pub(in crate::render) fn as_f64(self) -> Option<f64> {
@@ -393,6 +358,26 @@ impl Trajectory {
         }
     }
 
+    /// Whether the law keeps its current speed on every later output frame.
+    pub(in crate::render) fn holds_speed(&self) -> bool {
+        match &self.curve {
+            SpeedCurve::Constant(_) => true,
+            SpeedCurve::Steps(_) => self.frames_to_step().is_none(),
+            SpeedCurve::Ramp { frames, .. } => self.elapsed >= frames.get(),
+            SpeedCurve::Approach(_) | SpeedCurve::ApproachSteps(_) => false,
+        }
+    }
+
+    /// Output frames until the next step of a stepped law.
+    pub(in crate::render) fn frames_to_step(&self) -> Option<u64> {
+        let SpeedCurve::Steps(steps) = &self.curve else {
+            return None;
+        };
+        steps
+            .get(steps.partition_point(|(frame, _)| *frame <= self.elapsed))
+            .map(|(frame, _)| *frame - self.elapsed)
+    }
+
     pub(in crate::render) fn speed(&self) -> Result<f32, ElasticError> {
         self.speed_at()?.value()
     }
@@ -436,29 +421,5 @@ impl Trajectory {
                     (minimum.min(*speed), maximum.max(*speed))
                 }),
         })
-    }
-
-    pub(in crate::render) fn projection_stages(
-        &self,
-        correction: f64,
-    ) -> Result<usize, ElasticError> {
-        let (minimum, maximum) = self.speed_bounds()?;
-        let mut pitch = correction / f64::from(minimum);
-        let mut stages = 1;
-        while pitch > 4.0 {
-            pitch /= 4.0;
-            stages += 1;
-        }
-        let mut pitch = correction / f64::from(maximum);
-        let mut fast_stages = 1;
-        while pitch < 0.25 {
-            pitch *= 4.0;
-            fast_stages += 1;
-        }
-        stages = stages.max(fast_stages);
-        if stages > 3 {
-            return Err(ElasticError::InvalidRate(f64::from(minimum) / correction));
-        }
-        Ok(stages)
     }
 }

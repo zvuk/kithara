@@ -58,7 +58,7 @@ fn engine_start_stop_roundtrip() {
         state
             .ctx
             .as_ref()
-            .and_then(FirewheelContext::stream_info)
+            .and_then(|ctx| ctx.stream_info())
             .is_some()
     );
     assert_eq!(render_block(&mut state, 0).len(), 1024);
@@ -128,7 +128,8 @@ fn sample_rate_query_separates_the_measured_stream_from_the_request() {
         }
     ));
 
-    let mut state = test_state(|context, _requested| start_route_loss_stream(context, 48_000));
+    let mut state =
+        test_state(|context, _requested, decks| start_route_loss_stream(context, 48_000, decks));
     assert_eq!(state.root_view.sample_rate().requested, 44_100);
     assert_eq!(state.root_view.sample_rate().measured, None);
     assert!(state.stream.is_none());

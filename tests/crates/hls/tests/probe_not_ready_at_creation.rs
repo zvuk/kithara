@@ -17,7 +17,7 @@ use kithara::{
     audio::AudioConfig,
     download::{Downloader, DownloaderConfig},
     hls::{Hls, HlsConfig},
-    net::{HttpClient, NetOptions, RetryPolicy},
+    net::{NetOptions, RetryPolicy},
     platform::{
         CancelToken,
         sync::Arc,
@@ -85,7 +85,7 @@ fn audio_config(
         .cancel(cancel.clone())
         .initial_abr_mode(auto(0))
         .downloader(Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), cancel.child()))
+            DownloaderConfig::for_client(TestServerHelper::shared_client(net, cancel.child()))
                 .runtime(tokio::runtime::Handle::current())
                 .build(),
         ))

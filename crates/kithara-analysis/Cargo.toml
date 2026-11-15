@@ -9,6 +9,10 @@ description = "Progressive waveform and beat-grid analysis for Kithara."
 keywords = ["audio", "beatgrid", "dsp", "waveform", "analysis"]
 categories = ["multimedia::audio"]
 
+[package.metadata.kithara.wasm-lib-tests]
+default-features = false
+features = ["analysis-waveform", "beat-dsp", "client-reqwest", "tls-rustls", "symphonia", "webcodecs"]
+
 [features]
 default = ["symphonia", "client-reqwest", "tls-rustls"]
 analysis-beat = []
@@ -76,7 +80,7 @@ kithara-decode = { workspace = true, features = [] }
 kithara-events = { workspace = true }
 kithara-resampler = { workspace = true, features = ["resample-rubato"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "subscriber"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "hang", "mock", "subscriber"] }
 
 serde_json = { workspace = true }
 unimock = { workspace = true }

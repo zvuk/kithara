@@ -1,11 +1,12 @@
 use std::{
-    io::{Read, SeekFrom},
+    io::{Read, Seek, SeekFrom},
     ops::Range,
 };
 
 use kithara_platform::{
     sync::{Arc, Mutex},
     thread,
+    time::Duration,
 };
 use kithara_stream::{DeferredWake, Source, SourcePhase, Stream};
 use kithara_test_utils::kithara;
@@ -23,6 +24,82 @@ async fn shared_with_phase(
         .await
         .expect("test stream");
     (SharedStream::new(stream), waits)
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[case::steady(false, false)]
+#[case::construction(true, false)]
+#[case::blocking(false, true)]
+async fn position_queries_do_not_seek_or_request_bytes(
+    #[case] constructing: bool,
+    #[case] blocking: bool,
+) {
+    let wake = Arc::new(DeferredWake::default());
+    let source = TestSource::new(Arc::new(TestControl::new(media_info(0))))
+        .with_peer_wake(Arc::clone(&wake));
+    *source.phase_handle().lock() = SourcePhase::Waiting;
+    let waits = source.waits_handle();
+    let stream = Stream::<TestStream>::new(TestConfig { source })
+        .await
+        .expect("test stream");
+    let shared = SharedStream::new(stream);
+    let opened = shared.open_initial_reader();
+    if constructing {
+        opened.construction_gate().expect("construction gate").arm();
+    }
+    let control = opened.control();
+    if blocking {
+        control.require_blocking();
+    }
+    let mut reader = opened.into_inner();
+    shared.set_position(17);
+
+    assert_eq!(reader.stream_position().expect("cursor query"), 17);
+    assert_eq!(shared.position(), 17);
+    assert!(waits.lock().is_empty(), "cursor query files no read demand");
+    assert!(!wake.flush(), "cursor query does not wake the source");
+    control.cancel();
+    if constructing || blocking {
+        assert_eq!(
+            reader.stream_position().expect_err("retired reader").kind(),
+            std::io::ErrorKind::ConnectionAborted
+        );
+    } else {
+        assert_eq!(reader.stream_position().expect("steady snapshot"), 17);
+    }
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+async fn rebuild_position_queries_preserve_the_offset_without_requesting_bytes() {
+    let wake = Arc::new(DeferredWake::default());
+    let source = TestSource::new(Arc::new(TestControl::new(media_info(0))))
+        .with_peer_wake(Arc::clone(&wake));
+    let phase = source.phase_handle();
+    let waits = source.waits_handle();
+    let stream = Stream::<TestStream>::new(TestConfig { source })
+        .await
+        .expect("test stream");
+    let shared = SharedStream::new(stream);
+    let control = shared.new_reader_control();
+    let opened = shared
+        .open_rebuild_reader_with_control(64, control.clone())
+        .expect("rebuild reader");
+    opened.construction_gate().expect("construction gate").arm();
+    let mut reader = opened.into_inner();
+    waits.lock().clear();
+    wake.flush();
+    *phase.lock() = SourcePhase::Waiting;
+    shared.set_position(71);
+
+    assert_eq!(reader.stream_position().expect("relative cursor"), 7);
+    assert_eq!(shared.position(), 71);
+    assert!(waits.lock().is_empty(), "cursor query files no read demand");
+    assert!(!wake.flush(), "cursor query does not wake the source");
+    control.cancel();
+    assert_eq!(
+        reader.stream_position().expect_err("retired reader").kind(),
+        std::io::ErrorKind::ConnectionAborted
+    );
 }
 
 #[kithara::test(tokio)]

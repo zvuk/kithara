@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, bail};
+#[cfg(test)]
 use cargo_metadata::MetadataCommand;
 use clap::Args;
 use rayon::prelude::*;
@@ -14,14 +15,17 @@ use super::{
     checks::{Check, Context, registry},
     config::StyleConfig,
 };
-use crate::common::{
-    baseline::{Baseline, RatchetDiff},
-    exclude::{apply_lint_excludes, cfg_test_module_globs},
-    project::ProjectConfig,
-    report,
-    scan::Scan,
-    scope::Scope,
-    violation::{Report, Violation},
+use crate::{
+    Ctx,
+    common::{
+        baseline::{Baseline, RatchetDiff},
+        exclude::{apply_lint_excludes, cfg_test_module_globs},
+        project::ProjectConfig,
+        report,
+        scan::Scan,
+        scope::Scope,
+        violation::{Report, Violation},
+    },
 };
 
 #[derive(Debug, Default, Args)]
@@ -61,23 +65,24 @@ pub struct StyleArgs {
     pub update_baseline: bool,
 }
 
-pub(crate) fn run(args: &StyleArgs) -> Result<()> {
+pub(crate) fn run(args: &StyleArgs, workspace: &Ctx) -> Result<()> {
     validate(args)?;
 
-    let metadata = MetadataCommand::new().exec()?;
-    let workspace_root = metadata.workspace_root.as_std_path().to_path_buf();
-    let config = StyleConfig::load(&args.config_dir)?;
-    let scope = Scope::new(args.crates.clone(), args.paths.clone());
+    let metadata = workspace.metadata()?;
+    let workspace_root = workspace.root.clone();
+    let config_dir = workspace_root.join(&args.config_dir);
+    let config = StyleConfig::load(&config_dir)?;
+    let scope = Scope::new(args.crates.clone(), args.paths.clone()).with_metadata(metadata);
 
     let fix_scan = Scan::new(&workspace_root);
     let ctx = Context {
         workspace_root: &workspace_root,
-        metadata: &metadata,
+        metadata,
         config: &config,
         scope: &scope,
         scan: &fix_scan,
     };
-    let project = ProjectConfig::load(&workspace_root)?;
+    let project = &workspace.config;
 
     let registry = registry();
     let known_ids: HashSet<&str> = registry.iter().map(|c| c.id()).collect();
@@ -107,7 +112,7 @@ pub(crate) fn run(args: &StyleArgs) -> Result<()> {
         .collect();
     let ran: Vec<&'static str> = selected.iter().map(|check| check.id()).collect();
 
-    let outcomes = run_checks(&selected, &ctx, &project, &workspace_root)?;
+    let outcomes = run_checks(&selected, &ctx, project, &workspace_root)?;
 
     if args.timings {
         let rows: Vec<_> = ran
@@ -125,7 +130,7 @@ pub(crate) fn run(args: &StyleArgs) -> Result<()> {
 
     if args.update_baseline {
         let new_baseline = Baseline::from_report(&report);
-        let path = new_baseline.save(&args.config_dir)?;
+        let path = new_baseline.save(&config_dir)?;
         let total: usize = new_baseline.checks.values().map(BTreeMap::len).sum();
         println!(
             "wrote style baseline ({} entry across {} check(s)) to {}",
@@ -136,7 +141,7 @@ pub(crate) fn run(args: &StyleArgs) -> Result<()> {
         return Ok(());
     }
 
-    let baseline = Baseline::load(&args.config_dir)?;
+    let baseline = Baseline::load(&config_dir)?;
     let baseline = if scope.is_empty() {
         baseline
     } else {
@@ -145,12 +150,13 @@ pub(crate) fn run(args: &StyleArgs) -> Result<()> {
     let diff = baseline.diff(&report.violations);
 
     if let Some(path) = &args.report {
+        let path = workspace_root.join(path);
         let md = report::render_markdown(&report, &ran, &diff);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("create report dir: {}", parent.display()))?;
         }
-        fs::write(path, md).with_context(|| format!("write report: {}", path.display()))?;
+        fs::write(&path, md).with_context(|| format!("write report: {}", path.display()))?;
         eprintln!("wrote markdown report to {}", path.display());
     } else if args.json {
         print!("{}", report::render_json(&report, &ran, &diff));
@@ -235,7 +241,7 @@ fn run_fix(
     ctx: &Context<'_>,
     allow_dirty: bool,
 ) -> Result<()> {
-    crate::util::ensure_clean_tree(allow_dirty, "xtask lint style")?;
+    crate::util::ensure_clean_tree(ctx.workspace_root, allow_dirty, "xtask lint style")?;
     let mut total_writes = 0_usize;
     let mut all_skipped: Vec<String> = Vec::new();
     for check in registry {

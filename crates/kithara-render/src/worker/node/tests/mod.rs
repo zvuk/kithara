@@ -1,5 +1,7 @@
 mod activity_tests;
 mod core;
+#[cfg(not(target_arch = "wasm32"))]
+mod maintenance;
 mod preload;
 mod readiness_contracts;
 mod scheduler_tests;

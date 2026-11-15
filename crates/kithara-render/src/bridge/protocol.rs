@@ -1,13 +1,17 @@
 use std::fmt;
 
 use kithara_audio::TrackFailureKind;
-use kithara_command::{Protocol, Target};
-use kithara_effects::{GainDb, eq::EqLayout};
+use kithara_command::{Protocol, Seq, Target};
+use kithara_derive::Ranged;
+use kithara_effects::{DeckEffect, FxParamChange, GainDb, eq::EqLayout};
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_signal::{SegmentId, SessionFrame};
 
-use super::{DeckMixSettingsChange, SlotMark};
+use super::{
+    DeckMixSettingsChange, EqBinding, EqGainProgram, FilterBinding, FilterProgram, SlotBinding,
+    SlotGainProgram, SlotMark,
+};
 use crate::{CrossfadeSettings, rt::track::PlayerResource};
 
 /// One scoped deck's commands, clock and verdicts.
@@ -51,11 +55,39 @@ impl Target for Slot {
 /// A whole-batch refusal, before any part changes the deck.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeckRefusal {
-    Occupied { slot: Slot },
-    Empty { slot: Slot },
-    Outdated { slot: Slot },
+    Occupied {
+        slot: Slot,
+    },
+    Empty {
+        slot: Slot,
+    },
+    Outdated {
+        slot: Slot,
+    },
     Deferral,
     AxisRestarted,
+    /// A part names an FX unit the deck was not built with.
+    MissingFxUnit {
+        unit: usize,
+    },
+    /// A part changes a parameter the effect in `unit` does not have or cannot
+    /// take.
+    RefusedFxParam {
+        unit: usize,
+    },
+    EqOutdated {
+        band: usize,
+    },
+    EqUnavailable {
+        band: usize,
+    },
+    EqProgramClock {
+        band: usize,
+    },
+    EqProgramCapacity,
+    FilterOutdated,
+    FilterProgramClock,
+    FilterProgramCapacity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -68,6 +100,17 @@ pub enum Fade {
 pub enum FadeDir {
     In,
     Out,
+}
+
+/// Which clock a track keeps through a PCM dropout.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TrackClock {
+    /// The track resumes on the frame it stopped on.
+    #[default]
+    Media,
+    /// The track drops the frames the dropout missed and resumes where the
+    /// session stands.
+    Session,
 }
 
 /// Parts are applied in order after validation against the whole batch.
@@ -108,8 +151,30 @@ pub enum DeckPart {
         from: Slot,
         to: Slot,
     },
+    /// Sets the clock of the track seated in `slot`; an empty slot ignores it.
+    Clock {
+        slot: Slot,
+        clock: TrackClock,
+    },
     Mix(DeckMixSettingsChange),
     Eq(DeckEqChange),
+    Fx(DeckFxChange),
+    FilterProgram {
+        binding: FilterBinding,
+        authority: Option<Seq>,
+        program: FilterProgram,
+    },
+    EqProgram {
+        binding: EqBinding,
+        authority: Option<Seq>,
+        program: EqGainProgram,
+    },
+    GainProgram {
+        slot: Slot,
+        binding: SlotBinding,
+        authority: Option<Seq>,
+        program: SlotGainProgram,
+    },
     Returned(Returned),
 }
 
@@ -124,12 +189,56 @@ pub enum Returned {
         slot: Slot,
         resume: Option<SlotMark>,
     },
+    /// The effect an install or clear took out of `unit`.
+    Fx {
+        unit: usize,
+        effect: Box<dyn DeckEffect>,
+    },
 }
 
 #[derive(Debug)]
 pub enum DeckEqChange {
     Gain { band: usize, gain: GainDb },
     Layout(Box<EqLayout>),
+}
+
+/// An FX unit's dry/wet: `0.0` sounds its input alone, `1.0` its effect's wet
+/// signal alone.
+#[derive(Clone, Copy, Debug, PartialEq, Ranged)]
+#[ranged(min = 0.0, max = 1.0)]
+pub struct FxMix(f32);
+
+/// A change of one of the deck's FX units, which run in series after its
+/// equaliser.
+#[derive(Debug)]
+pub enum DeckFxChange {
+    /// Puts `effect` in `unit`, returning the effect it held.
+    Install {
+        unit: usize,
+        effect: Box<dyn DeckEffect>,
+    },
+    /// Empties `unit`, returning the effect it held.
+    Clear { unit: usize },
+    /// Switches `unit` on, its effect reset, or off to pass its input.
+    Power { unit: usize, on: bool },
+    /// Ramps the dry/wet of `unit` to `value`.
+    Mix { unit: usize, value: FxMix },
+    /// Changes a parameter of the effect in `unit`, checked against the effect
+    /// it holds when the batch arrives.
+    Param { unit: usize, change: FxParamChange },
+}
+
+impl DeckFxChange {
+    #[must_use]
+    pub const fn unit(&self) -> usize {
+        match self {
+            Self::Install { unit, .. }
+            | Self::Clear { unit }
+            | Self::Power { unit, .. }
+            | Self::Mix { unit, .. }
+            | Self::Param { unit, .. } => *unit,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,8 +330,46 @@ impl fmt::Debug for DeckPart {
                 .field("from", from)
                 .field("to", to)
                 .finish(),
+            Self::Clock { slot, clock } => formatter
+                .debug_struct("Clock")
+                .field("slot", slot)
+                .field("clock", clock)
+                .finish(),
             Self::Mix(change) => formatter.debug_tuple("Mix").field(change).finish(),
             Self::Eq(change) => formatter.debug_tuple("Eq").field(change).finish(),
+            Self::Fx(change) => formatter.debug_tuple("Fx").field(change).finish(),
+            Self::FilterProgram {
+                binding,
+                authority,
+                program,
+            } => formatter
+                .debug_struct("FilterProgram")
+                .field("binding", binding)
+                .field("authority", authority)
+                .field("program", program)
+                .finish(),
+            Self::EqProgram {
+                binding,
+                authority,
+                program,
+            } => formatter
+                .debug_struct("EqProgram")
+                .field("binding", binding)
+                .field("authority", authority)
+                .field("program", program)
+                .finish(),
+            Self::GainProgram {
+                slot,
+                binding,
+                authority,
+                program,
+            } => formatter
+                .debug_struct("GainProgram")
+                .field("slot", slot)
+                .field("binding", binding)
+                .field("authority", authority)
+                .field("program", program)
+                .finish(),
             Self::Returned(returned) => formatter.debug_tuple("Returned").field(returned).finish(),
         }
     }
@@ -242,6 +389,7 @@ impl fmt::Debug for Returned {
                 .field("slot", slot)
                 .field("resume", resume)
                 .finish(),
+            Self::Fx { unit, .. } => formatter.debug_struct("Fx").field("unit", unit).finish(),
         }
     }
 }

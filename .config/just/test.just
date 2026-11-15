@@ -13,166 +13,19 @@ test-utils:
 run *ARGS:
     just _xtask test "$@"
 
+# Compare complete nextest inventories through package and binary renames.
+[positional-arguments]
+census *ARGS:
+    just _xtask test-census "$@"
+
 all:
     just test
     just test run --lane=doc
 
-# These are workspace tests like any other, but `wasm32` has no host binary for
-# nextest to execute: the harness is `wasm-bindgen-test` driving a real browser,
-# and the target rebuilds std, which only the pinned nightly honours. That is
-# why they do not go through `just test run`. `just platform wasm` keeps the
-# artifacts (check, build, size-check); the tests belong here.
-#
-# Both suites run the wasm Host tests and FFI wire contract. SUITE `all` also
-# runs the integration browser suite; `webcodecs` adds kithara-decode's target.
-
-# Run browser tests; REAL_AUDIO_ROUTE selects device-backed binaries for CI only.
+# Run browser tests through the wasm owner in xtask.
 [positional-arguments]
-wasm BROWSER="chrome" SUITE="all" REAL_AUDIO_ROUTE="exclude":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    browser="{{ BROWSER }}"
-    suite="{{ SUITE }}"
-    real_audio_route="{{ REAL_AUDIO_ROUTE }}"
-    toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
-    case "$real_audio_route" in
-      exclude|include) ;;
-      *)
-        echo "unknown real audio route selection: $real_audio_route (use exclude|include)"
-        exit 2
-        ;;
-    esac
-    case "$suite" in
-      all|webcodecs) ;;
-      *)
-        echo "unknown wasm test suite: $suite (use all|webcodecs)"
-        exit 2
-        ;;
-    esac
-    if [[ "$suite" == "webcodecs" && "$browser" != "chrome" ]]; then
-      echo "the WebCodecs target runs on chrome only"
-      exit 2
-    fi
-    case "$browser" in
-      chrome)  export CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" ;;
-      firefox) export GECKODRIVER="${GECKODRIVER:-geckodriver}" ;;
-      safari)  export SAFARIDRIVER="${SAFARIDRIVER:-safaridriver}" ;;
-      *)
-        echo "unknown wasm test browser: $browser (use chrome|firefox|safari)"
-        exit 2
-        ;;
-    esac
-    # The browser talks to a fixture server that runs on this machine, and the
-    # runner looks for it beside itself — for every wasm test binary, not just
-    # the integration suite. Nothing in a wasm build produces a host binary, so
-    # without this the run dies with "failed to start test_server ... No such
-    # file or directory".
-    cargo build -p kithara-integration-tests --features all --bin test_server
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-encode --no-default-features \
-      --features client-reqwest,tls-rustls \
-      --test session
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-host --lib --no-default-features \
-      --features symphonia,webcodecs,resample-rubato,stretch-identity,client-reqwest,tls-rustls
-    if [[ "$real_audio_route" == "include" ]]; then
-      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-        cargo "+$toolchain" test --profile test-release \
-        --target wasm32-unknown-unknown \
-        -Z build-std=std,panic_abort,core,alloc \
-        -Z build-std-features=optimize_for_size \
-        -p kithara-ffi --test web-observer --no-default-features \
-        --features wasm
-    fi
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-worker --lib
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-dsp --lib --test layout --features spectrum
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-platform --lib
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-command --lib
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-analysis --lib --no-default-features \
-      --features analysis-waveform,beat-dsp,client-reqwest,tls-rustls,symphonia,webcodecs
-    if [[ "$real_audio_route" == "include" ]]; then
-      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-        cargo "+$toolchain" test --profile test-release \
-        --target wasm32-unknown-unknown \
-        -Z build-std=std,panic_abort,core,alloc \
-        -Z build-std-features=optimize_for_size \
-        -p kithara-ffi-web-analysis-tests --features browser --test web-analysis
-    fi
-    if [[ "$suite" == "all" ]]; then
-      # `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml
-      # so both lanes rebuild one identical std. The release-grade test profile
-      # is what lets the seek-pressure contract reach its final oracle inside
-      # its own ten-second deadline, which stays untouched.
-      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-        cargo "+$toolchain" test --profile test-release \
-        --target wasm32-unknown-unknown \
-        -Z build-std=std,panic_abort,core,alloc \
-        -Z build-std-features=optimize_for_size \
-        -p kithara-ffi-web-tests -p kithara-integration-tests --no-default-features \
-        --features kithara-integration-tests/wasm --test ffi_web --test suite_heavy
-      # `wasm-bindgen-test` picks its thread per binary, and the live-graph
-      # oracle needs the page's main thread.
-      if [[ "$real_audio_route" == "include" ]]; then
-        WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-          cargo "+$toolchain" test --profile test-release \
-          --target wasm32-unknown-unknown \
-          -Z build-std=std,panic_abort,core,alloc \
-          -Z build-std-features=optimize_for_size \
-          -p kithara-integration-tests --no-default-features \
-          --features kithara-integration-tests/wasm --test suite_live_web_audio
-      fi
-    fi
-    # `webcodecs_browser` belongs to kithara-decode, not to any integration
-    # suite, so it is its own cargo invocation. WebCodecs is a Chromium API;
-    # the other engines have nothing to answer here.
-    #
-    # It rebuilds std for the same reason the suite above does: the repository
-    # compiles wasm32 with `+atomics`, and linking that against a stock std
-    # fails with "--shared-memory is disallowed by std ... not compiled with
-    # 'atomics' or 'bulk-memory'". Both invocations must carry the flags.
-    if [[ "$browser" == "chrome" ]]; then
-      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-        cargo "+$toolchain" test --profile test-release \
-        --target wasm32-unknown-unknown \
-        -Z build-std=std,panic_abort,core,alloc \
-        -Z build-std-features=optimize_for_size \
-        -p kithara-decode --no-default-features \
-        --features symphonia,webcodecs,client-reqwest,tls-rustls \
-        --test webcodecs_browser
-    fi
+wasm *ARGS:
+    just _xtask wasm test "$@"
 
 # Render the same active no-SYNC scenarios into listening artifacts, the Host
 # metronome over a sine deck through a tempo ride, then the Warp scenarios on
@@ -410,23 +263,7 @@ fuzz SECONDS="120" *TARGETS:
 
 [positional-arguments]
 miri *ARGS:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # Isolation hides the clock and the environment, which every one of these
-    # crates reads on the way to its first assertion.
-    MIRIFLAGS="-Zmiri-disable-isolation" \
-        cargo +nightly miri test --lib --no-default-features \
-        --features kithara-platform/tokio-rt-multi-thread \
-        --features kithara-queue/symphonia,kithara-queue/stretch-glide,kithara-queue/client-reqwest,kithara-queue/tls-rustls \
-        -p kithara-abr \
-        -p kithara-bufpool \
-        -p kithara-command \
-        -p kithara-download \
-        -p kithara-events \
-        -p kithara-queue \
-        -p kithara-ring \
-        -p kithara-stream \
-        "$@"
+    just _xtask miri -- "$@"
 
 # Two backends answer to the same annotations, chosen by KITHARA_RTSAN_BACKEND:
 #

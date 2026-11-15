@@ -1,7 +1,10 @@
 use kithara::ui::render::{Node, ReadValue, Scope, StereoLevels};
 
 use super::value::{Value, impl_child_node};
-use crate::{gui::ui::scope::deck_index, mix::MixState};
+use crate::{
+    engine::{DeckSnapshot, EngineSnapshot},
+    mix::MixState,
+};
 
 #[derive(Clone, Copy)]
 pub(super) struct MixNode<'a> {
@@ -24,23 +27,29 @@ impl<'a> Node<'a> for MixNode<'a> {
     }
 }
 
-/// The master bus: what the mix hands the output, and the gain it is handed
-/// through. `MixState::levels` is the only place that folds trim, mute, the
-/// crossfader and the master together, so the meter reads it rather than
-/// re-deriving a second answer. A rejected fold means the stored position is
-/// not a mix at all, and the node answers nothing rather than a plausible zero.
+/// The master bus. Its level comes from `MixState::levels` over the published
+/// strips; an invalid mix answers nothing.
 #[derive(Clone, Copy)]
 pub(super) struct OutputNode<'a> {
     mix: &'a MixState,
+    decks: &'a [DeckSnapshot],
 }
 
 impl<'a> OutputNode<'a> {
-    pub(super) const fn new(mix: &'a MixState) -> Self {
-        Self { mix }
+    pub(super) const fn new(mix: &'a MixState, decks: &'a [DeckSnapshot]) -> Self {
+        Self { mix, decks }
     }
 
     fn passing(self) -> Option<f32> {
-        Some(self.mix.levels().ok()?.into_iter().fold(0.0, f32::max))
+        let strips = self.decks.iter().map(|deck| &deck.strip);
+
+        Some(
+            self.mix
+                .levels(strips)
+                .ok()?
+                .into_iter()
+                .fold(0.0, f32::max),
+        )
     }
 }
 
@@ -62,19 +71,21 @@ impl_child_node!(OutputNode<'a>, |this, segment, _scope| {
 
 #[derive(Clone, Copy)]
 pub(super) struct PlayerNode<'a> {
-    mix: &'a MixState,
+    output: OutputNode<'a>,
 }
 
 impl<'a> PlayerNode<'a> {
-    pub(super) const fn new(mix: &'a MixState) -> Self {
-        Self { mix }
+    pub(super) const fn new(mix: &'a MixState, decks: &'a [DeckSnapshot]) -> Self {
+        Self {
+            output: OutputNode::new(mix, decks),
+        }
     }
 }
 
 impl<'a> Node<'a> for PlayerNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         match segment {
-            "output" => Some(Box::new(OutputNode::new(self.mix))),
+            "output" => Some(Box::new(self.output)),
             _ => None,
         }
     }
@@ -82,17 +93,18 @@ impl<'a> Node<'a> for PlayerNode<'a> {
 
 #[derive(Clone, Copy)]
 pub(super) struct StripsNode<'a> {
-    mix: &'a MixState,
+    snapshot: &'a EngineSnapshot,
 }
 
 impl<'a> StripsNode<'a> {
-    pub(super) const fn new(mix: &'a MixState) -> Self {
-        Self { mix }
+    pub(super) const fn new(snapshot: &'a EngineSnapshot) -> Self {
+        Self { snapshot }
     }
 }
 
 impl_child_node!(StripsNode<'a>, |this, segment, scope| {
-    let strip = this.mix.strips.get(deck_index(scope.get("deck")?)?)?;
+    let strip = &this.snapshot.lettered(scope.get("deck")?)?.strip;
+
     let value = match segment {
         "muted" => ReadValue::Bool(strip.muted),
         "trim" => ReadValue::Scalar(f64::from(strip.trim)),

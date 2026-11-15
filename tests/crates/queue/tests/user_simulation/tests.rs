@@ -8,7 +8,7 @@ use kithara::{
     download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId, TryRecvError},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
@@ -127,14 +127,17 @@ async fn build_hls_abr(helper: &TestServerHelper, drm: bool, mixed_codec: bool) 
 
 async fn run_scenario(specs: Vec<TrackSpec>, actions: Vec<Action>) {
     let temp = temp_dir();
-    let mut harness = SimHarness::new(temp.path(), &specs).await;
-    harness.enter_track(0, WARMUP).await;
-    for action in actions {
-        let label = action.label();
-        tracing::debug!(action = %label, "user_sim: applying");
-        harness.apply(action).await;
-    }
-    harness.close().await;
+    let closing = {
+        let mut harness = SimHarness::new(temp.path(), &specs).await;
+        harness.enter_track(0, WARMUP).await;
+        for action in actions {
+            let label = action.label();
+            tracing::debug!(action = %label, "user_sim: applying");
+            harness.apply(action).await;
+        }
+        harness.close()
+    };
+    closing.await;
 }
 
 async fn run_single(kind: PreparedTrack, abr: AbrMode, actions: Vec<Action>) {
@@ -170,7 +173,12 @@ async fn run_multi(kinds: PreparedTracks, actions: Vec<Action>) {
 /// and auto-advance. HLS cases are exercised under every ABR mode so
 /// the same `seek_forward_unbuffered` path hits Auto's switch-decision
 /// arm AND Manual's no-switch arm.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    tokio,
+    multi_thread,
+    timeout(Duration::from_secs(60)),
+    tracing("warn,kithara_integration_tests::user_sim::harness=debug")
+)]
 #[case::mp3_file(track_mp3_file().await, AbrMode::Auto(None))]
 #[case::mp3_streamhq(track_mp3_stream_hq().await, AbrMode::Auto(None))]
 #[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
@@ -350,9 +358,8 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
     let temp = temp_dir();
     let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

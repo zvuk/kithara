@@ -31,7 +31,9 @@ use kithara::{
         time::{Duration, sleep},
         tokio::task,
     },
-    play::{MixTapWriter, PlayWorker, PlayWorkerConfig, PlayerFactory, ResourcePrep},
+    play::{
+        CrossfaderGain, MixTapWriter, PlayWorker, PlayWorkerConfig, PlayerFactory, ResourcePrep,
+    },
     queue::{Queue, QueueConfig, Transition},
 };
 use kithara_integration_tests::{
@@ -213,7 +215,7 @@ async fn live_web_audio_plays_at_session_rate() {
     init_diagnostics();
 
     let host: Host<TestPools> = Host::new(
-        HostConfig::builder()
+        HostConfig::builder(pools())
             .settings(HostSettings::builder().sample_rate(RATE).build())
             .build(),
     )
@@ -409,8 +411,9 @@ async fn run_deck_pair_worker(sender: wasm::HostSender<TestPools>, pair: Arc<Dec
             let levels = [CrossfaderBus::A, CrossfaderBus::B]
                 .map(|bus| crossfader_gain(bus, position).expect("a valid position"));
             for (deck, level) in decks.iter().zip(levels) {
+                let level = CrossfaderGain::checked(level).expect("a crossfader gain");
                 deck.control()
-                    .set_level(level)
+                    .set_crossfader(level)
                     .expect("set the crossfader level");
             }
             if applied == DeckPair::UNAPPLIED {
@@ -502,7 +505,7 @@ async fn two_decks_in_one_host_follow_the_crossfader() {
     init_diagnostics();
 
     let host: Host<TestPools> = Host::new(
-        HostConfig::builder()
+        HostConfig::builder(pools())
             .settings(HostSettings::builder().sample_rate(RATE).build())
             .build(),
     )

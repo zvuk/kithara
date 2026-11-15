@@ -51,6 +51,6 @@ where
     }
 
     fn snapshot(&self) -> Self::Snapshot {
-        self.queue_snapshot()
+        QueueSnapshot::clone(&self.view.read())
     }
 }

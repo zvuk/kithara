@@ -60,6 +60,12 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
+        id: "deck.playback.synced",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
         id: "deck.focused",
         value: ValueKind::Bool,
         scopes: Endpoint::DECK,
@@ -115,6 +121,54 @@ static ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         category: EndpointCategory::Command,
         id: "deck.transport.toggle_play",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.transport.toggle_sync",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.key.locked",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.key.lock_hidden",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.key.toggle_lock",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.key.transpose",
+        value: ValueKind::Text,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.key.transpose_up",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.key.transpose_down",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "deck.key.transpose_reset",
         value: ValueKind::Trigger,
         scopes: Endpoint::DECK,
     },
@@ -319,6 +373,18 @@ static ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         category: EndpointCategory::Model,
         id: "vis.time",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "clock.bpm",
+        value: ValueKind::Text,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Parameter,
+        id: "clock.tempo",
         value: ValueKind::Scalar,
         scopes: Endpoint::GLOBAL,
     },

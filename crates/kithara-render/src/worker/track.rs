@@ -3,7 +3,6 @@ use std::num::NonZeroUsize;
 use kithara_audio::{AudioConfig, ResamplerBackend};
 use kithara_config::{Config, Patch};
 use kithara_dsp::param::SmootherConfig;
-use kithara_effects::AudioEffect;
 use kithara_platform::sync::Arc;
 use kithara_stream::StreamType;
 use kithara_warp::WarpConfig;
@@ -36,7 +35,9 @@ where
     #[config(value, builder(default = crate::consts::DEFAULT_DECLICK), patch(skip))]
     #[field(get, copy)]
     pub(crate) declick: SmootherConfig,
-    /// Chunk capacity of each forward and reverse PCM ring.
+    /// Rendered lead each lane queues behind the packet its reader holds, in
+    /// render quanta. The lead is counted in frames, so a short packet takes
+    /// only its own frames and never a whole quantum.
     #[config(value, builder(default = crate::consts::AUDIO_BUFFER_CHUNKS))]
     #[field(get, copy)]
     pub(crate) audio_buffer_chunks: NonZeroUsize,
@@ -52,14 +53,6 @@ where
     #[field(get)]
     #[config(skip = "transferred to the producer cost meter", patch(skip))]
     pub(crate) engine_load: Option<Arc<EngineLoad>>,
-    /// Playback effects after the resident Warp stage.
-    #[config(
-        skip = "transferred to the effect chain",
-        builder(default),
-        patch(skip)
-    )]
-    #[field(get)]
-    pub(crate) effects: Vec<Box<dyn AudioEffect>>,
     /// Resident Warp resources and live temporal controls.
     #[config(skip = "transferred to the warp lane", builder(default = WarpConfig::builder().build()), patch(skip))]
     #[field(get)]
@@ -72,6 +65,15 @@ impl<T: StreamType, B: ResamplerBackend> TrackConfig<T, B> {
     pub fn declick_frames(&self, rate: std::num::NonZeroU32) -> kithara_signal::FrameCount {
         crate::rt::declick_frame_count(self.declick, rate)
     }
+}
+
+/// Frames of one lane packet at most, the unit of `audio_buffer_chunks`: the
+/// Warp render quantum, bounded by the source block it renders from.
+#[must_use]
+pub fn pcm_quantum(warp: &WarpConfig) -> NonZeroUsize {
+    let source_block = warp.source_block_frames();
+    warp.render_quantum_frames()
+        .map_or(source_block, |quantum| quantum.min(source_block))
 }
 
 impl<T, B> From<AudioConfig<T, B>> for TrackConfig<T, B>

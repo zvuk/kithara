@@ -7,10 +7,7 @@ pub(crate) mod flac;
 pub(crate) mod pcm;
 pub(crate) mod stream;
 
-pub(crate) use ffmpeg::codec::encoder::find as find_encoder;
-use ffmpeg_next as ffmpeg;
-
 pub(crate) use self::core::{
     PacketCodec, RebaseRates, build_direct_filter, collect_encoded_packets,
-    ensure_ffmpeg_initialized,
+    ensure_ffmpeg_initialized, find_encoder,
 };

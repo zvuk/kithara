@@ -30,7 +30,7 @@ use kithara_integration_tests::{
     mock::InjectedFactory,
     offline::{
         OfflinePlayer, OfflinePlayerOptions, append_source_loaded, asset_source,
-        offline_queue_fixture,
+        offline_queue_fixture_with_options,
     },
     waits::wait_for_loader_done_event,
 };
@@ -93,7 +93,14 @@ struct SecondCopyPlaying {
 }
 
 async fn fixture_playing_the_second_copy(track: &Asset) -> SecondCopyPlaying {
-    let (harness, queue) = offline_queue_fixture(SAMPLE_RATE).await;
+    let (harness, queue) = offline_queue_fixture_with_options(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .block_on_underrun(true)
+            .build(),
+        SAMPLE_RATE,
+    )
+    .await;
     let source = asset_source(track);
     let first = append_source_loaded(&harness, &queue, source.clone()).await;
     let playing = append_source_loaded(&harness, &queue, source.clone()).await;
@@ -335,6 +342,11 @@ async fn second_entry_with_the_same_source_owns_its_real_eof() {
     } = fixture_playing_the_second_copy(&assets::constant_wav_loud_0_5s()).await;
     render_loop(&queue, &harness, EOF_BLOCK_BUDGET).await;
 
+    assert_eq!(
+        harness.metrics().underruns(),
+        0,
+        "EOF fixture must render without producer starvation"
+    );
     assert_eq!(
         status_of(&queue, playing),
         TrackStatus::Consumed,

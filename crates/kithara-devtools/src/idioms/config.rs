@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -42,17 +42,17 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_delegation: DerivableDelegationConfig,
     #[serde(default)]
-    pub(crate) derivable_event: DerivableConfig,
+    pub(crate) derivable_event: EventConfig,
     #[serde(default)]
     pub(crate) derivable_getter: DerivableGetterConfig,
     #[serde(default)]
-    pub(crate) derivable_built_default: DerivableRangedConfig,
+    pub(crate) derivable_built_default: ProductDeriveConfig,
     #[serde(default)]
     pub(crate) derivable_clone: DerivableRangedConfig,
     #[serde(default)]
-    pub(crate) derivable_control: DerivableRangedConfig,
+    pub(crate) derivable_control: ProductDeriveConfig,
     #[serde(default)]
-    pub(crate) derivable_control_painter: DerivableRangedConfig,
+    pub(crate) derivable_control_painter: ProductDeriveConfig,
     #[serde(default)]
     pub(crate) derivable_debug: DerivableRangedConfig,
     #[serde(default)]
@@ -60,25 +60,25 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_display: DerivableRangedConfig,
     #[serde(default)]
-    pub(crate) derivable_enum_str: DerivableRangedConfig,
+    pub(crate) derivable_enum_str: ProductDeriveConfig,
     #[serde(default)]
     pub(crate) derivable_error: DerivableRangedConfig,
     #[serde(default)]
-    pub(crate) derivable_into_probe_arg: DerivableRangedConfig,
+    pub(crate) derivable_into_probe_arg: ProductDeriveConfig,
     #[serde(default)]
-    pub(crate) derivable_mirror: DerivableRangedConfig,
+    pub(crate) derivable_mirror: ProductDeriveConfig,
     #[serde(default)]
-    pub(crate) derivable_patch: DerivableRangedConfig,
+    pub(crate) derivable_patch: ProductDeriveConfig,
     #[serde(default)]
-    pub(crate) derivable_phase: DerivableRangedConfig,
+    pub(crate) derivable_phase: ProductDeriveConfig,
     #[serde(default)]
-    pub(crate) derivable_ranged: DerivableRangedConfig,
+    pub(crate) derivable_ranged: ProductDeriveConfig,
     #[serde(default)]
     pub(crate) derivable_serialize: DerivableRangedConfig,
     #[serde(default)]
-    pub(crate) derivable_skin_walk: DerivableRangedConfig,
+    pub(crate) derivable_skin_walk: ProductDeriveConfig,
     #[serde(default)]
-    pub(crate) derivable_variants: DerivableRangedConfig,
+    pub(crate) derivable_variants: ProductDeriveConfig,
     #[serde(default)]
     pub(crate) fat_loop_body: FatLoopBodyConfig,
     #[serde(default)]
@@ -121,6 +121,15 @@ impl Default for DerivableConfig {
     }
 }
 
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
+#[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
+pub(crate) struct EventConfig {
+    pub(crate) enabled: bool,
+    /// The workspace-relative owner may implement the selected Event contract manually.
+    pub(crate) owner_path: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum DerivableSeverity {
@@ -141,6 +150,23 @@ impl Default for DerivableRangedConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            severity: DerivableSeverity::Deny,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
+#[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
+pub(crate) struct ProductDeriveConfig {
+    pub(crate) severity: DerivableSeverity,
+    pub(crate) enabled: bool,
+}
+
+impl Default for ProductDeriveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
             severity: DerivableSeverity::Deny,
         }
     }
@@ -647,6 +673,57 @@ fn default_retry_forbidden_substrings() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn product_derives_are_opt_in_and_generic_derives_remain_enabled() {
+        let thresholds = ThresholdsConfig::default();
+        assert!(thresholds.derivable_from.enabled);
+        assert!(thresholds.derivable_deref.enabled);
+        assert!(thresholds.derivable_clone.enabled);
+        assert!(!thresholds.derivable_event.enabled);
+        assert!(!thresholds.derivable_ranged.enabled);
+        assert!(!thresholds.derivable_into_probe_arg.enabled);
+        assert!(!thresholds.derivable_mirror.enabled);
+        assert!(!thresholds.derivable_built_default.enabled);
+        assert!(!thresholds.derivable_skin_walk.enabled);
+        assert!(!thresholds.derivable_patch.enabled);
+        assert!(!thresholds.derivable_phase.enabled);
+        assert!(!thresholds.derivable_control.enabled);
+        assert!(!thresholds.derivable_control_painter.enabled);
+        assert!(!thresholds.derivable_enum_str.enabled);
+        assert!(!thresholds.derivable_variants.enabled);
+    }
+
+    #[test]
+    fn explicit_product_policy_keeps_selection_and_strict_fields() {
+        let config: ThresholdsConfig = toml::from_str(
+            r#"
+[derivable_event]
+enabled = true
+owner_path = "packages/events"
+
+[derivable_mirror]
+enabled = true
+
+[derivable_ranged]
+enabled = true
+severity = "warn"
+"#,
+        )
+        .expect("explicit product policy");
+        assert!(config.derivable_event.enabled);
+        assert_eq!(
+            config.derivable_event.owner_path.as_deref(),
+            Some(Path::new("packages/events"))
+        );
+        assert!(config.derivable_mirror.enabled);
+        assert_eq!(config.derivable_mirror.severity, DerivableSeverity::Deny);
+        assert!(config.derivable_ranged.enabled);
+        assert_eq!(config.derivable_ranged.severity, DerivableSeverity::Warn);
+        assert!(toml::from_str::<ThresholdsConfig>("[derivable_event]\nunknown=true").is_err());
+        assert!(toml::from_str::<ThresholdsConfig>("[derivable_event]\nenabled='yes'").is_err());
+        assert!(toml::from_str::<ThresholdsConfig>("[derivable_mirror]\nunknown=true").is_err());
+    }
 
     #[test]
     fn exemption_only_config_preserves_defaults_and_strict_fields() -> Result<()> {

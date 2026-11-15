@@ -1,0 +1,590 @@
+#![cfg(not(target_arch = "wasm32"))]
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use kithara::{
+    audio::{AudioObserveError, AudioObserver},
+    decode::DecoderBackend,
+    events::{EventReceiver, TrackId},
+    hls::AbrMode,
+    platform::{
+        sync::Arc,
+        time::{Duration, Instant, timeout},
+    },
+    play::PlayerEvent,
+    queue::{QueueControl, Transition},
+    signal::AudioChunk,
+};
+use kithara_app::pools::AppPools;
+use kithara_integration_tests::{
+    event::TestEvent,
+    kithara,
+    offline::{AppQueueFixture, app_track_source, insecure_app_queue},
+    usdt_trace::scope,
+    waits::wait_for_loader_done_event,
+};
+use kithara_render::bridge::SlotState;
+use kithara_test_utils::wait_until;
+
+/// `cdn-hls-slicer.zvuk.com` → `zvuk-prod` provider in baked `app.yaml`.
+///
+/// The track the bug was captured on (`171515249_1`, `app.log @ 06:39:13`)
+/// answers 502 — the slicer no longer serves it, so the scenario ran against
+/// the catalogue rather than the player. This is the longest track the
+/// playlist still serves, which is what the scrub needs: somewhere to land
+/// far outside anything the warmup could have buffered.
+const TARGET_TRACK: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/79829257_2/master.m3u8";
+
+/// Absolute scrub target: the same ~45% of the track the captured slider
+/// position was at, over this track's 480.16s. Fixed in seconds rather than
+/// as a ratio because `Queue::duration_seconds()` is only populated after
+/// the player has decoded at least one frame, and we want the scrub
+/// to land outside the buffered range — the bug precondition.
+const SCRUB_TARGET_SECS: f64 = 216.07;
+
+/// Safety budgets. These are NOT timer-driven control flow — every
+/// state transition is probe / event driven. Budgets fail the test
+/// loudly rather than mask a hang. Chosen larger than realistic prod
+/// latency (cold CDN cache, slow CI runner) so flakes surface as
+/// real bugs, not flake margin.
+const LOAD_BUDGET: Duration = Duration::from_secs(45);
+const WARMUP_PROBE_BUDGET: Duration = Duration::from_secs(30);
+const OUTCOME_BUDGET: Duration = Duration::from_secs(45);
+
+/// Minimum playback growth past `SCRUB_TARGET_SECS` that proves the
+/// engine actually resumed decoding after the seek (i.e. the user
+/// hears audio, not silence). Smaller than the budget window so a
+/// healthy run finishes fast; large enough that a single decoded
+/// chunk's timestamp can't accidentally satisfy it.
+const MIN_POST_SEEK_GROWTH_SECS: f64 = 1.0;
+
+async fn build_ctx() -> AppQueueFixture {
+    insecure_app_queue().await
+}
+
+struct DecodedChunks {
+    seen: Arc<AtomicUsize>,
+    from: Duration,
+}
+
+impl AudioObserver for DecodedChunks {
+    fn try_observe(&mut self, chunk: &AudioChunk) -> Result<(), AudioObserveError> {
+        if chunk.frames() > 0
+            && chunk
+                .meta
+                .media_origin
+                .and_then(|origin| chunk.meta.timestamp.checked_sub(origin))
+                .is_some_and(|position| position >= self.from)
+        {
+            self.seen.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(())
+    }
+}
+
+#[kithara::test]
+fn chunk_counter_does_not_count_unrelated_activity() {
+    use std::num::NonZeroU32;
+
+    use kithara::signal::{AudioChunkInfo, AudioSpec};
+    use kithara_test_utils::bufpool::{pools, sample_buffer};
+
+    let decoded = Arc::new(AtomicUsize::new(0));
+    let mut observer = DecodedChunks {
+        seen: Arc::clone(&decoded),
+        from: Duration::from_secs(10),
+    };
+    let recorder = scope();
+    kithara_test_utils::kithara::probe_event!(unrelated_scrub_activity);
+    assert!(
+        !recorder.events().is_empty(),
+        "the control records unrelated activity"
+    );
+    drop(recorder);
+    assert_eq!(decoded.load(Ordering::Relaxed), 0);
+    let pools = pools();
+    let mut chunk = AudioChunk::new(AudioChunkInfo::default(), sample_buffer(&pools, &[]));
+    observer.try_observe(&chunk).expect("empty output accepted");
+    assert_eq!(decoded.load(Ordering::Relaxed), 0);
+    chunk = AudioChunk::new(
+        AudioChunkInfo {
+            spec: AudioSpec::new(1, NonZeroU32::new(44_100).expect("source rate")),
+            frames: 1,
+            media_origin: Some(Duration::from_secs(5)),
+            timestamp: Duration::from_secs(14),
+            ..AudioChunkInfo::default()
+        },
+        sample_buffer(&pools, &[0.5]),
+    );
+    observer
+        .try_observe(&chunk)
+        .expect("old target PCM accepted");
+    assert_eq!(decoded.load(Ordering::Relaxed), 0);
+    chunk.meta.timestamp = Duration::from_secs(15);
+    observer
+        .try_observe(&chunk)
+        .expect("post-seek target PCM accepted");
+    assert_eq!(decoded.load(Ordering::Relaxed), 1);
+}
+
+async fn wait_for_target(
+    ctx: &AppQueueFixture,
+    target: TrackId,
+    chunks: &AtomicUsize,
+) -> Result<(), String> {
+    wait_until(WARMUP_PROBE_BUDGET, "native scrub target Playing", || {
+        ctx.queue.current().is_some_and(|entry| entry.id == target)
+            && chunks.load(Ordering::Relaxed) > 0
+            && ctx.queue.deck_snapshot().slots.iter().any(|slot| {
+                slot.binding.is_some_and(|binding| binding.item() == target)
+                    && slot.state == SlotState::Playing
+            })
+    }).await.map_err(|error| format!(
+        "{error}; current={:?}; index={:?}; position={:?}; host_frame={}; decoded={}; slots={:?}",
+        ctx.queue.current().map(|entry| entry.id), ctx.queue.current_index(),
+        ctx.queue.position_seconds(), ctx.queue.host().position(), chunks.load(Ordering::Relaxed),
+        ctx.queue.deck_snapshot().slots.iter().map(|slot| (slot.binding.map(|binding| binding.item()), slot.state)).collect::<Vec<_>>()
+    ))
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn local_selection_reaches_its_native_playing_slot() {
+    use kithara_test_fixtures::signal::{Wave, wav};
+    use kithara_test_utils::TestTempDir;
+
+    let directory = TestTempDir::new();
+    let source_root = directory.path().to_path_buf();
+    let (document, path) = kithara::platform::tokio::task::spawn_blocking(move || {
+        let path = source_root.join("selection.wav");
+        std::fs::write(&path, wav(44_100, 2, 441_000, Wave::sine(440.0))).expect("local source");
+        let config = source_root.join("app.yaml");
+        std::fs::write(&config, "sources:\n  zvuk: null\ndrm:\n  providers: []\n")
+            .expect("local configuration");
+        (
+            kithara_app::document::Config::load(Some(&config), None)
+                .expect("credential-free local configuration"),
+            path,
+        )
+    })
+    .await
+    .expect("prepare local fixture");
+    let ctx = kithara_integration_tests::offline::app_queue(document).await;
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let source = app_track_source(
+            path.to_str().expect("local path"),
+            &ctx.config,
+            ctx.config.store.clone(),
+            DecoderBackend::Symphonia,
+            AbrMode::Auto(None),
+            None,
+        );
+        ids.push(
+            ctx.queue
+                .run(move |queue| queue.append(source))
+                .await
+                .expect("append source"),
+        );
+    }
+    let target = ids[1];
+    let mut events = ctx.queue.subscribe();
+    wait_for_loader_done_event(&mut events, &ctx.queue, target, LOAD_BUDGET)
+        .await
+        .expect("target loaded");
+    let chunks = Arc::new(AtomicUsize::new(0));
+    ctx.queue.attach_observer(
+        target,
+        DecodedChunks {
+            seen: Arc::clone(&chunks),
+            from: Duration::ZERO,
+        },
+    );
+    ctx.queue
+        .run(move |queue| queue.select(target, Transition::None))
+        .await
+        .expect("select middle item");
+    wait_for_target(&ctx, target, &chunks)
+        .await
+        .expect("native target ready");
+    assert_eq!(ctx.queue.current_index(), Some(1));
+    ctx.close().await;
+}
+
+/// One observed event with a wall-clock relative timestamp. Captured
+/// independently of `src` filtering — auto-advance produces events
+/// for the *next* track, and the test needs to log those just as
+/// loudly as events for the scrubbed track.
+#[derive(Debug, Clone)]
+struct TimedEvent {
+    elapsed: Duration,
+    event: TestEvent,
+}
+
+/// What the engine did with the queue during the observation window.
+///
+/// `PlaybackContinued` is the *only* acceptable outcome: queue stayed
+/// on the target track AND the position advanced past
+/// `SCRUB_TARGET_SECS + MIN_POST_SEEK_GROWTH_SECS`, i.e. the user
+/// actually hears audio after the scrub.
+///
+/// `AutoAdvanced` and `Stalled` are both production-bug shapes:
+/// `AutoAdvanced` = silent track switch (false-EOF cascade);
+/// `Stalled` = no track switch but the source pipeline froze after
+/// the seek (reader stuck, codec wedged, scheduler not advancing).
+/// The user-visible effect is the same — the track stops playing —
+/// so the test must reject both.
+#[derive(Debug)]
+enum ScrubOutcome {
+    PlaybackContinued {
+        final_position: f64,
+        position_growth: f64,
+        chunks_after_seek: usize,
+    },
+    Stalled {
+        final_position: Option<f64>,
+        position_growth: Option<f64>,
+        chunks_after_seek: usize,
+        chunks_at_seek: usize,
+    },
+    AutoAdvanced {
+        triggered_by: AdvanceTrigger,
+        new_index: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AdvanceTrigger {
+    DidPlayToEnd,
+    DidFail,
+    NoTerminalEvent,
+}
+
+struct ScrubObservation<'a> {
+    queue: &'a QueueControl<AppPools>,
+    rx: &'a mut EventReceiver<TestEvent>,
+    chunks: &'a AtomicUsize,
+    event_log: &'a mut Vec<TimedEvent>,
+    started_at: Instant,
+    params: ScrubParams<'a>,
+}
+
+#[derive(Clone, Copy)]
+struct ScrubParams<'a> {
+    target_src: &'a str,
+    chunks_at_seek: usize,
+    min_new_chunks: usize,
+    initial_index: Option<usize>,
+    seek_target_secs: f64,
+    min_growth_secs: f64,
+    budget: Duration,
+}
+
+async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
+    use kithara::platform::tokio::sync::broadcast::error::RecvError;
+    let ScrubParams {
+        target_src,
+        chunks_at_seek,
+        min_new_chunks,
+        initial_index,
+        seek_target_secs,
+        min_growth_secs,
+        budget,
+    } = obs.params;
+    let deadline = Instant::now() + budget;
+    let success_threshold = seek_target_secs + min_growth_secs;
+    let mut last_terminal_for_target: Option<AdvanceTrigger> = None;
+    loop {
+        let current_index = obs.queue.current_index();
+        if current_index != initial_index {
+            return ScrubOutcome::AutoAdvanced {
+                triggered_by: last_terminal_for_target.unwrap_or(AdvanceTrigger::NoTerminalEvent),
+                new_index: current_index.unwrap_or(usize::MAX),
+            };
+        }
+        let chunks_now = obs.chunks.load(Ordering::Relaxed);
+        let new_chunks = chunks_now.saturating_sub(chunks_at_seek);
+        // Primary success signal: the decoder actually produced fresh
+        // PCM chunks after the seek. Chunks are the ground truth (one
+        // probe fires per decoded chunk handed to the audio pipeline);
+        // `position_seconds` is OffSession-render-driven and can stay
+        // `None` while the seek is still pending. Resume needs both
+        // fresh decode work and the target's audible source position.
+        if new_chunks >= min_new_chunks
+            && let Some(position) = obs.queue.position_seconds()
+            && position >= success_threshold
+        {
+            return ScrubOutcome::PlaybackContinued {
+                final_position: position,
+                position_growth: position - seek_target_secs,
+                chunks_after_seek: new_chunks,
+            };
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            let final_position = obs.queue.position_seconds();
+            let position_growth = final_position.map(|p| p - seek_target_secs);
+            return ScrubOutcome::Stalled {
+                final_position,
+                position_growth,
+                chunks_after_seek: new_chunks,
+                chunks_at_seek,
+            };
+        }
+        let recv_budget = remaining.min(Duration::from_millis(200));
+        match timeout(recv_budget, obs.rx.recv())
+            .await
+            .map(|r| r.map(|env| env.event))
+        {
+            Ok(Ok(ev)) => {
+                if let TestEvent::Player(PlayerEvent::ItemDidFail { item, .. }) = &ev
+                    && item.track().src.as_ref() == target_src
+                {
+                    last_terminal_for_target = Some(AdvanceTrigger::DidFail);
+                }
+                if let TestEvent::Player(PlayerEvent::ItemDidPlayToEnd { item }) = &ev
+                    && item.track().src.as_ref() == target_src
+                {
+                    last_terminal_for_target = Some(AdvanceTrigger::DidPlayToEnd);
+                }
+                obs.event_log.push(TimedEvent {
+                    elapsed: obs.started_at.elapsed(),
+                    event: ev,
+                });
+            }
+            Ok(Err(RecvError::Lagged(n))) => {
+                eprintln!("[event-log] LAGGED dropped {n} events");
+                continue;
+            }
+            Ok(Err(RecvError::Closed)) => {
+                let final_position = obs.queue.position_seconds();
+                let position_growth = final_position.map(|p| p - seek_target_secs);
+                return ScrubOutcome::Stalled {
+                    final_position,
+                    position_growth,
+                    chunks_after_seek: new_chunks,
+                    chunks_at_seek,
+                };
+            }
+            Err(_) => continue,
+        }
+    }
+}
+
+/// Rapid-scrub regression: the user reproduces this by tapping a
+/// track and dragging the slider before the first segment after the
+/// scrub target is fetched. Pre-fix, the decoder error propagated as
+/// `eof_seen=true` and the queue auto-advanced silently. Post-fix,
+/// the same decode error surfaces as `ItemDidFail` and the queue
+/// either keeps the track selected (if the failure is transient at
+/// the source layer) or advances WITH a preceding `ItemDidFail`
+/// (graceful-fail surface). The silent advance must never happen.
+///
+/// Why a multi-track queue: single-seek auto-advance is a no-op when
+/// there is no successor to advance to (the queue stays parked at
+/// `current_index == Some(0)` even after `ItemDidFail` fires). The
+/// production cascade always runs against a populated queue; we
+/// match that by prepending a sentinel "before" track and appending
+/// a "after" track around the target, so a forward advance has
+/// somewhere to land and the test can detect it via
+/// `queue.current_index()` change.
+///
+/// Parametrised on `DecoderBackend` for coverage; both backends share
+/// the same `kithara-audio` source FSM and `kithara-queue` advance
+/// path, so the bug — wherever it lives in those layers — must
+/// surface on both.
+#[kithara::test(tokio)]
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
+    let ctx = build_ctx().await;
+    let warmup_chunks = Arc::new(AtomicUsize::new(0));
+
+    // Multi-track playlist that mirrors a real user session. The
+    // sentinel tracks bracket the target so any single-step queue
+    // advance (forward or backward) shows up as a `current_index`
+    // delta — without them, the queue cannot move and the bug
+    // silently disappears.
+    const SENTINEL_BEFORE: &str =
+        "https://cdn-hls-slicer.zvuk.com/drm/track/180082552_1/master.m3u8";
+    const SENTINEL_AFTER: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/59232754_2/master.m3u8";
+
+    let mut rx = ctx.queue.subscribe();
+
+    let _before_id = ctx
+        .queue
+        .run({
+            let source = app_track_source(
+                SENTINEL_BEFORE,
+                &ctx.config,
+                ctx.config.store.clone(),
+                backend,
+                AbrMode::Auto(None),
+                None,
+            );
+            move |q| q.append(source)
+        })
+        .await
+        .expect("append leading sentinel");
+    let target_id = ctx
+        .queue
+        .run({
+            let source = app_track_source(
+                TARGET_TRACK,
+                &ctx.config,
+                ctx.config.store.clone(),
+                backend,
+                AbrMode::Auto(None),
+                None,
+            );
+            move |q| q.append(source)
+        })
+        .await
+        .expect("append scrub target");
+    let _after_id = ctx
+        .queue
+        .run({
+            let source = app_track_source(
+                SENTINEL_AFTER,
+                &ctx.config,
+                ctx.config.store.clone(),
+                backend,
+                AbrMode::Auto(None),
+                None,
+            );
+            move |q| q.append(source)
+        })
+        .await
+        .expect("append trailing sentinel");
+
+    wait_for_loader_done_event(&mut rx, &ctx.queue, target_id, LOAD_BUDGET)
+        .await
+        .unwrap_or_else(|e| panic!("Loaded never arrived for {TARGET_TRACK}: {e}"));
+
+    ctx.queue.attach_observer(
+        target_id,
+        DecodedChunks {
+            seen: Arc::clone(&warmup_chunks),
+            from: Duration::ZERO,
+        },
+    );
+
+    ctx.queue
+        .run(move |q| q.select(target_id, Transition::None))
+        .await
+        .expect("select target");
+
+    wait_for_target(&ctx, target_id, &warmup_chunks)
+        .await
+        .expect("the selected target must own a Playing slot with decoded PCM before scrubbing");
+
+    let initial_index = ctx.queue.current_index();
+    let initial_position = ctx.queue.position_seconds();
+    eprintln!(
+        "[harness] pre-scrub: current_index={initial_index:?} \
+         current_track={:?} position={initial_position:?}s",
+        ctx.queue.track(target_id).as_ref().map(|e| e.id.as_u64()),
+    );
+
+    let decoded = Arc::new(AtomicUsize::new(0));
+    ctx.queue.attach_observer(
+        target_id,
+        DecodedChunks {
+            seen: Arc::clone(&decoded),
+            from: Duration::from_secs_f64(SCRUB_TARGET_SECS),
+        },
+    );
+    let chunks_at_seek = decoded.load(Ordering::Relaxed);
+    eprintln!("[harness] chunks_at_seek={chunks_at_seek}");
+
+    ctx.queue
+        .run(move |q| q.seek(SCRUB_TARGET_SECS))
+        .await
+        .expect("seek");
+    let started_at = Instant::now();
+    let mut event_log: Vec<TimedEvent> = Vec::new();
+
+    // Count decoded source output, before Warp, only through this target's observer.
+    const MIN_NEW_CHUNKS_AFTER_SEEK: usize = 10;
+
+    let outcome = observe_scrub_outcome(ScrubObservation {
+        queue: &ctx.queue,
+        rx: &mut rx,
+        chunks: &decoded,
+        event_log: &mut event_log,
+        started_at,
+        params: ScrubParams {
+            target_src: TARGET_TRACK,
+            chunks_at_seek,
+            min_new_chunks: MIN_NEW_CHUNKS_AFTER_SEEK,
+            initial_index,
+            seek_target_secs: SCRUB_TARGET_SECS,
+            min_growth_secs: MIN_POST_SEEK_GROWTH_SECS,
+            budget: OUTCOME_BUDGET,
+        },
+    })
+    .await;
+
+    eprintln!("[event-log] captured {} events:", event_log.len());
+    for TimedEvent { elapsed, event } in &event_log {
+        eprintln!("  [{:>6.2}s] {event:?}", elapsed.as_secs_f64());
+    }
+
+    let _ = initial_position;
+    match outcome {
+        ScrubOutcome::PlaybackContinued {
+            final_position,
+            position_growth,
+            chunks_after_seek,
+        } => {
+            eprintln!(
+                "[harness] playback continued past seek target. \
+                 final_position={final_position:.2}s growth={position_growth:.2}s \
+                 new_chunks={chunks_after_seek}"
+            );
+        }
+        ScrubOutcome::Stalled {
+            final_position,
+            position_growth,
+            chunks_after_seek,
+            chunks_at_seek,
+        } => {
+            panic!(
+                "PLAYBACK STALLED AFTER SEEK: user scrubbed to {SCRUB_TARGET_SECS}s and \
+                 the queue stayed on the target track (no false auto-advance), but the \
+                 decoder produced only {chunks_after_seek} fresh PCM chunks past the \
+                 pre-seek count of {chunks_at_seek} within the {OUTCOME_BUDGET:?} budget. \
+                 final_position={final_position:?}s growth={position_growth:?}s. \
+                 The user hears silence: reader cursor, scheduler, or decoder failed to \
+                 resume PCM production after the seek even though no terminal event fired. \
+                 See the event log above for the last activity before the stall."
+            );
+        }
+        ScrubOutcome::AutoAdvanced {
+            triggered_by,
+            new_index,
+        } => {
+            panic!(
+                "PRODUCTION CASCADE REPRODUCED: a single user seek to {SCRUB_TARGET_SECS}s \
+                 caused the queue to advance from index {initial_index:?} → {new_index} \
+                 (triggered by {triggered_by:?}). The user never asked for a track switch. \
+                 Root cause is in the audio source pipeline reporting a premature terminal \
+                 condition after a failed cold-range seek — see the event log above. The \
+                 queue auto-advance itself is correct policy; the bug is the source layer \
+                 emitting `ItemDidPlayToEnd`/`ItemDidFail` instead of recovering or staying \
+                 parked in `WaitingForSource`."
+            );
+        }
+    }
+
+    ctx.queue
+        .run(QueueControl::clear)
+        .await
+        .expect("the queue clears");
+    drop(ctx);
+}

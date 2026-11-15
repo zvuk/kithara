@@ -1,10 +1,13 @@
 use std::num::NonZeroU32;
 
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
-use kithara_test_fixtures::unit_fixtures::{
-    blend_identity, blend_incoming, blend_join_frame, blend_multichannel, blend_outgoing,
-    blend_outgoing_constant, blend_signed_frame,
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SourceSpan};
+use kithara_test_fixtures::{
+    signal::{self, SignalDirection, Wave},
+    unit_fixtures::{
+        blend_identity, blend_incoming, blend_join_frame, blend_multichannel, blend_outgoing,
+        blend_outgoing_constant, blend_signed_frame,
+    },
 };
 use kithara_test_utils::kithara;
 
@@ -112,6 +115,98 @@ fn high_rate_join_uses_the_full_forty_milliseconds() {
 }
 
 #[kithara::test]
+fn a_frame_100224_join_can_look_descending_before_the_blend_finishes() {
+    const START: usize = 100_224;
+    const CHUNK: usize = 1_152;
+    const JOIN: usize = 1_764;
+    let trace = kithara_test_utils::test::usdt::scope();
+    let pools = pools();
+    let spec = spec(2, 44_100);
+    let channels = usize::from(spec.channels);
+    let sample =
+        |wave: Wave, frame| f32::from(wave.sample(frame, spec.sample_rate.get())) / 32_768.0;
+    let outgoing: Vec<_> = (START..START + JOIN)
+        .flat_map(|frame| [sample(Wave::Sawtooth, frame); 2])
+        .collect();
+    let mut blender = blender(&pools, spec);
+    blender.prepare_active(spec).expect("matching profile");
+    assert_eq!(blender.join_frame_count(), JOIN as u64);
+    assert!(blender.prepare_join(|tail| {
+        tail.copy_from_slice(&outgoing);
+        true
+    }));
+    blender.commit_join();
+    for index in 0..3 {
+        let offset = index * CHUNK;
+        let incoming: Vec<_> = (START + offset..START + offset + CHUNK)
+            .flat_map(|frame| [sample(Wave::SawtoothDescending, frame); 2])
+            .collect();
+        let mut input = chunk(&pools, spec, &incoming);
+        input.meta.frame_offset = (START + offset) as u64;
+        input.meta.variant_index = Some(1);
+        input.meta.source_span = SourceSpan::new(
+            (START + offset) as u64,
+            (START + offset + CHUNK) as u64,
+            spec.sample_rate,
+            CHUNK as u64,
+        );
+        let output = blender.process_active(input);
+        for (frame, samples) in output.samples.chunks_exact(channels).enumerate() {
+            let at = offset + frame;
+            let incoming = incoming[frame * channels];
+            let expected = if at < JOIN {
+                let gain = f32::from(u16::try_from(at).expect("join offset"))
+                    / f32::from(u16::try_from(JOIN).expect("join length"));
+                outgoing[at * channels].mul_add(1.0 - gain, incoming * gain)
+            } else {
+                incoming
+            };
+            assert!(
+                samples
+                    .iter()
+                    .all(|sample| sample.to_bits() == expected.to_bits())
+            );
+        }
+        if index == 0 {
+            assert_eq!(
+                signal::detect_direction(&output.samples, channels),
+                SignalDirection::Descending
+            );
+            assert!(!blender.is_steady());
+            assert!(trace.last("gapless_join_completed").is_none());
+        } else {
+            let phases: Vec<_> = output
+                .samples
+                .chunks_exact(channels)
+                .map(|frame| signal::phase::units(frame[0]))
+                .collect();
+            let breaks = phases
+                .windows(2)
+                .filter(|pair| signal::phase::delta(pair[0], pair[1]) != -1)
+                .count();
+            assert_eq!(breaks, if index == 1 { 612 } else { 0 });
+            assert!(blender.is_steady());
+            let event = trace
+                .last("gapless_join_completed")
+                .expect("completed join");
+            assert_eq!(event.field("variant"), Some(1));
+            assert_eq!(
+                event.field("end_ns"),
+                Some(
+                    u64::try_from(
+                        spec.duration_for((START + 2 * CHUNK) as u64)
+                            .expect("boundary")
+                            .as_nanos()
+                    )
+                    .expect("fixture nanoseconds")
+                )
+            );
+            assert_eq!(trace.events_of("gapless_join_completed").len(), 1);
+        }
+    }
+}
+
+#[kithara::test]
 fn real_outgoing_pcm_is_blended_for_the_full_linear_join(
     blend_outgoing: Vec<f32>,
     blend_incoming: Vec<f32>,
@@ -122,12 +217,16 @@ fn real_outgoing_pcm_is_blended_for_the_full_linear_join(
     let pools = pools();
     let spec = spec(2, 44_100);
     let channels = usize::from(spec.channels);
-    let outgoing = blend_outgoing
+    let mut outgoing = blend_outgoing
         .into_iter()
         .cycle()
         .take(JOIN_FRAMES.saturating_mul(channels))
         .collect::<Vec<_>>();
     let incoming = blend_incoming;
+    for frame in (0..JOIN_FRAMES).step_by(3) {
+        let start = frame * channels;
+        outgoing[start..start + channels].copy_from_slice(&incoming[start..start + channels]);
+    }
     let mut blender = blender(&pools, spec);
     blender
         .prepare_active(spec)
@@ -157,8 +256,11 @@ fn real_outgoing_pcm_is_blended_for_the_full_linear_join(
         let outgoing_gain = 1.0 - incoming_gain;
         for channel in 0..channels {
             let sample = frame * channels + channel;
-            let expected =
-                outgoing[sample].mul_add(outgoing_gain, incoming[sample] * incoming_gain);
+            let expected = if outgoing[sample].to_bits() == incoming[sample].to_bits() {
+                incoming[sample]
+            } else {
+                outgoing[sample].mul_add(outgoing_gain, incoming[sample] * incoming_gain)
+            };
             assert_eq!(output[sample].to_bits(), expected.to_bits());
         }
     }

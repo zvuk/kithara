@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use kithara_ui_shaping::FontFamily;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -106,6 +107,12 @@ macro_rules! define_skin_doc {
             #[serde(default)]
             #[skin(skip_frames, skip_roles)]
             pub artworks: BTreeMap<String, String>,
+            /// Font files replacing a style family in this skin. Paths stand
+            /// beside the declaring skin; one variable font or static faces
+            /// may supply the family's weights.
+            #[serde(default)]
+            #[skin(skip_frames, skip_roles)]
+            pub fonts: BTreeMap<FontFamily, Vec<String>>,
             #[skin(skip_frames, skip_roles)]
             pub schema: String,
             #[skin(skip_frames, skip_roles)]
@@ -179,6 +186,8 @@ macro_rules! define_skin_doc {
             pub pictures: Option<PicturePatch>,
             #[serde(default)]
             pub artworks: Option<BTreeMap<String, String>>,
+            #[serde(default)]
+            pub fonts: Option<BTreeMap<FontFamily, Vec<String>>>,
             /// Restated over every frame the skin inherits, before its own
             /// sections are applied.
             #[serde(default)]
@@ -211,6 +220,9 @@ macro_rules! define_skin_doc {
                 }
                 if let Some(artworks) = patch.artworks {
                     self.artworks.extend(artworks);
+                }
+                if let Some(fonts) = patch.fonts {
+                    self.fonts.extend(fonts);
                 }
                 if let Some(overrides) = patch.overrides {
                     self.overrides.extend(overrides);
@@ -254,6 +266,7 @@ pub fn parse_skin(text: &str, origin: &SourceUri) -> Result<SkinDoc, UiDocError>
     document.custom.validate(origin)?;
     document.pictures.rebase(origin)?;
     rebase_sources(document.artworks.values_mut(), origin)?;
+    rebase_sources(document.fonts.values_mut().flatten(), origin)?;
     Ok(document)
 }
 
@@ -292,6 +305,9 @@ pub fn parse_skin_over(
     }
     if let Some(artworks) = patch.artworks.as_mut() {
         rebase_sources(artworks.values_mut(), origin)?;
+    }
+    if let Some(fonts) = patch.fonts.as_mut() {
+        rebase_sources(fonts.values_mut().flatten(), origin)?;
     }
     let mut document = base.clone();
     document.apply(patch);

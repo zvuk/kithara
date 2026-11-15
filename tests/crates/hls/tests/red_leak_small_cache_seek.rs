@@ -9,12 +9,7 @@ use std::{
 use kithara::{
     assets::{AssetStore, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
-    platform::{
-        CancelToken,
-        thread::active_named_thread_count,
-        time::{self, Duration, Instant},
-        tokio::task::spawn_blocking,
-    },
+    platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -22,40 +17,10 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     hls_fixture::create_test_downloader,
     hls_server::test_pattern_hls,
+    waits::wait_thread_count_quiesced,
 };
 
 use crate::common::test_defaults::consts as shared;
-
-/// Wait until kithara's per-stream background work has quiesced after a stream
-/// drop+cancel — i.e. `active_named_thread_count()` stops decreasing across a
-/// short settle window. This is a state-wait, not a timer pace: the loop
-/// condition checks the runtime-internal named-thread counter, which is
-/// decremented when each spawned thread function returns and so flips under the
-/// flash clock (unlike `live_thread_count()`'s `ps -M` / `/proc/self/task`
-/// read, which tracks OS reap that lags real time and cannot be satisfied by
-/// virtual-clock advance alone). The inner `time::sleep` is only the poll
-/// cadence (mirrors `settle_thread_count` in the sibling DRM leak test). The
-/// `budget` bounds a hang via a real wall deadline; it does not pace progress.
-async fn wait_thread_count_quiesced(settle_window: usize, budget: Duration) -> usize {
-    const POLL: Duration = Duration::from_millis(25);
-    let deadline = Instant::now() + budget;
-    let mut last = active_named_thread_count();
-    let mut stable = 0usize;
-    loop {
-        time::sleep(POLL).await;
-        let now = active_named_thread_count();
-        if now < last {
-            // teardown still in progress — named-thread count is still dropping
-            stable = 0;
-        } else {
-            stable += 1;
-        }
-        last = now;
-        if stable >= settle_window || Instant::now() >= deadline {
-            return now;
-        }
-    }
-}
 
 mod consts {
     use super::shared;
@@ -110,7 +75,7 @@ async fn run_small_cache_seek_cycle(hls: &CreatedHls) -> usize {
         .await
         .expect("blocking join");
     cancel.cancel();
-    wait_thread_count_quiesced(4, Duration::from_secs(5)).await
+    wait_thread_count_quiesced(Duration::from_secs(5)).await
 }
 
 async fn stable_live_thread_baseline(hls: &CreatedHls) -> usize {
@@ -151,7 +116,7 @@ async fn red_small_cache_seek_stress_does_not_leak_threads(
 
     // Final settle: wait until reaping has fully quiesced before the leak
     // assertion samples the thread count.
-    wait_thread_count_quiesced(6, Duration::from_secs(5)).await;
+    wait_thread_count_quiesced(Duration::from_secs(5)).await;
     let threads_after = live_thread_count();
     let growth = threads_after.saturating_sub(threads_baseline);
 

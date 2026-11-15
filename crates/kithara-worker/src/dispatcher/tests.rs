@@ -398,8 +398,11 @@ fn terminal_tick_flushes_deferred_work_before_slot_removal() {
 
 #[kithara::test(flash(false))]
 fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
+    #[cfg(not(target_arch = "wasm32"))]
+    let trace = kithara_test_utils::test::usdt::scope();
     let wake = Wake::default();
     let mut configured = budgets();
+    configured.thread_class = kithara_platform::thread::ThreadClass::AudioFeed;
     configured.fairness_yield_interval = NonZeroU32::new(3).expect("nonzero");
     configured.backpressure_poll_interval = Duration::ZERO;
     configured.idle_timeout = Duration::ZERO;
@@ -419,6 +422,8 @@ fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
         &mut streak,
     );
     assert_eq!(streak, 2);
+    #[cfg(not(target_arch = "wasm32"))]
+    assert!(trace.events_of("fairness_yield").is_empty());
     park_after_outcome(
         &wake,
         &configured,
@@ -426,6 +431,13 @@ fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
         &mut streak,
     );
     assert_eq!(streak, 0);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let firings = trace.events_of("fairness_yield");
+        assert_eq!(firings.len(), 1);
+        assert_eq!(firings[0].field("interval"), Some(3));
+        assert_eq!(firings[0].field("audio_feed"), Some(1));
+    }
 
     for outcome in [
         PassOutcome::Waiting,
@@ -437,6 +449,8 @@ fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
         park_after_outcome(&wake, &configured, pass_report(outcome), &mut streak);
         assert_eq!(streak, 0, "{outcome:?} must reset the progress streak");
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    assert_eq!(trace.events_of("fairness_yield").len(), 1);
 }
 
 #[kithara::test(native, flash(true), timeout(Duration::from_secs(10)))]
@@ -1223,6 +1237,66 @@ mod native {
         assert!(received.try_recv().is_err());
         drop(blocker);
         drop(queued);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn configured_runtime_waits_for_dispatcher_exit_without_blocking_its_drop() {
+        struct HeldObserver {
+            entered: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+        }
+
+        impl Observer for HeldObserver {
+            fn on_event(&mut self, _: Event) {}
+        }
+
+        impl Drop for HeldObserver {
+            fn drop(&mut self) {
+                self.entered.send(()).ok();
+                self.release.recv().ok();
+            }
+        }
+
+        let runtime = kithara_platform::tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime");
+        let worker =
+            crate::Worker::new(crate::WorkerConfig::new().with_runtime(runtime.handle().clone()));
+        let (entered, entered_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let dispatcher = worker.dispatcher(
+            DispatcherConfig::builder()
+                .name("runtime-joined-dispatcher")
+                .observer(HeldObserver {
+                    entered,
+                    release: release_rx,
+                })
+                .build(),
+        );
+        let (dropped, dropped_rx) = mpsc::channel();
+        let (finished, finished_rx) = mpsc::channel();
+        let closer = thread::spawn(move || {
+            drop(dispatcher);
+            drop(worker);
+            dropped.send(()).expect("owners dropped");
+            drop(runtime);
+            finished.send(()).expect("runtime dropped");
+        });
+        let entered = entered_rx.recv_timeout(Instant::now() + Duration::from_secs(2));
+        let dropped = dropped_rx.recv_timeout(Instant::now() + Duration::from_secs(2));
+        let premature = finished_rx.recv_timeout(Instant::now() + Duration::from_millis(50));
+        drop(release);
+        closer.join().expect("runtime owner exits");
+
+        entered.expect("dispatcher reached held cleanup");
+        dropped.expect("dispatcher drop did not wait for cleanup");
+        assert!(
+            premature.is_err(),
+            "runtime must retain dispatcher completion"
+        );
+        finished_rx
+            .try_recv()
+            .expect("runtime finished after cleanup");
     }
 
     #[kithara::test(native, flash(false))]

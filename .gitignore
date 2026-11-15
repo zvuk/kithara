@@ -1,5 +1,8 @@
 # Rust / Cargo
 /target
+/Kithara-macos-universal.zip
+/Kithara-macos-universal.zip.sha256
+/.ci-bootstrap
 **/target/
 /xtask/.agent-hook-cache*
 /xtask/.xtask-cache*
@@ -62,12 +65,13 @@ lcov.info
 # Temporary / local environment files
 .env
 .env.*
-/.ci-artifacts/
+.ci-artifacts/
 .foglamp/
 .cache/
 dhat-heap.json
 
 # Performance monitoring outputs
+/bench-results/
 target/hotpath-*.json
 hotpath-*.json
 ui-*-perf.txt

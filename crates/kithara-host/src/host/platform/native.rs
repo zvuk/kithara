@@ -60,7 +60,7 @@ impl<S, O: HostOwner<S>> Platform<S, O> {
         view: RootView,
         output_block_frames: Option<NonZeroU32>,
         channel_config: ScopedConfig,
-        output: SessionOutput,
+        output: SessionOutput<S>,
         settings: Live<HostSettings, HostProtocol>,
         layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
     ) -> StartedPlatform<S, O>

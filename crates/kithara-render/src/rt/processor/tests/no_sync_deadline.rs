@@ -10,7 +10,6 @@ use kithara_test_utils::{
     kithara,
     test::usdt::{self, ProbeEvent},
 };
-use kithara_warp::RenderContext;
 
 use super::{
     DeckMixerConfig, DeckPart, Fade, PcmConsumer, PlayerResource, Slot, StreamShape, TestEnds,
@@ -55,7 +54,7 @@ fn spec() -> AudioSpec {
 
 fn processor(block_frames: u32) -> (DeadlineMixer, TestEnds) {
     let shape = StreamShape::new(non_zero(block_frames, "block frames"), spec().sample_rate);
-    let (mixer, ends) = mixer_with_shape(DeckMixerConfig::builder().eq_bands(0).build(), 64, shape);
+    let (mixer, ends) = mixer_with_shape(DeckMixerConfig::default(), 64, shape);
     (
         DeadlineMixer {
             mixer,
@@ -144,17 +143,13 @@ fn render_block(processor: &mut DeadlineMixer, out_l: &mut [f32], out_r: &mut [f
         SessionFrame::new(i64::try_from(processor.frame).expect("frame fits session clock"));
     processor.frame += u64::try_from(frames).expect("frames fit clock");
     let end = SessionFrame::new(i64::try_from(processor.frame).expect("frame fits session clock"));
-    let context = RenderContext::new_linear(
-        OutputContext::new(
-            start..end,
-            processor.shape.sample_rate,
-            SessionEpoch::new(0),
-            None,
-        )
-        .expect("output range"),
+    let context = OutputContext::new(
+        start..end,
+        processor.shape.sample_rate,
+        SessionEpoch::new(0),
         None,
     )
-    .expect("render context");
+    .expect("output range");
     processor.mixer.inbox.0.drain();
     let level = processor
         .mixer
@@ -249,6 +244,11 @@ fn census(block_frames: u32, tracks: usize, deadline_tracks: [&'static [u8]; 4])
     for _ in 0..consts::WARMUP_BLOCKS {
         render_block(&mut processor, &mut out_l, &mut out_r);
     }
+    assert_eq!(
+        control.deck.snapshot.read().eq.bands(),
+        10,
+        "deadline census retains the default ten-band EQ"
+    );
     assert!(
         peak(&out_l).max(peak(&out_r)) > 0.0,
         "deadline cell must reach audible PCM before the census ({block_frames} frames, {tracks} track(s))"

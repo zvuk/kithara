@@ -62,10 +62,18 @@ impl<T> JoinHandle<T> {
         self.native.join()
     }
 
+    /// Whether the thread's closure has returned. This reads the exit that
+    /// [`Self::join`] waits on, published while the thread still holds its
+    /// participant credit: the OS thread ends later, after that credit is
+    /// released, so polling its end under flash lets the virtual clock run
+    /// ahead of a thread that has not finished.
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        *self.exit.done.lock()
+    }
+
     delegate::delegate! {
         to self.native {
-            #[must_use]
-            pub fn is_finished(&self) -> bool;
             #[must_use]
             pub fn thread(&self) -> &Thread;
         }
@@ -318,6 +326,19 @@ where
     let (work, exit) = signalling(f);
     let native =
         crate::backend::thread::spawn_named_uncounted(name, counted(work, Location::caller()));
+    JoinHandle { native, exit }
+}
+
+/// Spawn a pool thread without reserving clock credit for its idle lifetime.
+/// Each job must capture its context with [`wrap_pool_task`].
+#[track_caller]
+pub fn spawn_pool_thread<F, T, N: Into<String>>(name: N, f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let (work, exit) = signalling(f);
+    let native = crate::backend::thread::spawn_named_uncounted(name, work);
     JoinHandle { native, exit }
 }
 

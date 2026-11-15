@@ -36,6 +36,9 @@ pub(crate) struct LinuxArgs {
 
 #[derive(Debug, Subcommand)]
 enum LinuxCommand {
+    /// Build one pinned image without provisioning host services.
+    #[command(subcommand)]
+    Image(ImageCommand),
     /// Install the host packages a runner machine needs beyond Docker.
     InstallTools,
     /// Create the caches and the fenced network the runners live on.
@@ -79,7 +82,7 @@ enum LinuxCommand {
     /// Build the Windows guest again when its licence is about to run out and
     /// it runs no job. A daily timer runs this.
     RenewWindows,
-    /// Report what the machine is currently serving.
+    /// Check configured runner services and report the guest state.
     Health,
 }
 
@@ -107,7 +110,7 @@ pub(in crate::ci::host) fn provision(
     let pins = CiPins::load(pins)?;
     process.require_tools(&["docker"])?;
     for image in required_builds(&host) {
-        image::build_pinned(process, image, &pins)?;
+        image::build_pinned(process, image, &pins, Some(&host.image_cache_env_file))?;
     }
     for step in consts::LINUX_PROVISION_STEPS {
         provision.as_root("linux", step)?;
@@ -148,6 +151,10 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
 
     let host = LinuxHost::load(&args.config)?;
     match &args.command {
+        LinuxCommand::Image(image) => {
+            let pins = CiPins::load(&args.pins)?;
+            image::build_pinned(&process, *image, &pins, Some(&host.image_cache_env_file))
+        }
         LinuxCommand::InstallTools => unreachable!("handled before the profile is read"),
         LinuxCommand::Bootstrap => system::bootstrap(&process, &host),
         LinuxCommand::Firewall => firewall::apply(&process, &host),
@@ -165,14 +172,14 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
         }
         LinuxCommand::Compose { out, mint } => {
             let pins = CiPins::load(&args.pins)?;
+            compose::write(&host, &pins, out)?;
             if *mint {
                 for runner in &host.runners {
                     registration::configure(&host, runner, Path::new(&services::env_file(runner)))?;
                 }
             }
             services::install_slice()?;
-            process.run("systemctl", &["daemon-reload"], "reload systemd")?;
-            compose::write(&host, &pins, out)
+            process.run("systemctl", &["daemon-reload"], "reload systemd")
         }
         LinuxCommand::InstallWindows => {
             let pins = CiPins::load(&args.pins)?;
@@ -196,6 +203,47 @@ mod tests {
 
     use super::*;
     use crate::Cli;
+
+    #[test]
+    fn an_image_build_uses_the_linux_host_profile() {
+        Cli::try_parse_from(["xtask", "ci", "host", "linux", "image", "toolchain"])
+            .expect("a host may build only its toolchain image");
+    }
+
+    #[test]
+    fn an_invalid_cpu_reservation_is_rejected_before_minting_registrations() {
+        let directory = tempfile::tempdir().expect("temporary host configuration");
+        let mut host = super::super::profile::tests::host_fixture();
+        host.runners.truncate(1);
+        host.runners[0].cpus = 1;
+        let mut stress = host.runners[0].clone();
+        stress.name = "stress".to_owned();
+        stress.labels = vec!["kithara-stress".to_owned()];
+        stress.cpus = u32::MAX;
+        host.runners.push(stress);
+        for repository in &mut host.repositories {
+            repository.token_file = directory.path().join("absent-token");
+        }
+        let config = directory.path().join("host.toml");
+        std::fs::write(&config, toml::to_string(&host).expect("serialized profile"))
+            .expect("write host profile");
+        let out = directory.path().join("compose.yml");
+        std::fs::write(&out, "previous project").expect("previous project");
+        let error = run(&LinuxArgs {
+            config,
+            pins: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.config/ci-pins.toml"),
+            command: LinuxCommand::Compose {
+                out: out.clone(),
+                mint: true,
+            },
+        })
+        .expect_err("stress reservation leaves no ordinary CPUs");
+        assert!(
+            error.to_string().contains("ordinary CPU requests"),
+            "{error:#}"
+        );
+        assert_eq!(std::fs::read_to_string(out).unwrap(), "previous project");
+    }
 
     fn parse(command: &[&str]) -> Result<Cli, clap::Error> {
         let mut argv = vec![

@@ -64,6 +64,9 @@ Fix: import `kithara_platform::sync::Arc`. Do not add a parallel Arc alias or a
 second ownership type.";
 
         let cfg = &ctx.config.thresholds.platform_layer_hygiene;
+        if !cfg.enabled {
+            return Ok(Vec::new());
+        }
         let mut violations = Vec::new();
 
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
@@ -213,6 +216,9 @@ fn flatten_tokens(stream: TokenStream, out: &mut Vec<FlatToken>) {
 }
 
 fn in_scope(rel_str: &str, cfg: &PlatformLayerHygieneThreshold) -> bool {
+    if cfg.root.is_empty() {
+        return false;
+    }
     let Some(inner) = rel_str.strip_prefix(cfg.root.as_str()) else {
         return false;
     };
@@ -360,12 +366,88 @@ fn strip_line_comment(line: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::PathBuf};
+
     use anyhow::Result;
+    use cargo_metadata::MetadataCommand;
+    use tempfile::tempdir;
 
     use super::{
         PlatformLayerHygieneThreshold, in_scope, is_impl_subtree, owns_raw_arc, scan_raw_arc,
         scan_source,
     };
+    use crate::{
+        arch::{
+            checks::{
+                Check, Context, fn_arg_count::FnArgCount,
+                platform_layer_hygiene::PlatformLayerHygiene,
+            },
+            config::ArchConfig,
+        },
+        common::scope::Scope,
+    };
+
+    #[test]
+    fn neutral_policy_accepts_arc_and_keeps_generic_findings() {
+        let workspace = tempdir().expect("fixture directory");
+        fs::create_dir(workspace.path().join("src")).expect("fixture source directory");
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname='external-consumer'\nversion='0.1.0'\nedition='2024'\n[workspace]\n",
+        )
+        .expect("fixture manifest");
+        fs::write(
+            workspace.path().join("src/lib.rs"),
+            "use std::sync::Arc;\nuse std::sync::Mutex;\npub fn generic_violation(a:u8,b:u8,c:u8,d:u8,e:u8,f:u8,g:u8,h:u8) {}\n",
+        ).expect("fixture source");
+        let metadata = MetadataCommand::new()
+            .manifest_path(workspace.path().join("Cargo.toml"))
+            .no_deps()
+            .exec()
+            .expect("fixture metadata");
+        let mut config = ArchConfig::default();
+        let scope = Scope::new(Vec::new(), vec![PathBuf::from("src")]);
+        let context = Context::new(&config, &metadata, workspace.path(), &scope);
+        assert_eq!(FnArgCount.run(&context).expect("generic check").len(), 1);
+        assert!(
+            PlatformLayerHygiene
+                .run(&context)
+                .expect("owner check")
+                .is_empty()
+        );
+        config.thresholds.platform_layer_hygiene.enabled = true;
+        let context = Context::new(&config, &metadata, workspace.path(), &scope);
+        assert_eq!(
+            PlatformLayerHygiene
+                .run(&context)
+                .expect("explicit owner check")
+                .len(),
+            1
+        );
+    }
+
+    fn policy() -> PlatformLayerHygieneThreshold {
+        PlatformLayerHygieneThreshold {
+            enabled: true,
+            root: "crates/kithara-platform/src/".into(),
+            arc_owner_files: vec![
+                "crates/kithara-platform/src/system/ownership.rs".into(),
+                "crates/kithara-platform/src/wasm/sync/mod.rs".into(),
+            ],
+            excluded_subtrees: ["backend/", "system/", "loom/", "wasm/"]
+                .map(str::to_owned)
+                .to_vec(),
+            impl_subtrees: [
+                "flash/sync/",
+                "flash/tokio/",
+                "flash/system/",
+                "common/cancel/",
+                "common/time.rs",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        }
+    }
 
     #[test]
     fn flags_raw_parking_lot_and_web_time_and_std_lock() {
@@ -406,7 +488,7 @@ mod tests {
 
     #[test]
     fn raw_arc_owner_is_exact() {
-        let cfg = PlatformLayerHygieneThreshold::default();
+        let cfg = policy();
         assert!(owns_raw_arc(
             "crates/kithara-platform/src/system/ownership.rs",
             &cfg
@@ -441,7 +523,7 @@ mod tests {
 
     #[test]
     fn scope_excludes_backend_and_impl_subtrees() {
-        let cfg = PlatformLayerHygieneThreshold::default();
+        let cfg = policy();
         // Backend impls and primitive sub-trees are NOT in scope.
         assert!(!in_scope(
             "crates/kithara-platform/src/system/sync/mutex.rs",
@@ -485,7 +567,7 @@ mod tests {
 
     #[test]
     fn scope_includes_cross_backend_flash_and_common() {
-        let cfg = PlatformLayerHygieneThreshold::default();
+        let cfg = policy();
         // Consumer-facing flash control surface + shared common modules ARE
         assert!(in_scope("crates/kithara-platform/src/flash/api.rs", &cfg));
         assert!(in_scope("crates/kithara-platform/src/flash/ctx.rs", &cfg));
@@ -502,7 +584,7 @@ mod tests {
 
     #[test]
     fn impl_subtree_classification() {
-        let cfg = PlatformLayerHygieneThreshold::default();
+        let cfg = policy();
         assert!(is_impl_subtree("flash/sync/notify.rs", &cfg));
         assert!(is_impl_subtree("flash/tokio/mpsc.rs", &cfg));
         assert!(is_impl_subtree("flash/system/pace.rs", &cfg));

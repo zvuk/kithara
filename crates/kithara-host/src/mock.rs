@@ -5,8 +5,7 @@ pub(crate) use fixture::*;
 mod fixture {
     use std::num::NonZeroU32;
 
-    use firewheel::FirewheelContext;
-    use kithara_command::{Live, When};
+    use kithara_command::{Live, Seq, When};
     use kithara_effects::LimiterConfig;
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_play::{HostedDeck, PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep};
@@ -22,14 +21,20 @@ mod fixture {
         HostCommand, HostCore, HostOwner, HostSettings,
         rt::SessionOutput,
         session::{
+            context::SessionGraph,
             decks::{DeckInbox, DeckMsg},
-            state::{HostRoot, RootView, SessionBufferConfig, SessionState, SessionStream},
+            state::{
+                DeckNode, DeviceBackend, HostRoot, RootView, SessionBufferConfig, SessionState,
+                SessionStream,
+            },
         },
     };
 
     fn session_state(
-        start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String> + Send + 'static,
-    ) -> SessionState<SessionStream, TestPools> {
+        mut start: impl FnMut(&mut SessionGraph, u32, &mut [DeckNode]) -> Result<SessionStream, String>
+        + Send
+        + 'static,
+    ) -> SessionState<DeviceBackend, TestPools> {
         let rate = NonZeroU32::new(44_100).expect("fixture rate");
         let root = HostRoot::new(BeatGridId::allocate().expect("fixture grid id"), rate);
         let settings = HostSettings::builder().sample_rate(rate).build();
@@ -38,13 +43,13 @@ mod fixture {
             root,
             root_view,
             SessionBufferConfig::default(),
-            SessionOutput::new(LimiterConfig::default()),
+            SessionOutput::new(LimiterConfig::default(), pools()),
             Live::new(settings).expect("fixture settings"),
-            crate::HostConfig::<TestPools>::builder()
+            crate::HostConfig::builder(pools())
                 .settings(settings)
                 .build()
                 .channel_config(),
-            start,
+            move |ctx, rate, decks, _previous| start(ctx, rate, decks),
         )
     }
 
@@ -78,7 +83,7 @@ mod fixture {
         pub(crate) messages: kithara_platform::sync::mpsc::Receiver<DeckMsg>,
     }
     impl<D: HostedDeck<TestPools>> std::ops::Deref for TestState<D> {
-        type Target = SessionState<SessionStream, TestPools>;
+        type Target = SessionState<DeviceBackend, TestPools>;
         fn deref(&self) -> &Self::Target {
             &self.owner.session
         }
@@ -90,14 +95,16 @@ mod fixture {
     }
 
     pub(crate) fn test_state(
-        start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String> + Send + 'static,
+        start: impl FnMut(&mut SessionGraph, u32, &mut [DeckNode]) -> Result<SessionStream, String>
+        + Send
+        + 'static,
     ) -> TestState {
         TestState::new(start)
     }
 
     impl<D: HostedDeck<TestPools>> TestState<D> {
         pub(crate) fn new(
-            start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String>
+            start: impl FnMut(&mut SessionGraph, u32, &mut [DeckNode]) -> Result<SessionStream, String>
             + Send
             + 'static,
         ) -> Self {
@@ -111,11 +118,19 @@ mod fixture {
         }
     }
 
-    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub(crate) fn ask<D: HostedDeck<TestPools>>(
         state: &mut TestState<D>,
         command: HostCommand<TestPools, D>,
     ) -> Result<(), PlayError> {
+        ask_for_seq(state, command).map(drop)
+    }
+
+    /// Asks `command` and returns the sequence of the batch it sent, if any.
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    pub(crate) fn ask_for_seq<D: HostedDeck<TestPools>>(
+        state: &mut TestState<D>,
+        command: HostCommand<TestPools, D>,
+    ) -> Result<Option<Seq>, PlayError> {
         kithara_platform::flash::participate_sync(|| {
             hang_tick!();
             state.owner.begin_pass();
@@ -127,12 +142,12 @@ mod fixture {
             }
             let result = state.owner.apply(command);
             hang_tick!();
-            result?;
+            let seq = result?;
             state.owner.pass();
             state.owner.begin_pass();
             state.owner.pass();
             hang_tick!();
-            Ok(())
+            Ok(seq)
         })
     }
 
@@ -144,11 +159,9 @@ mod fixture {
         kithara_platform::flash::participate_sync(|| {
             hang_tick!();
             let mut block = vec![0.0; 1024];
-            let SessionStream::Offline(stream) = state.stream.as_mut().expect("stream") else {
-                panic!("offline fixture")
-            };
-            stream
-                .render(clock, 512, &mut block)
+            state
+                .owner
+                .render_offline(clock, 512, &mut block)
                 .expect("offline render");
             hang_tick!();
             block
@@ -156,7 +169,9 @@ mod fixture {
     }
 
     pub(crate) fn probe_owner(
-        start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String> + Send + 'static,
+        start: impl FnMut(&mut SessionGraph, u32, &mut [DeckNode]) -> Result<SessionStream, String>
+        + Send
+        + 'static,
     ) -> (
         HostCore<TestPools>,
         kithara_platform::sync::mpsc::Receiver<DeckMsg>,
@@ -173,7 +188,10 @@ mod fixture {
             .block_on_underrun(true)
             .build();
         let mix = kithara_play::DeckMixSettings::builder()
-            .level(level)
+            .crossfader(
+                kithara_play::CrossfaderGain::checked(level)
+                    .expect("fixture start levels are crossfader gains"),
+            )
             .build();
         let mixer = kithara_play::DeckMixerConfig::builder().mix(mix).build();
         let store = kithara_assets::AssetStore::builder(pools())

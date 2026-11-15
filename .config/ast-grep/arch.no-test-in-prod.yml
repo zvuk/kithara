@@ -48,12 +48,12 @@ rule:
             - kind: function_item
             - has:
                 field: name
-                regex: '_for_test$|_for_tests$'
+                regex: "_for_test$|_for_tests$"
         - all:
             - kind: mod_item
             - has:
                 field: name
-                regex: '^test$|^tests$|_for_test$|_for_tests$'
+                regex: "^test$|^tests$|_for_test$|_for_tests$"
         - all:
             - any:
                 - kind: struct_item
@@ -61,7 +61,7 @@ rule:
                 - kind: trait_item
             - has:
                 field: name
-                regex: '_for_test$|_for_tests$'
+                regex: "_for_test$|_for_tests$"
     - not:
         any:
           - follows:
@@ -79,6 +79,6 @@ rule:
                       - kind: attribute_item
                       - regex: 'cfg\([^)]*\btest\b'
                       - not:
-                          regex: 'feature'
+                          regex: "feature"
                     stopBy: end
               stopBy: end

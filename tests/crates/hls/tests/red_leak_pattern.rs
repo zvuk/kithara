@@ -11,13 +11,11 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     download::{Downloader, DownloaderConfig, FetchCmd, Peer},
     hls::{Hls, HlsConfig},
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{
         CancelToken,
         sync::Arc,
-        thread::active_named_thread_count,
-        time,
-        time::{Duration, Instant},
+        time::{self, Duration},
     },
     stream::Stream,
 };
@@ -25,42 +23,11 @@ use kithara_integration_tests::{
     CreatedHls,
     bufpool_ext::{TestPools, pools},
     hls_server::test_pattern_hls,
+    waits::wait_thread_count_quiesced,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 
-/// Settle window / hang budget for [`wait_thread_count_quiesced`].
-const SETTLE_WINDOW: usize = 4;
 const SETTLE_BUDGET: Duration = Duration::from_secs(5);
-
-/// Wait until kithara-owned thread teardown after a stream drop has quiesced —
-/// i.e. `active_named_thread_count()` stops decreasing across a short settle
-/// window. This is a state-wait (the loop condition reads the same named-thread
-/// counter the leak assertion measures), not a timer pace: the inner
-/// `time::sleep` is only the poll cadence and `budget` only bounds a hang.
-///
-/// The counter decrements when each `spawn_named` thread function RETURNS, so it
-/// is observable once the engine is quiescent under the flash virtual clock —
-/// unlike `ps -M` / `/proc/self/task`, which track OS reap that lags real time
-/// and cannot be satisfied by virtual-clock advance.
-async fn wait_thread_count_quiesced(settle_window: usize, budget: Duration) -> usize {
-    const POLL: Duration = Duration::from_millis(25);
-    let deadline = Instant::now() + budget;
-    let mut last = active_named_thread_count();
-    let mut stable = 0usize;
-    loop {
-        time::sleep(POLL).await;
-        let now = active_named_thread_count();
-        if now < last {
-            stable = 0;
-        } else {
-            stable += 1;
-        }
-        last = now;
-        if stable >= settle_window || Instant::now() >= deadline {
-            return now;
-        }
-    }
-}
 
 /// A peer that behaves like `HlsPeer`: `poll_next` never returns
 /// `Ready(None)` — always `Pending`.
@@ -85,7 +52,7 @@ impl Abr for ImmortalPeer {
 }
 
 impl Peer for ImmortalPeer {
-    fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+    fn poll_next(&self, _cx: &mut Context<'_>, _budget: usize) -> Poll<Option<Vec<FetchCmd>>> {
         Poll::Pending
     }
 }
@@ -99,11 +66,9 @@ impl Peer for ImmortalPeer {
 async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn StdError + Send + Sync>>
 {
     let cancel = CancelToken::never();
-    let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(kithara_integration_tests::TestServerHelper::shared_client(
             NetOptions::default(),
-            pools,
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())
@@ -159,9 +124,8 @@ async fn red_hls_source_drop_leaks_peer(
     let pools = pools();
 
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(kithara_integration_tests::TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())
@@ -187,9 +151,7 @@ async fn red_hls_source_drop_leaks_peer(
         drop(stream);
     }
 
-    // Wait until warmup teardown has quiesced (thread count stops dropping) —
-    // state-wait on the same observable the leak assertion measures, not a timer.
-    let threads_baseline = wait_thread_count_quiesced(SETTLE_WINDOW, SETTLE_BUDGET).await;
+    let threads_baseline = wait_thread_count_quiesced(SETTLE_BUDGET).await;
 
     for i in 0..ITERATIONS {
         let store = AssetStore::builder(pools.clone())
@@ -207,11 +169,11 @@ async fn red_hls_source_drop_leaks_peer(
         )
         .await?;
         drop(stream);
-        let threads = wait_thread_count_quiesced(SETTLE_WINDOW, SETTLE_BUDGET).await;
+        let threads = wait_thread_count_quiesced(SETTLE_BUDGET).await;
         tracing::info!(iter = i, threads, "post-drop");
     }
 
-    let threads_after = wait_thread_count_quiesced(SETTLE_WINDOW, SETTLE_BUDGET).await;
+    let threads_after = wait_thread_count_quiesced(SETTLE_BUDGET).await;
     let growth = threads_after.saturating_sub(threads_baseline);
 
     assert!(

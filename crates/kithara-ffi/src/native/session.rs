@@ -73,7 +73,9 @@ fn host() -> &'static Mutex<Option<FfiHost>> {
 fn active_host(slot: &mut Option<FfiHost>) -> Result<&mut FfiHost, PlayError> {
     match slot {
         Some(host) => Ok(host),
-        None => Ok(slot.insert(FfiHost::new(HostConfig::builder().build())?)),
+        None => Ok(slot.insert(FfiHost::new(
+            HostConfig::builder(crate::pools::build()?).build(),
+        )?)),
     }
 }
 

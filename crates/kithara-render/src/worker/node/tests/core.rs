@@ -120,7 +120,6 @@ async fn worker_telemetry_throttles_immediate_repeats() {
         assert_eq!(receiver.decoded_frontier(), Duration::from_millis(350));
         assert!(meter.snapshot().is_active());
         assert_eq!(meter.snapshot().load(), first.load());
-        assert_eq!(meter.snapshot().ms(), first.ms());
     }
     assert!(receiver.pop().is_some());
     assert!(

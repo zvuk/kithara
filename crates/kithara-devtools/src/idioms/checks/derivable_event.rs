@@ -14,7 +14,7 @@ use crate::common::{
 
 pub(crate) mod consts {
     pub(crate) const ID: &str = "derivable_event";
-    pub(super) const EXPLANATION: &str = "Use #[derive(Event)] instead of a hand-written impl outside kithara-events. Each Event is already a single-member EventSet; consumers choose which topics their EventSet combines.";
+    pub(super) const EXPLANATION: &str = "Use #[derive(Event)] instead of a hand-written impl outside the configured Event owner. Each Event is already a single-member EventSet; consumers choose which topics their EventSet combines.";
 }
 
 pub(crate) struct DerivableEvent;
@@ -46,14 +46,18 @@ impl Check for DerivableEvent {
             let suppress = Suppressions::parse(&source);
             let mut visitor = ManualEvents::default();
             visitor.visit_file(&file);
-            if !relative.starts_with("crates/kithara-events") {
+            if !config
+                .owner_path
+                .as_ref()
+                .is_some_and(|owner| relative.starts_with(owner))
+            {
                 for (name, span) in visitor.manual {
                     if !suppress.is_suppressed(span.start().line, consts::ID) {
                         out.push(
                             Violation::deny(
                                 consts::ID,
                                 format!("{}::{name}", relative.display()),
-                                format!("{name} implements Event by hand outside kithara-events"),
+                                format!("{name} implements Event by hand outside the configured Event owner"),
                             )
                             .with_explanation(consts::EXPLANATION.into()),
                         );

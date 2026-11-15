@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
@@ -32,8 +32,11 @@ pub(crate) fn load_optional_config<T: Default + DeserializeOwned>(
 #[config(builder(none), fields(nested))]
 pub struct ProjectConfig {
     pub architecture: ArchitectureConfig,
+    #[serde(rename = "ast-grep")]
+    pub ast_grep: AstGrepConfig,
     pub audit_clippy: AuditClippyConfig,
     pub ci_report: CiReportConfig,
+    pub clippy: ClippyConfig,
     pub health: HealthConfig,
     pub lint_exclude: LintExcludeConfig,
     pub orphans: OrphansConfig,
@@ -48,6 +51,16 @@ pub struct ProjectConfig {
     pub tools: crate::common::tools::ToolsConfig,
     #[serde(default, rename = "workspace-scan")]
     pub workspace_scan: WorkspaceScan,
+}
+
+/// Source scope for the workspace's own ast-grep configuration.
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
+pub struct AstGrepConfig {
+    /// Retain an AST domain that also covers non-Rust project files.
+    pub default_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
@@ -226,6 +239,16 @@ pub struct AuditClippyConfig {
     pub lints: Vec<String>,
 }
 
+/// Product features included by the project's native Clippy gate.
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
+pub struct ClippyConfig {
+    /// Apple-only product surfaces need an explicit gate on their build host.
+    pub macos_features: Vec<String>,
+}
+
 /// How much of each measurement the consolidated CI report inlines before it
 /// sends the reader to the artifact it was rendered from.
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
@@ -258,11 +281,13 @@ impl Default for CiReportConfig {
     }
 }
 
-/// Workspace-wide Rust file scan exclusions.
+/// Workspace-wide Rust source selection.
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
 #[config(builder(none), fields(value))]
 pub struct WorkspaceScan {
+    /// Empty selects Cargo target roots; explicit lint scopes override these roots.
+    pub default_roots: Vec<PathBuf>,
     pub exclude: Vec<String>,
     /// Directories a scope token may name outside `crates/`. A token whose
     /// first component is one of these resolves to a workspace path rather
@@ -274,6 +299,7 @@ pub struct WorkspaceScan {
 impl Default for WorkspaceScan {
     fn default() -> Self {
         Self {
+            default_roots: Vec::new(),
             exclude: Vec::new(),
             top_level_dirs: default_top_level_dirs(),
         }
@@ -592,9 +618,19 @@ pub struct TestCommandConfig {
     /// a visible act in the diff with an owner attached — not a list a lane
     /// grows to stay green.
     pub known_flakes: Vec<KnownFlake>,
-    /// Paths that belong to no single lane: a change to one of them runs every
-    /// lane of a `--touched` scope whole, because the routing itself moved.
-    pub shared_paths: Vec<String>,
+    /// The tests a draft runs whatever it names.
+    #[config(nested)]
+    pub required: TestRequiredConfig,
+}
+
+/// The test packages most likely to fail, chosen from CI failure history and
+/// reviewed by hand. A draft runs them beside the tests its pull request names.
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
+#[serde(default, deny_unknown_fields)]
+#[config(builder(none))]
+pub struct TestRequiredConfig {
+    #[config(value)]
+    pub packages: Vec<String>,
 }
 
 /// One test allowed to reach a pass through a retry, and the issue it waits on.
@@ -663,13 +699,6 @@ pub struct TestLaneConfig {
     /// What runs the built tests: nextest unless the lane names `cargo`.
     pub runner: TestRunner,
     pub default_features: Vec<String>,
-    /// Source prefixes this lane is the test for. `just test run --touched`
-    /// tests the lane when the branch changed a path under one of them: a
-    /// scope that names the lane runs it whole, and the default lane, the
-    /// scope of a run that names none, runs narrowed to this lane's packages
-    /// when it builds them all. A lane that owns nothing is never selected
-    /// that way.
-    pub owns: Vec<String>,
     /// Toggles whose feature none of this lane's packages declares.
     ///
     /// `default_flash`/`default_no_block`/`default_load` say what a lane runs with by
@@ -875,6 +904,8 @@ pub struct StressModeConfig {
     /// lane's own.
     pub no_block: Option<bool>,
     pub load: Option<bool>,
+    /// Nextest concurrency for this lane mode; unset inherits the run's budget.
+    pub test_threads: Option<String>,
     /// Whether the command performs the run's repeats itself.
     ///
     /// A command that runs its tests under nextest can be handed the count
@@ -988,7 +1019,11 @@ impl StressConfig {
         require_value("stress.nextest_config", &self.nextest_config)?;
         require_value("stress.nextest_profile", &self.nextest_profile)?;
         require_value("stress.default_filter", &self.default_filter)?;
-        require_value("stress.test_threads", &self.test_threads)?;
+        validate_stress_threads(
+            "stress.test_threads",
+            &self.test_threads,
+            self.max_test_threads,
+        )?;
         validate_relative_path("stress.nextest_config", &self.nextest_config)?;
         validate_relative_path("stress.build_dir", &self.build_dir)?;
         validate_relative_path("stress.raw_output", &self.raw_output)?;
@@ -1002,17 +1037,6 @@ impl StressConfig {
         if self.default_count > self.max_count {
             bail!("stress.default_count cannot exceed stress.max_count");
         }
-        if self.test_threads != "num-cpus" {
-            let test_threads = self
-                .test_threads
-                .parse::<usize>()
-                .with_context(|| "stress.test_threads must be `num-cpus` or a positive integer")?;
-            ensure_positive("stress.test_threads", test_threads)?;
-            if test_threads > self.max_test_threads {
-                bail!("stress.test_threads cannot exceed stress.max_test_threads");
-            }
-        }
-
         self.validate_artifacts()?;
         self.validate_evidence()?;
         let mut removed = BTreeSet::new();
@@ -1024,7 +1048,7 @@ impl StressConfig {
         }
         for (name, mode) in &self.modes {
             require_value("stress mode name", name)?;
-            Self::validate_mode(name, mode)?;
+            Self::validate_mode(name, mode, self.max_test_threads)?;
         }
         require_value("stress.default_tier", &self.default_tier)?;
         if !self.tiers.contains_key(&self.default_tier) {
@@ -1158,9 +1182,7 @@ impl StressConfig {
         Ok(())
     }
 
-    /// A command lane selects nothing through the test runner, so toggles meant for that runner
-    /// would be read by no one; this is stated rather than silently ignored.
-    fn validate_mode(name: &str, mode: &StressModeConfig) -> Result<()> {
+    fn validate_mode(name: &str, mode: &StressModeConfig, max_test_threads: usize) -> Result<()> {
         for key in mode.set_env.keys() {
             require_env_key(&format!("stress.modes.{name}.set_env"), key)?;
             if mode.raw_path_env.contains_key(key) {
@@ -1180,12 +1202,36 @@ impl StressConfig {
             validate_relative_path(&format!("stress.modes.{name}.attempt_junit"), path)?;
         }
         if !mode.command.is_empty()
-            && (mode.flash.is_some() || mode.no_block.is_some() || mode.load.is_some())
+            && (mode.flash.is_some()
+                || mode.no_block.is_some()
+                || mode.load.is_some()
+                || mode.test_threads.is_some())
         {
-            bail!("stress mode `{name}` runs a command, so its toggles reach nothing");
+            bail!("stress mode `{name}` runs a command, so its runner settings reach nothing");
+        }
+        if let Some(threads) = &mode.test_threads {
+            validate_stress_threads(
+                &format!("stress.modes.{name}.test_threads"),
+                threads,
+                max_test_threads,
+            )?;
         }
         Ok(())
     }
+}
+
+fn validate_stress_threads(name: &str, value: &str, maximum: usize) -> Result<()> {
+    require_value(name, value)?;
+    if value != "num-cpus" {
+        let threads = value
+            .parse::<usize>()
+            .with_context(|| format!("{name} must be `num-cpus` or a positive integer"))?;
+        ensure_positive(name, threads)?;
+        if threads > maximum {
+            bail!("{name} cannot exceed stress.max_test_threads");
+        }
+    }
+    Ok(())
 }
 
 fn require_value(name: &str, value: &str) -> Result<()> {
@@ -1449,6 +1495,20 @@ unknown = true
         assert!(error.to_string().contains("parse project config"));
     }
 
+    /// Owned-path selection is gone: a catalog that still routes by path is
+    /// refused rather than read as if it did.
+    #[test]
+    fn owned_path_keys_are_unknown() {
+        for text in [
+            "[test]\nshared_paths = [\".config/xtask.toml\"]\n",
+            "[test.lanes.tooling]\nowns = [\"xtask/\"]\n",
+        ] {
+            let error = load(text).expect_err("an owned-path key");
+
+            assert!(format!("{error:#}").contains("unknown field"), "{error:#}");
+        }
+    }
+
     #[test]
     fn architecture_runtime_names_and_timeouts_are_validated() {
         let duplicate = load(
@@ -1582,12 +1642,8 @@ tooling_paths = ["crates/kithara-devtools/**"]
 
     #[test]
     fn style_keeps_the_tooling_globs_this_repo_excludes_from_architecture() {
-        let config = ProjectConfig::load(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../..")
-                .as_path(),
-        )
-        .expect("the repo config loads");
+        let config = ProjectConfig::load(crate::testing::package().join("../..").as_path())
+            .expect("the repo config loads");
 
         assert!(
             !config

@@ -1,4 +1,6 @@
+mod bench;
 mod cli;
+mod evidence;
 mod gecko;
 mod lanes;
 mod list;

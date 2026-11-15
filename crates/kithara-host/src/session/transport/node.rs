@@ -1,9 +1,6 @@
-use firewheel::{
-    FirewheelContext,
-    node::{
-        AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
-        NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
-    },
+use firewheel::node::{
+    AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
+    NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
 };
 use kithara_command::{ScopedConfig, ScopedSender, scoped_channel};
 use kithara_config::Config;
@@ -13,7 +10,6 @@ use kithara_render::{
 };
 use kithara_signal::{OutputContext, SessionFrame};
 use kithara_test_utils::kithara;
-use kithara_warp::RenderContext;
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
@@ -23,7 +19,10 @@ use super::{
         restart_transport,
     },
 };
-use crate::{host::HostSettings, session::queue::HostProtocol};
+use crate::{
+    host::HostSettings,
+    session::{context::SessionGraph, queue::HostProtocol},
+};
 
 type InstalledTransport = (
     ScopedSender<HostProtocol, DeckProtocol>,
@@ -31,7 +30,7 @@ type InstalledTransport = (
 );
 
 pub(crate) fn install(
-    ctx: &mut FirewheelContext,
+    ctx: &mut SessionGraph,
     session_grid: SessionGridGeneration,
     settings: HostSettings,
     config: ScopedConfig,
@@ -122,13 +121,12 @@ impl AudioNodeProcessor for SessionTransportProcessor {
     }
 }
 
-fn build(info: &ProcInfo, transport: &TransportFrame) -> Option<RenderContext> {
+fn build(info: &ProcInfo, transport: &TransportFrame) -> Option<OutputContext> {
     let output_frames = info.clock_samples_range();
-    let output = OutputContext::new(
+    OutputContext::new(
         SessionFrame::new(output_frames.start.0)..SessionFrame::new(output_frames.end.0),
         info.sample_rate,
         transport.session_epoch,
         Some(transport.transport_revision),
-    )?;
-    RenderContext::new(output, Some(transport.trajectory))
+    )
 }

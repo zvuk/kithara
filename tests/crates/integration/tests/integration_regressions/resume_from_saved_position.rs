@@ -42,9 +42,8 @@ async fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<
 
 fn new_downloader(pools: Pools) -> Downloader {
     Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(kithara_integration_tests::TestServerHelper::shared_client(
             NetOptions::default(),
-            pools,
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

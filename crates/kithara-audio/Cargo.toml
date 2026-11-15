@@ -49,6 +49,7 @@ kithara-bufpool = { workspace = true }
 kithara-config = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
 kithara-derive = { workspace = true, features = ["patch", "phase"] }
+kithara-dsp = { workspace = true }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
@@ -81,7 +82,7 @@ kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, features = ["usdt", "mock"] }
 kithara-storage = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang"] }
 
 num-traits = { workspace = true }
 serde_yaml_ng = { workspace = true }

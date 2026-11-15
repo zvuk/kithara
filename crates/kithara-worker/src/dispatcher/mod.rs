@@ -9,3 +9,6 @@ mod tests;
 
 pub use handle::{Dispatcher, TaskError, TaskHandle};
 pub use pending::PendingTask;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod completion_tests;

@@ -78,6 +78,10 @@ pub enum ControlNode {
         /// Written by an activation of the surface its `write` steps.
         #[serde(default)]
         reset: Option<BindingRef>,
+        /// Text a double-click opens a number field holding; Enter writes the
+        /// number typed there to `write`.
+        #[serde(default)]
+        entry: Option<BindingRef>,
         children: Vec<Self>,
     },
     Column {
@@ -115,6 +119,10 @@ pub enum ControlNode {
         /// Written by an activation of the surface its `write` steps.
         #[serde(default)]
         reset: Option<BindingRef>,
+        /// Text a double-click opens a number field holding; Enter writes the
+        /// number typed there to `write`.
+        #[serde(default)]
+        entry: Option<BindingRef>,
         children: Vec<Self>,
     },
     Scroll {
@@ -188,6 +196,9 @@ pub enum ControlNode {
         /// Written by a secondary press.
         #[serde(default)]
         secondary: Option<BindingRef>,
+        /// Written by a double click, after the two presses it is made of.
+        #[serde(default)]
+        double: Option<BindingRef>,
         child: Box<Self>,
     },
     /// Offsets its child from wherever its container placed it.

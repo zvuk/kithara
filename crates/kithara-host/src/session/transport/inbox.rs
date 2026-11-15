@@ -6,7 +6,11 @@ use firewheel::{
     },
 };
 use kithara_command::ScopedInbox;
+#[cfg(feature = "offline")]
+use kithara_command::{LevelInbox, ScopeId};
 use kithara_render::bridge::DeckProtocol;
+#[cfg(feature = "offline")]
+use kithara_render::bridge::SessionInbox;
 use ringbuf::{HeapCons, HeapProd};
 #[cfg(feature = "offline")]
 use ringbuf::{
@@ -54,6 +58,14 @@ impl OfflineInbox {
         )
     }
 
+    pub(crate) fn drain(&mut self) -> Result<(), TransportProcessError> {
+        self.inbox
+            .as_mut()
+            .ok_or(TransportProcessError::MissingState)?
+            .drain();
+        Ok(())
+    }
+
     pub(crate) fn begin_render(&mut self, frames: usize) -> Result<(), TransportProcessError> {
         let inbox = self
             .inbox
@@ -81,6 +93,13 @@ impl OfflineInbox {
             .ok_or(TransportProcessError::MissingState)?
             .retire_closing();
         Ok(())
+    }
+}
+
+#[cfg(feature = "offline")]
+impl SessionInbox for OfflineInbox {
+    fn scope(&mut self, id: ScopeId) -> Option<LevelInbox<'_, DeckProtocol>> {
+        self.inbox.as_mut()?.scope(id)
     }
 }
 

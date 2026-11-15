@@ -1,8 +1,12 @@
 use std::sync::OnceLock;
 
 use ffmpeg::{
-    ChannelLayout, Error as FfmpegError, Packet, Rational,
-    codec::{capabilities::Capabilities, encoder::Audio as AudioEncoder},
+    ChannelLayout, Codec, Error as FfmpegError, Packet, Rational,
+    codec::{
+        Id,
+        capabilities::Capabilities,
+        encoder::{Audio as AudioEncoder, find_by_name},
+    },
     error::EAGAIN,
     filter::{self, Graph as FilterGraph},
     format as av_format,
@@ -93,6 +97,19 @@ pub(crate) fn ensure_ffmpeg_initialized() -> Result<(), EncodeError> {
     }
 }
 
+/// The encoder this crate writes `codec` with. A codec id alone leaves the
+/// pick to whichever encoders the `FFmpeg` build registers, and two encoders
+/// of one codec write different packet geometry. `FFmpeg`'s native encoder
+/// carries its codec's name; MP3 has only the LAME library encoder, and Opus
+/// is written by libopus.
+pub(crate) fn find_encoder(codec: Id) -> Option<Codec> {
+    find_by_name(match codec {
+        Id::MP3 => "libmp3lame",
+        Id::OPUS => "libopus",
+        _ => codec.name(),
+    })
+}
+
 pub(crate) fn build_direct_filter(
     encoder: &AudioEncoder,
     sample_rate: u32,
@@ -145,4 +162,27 @@ pub(crate) fn build_direct_filter(
     }
 
     Ok(graph)
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::{Id, ensure_ffmpeg_initialized, find_encoder};
+
+    /// A codec with several encoders is written by the one its fixtures name,
+    /// not by whichever the `FFmpeg` build registers first.
+    #[kithara::test]
+    #[case::vorbis(Id::VORBIS, "vorbis")]
+    #[case::mp3(Id::MP3, "libmp3lame")]
+    #[case::opus(Id::OPUS, "libopus")]
+    #[case::aac(Id::AAC, "aac")]
+    fn a_codec_is_written_by_the_encoder_its_fixtures_name(
+        #[case] codec: Id,
+        #[case] encoder: &str,
+    ) {
+        ensure_ffmpeg_initialized().expect("FFmpeg initializes");
+        let found = find_encoder(codec).expect("FFmpeg registers an encoder for the codec");
+        assert_eq!(found.name(), encoder);
+    }
 }

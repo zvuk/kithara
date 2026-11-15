@@ -10,7 +10,6 @@ use kithara::{
         DispatcherProtocol, LoadRefusal, PlayWorker, PlayWorkerConfig, ResourceConfig,
         ResourceLoad, ResourceSrc,
     },
-    sync::SpeedCurve,
     warp::WarpConfig,
 };
 use kithara_command::{Batch, ChannelConfig, Outcome, Receipt, Rejection, Sender, When, channel};
@@ -116,11 +115,7 @@ fn load(worker: &PlayWorker<TestPools>, dir: &TestTempDir, name: &str) -> Batch<
         })
         .build();
     let warp = WarpConfig::builder().build();
-    let start = LaneStart {
-        speed: SpeedCurve::Constant(warp.speed()),
-        keylock: warp.keylock(),
-        backend: warp.backend(),
-    };
+    let start = LaneStart::new(warp.speed(), warp.pitch());
     let config = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(store)
         .worker(worker.clone())
@@ -280,13 +275,16 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
     ) -> R {
         let deck = mixer.ends.snapshot.read();
         let mut scope = mixer.ring.scope(mixer.scope).expect("live mixer scope");
+        let planned_tempo = mock::planned_tempo();
         let mut out = Outbox::new(&mut scope, dispatcher).in_pass(DeckPass {
             mix: DeckMixSettings::default(),
             suspended: false,
             now,
             delivery: FrameCount::new(0),
+            deck_delivery: FrameCount::new(0),
             output,
             deck,
+            planned_tempo: &planned_tempo,
         });
         run(&mut out)
     }
@@ -568,11 +566,7 @@ async fn a_nonzero_initial_hls_load_returns_while_its_segment_is_pending_and_adm
                     class: ServiceClass::Warm,
                     item: initial_hls::ObservedLoad { item, returned },
                     position: target,
-                    start: LaneStart {
-                        speed: SpeedCurve::Constant(warp.speed()),
-                        keylock: warp.keylock(),
-                        backend: warp.backend(),
-                    },
+                    start: LaneStart::new(warp.speed(), warp.pitch()),
                     inbox: lane_inbox,
                 }))],
             },

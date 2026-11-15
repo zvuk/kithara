@@ -3,7 +3,114 @@ use std::{
     time::Duration,
 };
 
+pub(crate) use xtask::ci::cache_report::INPUT_LIMIT as CACHE_EVIDENCE_INPUT_LIMIT;
+
 pub(crate) const INPUT_BYTES: usize = 32 * 1024 * 1024;
+
+pub(crate) const DRAFT_FLAG: &str = "--draft";
+
+pub(crate) const WINDOWS_DIAGNOSTIC_REPORTS: usize = 64;
+pub(crate) const WINDOWS_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const WINDOWS_DIAGNOSTIC_OUTPUT_BYTES: usize = 64 * 1024;
+#[cfg(windows)]
+pub(crate) const WINDOWS_REPARSE_POINT: u32 = 0x400;
+
+pub(crate) const WINDOWS_DIAGNOSTIC_SYSTEM: &str = r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+[ordered]@{
+  Drives = @(Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free)
+  Memory = Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize, FreePhysicalMemory, TotalVirtualMemorySize, FreeVirtualMemory
+  Processors = @(Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors)
+  Processes = @(Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 16 ProcessName, Id, CPU, WorkingSet64)
+} | ConvertTo-Json -Depth 4
+"#;
+
+pub(crate) const WASM_TEST_ARGS: &[&str] = &[
+    "test",
+    "--profile",
+    "test-release",
+    "--target",
+    "wasm32-unknown-unknown",
+    "-Z",
+    "build-std=std,panic_abort,core,alloc",
+    "-Z",
+    "build-std-features=optimize_for_size",
+];
+
+pub(crate) const WASM_ENCODER_TEST: &[&str] = &[
+    "-p",
+    "kithara-encode",
+    "--no-default-features",
+    "--features",
+    "client-reqwest,tls-rustls",
+    "--test",
+    "session",
+];
+
+pub(crate) const WASM_OBSERVER_TEST: &[&str] = &[
+    "-p",
+    "kithara-ffi",
+    "--test",
+    "web-observer",
+    "--test",
+    "web-bootstrap",
+    "--no-default-features",
+    "--features",
+    "wasm",
+];
+
+pub(crate) const WASM_LAYOUT_TEST: &[&str] = &[
+    "-p",
+    "kithara-dsp",
+    "--test",
+    "layout",
+    "--features",
+    "spectrum",
+];
+
+pub(crate) const WASM_ANALYSIS_TEST: &[&str] = &[
+    "-p",
+    "kithara-ffi-web-analysis-tests",
+    "--features",
+    "browser",
+    "--test",
+    "web-analysis",
+];
+
+pub(crate) const WASM_INTEGRATION_TEST: &[&str] = &[
+    "-p",
+    "kithara-ffi-web-tests",
+    "-p",
+    "kithara-integration-tests",
+    "--no-default-features",
+    "--features",
+    "kithara-integration-tests/wasm",
+    "--test",
+    "ffi_web",
+    "--test",
+    "suite_heavy",
+];
+
+pub(crate) const WASM_LIVE_GRAPH_TEST: &[&str] = &[
+    "-p",
+    "kithara-integration-tests",
+    "--no-default-features",
+    "--features",
+    "kithara-integration-tests/wasm",
+    "--test",
+    "suite_live_web_audio",
+];
+
+pub(crate) const WASM_WEBCODECS_TEST: &[&str] = &[
+    "-p",
+    "kithara-decode",
+    "--no-default-features",
+    "--features",
+    "symphonia,webcodecs,client-reqwest,tls-rustls",
+    "--test",
+    "webcodecs_browser",
+];
 
 pub(crate) const PATCH_BYTES: usize = 16 * 1024 * 1024;
 
@@ -107,6 +214,10 @@ pub(crate) const SLICE_TARGETS: &[(&str, &[&str])] = &[
 /// Nightly enables the `[unstable] build-std` section of
 /// `crates/kithara-ffi/.cargo/config.toml` for every release slice.
 pub(crate) const RELEASE_CARGO_ARGS: &[&str] = &["+nightly"];
+
+pub(crate) const MACOS_APP_ARCHIVE: &str = "Kithara-macos-universal.zip";
+pub(crate) const MACOS_APP_MINIMUM_OS: &str = "13.0";
+pub(crate) const MACOS_APP_TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
 
 /// Slice subdirectories inside the `*.xcframework` we expect to find.
 pub(crate) const XCFRAMEWORK_SLICES: &[&str] =
@@ -282,6 +393,13 @@ pub(crate) const OPEN_FILES: u64 = 65536;
 /// on rather than the scale a compiler writes files on.
 pub(crate) const JOB_ROOM_POLL: Duration = Duration::from_secs(15);
 
+/// The bytes a CI job needs free on the volume it builds on, told by the
+/// executor that names its build root.
+pub(crate) const JOB_ROOM_BYTES_ENV: &str = "KITHARA_CI_JOB_ROOM_BYTES";
+
+/// How many seconds a CI job waits for that room before refusing to start.
+pub(crate) const JOB_ROOM_WAIT_ENV: &str = "KITHARA_CI_JOB_ROOM_WAIT_SECONDS";
+
 #[cfg(test)]
 #[cfg(unix)]
 pub(crate) const CACHE_ROOT: &str = "KITHARA_TEST_CACHE_ROOT";
@@ -322,14 +440,14 @@ pub(crate) const KACHE_DIR: &str = "kache";
 pub(crate) const KACHE_MOUNT: &str = "/cache/kache";
 pub(crate) const KACHE_HOST_FILE: &str = "host.toml";
 pub(crate) const KACHE_STORE: &str = "store";
-/// The host file a Mac host's container runner names: the same remote and
-/// store, spelled as the container reaches them.
-pub(crate) const KACHE_DOCKER_HOST_FILE: &str = "host-docker.toml";
-
+pub(crate) const KACHE_LOCAL_ROOT_ENV: &str = "KITHARA_CI_COMPILER_CACHE_ROOT";
 /// Where a Linux runner mounts the Cargo home of its trust: the image's own
 /// `CARGO_HOME`, so a job that names no home and one that is told it key their
 /// compilations alike.
 pub(crate) const CARGO_HOME_MOUNT: &str = "/home/runner/.cargo";
+/// Where an Android runner mounts its Gradle user home: the default home of
+/// the image's user, so the wrapper and every build find it without being told.
+pub(crate) const GRADLE_HOME_MOUNT: &str = "/home/runner/.gradle";
 
 /// The host directory, under the cache root, that `production/main` claims its
 /// lane directories in, and where a Linux runner mounts it. A host deployed
@@ -396,6 +514,7 @@ pub(crate) const PRIVATE_BLOCKS: [&str; 3] = ["172.16.0.0/12", "10.0.0.0/8", "19
 
 /// A mode only its owner may read and write.
 pub(crate) const OWNER_ONLY: u32 = 0o600;
+pub(crate) const OWNER_DIRECTORY: u32 = 0o700;
 
 /// A mode anyone may read and run, and only its owner may write.
 pub(crate) const EXECUTABLE: u32 = 0o755;
@@ -440,10 +559,6 @@ pub(crate) const HOST_PACKAGES: [&str; 10] = [
 /// and make then reports `/Volumes/My: No such file or directory`. Only a real
 /// mount elsewhere fixes it, so the guest moves the share here on startup.
 pub(crate) const GUEST_SHARE: &str = "/opt/kithara";
-
-/// The floating tag the Linux runner runs. It always names the image the most
-/// recent pipeline pinned, so the runner configuration never changes with a pin.
-pub(crate) const LINUX_LATEST_IMAGE: &str = "kithara-ci:linux-latest";
 
 /// The throwaway VM the macOS lane clones for every job.
 pub(crate) const JOB_VM_NAME: &str = "kithara-ci-job";
@@ -556,11 +671,6 @@ pub(crate) const UNIT_HASH_LEN: usize = 16;
 /// caches in. On the cache share it is a namespace cleanup keeps.
 pub(crate) const CARGO_HOME_DIR: &str = "cargo";
 
-/// The host tree the container runner checks out into, under the build root.
-/// The container sees it where every runner checks out, `workspaces/gitlab`;
-/// the host's runners never do.
-pub(crate) const CONTAINER_BUILDS: &str = "workspaces/colima";
-
 /// Where a CI job's lanes take their build slots, when not in the root Cargo
 /// is told: runners that share their lanes' builds are told the directory they
 /// share.
@@ -572,6 +682,11 @@ pub(crate) const BUILD_ALIAS: &str = "build";
 
 /// The file in a build directory that records the content its builds read.
 pub(crate) const SOURCES_RECORD: &str = "sources.tsv";
+
+/// The scratch directory Cargo keeps in a build directory for tests
+/// (`CARGO_TARGET_TMPDIR`). No build reads it back, so a lane entering the
+/// directory sweeps it.
+pub(crate) const BUILD_SCRATCH: &str = "tmp";
 
 /// The header of a sources record a job still holds.
 pub(crate) const SOURCES_HELD: &str = "held";
@@ -684,7 +799,8 @@ pub(crate) const REPORT_DIR: &str = ".ci-artifacts/junit";
 /// catalog already validates by name for the same reason: the executor's enum
 /// lives in `ci::run`, and a lane is refused at configuration load, before any
 /// executor is consulted. `lane_config.rs` pins the two lists together.
-pub(crate) const PIPELINE_KINDS: [&str; 8] = [
+pub(crate) const PIPELINE_KINDS: [&str; 9] = [
+    "bench",
     "branch",
     "platforms",
     "merge-request",
@@ -739,6 +855,10 @@ pub(crate) const STUDIO_CAPTURE: &str = "KITHARA_STUDIO_CAPTURE";
 /// User-agent used for registry availability checks when the project
 /// config leaves `publish.user_agent` empty.
 pub(crate) const DEFAULT_USER_AGENT: &str = "xtask-publish";
+
+/// The directory under the workspace target where a publication dry run
+/// verifies its packaged crates.
+pub(crate) const PUBLISH_VERIFICATION_DIR: &str = "publish-verify";
 
 /// Who every commit the release makes is recorded as. The commits land in a
 /// public repository, so they carry no person's name or address.
@@ -924,7 +1044,7 @@ pub(crate) const GUEST_PROVISION_SCRIPT: &str = ".config/windows/provision.ps1";
 pub(crate) const GUEST_BUILD_TOOLS_URL: &str = "https://aka.ms/vs/17/release/vs_buildtools.exe";
 
 /// The tools the lane needs on a guest beyond the toolchain.
-pub(crate) const GUEST_CARGO_TOOLS: [&str; 2] = ["cargo-nextest", "just"];
+pub(crate) const GUEST_CARGO_TOOLS: [&str; 3] = ["cargo-nextest", "just", "sccache"];
 
 /// Where the Linux host's services live.
 pub(crate) const SERVICE_SYSTEMD_ROOT: &str = "/etc/systemd/system";
@@ -950,7 +1070,5 @@ pub(crate) const SERVICE_RENEWAL_TIMER: &str = "kithara-ci-windows-renewal.timer
 pub(crate) const PROBE_MANIFEST: &str =
     "[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n";
 
-/// How far back from a unit's newest build the build-directory tests keep its
-/// other builds.
-#[cfg(test)]
+/// How far back from a CI bootstrap unit's newest build to keep its other builds.
 pub(crate) const GARBAGE_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);

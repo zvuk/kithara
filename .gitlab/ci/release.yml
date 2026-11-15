@@ -14,8 +14,10 @@ release:xcframework:
   script:
     - just ci run release-xcframework --package release
   artifacts:
+    when: always
     expire_in: never
     paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - KitharaFFIInternal.xcframework.zip
       - KitharaFFIInternal.xcframework.zip.sha256
       - Kithara.xcframework.zip
@@ -39,11 +41,44 @@ release:framework-snapshot:
   script:
     - just ci run release-xcframework --package snapshot
   artifacts:
+    when: always
     expire_in: 30 days
     paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - Kithara.xcframework.zip
       - Kithara.xcframework.zip.sha256
       - provenance.json
+
+release:app:
+  extends:
+    - .release-job
+    - .rules-release
+  stage: release-build
+  timeout: 180 minutes
+  resource_group: kithara-app-signing
+  environment:
+    name: release
+    action: prepare
+  needs:
+    - apple:test
+    - job: deps:semver
+      optional: true
+  script:
+    - |
+      printf 'unlock-keychain -p "%s" "%s"\n' \
+        "${KITHARA_APP_SIGN_KEYCHAIN_PASSWORD:?set signing Keychain password}" \
+        "${KITHARA_APP_SIGN_KEYCHAIN:?set signing Keychain path}" |
+        security -q -i
+    - just ci run release-app
+  after_script:
+    - security lock-keychain "$KITHARA_APP_SIGN_KEYCHAIN"
+  artifacts:
+    when: always
+    expire_in: never
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - Kithara-macos-universal.zip
+      - Kithara-macos-universal.zip.sha256
 
 release:docs:
   extends: .release-build
@@ -51,8 +86,10 @@ release:docs:
   script:
     - just ci run release-docs
   artifacts:
+    when: always
     expire_in: never
     paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - Kithara-docs.zip
       - Kithara-docs.zip.sha256
 
@@ -62,8 +99,10 @@ release:wasm:
   script:
     - just ci run release-wasm
   artifacts:
+    when: always
     expire_in: never
     paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - kithara-wasm-pages.zip
       - kithara-wasm-pages.zip.sha256
       - kithara-web-docs.zip
@@ -82,8 +121,10 @@ release:android:
   script:
     - just ci run release-android
   artifacts:
+    when: always
     expire_in: never
     paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - kithara.aar
       - kithara.aar.sha256
       - kithara-okhttp.aar
@@ -108,6 +149,8 @@ release:publish:
     - job: release:wasm
       artifacts: true
     - job: release:android
+      artifacts: true
+    - job: release:app
       artifacts: true
   environment:
     name: release

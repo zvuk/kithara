@@ -1,4 +1,5 @@
 mod core;
+mod dropout_clock;
 mod fade;
 mod feeder_tests;
 mod gate;

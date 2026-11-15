@@ -9,6 +9,10 @@ description = "Timestamped command batches for real-time executors: ordered sche
 keywords = ["audio", "realtime", "command", "scheduling", "lock-free"]
 categories = ["concurrency", "data-structures"]
 
+[package.metadata.kithara.wasm-lib-tests]
+default-features = true
+features = []
+
 [dependencies]
 kithara-config = { workspace = true }
 kithara-platform = { workspace = true }
@@ -23,7 +27,7 @@ thiserror = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true, features = ["subscriber", "hang"] }
+kithara-test-utils = { workspace = true, features = ["test", "subscriber", "hang"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 assert_no_alloc = { workspace = true }

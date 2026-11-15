@@ -3,14 +3,14 @@
 use std::{
     f64::consts::{FRAC_1_SQRT_2, TAU},
     hint::black_box,
-    num::NonZeroUsize,
+    num::{NonZeroU32, NonZeroUsize},
 };
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::{
-    filter::{Biquad, Coefficients, Hertz, Type},
-    interp::{Interpolation, interpolate},
-    spectrum::{Autocorrelation, Fft, FftLen, magnitude, phase},
+    filter::{Biquad, Coefficients, Hertz, Response, StateVariableFilter, Type},
+    interp::{Interpolation, interpolate, interpolate_frame, weighted_frames},
+    spectrum::{Autocorrelation, Fft, FftLen, prediction_difference},
 };
 use kithara_test_utils::bufpool::pools;
 use num_traits::ToPrimitive;
@@ -192,20 +192,20 @@ fn spectrum(c: &mut Criterion) {
     group.finish();
 }
 
-fn bins(c: &mut Criterion) {
-    let mut group = c.benchmark_group("bins");
-    for size in consts::SIZES {
-        group.throughput(Throughput::Elements(
-            u64::try_from(size).expect("size fits u64"),
-        ));
+fn prediction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("prediction_difference");
+    group.sample_size(20);
+    for size in [1, 3, 17, 64, 513, 1024] {
         let re = tone(size);
         let im: Vec<f32> = re.iter().rev().copied().collect();
-        let mut output = vec![0.0_f32; size];
-        group.bench_with_input(BenchmarkId::new("magnitude", size), &size, |b, _| {
-            b.iter(|| magnitude(black_box(&re), black_box(&im), &mut output));
-        });
-        group.bench_with_input(BenchmarkId::new("phase", size), &size, |b, _| {
-            b.iter(|| phase(black_box(&re), black_box(&im), &mut output));
+        let mut history: [Vec<f32>; 4] = std::array::from_fn(|_| vec![0.0; size + 1]);
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter(|| {
+                prediction_difference(
+                    [black_box(&re), black_box(&im)],
+                    black_box(&mut history).each_mut().map(Vec::as_mut_slice),
+                )
+            });
         });
     }
     group.finish();
@@ -265,6 +265,65 @@ fn biquad(c: &mut Criterion) {
                 &sections,
                 |b, _| {
                     b.iter(|| filter.process(black_box(&mut planes), 0..FRAMES).is_ok());
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+fn svf(c: &mut Criterion) {
+    let mut group = c.benchmark_group("svf");
+    let rate = NonZeroU32::new(48_000).expect("bench rate");
+    for frames in [128_usize, 1_024] {
+        let tone: Vec<f32> =
+            std::iter::successors(Some(0.0_f32), |phase| Some(phase + consts::TONE_STEP))
+                .take(frames)
+                .map(|phase| 0.25 * phase.sin())
+                .collect();
+        let template = [tone.clone(), tone];
+        let cutoffs = vec![4_000.0; frames];
+        group.throughput(Throughput::Elements(
+            u64::try_from(frames * 2).expect("stereo frame count fits u64"),
+        ));
+        for response in [Response::LowPass, Response::HighPass] {
+            let mut filter = StateVariableFilter::<2>::new();
+            let mut probe = template.clone();
+            assert!(
+                filter
+                    .process(
+                        &mut probe,
+                        0..frames,
+                        &cutoffs,
+                        rate,
+                        FRAC_1_SQRT_2,
+                        response
+                    )
+                    .is_ok()
+            );
+            assert!(probe.iter().flatten().all(|sample| sample.is_finite()));
+            assert!(probe.iter().flatten().any(|sample| *sample != 0.0));
+            filter.reset();
+            group.bench_with_input(
+                BenchmarkId::new(format!("2ch_{response:?}"), frames),
+                &frames,
+                |b, &frames| {
+                    b.iter_batched_ref(
+                        || template.clone(),
+                        |planes| {
+                            let result = filter.process(
+                                black_box(&mut *planes),
+                                0..frames,
+                                black_box(&cutoffs),
+                                rate,
+                                FRAC_1_SQRT_2,
+                                response,
+                            );
+                            black_box(result.is_ok());
+                            black_box(planes);
+                        },
+                        BatchSize::SmallInput,
+                    );
                 },
             );
         }
@@ -340,16 +399,159 @@ fn interp(c: &mut Criterion) {
     group.finish();
 }
 
+type Crossfade = fn(&[f32], &mut [f32], NonZeroUsize, usize, usize) -> usize;
+
+// The scalar audio-join law is an independent timing control.
+fn previous_audio_crossfade(
+    outgoing: &[f32],
+    output: &mut [f32],
+    channels: NonZeroUsize,
+    first: usize,
+    frames: usize,
+) -> usize {
+    let mut frame = u16::try_from(first).expect("benchmark position");
+    let frames = u16::try_from(frames).expect("benchmark denominator");
+    for (old, incoming) in outgoing
+        .chunks_exact(channels.get())
+        .zip(output.chunks_exact_mut(channels.get()))
+    {
+        if frame >= frames {
+            break;
+        }
+        let gain = f32::from(frame) / f32::from(frames);
+        for (&old, incoming) in old.iter().zip(incoming) {
+            if old.to_bits() != incoming.to_bits() {
+                *incoming = old.mul_add(1.0 - gain, *incoming * gain);
+            }
+        }
+        frame += 1;
+    }
+    usize::from(frame) - first
+}
+
+fn crossfade(c: &mut Criterion) {
+    let old_sample = 0.314_159_f32;
+    let new_sample = -0.271_828_f32;
+    let kernels: [(&str, Crossfade); 2] = [
+        ("crossfade_linear", kithara_dsp::crossfade_linear),
+        ("crossfade_previous_audio", previous_audio_crossfade),
+    ];
+    for (name, kernel) in kernels {
+        let mut group = c.benchmark_group(name);
+        group.sample_size(20);
+        let mut shapes = Vec::new();
+        for frames in consts::SIZES {
+            for channels in [NonZeroUsize::MIN, consts::TWO, consts::SIX] {
+                shapes.push((channels, frames, frames.to_string(), 0, frames, new_sample));
+            }
+        }
+        shapes.extend([
+            (consts::TWO, 7, "7".to_owned(), 0, 7, new_sample),
+            (consts::SIX, 127, "127".to_owned(), 0, 127, new_sample),
+            (consts::TWO, 127, "127-tail".to_owned(), 1, 127, new_sample),
+            (
+                consts::TWO,
+                4096,
+                "4096-chunk128".to_owned(),
+                0,
+                128,
+                new_sample,
+            ),
+            (consts::TWO, 7, "7-identity".to_owned(), 0, 7, old_sample),
+        ]);
+        for (channels, frames, shape, tail, chunk, input_sample) in shapes {
+            let old = vec![old_sample; frames * channels.get() + tail];
+            let apply = |output: &mut [f32]| {
+                let mut processed = 0;
+                for (outgoing, incoming) in black_box(&old)
+                    .chunks(chunk * channels.get())
+                    .zip(output.chunks_mut(chunk * channels.get()))
+                {
+                    processed += kernel(outgoing, incoming, channels, processed, frames);
+                }
+                processed
+            };
+            let mut expected = vec![input_sample; old.len()];
+            assert_eq!(
+                previous_audio_crossfade(&old, &mut expected, channels, 0, frames),
+                frames
+            );
+            let mut actual = vec![input_sample; old.len()];
+            assert_eq!(apply(&mut actual), frames);
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(actual, expected)| actual.to_bits() == expected.to_bits()),
+                "kernel timing control must preserve the scalar law and tail"
+            );
+            group.throughput(Throughput::Elements(
+                u64::try_from(frames).expect("frame count"),
+            ));
+            group.bench_function(BenchmarkId::new(format!("{channels}ch"), shape), |b| {
+                b.iter_batched_ref(
+                    || vec![input_sample; old.len()],
+                    |output| black_box(apply(black_box(output))),
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+        group.finish();
+    }
+}
+
+fn source_frames(c: &mut Criterion) {
+    let mut group = c.benchmark_group("source_frames");
+    for channels in [1_usize, 2, 4, 6, 9] {
+        let samples = vec![0.25; channels * 33];
+        let offsets = std::array::from_fn::<_, 33, _>(|tap| tap * channels);
+        let weights = [0.125; 33];
+        let mut frame = vec![0.0; channels];
+        let mut sums = vec![0.0; channels];
+        group.throughput(Throughput::Elements(
+            u64::try_from(channels).expect("channels"),
+        ));
+        group.bench_function(BenchmarkId::new("interpolate", channels), |b| {
+            b.iter(|| {
+                interpolate_frame(
+                    black_box(&samples[..channels]),
+                    black_box(&samples[channels..2 * channels]),
+                    black_box(0.531_589_7),
+                    &mut frame,
+                );
+                black_box(&frame);
+            });
+        });
+        group.bench_function(BenchmarkId::new("weighted", channels), |b| {
+            b.iter(|| {
+                weighted_frames(
+                    black_box(&samples),
+                    black_box(&offsets),
+                    black_box(&weights),
+                    channels,
+                    &mut sums,
+                )
+                .expect("resolved taps");
+                black_box(&sums);
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    crossfade,
     kernels,
     vector,
     downmix,
     biquad,
     biquad_decay,
+    svf,
     interp,
+    source_frames,
     spectrum,
-    bins,
+    prediction,
     autocorrelation
 );
 criterion_main!(benches);

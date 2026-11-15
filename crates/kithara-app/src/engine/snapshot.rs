@@ -1,16 +1,20 @@
 use std::collections::BTreeMap;
 
 use kithara::{
-    abr::AbrMode, effects::GainDb, platform::sync::Arc, play::EngineLoadSnapshot, queue::TrackEntry,
+    abr::AbrMode,
+    effects::GainDb,
+    host::{DeckId, api::Tempo},
+    platform::sync::Arc,
+    play::{EngineLoadSnapshot, Pitch},
+    queue::TrackEntry,
 };
 use num_traits::cast::AsPrimitive;
 
 use crate::{
     analysis::TrackArtifacts,
     broadcast::Broadcaster,
-    deck::{DeckId, EqMode, TempoPercent},
-    engine::settings::DeckSettings,
-    mix::MixState,
+    deck::{EqMode, TempoPercent},
+    mix::{MixState, MixStrip},
     state::{AbrVariant, UiState},
 };
 
@@ -19,6 +23,7 @@ pub(crate) struct EngineSnapshot {
     pub(crate) broadcast: BroadcastPhase,
     pub(crate) eq_mode: EqMode,
     pub(crate) mix: MixState,
+    pub(crate) tempo: Tempo,
     pub(crate) decks: Vec<DeckSnapshot>,
     pub(crate) track_bpms: Arc<BTreeMap<String, f64>>,
     pub(crate) applied_seq: u64,
@@ -29,7 +34,8 @@ impl EngineSnapshot {
         Self {
             broadcast: BroadcastPhase::default(),
             eq_mode: EqMode::default(),
-            mix: MixState::new(0),
+            mix: MixState::default(),
+            tempo: Tempo::DEFAULT,
             decks: Vec::new(),
             track_bpms: Arc::new(BTreeMap::new()),
             applied_seq: 0,
@@ -38,6 +44,10 @@ impl EngineSnapshot {
 
     pub(crate) fn deck(&self, id: DeckId) -> Option<&DeckSnapshot> {
         self.decks.iter().find(|deck| deck.id == id)
+    }
+
+    pub(crate) fn lettered(&self, letter: &str) -> Option<&DeckSnapshot> {
+        self.decks.iter().find(|deck| deck.letter == letter)
     }
 }
 
@@ -64,9 +74,14 @@ pub(crate) struct DeckSnapshot {
     pub(crate) track_name: String,
     pub(crate) tracks: Vec<TrackEntry>,
     pub(crate) id: DeckId,
+    pub(crate) letter: &'static str,
+    pub(crate) strip: MixStrip,
     pub(crate) engine_load: EngineLoadSnapshot,
     pub(crate) current_track_index: Option<usize>,
     pub(crate) tempo: TempoPercent,
+    pub(crate) speed: f32,
+    pub(crate) synced: bool,
+    pub(crate) pitch: Option<Pitch>,
     pub(crate) playing: bool,
     pub(crate) duration: f64,
     pub(crate) position: f64,
@@ -89,17 +104,33 @@ pub(crate) struct AnalysisView {
     pub(crate) bpm: Option<f32>,
 }
 
+#[bon::bon]
 impl DeckSnapshot {
-    pub(crate) fn new(id: DeckId, state: &UiState, settings: &DeckSettings) -> Self {
+    #[builder]
+    pub(crate) fn new(
+        id: DeckId,
+        letter: &'static str,
+        strip: MixStrip,
+        eq_bands: Vec<GainDb>,
+        tempo: TempoPercent,
+        synced: bool,
+        pitch: Option<Pitch>,
+        state: &UiState,
+    ) -> Self {
         Self {
             id,
+            letter,
+            strip,
             analysis: AnalysisView::new(state),
-            eq_bands: settings.eq_bands.clone(),
+            eq_bands,
             stream: StreamView::new(state),
             track_name: state.track_name.clone(),
             tracks: state.tracks.clone(),
             engine_load: state.engine_load,
-            tempo: settings.tempo,
+            tempo,
+            speed: state.speed,
+            synced,
+            pitch,
             current_track_index: state.current_track_index,
             duration: state.duration,
             position: state.position,

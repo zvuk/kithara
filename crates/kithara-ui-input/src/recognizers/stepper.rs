@@ -52,7 +52,7 @@ impl Stepper {
                 }
                 Outcome::set(StepEvent::By(steps))
             }
-            Input::Pointer(pointer) if pointer.phase == PointerPhase::Down => {
+            Input::Pointer(pointer) if pointer.presses_primary() => {
                 let Some(position) = hit.inside() else {
                     return Outcome::IGNORED;
                 };

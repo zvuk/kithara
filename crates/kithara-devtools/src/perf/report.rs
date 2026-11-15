@@ -8,7 +8,7 @@ use crate::{
         gecko::{ProfileSummary, summarize},
         lanes::RunPaths,
         profile::IsolatedRun,
-        slow::SlowReport,
+        slow::{self, SlowReport},
     },
 };
 
@@ -111,9 +111,7 @@ pub(crate) fn run(
         .as_deref()
         .unwrap_or(&project.project.name);
     let paths = RunPaths::new(data_dir, run_id);
-    let slow: SlowReport =
-        serde_json::from_str(&fs::read_to_string(paths.slow_json()).context("read slow.json")?)
-            .context("parse slow.json")?;
+    let slow = slow::load_report(&paths, run_id)?;
     let iso_path = paths.profiles_dir(lane).join("isolated.json");
     let isolated: Vec<IsolatedRun> = serde_json::from_str(
         &fs::read_to_string(&iso_path).with_context(|| format!("read {}", iso_path.display()))?,
@@ -163,6 +161,29 @@ mod tests {
         profile::IsolatedRun,
         slow::{LaneStat, SlowReport, SlowTest},
     };
+
+    #[test]
+    fn cached_slow_report_requires_raw_matrix_before_rendering() {
+        let temp = tempfile::tempdir().expect("report fixture");
+        let paths = RunPaths::new(temp.path(), "run");
+        fs::create_dir(&paths.run_dir).expect("run directory");
+        fs::write(
+            paths.slow_json(),
+            r#"{"run_id":"run","threshold_ms":1000,"primary_lane":"flash-on-http","tests":[]}"#,
+        )
+        .expect("cached slow report");
+
+        let error = run(
+            &ProjectConfig::default(),
+            temp.path(),
+            "run",
+            "flash-on-http",
+        )
+        .expect_err("cached statistics cannot replace raw matrix evidence");
+
+        assert!(format!("{error:#}").contains("matrix.json"));
+        assert!(!paths.report_md().exists());
+    }
 
     #[test]
     fn renders_cards_and_ranking() {

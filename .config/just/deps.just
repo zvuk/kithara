@@ -10,9 +10,21 @@ hakari-check:
     cargo hakari manage-deps --dry-run
 
 deny:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p .ci-artifacts/deps-deny
+    : > .ci-artifacts/deps-deny/cargo-deny.log
+    : > .ci-artifacts/deps-deny/exit-status.txt
     cargo fetch --locked
     cargo deny fetch db || echo "RustSec refresh unavailable; validating the cached database" >&2
-    cargo deny --offline check
+    set +e
+    cargo deny --offline check --hide-inclusion-graph 2>&1 | tee .ci-artifacts/deps-deny/cargo-deny.log
+    check_status=("${PIPESTATUS[@]}")
+    set -e
+    printf 'cargo-deny=%s\ntee=%s\n' "${check_status[@]}" > .ci-artifacts/deps-deny/exit-status.txt
+    test "${check_status[1]}" -eq 0
+    test -s .ci-artifacts/deps-deny/cargo-deny.log
+    exit "${check_status[0]}"
 
 machete:
     cargo machete --skip-target-dir $(find crates -maxdepth 1 -mindepth 1 -not -name kithara-workspace-hack | sort) tests xtask

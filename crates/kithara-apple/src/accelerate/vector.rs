@@ -2,7 +2,36 @@ use std::ptr;
 
 use super::ffi::{
     vDSP_conv, vDSP_maxmgv, vDSP_svesq, vDSP_vadd, vDSP_vmul, vDSP_vsma, vDSP_vsmsa, vDSP_vsub,
+    vvtan,
 };
+
+/// Native double-precision tangent over the common prefix; returns its length.
+/// Signed zeros and subnormal inputs retain their exact tangent bits.
+#[must_use]
+pub fn tangent_f64(input: &[f64], output: &mut [f64]) -> usize {
+    let len = input.len().min(output.len());
+    let input = &input[..len];
+    let output = &mut output[..len];
+    tangent_vforce(input, output);
+    for (input, output) in input.iter().zip(output) {
+        // tan(x) rounds to x here; vForce is permitted to flush subnormals.
+        if input.abs() < f64::MIN_POSITIVE {
+            *output = *input;
+        }
+    }
+    len
+}
+
+fn tangent_vforce(input: &[f64], output: &mut [f64]) {
+    const MAXIMUM: usize = 2_147_483_647;
+    for (input, output) in input.chunks(MAXIMUM).zip(output.chunks_mut(MAXIMUM)) {
+        let Ok(count) = i32::try_from(input.len()) else {
+            return;
+        };
+        // SAFETY: both nonoverlapping slices hold count doubles; vForce is synchronous.
+        unsafe { vvtan(output.as_mut_ptr(), input.as_ptr(), ptr::from_ref(&count)) };
+    }
+}
 
 /// The largest `|x|` in `samples`; `0.0` for an empty slice.
 #[must_use]
@@ -28,6 +57,32 @@ pub fn multiply_f32(a: &[f32], b: &[f32], output: &mut [f32]) -> usize {
     // SAFETY: a, b and output each hold at least len floats at stride one.
     // SAFETY: output is an exclusive borrow, so it overlaps neither input.
     unsafe { vDSP_vmul(a.as_ptr(), 1, b.as_ptr(), 1, output.as_mut_ptr(), 1, len) };
+    len
+}
+
+/// `samples[i] *= gains[i]` over the common prefix; returns its length.
+#[must_use]
+#[inline(always)]
+pub fn multiply_in_place_f32(samples: &mut [f32], gains: &[f32]) -> usize {
+    match (samples, gains) {
+        ([sample], [gain, ..]) | ([sample, ..], [gain]) => {
+            *sample *= *gain;
+            1
+        }
+        (samples, gains) => multiply_in_place_vdsp(samples, gains),
+    }
+}
+
+#[inline(never)]
+fn multiply_in_place_vdsp(samples: &mut [f32], gains: &[f32]) -> usize {
+    let len = samples.len().min(gains.len());
+    if len == 0 {
+        return 0;
+    }
+    let values = samples.as_mut_ptr();
+    // SAFETY: both slices hold len floats; vDSP permits input/output aliasing
+    // SAFETY: at stride one. The exclusive samples borrow cannot overlap gains.
+    unsafe { vDSP_vmul(values.cast_const(), 1, gains.as_ptr(), 1, values, 1, len) };
     len
 }
 
@@ -76,7 +131,7 @@ pub fn sum_squares_f32(samples: &[f32]) -> f32 {
     sum
 }
 
-/// `x[i] = x[i]·scale + offset` in place; returns the length of `x`.
+/// `x[i] = x[i]*scale + offset` in place; returns the length of `x`.
 #[must_use]
 pub fn affine_f32(x: &mut [f32], scale: f32, offset: f32) -> usize {
     if x.is_empty() {
@@ -116,7 +171,7 @@ pub fn sub_f32(x: &mut [f32], y: &[f32]) -> usize {
     len
 }
 
-/// `acc[i] += x[i]·gain` over the common prefix of the two slices; returns
+/// `acc[i] += x[i]*gain` over the common prefix of the two slices; returns
 /// its length.
 #[must_use]
 pub fn scale_add_f32(x: &[f32], gain: f32, acc: &mut [f32]) -> usize {

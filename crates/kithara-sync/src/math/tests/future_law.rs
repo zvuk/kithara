@@ -9,7 +9,7 @@ use super::{
     fixtures::{grid, host, position, source_grid},
 };
 use crate::{
-    SessionBeat, SpeedCurve, Tempo, TempoStep, TempoTrajectory, corrected_speed_curve, speed_curve,
+    SessionBeat, Slew, SlewCause, SpeedCurve, Tempo, TempoStep, TempoTrajectory, slew, speed_curve,
 };
 
 fn approached(initial: f64, target: f64, frames: u64) -> f64 {
@@ -81,8 +81,10 @@ fn future_targets_are_projected_in_frame_order_after_out_of_order_acceptance() {
         position(0),
         SessionFrame::new(800),
         None,
+        u64::MAX,
     )
-    .expect("finite future trajectory");
+    .expect("finite future trajectory")
+    .0;
     let laws = analytic_laws(&curve);
 
     assert_eq!(
@@ -114,8 +116,10 @@ fn future_targets_are_projected_in_frame_order_after_out_of_order_acceptance() {
         position(0),
         SessionFrame::new(1_000),
         None,
+        u64::MAX,
     )
-    .expect("projection from a command boundary");
+    .expect("projection from a command boundary")
+    .0;
     assert_eq!(
         analytic_laws(&at_target)
             .iter()
@@ -136,8 +140,10 @@ fn withdrawing_an_earlier_target_removes_it_from_the_future_projection() {
         position(0),
         SessionFrame::new(800),
         None,
+        u64::MAX,
     )
-    .expect("withdrawn target is absent");
+    .expect("withdrawn target is absent")
+    .0;
     let laws = analytic_laws(&curve);
 
     assert_eq!(laws.iter().map(|(at, _)| *at).collect::<Vec<_>>(), [0, 328]);
@@ -180,8 +186,10 @@ fn projection_keeps_exact_frame_offsets_beyond_f64_integer_precision(#[case] ori
         position(0),
         SessionFrame::new(origin + 7),
         None,
+        u64::MAX,
     )
-    .expect("integer origin projection");
+    .expect("integer origin projection")
+    .0;
     let laws = analytic_laws(&curve);
 
     assert_eq!(
@@ -204,24 +212,35 @@ fn zero_correction_preserves_the_complete_future_law() {
         position(480),
         at,
         None,
+        u64::MAX,
     )
-    .expect("anchored future trajectory");
+    .expect("anchored future trajectory")
+    .0;
     assert_eq!(
         crate::phase_error(&pending_targets(), &source_grid(&model), position(480), at)
             .expect("exactly representable source and Host anchor")
             .beats,
         0.0,
     );
-    let (actual, end) = corrected_speed_curve(
+    let Some(Slew::Closes {
+        curve: actual,
+        frames: end,
+        ..
+    }) = slew(
         &pending_targets(),
         &source_grid(&model),
         position(480),
         at,
-        1.0,
         0.001,
-        false,
+        SlewCause::Drift {
+            from: 1.0,
+            limit: f32::INFINITY,
+        },
+        u64::MAX,
     )
-    .expect("zero source phase");
+    else {
+        panic!("zero source phase");
+    };
 
     assert_eq!(end, 0);
     assert_eq!(actual, base);
@@ -250,8 +269,10 @@ fn zero_correction_preserves_the_complete_future_law() {
         cue,
         at,
         Some((position(278_129), landing)),
+        u64::MAX,
     )
-    .expect("a seek composes the actual pickup with its observed landing");
+    .expect("a seek composes the actual pickup with its observed landing")
+    .0;
     let landing_offset = landing.frames_since(at).expect("future landing");
     let initial_advance = advance(&aligned, 0, landing_offset);
     assert!((initial_advance - 240.0 * 124.0 / 140.0).abs() < 1e-9);
@@ -275,8 +296,10 @@ fn correction_restores_an_approach_between_two_host_commands() {
         position(0),
         SessionFrame::new(800),
         None,
+        u64::MAX,
     )
-    .expect("future trajectory");
+    .expect("future trajectory")
+    .0;
     let at = SessionFrame::new(800);
     let source = SourceGrid::new(&model, NonZeroU32::new(48_000).expect("rate"), None, false)
         .expect("source geometry");
@@ -285,8 +308,11 @@ fn correction_restores_an_approach_between_two_host_commands() {
         &pending_targets(),
         &source,
         position(0),
-        at,
-        None,
+        source::Span {
+            start: at,
+            landing: None,
+            horizon: u64::MAX,
+        },
         &[(0, 0.25), (end, 0.0)],
         None,
     )
@@ -323,26 +349,38 @@ fn correction_restores_an_approach_between_two_host_commands() {
     .expect("nonuniform source");
     let host = host(120.0, 4);
     let cue = position(480);
-    let (base, _) = source::curve(
+    let (base, _, _) = source::curve(
         &host,
         &SourceGrid::new(&model, host.sample_rate(), None, false).expect("source"),
         cue,
-        SessionFrame::new(0),
-        None,
+        source::Span {
+            start: SessionFrame::new(0),
+            landing: None,
+            horizon: u64::MAX,
+        },
         &[(0, 0.0)],
         None,
     )
     .expect("local source law");
-    let (corrected, end) = corrected_speed_curve(
+    let Some(Slew::Closes {
+        curve: corrected,
+        frames: end,
+        ..
+    }) = slew(
         &host,
         &source_grid(&model),
         cue,
         SessionFrame::new(0),
-        0.8,
         0.001,
-        false,
+        SlewCause::Drift {
+            from: 0.8,
+            limit: f32::INFINITY,
+        },
+        u64::MAX,
     )
-    .expect("true source phase correction");
+    else {
+        panic!("true source phase correction");
+    };
     let base_boundary = analytic_laws(&base)
         .into_iter()
         .find(|(at, _)| *at > 0)
@@ -369,8 +407,10 @@ fn correction_restores_an_approach_between_two_host_commands() {
         position(4_800),
         SessionFrame::new(0),
         Some((position(0), landing)),
+        u64::MAX,
     )
-    .expect("real pre-jump source and physical-zero landing");
+    .expect("real pre-jump source and physical-zero landing")
+    .0;
     let from = u64::try_from(i64::from(landing)).expect("landing frame");
     let consumed = advance(&aligned, from, from + 24_000) / 48_000.0;
     let expected = source.media_at(1.0).expect("next observed beat");
@@ -390,8 +430,10 @@ fn correction_collisions_preserve_host_targets_and_restore_the_remaining_law() {
         position(0),
         SessionFrame::new(800),
         None,
+        u64::MAX,
     )
-    .expect("future trajectory");
+    .expect("future trajectory")
+    .0;
     let at = SessionFrame::new(800);
     let source = SourceGrid::new(&model, NonZeroU32::new(48_000).expect("rate"), None, false)
         .expect("source geometry");
@@ -400,8 +442,11 @@ fn correction_collisions_preserve_host_targets_and_restore_the_remaining_law() {
         &trajectory,
         &source,
         position(0),
-        at,
-        None,
+        source::Span {
+            start: at,
+            landing: None,
+            horizon: u64::MAX,
+        },
         &[(0, 0.25), (200, -0.25), (end, 0.0)],
         None,
     )

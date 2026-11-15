@@ -25,6 +25,9 @@ pub enum SourceError {
 
     #[error("unexpected asset acquisition state")]
     UnexpectedAcquisitionState,
+
+    #[error("another writer of this store is settling the resource")]
+    WriterSettling,
 }
 
 impl From<SourceError> for StreamSourceError {
@@ -34,7 +37,9 @@ impl From<SourceError> for StreamSourceError {
             SourceError::Storage(e) => Self::Storage(e),
             SourceError::Assets(e) => Self::other(e),
             SourceError::InvalidPath(s) => Self::InvalidPath(s),
-            SourceError::NoDownloader | SourceError::UnexpectedAcquisitionState => Self::other(err),
+            SourceError::NoDownloader
+            | SourceError::UnexpectedAcquisitionState
+            | SourceError::WriterSettling => Self::other(err),
         }
     }
 }

@@ -94,7 +94,12 @@ impl Check for DerivableDelegation {
         for manifest in manifests {
             let source = fs::read_to_string(&manifest)
                 .with_context(|| format!("read {}", manifest.display()))?;
-            let Some(rewritten) = crate::manifest::add_workspace_dependency(&source, "delegate")?
+            let Some(rewritten) = crate::manifest::add_workspace_dependency(
+                &source,
+                "delegate",
+                &manifest,
+                ctx.metadata,
+            )?
             else {
                 continue;
             };

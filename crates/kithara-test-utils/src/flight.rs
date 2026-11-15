@@ -5,6 +5,7 @@ use std::{
     sync::{Mutex, MutexGuard, OnceLock, PoisonError},
 };
 
+use arrayvec::ArrayString;
 use kithara_platform::time::WallInstant;
 use tracing::{
     Event, Level, Metadata, Subscriber,
@@ -184,10 +185,7 @@ where
         };
         let at_ns = self.started.elapsed().as_nanos();
         let thread = std::thread::current();
-        let mut text = EventText {
-            line: String::with_capacity(consts::MAX_EVENT_BYTES + '\u{2026}'.len_utf8()),
-            ..EventText::default()
-        };
+        let mut text = EventText::default();
         let _ = write!(
             text,
             "{level} {target}: thread={id:?} thread_name={name:?}",
@@ -217,7 +215,7 @@ where
             Lane::Probe => &PROBES,
         };
         let (line, key) = text.finish();
-        record(ring, line, key, at_ns);
+        record(ring, &line, key, at_ns);
     }
 }
 
@@ -227,7 +225,7 @@ where
 #[derive(Default)]
 struct EventText {
     key: DefaultHasher,
-    line: String,
+    line: ArrayString<{ consts::MAX_EVENT_BYTES + '\u{2026}'.len_utf8() }>,
     truncated: bool,
 }
 
@@ -249,7 +247,12 @@ impl EventText {
         self.truncated = true;
     }
 
-    fn finish(mut self) -> (String, u64) {
+    fn finish(
+        mut self,
+    ) -> (
+        ArrayString<{ consts::MAX_EVENT_BYTES + '\u{2026}'.len_utf8() }>,
+        u64,
+    ) {
         if self.truncated {
             self.line.push('\u{2026}');
         }
@@ -275,7 +278,7 @@ impl fmt::Write for LineOnly<'_> {
     }
 }
 
-fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: u64, at_ns: u128) {
+fn record(ring: &Mutex<VecDeque<Entry>>, line: &str, key: u64, at_ns: u128) {
     /// How far back a repeat folds into the entry already in the ring.
     ///
     /// Steady-state volume arrives as a short cycle of a few distinct lines — a
@@ -299,7 +302,7 @@ fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: u64, at_ns: u128) {
         first_ns: at_ns,
         key,
         last_ns: at_ns,
-        line,
+        line: line.to_owned(),
         repeats: 1,
     });
 }
@@ -349,17 +352,19 @@ mod tests {
     use std::{
         cell::Cell,
         collections::VecDeque,
-        fmt,
+        fmt::{self, Write as _},
+        hash::{DefaultHasher, Hasher as _},
         sync::{Mutex, MutexGuard, PoisonError},
         thread,
     };
 
-    use tracing::debug;
+    use tracing::{callsite::Callsite as _, debug, field::Visit as _};
     use tracing_subscriber::layer::SubscriberExt;
 
     use super::{
+        EventText, FieldVisitor, LineOnly,
         consts::{MAX_EVENT_BYTES, MAX_EVENTS},
-        layer, probes_tail, record, snapshot, tail,
+        layer, lock, probes_tail, record, snapshot, tail,
     };
     use crate::kithara;
 
@@ -383,12 +388,286 @@ mod tests {
         line.split_once(' ').expect("monotonic timestamp prefix").1
     }
 
+    #[derive(Default)]
+    struct OwnedEventText {
+        key: DefaultHasher,
+        line: String,
+        truncated: bool,
+    }
+
+    impl OwnedEventText {
+        fn push_line(&mut self, text: &str) {
+            if self.truncated {
+                return;
+            }
+            let room = MAX_EVENT_BYTES - self.line.len();
+            if text.len() <= room {
+                self.line.push_str(text);
+                return;
+            }
+            let mut end = room;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            self.line.push_str(&text[..end]);
+            self.truncated = true;
+        }
+
+        fn finish(mut self) -> (String, u64) {
+            if self.truncated {
+                self.line.push('\u{2026}');
+            }
+            (self.line, self.key.finish())
+        }
+    }
+
+    impl fmt::Write for OwnedEventText {
+        fn write_str(&mut self, text: &str) -> fmt::Result {
+            self.push_line(text);
+            self.key.write(text.as_bytes());
+            Ok(())
+        }
+    }
+
+    #[kithara::test]
+    fn inline_text_matches_owned_text_at_every_utf8_boundary() {
+        for prefix_bytes in 0..=MAX_EVENT_BYTES {
+            let prefix = "x".repeat(prefix_bytes);
+            for ending in ["", "a", "\u{e9}", "\u{20ac}", "\u{1f980}"] {
+                for tail in ["", "after the retained line"] {
+                    let mut inline = EventText::default();
+                    let mut owned = OwnedEventText::default();
+                    for chunk in [prefix.as_str(), "", ending, tail] {
+                        inline.write_str(chunk).unwrap();
+                        owned.write_str(chunk).unwrap();
+                    }
+                    let (line, key) = inline.finish();
+                    let (expected_line, expected_key) = owned.finish();
+                    assert_eq!(line.as_str(), expected_line);
+                    assert_eq!(key, expected_key);
+                }
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn inline_text_preserves_thread_span_and_signed_counter_keys() {
+        let callsite = tracing::callsite! {
+            name: "flight key parity",
+            kind: tracing::metadata::Kind::EVENT,
+            fields: message, seq, thread_seq, ready,
+        };
+        let fields = callsite.metadata().fields();
+        let mut context_keys = Vec::new();
+        for thread in ["ThreadId(7)", "ThreadId(8)"] {
+            for span_key in [11, 12] {
+                let mut keys = Vec::new();
+                for (seq, thread_seq) in [(-7i64, -9i64), (8, 10)] {
+                    let mut inline = EventText::default();
+                    let mut owned = OwnedEventText::default();
+                    let header = format!(
+                        "TRACE kithara_flight_test_probe: thread={thread} thread_name=Some(\"worker\")"
+                    );
+                    inline.write_str(&header).unwrap();
+                    owned.write_str(&header).unwrap();
+                    LineOnly(&mut inline).write_str(" worker{lane=11}").unwrap();
+                    owned.push_line(" worker{lane=11}");
+                    inline.key.write(b"worker");
+                    inline.key.write_u64(span_key);
+                    owned.key.write(b"worker");
+                    owned.key.write_u64(span_key);
+                    let mut visitor = FieldVisitor(&mut inline);
+                    visitor.record_debug(&fields.field("message").unwrap(), &"parity");
+                    visitor.record_debug(&fields.field("seq").unwrap(), &seq);
+                    visitor.record_debug(&fields.field("thread_seq").unwrap(), &thread_seq);
+                    visitor.record_debug(&fields.field("ready").unwrap(), &true);
+                    owned.write_str(" ").unwrap();
+                    write!(owned, "{:?}", "parity").unwrap();
+                    owned.push_line(&format!(" seq={seq} thread_seq={thread_seq}"));
+                    for chunk in [" ", "ready", "="] {
+                        owned.write_str(chunk).unwrap();
+                    }
+                    write!(owned, "{:?}", true).unwrap();
+                    let (line, key) = inline.finish();
+                    let (expected_line, expected_key) = owned.finish();
+                    assert_eq!(line.as_str(), expected_line);
+                    assert_eq!(key, expected_key);
+                    keys.push(key);
+                }
+                assert_eq!(keys[0], keys[1]);
+                context_keys.push(keys[0]);
+            }
+        }
+        context_keys.sort_unstable();
+        context_keys.dedup();
+        assert_eq!(context_keys.len(), 4);
+    }
+
+    #[kithara::test]
+    fn long_debug_runs_once_per_firing_and_hashes_the_unretained_suffix() {
+        struct LongDebug<'a> {
+            calls: &'a Cell<usize>,
+            ending: &'a str,
+        }
+
+        impl fmt::Debug for LongDebug<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.calls.set(self.calls.get() + 1);
+                for _ in 0..MAX_EVENT_BYTES {
+                    f.write_str("\u{1f980}")?;
+                }
+                f.write_str(self.ending)
+            }
+        }
+
+        let callsite = tracing::callsite! {
+            name: "long flight field",
+            kind: tracing::metadata::Kind::EVENT,
+            fields: payload,
+        };
+        let field = callsite.metadata().fields().field("payload").unwrap();
+        let calls = Cell::new(0);
+        let reference_calls = Cell::new(0);
+        let ring = Mutex::new(VecDeque::new());
+        for (index, ending) in ["left", "left", "right"].into_iter().enumerate() {
+            let mut inline = EventText::default();
+            let mut owned = OwnedEventText::default();
+            let value = LongDebug {
+                calls: &calls,
+                ending,
+            };
+            FieldVisitor(&mut inline).record_debug(&field, &value);
+            for chunk in [" ", "payload", "="] {
+                owned.write_str(chunk).unwrap();
+            }
+            write!(
+                owned,
+                "{:?}",
+                LongDebug {
+                    calls: &reference_calls,
+                    ending,
+                }
+            )
+            .unwrap();
+            let (line, key) = inline.finish();
+            let (expected_line, expected_key) = owned.finish();
+            assert_eq!(line.as_str(), expected_line);
+            assert_eq!(key, expected_key);
+            record(&ring, &line, key, index as u128);
+        }
+        assert_eq!(calls.get(), 3);
+        assert_eq!(reference_calls.get(), 3);
+        let entries = lock(&ring);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].repeats, 2);
+        assert_eq!((entries[0].first_ns, entries[0].last_ns), (0, 1));
+        assert_eq!(entries[1].repeats, 1);
+        assert_eq!(entries[0].line, entries[1].line);
+        assert_eq!(
+            entries[0].line,
+            format!(" payload={}\u{2026}", "\u{1f980}".repeat(125))
+        );
+        assert_ne!(entries[0].key, entries[1].key);
+    }
+
+    #[kithara::test]
+    fn a_debug_error_keeps_partial_text_and_following_fields() {
+        struct PartialDebug<'a>(&'a Cell<usize>);
+
+        impl fmt::Debug for PartialDebug<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.set(self.0.get() + 1);
+                f.write_str("partial")?;
+                Err(fmt::Error)
+            }
+        }
+
+        let callsite = tracing::callsite! {
+            name: "fallible flight field",
+            kind: tracing::metadata::Kind::EVENT,
+            fields: payload, ready,
+        };
+        let fields = callsite.metadata().fields();
+        let calls = Cell::new(0);
+        let mut inline = EventText::default();
+        let mut visitor = FieldVisitor(&mut inline);
+        visitor.record_debug(&fields.field("payload").unwrap(), &PartialDebug(&calls));
+        visitor.record_debug(&fields.field("ready").unwrap(), &true);
+        let mut owned = OwnedEventText::default();
+        for chunk in [" ", "payload", "=", "partial", " ", "ready", "=", "true"] {
+            owned.write_str(chunk).unwrap();
+        }
+        let (line, key) = inline.finish();
+        let (expected_line, expected_key) = owned.finish();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(line.as_str(), " payload=partial ready=true");
+        assert_eq!(line.as_str(), expected_line);
+        assert_eq!(key, expected_key);
+    }
+
+    #[kithara::test]
+    fn fold_window_keeps_the_first_line_order_and_saturating_count() {
+        for intervening in [15u64, 16] {
+            let ring = Mutex::new(VecDeque::new());
+            record(&ring, "first sequence", 0, 17);
+            for key in 1..=intervening {
+                record(&ring, "intervening", key, 23);
+            }
+            record(&ring, "changed sequence", 0, 7);
+            let entries = lock(&ring);
+            assert_eq!(entries[0].line, "first sequence");
+            assert_eq!(entries[1].key, 1);
+            if intervening == 15 {
+                assert_eq!(entries.len(), 16);
+                assert_eq!(entries[0].repeats, 2);
+                assert_eq!((entries[0].first_ns, entries[0].last_ns), (7, 17));
+                assert_eq!(entries.back().unwrap().key, 15);
+            } else {
+                assert_eq!(entries.len(), 18);
+                assert_eq!(entries[0].repeats, 1);
+                assert_eq!((entries[0].first_ns, entries[0].last_ns), (17, 17));
+                assert_eq!(entries.back().unwrap().line, "changed sequence");
+            }
+        }
+        let ring = Mutex::new(VecDeque::new());
+        record(&ring, "saturated", 7, 17);
+        lock(&ring)[0].repeats = u32::MAX;
+        record(&ring, "discarded", 7, 31);
+        assert_eq!(
+            snapshot(&ring),
+            [format!(
+                "mono_ns={:039}..{:039} saturated (x{})",
+                17,
+                31,
+                u32::MAX
+            )]
+        );
+    }
+
+    #[kithara::test]
+    fn ring_capacity_preserves_exact_insertion_order() {
+        let ring = Mutex::new(VecDeque::new());
+        for key in 0..=MAX_EVENTS as u64 {
+            record(&ring, "unique event", key, u128::from(key));
+        }
+        let entries = lock(&ring);
+        assert_eq!(entries.len(), MAX_EVENTS);
+        for (index, entry) in entries.iter().enumerate() {
+            assert_eq!(entry.key, (index + 1) as u64);
+            assert_eq!(entry.repeats, 1);
+            assert_eq!(
+                (entry.first_ns, entry.last_ns),
+                (entry.key.into(), entry.key.into())
+            );
+        }
+    }
+
     #[kithara::test]
     fn repeated_events_keep_their_monotonic_interval() {
         let ring = Mutex::new(VecDeque::new());
-        record(&ring, "same event".into(), 7, 17);
-        record(&ring, "same event".into(), 7, 31);
-        record(&ring, "same event".into(), 7, 23);
+        record(&ring, "same event", 7, 17);
+        record(&ring, "same event", 7, 31);
+        record(&ring, "same event", 7, 23);
 
         assert_eq!(
             snapshot(&ring),

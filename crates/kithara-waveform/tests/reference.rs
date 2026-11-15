@@ -1,7 +1,7 @@
 #![cfg(all(feature = "dsp", not(target_arch = "wasm32")))]
 #![forbid(unsafe_code)]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[cfg(all(test, target_os = "android"))]
 use kithara_test_dylib as _;
@@ -38,7 +38,7 @@ fn heights(pcm: &[f32], channels: usize) -> Vec<[f32; 3]> {
 }
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
         .join("tests/fixtures")
         .join(name)
 }

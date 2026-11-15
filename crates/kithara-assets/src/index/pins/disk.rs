@@ -1,32 +1,19 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    collections::BTreeMap,
-    path::PathBuf,
-    sync::{
-        OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use dashmap::DashMap;
 use kithara_bufpool::ByteBuffer;
-use kithara_platform::sync::{Arc, Mutex};
-use kithara_storage::StorageError;
-use rkyv::rancor::Error;
+use kithara_platform::sync::Arc;
 
-use super::core::{PinCounts, PinsIndex, PinsInner};
+use super::core::{PinCounts, PinsIndex};
 use crate::{
-    error::{AssetsError, AssetsResult},
-    index::persistence::{IndexFile, schema::PinsIndexFile},
+    error::AssetsResult,
+    index::{
+        persistence::{IndexCell, IndexFile, read_archived, schema::PinsIndexFile, write_record},
+        schema::ArchivedPinsIndexFile,
+    },
 };
-
-pub(super) struct PinsPersist {
-    file: IndexFile,
-    /// One writer at a time for `pins.bin`: the snapshot and the atomic
-    /// rename that publishes it are one step.
-    writing: Mutex<()>,
-}
 
 impl PinsIndex {
     /// Construct a disk-backed index rooted at `path`.
@@ -41,40 +28,11 @@ impl PinsIndex {
             tracing::debug!("read existing pins.bin failed: {e}");
             DashMap::new()
         });
+        let inner = IndexCell::new(initial);
+        inner.persist_to(file, write_pins);
         Self {
-            inner: Arc::new(PinsInner {
-                pins: initial,
-                persist: Some(PinsPersist {
-                    file,
-                    writing: Mutex::new(()),
-                }),
-                hub: OnceLock::new(),
-                dirty: AtomicBool::new(false),
-            }),
+            inner: Arc::new(inner),
         }
-    }
-}
-
-impl PinsInner {
-    /// Roots held by at least one durable pin — the set that belongs on disk.
-    fn durable_roots(&self) -> Vec<String> {
-        self.pins
-            .iter()
-            .filter(|r| r.value().durable > 0)
-            .map(|r| r.key().clone())
-            .collect()
-    }
-
-    pub(super) fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
-        let Some(persist) = self.persist.as_ref() else {
-            self.dirty.store(false, Ordering::Release);
-            return Ok(());
-        };
-        let _writing = persist.writing.lock();
-        let snapshot = self.durable_roots();
-        write_pins(&persist.file, &snapshot, durable)?;
-        self.dirty.store(false, Ordering::Release);
-        Ok(())
     }
 }
 
@@ -88,17 +46,8 @@ const fn hydrated_counts() -> PinCounts {
 }
 
 fn read_pins(file: &IndexFile, buf: &mut ByteBuffer) -> AssetsResult<DashMap<String, PinCounts>> {
-    file.read_into(buf)?;
-    if buf.is_empty() {
+    let Some(archived) = read_archived::<ArchivedPinsIndexFile>(file, buf)? else {
         return Ok(DashMap::new());
-    }
-
-    let archived = match rkyv::access::<crate::index::schema::ArchivedPinsIndexFile, Error>(buf) {
-        Ok(a) => a,
-        Err(e) => {
-            tracing::debug!("Failed to validate pins index: {}", e);
-            return Ok(DashMap::new());
-        }
     };
 
     let pinned = archived
@@ -110,17 +59,16 @@ fn read_pins(file: &IndexFile, buf: &mut ByteBuffer) -> AssetsResult<DashMap<Str
     Ok(pinned)
 }
 
-fn write_pins(file: &IndexFile, pins: &[String], durable: bool) -> AssetsResult<()> {
-    let mut map = BTreeMap::new();
-    for pin in pins {
-        map.insert(pin.clone(), true);
-    }
-    let index = PinsIndexFile {
-        version: 1,
-        pinned: map,
-    };
-
-    let bytes = rkyv::to_bytes::<Error>(&index)
-        .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
-    file.write(&bytes, durable)
+/// Writes the roots held by at least one durable pin — the set that belongs on disk.
+fn write_pins(
+    pins: &DashMap<String, PinCounts>,
+    file: &IndexFile,
+    durable: bool,
+) -> AssetsResult<()> {
+    let pinned: BTreeMap<String, bool> = pins
+        .iter()
+        .filter(|r| r.value().durable > 0)
+        .map(|r| (r.key().clone(), true))
+        .collect();
+    write_record(file, &PinsIndexFile { version: 1, pinned }, durable)
 }

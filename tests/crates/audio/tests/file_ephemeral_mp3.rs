@@ -18,7 +18,6 @@ use kithara_test_fixtures::{assets, fixtures::tone_mp3, headerless_bitrate_chang
 
 use crate::common::test_defaults::consts;
 
-#[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn read_prefix(mut audio: impl AudioRead + Send + 'static) -> (usize, Duration, bool) {
     spawn_blocking(move || {
@@ -54,56 +53,38 @@ async fn read_prefix(mut audio: impl AudioRead + Send + 'static) -> (usize, Dura
     .expect("the decode thread must not panic")
 }
 
-#[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn read_to_end(
-    mut audio: impl AudioRead + Send + 'static,
-    max_pending_waits: usize,
-) -> (Duration, bool, usize) {
+async fn read_to_end(mut audio: impl AudioRead + Send + 'static) -> Duration {
     spawn_blocking(move || {
         let mut buf = [0.0f32; 4096];
-        let mut saw_eof = false;
-        let mut waits = 0usize;
         loop {
             hang_tick!();
             match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => {
-                    waits += 1;
-                    if waits >= max_pending_waits {
-                        break;
-                    }
-                    hang_park!(|remaining| {
-                        thread::paced_backoff(Duration::from_millis(5).min(remaining));
-                    });
-                }
+                Ok(ReadOutcome::Pending { .. }) => hang_park!(|remaining| {
+                    thread::paced_backoff(Duration::from_millis(5).min(remaining));
+                }),
                 Ok(ReadOutcome::Frames { .. }) => {
                     hang_reset!();
                 }
-                Ok(ReadOutcome::Eof { .. }) => {
-                    saw_eof = true;
-                    hang_reset!();
-                    break;
-                }
+                Ok(ReadOutcome::Eof { .. }) => break,
                 Err(e) => panic!("decode error: {e}"),
             }
         }
-        (audio.position(), saw_eof, waits)
+        audio.position()
     })
     .await
     .expect("the decode thread must not panic")
 }
 
-#[kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn seek_and_read(
     mut audio: impl AudioRead + AudioControl + Send + 'static,
     position: Duration,
-    max_pending_waits: usize,
 ) -> ReadOutcome {
     spawn_blocking(move || {
         audio.seek(position).expect("seek inside the track");
         let mut buf = [0.0f32; 4096];
-        for _ in 0..max_pending_waits {
+        loop {
             hang_tick!();
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => hang_park!(|remaining| {
@@ -116,7 +97,6 @@ async fn seek_and_read(
                 Err(e) => panic!("decode error after the seek: {e}"),
             }
         }
-        panic!("the source stopped delivering the range the seek requested")
     })
     .await
     .expect("the decode thread must not panic")
@@ -235,10 +215,9 @@ async fn audio_file_mp3_decodes_with_duration(
 /// by the same amount, and the two agree while both are wrong. The fixture's
 /// built length is the one number a playthrough cannot move.
 ///
-/// The body is throttled so the reader meets the download frontier a loopback
-/// server hides, and the waits between reads are paced against that delivery,
-/// which is why the clock stays real.
-#[kithara::test(tokio, multi_thread, flash(false), timeout(Duration::from_secs(120)))]
+/// The body is throttled so the reader meets the download frontier an
+/// in-memory server would otherwise hide.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
@@ -254,9 +233,6 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
     /// below the seconds-scale truncation this is written to catch, and well
     /// above any encoder priming or tail padding.
     const END_TOLERANCE_SECS: f64 = 0.25;
-    /// Waits the reader may spend on a throttled body before the source is
-    /// declared stuck rather than slow.
-    const MAX_PENDING_WAITS: usize = 6_000;
 
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
@@ -293,16 +269,8 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
         .await
         .expect("open the streamed track");
 
-    let (position, eof, waits) = read_to_end(audio, MAX_PENDING_WAITS).await;
+    let position = read_to_end(audio).await;
 
-    assert!(
-        waits < MAX_PENDING_WAITS,
-        "{backend:?}: the source stopped delivering the body: pos={position:?}"
-    );
-    assert!(
-        eof,
-        "{backend:?}: the track must end at its own end, not by running out of waits"
-    );
     let reached = position.as_secs_f64();
     assert!(
         (reached - consts::TEST_MP3_DURATION_SECS).abs() <= END_TOLERANCE_SECS,
@@ -317,7 +285,7 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
 /// bitrate. Here eight 320 kbps frames lead a minute at 128 kbps: averaging
 /// them ends the track near 35 s, and a seek to 45 s would land on that false
 /// end instead of the audio the file holds.
-#[kithara::test(tokio, multi_thread, flash(false), timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(30)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(
@@ -333,9 +301,6 @@ async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
     const SEEK: Duration = Duration::from_secs(45);
     /// How far playback may resume from the seek target: a few MPEG frames.
     const LANDING_TOLERANCE_SECS: f64 = 0.25;
-    /// Waits the reader may spend on the range request a seek issues before
-    /// the source is declared stuck rather than slow.
-    const MAX_PENDING_WAITS: usize = 2_000;
 
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
@@ -380,7 +345,7 @@ async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
         "{backend:?}: a published length must not end before audio the file holds, got {duration:?}"
     );
 
-    let outcome = seek_and_read(audio, SEEK, MAX_PENDING_WAITS).await;
+    let outcome = seek_and_read(audio, SEEK).await;
 
     let ReadOutcome::Frames { position, .. } = outcome else {
         panic!("{backend:?}: a seek to {SEEK:?} must play on, got {outcome:?}");

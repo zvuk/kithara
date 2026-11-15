@@ -8,9 +8,8 @@ use web_sys::BroadcastChannel;
 use crate::web::observer::marshal::{set_bool, set_f64, set_str};
 
 mod consts {
-    /// Length of the alphanumeric DRM salt. Mirrors `SALT_LEN` in
-    /// [`NativeInner`](crate::native::inner::NativeInner) and `kithara_app::drm`.
-    pub(super) const SALT_LEN: usize = 16;
+    /// Length of the DRM salt: the native `drm_lowercase_hex_salt` format.
+    pub(super) const SALT_LEN: usize = 8;
 }
 
 pub(crate) fn next_request_id() -> u32 {
@@ -18,14 +17,13 @@ pub(crate) fn next_request_id() -> u32 {
     NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Generate a 16-character alphanumeric DRM salt on the main thread,
-/// mirroring [`NativeInner`](crate::native::inner::NativeInner)'s
-/// `generate_salt`. Sourced from the Web Crypto API
+/// Generate an 8-character lowercase-hex DRM salt on the main thread, the
+/// format native players send by default. Sourced from the Web Crypto API
 /// (`crypto.getRandomValues`) reached via global reflection so no extra
 /// `web-sys` feature is required; falls back to the request-id counter if
 /// the global `crypto` object is unavailable (non-secure context).
 pub(crate) fn generate_salt() -> String {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const ALPHABET: &[u8] = b"0123456789abcdef";
 
     let mut bytes = [0u8; consts::SALT_LEN];
     if !fill_random(&mut bytes) {

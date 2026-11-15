@@ -214,6 +214,8 @@ fn walk_group(
         size,
         measure,
         write,
+        reset,
+        entry,
         children,
         ..
     }
@@ -222,6 +224,8 @@ fn walk_group(
         size,
         measure,
         write,
+        reset,
+        entry,
         children,
         ..
     }) = node
@@ -230,6 +234,12 @@ fn walk_group(
     };
     if id.is_none() && write.is_some() {
         return Err(UiDocError::UnaddressedSurface {
+            origin: origin.clone(),
+            path: path.render(),
+        });
+    }
+    if entry.is_some() && (write.is_none() || reset.is_some()) {
+        return Err(UiDocError::UnwritableEntry {
             origin: origin.clone(),
             path: path.render(),
         });

@@ -5,11 +5,11 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 
 use super::manifest::{PolicySnapshot, StressRunner};
 use crate::{
-    common::project::{ProjectConfig, StressConfig, StressModeConfig},
+    common::project::{ProjectConfig, StressConfig, StressModeConfig, TestRunner},
     test::{resolve, toggled},
 };
 
@@ -22,6 +22,7 @@ pub(super) struct Unit<'a> {
     /// The test lane a lane mode runs on; a command mode has none.
     pub(super) lane: Option<&'a str>,
     pub(super) runner: StressRunner,
+    pub(super) test_threads: &'a str,
 }
 
 impl Unit<'_> {
@@ -65,8 +66,9 @@ pub(super) fn resolve_modes(requested: &[String], config: &StressConfig) -> Resu
 pub(super) fn resolve_lanes(
     tier: Option<&str>,
     requested: &[String],
-    config: &StressConfig,
+    project: &ProjectConfig,
 ) -> Result<Vec<String>> {
+    let config = &project.stress;
     let lanes = if requested.is_empty() {
         config
             .tier(tier.unwrap_or(&config.default_tier))?
@@ -75,15 +77,24 @@ pub(super) fn resolve_lanes(
     } else {
         requested.to_vec()
     };
-    let stressed = config.stressed_lanes();
     let mut seen = BTreeSet::new();
     for lane in &lanes {
-        ensure!(
-            stressed.contains(lane.as_str()),
-            "stress lane `{lane}` is in no stress tier"
-        );
         validate_directory_name("lane", lane)?;
         ensure!(seen.insert(lane), "stress lane `{lane}` is named twice");
+        if !requested.is_empty() {
+            if let Some(reason) = config.not_stressed.get(lane) {
+                bail!("stress lane `{lane}` is excluded: {reason}");
+            }
+            let configured = project
+                .test
+                .lanes
+                .get(lane)
+                .with_context(|| format!("stress lane `{lane}` is not configured"))?;
+            ensure!(
+                matches!(&configured.runner, TestRunner::Nextest(_)),
+                "stress lane `{lane}` does not produce Nextest evidence"
+            );
+        }
     }
     Ok(lanes)
 }
@@ -109,10 +120,11 @@ pub(super) fn units<'a>(
     modes: &'a [String],
     lanes: &'a [String],
 ) -> Result<Vec<Unit<'a>>> {
-    let mut seen = Vec::<(StressRunner, PolicySnapshot)>::new();
+    let mut seen = Vec::<(StressRunner, PolicySnapshot, &str)>::new();
     let mut units = Vec::new();
     for mode_name in modes {
         let mode = config.mode(mode_name)?;
+        let test_threads = mode.test_threads.as_deref().unwrap_or(&config.test_threads);
         let targets = if mode.command.is_empty() {
             lanes.iter().map(|lane| Some(lane.as_str())).collect()
         } else {
@@ -120,7 +132,7 @@ pub(super) fn units<'a>(
         };
         for lane in targets {
             let runner = unit_runner(project, mode, lane)?;
-            let identity = (runner.clone(), policy_snapshot(config, mode));
+            let identity = (runner.clone(), policy_snapshot(config, mode), test_threads);
             if seen.contains(&identity) {
                 continue;
             }
@@ -130,6 +142,7 @@ pub(super) fn units<'a>(
                 mode,
                 lane,
                 runner,
+                test_threads,
             });
         }
     }

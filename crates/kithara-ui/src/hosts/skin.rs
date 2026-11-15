@@ -85,13 +85,29 @@ impl TextRoleSkin {
         content: &'a str,
         max_width: f32,
     ) -> (Cow<'a, str>, GlyphRun) {
+        let max_width = max_width + 1.0;
         match self.elide {
-            Some(at) => text.shape_elided(content, self, max_width + 1.0, at),
+            Some(at) => text.shape_elided(content, self, max_width, at),
             None => (
                 Cow::Borrowed(content),
                 text.shape(content, self, Some(max_width)),
             ),
         }
+    }
+
+    /// The size this role sets `content` at in a box `room` wide, padding
+    /// aside: its one line where that fits, and where it does not, the whole
+    /// room and the height of the lines it wraps to. A role that elides keeps
+    /// its one line, and is cut to the box where it paints.
+    ///
+    /// Both hosts measure here, so a paragraph takes the same box on either,
+    /// and [`Self::fit`] never sets more lines than this counted.
+    pub(crate) fn measure(self, text: &mut TextContext, content: &str, room: f32) -> (f32, f32) {
+        let line = text.shape(content, self, None);
+        if self.elide.is_some() || line.width() <= room {
+            return (line.width(), line.height());
+        }
+        (room, text.shape(content, self, Some(room)).height())
     }
 
     /// This role set in the face a run names, keeping the skin's where it

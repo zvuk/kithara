@@ -21,26 +21,26 @@ async fn provider_tempo_controls_measure_without_sync(
     #[case] start: Start,
 ) {
     let mut failures = Vec::new();
-    for (deck, source) in prepared.2.iter().enumerate() {
-        if prepared.2[..deck].contains(source) {
+    for (deck, source) in prepared.paths.iter().enumerate() {
+        if prepared.paths[..deck].contains(source) {
             continue;
         }
         // Mp3Distinct already checks the identical local B source and oracle.
-        if matches!(prepared.0, Provider::HlsMp3(_)) && deck % 2 == 1 {
+        if matches!(prepared.provider(), Provider::HlsMp3(_)) && deck % 2 == 1 {
             continue;
         }
-        let ArtifactSource::Value(mut grid) = prepared.0.beat_grid(deck) else {
+        let ArtifactSource::Value(mut grid) = prepared.beat_grid(deck) else {
             panic!("control has a known fixture grid");
         };
         let native_bpm = grid.as_raw().bpm;
         #[cfg(not(target_os = "android"))]
-        let mut reference = prepared.0.control_reference(deck).map(|asset| {
+        let mut reference = prepared.provider().control_reference(deck).map(|asset| {
             kithara_integration_tests::pcm_oracle::prepared_native(&asset)
                 .expect("independent native control reference")
         });
         #[cfg(target_os = "android")]
         let mut reference: Option<kithara_integration_tests::pcm_oracle::Audio> = None;
-        let wrong_asset = prepared.0.wrong_control_reference(deck);
+        let wrong_asset = prepared.provider().wrong_control_reference(deck);
         #[cfg(not(target_os = "android"))]
         let mut wrong_source = kithara_integration_tests::pcm_oracle::prepared_native(&wrong_asset)
             .expect("independent wrong-source control reference");
@@ -57,25 +57,25 @@ async fn provider_tempo_controls_measure_without_sync(
             }
             hang_tick!(format!(
                 "{:?}: deck {deck}, native {native_bpm}, target {target}",
-                prepared.0
+                prepared.provider()
             ));
             let (trace, captured) = super::control::capture(
                 source.clone(),
-                prepared.1.modeled_downloader(),
+                prepared.server.modeled_downloader(),
                 48_000,
                 native_bpm,
                 target,
-                prepared.0.start_seconds(deck, start),
+                prepared.start_seconds(deck, start),
             )
             .await;
             let label = format!(
                 "{:?} deck {deck} native {native_bpm} target {target}",
-                prepared.0
+                prepared.provider()
             );
             let analysis_label = label.clone();
             let analysis_source = source.clone();
-            let requested_start_seconds = prepared.0.start_seconds(deck, start);
-            let has_score_markers = prepared.0.has_score_markers();
+            let requested_start_seconds = prepared.start_seconds(deck, start);
+            let has_score_markers = prepared.provider().has_score_markers();
             let (captured, returned_reference, returned_wrong_source, returned_grid, measured) =
                 kithara::platform::tokio::task::spawn_blocking(move || {
                     let label = analysis_label;
@@ -134,7 +134,7 @@ async fn provider_tempo_controls_measure_without_sync(
                     "source",
                     serde_json::json!({
                         "path": source,
-                        "start": prepared.0.start_seconds(deck, start),
+                        "start": prepared.start_seconds(deck, start),
                         "native_bpm": native_bpm,
                         "target_bpm": target,
                     }),
@@ -165,7 +165,7 @@ async fn run_with_decoder(
     start: Start,
     decoder: Option<(DecoderBackend, EventDecoderBackend)>,
 ) {
-    let provider = prepared.0;
+    let provider = prepared.provider();
     let expected_frames: usize = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0)
         .round()
         .as_();
@@ -270,7 +270,7 @@ async fn run_with_decoder(
 #[case::mp3(source_mp3_same().await)]
 #[case::drm(source_hls_same_drm().await)]
 async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: PreparedSources) {
-    let provider = prepared.0;
+    let provider = prepared.provider();
     let mut harness = ProductHarness::new(ONE_DECK, &prepared, CUE, Audible::Deck(0)).await;
     let pcm = harness.capture(ONE_DECK).await;
     let mut failures = synchronization_failures(

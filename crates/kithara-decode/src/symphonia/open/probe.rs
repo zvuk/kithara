@@ -10,7 +10,7 @@ use kithara_stream::ContainerFormat;
 use symphonia::{
     core::{
         formats::{FormatOptions, FormatReader, probe::Hint, well_known::FORMAT_ID_WAVE},
-        io::{MediaSourceStream, MediaSourceStreamOptions, ReadBytes},
+        io::{MediaSourceStream, ReadBytes},
         meta::MetadataOptions,
     },
     default::formats::{AdtsReader, AiffReader, FlacReader, IsoMp4Reader, OggReader, WavReader},
@@ -75,7 +75,7 @@ where
     let seek_enabled_handle = adapter.seek_enabled_handle();
     let byte_pos_handle = adapter.byte_pos_handle();
 
-    let mut mss = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
+    let mut mss = MediaSourceStream::from(adapter);
     mss.ignore_bytes(audio_start)
         .map_err(DecodeError::backend)?;
 
@@ -128,7 +128,7 @@ where
     let seek_enabled_handle = adapter.seek_enabled_handle();
     let byte_pos_handle = adapter.byte_pos_handle();
 
-    let mss = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
+    let mss = MediaSourceStream::from(adapter);
 
     let mut probe_hint = Hint::new();
     if let Some(ref ext) = config.hint {

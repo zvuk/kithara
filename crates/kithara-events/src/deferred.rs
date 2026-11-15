@@ -121,7 +121,7 @@ mod tests {
         assert!(rx.try_recv().is_err(), "flush drains the ring exactly once");
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn enqueue_drops_when_full_without_blocking() {
         let bus = EventBus::new(16);
         let mut rx = bus.subscribe::<Progress>();
@@ -144,7 +144,7 @@ mod tests {
         assert!(rx.try_recv().is_err(), "earlier events survive in order");
     }
 
-    #[kithara::test(tokio)]
+    #[kithara::test(miri, tokio)]
     async fn flush_stamps_the_publish_time_and_keeps_enqueue_order() {
         let bus = EventBus::new(16);
         let mut rx = bus.subscribe::<Progress>();

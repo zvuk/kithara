@@ -13,9 +13,12 @@ use super::{
 };
 use crate::{
     CrossfadeSettings,
-    bridge::{DeckPart, Fade, RtMetricsSnapshot, Slot},
-    rt::DeckMixerConfig,
-    worker::{PcmPacket, packet_tests::PacketRing},
+    bridge::{DeckEvent, DeckPart, Fade, RtMetricsSnapshot, Slot, SlotState},
+    rt::{DeckMixerConfig, track::PlayerTrack},
+    worker::{
+        PcmPacket,
+        packet_tests::{PacketRing, chunk},
+    },
 };
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -115,6 +118,78 @@ fn source_with_nothing_ready_renders_silence_and_counts_an_underrun() {
     assert!(
         peak == 0.0,
         "an underrun must render silence, not stale scratch (peak {peak})"
+    );
+}
+
+#[kithara::test]
+fn repeated_pcm_starvation_recovers_without_reloading_or_playing_again() {
+    let spec = AudioSpec::new(2, super::shape().sample_rate);
+    let packets = PacketRing::new(spec, Duration::from_secs(60), 2);
+    let resource = legacy_fixture::from_packets("late-producer", packets);
+    let (mut processor, mut control) =
+        legacy_fixture::processor(DeckMixerConfig::default(), BLOCK_FRAMES, spec.sample_rate);
+    let slot = Slot::new(0);
+    attach(&mut control, slot, resource, false);
+    push(
+        &mut control,
+        DeckPart::Start {
+            slot,
+            fade: Fade::Crossfade(crossfade(0.0)),
+        },
+    );
+    super::render_frames(&mut processor, 0, block_len());
+    let samples = vec![0.5; block_len() * 2];
+    let mut session = block_len();
+
+    for cycle in 0..3_u64 {
+        for _ in 0..4 {
+            assert_eq!(
+                peak(&super::render_frames(&mut processor, session, block_len())),
+                0.0
+            );
+            session += block_len();
+        }
+        assert_eq!(metrics(&processor).underruns(), cycle + 1);
+        assert_eq!(
+            processor.track(slot).map(PlayerTrack::state),
+            Some(SlotState::Playing)
+        );
+
+        let frame = cycle * u64::from(BLOCK_FRAMES);
+        control.packets[0].push(PcmPacket::Chunk(Box::new(chunk(
+            spec,
+            SegmentId::FIRST,
+            frame,
+            frame,
+            &samples,
+        ))));
+        assert!(peak(&super::render_frames(&mut processor, session, block_len())) > 0.0);
+        session += block_len();
+        assert_eq!(
+            processor.track(slot).map(PlayerTrack::state),
+            Some(SlotState::Playing)
+        );
+        assert_eq!(metrics(&processor).decode_errors(), 0);
+    }
+
+    let events = control.ends.events.drain().collect::<Vec<_>>();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                DeckEvent::UnderrunEnded {
+                    recovered: true,
+                    ..
+                }
+            ))
+            .count(),
+        3
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, DeckEvent::Ended { .. }))
     );
 }
 

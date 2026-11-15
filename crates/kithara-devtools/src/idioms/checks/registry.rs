@@ -124,8 +124,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
 
 #[cfg(test)]
 mod per_file_declaration_tests {
-    use std::path::Path;
-
     use anyhow::Result;
     use cargo_metadata::{Metadata, MetadataCommand};
     use rayon::prelude::*;
@@ -196,7 +194,7 @@ mod per_file_declaration_tests {
                 .join("idioms"),
         )
         .expect("idioms config");
-        let checks = Path::new(env!("CARGO_MANIFEST_DIR"))
+        let checks = crate::testing::package()
             .join("src")
             .join("idioms")
             .join("checks");

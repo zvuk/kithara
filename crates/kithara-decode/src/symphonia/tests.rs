@@ -27,7 +27,7 @@ mod flac {
                 audio::{AudioCodecParameters, AudioDecoderOptions},
             },
             formats::{FormatOptions, FormatReader},
-            io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
+            io::{MediaSource, MediaSourceStream},
             packet::Packet,
         },
         default::formats::FlacReader,
@@ -50,7 +50,7 @@ mod flac {
         }
         let adapter = crate::symphonia::adapter::ReadSeekAdapter::new(source, None, true)
             .with_control(control.input.clone());
-        let stream = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
+        let stream = MediaSourceStream::from(adapter);
         let reader =
             FlacReader::try_new(stream, FormatOptions::default()).expect("FLAC fixture reader");
         (reader, control)
@@ -431,7 +431,7 @@ fn controlled_mpa_reader(
     control.make_seekable();
     let adapter = crate::symphonia::adapter::ReadSeekAdapter::new(source, None, true)
         .with_control(control.input.clone());
-    let stream = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
+    let stream = MediaSourceStream::from(adapter);
     MpaReader::try_new(stream, FormatOptions::default()).expect("controlled MPEG reader")
 }
 
@@ -736,9 +736,13 @@ fn mpa_seek_preserves_packet_position(mpeg_eight: &'static [u8]) {
 mod wav {
     use std::io::Cursor;
 
-    use kithara_platform::time::Duration;
+    use kithara_platform::{sync::mpsc, thread, time::Duration};
     use kithara_stream::{ContainerFormat, NotReadyCause, PendingReason};
-    use kithara_test_fixtures::fixtures::tone_wav;
+    use kithara_test_fixtures::{
+        fixtures::tone_wav,
+        hls_fixtures::{hls_header_fifty, hls_pcm_fifty},
+    };
+    use kithara_test_utils::wait_until_blocking;
     use symphonia::{
         core::{
             codecs::{CodecParameters, audio::well_known::CODEC_ID_PCM_S16LE},
@@ -756,6 +760,8 @@ mod wav {
         symphonia::{FileOpen, SymphoniaDemuxer},
         test_pools::{TestPools, pools},
     };
+
+    type WavPacket = (Duration, Duration, Vec<u8>);
 
     fn native_reader(bytes: &[u8]) -> (WavReader<'static>, SourceControl) {
         let (source, control) = InterruptingSource::new(bytes.to_vec());
@@ -849,13 +855,17 @@ mod wav {
         assert_eq!(actual, expected, "every physical PCM16 sample must survive");
     }
 
-    fn frame(demuxer: &mut SymphoniaDemuxer) -> Option<(Duration, Duration, Vec<u8>)> {
-        match demuxer.next_frame().expect("WAV packet") {
-            DemuxOutcome::Frame(frame) => Some((frame.pts, frame.duration, frame.data.to_vec())),
-            DemuxOutcome::Eof => None,
-            DemuxOutcome::Pending(reason) => {
-                panic!("released WAV source is still pending: {reason:?}")
+    fn frame(demuxer: &mut SymphoniaDemuxer) -> Option<WavPacket> {
+        try_frame(demuxer).expect("WAV packet")
+    }
+
+    fn try_frame(demuxer: &mut SymphoniaDemuxer) -> Result<Option<WavPacket>, String> {
+        match demuxer.next_frame().map_err(|error| error.to_string())? {
+            DemuxOutcome::Frame(frame) => {
+                Ok(Some((frame.pts, frame.duration, frame.data.to_vec())))
             }
+            DemuxOutcome::Eof => Ok(None),
+            DemuxOutcome::Pending(reason) => Err(format!("WAV packet is pending: {reason:?}")),
         }
     }
 
@@ -870,7 +880,7 @@ mod wav {
                 DemuxOutcome::Pending(
                     PendingReason::Retry | PendingReason::NotReady(NotReadyCause::OperationPending),
                 ) => {
-                    kithara_platform::thread::yield_runnable();
+                    thread::yield_runnable();
                 }
                 DemuxOutcome::Pending(reason) => return reason,
                 DemuxOutcome::Frame(frame) => panic!(
@@ -882,6 +892,184 @@ mod wav {
                 DemuxOutcome::Eof => panic!("pending WAV source was reported as EOF"),
             }
         }
+    }
+
+    #[kithara::test]
+    fn native_prefix_owner_test() {
+        const HEADER_BYTES: usize = 44;
+        const STRIDE: usize = 4;
+        const RATE: u64 = 44_100;
+        const SEGMENT_BYTES: usize = 200_000;
+        const FRAMES: usize = 2_500_000;
+        const PACKET_FRAMES: usize = 1_152;
+        const CUT: usize = 146_304;
+        const PREFIX_PACKETS: usize = CUT / PACKET_FRAMES + 2;
+        let mut wav = hls_header_fifty();
+        assert_eq!(wav.len(), HEADER_BYTES);
+        assert_eq!(&wav[..4], b"RIFF");
+        assert_eq!(&wav[8..16], b"WAVEfmt ");
+        assert_eq!(&wav[20..24], &[1, 0, 2, 0]);
+        assert_eq!(&wav[24..28], &44_100_u32.to_le_bytes());
+        assert_eq!(&wav[32..36], &[4, 0, 16, 0]);
+        assert_eq!(&wav[36..40], b"data");
+        assert_eq!(&wav[40..44], &10_000_000_u32.to_le_bytes());
+        assert_eq!(&wav[4..8], &10_000_036_u32.to_le_bytes());
+        wav.extend(hls_pcm_fifty());
+        assert_eq!(wav.len(), HEADER_BYTES + 50 * SEGMENT_BYTES);
+        assert_eq!(wav.len() - HEADER_BYTES, FRAMES * STRIDE);
+        assert_eq!(CUT % PACKET_FRAMES, 0);
+        assert_eq!(PREFIX_PACKETS, 129);
+        let gate_byte = HEADER_BYTES + 3 * SEGMENT_BYTES;
+        let prefix_end = HEADER_BYTES + (CUT + 2 * PACKET_FRAMES) * STRIDE;
+        assert_eq!(gate_byte, 600_044);
+        assert_eq!(HEADER_BYTES + CUT * STRIDE, 585_260);
+        assert_eq!(HEADER_BYTES + (CUT + PACKET_FRAMES) * STRIDE, 589_868);
+        assert_eq!(prefix_end, 594_476);
+        assert!(prefix_end < gate_byte);
+
+        let (mut reference, _) = reader(&wav);
+        assert_eq!(reference.track_info().sample_rate, 44_100);
+        assert_eq!(reference.track_info().channels, 2);
+        let reference = std::iter::from_fn(|| frame(&mut reference)).collect::<Vec<_>>();
+        assert_eq!(reference.len(), FRAMES.div_ceil(PACKET_FRAMES));
+        let clock = |frames: usize| {
+            Duration::from_nanos(
+                u64::try_from(frames).expect("fixture frames") * 1_000_000_000 / RATE,
+            )
+        };
+        let mut next_frame = 0;
+        for (index, (pts, duration, data)) in reference.iter().enumerate() {
+            let frames = (FRAMES - next_frame).min(PACKET_FRAMES);
+            assert_eq!(*pts, clock(next_frame), "reference packet {index}");
+            assert_eq!(*duration, clock(frames), "reference packet {index}");
+            assert_eq!(data.len(), frames * STRIDE, "reference packet {index}");
+            let start = HEADER_BYTES + next_frame * STRIDE;
+            assert!(
+                data == &wav[start..start + frames * STRIDE],
+                "reference PCM bytes differ in packet {index}"
+            );
+            next_frame += frames;
+        }
+        assert_eq!(next_frame, FRAMES);
+        for (index, start) in [(127, 146_304), (128, 147_456)] {
+            let (pts, duration, data) = &reference[index];
+            assert_eq!(*pts, clock(start));
+            assert_eq!(*duration, clock(PACKET_FRAMES));
+            assert_eq!(data.len(), 4_608);
+        }
+
+        let (source, control) = InterruptingSource::new(wav);
+        control.make_seekable();
+        assert!(symphonia::core::io::MediaSource::is_seekable(&source));
+        assert_eq!(symphonia::core::io::MediaSource::byte_len(&source), None);
+        assert_eq!(super::lock(&control.state).pos, 0);
+        control.arm_at(gate_byte, usize::MAX);
+        super::lock(&control.state).interrupt_kind = std::io::ErrorKind::WouldBlock;
+        let input = control.input.clone();
+        let (completed, completion) = mpsc::channel();
+        let (resume, resumed) = mpsc::channel();
+        let worker = thread::spawn_named("wav-native-prefix", move || {
+            let (mut demuxer, _) = SymphoniaDemuxer::open_file(
+                source,
+                FileOpen {
+                    control: input,
+                    container: Some(ContainerFormat::Wav),
+                    hint: None,
+                    byte_len_handle: None,
+                    byte_map: None,
+                },
+            )
+            .map_err(|error| error.to_string())?;
+            let mut prefix = Vec::new();
+            for _ in 0..PREFIX_PACKETS {
+                let Some(packet) = try_frame(&mut demuxer)? else {
+                    break;
+                };
+                prefix.push(packet);
+            }
+            completed
+                .send(prefix)
+                .map_err(|_| "prefix receiver dropped".to_owned())?;
+            // The parser reads per request; pause before a later packet can reach the gate.
+            if !matches!(resumed.recv(), Ok(true)) {
+                return Ok(Vec::new());
+            }
+            let mut remaining = Vec::new();
+            while let Some(packet) = try_frame(&mut demuxer)? {
+                remaining.push(packet);
+            }
+            Ok::<_, String>(remaining)
+        });
+        let mut prefix = None;
+        let wait = wait_until_blocking(Duration::from_secs(1), "native WAV prefix output", || {
+            match completion.try_recv() {
+                Ok(packets) => {
+                    prefix = Some(packets);
+                    true
+                }
+                Err(mpsc::TryRecvError::Empty) => control.input.pending_reason().is_some(),
+                Err(mpsc::TryRecvError::Disconnected) => true,
+            }
+        });
+        let pending = control.input.pending_reason();
+        let state = super::lock(&control.state);
+        let source_pos = state.pos;
+        let held = state.interrupt_at == Some(gate_byte) && state.interrupts_remaining > 0;
+        drop(state);
+        let mismatch = prefix.as_ref().and_then(|packets| {
+            packets
+                .iter()
+                .zip(&reference)
+                .position(|(actual, expected)| actual != expected)
+        });
+        let prefix_ok = wait.is_ok()
+            && pending.is_none()
+            && !control.input.is_cancelled()
+            && held
+            && (prefix_end..=gate_byte).contains(&source_pos)
+            && prefix
+                .as_ref()
+                .is_some_and(|packets| packets.len() == PREFIX_PACKETS && mismatch.is_none());
+        // Seal the verdict while held, then unblock both owners before any failing assertion.
+        if !prefix_ok {
+            control.input.cancel();
+        }
+        control.release();
+        let acknowledged = resume.send(prefix_ok).is_ok();
+        let remaining = worker.join();
+        let worker_error = match &remaining {
+            Ok(Err(error)) => Some(error.as_str()),
+            Err(_) => Some("worker panicked"),
+            Ok(Ok(_)) => None,
+        };
+        assert!(
+            prefix_ok,
+            "native WAV packets 146304..147456 and 147456..148608 must complete with exact PCM before release; source_byte={source_pos}, gate_byte={gate_byte}, held={held}, pending={pending:?}, wait={wait:?}, packets={:?}, mismatch={mismatch:?}, worker_error={worker_error:?}",
+            prefix.as_ref().map(Vec::len)
+        );
+        assert!(
+            acknowledged,
+            "prefix worker must retain its acknowledgement"
+        );
+        let prefix = prefix.expect("validated prefix output");
+        let remaining = remaining
+            .expect("native prefix worker")
+            .expect("WAV continuation");
+        assert_eq!(prefix.len() + remaining.len(), reference.len());
+        let mut pcm_bytes = 0;
+        for (index, (actual, expected)) in
+            prefix.iter().chain(&remaining).zip(&reference).enumerate()
+        {
+            assert_eq!(actual.0, expected.0, "WAV packet {index} timestamp");
+            assert_eq!(actual.1, expected.1, "WAV packet {index} duration");
+            assert_eq!(actual.2.len(), expected.2.len(), "WAV packet {index} size");
+            assert!(
+                actual.2 == expected.2,
+                "WAV packet {index} PCM bytes changed"
+            );
+            pcm_bytes += actual.2.len();
+        }
+        assert_eq!(pcm_bytes, FRAMES * STRIDE);
     }
 
     #[kithara::test]
@@ -932,7 +1120,7 @@ mod wav {
         drop(demuxer);
         while std::sync::Arc::strong_count(&control.state) != 1 {
             hang_tick!();
-            kithara_platform::thread::yield_runnable();
+            thread::yield_runnable();
         }
         assert!(control.input.is_cancelled());
     }

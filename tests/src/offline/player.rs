@@ -11,7 +11,7 @@ use kithara::{
         maybe_send::MaybeSend,
         sync::{Arc, Mutex},
         time::{Duration, Instant, WallInstant},
-        tokio::sync::broadcast::error::TryRecvError,
+        tokio::sync::broadcast::{self, error::TryRecvError},
     },
     play::{
         CrossfadeSettings, DeckMixSettings, DeckMixerConfig, HostedDeck, PlayWorker,
@@ -21,7 +21,7 @@ use kithara::{
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     warp::WarpConfig,
 };
-use kithara_render::bridge::{DeckSnapshot, RtMetricsSnapshot};
+use kithara_render::bridge::{DeckEvent, DeckSnapshot, RtMetricsSnapshot};
 
 use super::{
     OfflineHostHarness, append_source_loaded,
@@ -38,6 +38,7 @@ use crate::{
 #[fieldwork(opt_in, get)]
 pub struct OfflinePlayer<F: TrackFactory<TestPools> = PlayerFactory> {
     events: Mutex<EventReceiver<TestEvent>>,
+    underruns: broadcast::Sender<DeckEvent>,
     host: OfflineHostHarness<TestPools>,
     queue: HostOwned<ObservedDeck<Queue<TestPools, F>>>,
     snapshot: Arc<Mutex<DeckSnapshot>>,
@@ -61,12 +62,11 @@ pub struct OfflinePlayerOptions {
     gapless_mode: GaplessMode,
     #[builder(default)]
     mix: DeckMixSettings,
-    /// Make audio-thread reads block on a producer-ring underrun instead of
-    /// zero-filling. Suites that read the rendered PCM itself opt in, because
-    /// a zero-filled range is indistinguishable from rendered silence:
-    /// blocking trades an underrun for waiting on decode, so under a tight
-    /// `hang_timeout_secs` a slow decode becomes a hang panic instead of
-    /// inserted silence.
+    /// FX units the deck is built with; the mixer default when unset.
+    fx_units: Option<usize>,
+    /// Await producer PCM during offline preparation, before graph processing.
+    /// PCM suites opt in so decoder underruns cannot appear as rendered silence.
+    /// Decoder stalls still fail the existing no-progress watchdog.
     #[builder(default)]
     block_on_underrun: bool,
     warp: Option<WarpConfig>,
@@ -127,8 +127,8 @@ impl OfflinePlayer {
 
 impl<F> OfflinePlayer<F>
 where
-    F: TrackFactory<TestPools> + MaybeSend + 'static,
-    F::Track: MaybeSend,
+    F: TrackFactory<TestPools> + Send + 'static,
+    F::Track: Send,
 {
     pub async fn with_factory(
         options: OfflinePlayerOptions,
@@ -143,8 +143,7 @@ where
             .map_or_else(TrackSettings::default, |warp| {
                 TrackSettings::builder()
                     .speed(warp.speed())
-                    .keylock(warp.keylock())
-                    .backend(warp.backend())
+                    .pitch(warp.pitch_control(warp.pitch()).unwrap_or_default())
                     .build()
             });
         let prep = ResourcePrep::builder()
@@ -165,7 +164,16 @@ where
             QueueConfig::with_factory(factory)
                 .prep(prep.clone())
                 .track(track)
-                .mixer(DeckMixerConfig::builder().mix(options.mix).build())
+                .mixer(
+                    DeckMixerConfig::builder()
+                        .mix(options.mix)
+                        .fx_units(
+                            options
+                                .fx_units
+                                .unwrap_or_else(|| DeckMixerConfig::default().fx_units()),
+                        )
+                        .build(),
+                )
                 .settings(settings)
                 .store(memory_asset_store())
                 .maybe_downloader(options.downloader)
@@ -176,11 +184,13 @@ where
             .await
             .unwrap_or_else(|error| panic!("create product offline Host: {error}"));
 
+        let (underruns, _) = broadcast::channel(kithara::events::DEFAULT_EVENT_BUS_CAPACITY);
         let snapshot = Arc::new(Mutex::new(DeckSnapshot::default()));
         let queue = host
             .insert(ObservedDeck {
                 inner: queue,
                 snapshot: snapshot.clone(),
+                underruns: Some(underruns.clone()),
             })
             .await
             .unwrap_or_else(|error| panic!("insert product offline queue: {error}"));
@@ -193,6 +203,7 @@ where
         Self {
             snapshot,
             events: Mutex::new(events),
+            underruns,
             host,
             queue,
             worker,
@@ -255,6 +266,11 @@ where
         self.queue.position_seconds().unwrap_or_default()
     }
 
+    /// Observe raw mixer underrun edges before facade event translation.
+    pub fn subscribe_underruns(&self) -> broadcast::Receiver<DeckEvent> {
+        self.underruns.subscribe()
+    }
+
     pub fn metrics(&self) -> RtMetricsSnapshot {
         self.snapshot.lock().metrics
     }
@@ -263,13 +279,13 @@ where
         self.snapshot.lock().clone()
     }
 
-    /// Issues queue control calls from the host owner thread.
+    /// Awaits queue control calls outside their session executor.
     pub async fn with_queue<R>(
         &self,
-        use_queue: impl FnOnce(&QueueControl<TestPools>) -> R + MaybeSend + 'static,
+        use_queue: impl FnOnce(&QueueControl<TestPools>) -> R + Send + 'static,
     ) -> R
     where
-        R: MaybeSend + 'static,
+        R: Send + 'static,
     {
         assert!(
             !self.queue.is_closed(),
@@ -278,12 +294,11 @@ where
         self.run(self.queue.control(), use_queue).await
     }
 
-    /// Issues a control call on `control` from the host owner thread, as the
-    /// app would.
-    pub async fn run<C, R>(&self, control: &C, f: impl FnOnce(&C) -> R + MaybeSend + 'static) -> R
+    /// Awaits a blocking control call outside the session executor.
+    pub async fn run<C, R>(&self, control: &C, f: impl FnOnce(&C) -> R + Send + 'static) -> R
     where
-        C: Clone + MaybeSend + 'static,
-        R: MaybeSend + 'static,
+        C: Clone + Send + 'static,
+        R: Send + 'static,
     {
         let control = control.clone();
         self.host.run(move || f(&control)).await
@@ -442,6 +457,7 @@ where
     pub async fn close(self) {
         let Self {
             events,
+            underruns,
             host,
             queue,
             worker,
@@ -451,6 +467,7 @@ where
             snapshot,
         } = self;
         drop(events);
+        drop(underruns);
         drop(snapshot);
         drop(queue);
         drop(worker);

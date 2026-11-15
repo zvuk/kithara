@@ -5,8 +5,8 @@ use tracing::info;
 
 use super::{
     container::{Container, container},
+    cpu,
     profile::LinuxHost,
-    services::cpuset,
 };
 use crate::{ci::config::CiPins, consts};
 
@@ -75,20 +75,23 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
     }
     writeln!(yaml, "\nservices:")?;
 
-    for (index, runner) in host.runners.iter().enumerate() {
-        let unit = container(host, runner, cpuset(index, runner.cpus, cores), pins)?;
+    for (runner, cpuset) in host.runners.iter().zip(cpu::assignments(host, cores)?) {
+        let unit = container(host, runner, cpuset, pins)?;
         writeln!(
             yaml,
             "  {name}:\n    \
              image: {image}\n    \
              container_name: {container}\n    \
              restart: \"no\"\n    \
+             init: true\n    \
              cpuset: \"{cpuset}\"\n    \
              mem_limit: {memory}\n    \
              cgroup_parent: {cgroup_parent}\n    \
              pids_limit: {pids}\n    \
              ulimits:\n      \
              nice: {nice}\n    \
+             tmpfs:\n      \
+             - \"{tmpfs}\"\n    \
              security_opt: [\"no-new-privileges\"]\n    \
              env_file: [\"{env_file}\"]",
             name = runner.name,
@@ -99,10 +102,11 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
             cgroup_parent = unit.cgroup_parent,
             pids = Container::PIDS_LIMIT,
             nice = Container::NICE_LIMIT,
+            tmpfs = Container::tmpfs(),
             env_file = unit.env_file,
         )?;
         writeln!(yaml, "    environment:")?;
-        for entry in Container::environment(runner) {
+        for entry in Container::environment(host, runner) {
             writeln!(yaml, "      - {entry}")?;
         }
         writeln!(yaml, "    volumes:")?;
@@ -131,6 +135,36 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
 mod tests {
     use super::*;
     use crate::ci::{config::fixture, host::linux::profile::tests::host_fixture};
+
+    #[test]
+    fn stress_cpus_are_disjoint_from_ordinary_runners() {
+        let mut host = host_fixture();
+        let mut stress = host.runners[0].clone();
+        stress.name = "kithara-ci-stress".to_owned();
+        stress.cpus = 8;
+        stress.labels = vec!["kithara-stress".to_owned()];
+        host.runners.insert(0, stress);
+        let source = project(&host, &fixture().pins, 32).expect("the project renders");
+        let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&source).expect("Compose YAML");
+        let cpus = |name: &str| {
+            yaml["services"][name]["cpuset"]
+                .as_str()
+                .expect("a CPU set")
+                .split(',')
+                .map(|cpu| cpu.parse::<usize>().expect("a CPU index"))
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let reserved = cpus(&host.runners[0].name);
+        assert_eq!(reserved.len(), 8);
+        for runner in &host.runners[1..] {
+            let ordinary = cpus(&runner.name);
+            assert!(
+                reserved.is_disjoint(&ordinary),
+                "{} shares stress CPUs: {ordinary:?} intersects {reserved:?}",
+                runner.name
+            );
+        }
+    }
 
     /// The fleet is generated, not written by hand: every runner in the profile
     /// gets a service, and none of them carries a restart policy that would
@@ -163,7 +197,7 @@ mod tests {
         let host = host_fixture();
         let yaml = project(&host, &fixture().pins, 32).expect("the project must render");
         for runner in &host.runners {
-            for entry in Container::environment(runner) {
+            for entry in Container::environment(&host, runner) {
                 assert!(
                     yaml.contains(&format!("      - {entry}")),
                     "{entry}:\n{yaml}"
@@ -179,6 +213,17 @@ mod tests {
         );
         assert!(
             yaml.contains("/var/lib/kithara-ci/target/kithara-ci-octocat:/cache/target"),
+            "{yaml}"
+        );
+    }
+
+    #[test]
+    fn every_service_reaps_orphaned_job_processes() {
+        let host = host_fixture();
+        let yaml = project(&host, &fixture().pins, 32).expect("the project must render");
+        assert_eq!(
+            yaml.matches("init: true\n").count(),
+            host.runners.len(),
             "{yaml}"
         );
     }

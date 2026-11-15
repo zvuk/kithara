@@ -3,11 +3,12 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_dsp::param::SmootherConfig;
+use kithara_effects::filter::FilterSettings;
 use kithara_signal::FrameCount;
 use num_traits::ToPrimitive;
 
 use crate::{
-    bridge::{DeckMixSettings, DeckMixSettingsPatch, DeckMixSettingsPatchError},
+    bridge::{DeckMixSettings, DeckMixSettingsPatch},
     consts::{DEFAULT_DECK_SLOTS, DEFAULT_DECLICK, DEFAULT_EVICT_FADE, DEFAULT_SAMPLE_RATE},
 };
 
@@ -21,6 +22,10 @@ pub struct DeckMixerConfig {
     /// Initial log-spaced bands and capacity of later layouts. Default: 10.
     #[config(builder(default = 10))]
     eq_bands: usize,
+    /// FX units in series after the equaliser, each empty until an effect is installed.
+    /// Default: 2.
+    #[config(builder(default = 2))]
+    fx_units: usize,
     /// How many tracks the deck holds at once; its owner assigns them. Default: 4.
     #[config(builder(default = DEFAULT_DECK_SLOTS))]
     slots: NonZeroUsize,
@@ -34,8 +39,11 @@ pub struct DeckMixerConfig {
     /// Maximum obsolete packets recycled by each slot in one block.
     #[config(builder(default = crate::consts::CAPACITY))]
     recycle_per_block: NonZeroUsize,
+    /// Sweep ranges and resonance of the deck filter knob.
+    #[config(builder(default), patch(skip))]
+    filter: FilterSettings,
     /// How loud the deck sounds before its owner changes it.
-    #[config(builder(default), patch(nested, fallible))]
+    #[config(builder(default), patch(nested))]
     mix: DeckMixSettings,
 }
 

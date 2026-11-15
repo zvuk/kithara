@@ -9,6 +9,8 @@ mod double_click;
 mod iced;
 mod input;
 mod item;
+#[cfg(feature = "masonry")]
+mod masonry;
 mod outcome;
 mod scalar;
 mod span;

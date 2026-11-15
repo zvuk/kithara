@@ -15,8 +15,9 @@ use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_play::{
     Bound, DeckMixSettings, DeckPass, HostedDeck, Outbox, OutputSnapshot, PlayError, PlayWorker,
-    Player, Position, ResourceConfig, ResourceLoad, ResourceSrc, Settled, Track, TrackCommand,
-    TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot, TrackStatus, mock::DeckRig,
+    Player, Position, ResourceConfig, ResourceLoad, ResourceSrc, Settled, Track, TrackClock,
+    TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot, TrackStatus,
+    mock::DeckRig,
 };
 use kithara_render::{
     bridge::{DeckPart, DeckProtocol, DeckSnapshot, Slot, SlotMark},
@@ -115,6 +116,7 @@ pub(super) enum Command {
     Load(Position),
     Play(When<SessionFrame>),
     Pause(When<SessionFrame>),
+    Fade(When<SessionFrame>),
     Seek(Position),
     Jump(Position, SessionFrame),
     Speed(SpeedCurve, When<SessionFrame>),
@@ -127,6 +129,10 @@ pub(super) struct Script {
     pub snapshot: TrackSnapshot,
     pub sent: Vec<(Seq, Command)>,
     pub reject: Option<PlayError>,
+    /// The dropout clock the track accepted; kept apart from `sent` because
+    /// SYNC reconciles it on every pass.
+    pub clock: TrackClock,
+    pub clock_refusal: Option<PlayError>,
     pending: Vec<(Seq, Vec<Command>, bool)>,
     speeds: VecDeque<Settled>,
     verdicts: Vec<(Seq, bool)>,
@@ -248,6 +254,7 @@ impl Player<TestPools> for ScriptedTrack {
             TrackCommand::Load { position, .. } => Command::Load(position),
             TrackCommand::Play { at } => Command::Play(at),
             TrackCommand::Pause { at } => Command::Pause(at),
+            TrackCommand::Fade { at, .. } => Command::Fade(at),
             TrackCommand::Seek { to } => Command::Seek(to),
             TrackCommand::Jump { to, at } => Command::Jump(to, at),
             TrackCommand::SetSpeed { speed, at } => Command::Speed(speed, at),
@@ -259,8 +266,17 @@ impl Player<TestPools> for ScriptedTrack {
             }
             TrackCommand::SetHostRate { rate } => Command::Rate(rate),
             TrackCommand::Release => Command::Release,
+            TrackCommand::Clock(clock) => {
+                return self.control.edit(|script| {
+                    if let Some(error) = script.clock_refusal.take() {
+                        return Err(error);
+                    }
+                    script.clock = clock;
+                    Ok(None)
+                });
+            }
             TrackCommand::Supersede
-            | TrackCommand::Fade { .. }
+            | TrackCommand::GainProgram(_)
             | TrackCommand::PlayAfter { .. }
             | TrackCommand::Seat { .. } => {
                 panic!("unexpected command in synchronization fixture")
@@ -347,7 +363,7 @@ impl Player<TestPools> for ScriptedTrack {
                             }
                             Command::ConfigureSpeed(value, _) => script.snapshot.speed = value,
                             Command::Release => script.snapshot.status = TrackStatus::Released,
-                            Command::Rate(_) => {}
+                            Command::Rate(_) | Command::Fade(_) => {}
                         }
                     }
                     script.snapshot.pending_lane = false;
@@ -534,6 +550,9 @@ pub(super) struct Rig {
     pub queues: DeckRig<TestPools>,
     pub now: SessionFrame,
     pub delivery: FrameCount,
+    pub deck_delivery: Option<FrameCount>,
+    /// The accepted tempo map a pass lends the deck.
+    pub planned: TempoTrajectory,
     output: OutputSnapshot,
     observation: DeckSnapshot,
 }
@@ -544,6 +563,8 @@ impl Rig {
             queues: DeckRig::new(DeckMixerConfig::default()).expect("deck scope"),
             now: SessionFrame::new(now),
             delivery: FrameCount::new(128),
+            deck_delivery: None,
+            planned: kithara_play::mock::planned_tempo(),
             output: kithara_play::mock::output(None).get(),
             observation: DeckSnapshot::default(),
         }
@@ -567,8 +588,10 @@ impl Rig {
             suspended: false,
             now: self.now,
             delivery: self.delivery,
+            deck_delivery: self.deck_delivery.unwrap_or(self.delivery),
             output: &self.output,
             deck: &self.observation,
+            planned_tempo: &self.planned,
         };
         run(
             &mut Outbox::new(&mut port, &mut self.queues.dispatcher).in_pass(pass),
@@ -614,6 +637,7 @@ impl Rig {
 pub(super) fn ordinary() -> (ScriptedTrack, Control) {
     let control = Control(Arc::new(Mutex::new(Script {
         snapshot: TrackSnapshot {
+            output: kithara_play::SlotOutputSnapshot::default(),
             item: TrackId::allocate(),
             slot: Some(Slot::new(0)),
             status: TrackStatus::Loaded,
@@ -632,6 +656,8 @@ pub(super) fn ordinary() -> (ScriptedTrack, Control) {
         },
         sent: Vec::new(),
         reject: None,
+        clock: TrackClock::Media,
+        clock_refusal: None,
         pending: Vec::new(),
         speeds: VecDeque::new(),
         verdicts: Vec::new(),
@@ -674,14 +700,13 @@ pub(super) fn load(deck: &mut Deck, rig: &mut Rig, cue: u32) -> Seq {
     .expect("load sequence")
 }
 
-pub(super) fn answer(deck: &mut Deck, rig: &mut Rig, load: Seq, model: BeatGridModel) {
+pub(super) fn answer(deck: &mut Deck, rig: &mut Rig, model: BeatGridModel) {
     let item = deck.snapshot().as_ref().item;
     rig.run(|out| {
         LinkedPlayer::grid(
             deck,
             GridAnswer {
                 item,
-                load,
                 model: Ok(model),
             },
             out,
@@ -694,33 +719,70 @@ pub(super) fn loaded(model: BeatGridModel) -> (Deck, Control, Rig, Seq) {
     let mut rig = Rig::new(0);
     let load = load(&mut deck, &mut rig, 0);
     rig.apply(&mut deck, load, 0);
-    answer(&mut deck, &mut rig, load, model);
+    answer(&mut deck, &mut rig, model);
     control.clear();
     (deck, control, rig, load)
 }
 
-pub(super) fn sounding() -> (Deck, Control, Rig, Seq) {
-    let (mut deck, control, mut rig, load) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
+/// A session frame near the end of a grid covering 480 000 frames.
+pub(super) const NEAR_THE_COVERED_END: u32 = 475_200;
+/// The track frame a deck sounds on `NEAR_THE_COVERED_END` a third of a beat
+/// behind the host.
+pub(super) const A_THIRD_OF_A_BEAT_BEHIND: u32 = 467_200;
+
+/// `model` as an answer a later revision can still extend.
+pub(super) fn provisional(model: &BeatGridModel) -> BeatGridModel {
+    let mut raw = model.as_raw().clone();
+    raw.state = BeatGridState::Provisional;
+    BeatGridModel::try_from(raw).expect("consistent grid")
+}
+
+/// A deck that loaded a track at 0 on `model` and turned SYNC on, silent.
+pub(super) fn synced(model: BeatGridModel) -> (Deck, Control, Rig, Seq) {
+    let (mut deck, control, mut rig, load) = loaded(model);
     let seq = rig
         .run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("sync accepted")
         .expect("speed sequence");
     rig.apply(&mut deck, seq, 0);
+    control.clear();
+    (deck, control, rig, load)
+}
+
+/// The deck sounds track frame `at` on session frame `now`.
+pub(super) fn sound(control: &Control, rig: &mut Rig, now: u32, at: u32) {
+    rig.now = SessionFrame::new(i64::from(now));
     control.edit(|script| {
-        script.snapshot.status = TrackStatus::Playing {
-            since: SessionFrame::new(0),
-        };
+        script.snapshot.status = TrackStatus::Playing { since: rig.now };
+        script.snapshot.position = position(at);
         script.snapshot.mark = Some(SlotMark {
-            session: SessionFrame::new(0),
+            session: rig.now,
             lane: kithara_render::LaneFrame {
                 segment: SegmentId::FIRST,
-                frame: 0,
+                frame: u64::from(at),
             },
-            position: Position::ZERO,
+            position: position(at),
         });
     });
     control.clear();
+}
+
+pub(super) fn sounding() -> (Deck, Control, Rig, Seq) {
+    let (deck, control, mut rig, load) = synced(grid(24_000, 0, Some((4, 0)), 960_000));
+    sound(&control, &mut rig, 0, 0);
     (deck, control, rig, load)
+}
+
+/// The jumps the deck was sent.
+pub(super) fn jumps(control: &Control) -> Vec<(Position, SessionFrame)> {
+    control
+        .commands()
+        .into_iter()
+        .filter_map(|(_, command)| match command {
+            Command::Jump(to, at) => Some((to, at)),
+            _ => None,
+        })
+        .collect()
 }
 
 pub(super) fn consume(control: &Control, frame: u32) {
@@ -734,6 +796,12 @@ pub(super) fn consume(control: &Control, frame: u32) {
         mark.lane.frame = u64::from(frame);
         mark.position = position(frame);
     });
+}
+
+/// The default plan horizon in fixture frames.
+pub(super) fn horizon() -> u64 {
+    u64::try_from(LinkConfig::default().horizon().as_nanos() * 48_000 / 1_000_000_000)
+        .expect("fixture horizon")
 }
 
 pub(super) fn source_grid(model: &BeatGridModel) -> kithara_sync::SourceGrid {

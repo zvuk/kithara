@@ -1,5 +1,7 @@
 use kithara::{
     effects::GainDb,
+    host::api::Tempo,
+    play::PitchStep,
     ui::render::{
         DEFAULT_ZOOM, Scope, UiEvent, WindowCommand, WriteValue, Zoom, zoom_in, zoom_out,
     },
@@ -7,12 +9,9 @@ use kithara::{
 use kithara_app_library::Playable;
 use num_traits::cast::AsPrimitive;
 
-use super::{
-    cache::{DeckLayout, ViewCache},
-    scope::deck_index,
-};
+use super::cache::{DeckLayout, ViewCache};
 use crate::{
-    deck::{DeckId, EqMode, TempoPercent},
+    deck::{EqMode, TempoPercent},
     engine::{Command, MixCmd},
     gui::{
         app::Kithara,
@@ -37,6 +36,7 @@ fn write(state: &mut Kithara, key: &str, value: WriteValue) -> Option<Message> {
         "mix" | "mixer" => mixer_write(state, id, scope, &value),
         "ui" => ui_write(&mut state.ui.cache, id, scope, &value),
         "broadcast" => broadcast_write(id, &value),
+        "clock" => clock_write(id, &value),
         "library" => {
             library_write(state, id, &value);
             None
@@ -52,26 +52,69 @@ fn deck_write(
     scope: Scope<'_>,
     value: WriteValue,
 ) -> Option<Message> {
-    let index = deck_index(scope.get("deck")?)?;
+    let shown = state.snapshot.lettered(scope.get("deck")?)?;
+    let (deck, letter, synced) = (shown.id, shown.letter, shown.synced);
+
+    match id {
+        "deck.view.zoom_in" | "deck.view.zoom_out" | "deck.view.zoom" | "deck.queue.load"
+        | "deck.eq.mode" => return deck_view_write(state, id, letter, scope, value),
+        _ => {}
+    }
+
     let msg = match (id, value) {
+        ("deck.stream.select_variant", WriteValue::Trigger) => {
+            quality_msg(state, letter, scope.get("variant")?)?
+        }
+        ("deck.transport.toggle_play", WriteValue::Trigger) => DeckMsg::TogglePlayPause,
+        ("deck.transport.toggle_sync", WriteValue::Trigger) => DeckMsg::ToggleSync,
+        ("deck.key.toggle_lock", WriteValue::Trigger) => DeckMsg::Pitch(PitchStep::ToggleKeylock),
+        ("deck.key.transpose_up", WriteValue::Trigger) => DeckMsg::Pitch(PitchStep::Up),
+        ("deck.key.transpose_down", WriteValue::Trigger) => DeckMsg::Pitch(PitchStep::Down),
+        ("deck.key.transpose_reset", WriteValue::Trigger) => DeckMsg::Pitch(PitchStep::Reset),
+        ("deck.transport.prev", WriteValue::Trigger) => DeckMsg::Prev,
+        ("deck.transport.next", WriteValue::Trigger) => DeckMsg::Next,
+        ("deck.transport.seek_normalized", WriteValue::Scalar(position)) => {
+            DeckMsg::SeekTo(position.clamp(0.0, 1.0))
+        }
+        ("deck.tempo.rate" | "deck.tempo.reset", _) if synced => return None,
+        ("deck.tempo.rate", WriteValue::Step(steps)) => {
+            let tempo = f32::from(state.snapshot.deck(deck)?.tempo);
+            DeckMsg::SetTempo(TempoPercent::from(steps.mul_add(TEMPO_STEP, tempo)))
+        }
+        ("deck.tempo.reset", WriteValue::Trigger) => DeckMsg::SetTempo(TempoPercent::DEFAULT),
+        (id, WriteValue::Scalar(knob)) => eq_band(state, id.strip_prefix("deck.eq.")?, knob)?,
+        _ => return None,
+    };
+
+    Some(Message::Deck(deck, msg))
+}
+
+fn deck_view_write(
+    state: &mut Kithara,
+    id: &str,
+    letter: &str,
+    scope: Scope<'_>,
+    value: WriteValue,
+) -> Option<Message> {
+    match (id, value) {
         ("deck.view.zoom_in", WriteValue::Trigger) => {
-            return step_zoom(&mut state.ui.cache, index, zoom_in);
+            step_zoom(&mut state.ui.cache, letter, zoom_in)
         }
         ("deck.view.zoom_out", WriteValue::Trigger) => {
-            return step_zoom(&mut state.ui.cache, index, zoom_out);
+            step_zoom(&mut state.ui.cache, letter, zoom_out)
         }
         ("deck.view.zoom", WriteValue::Scalar(zoom)) => {
             let zoom: f32 = zoom.as_();
-            state.ui.cache.deck_mut(index)?.view.zoom =
+            state.ui.cache.deck_mut(letter)?.view.zoom =
                 Some(f64::from(f32::from(Zoom::from(zoom))));
-            return None;
+            None
         }
         ("deck.queue.load", WriteValue::Record(record)) => {
             let track = Playable::try_from(record).ok()?;
-            let deck = deck_id(state, index)?;
-            state.ui.cache.focus(index);
+            let deck = state.snapshot.lettered(letter)?.id;
+            state.ui.cache.focus(letter);
             state.send(Command::LoadOntoDeck { deck, track });
-            return None;
+            None
         }
         ("deck.eq.mode", WriteValue::Trigger) => {
             let mode = match scope.get("bands")? {
@@ -79,30 +122,10 @@ fn deck_write(
                 "4" => EqMode::FourBand,
                 _ => return None,
             };
-            return Some(Message::SetEqMode(mode));
+            Some(Message::SetEqMode(mode))
         }
-        ("deck.stream.select_variant", WriteValue::Trigger) => {
-            quality_msg(state, index, scope.get("variant")?)?
-        }
-        ("deck.transport.toggle_play", WriteValue::Trigger) => DeckMsg::TogglePlayPause,
-        ("deck.transport.prev", WriteValue::Trigger) => DeckMsg::Prev,
-        ("deck.transport.next", WriteValue::Trigger) => DeckMsg::Next,
-        ("deck.transport.seek_normalized", WriteValue::Scalar(position)) => {
-            DeckMsg::SeekTo(position.clamp(0.0, 1.0))
-        }
-        ("deck.tempo.rate", WriteValue::Step(steps)) => {
-            let tempo = f32::from(state.snapshot.deck(deck_id(state, index)?)?.tempo);
-            DeckMsg::SetTempo(TempoPercent::from(steps.mul_add(TEMPO_STEP, tempo)))
-        }
-        ("deck.tempo.reset", WriteValue::Trigger) => DeckMsg::SetTempo(TempoPercent::DEFAULT),
-        ("deck.eq.low", WriteValue::Scalar(knob)) => eq_band(state, "low", knob)?,
-        ("deck.eq.low_mid", WriteValue::Scalar(knob)) => eq_band(state, "low_mid", knob)?,
-        ("deck.eq.mid", WriteValue::Scalar(knob)) => eq_band(state, "mid", knob)?,
-        ("deck.eq.high_mid", WriteValue::Scalar(knob)) => eq_band(state, "high_mid", knob)?,
-        ("deck.eq.high", WriteValue::Scalar(knob)) => eq_band(state, "high", knob)?,
-        _ => return None,
-    };
-    Some(Message::Deck(deck_id(state, index)?, msg))
+        _ => None,
+    }
 }
 
 fn eq_band(state: &Kithara, name: &str, knob: f64) -> Option<DeckMsg> {
@@ -110,18 +133,25 @@ fn eq_band(state: &Kithara, name: &str, knob: f64) -> Option<DeckMsg> {
     Some(DeckMsg::EqBandChanged(band, GainDb::at_knob(knob.as_())))
 }
 
-fn quality_msg(state: &Kithara, index: usize, variant: &str) -> Option<DeckMsg> {
+fn quality_msg(state: &Kithara, letter: &str, variant: &str) -> Option<DeckMsg> {
     if variant == "auto" {
         return Some(DeckMsg::SetQuality(None));
     }
+
     let slot: usize = variant.parse().ok()?;
-    let id = deck_id(state, index)?;
-    let rung = state.snapshot.deck(id)?.stream.variants.get(slot)?.index;
+    let rung = state
+        .snapshot
+        .lettered(letter)?
+        .stream
+        .variants
+        .get(slot)?
+        .index;
+
     Some(DeckMsg::SetQuality(Some(rung)))
 }
 
-fn step_zoom(cache: &mut ViewCache, index: usize, step: fn(Zoom) -> Zoom) -> Option<Message> {
-    let deck = cache.deck_mut(index)?;
+fn step_zoom(cache: &mut ViewCache, letter: &str, step: fn(Zoom) -> Zoom) -> Option<Message> {
+    let deck = cache.deck_mut(letter)?;
     let current: f32 = deck.view.zoom.map_or(DEFAULT_ZOOM, AsPrimitive::as_);
     deck.view.zoom = Some(f64::from(f32::from(step(current.into()))));
     None
@@ -133,11 +163,12 @@ fn mixer_write(state: &Kithara, id: &str, scope: Scope<'_>, value: &WriteValue) 
             MixCmd::Crossfader(position.clamp(0.0, 1.0).as_())
         }
         ("mixer.trim", WriteValue::Scalar(trim)) => MixCmd::Trim(
-            deck_id(state, deck_index(scope.get("deck")?)?)?,
+            state.snapshot.lettered(scope.get("deck")?)?.id,
             trim.clamp(0.0, 1.0).as_(),
         ),
         _ => return None,
     };
+
     Some(Message::Mix(cmd))
 }
 
@@ -162,6 +193,14 @@ fn ui_write(
             cache.set_layout(DeckLayout::from_decks(scope.get("layout")?.parse().ok()?)?);
             Some(Message::PauseHiddenDecks)
         }
+        _ => None,
+    }
+}
+
+fn clock_write(id: &str, value: &WriteValue) -> Option<Message> {
+    match (id, value) {
+        ("clock.tempo", WriteValue::Step(steps)) => Some(Message::StepTempo(*steps)),
+        ("clock.tempo", WriteValue::Scalar(bpm)) => Tempo::new(*bpm).ok().map(Message::SetTempo),
         _ => None,
     }
 }
@@ -202,10 +241,6 @@ fn source_write(
     None
 }
 
-fn deck_id(state: &Kithara, index: usize) -> Option<DeckId> {
-    state.snapshot.decks.get(index).map(|deck| deck.id)
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
@@ -218,19 +253,22 @@ mod tests {
     }
 
     fn select_layout(cache: &mut ViewCache, layout: DeckLayout) -> Option<Message> {
-        press(cache, &format!("ui.layout.apply@layout={}", layout.decks()))
+        press(
+            cache,
+            &format!("ui.layout.apply@layout={}", layout.letters().len()),
+        )
     }
 
     fn press_zoom(cache: &mut ViewCache, step: fn(Zoom) -> Zoom) -> f64 {
-        step_zoom(cache, 0, step);
-        cache.deck_mut(0).and_then(|deck| deck.view.zoom).unwrap()
+        step_zoom(cache, "a", step);
+        cache.deck_mut("a").and_then(|deck| deck.view.zoom).unwrap()
     }
 
     #[kithara::test]
     fn the_zoom_buttons_step_the_wave_window_and_stop_at_its_bounds() {
         const PRESSES: usize = 40;
 
-        let mut cache = ViewCache::with_decks(1);
+        let mut cache = ViewCache::with_decks(&["a"]);
 
         let narrowed = press_zoom(&mut cache, zoom_in);
         let widened = press_zoom(&mut cache, zoom_out);
@@ -240,6 +278,7 @@ mod tests {
         for _ in 0..PRESSES {
             press_zoom(&mut cache, zoom_in);
         }
+
         let floor = press_zoom(&mut cache, zoom_in);
         assert!(floor > 0.0, "the window never closes");
         assert_eq!(press_zoom(&mut cache, zoom_in), floor);
@@ -247,6 +286,7 @@ mod tests {
         for _ in 0..PRESSES {
             press_zoom(&mut cache, zoom_out);
         }
+
         let ceiling = press_zoom(&mut cache, zoom_out);
         assert!(ceiling < 1.0, "the window never spans the whole track");
         assert_eq!(press_zoom(&mut cache, zoom_out), ceiling);
@@ -282,35 +322,21 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_menu_asks_the_host_for_full_screen() {
-        let mut cache = ViewCache::default();
-
-        assert!(matches!(
-            press(&mut cache, "ui.window.toggle_full_screen"),
-            Some(Message::Window(WindowCommand::ToggleFullScreen))
-        ));
-    }
-
-    #[kithara::test]
-    fn the_air_toggle_asks_the_host_for_the_air() {
-        assert!(matches!(
-            broadcast_write("broadcast.toggle", &WriteValue::Trigger),
-            Some(Message::BroadcastToggle)
-        ));
-    }
-
-    #[kithara::test]
     fn narrowing_the_layout_moves_a_focus_it_stops_laying_out() {
         let mut cache = ViewCache::default();
-        cache.focus(1);
-        assert_eq!(cache.focus_deck(), 1);
+
+        cache.focus("b");
+        assert_eq!(cache.focus_deck(), "b");
 
         select_layout(&mut cache, DeckLayout::Single);
 
-        assert_eq!(cache.focus_deck(), 0, "the key must reach a deck on screen");
+        assert_eq!(
+            cache.focus_deck(),
+            "a",
+            "the key must reach a deck on screen"
+        );
     }
 
-    #[cfg(not(feature = "broadcast"))]
     mod writes {
         use std::convert::Infallible;
 
@@ -325,7 +351,7 @@ mod tests {
         use super::super::translate;
         use crate::{
             analysis::fixtures::{long_wav, short_wav, tone_mp3},
-            deck::{DeckId, EqMode, TempoPercent},
+            deck::{EqMode, TempoPercent},
             engine::MixCmd,
             gui::{app::Kithara, deck::DeckMsg, message::Message, rig::Rig, ui::cache::DeckLayout},
             state::AbrVariant,
@@ -348,43 +374,42 @@ mod tests {
         #[kithara::test(native, flash(false))]
         fn the_transport_answers_the_writes_it_declares() {
             let mut rig = Rig::offline();
-            rig.message(Message::Deck(
-                DeckId(0),
-                DeckMsg::SetTempo(TempoPercent::from(3.0)),
-            ));
+            let (a, b) = (rig.deck("a"), rig.deck("b"));
+
+            rig.message(Message::Deck(a, DeckMsg::SetTempo(TempoPercent::from(3.0))));
             let state = &mut rig.ui;
 
             assert!(matches!(
                 press(state, "deck.transport.toggle_play@deck=a"),
-                Some(Message::Deck(DeckId(0), DeckMsg::TogglePlayPause))
+                Some(Message::Deck(id, DeckMsg::TogglePlayPause)) if id == a
             ));
             assert!(matches!(
                 press(state, "deck.transport.prev@deck=a"),
-                Some(Message::Deck(DeckId(0), DeckMsg::Prev))
+                Some(Message::Deck(id, DeckMsg::Prev)) if id == a
             ));
             assert!(matches!(
                 press(state, "deck.transport.next@deck=b"),
-                Some(Message::Deck(DeckId(1), DeckMsg::Next))
+                Some(Message::Deck(id, DeckMsg::Next)) if id == b
             ));
             assert!(matches!(
                 write(state, "deck.transport.seek_normalized@deck=a", WriteValue::Scalar(0.25)),
-                Some(Message::Deck(DeckId(0), DeckMsg::SeekTo(fraction)))
-                    if (fraction - 0.25).abs() < f64::EPSILON
+                Some(Message::Deck(id, DeckMsg::SeekTo(fraction)))
+                    if id == a && (fraction - 0.25).abs() < f64::EPSILON
             ));
             assert!(matches!(
                 write(state, "deck.tempo.rate@deck=a", WriteValue::Step(2.0)),
-                Some(Message::Deck(DeckId(0), DeckMsg::SetTempo(tempo)))
-                    if (f32::from(tempo) - 6.0).abs() < f32::EPSILON
+                Some(Message::Deck(id, DeckMsg::SetTempo(tempo)))
+                    if id == a && (f32::from(tempo) - 6.0).abs() < f32::EPSILON
             ));
             assert!(matches!(
                 press(state, "deck.tempo.reset@deck=a"),
-                Some(Message::Deck(DeckId(0), DeckMsg::SetTempo(tempo)))
-                    if tempo == TempoPercent::DEFAULT
+                Some(Message::Deck(id, DeckMsg::SetTempo(tempo)))
+                    if id == a && tempo == TempoPercent::DEFAULT
             ));
             assert!(matches!(
                 write(state, "mixer.trim@deck=a", WriteValue::Scalar(2.0)),
-                Some(Message::Mix(MixCmd::Trim(DeckId(0), trim)))
-                    if (trim - 1.0).abs() < f32::EPSILON
+                Some(Message::Mix(MixCmd::Trim(id, trim)))
+                    if id == a && (trim - 1.0).abs() < f32::EPSILON
             ));
             assert!(matches!(
                 press(state, "broadcast.toggle"),
@@ -393,11 +418,28 @@ mod tests {
         }
 
         #[kithara::test(native, flash(false))]
+        fn a_synced_tempo_fader_sends_nothing() {
+            let mut rig = Rig::offline();
+            let a = rig.deck("a");
+            rig.message(Message::Deck(a, DeckMsg::ToggleSync));
+            rig.pump();
+            rig.frame();
+            let state = &mut rig.ui;
+            assert!(
+                state.snapshot.deck(a).is_some_and(|deck| deck.synced),
+                "deck A is synced"
+            );
+
+            assert!(write(state, "deck.tempo.rate@deck=a", WriteValue::Step(2.0)).is_none());
+            assert!(press(state, "deck.tempo.reset@deck=a").is_none());
+        }
+
+        #[kithara::test(native, flash(false))]
         fn the_wave_window_answers_its_zoom_writes() {
             let mut rig = Rig::offline();
             let state = &mut rig.ui;
             let zoom =
-                |state: &mut Kithara| state.ui.cache.deck_mut(0).and_then(|deck| deck.view.zoom);
+                |state: &mut Kithara| state.ui.cache.deck_mut("a").and_then(|deck| deck.view.zoom);
 
             assert!(press(state, "deck.view.zoom_in@deck=a").is_none());
             let narrowed = zoom(state).expect("zooming in sets the window");
@@ -412,6 +454,7 @@ mod tests {
         #[kithara::test(native, flash(false))]
         fn the_mixer_answers_the_writes_it_declares() {
             let mut rig = Rig::offline();
+            let a = rig.deck("a");
             let state = &mut rig.ui;
 
             assert!(matches!(
@@ -420,14 +463,6 @@ mod tests {
                     if (position - 1.0).abs() < f32::EPSILON
             ));
             assert!(matches!(
-                write(state, "deck.eq.low@deck=a", WriteValue::Scalar(1.0)),
-                Some(Message::Deck(DeckId(0), DeckMsg::EqBandChanged(0, _)))
-            ));
-            assert!(
-                write(state, "deck.eq.high_mid@deck=a", WriteValue::Scalar(1.0)).is_none(),
-                "only the bank the mode draws answers"
-            );
-            assert!(matches!(
                 press(state, "deck.eq.mode@bands=4,deck=a"),
                 Some(Message::SetEqMode(EqMode::FourBand))
             ));
@@ -435,12 +470,47 @@ mod tests {
                 press(state, "deck.eq.mode@bands=3,deck=b"),
                 Some(Message::SetEqMode(EqMode::ThreeBand))
             ));
+
+            for (mode, expected) in [
+                (EqMode::ThreeBand, [Some(0), None, Some(1), None, Some(2)]),
+                (EqMode::FourBand, [Some(0), Some(1), None, Some(2), Some(3)]),
+            ] {
+                rig.message(Message::SetEqMode(mode));
+                rig.pump();
+                crate::mock::render_rig(&mut rig, 128);
+                rig.frame();
+
+                assert_eq!(rig.ui.snapshot.eq_mode, mode);
+
+                for (name, band) in ["low", "low_mid", "mid", "high_mid", "high"]
+                    .into_iter()
+                    .zip(expected)
+                {
+                    let message = write(
+                        &mut rig.ui,
+                        &format!("deck.eq.{name}@deck=a"),
+                        WriteValue::Scalar(1.0),
+                    );
+
+                    let actual = match message {
+                        Some(Message::Deck(id, DeckMsg::EqBandChanged(index, _))) if id == a => {
+                            Some(index)
+                        }
+                        None => None,
+                        other => panic!("{mode:?} {name}: unexpected {other:?}"),
+                    };
+
+                    assert_eq!(actual, band, "{mode:?} {name}");
+                }
+            }
         }
 
         #[kithara::test(native, flash(false))]
         fn each_deck_picks_the_quality_its_row_names() {
             let mut rig = Rig::offline();
-            rig.shows(DeckId(0), |deck| {
+            let a = rig.deck("a");
+
+            rig.shows("a", |deck| {
                 deck.abr_variants = vec![AbrVariant {
                     index: 7,
                     label: "320k".to_string(),
@@ -451,11 +521,11 @@ mod tests {
 
             assert!(matches!(
                 press(state, "deck.stream.select_variant@deck=a,variant=0"),
-                Some(Message::Deck(DeckId(0), DeckMsg::SetQuality(Some(7))))
+                Some(Message::Deck(id, DeckMsg::SetQuality(Some(7)))) if id == a
             ));
             assert!(matches!(
                 press(state, "deck.stream.select_variant@deck=a,variant=auto"),
-                Some(Message::Deck(DeckId(0), DeckMsg::SetQuality(None)))
+                Some(Message::Deck(id, DeckMsg::SetQuality(None))) if id == a
             ));
         }
 

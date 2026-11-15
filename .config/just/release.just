@@ -6,6 +6,11 @@ set working-directory := "../.."
 crates *ARGS:
     just _xtask publish "$@"
 
+# Build and sign the universal macOS application and its release archive.
+[positional-arguments]
+app *ARGS:
+    just _xtask release app "$@"
+
 # Render CHANGELOG.md from the history and the release tags; a VERSION names
 # the unreleased commits as that release.
 [positional-arguments]

@@ -15,6 +15,7 @@ use kithara_integration_tests::{
     hls_fixture::create_test_downloader,
     mixed_encrypted, mixed_plain,
     mock::LaneAudio,
+    reads::read_until_samples,
 };
 use kithara_test_utils::{TestTempDir, kithara as watchdog, temp_dir};
 use tracing::info;
@@ -223,31 +224,14 @@ async fn seek_sequence_from_log_real_stream(
         .expect("audio creation");
 
     let result = spawn_blocking(move || {
-        let mut buf = vec![0f32; 4096];
-        loop {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Frames { .. } | ReadOutcome::Eof { .. }) => break,
-                Ok(ReadOutcome::Pending { .. }) => continue,
-                Err(e) => panic!("warmup read error: {e}"),
-            }
-        }
+        read_until_samples(&mut audio, 1);
 
         let seeks = [7.135_147_392, 12.279_818_594, 17.778_684_807];
         for (idx, seconds) in seeks.into_iter().enumerate() {
             let pos = Duration::from_secs_f64(seconds);
             audio.seek(pos).expect("seek must not fail");
 
-            let mut samples_after_seek = 0usize;
-            while samples_after_seek < 16_384 {
-                match audio.read(&mut buf) {
-                    Ok(ReadOutcome::Pending { .. }) => continue,
-                    Ok(ReadOutcome::Frames { count, .. }) => {
-                        samples_after_seek += count.get();
-                    }
-                    Ok(ReadOutcome::Eof { .. }) => break,
-                    Err(e) => panic!("post-seek read error: {e}"),
-                }
-            }
+            let samples_after_seek = read_until_samples(&mut audio, 16_384);
 
             assert!(
                 samples_after_seek > 0,

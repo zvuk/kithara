@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::{common::project::ProjectConfig, lock::FileLock, test::NextestAction};
 use sha2::{Digest, Sha256};
 
-use super::{super::device::Selected, build, runner};
+use super::{super::device::Selected, build, runner, selection};
 use crate::child;
 
 pub(super) fn art_nextest_list_extra(target: &str, packages: &BTreeSet<String>) -> Vec<String> {
@@ -195,10 +195,7 @@ impl Prepared {
             "==> Native fixtures from {device_url} after {:.1}s (no store push)",
             started.elapsed().as_secs_f64()
         );
-        fs::write(
-            self.evidence.join("session.json"),
-            serde_json::to_vec_pretty(&session)?,
-        )?;
+        session.write(&self.evidence.join("session.json"))?;
         let mut list = self.nextest(NextestAction::List, filter)?;
         list.args(["--message-format", "json"]);
         logged(
@@ -207,6 +204,8 @@ impl Prepared {
             &self.evidence.join("list.log"),
             cancel,
         )?;
+        session.filters = selection::filters(&fs::read(self.evidence.join("list.json"))?)?;
+        session.write(&self.evidence.join("session.json"))?;
         let junit = inventory_junit(&self.root);
         if junit.exists() {
             fs::remove_file(&junit)?;
@@ -539,11 +538,9 @@ kithara-stream v0.0.1 (/workspace/crates/kithara-stream)\n";
 
     #[test]
     fn configured_android_lane_combines_product_and_detached_suites() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask lives below the workspace root");
-        let config = ProjectConfig::load(root).expect("project config");
-        let product = android_product_packages(root, "aarch64-linux-android", "kithara-ffi")
+        let root = crate::testing::workspace::root();
+        let config = ProjectConfig::load(&root).expect("project config");
+        let product = android_product_packages(&root, "aarch64-linux-android", "kithara-ffi")
             .expect("Android product packages");
         let extra = art_nextest_list_extra("aarch64-linux-android", &product);
         let command = kithara_devtools::test::nextest_command_for_lane(

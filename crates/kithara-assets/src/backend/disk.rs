@@ -131,10 +131,13 @@ impl AssetDeleter for DiskAssetDeleter {
             }
             ResourceKeyKind::Absolute(_) => return Err(AssetsError::InvalidKey),
         };
-        match fs::remove_file(path) {
+        match fs::remove_file(&path) {
             Ok(()) => {}
             Err(e) if e.kind() == ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
+            Err(error) => {
+                tracing::error!(operation = "remove-resource", path = %path.display(), error = ?error, "asset resource I/O failed");
+                return Err(error.into());
+            }
         }
         self.availability.remove(key);
         Ok(())
@@ -404,12 +407,15 @@ impl Assets for DiskAssetStore {
 
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
         let path = self.resource_path(key)?;
-        match fs::metadata(path) {
+        match fs::metadata(&path) {
             Ok(metadata) => Ok(AssetResourceState::Committed {
                 final_len: Some(metadata.len()),
             }),
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(AssetResourceState::Missing),
-            Err(error) => Err(error.into()),
+            Err(error) => {
+                tracing::error!(operation = "metadata", path = %path.display(), error = ?error, "asset resource I/O failed");
+                Err(error.into())
+            }
         }
     }
 

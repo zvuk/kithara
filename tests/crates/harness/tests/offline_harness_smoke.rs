@@ -43,6 +43,8 @@ const MIN_SHARE_NUM: usize = 7;
 const MAX_SHARE_NUM: usize = 9;
 const SHARE_DEN: usize = 10;
 const DRAIN_BLOCK_BUDGET: usize = 2_000;
+const INVALID_SOURCE_FAILURE: &str =
+    "invalid URL or path: not-a-url: Invalid data: invalid URL or file path (must be absolute)";
 
 fn file_resource(
     path: &Path,
@@ -207,21 +209,61 @@ async fn offline_harness_glide_varispeed(drain_tone: &'static [u8], temp_dir: Te
 #[kithara::test(tokio)]
 #[case::loaded(TrackStatus::Loaded, Ok(()))]
 #[case::consumed(TrackStatus::Consumed, Ok(()))]
-#[case::failed(TrackStatus::Failed("decode rejected".to_owned()), Err("track entered Failed: decode rejected".to_owned()))]
+#[case::failed(TrackStatus::Failed(INVALID_SOURCE_FAILURE.to_owned()), Err(format!("track entered Failed: {INVALID_SOURCE_FAILURE}")))]
 async fn loader_wait_returns_the_matching_terminal_outcome(
     #[case] status: TrackStatus,
     #[case] expected: Result<(), String>,
 ) {
     let (harness, queue) = offline_queue_fixture(consts::SAMPLE_RATE).await;
     let mut events = queue.subscribe();
-    let id = TrackId::allocate();
+    let source = if matches!(&status, TrackStatus::Failed(_)) {
+        "not-a-url".to_owned()
+    } else {
+        assets::fixed_constant_wav_cd_half_4410()
+            .path()
+            .expect("prepared loader WAV")
+            .to_string_lossy()
+            .into_owned()
+    };
+    let id = harness
+        .with_queue(move |control| control.append(source))
+        .await
+        .expect("append the loader fixture");
+    if !matches!(&status, TrackStatus::Failed(_)) {
+        let _real_io = real_io();
+        wait_for_event(
+            &mut events,
+            "the queue's completed load",
+            |event| matches!(event,
+                TestEvent::Queue(QueueEvent::TrackStatusChanged { id: found, status: TrackStatus::Loaded }) if *found == id),
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("the queue loads the prepared WAV");
+    }
+    if matches!(&status, TrackStatus::Consumed) {
+        harness
+            .with_queue(move |control| control.select(id, kithara::queue::Transition::None))
+            .await
+            .expect("select the loaded fixture");
+        harness
+            .render_until_current(
+                id,
+                BLOCK_FRAMES,
+                time::WallInstant::now() + Duration::from_secs(1),
+            )
+            .await;
+        harness.with_queue(kithara::queue::QueueControl::play).await;
+    }
+    assert_eq!(queue.track(id).expect("the queued fixture").status, status);
     queue.bus().publish(QueueEvent::TrackStatusChanged {
         id: TrackId::allocate(),
         status: TrackStatus::Loaded,
     });
-    queue
-        .bus()
-        .publish(QueueEvent::TrackStatusChanged { id, status });
+    queue.bus().publish(QueueEvent::TrackStatusChanged {
+        id,
+        status: TrackStatus::Loaded,
+    });
     assert_eq!(
         wait_for_loader_done_event(&mut events, &queue, id, Duration::from_secs(1)).await,
         expected,

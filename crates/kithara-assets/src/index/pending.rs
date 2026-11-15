@@ -178,6 +178,9 @@ where
                     AcquisitionResult::Ready(reader) => {
                         return Ok(AcquisitionResult::Ready(reader));
                     }
+                    AcquisitionResult::Joined(reader) => {
+                        return Ok(AcquisitionResult::Joined(reader));
+                    }
                 };
                 writer.transfer_cleanup();
                 let slot = Arc::new(PendingResource::new(

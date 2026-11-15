@@ -3,7 +3,10 @@ use kithara_stream::{SourcePhase, needs_exact_byte_sizes};
 use tracing::trace;
 
 use super::probe::SizeDemand;
-use crate::{segment::PlannedFetch, variant::HlsVariant};
+use crate::{
+    segment::{PlannedFetch, SegmentContent},
+    variant::HlsVariant,
+};
 
 #[derive(Clone, Copy)]
 pub(in crate::variant) struct ExactSeekDemand {
@@ -186,13 +189,21 @@ where
     }
 
     fn request_exact_size(&self, demand: SizeDemand) {
+        let segment = match demand {
+            SizeDemand::Init => self.segments.init.as_ref(),
+            SizeDemand::Segment(index) => self.segments.get(index as usize),
+        };
+        let Some(segment) = segment.filter(|segment| !segment.size().is_exact()) else {
+            return;
+        };
+        let probe_allowed = matches!(segment.content(), SegmentContent::Plain);
         trace!(
             variant = self.variant,
             demand = ?demand,
-            probe_allowed = self.size_probe_allowed(demand),
+            probe_allowed,
             "request exact size"
         );
-        if self.size_probe_allowed(demand) {
+        if probe_allowed {
             self.enqueue_size_demand(demand);
         } else {
             self.enqueue_body_fetch_for_size(demand);
@@ -241,5 +252,50 @@ where
         self.seek.exact_seek.set(segment, anchor);
         self.request_exact_prefix_through(segment);
         self.complete_exact_seek_if_ready();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_platform::CancelToken;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::variant::{
+        VariantParts,
+        tests::{make_placeholder_init, make_placeholder_seg, test_ctx},
+    };
+
+    #[kithara::test(tokio)]
+    #[case::init(SizeDemand::Init, PlannedFetch::Init)]
+    #[case::media(SizeDemand::Segment(2), PlannedFetch::Segment(2))]
+    async fn a_size_request_resolved_before_enqueue_never_fetches_the_body(
+        #[case] demand: SizeDemand,
+        #[case] body: PlannedFetch,
+    ) {
+        let ctx = test_ctx(4);
+        let variant = VariantParts {
+            init: Some(make_placeholder_init(64, &ctx.scope)),
+            segments: (0..3)
+                .map(|index| make_placeholder_seg(index, 256, &ctx.scope))
+                .collect(),
+            codec: None,
+            container: None,
+        }
+        .into_variant(0, &ctx);
+
+        assert!(variant.size_probe_allowed(demand));
+        assert!(variant.apply_resolved_size(demand, 100));
+        assert!(!variant.size_probe_allowed(demand));
+        variant.request_exact_size(demand);
+
+        let mut commands = Vec::new();
+        let mut remaining = 4;
+        variant.dispatch_size_demands(&ctx, &mut commands, &mut remaining, &CancelToken::never());
+        assert!(commands.is_empty(), "the resolved size needs no probe");
+        assert!(
+            !variant.fetch_is_planned(body),
+            "a resolved metadata request must not become a body fetch"
+        );
     }
 }

@@ -8,7 +8,7 @@ mod baked;
 mod broadcast;
 pub mod catalog;
 pub mod config;
-pub mod crossfade;
+#[cfg(feature = "gui")]
 pub mod deck;
 pub mod document;
 #[cfg(feature = "gui")]
@@ -16,6 +16,7 @@ mod engine;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod logging;
 pub mod memory;
+#[cfg(feature = "gui")]
 pub mod mix;
 pub mod mock;
 pub mod plugins;

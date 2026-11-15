@@ -39,6 +39,14 @@ impl Lane {
         Ok(())
     }
 
+    fn deferred_ready(&self) -> bool {
+        self.state.ended
+            && self
+                .inbox
+                .frames_until_due(self.state.cursor)
+                .is_none_or(|frames| frames > 0)
+    }
+
     pub(crate) fn execute_due<T, S>(
         &mut self,
         source: &mut T,
@@ -53,11 +61,7 @@ impl Lane {
         let mut changed = LaneChange::None;
         let declick_frames = self.declick_frames(spec.sample_rate).get();
         loop {
-            let deferred = self.state.ended
-                && self
-                    .inbox
-                    .frames_until_due(self.state.cursor)
-                    .is_none_or(|frames| frames > 0);
+            let deferred = self.deferred_ready();
             let Some(due) = next_due(&mut self.inbox, &mut self.state, deferred)? else {
                 break;
             };
@@ -114,6 +118,37 @@ impl Lane {
             changed = LaneChange::Source;
         }
         Ok(changed)
+    }
+
+    /// Shows the renderer the speed law of the next timed batch of this segment
+    /// ahead of its frame, so that a live keylock engine can render through the
+    /// step the law opens with, and returns whether the renderer's law changed.
+    /// The batch stays in the inbox and applies whole on its frame; the
+    /// renderer decides whether the lead lets it take the step.
+    pub(crate) fn anticipate_speed<S: HasPool<f32>>(
+        &self,
+        warp: &mut WarpRenderer<S>,
+    ) -> Result<bool, TrackFailureKind> {
+        let cursor = self.state.cursor;
+        let Some(timed) = self.inbox.next_timed() else {
+            return Ok(false);
+        };
+        let at = timed.at();
+        let lead = at.frame.saturating_sub(cursor.frame);
+        let speed = timed
+            .commands()
+            .iter()
+            .rev()
+            .find_map(|command| match command {
+                LaneCommand::SetSpeed(curve) => Some(curve),
+                _ => None,
+            });
+        match speed {
+            Some(curve) if at.segment == cursor.segment && lead > 0 => warp
+                .anticipate_speed(curve, lead)
+                .map_err(|_| TrackFailureKind::Render),
+            _ => Ok(false),
+        }
     }
 }
 
@@ -177,8 +212,7 @@ impl LaneState {
                 LaneCommand::SetSpeed(curve) => warp
                     .set_speed(curve.clone(), revision)
                     .map_err(|_| TrackFailureKind::Render)?,
-                LaneCommand::SetKeylock(on) => warp.set_keylock(*on),
-                LaneCommand::SetBackend(kind) => warp.set_backend(*kind),
+                LaneCommand::SetPitch(pitch) => warp.set_pitch(*pitch),
                 LaneCommand::Jump { to } => {
                     let gain = self.jump.map_or(1.0, |jump| jump.gain(self.cursor.frame));
                     self.jump = Some(Jump::Down {

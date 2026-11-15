@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use kithara_assets::{AssetReader, AssetWriter, RawWriteHandle, ReadSide, WriteSide};
+use kithara_assets::{AssetWriter, RawWriteHandle, ReadSide, WriteSide};
 use kithara_bufpool::HasPool;
 use kithara_download::{OnCompleteFn, WriterFn};
 use kithara_events::EventBus;
@@ -148,16 +148,6 @@ where
         }
     }
 
-    /// `Downloading -> Loaded` on a commit another writer made while this
-    /// fetch ended without one: the bytes are there, at whatever length that
-    /// commit reported.
-    fn into_committed(self, final_len: Option<u64>) -> FetchClaim<Loaded, S> {
-        match final_len {
-            Some(n) => self.into_loaded(n),
-            None => self.into_loaded_no_apply(),
-        }
-    }
-
     /// `Downloading -> Missing` recovery (recoverable failure / cancel
     /// before commit). The slot returns to the dispatch pool.
     pub(crate) fn into_missing(mut self) -> FetchClaim<Missing, S> {
@@ -289,9 +279,6 @@ pub(crate) struct FetchSlot<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    /// Read view of the writer's generation — used to observe a
-    /// committed-by-race status before deciding the terminal transition.
-    pub(crate) reader: AssetReader<S>,
     /// Sole commit owner (non-`Clone`); consumed in `settle`.
     pub(crate) writer: AssetWriter<S>,
     pub(crate) cancel: CancelToken,
@@ -340,82 +327,63 @@ where
     }
 
     /// A cancelled fetch still owns its slot, since eviction never takes one from its claim, so it
-    /// settles it: a commit another writer made meanwhile is adopted. Otherwise the work returns
-    /// to the plan unstamped, since stamping would fail the next writer's first `write_at`.
+    /// settles it. The work returns to the plan unstamped, since stamping would fail the next
+    /// writer's first `write_at`.
     fn settle_cancelled(self, bytes_written: u64) {
         let Self {
             handle,
             writer,
-            reader,
             signal,
             ..
         } = self;
-        let status = reader.status();
-        let committed = matches!(status, ResourceStatus::Committed { .. });
         debug!(
             target: "kithara_hls::settle",
             planned = ?handle.planned(),
             bytes_written,
-            committed,
             "stale (cancelled)"
         );
-        if let ResourceStatus::Committed { final_len } = status {
-            drop(writer);
-            handle.into_committed(final_len);
-        } else {
-            let planned = handle.planned();
-            let plan_revision = handle.plan_revision();
-            let variant = handle.variant();
-            writer.abandon();
-            handle.into_missing();
-            if let Some(variant) = variant
-                && variant.requeue_planned(planned, plan_revision)
-            {
-                signal.wake_peer();
-            }
+        let planned = handle.planned();
+        let plan_revision = handle.plan_revision();
+        let variant = handle.variant();
+        writer.abandon();
+        handle.into_missing();
+        if let Some(variant) = variant
+            && variant.requeue_planned(planned, plan_revision)
+        {
+            signal.wake_peer();
         }
     }
 
-    /// An uncommitted writer is dropped (race-safe cleanup) and the on-disk length adopted if a
-    /// newer epoch already committed. Otherwise the segment is requeued onto the plan so a peer
-    /// refetches it.
+    /// The segment is requeued onto the plan so a peer refetches it, unless the error is terminal.
     fn settle_failure(self, e: &NetError) {
         let Self {
             handle,
             writer,
-            reader,
             bus,
             signal,
             ..
         } = self;
-        let status = reader.status();
-        let committed = matches!(status, ResourceStatus::Committed { .. });
-        debug!(target: "kithara_hls::settle", err = %e, committed, "fail-path");
-        if let ResourceStatus::Committed { final_len } = status {
-            drop(writer);
-            handle.into_committed(final_len);
+        debug!(target: "kithara_hls::settle", err = %e, "fail-path");
+        writer.fail(e.to_string());
+        if is_terminal_fetch_error(e) {
+            error!(
+                target: "kithara_hls::settle",
+                err = %e,
+                "terminal fetch failure — slot parked Failed, will not re-dispatch"
+            );
+            bus.publish(HlsEvent::Error {
+                error: HlsFailure::Other("segment fetch failed".to_string()),
+            });
+            handle.into_failed();
         } else {
-            writer.fail(e.to_string());
-            if is_terminal_fetch_error(e) {
-                error!(
-                    target: "kithara_hls::settle",
-                    err = %e,
-                    "terminal fetch failure — slot parked Failed, will not re-dispatch"
-                );
-                bus.publish(HlsEvent::Error {
-                    error: HlsFailure::Other("segment fetch failed".to_string()),
-                });
-                handle.into_failed();
-            } else {
-                let planned = handle.planned();
-                let plan_revision = handle.plan_revision();
-                let variant = handle.variant();
-                handle.into_missing();
-                if let Some(variant) = variant {
-                    let _ = variant.requeue_planned(planned, plan_revision);
-                }
-                signal.wake_peer();
+            let planned = handle.planned();
+            let plan_revision = handle.plan_revision();
+            let variant = handle.variant();
+            handle.into_missing();
+            if let Some(variant) = variant {
+                let _ = variant.requeue_planned(planned, plan_revision);
             }
+            signal.wake_peer();
         }
     }
 

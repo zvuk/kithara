@@ -9,6 +9,8 @@ use kithara_assets::{
 use kithara_platform::{thread, time::Duration};
 use kithara_test_utils::{bufpool::pools, kithara, temp_dir};
 
+#[cfg(not(target_arch = "wasm32"))]
+use super::support::{LiteralLayout, source};
 use super::support::{asset_scope, pending, read_bytes, resource};
 
 fn read_pins_file(root: &Path) -> Option<Vec<String>> {
@@ -368,9 +370,16 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTem
 
     let asset_roots = ["asset-alpha", "asset-beta", "asset-gamma"];
     let payloads: [&[u8]; 3] = [b"alpha data", b"beta data", b"gamma data"];
+    let store = asset_scope(&temp_dir, asset_roots[0]).store().clone();
 
     for (i, asset_root) in asset_roots.iter().enumerate() {
-        let scope = asset_scope(&temp_dir, asset_root);
+        let scope = store
+            .scope::<LiteralLayout>(&source(asset_root))
+            .expect("scope");
+        assert!(
+            scope.store().is_same(&store),
+            "one store owns the fixture's disk root"
+        );
         let key = scope.key(&resource("data.bin")).unwrap();
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         writer.write_at(0, payloads[i]).unwrap();
@@ -387,7 +396,9 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTem
     }
 
     {
-        let scope = asset_scope(&temp_dir, "asset-beta");
+        let scope = store
+            .scope::<LiteralLayout>(&source("asset-beta"))
+            .expect("scope");
         scope.delete_asset().unwrap();
     }
 
@@ -401,7 +412,9 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTem
         "asset-alpha directory should still exist"
     );
     {
-        let scope = asset_scope(&temp_dir, "asset-alpha");
+        let scope = store
+            .scope::<LiteralLayout>(&source("asset-alpha"))
+            .expect("scope");
         let key = scope.key(&resource("data.bin")).unwrap();
         let res = scope.store().open_resource(&key, None).unwrap();
         let mut buf = pools().get::<u8>();
@@ -414,7 +427,9 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTem
         "asset-gamma directory should still exist"
     );
     {
-        let scope = asset_scope(&temp_dir, "asset-gamma");
+        let scope = store
+            .scope::<LiteralLayout>(&source("asset-gamma"))
+            .expect("scope");
         let key = scope.key(&resource("data.bin")).unwrap();
         let res = scope.store().open_resource(&key, None).unwrap();
         let mut buf = pools().get::<u8>();
@@ -434,9 +449,16 @@ fn delete_assets_sequentially(temp_dir: kithara_test_utils::TestTempDir) {
     let root_path = temp_dir.path();
 
     let asset_roots = ["seq-asset-1", "seq-asset-2", "seq-asset-3", "seq-asset-4"];
+    let store = asset_scope(&temp_dir, asset_roots[0]).store().clone();
 
     for (i, asset_root) in asset_roots.iter().enumerate() {
-        let scope = asset_scope(&temp_dir, asset_root);
+        let scope = store
+            .scope::<LiteralLayout>(&source(asset_root))
+            .expect("scope");
+        assert!(
+            scope.store().is_same(&store),
+            "one store owns the fixture's disk root"
+        );
         let key = scope.key(&resource(format!("file{}.bin", i))).unwrap();
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         let content = format!("content {}", i).into_bytes();
@@ -454,7 +476,9 @@ fn delete_assets_sequentially(temp_dir: kithara_test_utils::TestTempDir) {
 
     for (delete_idx, asset_to_delete) in asset_roots.iter().enumerate() {
         {
-            let scope = asset_scope(&temp_dir, asset_to_delete);
+            let scope = store
+                .scope::<LiteralLayout>(&source(asset_to_delete))
+                .expect("scope");
             scope.delete_asset().unwrap();
         }
 
@@ -489,9 +513,12 @@ fn delete_assets_sequentially(temp_dir: kithara_test_utils::TestTempDir) {
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_test_utils::TestTempDir) {
     let root_path = temp_dir.path();
+    let store = asset_scope(&temp_dir, "existing-asset").store().clone();
 
     {
-        let scope = asset_scope(&temp_dir, "existing-asset");
+        let scope = store
+            .scope::<LiteralLayout>(&source("existing-asset"))
+            .expect("scope");
         let key = scope.key(&resource("data.bin")).unwrap();
         let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
         let data: &[u8] = b"existing data";
@@ -500,7 +527,9 @@ fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_test_utils::TestTemp
     }
 
     {
-        let scope = asset_scope(&temp_dir, "nonexistent-asset");
+        let scope = store
+            .scope::<LiteralLayout>(&source("nonexistent-asset"))
+            .expect("scope");
         let result = scope.delete_asset();
         assert!(result.is_ok(), "deleting non-existent asset should succeed");
     }
@@ -510,7 +539,9 @@ fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_test_utils::TestTemp
         "existing-asset should still exist"
     );
     {
-        let scope = asset_scope(&temp_dir, "existing-asset");
+        let scope = store
+            .scope::<LiteralLayout>(&source("existing-asset"))
+            .expect("scope");
         let key = scope.key(&resource("data.bin")).unwrap();
         let res = scope.store().open_resource(&key, None).unwrap();
         let mut buf = pools().get::<u8>();

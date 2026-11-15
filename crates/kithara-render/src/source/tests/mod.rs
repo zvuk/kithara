@@ -3,14 +3,19 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
-use kithara_audio::{
-    AudioReadError, AudioSource, Fetch, SeekOutcome, SourceDiscontinuity, SourceEnd,
-    TrackFailureKind, TrackStep,
-};
 #[cfg(feature = "stretch-identity")]
+use kithara_audio::SourceEnd;
+use kithara_audio::{
+    AudioReadError, AudioSource, Fetch, SeekOutcome, SourceDiscontinuity, TrackFailureKind,
+    TrackStep,
+};
+#[cfg(any(
+    feature = "stretch-identity",
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee"
+))]
 use kithara_command::Batch;
 use kithara_command::{ChannelConfig, Outcome, Rejection, When, channel};
-use kithara_effects::{AudioEffect, EffectDrain, held_source_frames};
 use kithara_platform::{
     sync::{
         Arc, Mutex,

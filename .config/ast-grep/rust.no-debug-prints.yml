@@ -1,7 +1,6 @@
 id: rust.no-debug-prints
 message: |
-  `dbg!` / `println!` / `eprintln!` left in production code. Per AGENTS.md:
-  "Use `tracing`, not `println!` or `dbg!`, in production code". Replace
+  `dbg!` / `println!` / `eprintln!` left in production code. Replace
   with the appropriate `tracing::{trace,debug,info,warn,error}!` call.
 
   Tests, examples, and `xtask` build tooling can keep `println!` /
@@ -11,7 +10,7 @@ message: |
 severity: warning
 language: Rust
 files:
-  - crates/**/src/**/*.rs
+  - "crates/**/src/**/*.rs"
 ignores:
   - "**/tests/**"
   - "**/test_*.rs"

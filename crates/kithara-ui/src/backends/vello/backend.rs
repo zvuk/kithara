@@ -65,6 +65,19 @@ fn image_data(image: &Image) -> Option<ImageData> {
     })
 }
 
+/// The same transform in the coefficients Vello and Masonry spell it with.
+#[must_use]
+pub(crate) fn affine(transform: Transform) -> Affine {
+    Affine::new([
+        f64::from(transform.xx),
+        f64::from(transform.yx),
+        f64::from(transform.xy),
+        f64::from(transform.yy),
+        f64::from(transform.dx),
+        f64::from(transform.dy),
+    ])
+}
+
 /// Where the picture lands: scaled from its natural size to the box, then
 /// turned about that box's centre.
 pub(in crate::backends) fn placed(image: &Image, rect: Rect, turn: f32) -> Affine {
@@ -237,14 +250,7 @@ impl Backend for VelloBackend<'_> {
             });
             self.scene
                 .draw_glyphs(data.as_ref())
-                .transform(Affine::new([
-                    f64::from(transform.xx),
-                    f64::from(transform.yx),
-                    f64::from(transform.xy),
-                    f64::from(transform.yy),
-                    f64::from(transform.dx),
-                    f64::from(transform.dy),
-                ]))
+                .transform(affine(transform))
                 .font_size(run.size())
                 .normalized_coords(segment.normalized_coords())
                 .brush(paint_color(color))

@@ -10,8 +10,8 @@ pub use kithara_signal::Bound;
 use kithara_signal::SessionFrame;
 
 use crate::{
-    DeckEqChange, DeckMixSettings, DeckMixSettingsChange, DeckPass, InterruptionKind, PlayError,
-    ResourceLoad, SessionEvent,
+    DeckEqChange, DeckFxChange, DeckMixSettings, DeckMixSettingsChange, DeckPass, InterruptionKind,
+    PlayError, ResourceLoad, SessionEvent,
 };
 
 /// One loaded track or a deck built of them: it changes its own state on the
@@ -137,7 +137,9 @@ impl<'a, S> Outbox<'a, S> {
         self.session = Some((suspended_at, bus, blocks));
         self
     }
+}
 
+impl<'a, S> Outbox<'a, S> {
     pub fn mix(
         &mut self,
         at: When<SessionFrame>,
@@ -149,7 +151,7 @@ impl<'a, S> Outbox<'a, S> {
         })?;
         mix.send(&mut *self.deck, at, change, DeckPart::Mix)
             .map_err(|error| match error {
-                LiveError::Invalid(error) => PlayError::from(error),
+                LiveError::Invalid(never) => match never {},
                 LiveError::Send(SendError::Full(_)) => PlayError::Full("deck"),
                 LiveError::Send(SendError::Closed(_)) => PlayError::Closed,
                 LiveError::Send(SendError::Target(_)) => {
@@ -158,8 +160,69 @@ impl<'a, S> Outbox<'a, S> {
             })
     }
 
+    /// Sends `changes` of the deck's FX units to apply at `at`, whole or not at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlayError::Late`] for a frame already rendered and
+    /// [`PlayError::Full`] when the deck has no room.
+    pub fn fx(
+        &mut self,
+        at: When<SessionFrame>,
+        changes: Vec<DeckFxChange>,
+    ) -> Result<Option<Seq>, PlayError> {
+        self.deck(at, changes.into_iter().map(DeckPart::Fx).collect())
+    }
+
     pub fn eq(&mut self, parts: Vec<DeckEqChange>) -> Result<Option<Seq>, PlayError> {
         self.deck(When::Next, parts.into_iter().map(DeckPart::Eq).collect())
+    }
+
+    /// Submit a filter knob program against the observed output stream and knob authority.
+    /// # Errors
+    /// Refuses unavailable output state, insufficient delivery lead or command capacity.
+    pub fn filter_program(
+        &mut self,
+        program: crate::FilterProgram,
+    ) -> Result<Option<Seq>, PlayError> {
+        let pass = self.pass.ok_or(PlayError::NotReady)?;
+        let binding = pass.deck.filter.binding().ok_or(PlayError::NotReady)?;
+        let authority = pass.deck.filter.authority();
+        self.deck(
+            When::At(program.start()),
+            vec![DeckPart::FilterProgram {
+                binding,
+                authority,
+                program,
+            }],
+        )
+    }
+
+    /// Send an EQ trajectory on the layout and authority last observed by this pass.
+    /// # Errors
+    /// Refuses an unavailable band/layout/clock or insufficient command delivery lead.
+    pub fn eq_gain_program(
+        &mut self,
+        program: crate::EqGainProgram,
+    ) -> Result<Option<Seq>, PlayError> {
+        let pass = self.pass.ok_or(PlayError::NotReady)?;
+        let band = program.band();
+        if band >= pass.deck.eq.bands() {
+            return Err(PlayError::EqBandOutOfRange {
+                band,
+                bands: pass.deck.eq.bands(),
+            });
+        }
+        let binding = pass.deck.eq.binding().ok_or(PlayError::NotReady)?;
+        let authority = pass.deck.eq.authority(band);
+        self.deck(
+            When::At(program.start()),
+            vec![DeckPart::EqProgram {
+                binding,
+                authority,
+                program,
+            }],
+        )
     }
 
     pub fn eq_layout(
@@ -175,7 +238,9 @@ impl<'a, S> Outbox<'a, S> {
         let layout = kithara_effects::eq::EqLayout::new(&config, bands, rate)?;
         self.eq(vec![DeckEqChange::Layout(Box::new(layout))])
     }
+}
 
+impl<'a, S> Outbox<'a, S> {
     pub fn notify_interruption(&mut self, kind: InterruptionKind) -> Result<bool, PlayError> {
         let (suspended_at, bus, blocks) = self.session.as_mut().ok_or(PlayError::NotReady)?;
         if matches!(kind, InterruptionKind::Began) {
@@ -213,7 +278,7 @@ impl<'a, S> Outbox<'a, S> {
     fn check_when(&self, at: When<SessionFrame>) -> Result<(), PlayError> {
         if let When::At(frame) = at {
             let pass = self.pass.ok_or(PlayError::Untimed)?;
-            if frame < pass.earliest() {
+            if frame < pass.deck_earliest() {
                 return Err(PlayError::Late);
             }
         }
@@ -445,7 +510,14 @@ pub(crate) fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
         | DeckPart::Adopt { slot, .. }
         | DeckPart::Replace { slot, .. } => (Some(slot), None),
         DeckPart::Chain { from, to } => (Some(from), Some(to)),
-        DeckPart::Mix(_) | DeckPart::Eq(_) | DeckPart::Returned(_) => (None, None),
+        DeckPart::Clock { .. }
+        | DeckPart::Mix(_)
+        | DeckPart::Eq(_)
+        | DeckPart::Fx(_)
+        | DeckPart::FilterProgram { .. }
+        | DeckPart::EqProgram { .. }
+        | DeckPart::GainProgram { .. }
+        | DeckPart::Returned(_) => (None, None),
     };
     first.into_iter().chain(second)
 }
@@ -488,6 +560,23 @@ pub enum Settled {
     },
 }
 
+/// The batch that answers a seek, named on the channel it went out on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeekBatch {
+    Deck(Seq),
+    Lane(Seq),
+}
+
+impl SeekBatch {
+    /// The number the batch took on its channel.
+    #[must_use]
+    pub const fn seq(self) -> Seq {
+        match self {
+            Self::Deck(seq) | Self::Lane(seq) => seq,
+        }
+    }
+}
+
 /// What comes back to a player: a receipt of its deck's mixer, shared by every
 /// player whose slot the batch names; a receipt of the dispatcher; or an event
 /// of its slot. Its own lane's receipts it reads itself.
@@ -507,7 +596,8 @@ impl<S> TrackReceipt<'_, S> {
     #[must_use]
     pub fn names(&self, slot: Slot) -> bool {
         match self {
-            Self::Deck { batch, .. } => batch.basis.iter().any(|&(named, _)| named == slot),
+            Self::Deck { batch, .. } => batch.basis.iter().any(|&(named, _)| named == slot)
+                || batch.commands.iter().any(|part| matches!(part, DeckPart::GainProgram { slot: named, .. } if *named == slot)),
             Self::Event(
                 DeckEvent::Ended { slot: named, .. }
                 | DeckEvent::Failed { slot: named, .. }

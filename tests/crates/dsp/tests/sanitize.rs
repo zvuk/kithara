@@ -4,7 +4,7 @@ const BLOCK: u32 = 1 << 16;
 const BLOCK_LEN: usize = 1 << 16;
 const BLOCKS: u32 = 1 << 16;
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 #[case(0)]
 #[case(1)]
 #[case(2)]
@@ -27,16 +27,31 @@ fn platform_sanitize_matches_signal_on_every_bit_pattern(#[case] first: u32) {
 
 fn check_blocks(first: u32) {
     let mut samples = vec![0.0_f32; BLOCK_LEN];
+    let mut expected = vec![0_u32; BLOCK_LEN];
     for block in (first..BLOCKS).step_by(16) {
         let base = block << 16;
-        let patterns = base..=base | (BLOCK - 1);
-        for (sample, bits) in samples.iter_mut().zip(patterns.clone()) {
+        let patterns = (0..BLOCK).map(|offset| base | offset);
+        for ((sample, expected), bits) in
+            samples.iter_mut().zip(&mut expected).zip(patterns.clone())
+        {
             *sample = f32::from_bits(bits);
+            *expected = sanitize_sample(*sample).to_bits();
         }
         kithara::dsp::sanitize(&mut samples);
-        for (sample, bits) in samples.iter().zip(patterns) {
-            let expected = sanitize_sample(f32::from_bits(bits));
-            assert_eq!(sample.to_bits(), expected.to_bits(), "pattern {bits:#010x}");
+        let diff = samples
+            .iter()
+            .zip(&expected)
+            .fold(0, |diff, (sample, expected)| {
+                diff | (sample.to_bits() ^ expected)
+            });
+        if diff != 0 {
+            let (bits, sample, expected) = patterns
+                .zip(&samples)
+                .zip(&expected)
+                .map(|((bits, sample), expected)| (bits, sample.to_bits(), *expected))
+                .find(|(_, sample, expected)| sample != expected)
+                .expect("a nonzero difference has a mismatching sample");
+            panic!("pattern {bits:#010x}: sanitized {sample:#010x}, expected {expected:#010x}");
         }
     }
 }

@@ -8,6 +8,7 @@ use kithara_ui::{
     compile::{CompiledUi, compile},
     draw::Pt,
     error::UiDocError,
+    interact::Key,
     mock::MapEndpoints,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{ReadValue, Reads, Scope, Skin, UiEvent, WriteValue},
@@ -38,6 +39,7 @@ fn endpoints() -> MapEndpoints {
             "fixture.rate",
             ValueKind::Scalar,
         ),
+        (EndpointCategory::Model, "fixture.rate", ValueKind::Text),
         (EndpointCategory::Model, "fixture.mode", ValueKind::Scalar),
         (
             EndpointCategory::Parameter,
@@ -75,8 +77,14 @@ fn deck(play: &str) -> MemResolver {
                         read: Model(id: "fixture.mode", with: {{ "deck": "$deck" }}),
                         write: Parameter(id: "fixture.mode", with: {{ "deck": "$deck" }})),
                     Row(id: "tempo", size: (w: Fixed(80.0), h: Fill),
-                        write: Parameter(id: "fixture.rate", with: {{ "deck": "$deck" }}), children: [
+                        write: Parameter(id: "fixture.rate", with: {{ "deck": "$deck" }}),
+                        reset: Command(id: "fixture.play", with: {{ "deck": "$deck" }}), children: [
                         Text(id: "tempo-label", style: MicroLabel, label: "TEMPO"),
+                    ]),
+                    Row(id: "typed", size: (w: Fixed(80.0), h: Fill),
+                        write: Parameter(id: "fixture.rate", with: {{ "deck": "$deck" }}),
+                        entry: Model(id: "fixture.rate", with: {{ "deck": "$deck" }}), children: [
+                        Text(id: "typed-label", style: MicroLabel, label: "TEMPO"),
                     ]),
                 ]))"#
         ),
@@ -92,6 +100,7 @@ impl Reads for Deck {
         match id {
             "fixture.gain" => Some(ReadValue::Scalar(0.5)),
             "fixture.mode" => Some(ReadValue::Scalar(0.0)),
+            "fixture.rate" => Some(ReadValue::Text("124.00")),
             _ => None,
         }
     }
@@ -195,6 +204,74 @@ fn a_stepper_delivers_its_steps() {
 }
 
 #[kithara::test]
+fn a_declared_surface_writes_the_number_its_field_holds_on_enter() {
+    let typed = delivered("play", |scenario| {
+        scenario.double_click("deck-b/typed-label");
+        scenario.type_text("128.5");
+        scenario.key(Key::Enter);
+    });
+    let held = delivered("play", |scenario| {
+        scenario.double_click("deck-b/typed-label");
+        scenario.key(Key::Enter);
+    });
+
+    assert_eq!(
+        typed,
+        write("fixture.rate@deck=b", WriteValue::Scalar(128.5))
+    );
+    assert_eq!(
+        held,
+        write("fixture.rate@deck=b", WriteValue::Scalar(124.0))
+    );
+}
+
+#[kithara::test]
+fn a_declared_surface_writes_nothing_until_a_number_is_entered() {
+    let refused_then_escaped = delivered("play", |scenario| {
+        scenario.double_click("deck-b/typed-label");
+        scenario.type_text("fast");
+        scenario.key(Key::Enter);
+        scenario.key(Key::Escape);
+        scenario.key(Key::Enter);
+    });
+    let refused_then_corrected = delivered("play", |scenario| {
+        scenario.double_click("deck-b/typed-label");
+        scenario.type_text("fast");
+        scenario.key(Key::Enter);
+        for _ in "fast".chars() {
+            scenario.key(Key::Backspace);
+        }
+        scenario.type_text("90");
+        scenario.key(Key::Enter);
+    });
+    let unfocused = delivered("play", |scenario| {
+        scenario.double_click("deck-b/typed-label");
+        scenario.click("deck-b/gain");
+        scenario.type_text("128");
+        scenario.key(Key::Enter);
+    });
+
+    assert_eq!(refused_then_escaped, None);
+    assert_eq!(unfocused, None);
+    assert_eq!(
+        refused_then_corrected,
+        write("fixture.rate@deck=b", WriteValue::Scalar(90.0)),
+        "a refused input leaves the field open"
+    );
+}
+
+#[kithara::test]
+fn an_undeclared_surface_still_activates_on_a_double_click() {
+    let host = delivered("play", |scenario| {
+        scenario.double_click("deck-b/tempo-label");
+        scenario.type_text("128");
+        scenario.key(Key::Enter);
+    });
+
+    assert_eq!(host, write("fixture.play@deck=b", WriteValue::Trigger));
+}
+
+#[kithara::test]
 fn a_selection_delivers_the_index_it_picked() {
     let host = delivered("play", |scenario| scenario.click("deck-b/mode"));
 
@@ -234,6 +311,28 @@ fn a_view_flag_press_turns_the_flag_and_delivers_nothing_to_the_host() {
 
     assert!(scenario.view().flag("deck-b/panel"));
     assert_eq!(scenario.published(), []);
+}
+
+#[kithara::test]
+fn an_entry_on_a_surface_that_writes_nothing_fails_to_compile() {
+    let endpoints = endpoints();
+    let mut resolver = deck("play");
+    resolver.insert(
+        "deck.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "gallery-knobs", chrome: Plain,
+            parameters: ["deck"],
+            root: Row(id: "typed", size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0,
+                entry: Model(id: "fixture.rate", with: { "deck": "$deck" }), children: []))"#,
+    );
+
+    let Err(error) = compiled(&resolver, &endpoints) else {
+        panic!("a field with nowhere to write cannot stand")
+    };
+
+    assert!(
+        matches!(error, UiDocError::UnwritableEntry { .. }),
+        "the refusal must name the entry, got {error}"
+    );
 }
 
 #[kithara::test]

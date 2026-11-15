@@ -2,7 +2,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use crate::{sccache, verdict::ChildFailure};
+use crate::{Ctx, sccache, verdict::ChildFailure};
 
 /// Run the workspace Clippy gate with the caching that suits where it runs.
 ///
@@ -15,23 +15,18 @@ use crate::{sccache, verdict::ChildFailure};
 /// compile only under their own targets, and the lint policy holds them to the
 /// same standard.
 ///
-/// On macOS the gate also lints the Apple product features.
+/// Native product features come from the selected project's configuration.
 ///
 /// # Errors
 ///
 /// Returns an error when Clippy cannot be started, or the child's own exit code
 /// when it reports a lint.
-pub(crate) fn run() -> Result<()> {
-    /// The Apple product build: the `NSURLSession` transport and the fused
-    /// decoder. No workspace member enables either by default, so a plain
-    /// workspace lint leaves both configured out even on the only host that can
-    /// compile them.
-    const APPLE_FEATURES: &str = "kithara-ffi/apple";
-
-    let mut cmd = Command::new("cargo");
+pub(crate) fn run(ctx: &Ctx) -> Result<()> {
+    let mut cmd = Command::new(ctx.config.tools.program("cargo"));
+    cmd.current_dir(&ctx.root);
     cmd.args(["clippy", "--workspace", "--all-targets"]);
-    if cfg!(target_os = "macos") {
-        cmd.args(["--features", APPLE_FEATURES]);
+    if cfg!(target_os = "macos") && !ctx.config.clippy.macos_features.is_empty() {
+        cmd.args(["--features", &ctx.config.clippy.macos_features.join(",")]);
     }
     cmd.args(["--", "-D", "warnings"]);
     for name in sccache::clippy_cleared() {

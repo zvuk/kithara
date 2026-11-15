@@ -52,13 +52,17 @@ fn response_json(request: RequestBuilder, method: &Method, url: &Url) -> Result<
         .send()
         .with_context(|| format!("{method} {url} failed"))?;
     let status = response.status();
+    if !status.is_success() {
+        let request_id = response.headers().get("x-github-request-id");
+        let server = response.headers().get("server");
+        let date = response.headers().get("date");
+        bail!(
+            "{method} {url} failed with HTTP {status} (request_id={request_id:?}, server={server:?}, date={date:?})"
+        );
+    }
     let body = response
         .text()
         .with_context(|| format!("reading {method} {url} response"))?;
-    if !status.is_success() {
-        let detail = body.chars().take(4_096).collect::<String>();
-        bail!("{method} {url} failed with HTTP {status}: {detail}");
-    }
     if body.trim().is_empty() {
         Ok(Value::Null)
     } else {
@@ -73,12 +77,29 @@ pub(super) fn paginated(
     const PAGE_SIZE: usize = 100;
     let mut result = Vec::new();
     let mut page = 1;
+    let mut total = None;
     loop {
         let response = fetch(page)?;
+        match (total, response.get("total_count")) {
+            (expected, Some(count)) => {
+                let count = count
+                    .as_u64()
+                    .context("API total_count was not a nonnegative integer")?;
+                if expected.is_some_and(|expected| expected != count) {
+                    bail!("API total_count changed while reading pages");
+                }
+                total = Some(count);
+            }
+            (Some(_), None) => bail!("API page omitted its previous total_count"),
+            (None, None) => {}
+        }
         let values = field.map_or(&response, |field| &response[field]);
         let values = values.as_array().context("API page was not an array")?;
         result.extend(values.iter().cloned());
         if values.len() < PAGE_SIZE {
+            if total.is_some_and(|total| total != result.len() as u64) {
+                bail!("API pages did not contain their declared total_count");
+            }
             return Ok(result);
         }
         page += 1;
@@ -92,8 +113,106 @@ mod tests {
     use super::*;
 
     #[test]
+    fn http_failure_keeps_headers_when_the_body_is_incomplete() {
+        use std::io::{BufRead as _, Write as _};
+
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = Url::parse(&format!("http://{}/jobs", server.local_addr().unwrap())).unwrap();
+        let responder = std::thread::spawn(move || {
+            let (stream, _) = server.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = std::io::BufReader::new(stream);
+            let mut line = String::new();
+            while request.read_line(&mut line).unwrap() > 0 {
+                if line == "\r\n" {
+                    break;
+                }
+                line.clear();
+            }
+            request
+                .get_mut()
+                .write_all(
+                    b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 1024\r\nX-GitHub-Request-Id: incomplete-body\r\nServer: test-gateway\r\nDate: Thu, 05 Nov 2026 13:21:54 GMT\r\nConnection: close\r\n\r\nshort",
+                )
+                .unwrap();
+        });
+        let client = Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let error = response_json(client.get(url.clone()), &Method::GET, &url)
+            .unwrap_err()
+            .to_string();
+        responder.join().unwrap();
+        for expected in [
+            "HTTP 502",
+            "incomplete-body",
+            "test-gateway",
+            "Thu, 05 Nov 2026 13:21:54 GMT",
+        ] {
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn http_failure_retains_origin_headers_without_dumping_credentials() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url = Url::parse(&format!("http://{}/jobs", server.server_addr())).unwrap();
+        let responder = std::thread::spawn(move || {
+            let request = server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+            let mut response =
+                tiny_http::Response::from_string("{\"message\":\"private-error-body\"}")
+                    .with_status_code(502);
+            for (name, value) in [
+                ("X-GitHub-Request-Id", "test-request-id"),
+                ("Server", "test-gateway"),
+                ("Date", "Thu, 05 Nov 2026 13:21:54 GMT"),
+                ("Set-Cookie", "private-response-cookie"),
+                ("Authorization", "private-response-token"),
+            ] {
+                response.add_header(tiny_http::Header::from_bytes(name, value).unwrap());
+            }
+            request.respond(response).unwrap();
+        });
+        let client = Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let error = response_json(
+            client.get(url.clone()).bearer_auth("private-request-token"),
+            &Method::GET,
+            &url,
+        )
+        .unwrap_err()
+        .to_string();
+        responder.join().unwrap();
+        for expected in [
+            "HTTP 502",
+            "test-request-id",
+            "test-gateway",
+            "Thu, 05 Nov 2026 13:21:54 GMT",
+        ] {
+            assert!(error.contains(expected), "{error}");
+        }
+        assert!(!error.contains("private-"), "{error}");
+    }
+
+    #[test]
     fn all_pages_are_collected_for_jobs_bridges_runs_and_commit_statuses() {
-        for field in [None, Some("jobs"), Some("workflow_runs"), Some("statuses")] {
+        for field in [
+            None,
+            Some("jobs"),
+            Some("workflow_runs"),
+            Some("statuses"),
+            Some("check_runs"),
+        ] {
             let mut requested = Vec::new();
             let values = paginated(
                 |page| {
@@ -102,7 +221,10 @@ mod tests {
                     let entries = (0..count)
                         .map(|index| json!({"id": (page - 1) * 100 + index}))
                         .collect::<Vec<_>>();
-                    Ok(field.map_or_else(|| json!(entries), |field| json!({(field): entries})))
+                    Ok(field.map_or_else(
+                        || json!(entries),
+                        |field| json!({(field): entries, "total_count": 201}),
+                    ))
                 },
                 field,
             )
@@ -126,5 +248,35 @@ mod tests {
             None,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn declared_counts_reject_truncation_and_inconsistent_pages() {
+        for second in [
+            json!({"check_runs": [], "total_count": 101}),
+            json!({"check_runs": [{"id": 100}], "total_count": 102}),
+            json!({"check_runs": [{"id": 100}]}),
+        ] {
+            let result = paginated(
+                |page| {
+                    Ok(if page == 1 {
+                        json!({"check_runs": vec![Value::Null; 100], "total_count": 101})
+                    } else {
+                        second.clone()
+                    })
+                },
+                Some("check_runs"),
+            );
+            assert!(result.is_err());
+        }
+        for invalid in [json!(-1), json!("100"), Value::Null] {
+            assert!(
+                paginated(
+                    |_| Ok(json!({"check_runs": [], "total_count": invalid})),
+                    Some("check_runs")
+                )
+                .is_err()
+            );
+        }
     }
 }

@@ -181,6 +181,9 @@ impl RetainedComponent {
             }
             (Self::Item(component), Self::Item(next)) => Self::Item(component.reconcile(next)),
             (Self::Crossing(component), Self::Crossing(_)) => Self::Crossing(component),
+            (Self::Activation(component), Self::Activation(next)) => {
+                Self::Activation(component.reconcile(next))
+            }
             (_, next) => next,
         }
     }
@@ -196,6 +199,12 @@ impl RetainedComponent {
     pub(in crate::engine) fn set_scroll_viewport(&mut self, area: Rect) {
         if let Self::Scroll(component) = self {
             component.set_viewport(area);
+        }
+    }
+
+    pub(in crate::engine) fn select_all(&mut self) {
+        if let Self::TextInput(component) = self {
+            component.select_all();
         }
     }
 

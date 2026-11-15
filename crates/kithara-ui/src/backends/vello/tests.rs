@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+
+use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
 use vello::{
     Scene,
@@ -7,7 +10,7 @@ use vello::{
 use super::backend::*;
 use crate::{
     draw::{DrawCmd, DrawListBuilder, LineCap, LineJoin, Pen, Pt, Rect, Rgba, Transform, replay},
-    shaping::{FontPolicy, GlyphFace, GlyphRun, TextContext, TextResources},
+    shaping::{FontId, FontPolicy, GlyphFace, GlyphRun, TextContext, TextResources},
     skin::{ColorRole, FontFamily, FontWeight, TextCase, TextRoleSkin},
 };
 
@@ -125,6 +128,58 @@ fn missing_character_does_not_drop_any_positioned_glyphs() {
     let scene = text_scene("A\u{10ffff}B");
 
     assert_eq!(scene.encoding().resources.glyphs.len(), 3);
+}
+
+#[kithara::test]
+fn supplied_font_and_glyph_positions_survive_replay() {
+    let mut bytes = FontId::JetBrainsMonoRegular.bytes().to_vec();
+    bytes.extend_from_slice(b"caller-owned");
+    let run = {
+        let resources = TextResources::with_fonts(
+            FontPolicy::Embedded,
+            BTreeMap::from([(FontFamily::Sans, vec![Arc::from(bytes.clone())])]),
+        )
+        .unwrap();
+        TextContext::from(&resources).shape("\u{0426}\u{0430}\u{0440}\u{044c}", FIXTURE.role, None)
+    };
+    assert!(!run.segments().is_empty());
+    for segment in run.segments() {
+        let GlyphFace::System(font) = segment.face() else {
+            panic!("the caller's face must answer");
+        };
+        assert_eq!(font.data.as_ref(), bytes);
+        assert!(segment.glyphs().iter().all(|glyph| glyph.id != 0));
+    }
+    let mut builder = DrawListBuilder::default();
+    builder.text(
+        &run,
+        "do not reshape this",
+        Transform::IDENTITY,
+        FIXTURE.color,
+    );
+    let mut scene = Scene::new();
+    replay(&builder.finish(), &mut VelloBackend::new(&mut scene));
+
+    let encoded = &scene.encoding().resources;
+    assert!(!encoded.glyph_runs.is_empty());
+    assert!(
+        encoded
+            .glyph_runs
+            .iter()
+            .all(|glyph_run| glyph_run.font.data.as_ref() == bytes)
+    );
+    let positioned: Vec<_> = run
+        .segments()
+        .iter()
+        .flat_map(|segment| segment.glyphs())
+        .collect();
+    assert_eq!(encoded.glyphs.len(), positioned.len());
+    for (painted, shaped) in encoded.glyphs.iter().zip(positioned) {
+        assert_eq!(
+            (painted.id, painted.x, painted.y),
+            (shaped.id, shaped.x, shaped.y)
+        );
+    }
 }
 
 fn line_scene(width: f32) -> Scene {

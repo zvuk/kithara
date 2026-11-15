@@ -1,7 +1,12 @@
-use kithara::{effects::GainDb, queue::TrackId};
+use kithara::{
+    effects::GainDb,
+    host::{DeckId, api::Tempo},
+    play::PitchStep,
+    queue::TrackId,
+};
 use kithara_app_library::Playable;
 
-use crate::deck::{DeckId, EqMode, TempoPercent};
+use crate::deck::{EqMode, TempoPercent};
 
 #[derive(Debug)]
 pub(crate) struct Envelope {
@@ -19,7 +24,7 @@ pub(crate) enum Command {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum DeckCmd {
-    Play,
+    TogglePlay,
     Pause,
     Next,
     Prev,
@@ -32,6 +37,8 @@ pub(crate) enum DeckCmd {
     RemoveTrack(TrackId),
     SetTempo(TempoPercent),
     SetQuality(Option<usize>),
+    ToggleSync,
+    Pitch(PitchStep),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -43,11 +50,13 @@ pub(crate) enum MixCmd {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum AppCmd {
     SetEqMode(EqMode),
+    SetTempo(Tempo),
+    StepTempo(f32),
     BroadcastToggle,
     Shutdown,
 }
 
-#[cfg(all(test, not(feature = "broadcast")))]
+#[cfg(test)]
 mod tests {
     use std::convert::Infallible;
 

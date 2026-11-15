@@ -190,7 +190,7 @@ impl NodeControl for mount::label::text::host::Text<'_> {
             })
             .or_else(|| self.label.map(|label| host.ctx.ui.resolve(label)))
             .unwrap_or_default();
-        host.text_leaf(self, content, cx.declared)
+        host.text_leaf(self, content, cx.skin, cx.declared)
     }
 }
 
@@ -363,8 +363,9 @@ fn stage(
     size
 }
 
-/// Lays out the one branch the room reaches, and hands every other an empty
-/// box: a branch keeps its place from one frame to the next, standing or not.
+/// Lays out the one branch the room reaches and stashes every other: a branch
+/// the room does not reach takes neither a box nor a hand, even where it holds
+/// a control with the same path as one the standing branch holds.
 fn measured(
     plan: &Measured,
     ctx: &mut LayoutCtx<'_>,
@@ -378,19 +379,16 @@ fn measured(
         MeasureAxis::Height => inner.max().height,
     };
     let drawn = plan.branch(room).min(children.len().saturating_sub(1));
-    let none = Limits::new(Size::ZERO, Size::ZERO);
     let loose = inner.loose();
     let mut intrinsic = Size::ZERO;
     for (index, child) in children.iter_mut().enumerate() {
+        ctx.set_stashed(child, index != drawn);
         if index == drawn {
             Node::set_child_limits(ctx, child, loose);
             let size = ctx.run_layout(child, &box_constraints(loose));
             intrinsic = Size::new(size.width.as_(), size.height.as_());
-        } else {
-            Node::set_child_limits(ctx, child, none);
-            ctx.run_layout(child, &BoxConstraints::tight(MasonrySize::ZERO));
+            ctx.place_child(child, Point::ORIGIN);
         }
-        ctx.place_child(child, Point::ORIGIN);
     }
     limits.resolve(declared.width, declared.height, intrinsic)
 }

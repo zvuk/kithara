@@ -17,7 +17,7 @@ use super::{Item, ScopeId, ScopeReply};
 use super::{ScopedConfig, scoped_channel};
 #[cfg(panic = "unwind")]
 use crate::channel::sender::Sent;
-use crate::{Batch, Outcome, Protocol, Rejection, Seq, When};
+use crate::{Batch, Outcome, Port, Protocol, Rejection, Seq, When};
 
 #[kithara::hang_watchdog(timeout = watchdog_budget, ctx = String)]
 fn await_plain_answers(
@@ -56,7 +56,7 @@ fn await_plain_answers(
     assert_eq!(sender.receipts().count(), 0, "no duplicate answer");
 }
 
-#[kithara::test(native, tokio, browser)]
+#[kithara::test(miri, native, tokio, browser)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn sends_racing_inbox_drop_are_answered_exactly_once() {
     let _real_io = kithara_platform::flash::real_io();
@@ -149,7 +149,7 @@ fn lost_answer_negative_control_trips_the_watchdog() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(miri)]
 fn a_publication_admitted_before_drop_recovers_both_levels() {
     use crate::Port;
     let (mut sender, inbox) = scoped_channel::<Test, Test>(ScopedConfig::builder().build());
@@ -205,6 +205,48 @@ impl Protocol for Test {
     fn frames_since(at: u64, start: u64) -> Option<u64> {
         at.checked_sub(start)
     }
+}
+
+#[kithara::test]
+fn inspecting_retained_commands_neither_executes_nor_answers_them() {
+    let (mut sender, mut inbox) = scoped_channel::<Test, Test>(ScopedConfig::builder().build());
+    for (when, command) in [
+        (When::Next, 1),
+        (When::At(20), 2),
+        (When::Deferred, 3),
+        (When::Deferred, 4),
+    ] {
+        sender
+            .send(
+                when,
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![command],
+                },
+            )
+            .expect("fixture batch");
+    }
+    sender.publish().expect("publish batches");
+    inbox.drain();
+    let mut root = inbox.root();
+    root.next_due(0, 1).expect("next batch").commit();
+    let parked = root
+        .next_deferred()
+        .expect("deferred batch")
+        .park()
+        .expect("park batch");
+    let mut commands = root.pending_commands().copied().collect::<Vec<_>>();
+    commands.sort_unstable();
+    assert_eq!(commands, [1, 2, 3, 4]);
+    assert!(root.is_parked(parked));
+    assert_eq!(root.frames_until_due(0), Some(20));
+    assert!(sender.receipt().is_none());
+    root.next_due(0, 21)
+        .expect("scheduled batch is retained")
+        .apply(());
+    let mut commands = root.pending_commands().copied().collect::<Vec<_>>();
+    commands.sort_unstable();
+    assert_eq!(commands, [1, 3, 4]);
 }
 
 #[cfg(panic = "unwind")]
@@ -301,7 +343,7 @@ fn a_closed_gate_spends_neither_a_number_nor_a_credit() {
     assert!(sender.publish().is_err());
 }
 
-#[kithara::test]
+#[kithara::test(miri)]
 fn a_scoped_holder_rearms_on_receipt_and_release_stops_waking() {
     use crate::Port;
 

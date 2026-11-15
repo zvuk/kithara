@@ -9,7 +9,6 @@ use kithara_audio::{
     TrackFailureKind, TrackStep, WaitingReason,
 };
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_effects::{AudioEffect, EffectDrain, EffectDrainStep, apply_effects, reset_effects};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_warp::WarpRenderError;
@@ -24,7 +23,6 @@ pub(super) enum DrainState {
     Open,
     LiveWarp,
     Warp,
-    Effects,
     Exhausted,
 }
 
@@ -33,11 +31,10 @@ pub(super) struct PendingInput {
     pub(super) consumed_frames: usize,
 }
 
-/// The sole producer-side Warp/effect stage before the play output ring.
+/// The sole producer-side Warp stage before the play output ring.
 pub struct WarpSource<T, S> {
     pub(super) spec: AudioSpec,
     pub(super) drain_state: DrainState,
-    drain: EffectDrain,
     discontinuity: Option<SourceDiscontinuity>,
     lane: Lane,
     pub(super) pending_input: Option<PendingInput>,
@@ -47,7 +44,6 @@ pub struct WarpSource<T, S> {
     staged_meta: Option<AudioChunkInfo>,
     pools: PoolRegion<S>,
     pub(super) source: T,
-    pub(super) effects: Vec<Box<dyn AudioEffect>>,
     pub(super) warp: kithara_warp::WarpRenderer<S>,
     pub(super) quantum_failed: bool,
     terminal_failure: Option<TrackFailureKind>,
@@ -58,14 +54,11 @@ where
     T: AudioSource<Chunk = AudioChunk>,
     S: HasPool<f32>,
 {
-    /// Builds the stage over a decoded source, its Warp renderer, and the
-    /// effect chain with the drain that flushes it; `lane` brings the lane
-    /// commands it executes at frames of its output.
+    /// Builds the stage over a decoded source and its Warp renderer; `lane`
+    /// brings the lane commands it executes at frames of its output.
     pub fn new(
         source: T,
         warp: kithara_warp::WarpRenderer<S>,
-        effects: Vec<Box<dyn AudioEffect>>,
-        drain: EffectDrain,
         spec: AudioSpec,
         pools: PoolRegion<S>,
         lane: LaneSetup,
@@ -74,8 +67,6 @@ where
         Self {
             source,
             warp,
-            effects,
-            drain,
             discontinuity,
             spec,
             pools,
@@ -126,7 +117,8 @@ where
         self.lane.declick_frames(self.spec.sample_rate)
     }
 
-    /// Executes commands at the output cursor before producing more samples.
+    /// Executes commands at the output cursor before producing more samples,
+    /// then shows the renderer the speed law the next timed batch brings.
     /// Returns whether a command reset the decoded source.
     ///
     /// # Errors
@@ -135,14 +127,13 @@ where
         let changed = self
             .lane
             .execute_due(&mut self.source, &mut self.warp, self.spec)?;
+        let ahead = self.lane.anticipate_speed(&mut self.warp)?;
         if changed == LaneChange::Source {
             self.discard_staged_input();
-            reset_effects(&mut self.effects);
-            self.drain.reset();
             self.drain_state = DrainState::Open;
             self.discontinuity = self.source.discontinuity();
             self.spec = self.discontinuity.map_or(self.spec, |stamp| *stamp.spec());
-        } else if changed == LaneChange::Controls {
+        } else if changed == LaneChange::Controls || ahead {
             self.prepared_frames = None;
         }
         self.prepare_renderers(self.spec);
@@ -223,7 +214,7 @@ where
         }
         input.truncate(staged_samples);
         self.render_input = Some(input);
-        if frames == 0 {
+        if frames == 0 && staged == 0 {
             self.staged_meta = Self::span_meta(meta, 0, 0);
         }
         self.prepared_frames = Some(frames);
@@ -272,6 +263,10 @@ where
     }
 
     fn accept_source_chunk(&mut self, mut data: AudioChunk) -> TrackStep<AudioChunk> {
+        let channels = usize::from(data.spec().channels);
+        if channels == 0 || !data.samples.len().is_multiple_of(channels) {
+            return self.fail(TrackFailureKind::Render);
+        }
         let Some(geometry) = data.meta.source_geometry() else {
             tracing::error!("decoded source has invalid PCM geometry");
             return self.fail(TrackFailureKind::Render);
@@ -498,8 +493,7 @@ where
             }
             return Some(
                 chunk
-                    .and_then(|chunk| apply_effects(&mut self.effects, chunk))
-                    .and_then(|output| self.fetch(output))
+                    .and_then(|chunk| self.fetch(chunk))
                     .map_or(TrackStep::StateChanged, TrackStep::Produced),
             );
         }
@@ -511,32 +505,14 @@ where
             };
             if let Some(chunk) = chunk {
                 return Some(
-                    apply_effects(&mut self.effects, chunk)
-                        .and_then(|output| self.fetch(output))
+                    self.fetch(chunk)
                         .map_or(TrackStep::StateChanged, TrackStep::Produced),
                 );
             }
-            self.drain_state = DrainState::Effects;
+            self.drain_state = DrainState::Exhausted;
+            return Some(TrackStep::Eof);
         }
-
-        let DrainState::Effects = self.drain_state else {
-            return None;
-        };
-        Some(match self.drain.step(&mut self.effects) {
-            EffectDrainStep::Produced(chunk) => {
-                let source_end = chunk.meta.source_span.map(|span| {
-                    SourceEnd::new(span.end(), span.sample_rate())
-                        .with_mapping_revision(span.mapping_revision())
-                });
-                self.emit_output(*chunk, source_end)
-                    .map_or(TrackStep::StateChanged, TrackStep::Produced)
-            }
-            EffectDrainStep::Progress => TrackStep::StateChanged,
-            EffectDrainStep::Exhausted => {
-                self.drain_state = DrainState::Exhausted;
-                TrackStep::Eof
-            }
-        })
+        None
     }
 
     fn fetch(&mut self, data: AudioChunk) -> Option<Fetch<AudioChunk>> {
@@ -602,9 +578,6 @@ where
         if !self.warp.transition_pending() {
             self.prepare_staging();
         }
-        for effect in &mut self.effects {
-            effect.service_deferred(spec);
-        }
     }
 
     fn render_full_quantum(&mut self) -> Option<TrackStep<AudioChunk>> {
@@ -620,7 +593,6 @@ where
         if self.warp.transition_pending() {
             self.drain_state = DrainState::LiveWarp;
         }
-        let output = output.and_then(|chunk| apply_effects(&mut self.effects, chunk));
         ControlFlow::Continue(output.and_then(|output| self.fetch(output)))
     }
 
@@ -707,7 +679,6 @@ where
 
     fn reset_renderers(&mut self) {
         self.warp.reset();
-        reset_effects(&mut self.effects);
     }
 
     fn sync_discontinuity(&mut self) -> bool {
@@ -729,7 +700,6 @@ where
         }
         self.discard_staged_input();
         self.reset_renderers();
-        self.drain.reset();
         self.drain_state = DrainState::Open;
         true
     }
@@ -851,8 +821,6 @@ mod tests {
         let mut source = WarpSource::new(
             decoded,
             kithara_warp::Warp::new((), &config).renderer(spec, pools.clone()),
-            Vec::new(),
-            EffectDrain::new(0, &pools).expect("effect drain"),
             spec,
             pools.clone(),
             LaneSetup {

@@ -4,8 +4,9 @@ mod error;
 mod owner;
 mod run;
 mod serve;
-mod settings;
 mod snapshot;
+#[cfg(all(test, feature = "mock", feature = "gui"))]
+mod tests;
 #[cfg(not(target_arch = "wasm32"))]
 mod thread;
 
@@ -17,8 +18,6 @@ pub(crate) use owner::Engine;
 pub(crate) use owner::mock::render as render_fixture;
 pub(crate) use run::run;
 pub(crate) use serve::serve;
-#[cfg(test)]
-pub(crate) use settings::DeckSettings;
 pub(crate) use snapshot::{DeckSnapshot, EngineSnapshot};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use thread::spawn;

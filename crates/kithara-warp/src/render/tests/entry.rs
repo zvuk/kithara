@@ -7,7 +7,7 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{WarpRenderer, chunk, spec};
-use crate::{Warp, WarpConfig, consts, test_pools::pools};
+use crate::{Pitch, Warp, WarpConfig, consts, test_pools::pools};
 
 const CUE_BEAT: f64 = 4.0;
 
@@ -19,7 +19,7 @@ fn entered_renderer(
 ) -> (WarpRenderer, u64, u64) {
     let config = WarpConfig::builder()
         .backend(backend)
-        .keylock(keylock)
+        .maybe_pitch(keylock.then_some(Pitch::HELD))
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
     renderer.prepare(spec());
@@ -74,6 +74,9 @@ fn entered_renderer(
     renderer
         .set_speed(SpeedCurve::Constant(speed), 1)
         .expect("entry trajectory");
+    renderer
+        .prepare_engine_latency(spec())
+        .expect("entry latency");
     (renderer, entry, cue)
 }
 

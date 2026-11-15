@@ -1458,6 +1458,7 @@ mod tests {
     fn promotion_resets_render_geometry_only_when_decoder_coordinates_change() {
         use crate::pipeline::decode::transition::{PreparedPromotion, PromotionJoin};
 
+        let trace = kithara_test_utils::test::usdt::scope();
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
@@ -1475,6 +1476,24 @@ mod tests {
         let mut decode = active_decode(&pools, outgoing, GaplessMode::MediaOnly);
         let initial = decode.discontinuity().revision();
         let mut incoming = generation(spec);
+        incoming
+            .stage(AudioChunk::new(
+                AudioChunkInfo {
+                    spec,
+                    frame_offset: 44_100,
+                    frames: 147,
+                    timestamp: Duration::from_secs(2),
+                    source_span: kithara_signal::SourceSpan::new(
+                        96_000,
+                        96_160,
+                        NonZeroU32::new(48_000).expect("source rate"),
+                        147,
+                    ),
+                    ..Default::default()
+                },
+                sample_buffer(&pools, &vec![0.25; 294]),
+            ))
+            .expect("staged hard-cut PCM");
         incoming.retain_visible_origin(None, None);
         assert_eq!(decode.active().visible_origin(), Some(Duration::ZERO));
         assert_eq!(incoming.visible_origin(), None);
@@ -1490,6 +1509,12 @@ mod tests {
             join: PromotionJoin::HardCut,
             resume_head: crate::SourceEnd::new(0, spec.sample_rate),
         }));
+        let event = trace
+            .last("gapless_join_completed")
+            .expect("committed hard cut");
+        drop(trace);
+        assert_eq!(event.field("variant"), Some(1));
+        assert_eq!(event.field("end_ns"), Some(2_003_333_333));
         assert_eq!(decode.active().visible_origin(), None);
         assert_eq!(decode.discontinuity().revision(), initial);
 

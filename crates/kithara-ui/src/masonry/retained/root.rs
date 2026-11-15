@@ -5,20 +5,18 @@ use masonry::{
     accesskit::TreeUpdate,
     app::{RenderRoot, RenderRootOptions, RenderRootSignal},
     core::{
-        CursorIcon, ErasedAction, Handled, NewWidget, PointerEvent, TextEvent, Widget, WidgetId,
-        WindowEvent,
+        CursorIcon, ErasedAction, Handled, PointerEvent, TextEvent, Widget, WidgetId, WindowEvent,
     },
     kurbo::{Point, Rect as MasonryRect},
     ui_events::keyboard::{Key, NamedKey},
     vello::Scene,
 };
-use num_traits::cast::AsPrimitive;
 use thiserror::Error;
 
 use super::{
     built::{
         BlockRegistration, MasonryNode, NodeBox, PopoverRegistration, Registrations, RootParts,
-        Watched, WindowTracker, Within,
+        Watched, WindowTracker, Within, installed_at, stack_modals_on_top,
     },
     custom::HostAction,
     node::Node,
@@ -29,6 +27,7 @@ use super::{
 #[cfg(feature = "capture")]
 use crate::draw::Rgba;
 use crate::{
+    backends::affine,
     draw::Pt,
     hosts::drag::DragSession,
     interact::{
@@ -172,7 +171,7 @@ where
     ///
     /// Returns whether an animation frame, rather than an ordinary redraw, was
     /// requested. Every unrelated platform signal remains queued in order.
-    pub(crate) fn complete_frame(&mut self) -> bool {
+    pub fn complete_frame(&mut self) -> bool {
         let animation = complete_frame_signals(&mut self.platform);
         animation || self.animates || std::mem::take(&mut self.moved)
     }
@@ -284,7 +283,7 @@ where
     }
 
     /// Reports whether Masonry requested another paint or animation frame.
-    pub(crate) fn needs_frame(&self) -> bool {
+    pub fn needs_frame(&self) -> bool {
         frame_requested(&self.platform) || self.animates || self.moved
     }
 
@@ -556,30 +555,17 @@ where
     }
 
     fn observe_pointer(&mut self, event: &PointerEvent) {
-        let position = match event {
-            PointerEvent::Down(button) | PointerEvent::Up(button) => {
-                Some(button.state.logical_position())
-            }
-            PointerEvent::Move(update) => Some(update.current.logical_position()),
-            PointerEvent::Scroll(scroll) => Some(scroll.state.logical_position()),
-            PointerEvent::Gesture(gesture) => Some(gesture.state.logical_position()),
-            PointerEvent::Cancel(_) | PointerEvent::Enter(_) | PointerEvent::Leave(_) => None,
-        };
-        if let Some(position) = position {
-            let point = Pt {
-                x: position.x.as_(),
-                y: position.y.as_(),
-            };
-            if let Some(window) = &self.window {
-                window.pointer.set(Some(point));
-                if window.carrying
-                    && matches!(event, PointerEvent::Move(_))
-                    && let Some(layer) = window.layer
-                {
-                    self.root.edit_widget(layer, |mut layer| {
-                        layer.ctx.request_paint_only();
-                    });
-                }
+        if let Some(point) = picker::at(event)
+            && let Some(window) = &self.window
+        {
+            window.pointer.set(Some(point));
+            if window.carrying
+                && matches!(event, PointerEvent::Move(_))
+                && let Some(layer) = window.layer
+            {
+                self.root.edit_widget(layer, |mut layer| {
+                    layer.ctx.request_paint_only();
+                });
             }
         }
     }
@@ -617,10 +603,25 @@ where
                 self.follow_drag(&engine, &event)?;
             }
             if captured || held {
+                if matches!(event, PointerEvent::Down(_)) {
+                    self.leave_focus(owner);
+                }
                 return Ok(true);
             }
         }
         Ok(false)
+    }
+
+    /// A press an engine took never reaches the tree, where a press elsewhere
+    /// ends the keyboard focus, so it ends here.
+    fn leave_focus(&mut self, owner: WidgetId) {
+        if self
+            .root
+            .focused_widget()
+            .is_some_and(|focused| focused != owner)
+        {
+            self.root.focus_on(None);
+        }
     }
 
     /// Whether the pointer reaches this engine past the surface that covers
@@ -826,7 +827,7 @@ where
                 let mut node = widget.downcast::<Node>();
                 let moved = node.widget.place(transform);
                 if moved {
-                    node.ctx.request_paint_only();
+                    node.ctx.set_transform(affine(transform));
                 }
                 moved
             });
@@ -836,6 +837,24 @@ where
             moved |= placed;
         }
         moved
+    }
+
+    /// Repaints what the application installed at `path` with
+    /// [`MasonryHost::with_custom`](super::MasonryHost::with_custom) after it
+    /// changed state the host cannot see, which such a widget otherwise idles
+    /// on. One redraw follows, and frames only while its `repaint` asks for
+    /// them; it is not measured again. Returns whether anything is installed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MasonryRootError`] when a widget violates the typed action contract.
+    pub fn invalidate(&mut self, path: &str) -> Result<bool, MasonryRootError> {
+        let installed = installed_at(&self.watched, path);
+        for id in &installed {
+            self.root.edit_widget(*id, Node::invalidate);
+        }
+        self.sync()?;
+        Ok(!installed.is_empty())
     }
 
     /// Refreshes mounted values and poses without rebuilding, preserving in-flight
@@ -918,7 +937,7 @@ where
                         lit
                     });
                 }
-                Watched::Placed { .. } | Watched::Zone { .. } => {}
+                Watched::Custom { .. } | Watched::Placed { .. } | Watched::Zone { .. } => {}
             }
         }
         moved
@@ -950,27 +969,6 @@ where
         }
         self.sync_menus();
     }
-}
-
-/// Stacks every modal above the other surfaces and layers, under only the
-/// window's own layer, whatever its place in the document: the layer order is
-/// the paint order, and the surface order is the order input finds them in.
-fn stack_modals_on_top(
-    layers: &mut [NewWidget<dyn Widget>],
-    popovers: &mut [Within<PopoverRegistration>],
-    window: Option<&WindowTracker>,
-) {
-    popovers.sort_by_key(|popover| matches!(popover.item.state.kind(), SurfaceKind::Modal));
-    let modals: Vec<WidgetId> = popovers
-        .iter()
-        .filter(|popover| matches!(popover.item.state.kind(), SurfaceKind::Modal))
-        .map(|popover| popover.item.layer)
-        .collect();
-    let edges = window.and_then(|window| window.layer);
-    layers.sort_by_key(|layer| {
-        let id = layer.id();
-        (Some(id) == edges, modals.contains(&id))
-    });
 }
 
 fn complete_frame_signals(signals: &mut Vec<RenderRootSignal>) -> bool {

@@ -8,7 +8,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/kithara-net.svg)](https://crates.io/crates/kithara-net)
 [![docs.rs](https://docs.rs/kithara-net/badge.svg)](https://docs.rs/kithara-net)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-APACHE)
 
 </div>
 
@@ -69,11 +69,13 @@ The inactivity timeout bounds response headers and each body-chunk wait separate
 - `client-apple` — macOS/iOS `NSURLSession` backend; shadows the reqwest/wreq seam on Apple platforms when enabled.
 - `tls-rustls` (default) / `tls-native` — TLS selection for the reqwest path only.
 - `mock` — `NetMock`, a deterministic client for tests that must not reach the network (native only).
-- `probe` — enables USDT probes for tracing.
+- `usdt` — USDT probes for tracing.
 - `perf` — enables `hotpath` instrumentation.
 
 ## Integration
 
 Used by `kithara-file` and `kithara-hls` for all HTTP operations.
+
+The native Safari18 and Chrome137 profiles and their TLS certificate codecs derive from Apache-2.0 licensed wreq-util 3.0.0-rc.14. See [NOTICE](./NOTICE) for attribution and modifications.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-net) for detailed contracts, invariants, and internals.

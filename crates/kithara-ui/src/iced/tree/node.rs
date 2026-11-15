@@ -1,6 +1,6 @@
 use iced::{
     Alignment, Element, Length, Size,
-    widget::{Space, Stack, container, mouse_area},
+    widget::{Space, Stack, container},
 };
 
 use super::{
@@ -10,9 +10,10 @@ use super::{
     measure::{Flex, Measured},
 };
 use crate::{
-    compile::CompiledUi,
     draw::Transform,
+    engine::Presses,
     expand::{Binding, ControlSpec, ExpandedNode, SurfaceSpec, header_path},
+    hosts::surface::entry_value,
     iced::{
         immediate::{
             Anchored, Modal, ModuleChrome, Placement, Viewport, WheelSurface, drop_outline,
@@ -106,7 +107,8 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
             ),
             group.surface(),
             size,
-            self.ctx.ui,
+            self.ctx,
+            self.skin,
         );
         apply_size(Rendered::leading(element), group.size())
     }
@@ -239,20 +241,16 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
     fn pressable(
         &mut self,
         path: InternId,
+        presses: Presses,
+        owner: InputOwner,
         child: Self::Output,
         size: Option<SizeSpec>,
     ) -> Self::Output {
-        let path = self.ctx.ui.resolve(path);
-        let element = mouse_area(child)
-            .on_press(crate::hosts::event::control_event(
-                path,
-                ControlAction::Activate,
-            ))
-            .on_right_press(crate::hosts::event::control_event(
-                path,
-                ControlAction::SecondaryActivate,
-            ))
-            .into();
+        let element = if owner == InputOwner::Engine {
+            child
+        } else {
+            host::pressable(child, self.ctx.ui.resolve(path), presses)
+        };
         apply_size(Rendered::leading(element), size)
     }
 
@@ -396,13 +394,20 @@ fn wheeled<'a>(
     element: Element<'a, Published>,
     surface: Option<&SurfaceSpec>,
     size: (Length, Length),
-    ui: &'a CompiledUi,
+    ctx: Ctx<'a, '_>,
+    skin: &'a Skin,
 ) -> Element<'a, Published> {
     let Some(surface) = surface else {
         return element;
     };
     let wheel = WheelSurface::builder()
-        .path(ui.resolve(surface.path))
+        .path(ctx.ui.resolve(surface.path))
+        .maybe_entry(
+            surface
+                .entry
+                .as_ref()
+                .map(|entry| (entry_value(ctx, entry), skin)),
+        )
         .build()
         .view();
     Stack::with_children([element, wheel])

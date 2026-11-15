@@ -26,8 +26,8 @@ use crate::{
         solve::{Length, Size},
     },
     interact::{
-        CursorShape, Hit, Input, MOUSE, Outcome, PointerInput, PointerOwnership, PointerPhase,
-        masonry::{cursor_icon, pointer_button},
+        CursorShape, Hit, Input, Outcome, PointerInput, PointerOwnership, PointerPhase,
+        masonry::{cursor_icon, pointer_button, portable_pointer_id},
     },
     masonry::{external::ExternalImageDeclaration, shader::ShaderDeclaration},
     module::TextAlign,
@@ -51,6 +51,9 @@ pub(crate) enum Leaf {
         /// the one it shows otherwise. Text that named no flag keeps none.
         lit: Option<TextFaces>,
         text: Box<TextContext>,
+        /// The widest box the last layout offered, which is the room the text
+        /// wraps in until the next one.
+        room: f32,
     },
     Custom {
         widget: Box<dyn CustomWidget<Action = HostAction>>,
@@ -210,13 +213,16 @@ impl Leaf {
                 role,
                 padding_x,
                 text,
+                room,
                 ..
             } => {
+                *room = limits.max().width;
                 if content.is_empty() {
                     return Size::ZERO;
                 }
-                let run = text.shape(content, *role, None);
-                Size::new(run.width() + *padding_x * 2.0, run.height())
+                let (width, height) =
+                    role.measure(text, content, (*room - *padding_x * 2.0).max(0.0));
+                Size::new(width + *padding_x * 2.0, height)
             }
             Self::Custom { widget, text, .. } => {
                 let mut text = TextMeasurer::new(text);
@@ -232,19 +238,16 @@ impl Leaf {
         }
     }
 
-    /// `transform` is every enclosing object's pose, folded into this leaf's
-    /// own box. A shader paints its own pass into the scene and is the one leaf
-    /// an object cannot move, because nothing it draws goes through the list.
-    pub(crate) fn paint(&mut self, bounds: Rect, transform: Transform, scene: &mut Scene) {
+    /// Draws in the leaf's own box. Every enclosing object's pose is the
+    /// node's Masonry transform, which moves this picture and the region that
+    /// answers the pointer as one.
+    pub(crate) fn paint(&mut self, bounds: Rect, scene: &mut Scene) {
         if let Self::Control(control) = self {
-            replay(
-                &control.draw_list(bounds, transform),
-                &mut VelloBackend::new(scene),
-            );
+            replay(&control.draw_list(bounds), &mut VelloBackend::new(scene));
             return;
         }
         let mut list = DrawListBuilder::default();
-        list.transformed(transform, |list| match self {
+        match self {
             Self::Empty | Self::Control(_) | Self::Vis(_) => {}
             Self::Shader(shader) => shader.paint(bounds, scene),
             Self::Text {
@@ -273,9 +276,9 @@ impl Leaf {
             Self::Custom {
                 widget, skin, text, ..
             } => {
-                widget.paint(list, &mut TextMeasurer::new(text), bounds, skin);
+                widget.paint(&mut list, &mut TextMeasurer::new(text), bounds, skin);
             }
-        });
+        }
         let list = list.finish();
         if let Self::Custom {
             widget, pictures, ..
@@ -345,13 +348,16 @@ impl Leaf {
         }
     }
 
+    /// The size this text takes in the room the last layout gave it, so that
+    /// words which wrap to another line ask for a layout even where their one
+    /// line is no wider than before.
     pub(crate) fn text_size(&mut self) -> Option<Size> {
-        if !matches!(self, Self::Text { .. }) {
+        let &mut Self::Text { room, .. } = self else {
             return None;
-        }
+        };
         Some(self.measure(crate::hosts::solve::Limits::new(
             Size::ZERO,
-            Size::new(f32::INFINITY, f32::INFINITY),
+            Size::new(room, f32::INFINITY),
         )))
     }
 
@@ -456,7 +462,11 @@ where
             y: point.y.as_(),
         });
         Some(Input::Pointer(PointerInput::new(
-            MOUSE, button, phase, at, clicks,
+            portable_pointer_id(event),
+            button,
+            phase,
+            at,
+            clicks,
         )))
     }
 

@@ -1,18 +1,19 @@
 use std::{
     future::Future,
     io::{BufWriter, Error, ErrorKind, Write},
-    num::NonZeroU32,
+    num::{NonZeroU16, NonZeroU32},
     task::Poll,
 };
 
 use firewheel::{
+    StreamInfo,
     clock::InstantSamples,
     dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
     log::{RealtimeLoggerConfig, realtime_logger},
     mask::{ConnectedMask, ConstantMask, SilenceMask},
     node::{
-        AudioNodeProcessor, NUM_SCRATCH_BUFFERS, ProcBuffers, ProcExtra, ProcInfo, ProcStore,
-        StreamStatus,
+        AudioNode, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig, NUM_SCRATCH_BUFFERS,
+        NodeID, ProcBuffers, ProcExtra, ProcInfo, ProcStore, StreamStatus,
     },
 };
 use futures::future::poll_fn;
@@ -32,21 +33,21 @@ use kithara_render::{
     Open,
     bridge::{DeckEnds, DeckEvents, DeckPart, DeckProtocol, Fade, Slot, SlotState, scope_channels},
     mock::{MockDeck, TestSessionInbox},
-    rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
+    rt::{
+        DeckMixerConfig, OfflineDeck, PlayerNode, StreamShape, install_render_context,
+        publish_render_context,
+    },
 };
 use kithara_signal::{AudioSpec, FrameCount, OutputContext, SegmentId, SessionEpoch, SessionFrame};
+use kithara_sync::{SessionBeat, Tempo, TempoStep, TempoTrajectory};
 use kithara_test_utils::kithara;
-use kithara_warp::RenderContext;
 use kithara_worker::Task;
 use num_traits::ToPrimitive;
 
+pub use crate::resource::source_mock::{resource_tracks, track_load};
 use crate::{
     DeckPass, OpenedTrack, PlayError, ResourceLoad, TrackSettings, player::Outbox,
     session::SessionOutputView,
-};
-pub use crate::{
-    api::equalizer::EqualizerMock,
-    resource::source_mock::{resource_tracks, track_load},
 };
 
 /// Sample rate every mock session runs at.
@@ -54,6 +55,25 @@ pub const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
     Some(sample_rate) => sample_rate,
     None => unreachable!(),
 };
+
+/// The session tempo every mock pass lends: the default tempo from frame 0,
+/// four beats to the bar at [`SAMPLE_RATE`].
+#[must_use]
+pub fn planned_tempo() -> TempoTrajectory {
+    const BEATS_PER_BAR: NonZeroU16 = match NonZeroU16::new(4) {
+        Some(beats) => beats,
+        None => unreachable!(),
+    };
+    TempoTrajectory::new(
+        TempoStep {
+            frame: SessionFrame::new(0),
+            beat: SessionBeat::default(),
+            tempo: Tempo::default(),
+        },
+        BEATS_PER_BAR,
+        SAMPLE_RATE,
+    )
+}
 
 /// Observes the cancellation subtree and output rate passed to a fixture open.
 #[must_use]
@@ -362,7 +382,8 @@ pub struct MixerRig {
     pub ring: ScopedSender<DeckProtocol, DeckProtocol>,
     pub scope: ScopeId,
     pub ends: DeckEnds,
-    mixer: DeckMixer<TestSessionInbox>,
+    processor: Box<dyn AudioNodeProcessor>,
+    offline: OfflineDeck<TestSessionInbox>,
     extra: ProcExtra,
     shape: StreamShape,
 }
@@ -390,7 +411,19 @@ impl MixerRig {
             .open(targets)
             .map_err(|error| PlayError::Internal(error.to_string()))?;
         let (ends, inputs) = scope_channels(scope, config);
-        let mixer = DeckMixer::new(inputs, shape, pools)
+        let (node, offline) = PlayerNode::offline(inputs, pools.clone());
+        node.prepare_stream(shape)
+            .map_err(|error| PlayError::Internal(error.to_string()))?;
+        let stream = StreamInfo {
+            sample_rate: shape.sample_rate,
+            max_block_frames: shape.max_block_frames,
+            ..StreamInfo::default()
+        };
+        let processor = node
+            .construct_processor(
+                &EmptyConfig,
+                ConstructProcessorContext::new(NodeID::DANGLING, &stream, &mut None),
+            )
             .map_err(|error| PlayError::Internal(error.to_string()))?;
         let frames = usize::try_from(shape.max_block_frames.get())
             .map_err(|error| PlayError::Internal(error.to_string()))?;
@@ -407,7 +440,8 @@ impl MixerRig {
             ring,
             scope,
             ends,
-            mixer,
+            processor: Box::new(processor),
+            offline,
             extra: ProcExtra {
                 logger,
                 store,
@@ -426,7 +460,7 @@ impl MixerRig {
         self.block_frames(at, out)
     }
 
-    /// Processes an exact block within the configured maximum output geometry.
+    /// Renders an offline block in the product node's prepared PCM quanta.
     /// Writes PCM into caller-owned storage independent of the mixer and its pools.
     ///
     /// # Errors
@@ -434,7 +468,7 @@ impl MixerRig {
     pub fn block_frames(
         &mut self,
         at: SessionFrame,
-        mut out: [&mut [f32]; 2],
+        out: [&mut [f32]; 2],
     ) -> Result<(), PlayError> {
         let frames = out[0].len();
         if frames == 0
@@ -445,7 +479,57 @@ impl MixerRig {
                 "mock block exceeds its output geometry".into(),
             ));
         }
+        self.ring
+            .publish()
+            .map_err(|error| PlayError::Internal(error.to_string()))?;
+        self.extra
+            .store
+            .try_get_mut::<TestSessionInbox>()
+            .ok_or(PlayError::Closed)?
+            .0
+            .drain();
+        let mut cursor = 0;
+        let [left, right] = out;
+        while cursor < frames {
+            let start = i64::from(at)
+                .checked_add(
+                    i64::try_from(cursor)
+                        .map_err(|error| PlayError::Internal(error.to_string()))?,
+                )
+                .ok_or_else(|| PlayError::Internal("mock block frame overflow".into()))?;
+            let quantum = self
+                .offline
+                .prepare(
+                    self.extra
+                        .store
+                        .try_get_mut::<TestSessionInbox>()
+                        .ok_or(PlayError::Closed)?,
+                    SessionFrame::new(start),
+                    frames - cursor,
+                    self.shape.sample_rate,
+                )
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+            self.offline
+                .begin_render(quantum)
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+            self.render_turn(
+                SessionFrame::new(start),
+                [
+                    &mut left[cursor..cursor + quantum],
+                    &mut right[cursor..cursor + quantum],
+                ],
+            )?;
+            self.offline
+                .end_render()
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+            cursor += quantum;
+        }
+        Ok(())
+    }
+
+    fn render_turn(&mut self, at: SessionFrame, mut out: [&mut [f32]; 2]) -> Result<(), PlayError> {
         let start: i64 = at.into();
+        let frames = out[0].len();
         let count =
             i64::try_from(frames).map_err(|error| PlayError::Internal(error.to_string()))?;
         let end = start
@@ -458,19 +542,8 @@ impl MixerRig {
             None,
         )
         .ok_or_else(|| PlayError::Internal("mock output block is invalid".into()))?;
-        let context = RenderContext::new_linear(context, None)
-            .ok_or_else(|| PlayError::Internal("mock render context is invalid".into()))?;
         publish_render_context(&mut self.extra.store, context)
             .map_err(|error| PlayError::Internal(error.to_string()))?;
-        self.ring
-            .publish()
-            .map_err(|error| PlayError::Internal(error.to_string()))?;
-        self.extra
-            .store
-            .try_get_mut::<TestSessionInbox>()
-            .ok_or(PlayError::Closed)?
-            .0
-            .drain();
         let info = ProcInfo {
             frames,
             sample_rate: self.shape.sample_rate,
@@ -498,7 +571,7 @@ impl MixerRig {
         for channel in &mut out {
             channel.fill(0.0);
         }
-        let _ = self.mixer.process(
+        let _ = self.processor.process(
             &info,
             ProcBuffers {
                 inputs: &[],
@@ -543,9 +616,22 @@ pub struct DeckRig<S> {
     pub dispatcher: Sender<DispatcherProtocol<ResourceLoad<S>>>,
     pub opens: Inbox<DispatcherProtocol<ResourceLoad<S>>>,
     fixture_dispatcher: Option<FixtureDispatcher<S>>,
-    fixture_lanes: Vec<Sender<kithara_render::LaneProtocol>>,
+    lanes: Vec<HeldLane>,
     now: SessionFrame,
     observation: kithara_render::bridge::DeckSnapshot,
+}
+
+/// The end of a lane channel the rig keeps open for its lifetime, as a deck
+/// keeps a lane live while it plays.
+enum HeldLane {
+    /// The rig opened the lane; the worker holds its inbox.
+    Sender {
+        _sender: Sender<kithara_render::LaneProtocol>,
+    },
+    /// The owner opened the lane; the rig holds its inbox in place of a running lane.
+    Inbox {
+        _inbox: Inbox<kithara_render::LaneProtocol>,
+    },
 }
 
 struct FixtureDispatcher<S> {
@@ -575,7 +661,7 @@ impl<S> DeckRig<S> {
             mixer: MockDeck::new(inputs),
             events: ends.events,
             fixture_dispatcher: None,
-            fixture_lanes: Vec::new(),
+            lanes: Vec::new(),
             now: SessionFrame::new(0),
             observation,
         })
@@ -668,6 +754,12 @@ impl<S> DeckRig<S> {
         Ok(receipts)
     }
 
+    /// Keeps a lane inbox open for the rig's lifetime, as a running lane keeps
+    /// the one its load request carried.
+    pub fn hold_lane(&mut self, inbox: Inbox<kithara_render::LaneProtocol>) {
+        self.lanes.push(HeldLane::Inbox { _inbox: inbox });
+    }
+
     /// The queues a player sends to, lent for one pass.
     pub fn with_outbox<R, F>(&mut self, run: F) -> Result<R, PlayError>
     where
@@ -680,8 +772,10 @@ impl<S> DeckRig<S> {
             suspended: false,
             now: self.now,
             delivery: FrameCount::new(0),
+            deck_delivery: FrameCount::new(0),
             output: &output,
             deck: &self.observation,
+            planned_tempo: &planned_tempo(),
         };
         Ok(run(
             &mut Outbox::new(&mut scope, &mut self.dispatcher).in_pass(pass)
@@ -720,7 +814,9 @@ where
                 },
             )
             .await?;
-        self.fixture_lanes.push(lane_sender);
+        self.lanes.push(HeldLane::Sender {
+            _sender: lane_sender,
+        });
         Ok(loaded)
     }
 

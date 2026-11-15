@@ -110,6 +110,8 @@ pub enum ExpandedNode {
     Pressable {
         path: InternId,
         press: Binding,
+        secondary: Option<Binding>,
+        double: Option<Binding>,
         child: Box<Self>,
     },
     /// Puts its child at a point in the stage that holds it.
@@ -585,11 +587,13 @@ pub(crate) fn motion_of(node: &ExpandedNode) -> Unprompted {
     }
 }
 
-/// Control path a wheel detent publishes on, and the scalar it steps.
+/// Control path a wheel detent publishes on, the scalar it steps, and what a
+/// double-click opens the number field holding where the document declares one.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct SurfaceSpec {
     pub write: Binding,
+    pub entry: Option<Binding>,
     pub path: InternId,
 }
 
@@ -639,6 +643,7 @@ impl<'a> ControlSite<'a> {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct SlotWrites<'a> {
     pub(crate) secondary: Option<&'a BindingRef>,
+    pub(crate) double: Option<&'a BindingRef>,
     pub(crate) reset: Option<&'a BindingRef>,
     pub(crate) zoom: Option<&'a BindingRef>,
     pub(crate) loop_start: Option<&'a BindingRef>,

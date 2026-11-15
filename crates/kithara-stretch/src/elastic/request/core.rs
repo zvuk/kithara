@@ -36,6 +36,18 @@ impl ElasticRequest {
         })
     }
 
+    /// Sets the audible source-frame advance independently of admitted input.
+    ///
+    /// # Errors
+    /// Returns [`ElasticError::EmptySource`] when the audible advance is zero.
+    pub const fn with_output_source_frames(mut self, frames: usize) -> Result<Self, ElasticError> {
+        if frames == 0 {
+            return Err(ElasticError::EmptySource);
+        }
+        self.output_source_frames = frames;
+        Ok(self)
+    }
+
     pub(crate) fn source_frames_per_output(self) -> Result<f64, ElasticError> {
         let source_frames = self
             .source_frames

@@ -105,9 +105,9 @@ fn warp_native_tone() -> Vec<u8> {
 #[kithara::asset(ext = "f32le", content_type = "application/octet-stream", format = metronome_format)]
 #[case::default()]
 fn host_metronome_held() -> Vec<u8> {
-    kithara_fixture_media::signal::metronome_held(
+    kithara_fixture_media::signal::metronome_held(f32::from(
         kithara_effects::LimiterConfig::default().ceiling(),
-    )
+    ))
     .into_iter()
     .flat_map(f32::to_le_bytes)
     .collect()
@@ -135,9 +135,7 @@ fn host_metronome_tone(inputs: &[&[u8]]) -> Vec<u8> {
 fn metronome_format() -> Vec<u8> {
     let mut format = b"metronome-mix:v1;ceiling=".to_vec();
     format.extend_from_slice(
-        &kithara_effects::LimiterConfig::default()
-            .ceiling()
-            .to_le_bytes(),
+        &f32::from(kithara_effects::LimiterConfig::default().ceiling()).to_le_bytes(),
     );
     format
 }
@@ -345,7 +343,7 @@ mod tests {
 
     #[kithara::test(native)]
     fn prepared_metronome_mixes_preserve_the_original_ceiling_and_sample_bits() {
-        let ceiling = kithara_effects::LimiterConfig::default().ceiling();
+        let ceiling = f32::from(kithara_effects::LimiterConfig::default().ceiling());
         let held: Vec<f32> = (0..8_192_u16)
             .map(|frame| {
                 let rise = (f32::from(frame) / 512.0).min(1.0);
@@ -370,9 +368,7 @@ mod tests {
     fn both_metronome_assets_key_the_observed_canonical_ceiling() {
         let mut expected = b"metronome-mix:v1;ceiling=".to_vec();
         expected.extend_from_slice(
-            &kithara_effects::LimiterConfig::default()
-                .ceiling()
-                .to_le_bytes(),
+            &f32::from(kithara_effects::LimiterConfig::default().ceiling()).to_le_bytes(),
         );
         for name in ["host_metronome_held_default", "host_metronome_tone_default"] {
             let definition = inventory::iter::<crate::registry::AssetDef>

@@ -7,13 +7,16 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
     queue::ItemEvent,
 };
-use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::DelayRule};
+use kithara_integration_tests::{
+    CreatedHls, TestServerHelper,
+    audio_artifact::{AudioArtifactSet, audio_artifact_path},
+    fixture_protocol::DelayRule,
+};
 use kithara_render::bridge::DeckSnapshot;
 
 use super::*;
 use crate::bufpool_ext::pools;
 
-const OUTPUT_RING_CHUNKS: usize = 1;
 const TARGET_SEGMENT_DELAY_MS: u64 = 250;
 const SLOW_TARGET_SEGMENT_DELAY_MS: u64 = 600;
 const COLD_TARGET_SEGMENT_DELAY_MS: u64 = 300;
@@ -30,12 +33,24 @@ struct Render {
     capture_frame: i64,
     samples: Vec<f32>,
     blocks: Vec<CaptureBlock>,
+    /// Capture frames the variant transition owned, `None` without a switch.
+    transition: Option<Range<usize>>,
+}
+
+/// What one paced capture observed.
+struct PacedCapture {
+    samples: Vec<f32>,
+    decoder_events: Vec<DecoderObservation>,
+    blocks: Vec<CaptureBlock>,
+    /// Start of the first block after which the decoder announced a transition hold.
+    hold_start: Option<usize>,
 }
 
 #[derive(Debug)]
 struct CaptureBlock {
     capture: Range<usize>,
     output: Range<u64>,
+    started: WallInstant,
     started_unix_micros: Option<u128>,
     before: DeckSnapshot,
     after: DeckSnapshot,
@@ -93,12 +108,8 @@ impl CaptureBlock {
 }
 
 impl Render {
-    fn capture_window(&self) -> RangeInclusive<u128> {
-        let mut times = self.blocks.iter().map(|block| {
-            block
-                .started_unix_micros
-                .expect("capture block has a wall timestamp")
-        });
+    fn capture_window(&self) -> RangeInclusive<WallInstant> {
+        let mut times = self.blocks.iter().map(|block| block.started);
         let first = times.next().expect("capture has blocks");
         let last = times.fold(first, |previous, next| {
             assert!(
@@ -170,6 +181,86 @@ impl Render {
     }
 }
 
+#[kithara::test]
+fn capture_window_uses_monotonic_time_when_calendar_time_moves_backwards() {
+    let started = WallInstant::now();
+    let later = started + Duration::from_millis(1);
+    let render = Render {
+        capture_frame: 0,
+        samples: Vec::new(),
+        blocks: [(started, 2_000), (later, 1_000)]
+            .into_iter()
+            .map(|(started, unix_micros)| CaptureBlock {
+                capture: 0..1,
+                output: 0..1,
+                started,
+                started_unix_micros: Some(unix_micros),
+                before: DeckSnapshot::default(),
+                after: DeckSnapshot::default(),
+                item_events: Vec::new(),
+                event_error: None,
+                refill_probes: Vec::new(),
+                admitted: Vec::new(),
+            })
+            .collect(),
+        transition: None,
+    };
+    assert!(render.blocks[0].started < render.blocks[1].started);
+    assert!(render.blocks[0].started_unix_micros > render.blocks[1].started_unix_micros);
+    let window = render.capture_window();
+    assert_eq!(window, started..=later);
+}
+
+/// A steady capture of `frames` frames started at `started`, silent over `gap`.
+fn steady_render(started: WallInstant, frames: usize, gap: Range<usize>) -> Render {
+    let channels = usize::from(CHANNELS);
+    let mut samples = vec![0.5; frames * channels];
+    samples[gap.start * channels..gap.end * channels].fill(0.0);
+    Render {
+        capture_frame: 0,
+        samples,
+        blocks: vec![CaptureBlock {
+            capture: 0..frames,
+            output: 0..u64::try_from(frames).expect("frames fit u64"),
+            started,
+            started_unix_micros: None,
+            before: DeckSnapshot::default(),
+            after: DeckSnapshot::default(),
+            item_events: Vec::new(),
+            event_error: None,
+            refill_probes: Vec::new(),
+            admitted: Vec::new(),
+        }],
+        transition: None,
+    }
+}
+
+#[kithara::test]
+fn a_gap_inside_the_transition_window_fails_the_cold_switch_oracle() {
+    let started = WallInstant::now();
+    let control = steady_render(started, 8_192, 0..0);
+    let switched = steady_render(started, 8_192, 2_048..3_072);
+    let failures = cold_switch_failures(AAC_TO_FLAC, 1_024..4_096, &control, &switched);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("inserted an audible silent gap")),
+        "a transition gap must fail the oracle: {failures:?}"
+    );
+}
+
+#[kithara::test]
+fn a_gap_outside_the_transition_window_is_not_charged_to_the_switch() {
+    let started = WallInstant::now();
+    let control = steady_render(started, 8_192, 0..0);
+    let switched = steady_render(started, 8_192, 2_048..3_072);
+    let failures = cold_switch_failures(AAC_TO_FLAC, 4_096..8_192, &control, &switched);
+    assert!(
+        failures.is_empty(),
+        "silence the transition did not own must not fail the oracle: {failures:?}"
+    );
+}
+
 fn target_rebuild_fixture(delay_ms: u64) -> HlsFixtureBuilder {
     fixture().delay_rules(vec![DelayRule {
         segment_eq: Some(TARGET_SWITCH_SEGMENT),
@@ -196,7 +287,7 @@ fn cold_target_fixture(target: usize) -> HlsFixtureBuilder {
 
 #[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn prepare_tiny_ring_player(
+async fn prepare_paced_player(
     master_url: &url::Url,
     initial_variant: usize,
     backend: DecoderBackend,
@@ -229,10 +320,6 @@ async fn prepare_tiny_ring_player(
                     .build(),
             )
             .events(bus)
-            .preload_chunks(std::num::NonZeroUsize::MIN)
-            .audio_buffer_chunks(
-                std::num::NonZeroUsize::new(OUTPUT_RING_CHUNKS).expect("output ring depth"),
-            )
             .build();
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools)
@@ -328,13 +415,17 @@ async fn render_to_capture_frame(player: &mut OfflinePlayer, pacer: &mut Pacer, 
 
 #[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn capture_tiny_ring(
-    prepared: &mut PreparedPlayer,
-) -> (Vec<f32>, Vec<DecoderObservation>, Vec<CaptureBlock>) {
+async fn capture_paced(prepared: &mut PreparedPlayer) -> PacedCapture {
+    assert_eq!(
+        kithara_test_utils::test::usdt::count("pcm_wait_started"),
+        0,
+        "device continuity setup must not wait for PCM"
+    );
     let mut item_events = prepared.player.player().subscribe::<ItemEvent>();
     let mut blocks = Vec::with_capacity(OBSERVATION_FRAMES.div_ceil(BLOCK_FRAMES));
     let mut samples = Vec::with_capacity(OBSERVATION_FRAMES * usize::from(CHANNELS));
     let mut decoder_events = Vec::new();
+    let mut hold_start = None;
     let mut refill_snapshots = 0usize;
     while samples.len() / usize::from(CHANNELS) < OBSERVATION_FRAMES {
         hang_tick!();
@@ -342,6 +433,7 @@ async fn capture_tiny_ring(
         let frames = (OBSERVATION_FRAMES - samples.len() / usize::from(CHANNELS)).min(BLOCK_FRAMES);
         let capture_start = samples.len() / usize::from(CHANNELS);
         let output_start = prepared.player.host().position();
+        let started = WallInstant::now();
         let started_unix_micros = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .ok()
@@ -403,6 +495,7 @@ async fn capture_tiny_ring(
             CaptureBlock {
                 capture: capture_start..capture_start + frames,
                 output: output_start..output_end,
+                started,
                 started_unix_micros,
                 before: snapshot_before,
                 after: snapshot_after,
@@ -417,11 +510,18 @@ async fn capture_tiny_ring(
         if prepared.player.position() > before {
             hang_reset!();
         }
-        decoder_events.extend(drain_decoder_events(
-            &mut prepared.events,
-            samples.len() / usize::from(CHANNELS),
-        ));
+        let lifecycle =
+            drain_decoder_lifecycle(&mut prepared.events, samples.len() / usize::from(CHANNELS));
+        if lifecycle.held {
+            hold_start.get_or_insert(capture_start);
+        }
+        decoder_events.extend(lifecycle.changes);
     }
+    assert_eq!(
+        kithara_test_utils::test::usdt::count("pcm_wait_started"),
+        0,
+        "device continuity capture must not wait for PCM before or inside the graph"
+    );
     let admissions = kithara_test_utils::test::usdt::events_of("chunk_admitted");
     let mut through = 0;
     let mut ends = Vec::new();
@@ -434,7 +534,12 @@ async fn capture_tiny_ring(
             block
         })
         .collect();
-    (samples, decoder_events, blocks)
+    PacedCapture {
+        samples,
+        decoder_events,
+        blocks,
+        hold_start,
+    }
 }
 
 /// The end of the last packet each segment admitted so far.
@@ -457,9 +562,14 @@ fn extend_admitted_ends(
     }
 }
 
-async fn capture_tiny_ring_control(mut prepared: PreparedPlayer, transition: Transition) -> Render {
-    let label = format!("{}-tiny-ring-control", transition.label);
-    let (samples, decoder_events, blocks) = capture_tiny_ring(&mut prepared).await;
+async fn capture_paced_control(mut prepared: PreparedPlayer, transition: Transition) -> Render {
+    let label = format!("{}-control", transition.label);
+    let PacedCapture {
+        samples,
+        decoder_events,
+        blocks,
+        hold_start,
+    } = capture_paced(&mut prepared).await;
     assert_eq!(
         prepared.abr.current_variant_index(),
         Some(transition.from),
@@ -469,23 +579,33 @@ async fn capture_tiny_ring_control(mut prepared: PreparedPlayer, transition: Tra
         decoder_events.is_empty(),
         "{label} must not recreate its decoder: {decoder_events:?}",
     );
+    assert_eq!(
+        hold_start, None,
+        "{label} must not hold its decoder for a transition"
+    );
     let result = Render {
         capture_frame: prepared.capture_frame,
         samples,
         blocks,
+        transition: None,
     };
     prepared.close().await;
     result
 }
 
-async fn capture_tiny_ring_switch(mut prepared: PreparedPlayer, transition: Transition) -> Render {
-    let label = format!("{}-tiny-ring-switch", transition.label);
+async fn capture_paced_switch(mut prepared: PreparedPlayer, transition: Transition) -> Render {
+    let label = format!("{}-switch", transition.label);
     prepared
         .abr
         .set_mode(AbrMode::manual(transition.to))
         .unwrap_or_else(|error| panic!("request {label}: {error}"));
 
-    let (samples, decoder_events, blocks) = capture_tiny_ring(&mut prepared).await;
+    let PacedCapture {
+        samples,
+        decoder_events,
+        blocks,
+        hold_start,
+    } = capture_paced(&mut prepared).await;
     assert_eq!(
         prepared.abr.current_variant_index(),
         Some(transition.to),
@@ -513,13 +633,52 @@ async fn capture_tiny_ring_switch(mut prepared: PreparedPlayer, transition: Tran
         Some(expected_variant),
         "{label} target variant"
     );
+    let transition_window = transition_window(&blocks, hold_start, &event, transition.to)
+        .unwrap_or_else(|| {
+            panic!(
+                "{label} must hear the target variant after its transition began: hold_start={hold_start:?}, decoder_event={event:?}"
+            )
+        });
     let result = Render {
         capture_frame: prepared.capture_frame,
         samples,
         blocks,
+        transition: Some(transition_window),
     };
     prepared.close().await;
     result
+}
+
+/// The capture frames a variant transition owns, read from the product's own
+/// events: it opens on the block after which the decoder parked its playing
+/// generation for the transition (or, when it never had to park, swapped the
+/// decoder), and closes on the first block whose deck already played PCM of
+/// the target variant. Silence outside it starved a decoder no transition was
+/// holding, which a paced capture cannot tell from the host not scheduling it.
+fn transition_window(
+    blocks: &[CaptureBlock],
+    hold_start: Option<usize>,
+    decoder_change: &DecoderObservation,
+    target: usize,
+) -> Option<Range<usize>> {
+    let change_start = blocks
+        .iter()
+        .find(|block| block.capture.end == decoder_change.frame_end)?
+        .capture
+        .start;
+    let start = hold_start.map_or(change_start, |hold| hold.min(change_start));
+    let end = blocks
+        .iter()
+        .find(|block| {
+            block.after.slots.iter().any(|slot| {
+                slot.source
+                    .as_ref()
+                    .is_some_and(|source| source.variant_index == Some(target))
+            })
+        })?
+        .capture
+        .end;
+    (start < end).then_some(start..end)
 }
 
 fn cochlea_silent_buckets(samples: &[f32]) -> usize {
@@ -592,13 +751,13 @@ async fn target_rebuild_keeps_player_output_continuous(
     let master_url = created.master_url();
 
     let (control, switched) = join!(
-        prepare_tiny_ring_player(
+        prepare_paced_player(
             &master_url,
             AAC_TO_FLAC.from,
             backend,
             "target-rebuild-control"
         ),
-        prepare_tiny_ring_player(
+        prepare_paced_player(
             &master_url,
             AAC_TO_FLAC.from,
             backend,
@@ -606,8 +765,8 @@ async fn target_rebuild_keeps_player_output_continuous(
         ),
     );
     let (control, switched) = join!(
-        capture_tiny_ring_control(control, AAC_TO_FLAC),
-        capture_tiny_ring_switch(switched, AAC_TO_FLAC),
+        capture_paced_control(control, AAC_TO_FLAC),
+        capture_paced_switch(switched, AAC_TO_FLAC),
     );
     assert_eq!(
         switched.capture_frame, control.capture_frame,
@@ -659,22 +818,69 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
     let mut failures = Vec::new();
     for [(first, first_url), (second, second_url)] in sources.as_chunks::<2>().0 {
         let (first_control, second_control, first_switch, second_switch) = join!(
-            prepare_tiny_ring_player(first_url, first.from, backend, first.label),
-            prepare_tiny_ring_player(second_url, second.from, backend, second.label),
-            prepare_tiny_ring_player(first_url, first.from, backend, first.label),
-            prepare_tiny_ring_player(second_url, second.from, backend, second.label),
+            prepare_paced_player(first_url, first.from, backend, first.label),
+            prepare_paced_player(second_url, second.from, backend, second.label),
+            prepare_paced_player(first_url, first.from, backend, first.label),
+            prepare_paced_player(second_url, second.from, backend, second.label),
         );
         let (first_control, second_control, first_switched, second_switched) = join!(
-            capture_tiny_ring_control(first_control, *first),
-            capture_tiny_ring_control(second_control, *second),
-            capture_tiny_ring_switch(first_switch, *first),
-            capture_tiny_ring_switch(second_switch, *second),
+            capture_paced_control(first_control, *first),
+            capture_paced_control(second_control, *second),
+            capture_paced_switch(first_switch, *first),
+            capture_paced_switch(second_switch, *second),
         );
         for (transition, control, switched) in [
             (first, first_control, first_switched),
             (second, second_control, second_switched),
         ] {
-            failures.extend(cold_switch_failures(*transition, &control, &switched));
+            let window = switched
+                .transition
+                .clone()
+                .expect("a switched capture records its transition window");
+            failures.extend(cold_switch_failures(
+                *transition,
+                window,
+                &control,
+                &switched,
+            ));
+        }
+    }
+    if !failures.is_empty() {
+        let (events, overflowed) = kithara_test_utils::test::usdt::recorded();
+        let identity = [
+            "NEXTEST_RUN_ID",
+            "NEXTEST_BINARY_ID",
+            "NEXTEST_TEST_NAME",
+            "NEXTEST_ATTEMPT_ID",
+            "NEXTEST_ATTEMPT",
+            "NEXTEST_TOTAL_ATTEMPTS",
+            "NEXTEST_STRESS_CURRENT",
+        ]
+        .map(|key| (key, std::env::var_os(key)));
+        let evidence = format!(
+            "case=cold_target_variant_switch_keeps_playback_uninterrupted backend={backend:?} pid={} overflowed={overflowed} nextest={identity:?}\n{events:#?}\n",
+            std::process::id(),
+        );
+        let directory = std::env::var_os("KITHARA_HANG_DUMP_DIR")
+            .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+        let written = std::path::absolute(directory)
+            .and_then(|directory| {
+                AudioArtifactSet::new(
+                    &directory,
+                    "cold-target-variant-switch",
+                    SAMPLE_RATE,
+                    CHANNELS,
+                )
+            })
+            .and_then(|artifacts| {
+                let history = artifacts.write_bytes("usdt-history.txt", evidence.as_bytes())?;
+                audio_artifact_path(&history)
+            });
+        match written {
+            Ok(path) => {
+                tracing::error!(path = %path.display(), overflowed, "Cold-switch USDT history saved");
+            }
+            Err(error) => tracing::error!(%error, "Cold-switch USDT history export failed"),
         }
     }
     assert!(
@@ -686,8 +892,7 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
 
 /// A deck renders full lane packets whatever the AAC decoder's chunking: FDK
 /// splits each AAC frame into 363 and 661 frames, and a packet still carries
-/// the render quantum, so a one-slot ring holds the lead the lane geometry
-/// promises.
+/// the render quantum, and the lead never passes the ring the product ships.
 #[kithara::test(
     tokio,
     multi_thread,
@@ -708,14 +913,14 @@ async fn aac_lane_packets_carry_the_render_quantum(
 ) {
     let _probe_scope = kithara_test_utils::test::usdt::scope();
     let (_server, created) = &aac_source;
-    let prepared = prepare_tiny_ring_player(
+    let prepared = prepare_paced_player(
         &created.master_url(),
         AAC_TO_FLAC.from,
         backend,
         "aac-packet-control",
     )
     .await;
-    let control = capture_tiny_ring_control(prepared, AAC_TO_FLAC).await;
+    let control = capture_paced_control(prepared, AAC_TO_FLAC).await;
 
     let packets: Vec<(u64, u64, u64)> = kithara_test_utils::test::usdt::events_of("chunk_admitted")
         .iter()
@@ -751,8 +956,7 @@ async fn aac_lane_packets_carry_the_render_quantum(
         );
     }
 
-    let horizon =
-        (u64::try_from(OUTPUT_RING_CHUNKS).expect("ring depth fits u64") + 1) * packet - 1;
+    let horizon = (shipped_ring_chunks() + 1) * packet - 1;
     for block in &control.blocks {
         for (lead, admitted) in block.leads() {
             assert!(
@@ -762,6 +966,23 @@ async fn aac_lane_packets_carry_the_render_quantum(
             );
         }
     }
+}
+
+/// The lane ring depth of a resource that leaves `audio_buffer_chunks` unset.
+fn shipped_ring_chunks() -> u64 {
+    let stream =
+        kithara::file::FileConfig::for_src(kithara::file::FileSrc::Local("ring-depth.m4a".into()))
+            .store(
+                AssetStore::builder(pools())
+                    .backend(StorageBackend::Memory)
+                    .build(),
+            )
+            .build();
+    let track = kithara_render::TrackConfig::for_audio(
+        kithara::audio::AudioConfig::<kithara::file::File<_>>::for_stream(stream).build(),
+    )
+    .build();
+    u64::try_from(track.audio_buffer_chunks().get()).expect("ring depth fits u64")
 }
 
 #[kithara::fixture]
@@ -774,8 +995,11 @@ async fn aac_source() -> (TestServerHelper, CreatedHls) {
     (server, created)
 }
 
+/// The switched capture may not be quieter than the concurrent control over
+/// `window`, the capture frames the transition owns.
 fn cold_switch_failures(
     transition: Transition,
+    window: Range<usize>,
     control: &Render,
     switched: &Render,
 ) -> Vec<String> {
@@ -792,28 +1016,84 @@ fn cold_switch_failures(
         "{} must compare concurrent captures: control={control_window:?}, switch={switch_window:?}",
         transition.label,
     );
+    let samples = window.start * usize::from(CHANNELS)..window.end * usize::from(CHANNELS);
+    let control_samples = &control.samples[samples.clone()];
+    let switched_samples = &switched.samples[samples];
     let mut failures = Vec::new();
-    let control_silence = longest_silent_run(&control.samples);
-    let switched_silence = longest_silent_run(&switched.samples);
+    let control_silence = longest_silent_run(control_samples);
+    let switched_silence = longest_silent_run(switched_samples);
     if switched_silence > control_silence.saturating_add(MAX_EXTRA_SILENT_FRAMES) {
         failures.push(format!(
-            "{} inserted an audible silent gap: switched={switched_silence} frames, control={control_silence} frames; switched {}; control {}",
+            "{} inserted an audible silent gap in transition frames {window:?}: switched={switched_silence} frames, control={control_silence} frames; switched {}; control {}",
             transition.label,
             switched.silence_diagnostic(),
             control.silence_diagnostic(),
         ));
     }
-    let control_buckets = cochlea_silent_buckets(&control.samples);
-    let switched_buckets = cochlea_silent_buckets(&switched.samples);
+    let control_buckets = cochlea_silent_buckets(control_samples);
+    let switched_buckets = cochlea_silent_buckets(switched_samples);
     if switched_buckets > control_buckets {
         failures.push(format!(
-            "{} produced switch-only silent buckets: switched={switched_buckets}, control={control_buckets}; switched {}; control {}",
+            "{} produced switch-only silent buckets in transition frames {window:?}: switched={switched_buckets}, control={control_buckets}; switched {}; control {}",
             transition.label,
             switched.silence_diagnostic(),
             control.silence_diagnostic(),
         ));
     }
     failures
+}
+
+#[kithara::test(tokio, multi_thread, native, serial)]
+async fn device_capture_exposes_a_starved_producer_as_missing_pcm() {
+    let trace = kithara_test_utils::test::usdt::scope();
+    let server = TestServerHelper::new().await;
+    let control_source = server.create_hls(fixture()).await.expect("control HLS");
+    let starved_source = server
+        .create_hls(fixture().delay_rules(vec![DelayRule {
+            segment_eq: None,
+            segment_gte: Some(3),
+            variant: None,
+            delay_ms: 5_000,
+        }]))
+        .await
+        .expect("starved HLS");
+    let control_url = control_source.master_url();
+    let starved_url = starved_source.master_url();
+    let (control, starved) = join!(
+        prepare_paced_player(&control_url, AAC_HIGH, DecoderBackend::default(), "control"),
+        prepare_paced_player(&starved_url, AAC_HIGH, DecoderBackend::default(), "starved"),
+    );
+    let (control, starved) = join!(
+        capture_paced_control(control, AAC_TO_FLAC),
+        capture_paced_control(starved, AAC_TO_FLAC),
+    );
+    assert!(
+        trace.events_of("pcm_wait_started").is_empty(),
+        "device capture must not wait for PCM before or inside the graph"
+    );
+    drop(trace);
+    assert!(
+        control
+            .samples
+            .iter()
+            .any(|sample| sample.abs() > ACTIVE_SAMPLE_THRESHOLD),
+        "the undelayed control must contain the fixture signal: {}",
+        control.silence_diagnostic(),
+    );
+    assert!(
+        starved
+            .blocks
+            .iter()
+            .any(|block| block.after.metrics.underruns() > block.before.metrics.underruns()),
+        "the device must expose producer starvation as an underrun",
+    );
+    let failures = cold_switch_failures(AAC_TO_FLAC, 0..OBSERVATION_FRAMES, &control, &starved);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("inserted an audible silent gap")),
+        "the unchanged PCM oracle must reject the starved capture: {failures:?}",
+    );
 }
 
 async fn rebuild_source(delay_ms: u64) -> (TestServerHelper, CreatedHls) {

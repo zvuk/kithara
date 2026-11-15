@@ -13,7 +13,7 @@ use kithara_command::{Inbox, Protocol, Seq};
 use kithara_platform::{time::Duration, tokio::runtime::Handle};
 use kithara_signal::FrameCount;
 use kithara_sync::SpeedCurve;
-use kithara_warp::StretchKind;
+use kithara_warp::Pitch;
 use kithara_worker::{Priority, Task, TickResult};
 use tracing::Instrument as _;
 
@@ -22,6 +22,13 @@ use crate::{LaneProtocol, LoadRefusal, ServiceClass, worker::scheduler::StreamWa
 /// Dispatcher-issued identity in load admission order.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct LaneId(u64);
+
+impl LaneId {
+    /// The lane a load admitted under `seq` runs on.
+    pub(crate) fn admitted(seq: Seq) -> Self {
+        Self(seq.get())
+    }
+}
 
 #[derive(Debug)]
 pub enum DispatcherCommand<I> {
@@ -54,8 +61,24 @@ impl<I: Debug> Debug for LoadRequest<I> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LaneStart {
     pub speed: SpeedCurve,
-    pub keylock: bool,
-    pub backend: StretchKind,
+    pub pitch: Pitch,
+}
+
+impl LaneStart {
+    /// A lane that opens at the constant `speed` and at `pitch`.
+    #[must_use]
+    pub const fn new(speed: f32, pitch: Pitch) -> Self {
+        Self {
+            speed: SpeedCurve::Constant(speed),
+            pitch,
+        }
+    }
+}
+
+impl Default for LaneStart {
+    fn default() -> Self {
+        Self::new(1.0, Pitch::default())
+    }
 }
 
 #[derive(Debug)]
@@ -269,7 +292,7 @@ where
                         continue;
                     }
                     let seq = due.defer();
-                    let lane = LaneId(seq.get());
+                    let lane = LaneId::admitted(seq);
                     if request.class != ServiceClass::Idle {
                         self.playing_opens += 1;
                     }
@@ -576,11 +599,7 @@ mod tests {
                                 item: Gate(input),
                                 class,
                                 position: Duration::ZERO,
-                                start: LaneStart {
-                                    speed: SpeedCurve::Constant(1.0),
-                                    keylock: false,
-                                    backend: StretchKind::default(),
-                                },
+                                start: LaneStart::default(),
                                 inbox: channel(ChannelConfig::builder().build()).1,
                             }))],
                         },
@@ -692,11 +711,7 @@ mod tests {
                         },
                         class: ServiceClass::Warm,
                         position: Duration::ZERO,
-                        start: LaneStart {
-                            speed: SpeedCurve::Constant(1.0),
-                            keylock: false,
-                            backend: StretchKind::default(),
-                        },
+                        start: LaneStart::default(),
                         inbox: worker.lane_channel().1,
                     }))],
                 },
@@ -766,11 +781,7 @@ mod tests {
                                 item,
                                 class: ServiceClass::Warm,
                                 position: Duration::ZERO,
-                                start: LaneStart {
-                                    speed: SpeedCurve::Constant(1.0),
-                                    keylock: false,
-                                    backend: StretchKind::default(),
-                                },
+                                start: LaneStart::default(),
                                 inbox: channel(ChannelConfig::builder().build()).1,
                             }))
                         })
@@ -817,11 +828,7 @@ mod tests {
                         },
                         class: ServiceClass::Warm,
                         position: Duration::ZERO,
-                        start: LaneStart {
-                            speed: SpeedCurve::Constant(1.0),
-                            keylock: false,
-                            backend: StretchKind::default(),
-                        },
+                        start: LaneStart::default(),
                         inbox: channel(ChannelConfig::builder().build()).1,
                     }))],
                 },
@@ -841,7 +848,7 @@ mod tests {
                 When::Next,
                 Batch {
                     basis: Vec::new(),
-                    commands: vec![DispatcherCommand::Release(LaneId(seq.get()))],
+                    commands: vec![DispatcherCommand::Release(LaneId::admitted(seq))],
                 },
             )
             .expect("release admitting lane");

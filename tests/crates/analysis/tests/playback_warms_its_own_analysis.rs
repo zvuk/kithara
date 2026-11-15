@@ -11,7 +11,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     download::{Downloader, DownloaderConfig},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, TrackStatus},
@@ -62,9 +62,8 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays(
     let mut tick_handle = QueueTicker::spawn(queue_for_tick, Duration::from_millis(50));
 
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

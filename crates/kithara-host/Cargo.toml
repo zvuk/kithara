@@ -9,6 +9,10 @@ description = "Multi-player audio session host and output graph for Kithara."
 keywords = ["audio", "player", "dj", "mixing", "synchronization"]
 categories = ["multimedia::audio"]
 
+[package.metadata.kithara.wasm-lib-tests]
+default-features = false
+features = ["symphonia", "webcodecs", "resample-rubato", "stretch-identity", "client-reqwest", "tls-rustls"]
+
 [features]
 default = [
     "backend-cpal",
@@ -58,6 +62,7 @@ kithara-warp = { workspace = true, default-features = false }
 kithara-worker = { workspace = true }
 
 arc-swap = { workspace = true }
+audioadapter = { workspace = true }
 audioadapter-buffers = { workspace = true }
 bevy_platform = { workspace = true }
 bon = { workspace = true }
@@ -67,6 +72,7 @@ fieldwork = { workspace = true }
 firewheel = { workspace = true }
 num-traits = { workspace = true }
 ringbuf = { workspace = true }
+smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 triple_buffer = { workspace = true }
@@ -81,20 +87,22 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 # own included — to `web-time` instead of the panicking `std` fallback.
 bevy_platform = { workspace = true, features = ["web"] }
 firewheel = { workspace = true, features = ["wasm-bindgen"] }
-firewheel-web-audio = { workspace = true }
+js-sys = { workspace = true }
 send_wrapper = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
 
 [dev-dependencies]
 kithara-assets = { workspace = true }
 kithara-audio = { workspace = true, features = ["usdt", "mock"] }
 kithara-bufpool = { workspace = true }
-kithara-effects = { workspace = true, features = ["mock"] }
+kithara-effects = { workspace = true }
 kithara-fixture-media = { workspace = true, default-features = false }
 kithara-host = { workspace = true, default-features = false, features = ["mock", "offline"] }
 kithara-play = { workspace = true, default-features = false, features = ["mock"] }
 kithara-queue = { workspace = true, default-features = false }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "subscriber"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "hang", "mock", "subscriber"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

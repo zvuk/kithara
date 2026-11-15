@@ -1,12 +1,6 @@
 use kithara_test_utils::kithara;
 
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-use crate::BackendCapabilities;
-use crate::StretchKind;
+use crate::{BackendCapabilities, StretchKind};
 
 #[kithara::test(native, flash(false))]
 fn roundtrips_compiled_variants_through_u8() {
@@ -52,4 +46,22 @@ fn compiled_backends_report_only_renderable_functions() {
             ),
         }
     }
+}
+
+#[kithara::test(native, flash(false))]
+fn supporting_selects_backends_that_render_the_functions_in_selector_order() {
+    assert_eq!(
+        StretchKind::supporting(BackendCapabilities::empty()).collect::<Vec<_>>(),
+        StretchKind::all()
+    );
+    let keylock: &[StretchKind] = &[
+        #[cfg(feature = "stretch-signalsmith")]
+        StretchKind::Signalsmith,
+        #[cfg(feature = "stretch-bungee")]
+        StretchKind::Bungee,
+    ];
+    assert_eq!(
+        StretchKind::supporting(BackendCapabilities::KEYLOCK).collect::<Vec<_>>(),
+        keylock
+    );
 }

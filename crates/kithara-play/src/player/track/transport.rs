@@ -2,7 +2,7 @@ use kithara_audio::TrackFailureKind;
 use kithara_command::{Rejection, Seq, When};
 use kithara_config::{ConfigOwner, LiveConfig};
 use kithara_render::{
-    LaneCommand,
+    LaneCommand, LaneFrame,
     bridge::{DeckPart, Fade, PlaybackFault, Slot, SlotMark},
 };
 use kithara_signal::SessionFrame;
@@ -41,12 +41,9 @@ impl<S> PlayerImpl<S> {
         &mut self,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        self.play = None;
+        self.withdraw_play();
         if let Some(loading) = self.loading.as_mut() {
             loading.speed = None;
-        }
-        if let Some(attaching) = self.attaching.as_mut() {
-            attaching.play = None;
         }
         if let Some(seq) = self.playback_commands.iter().rev().find_map(|operation| {
             operation
@@ -61,12 +58,13 @@ impl<S> PlayerImpl<S> {
             return Ok(None);
         }
         if self
-            .attaching
+            .seat
+            .attaching()
             .is_some_and(|attach| attach.replacement && attach.seq.is_some())
         {
-            if !self.releasing {
+            if !self.seat.releasing() {
                 out.supersede(self.seat()?)?;
-                self.releasing = true;
+                self.seat.release_on_landing();
             }
             return Ok(None);
         }
@@ -78,7 +76,6 @@ impl<S> PlayerImpl<S> {
             );
         }
         self.status = TrackStatus::Released;
-        self.releasing = false;
         self.release_lane(out)?;
         Ok(None)
     }
@@ -108,11 +105,7 @@ impl<S> PlayerImpl<S> {
     ) -> Result<Option<Seq>, PlayError> {
         self.check_when(at, out)?;
         if matches!(self.status, TrackStatus::Ended { .. }) {
-            if !self
-                .adopting
-                .iter()
-                .any(|adoption| adoption.segment == self.segment)
-            {
+            if !self.adoptions.adopts(self.segment.id) {
                 self.segment(Position::ZERO, None, out)?;
             }
             self.resume = None;
@@ -123,7 +116,7 @@ impl<S> PlayerImpl<S> {
             tracing::debug!(
                 item = u64::from(self.item),
                 seq = operation.seq.get(),
-                current_segment = self.segment.get(),
+                current_segment = self.segment.id.get(),
                 applied = ?operation.applied(),
                 requested_when = ?operation.when,
                 paused_resume = ?resume,
@@ -135,7 +128,7 @@ impl<S> PlayerImpl<S> {
             self.play = Some(at);
             return Ok(None);
         }
-        if !self.attached() || self.ready != Some(self.segment) {
+        if !self.attached() || !self.segment.ready {
             self.play = Some(at);
             return Ok(None);
         }
@@ -158,10 +151,11 @@ impl<S> PlayerImpl<S> {
                 )
             })
         })?;
-        if resume.lane.segment != self.segment {
+        if resume.lane.segment != self.segment.id {
             return None;
         }
-        self.lane_commands
+        self.lane_history
+            .commands
             .iter()
             .filter(|operation| operation.applied() != Some(false))
             .find(|operation| match operation.when {
@@ -195,7 +189,7 @@ impl<S> PlayerImpl<S> {
             out.deck(at, parts)?
         };
         if let Some(pending) = self.playback_commands.iter_mut().find(|operation| {
-            seq.is_none() && operation.seq.is_none() && operation.segment == self.segment
+            seq.is_none() && operation.seq.is_none() && operation.segment == self.segment.id
         }) {
             if action.is_some() {
                 pending.action = action;
@@ -208,7 +202,7 @@ impl<S> PlayerImpl<S> {
         } else {
             self.playback_commands.push(PlaybackOperation {
                 seq,
-                segment: self.segment,
+                segment: self.segment.id,
                 basis,
                 action,
                 obsolete: false,
@@ -254,7 +248,7 @@ impl<S> PlayerImpl<S> {
                     .and_then(|(_, basis)| *basis);
             }
         }
-        if let Some(attach) = self.attaching.as_mut()
+        if let Some(attach) = self.seat.attaching_mut()
             && attach.seq.is_some()
             && attach.seq == basis
         {
@@ -270,7 +264,7 @@ impl<S> PlayerImpl<S> {
         at: When<SessionFrame>,
         out: &Outbox<'_, S>,
     ) -> Result<(Configuring, Option<usize>), PlayError> {
-        if self.adopting.iter().any(|adoption| adoption.cancelled) {
+        if self.adoptions.cancelling() {
             return Err(PlayError::NotReady);
         }
         if self.lane.is_none() {
@@ -284,10 +278,7 @@ impl<S> PlayerImpl<S> {
         }
         let when = self.lane_when(at, out)?;
         let change = TrackSettings::check(change)?;
-        if let TrackSettingsChange::Speed(speed) = change
-            && matches!(when, When::Next)
-            && self.unchanged_speed(speed)
-        {
+        if self.unchanged(change, when) {
             return Ok((Configuring::Unchanged, None));
         }
         if matches!(change, TrackSettingsChange::Speed(_)) {
@@ -300,28 +291,38 @@ impl<S> PlayerImpl<S> {
         Ok((Configuring::Send(when, change), Some(0)))
     }
 
+    fn unchanged(&self, change: TrackSettingsChange, when: When<LaneFrame>) -> bool {
+        match change {
+            TrackSettingsChange::Speed(speed) => {
+                matches!(when, When::Next) && self.unchanged_speed(speed)
+            }
+            TrackSettingsChange::Pitch(pitch) => self.settings.projected().pitch() == pitch,
+        }
+    }
+
     fn unchanged_speed(&self, speed: f32) -> bool {
         speed == self.settings.config().speed()
             && self
                 .loading
                 .as_ref()
                 .is_none_or(|loading| loading.speed.is_none())
-            && !self.lane_commands.iter().any(|operation| {
+            && !self.lane_history.commands.iter().any(|operation| {
                 operation.applied().is_none()
                     && match operation.command {
-                        LaneCommand::SetSpeed(_) => operation.segment == self.segment,
-                        LaneCommand::Segment { id, .. } => id == self.segment,
+                        LaneCommand::SetSpeed(_) => operation.segment == self.segment.id,
+                        LaneCommand::Segment { id, .. } => id == self.segment.id,
                         _ => false,
                     }
             })
             && self
-                .lane_commands
+                .lane_history
+                .commands
                 .iter()
                 .filter(|operation| {
                     operation.applied() == Some(true)
                         && match operation.command {
-                            LaneCommand::SetSpeed(_) => operation.segment == self.segment,
-                            LaneCommand::Segment { id, .. } => id == self.segment,
+                            LaneCommand::SetSpeed(_) => operation.segment == self.segment.id,
+                            LaneCommand::Segment { id, .. } => id == self.segment.id,
                             _ => false,
                         }
                 })
@@ -373,7 +374,7 @@ impl<S> PlayerImpl<S> {
         &mut self,
         speed: SpeedCurve,
         target: f32,
-        when: When<kithara_render::LaneFrame>,
+        when: When<LaneFrame>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         if !matches!(self.status, TrackStatus::Playing { .. }) {
@@ -432,10 +433,10 @@ impl<S> PlayerImpl<S> {
         {
             return Some(failure);
         }
-        let operation = self.lane_commands.iter().rev().find(|operation| {
+        let operation = self.lane_history.commands.iter().rev().find(|operation| {
             matches!(operation.command,
                 LaneCommand::Segment { id, .. } | LaneCommand::SetHostRate { id, .. }
-                if id == self.segment)
+                if id == self.segment.id)
         })?;
         match operation.verdict {
             Some(Err(Rejection::Refused(failure))) => Some(failure),

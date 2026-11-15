@@ -20,22 +20,42 @@ choice of face for a family and weight, the fallback faces for scripts the
 display family does not carry, and whether the machine's own fonts may answer.
 It knows no toolkit: a backend paints the `GlyphRun` it returns.
 
+`TextResources::with_fonts` registers skin-owned font bytes for selected style
+families. Each context created from those resources measures and shapes with
+the same private family aliases; the resulting glyph segments retain the exact
+font bytes for the backend. Resources with no declared fonts keep the embedded
+catalog unchanged.
+
 ## Usage
 
 ```rust
-use kithara_ui_shaping::{FontFamily, FontWeight, TextContext, TextStyle};
+use std::{collections::BTreeMap, sync::Arc};
+use kithara_ui_shaping::{
+    FontFamily, FontId, FontPolicy, FontWeight, GlyphFace, TextContext, TextResources, TextStyle,
+};
 
-let mut text = TextContext::new()?;
+let resources = TextResources::with_fonts(
+    FontPolicy::Embedded,
+    BTreeMap::from([(
+        FontFamily::Sans,
+        vec![Arc::from(FontId::JetBrainsMonoRegular.bytes())],
+    )]),
+)?;
+let mut text = TextContext::from(&resources);
 let style = TextStyle {
     font: FontFamily::Sans,
-    weight: FontWeight::Semibold,
+    weight: FontWeight::Normal,
     size: 12.0,
     spacing: 0.0,
 };
 let run = text.shape("GAIN", style, None);
 assert!(run.width() > 0.0);
+assert!(matches!(run.segments()[0].face(), GlyphFace::System(_)));
 # Ok::<(), kithara_ui_shaping::TextError>(())
 ```
+
+The example registers a bundled face as a skin face; applications can pass
+their own `Arc<[u8]>` font data in the same map.
 
 ## Key Types
 

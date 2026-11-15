@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub(crate) struct CiPins {
     pub(crate) actions_runner_linux_amd64_sha256: String,
+    pub(crate) actions_runner_linux_amd64_url: String,
     pub(crate) actions_runner_linux_arm64_sha256: String,
+    pub(crate) actions_runner_linux_arm64_url: String,
     pub(crate) actions_runner_version: String,
     pub(crate) actions_runner_windows_sha256: String,
     pub(crate) android_avd: String,
@@ -20,6 +22,9 @@ pub(crate) struct CiPins {
     pub(crate) android_commandline_tools_version: String,
     pub(crate) android_ndk_version: String,
     pub(crate) android_platform_version: u32,
+    pub(crate) binaryen_linux_amd64_sha256: String,
+    pub(crate) binaryen_linux_arm64_sha256: String,
+    pub(crate) binaryen_version: String,
     pub(crate) brew_casks: Vec<String>,
     /// Two entries name `FFmpeg` because two consumers want different things
     /// from it. The unversioned formula keeps the `ffmpeg` binary on `PATH`
@@ -40,7 +45,6 @@ pub(crate) struct CiPins {
     pub(crate) cmake_linux_arm64_sha256: String,
     pub(crate) cmake_version: String,
     pub(crate) cmake_windows_amd64_sha256: String,
-    pub(crate) expected_xcode_version: String,
     pub(crate) ffmpeg_windows_sha256: String,
     /// A monthly build from `BtbN/FFmpeg-Builds`, named in full: the tag
     /// carries the build time and the file name the commit it was cut from.
@@ -58,8 +62,12 @@ pub(crate) struct CiPins {
     pub(crate) gitleaks_linux_arm64_sha256: String,
     pub(crate) gitleaks_version: String,
     /// The `CoreSimulator` device type the simulator lane creates its device
-    /// from. It has to ship with `expected_xcode_version`.
+    /// from. It must be available in the installed Xcode simulator runtime.
     pub(crate) ios_simulator_device_type: String,
+    pub(crate) kache_linux_amd64_sha256: String,
+    pub(crate) kache_linux_arm64_sha256: String,
+    pub(crate) kache_macos_arm64_sha256: String,
+    pub(crate) kache_windows_amd64_sha256: String,
     pub(crate) linux_base_digest: String,
     pub(crate) linux_android_image: String,
     pub(crate) linux_android_runner_image: String,
@@ -87,6 +95,8 @@ pub(crate) struct CiPins {
     /// links. It tracks the LLVM the libraries were cut from, not a toolchain
     /// pinned here.
     pub(crate) rtsan_version: String,
+    pub(crate) rustfs_version: String,
+    pub(crate) rustfs_macos_arm64_sha256: String,
     pub(crate) rustup_version: String,
     pub(crate) rustup_windows_sha256: String,
     pub(crate) stable_toolchain: String,
@@ -114,6 +124,14 @@ impl CiPins {
     pub(crate) fn validate(&self) -> Result<()> {
         for (name, value) in [
             (
+                "actions_runner_linux_amd64_url",
+                self.actions_runner_linux_amd64_url.as_str(),
+            ),
+            (
+                "actions_runner_linux_arm64_url",
+                self.actions_runner_linux_arm64_url.as_str(),
+            ),
+            (
                 "actions_runner_version",
                 self.actions_runner_version.as_str(),
             ),
@@ -127,13 +145,10 @@ impl CiPins {
                 self.android_commandline_tools_version.as_str(),
             ),
             ("android_ndk_version", self.android_ndk_version.as_str()),
+            ("binaryen_version", self.binaryen_version.as_str()),
             ("cache_client_image", self.cache_client_image.as_str()),
             ("cache_server_image", self.cache_server_image.as_str()),
             ("cmake_version", self.cmake_version.as_str()),
-            (
-                "expected_xcode_version",
-                self.expected_xcode_version.as_str(),
-            ),
             ("ffmpeg_windows_url", self.ffmpeg_windows_url.as_str()),
             ("geckodriver_version", self.geckodriver_version.as_str()),
             ("gitlab_runner_version", self.gitlab_runner_version.as_str()),
@@ -161,6 +176,7 @@ impl CiPins {
             ("msrv_toolchain", self.msrv_toolchain.as_str()),
             ("nightly_toolchain", self.nightly_toolchain.as_str()),
             ("rtsan_version", self.rtsan_version.as_str()),
+            ("rustfs_version", self.rustfs_version.as_str()),
             ("rustup_version", self.rustup_version.as_str()),
             ("stable_toolchain", self.stable_toolchain.as_str()),
             ("windows_eval_iso_url", self.windows_eval_iso_url.as_str()),
@@ -192,6 +208,30 @@ impl CiPins {
 
     fn validate_hashes(&self) -> Result<()> {
         for (name, digest) in [
+            (
+                "binaryen_linux_amd64_sha256",
+                self.binaryen_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "binaryen_linux_arm64_sha256",
+                self.binaryen_linux_arm64_sha256.as_str(),
+            ),
+            (
+                "kache_linux_amd64_sha256",
+                self.kache_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "kache_linux_arm64_sha256",
+                self.kache_linux_arm64_sha256.as_str(),
+            ),
+            (
+                "kache_macos_arm64_sha256",
+                self.kache_macos_arm64_sha256.as_str(),
+            ),
+            (
+                "kache_windows_amd64_sha256",
+                self.kache_windows_amd64_sha256.as_str(),
+            ),
             (
                 "actions_runner_linux_amd64_sha256",
                 self.actions_runner_linux_amd64_sha256.as_str(),
@@ -259,6 +299,10 @@ impl CiPins {
                 "rtsan_linux_arm64_sha256",
                 self.rtsan_linux_arm64_sha256.as_str(),
             ),
+            (
+                "rustfs_macos_arm64_sha256",
+                self.rustfs_macos_arm64_sha256.as_str(),
+            ),
             ("rustup_windows_sha256", self.rustup_windows_sha256.as_str()),
             (
                 "windows_eval_iso_sha256",
@@ -305,7 +349,16 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::{ci::config::profile::workspace_root, consts};
+    use crate::{consts, testing::workspace::root as workspace_root};
+
+    #[test]
+    fn native_and_container_stores_use_the_same_release() {
+        let pins = CiPins::load(&workspace_root().join(consts::PINS_PATH)).unwrap();
+        assert!(
+            pins.cache_server_image
+                .starts_with(&format!("rustfs/rustfs:{}@sha256:", pins.rustfs_version))
+        );
+    }
 
     #[test]
     fn digests_are_bounded() {
@@ -360,7 +413,7 @@ mod tests {
         let root = workspace_root();
         let pins = CiPins::load(&root.join(".config/ci-pins.toml")).expect("pins load");
         let project =
-            kithara_devtools::common::project::ProjectConfig::load(root).expect("project loads");
+            kithara_devtools::common::project::ProjectConfig::load(&root).expect("project loads");
 
         pins.validate_tool_pins(&project.tools)
             .expect("every configured role names a pin this repository reviews");

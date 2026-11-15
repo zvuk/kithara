@@ -2,6 +2,7 @@ use std::num::NonZeroU16;
 
 use kithara_net::NetError;
 use serde::Deserialize;
+use serde_json::Value;
 use thiserror::Error;
 
 /// Structured server diagnostics for a rejected `GraphQL` operation.
@@ -9,6 +10,8 @@ use thiserror::Error;
 pub(crate) struct GraphQlError {
     /// Server-provided description of the failure.
     pub(crate) message: String,
+    #[serde(default)]
+    pub(crate) path: Vec<Value>,
 }
 
 /// A catalogue operation that could not produce a confirmed result.

@@ -9,14 +9,31 @@ pub(super) struct Ratio {
     pub(super) denominator: NonZeroU128,
 }
 
-pub(super) fn divisor(mut first: u128, mut second: u128) -> u128 {
+/// Greatest common divisor by Stein's binary algorithm: `u128` has no hardware
+/// division, so shifts and subtractions replace Euclid's remainder loop.
+pub(super) fn divisor(first: u128, second: u128) -> u128 {
+    if first == 0 {
+        return second;
+    }
+    if second == 0 {
+        return first;
+    }
     if second.is_power_of_two() {
         return 1u128 << first.trailing_zeros().min(second.trailing_zeros());
     }
-    while second != 0 {
-        (first, second) = (second, first % second);
+    let shift = first.trailing_zeros().min(second.trailing_zeros());
+    let mut odd = first >> first.trailing_zeros();
+    let mut rest = second;
+    loop {
+        rest >>= rest.trailing_zeros();
+        if odd > rest {
+            (odd, rest) = (rest, odd);
+        }
+        rest -= odd;
+        if rest == 0 {
+            return odd << shift;
+        }
     }
-    first
 }
 
 fn quotient(numerator: u128, denominator: NonZeroU128) -> u128 {
@@ -46,6 +63,32 @@ impl Ratio {
         NonZeroU128::new(quotient(first.get(), common).checked_mul(second.get())?)
     }
 
+    /// Combines coprime fractions over their least common denominator. Only the
+    /// shared factor of the denominators can divide the combined numerator, so
+    /// the result is reduced by a divisor of that factor instead of the whole
+    /// common denominator.
+    fn combine(self, other: Self, numerator: fn(u128, u128) -> Option<u128>) -> Option<Self> {
+        let shared = NonZeroU128::new(divisor(self.denominator.get(), other.denominator.get()))?;
+        let combined = numerator(
+            self.numerator
+                .checked_mul(quotient(other.denominator.get(), shared))?,
+            other
+                .numerator
+                .checked_mul(quotient(self.denominator.get(), shared))?,
+        )?;
+        if combined == 0 {
+            return Self::new(0, NonZeroU128::MIN);
+        }
+        let reduction = NonZeroU128::new(divisor(combined, shared.get()))?;
+        Some(Self {
+            numerator: quotient(combined, reduction),
+            denominator: NonZeroU128::new(
+                quotient(self.denominator.get(), shared)
+                    .checked_mul(quotient(other.denominator.get(), reduction))?,
+            )?,
+        })
+    }
+
     pub(super) fn add(self, other: Self) -> Option<Self> {
         if other.numerator == 0 {
             return Some(self);
@@ -53,22 +96,14 @@ impl Ratio {
         if self.numerator == 0 {
             return Some(other);
         }
-        let denominator = Self::common(self.denominator, other.denominator)?;
-        Self::new(
-            self.at(denominator)?.checked_add(other.at(denominator)?)?,
-            denominator,
-        )
+        self.combine(other, u128::checked_add)
     }
 
     pub(super) fn sub(self, other: Self) -> Option<Self> {
         if other.numerator == 0 {
             return Some(self);
         }
-        let denominator = Self::common(self.denominator, other.denominator)?;
-        Self::new(
-            self.at(denominator)?.checked_sub(other.at(denominator)?)?,
-            denominator,
-        )
+        self.combine(other, u128::checked_sub)
     }
 
     pub(super) fn mul(self, other: Self) -> Option<Self> {
@@ -190,6 +225,108 @@ mod tests {
                     quotient(numerator, denominator),
                     numerator / denominator.get()
                 );
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn binary_divisor_matches_euclid_across_full_width() {
+        fn euclid(mut first: u128, mut second: u128) -> u128 {
+            while second != 0 {
+                (first, second) = (second, first % second);
+            }
+            first
+        }
+        let mut values = vec![
+            0,
+            1,
+            2,
+            3,
+            44_100,
+            48_000,
+            96_000,
+            u128::from(u32::MAX),
+            u128::from(u64::MAX),
+            1 << 64,
+            (1 << 64) + 1,
+            1 << 127,
+            u128::MAX - 1,
+            u128::MAX,
+        ];
+        let mut state = 0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c834_u128;
+        for _ in 0..64 {
+            state = state
+                .wrapping_mul(0x2360_ed05_1fc6_5da4_4385_df64_9fcc_f645)
+                .wrapping_add(0x5851_f42d_4c95_7f2d_1405_7b7e_f767_814f);
+            values.push(state >> (state % 127));
+            values.push((state >> 96) * 44_100 * 48_000);
+        }
+        for &first in &values {
+            for &second in &values {
+                assert_eq!(
+                    divisor(first, second),
+                    euclid(first, second),
+                    "first={first}, second={second}",
+                );
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn shared_factor_sums_match_full_common_denominator_reduction() {
+        let reference = |first: Ratio, second: Ratio, add: bool| {
+            let denominator = Ratio::common(first.denominator, second.denominator)?;
+            let (first, second) = (first.at(denominator)?, second.at(denominator)?);
+            let numerator = if add {
+                first.checked_add(second)?
+            } else {
+                first.checked_sub(second)?
+            };
+            Ratio::new(numerator, denominator)
+        };
+        let mut components = vec![
+            1,
+            2,
+            3,
+            1 << 32,
+            3 << 31,
+            44_100,
+            48_000,
+            44_100 << 32,
+            u128::from(u64::MAX),
+            u128::MAX >> 1,
+            u128::MAX,
+        ];
+        let mut state = 0x2545_f491_4f6c_dd1d_9e37_79b9_7f4a_7c15_u128;
+        for _ in 0..24 {
+            state = state
+                .wrapping_mul(0x2360_ed05_1fc6_5da4_4385_df64_9fcc_f645)
+                .wrapping_add(0x5851_f42d_4c95_7f2d_1405_7b7e_f767_814f);
+            components.push((state >> (state % 125)).max(1));
+        }
+        let ratios: Vec<_> = components
+            .iter()
+            .flat_map(|&numerator| {
+                components.iter().filter_map(move |&denominator| {
+                    Ratio::new(numerator, NonZeroU128::new(denominator)?)
+                })
+            })
+            .step_by(7)
+            .collect();
+        for &first in &ratios {
+            for &second in &ratios {
+                for add in [true, false] {
+                    let combined = if add {
+                        first.add(second)
+                    } else {
+                        first.sub(second)
+                    };
+                    if let Some(expected) = reference(first, second, add) {
+                        assert_eq!(combined, Some(expected), "{first:?} {second:?} add={add}");
+                    } else if let Some(value) = combined {
+                        assert_eq!(divisor(value.numerator, value.denominator.get()), 1);
+                    }
+                }
             }
         }
     }

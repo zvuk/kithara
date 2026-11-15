@@ -19,6 +19,8 @@ pub(super) struct DspSplitComplex {
 
 #[link(name = "Accelerate", kind = "framework")]
 unsafe extern "C" {
+    pub(super) fn vvtan(output: *mut f64, input: *const f64, length: *const i32);
+
     pub(super) fn vDSP_DFT_DestroySetup(setup: VdspDftSetup);
 
     pub(super) fn vDSP_DFT_Execute(
@@ -163,7 +165,7 @@ unsafe extern "C" {
         n: VdspLength,
     );
 
-    /// `c = a − b`, with the subtrahend first, as vDSP declares it.
+    /// `c = a - b`, with the subtrahend first, as vDSP declares it.
     pub(super) fn vDSP_vsub(
         b: *const f32,
         ib: VdspStride,

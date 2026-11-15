@@ -1,13 +1,16 @@
 //! Concrete session state, graph dispatch, and platform backends.
 
+pub(crate) mod context;
 pub(crate) mod decks;
 pub(crate) mod dispatch;
 pub(crate) mod graph;
+pub(crate) mod processor;
 pub(crate) mod protocol;
 pub(crate) mod queue;
 pub(crate) mod state;
 #[cfg(test)]
 pub(crate) mod tests;
+pub(crate) mod timeline;
 pub(crate) mod transport;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -17,6 +20,8 @@ pub(crate) mod offline;
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web;
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod web_output;
 
 pub(crate) use protocol::{HostDispatcher, SessionError, SessionSampleRate, ask};
 pub(crate) use queue::HostProtocol;

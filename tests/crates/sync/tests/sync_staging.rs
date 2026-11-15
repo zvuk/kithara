@@ -84,7 +84,6 @@ struct Delivered {
 }
 
 fn delivered(harness: &ProductHarness, operations: &[Operation]) -> Vec<Delivered> {
-    // Ruling: sync_receipt_delivered codes and accepted bit → executor-qualified Seq: owner-visible Ready state for Cue, native returned Outcome for Load/Start — spec §11.2–§11.3.
     harness
         .decks
         .iter()
@@ -201,9 +200,13 @@ async fn prepare_cue(
         .await
         .expect("paused cue seek");
     let item = harness.decks[0].current().expect("paused current track").id;
+    // The seek and SYNC travel on separate channels, so SYNC waits to see the seek land.
     while harness.decks[0]
         .track_snapshot(item)
-        .is_some_and(|snapshot| snapshot.track.pending_lane)
+        .is_some_and(|snapshot| {
+            snapshot.track.pending_lane
+                || (snapshot.track.position.as_secs_f64() - prepared).abs() > 1.0 / rate
+        })
     {
         hang_tick!("prepare_cue: waiting for progress".to_owned());
         let _ = harness.render(case, BLOCK_FRAMES).await;
@@ -289,7 +292,7 @@ async fn prepare_incoming(
 }
 
 async fn release_incoming_grid(harness: &ProductHarness, operation: Operation) {
-    let Operation::Load { item, seq } = operation else {
+    let Operation::Load { item, .. } = operation else {
         panic!("incoming load sequence")
     };
     let ArtifactSource::Value(model) = harness.provider_grid(0) else {
@@ -302,7 +305,6 @@ async fn release_incoming_grid(harness: &ProductHarness, operation: Operation) {
             deck,
             answer: GridAnswer {
                 item,
-                load: seq,
                 model: Ok((*model).clone()),
             },
         })
@@ -421,9 +423,9 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
     let prepared = prepared_mark(&harness, cue);
     assert!(
         (snapshot.track.position.as_secs_f64() - prepared).abs() <= 1.0 / rate,
-        "the Ready segment begins at the exact prepared source frame"
+        "the Ready segment begins at the exact prepared source frame: position {:?}, prepared {prepared}",
+        snapshot.track.position,
     );
-    // Ruling: installed mapped lane before sound → one cue Seq reaches Ready, then one native Applied Start and silence before its aligned first PCM — spec §4.5, §11.3.
     let opened = harness.host.position();
     harness.play_all().await;
     let mut pcm = Vec::new();
@@ -497,7 +499,6 @@ async fn unloading_the_track_reports_its_installed_lane_cancelled(
     let operation = prepare_cue(&mut harness, case, rate, cue).await;
     let _ = render_until(&mut harness, case, operation, INSTALLED).await;
 
-    // Ruling: unloading cancels an installed prepared lane → unload supersedes a scheduled Start's slot basis, with Stale and no Applied — spec §11.3.
     let operation = schedule_start(&mut harness, case).await;
     let control = harness.decks[0].control().clone();
     harness
@@ -537,7 +538,6 @@ async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
 ) {
     let case = STAGED_WITHOUT_CAPACITY;
     let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
-    // Ruling: spec §11.3 Capacity needs a seated Warm load; an unseated Idle load does not consume the worker's foreground capacity.
     let contender = harness.add_seated_deck(case).await;
     let operation = prepare_incoming(&mut harness, case, rate, cue, contender, false).await;
 
@@ -608,7 +608,6 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         case.id(),
     );
     harness.mark("staged cue, then a superseding cue");
-    // Ruling: superseded prepared lanes → two rapid selections of incoming linked tracks waiting for Grid, without touching the sounding track — spec §6 scenario 11, §11.3.
     let superseded = prepare_incoming(&mut harness, case, rate, cue, 0, true).await;
     let candidate_staged = Window::read(&harness, case);
     let successor = prepare_incoming(&mut harness, case, rate, superseding, 0, true).await;
@@ -686,7 +685,6 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
         let _ = harness.render(case, BLOCK_FRAMES).await;
     }
     let receipts = delivered(&harness, &[superseded, successor]);
-    // Ruling: superseded preparation has no rejection → replaced Load is cancelled or already applied; only the successor reaches Ready — spec §6 scenario 11, §11.3.
     assert!(
         receipts.iter().all(|receipt| {
             (receipt.operation == superseded

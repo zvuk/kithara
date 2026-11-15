@@ -331,7 +331,7 @@ fn expected_selection_reports_missing_identities_when_no_binary_is_listed() {
 #[test]
 fn expected_selection_rejects_unsupported_request_combinations() {
     for extra in [
-        vec!["--touched"],
+        vec!["--draft"],
         vec!["--rerun", "latest"],
         vec!["--rerun=latest"],
         vec!["-Rlatest"],

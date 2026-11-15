@@ -22,7 +22,7 @@ pub(super) struct Container<'a> {
     pub(super) image: String,
     pub(super) network: &'a str,
     /// Which cores its jobs may use, as a set rather than a share. See
-    /// [`super::services::cpuset`].
+    /// [`super::cpu::assignments`].
     pub(super) cpuset: String,
     pub(super) memory: &'a str,
     /// The slice that caps the fleet as a whole. A runner's own `memory` never
@@ -45,17 +45,20 @@ impl Container<'_> {
     /// The build root is the runner's own: one job runs per container, and the
     /// lane runner re-points the alias inside it at the lane's build, which
     /// two jobs sharing one root would race. The lanes' builds are not: every
-    /// runner of a trust takes its lane's slots in one directory, so a lane
+    /// runner of a cache scope takes its lane's slots in one directory, so a lane
     /// built on one runner is warm for the next that runs it. Cargo's home is shared by the
-    /// runners of one trust, so a crate is downloaded once per trust, while a
+    /// runners of one cache scope, so a crate is downloaded once per scope, while a
     /// review job never writes what a trusted job reads. It is mounted whole
     /// rather than as its registry and its git checkouts separately: cargo
     /// guards both with a lock file kept beside them, and mounting the data
     /// without the lock leaves two jobs unpacking one crate into one directory.
     /// Host paths keep these write-heavy caches on the disk the machine profile
-    /// selects instead of wherever Docker stores named volumes.
+    /// selects instead of wherever Docker stores named volumes. An Android
+    /// runner also keeps its Gradle home, its own rather than its scope's:
+    /// Gradle asks the holder of a cache lock to release it over loopback, and
+    /// separate containers do not share one.
     pub(super) fn mounts(host: &LinuxHost, runner: &LinuxRunner) -> Vec<(String, &'static str)> {
-        vec![
+        let mut mounts = vec![
             (
                 Self::cargo_home(host, runner)
                     .to_string_lossy()
@@ -96,7 +99,18 @@ impl Container<'_> {
                     .into_owned(),
                 consts::PREVIOUS_LANES_MOUNT,
             ),
-        ]
+        ];
+        if matches!(runner.flavor, RunnerFlavor::Android) {
+            mounts.push((
+                host.cache_root
+                    .join("gradle")
+                    .join(&runner.name)
+                    .to_string_lossy()
+                    .into_owned(),
+                consts::GRADLE_HOME_MOUNT,
+            ));
+        }
+        mounts
     }
 
     /// Where a runner's jobs build: every lane's directory, the alias pointing
@@ -105,24 +119,20 @@ impl Container<'_> {
         host.cache_root.join("target").join(&runner.name)
     }
 
-    /// Where the runners of one trust take their lanes' build slots.
+    /// Where the runners of one cache scope take their lanes' build slots.
     pub(super) fn build_slots(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
         host.cache_root
             .join(consts::BUILD_SLOTS_DIR)
-            .join(runner.cache_trust.as_str())
+            .join(&runner.cache_scope)
     }
 
-    /// Where the runners of one trust keep kache's host file and store.
+    /// Where the runners of one cache scope keep kache's host file and store.
     pub(super) fn kache(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
-        host.cache_root
-            .join(consts::KACHE_DIR)
-            .join(runner.cache_trust.as_str())
+        host.compiler_cache_root().join(&runner.cache_scope)
     }
 
     fn cargo_home(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
-        host.cache_root
-            .join("cargo")
-            .join(runner.cache_trust.as_str())
+        host.cache_root.join("cargo").join(&runner.cache_scope)
     }
 
     pub(super) fn mount_type(source: &str) -> &'static str {
@@ -138,14 +148,14 @@ impl Container<'_> {
     /// Cargo is told the build root, the same path in every container; a lane
     /// builds behind the alias in it, so every lane's compilations are keyed
     /// alike fleet-wide and the compiler cache serves one runner's entries to
-    /// another. The lane is told where its trust's slots are. The store itself is the one the runner's credentials name;
+    /// another. The lane is told where its scope's slots are. The store itself is the one the runner's credentials name;
     /// nothing of it is kept on this disk. `production/main` is told where it
     /// claims lane directories too, until this layout replaces its own.
     ///
     /// The linker entries come from [`LINUX_LINKER_ENV`](consts::LINUX_LINKER_ENV), which the GitLab lane
     /// executor reads too: one statement of what a Linux job links with rather
     /// than one per way of starting a job.
-    pub(super) fn environment(runner: &LinuxRunner) -> Vec<String> {
+    pub(super) fn environment(host: &LinuxHost, runner: &LinuxRunner) -> Vec<String> {
         let root = Path::new(consts::BUILD_ROOT_MOUNT);
         let mut environment: Vec<String> = consts::CACHE_ENVIRONMENT
             .iter()
@@ -154,9 +164,21 @@ impl Container<'_> {
         environment.extend([
             // Containers own CPU admission; their kache store is shared.
             "KACHE_SCHEDULER=0".to_owned(),
+            format!("TMPDIR={}", Self::TMPDIR),
+            format!("{}={}", consts::KACHE_LOCAL_ROOT_ENV, consts::KACHE_MOUNT),
             format!("CARGO_HOME={}", consts::CARGO_HOME_MOUNT),
             format!("CARGO_TARGET_DIR={}", root.display()),
             format!("{}={}", consts::BUILD_SLOTS_ENV, consts::BUILD_SLOTS_MOUNT),
+            format!(
+                "{}={}",
+                consts::JOB_ROOM_BYTES_ENV,
+                host.free_bytes_for_a_job
+            ),
+            format!(
+                "{}={}",
+                consts::JOB_ROOM_WAIT_ENV,
+                host.job_room_wait_seconds
+            ),
             format!("KITHARA_CI_TARGET_ROOT={}", consts::PREVIOUS_LANES_MOUNT),
             format!(
                 "KITHARA_XTASK_TARGET={}",
@@ -186,6 +208,13 @@ impl Container<'_> {
     }
 
     pub(super) const PIDS_LIMIT: u32 = 8192;
+
+    const TMPDIR: &'static str = "/run/kithara-ci-tests";
+
+    /// Disposable job files stay within the runner's memory ceiling.
+    pub(super) fn tmpfs() -> String {
+        format!("{}:rw,exec,nosuid,nodev,size=4g,mode=1777", Self::TMPDIR)
+    }
 
     /// `RLIMIT_NICE` for every process of a job: 20 minus the lowest nice
     /// value a thread may set for itself, so 40 allows -20, as Android's init
@@ -232,15 +261,46 @@ pub(crate) mod tests {
     use serde_yaml_ng::Value;
 
     use super::*;
-    use crate::ci::{
-        config::workspace_root, environment::CacheTrust, host::linux::profile::tests::host_fixture,
-        previous_layout::previous_layout,
+    use crate::{
+        ci::{
+            environment::CacheTrust, host::linux::profile::tests::host_fixture,
+            previous_layout::previous_layout,
+        },
+        testing::workspace::root as workspace_root,
     };
 
+    #[test]
+    fn configured_compiler_store_keeps_scope_and_mount_ownership() {
+        let directory = tempfile::tempdir().unwrap();
+        let profile = directory.path().join("host.toml");
+        fs::write(
+            &profile,
+            format!(
+                "compiler_cache_root = \"/compiler-store\"\n{}",
+                toml::to_string(&host_fixture()).unwrap()
+            ),
+        )
+        .unwrap();
+        let host = LinuxHost::load(&profile).expect("separate compiler store volume");
+
+        for runner in &host.runners {
+            let store = Path::new("/compiler-store").join(&runner.cache_scope);
+            assert_eq!(Container::kache(&host, runner), store);
+            assert!(
+                Container::mounts(&host, runner)
+                    .contains(&(store.to_string_lossy().into_owned(), consts::KACHE_MOUNT))
+            );
+            assert_eq!(
+                Container::build_root(&host, runner),
+                host.cache_root.join("target").join(&runner.name)
+            );
+        }
+    }
+
     /// The value a runner's job is told for `name`.
-    pub(crate) fn told(runner: &LinuxRunner, name: &str) -> PathBuf {
+    pub(crate) fn told(host: &LinuxHost, runner: &LinuxRunner, name: &str) -> PathBuf {
         let prefix = format!("{name}=");
-        Container::environment(runner)
+        Container::environment(host, runner)
             .iter()
             .find_map(|entry| entry.strip_prefix(&prefix).map(PathBuf::from))
             .unwrap_or_else(|| panic!("{} is not told {name}", runner.name))
@@ -271,14 +331,36 @@ pub(crate) mod tests {
         let [first, second, ..] = host.runners.as_slice() else {
             panic!("the host fixture serves more than one runner");
         };
-        let root = told(first, "CARGO_TARGET_DIR");
+        let root = told(&host, first, "CARGO_TARGET_DIR");
 
-        assert_eq!(root, told(second, "CARGO_TARGET_DIR"));
+        assert_eq!(root, told(&host, second, "CARGO_TARGET_DIR"));
         assert_ne!(
             mounted_at(&host, first, &root),
             mounted_at(&host, second, &root),
             "two jobs re-point one alias"
         );
+    }
+
+    /// A job asks for the room its host names before it builds; the container
+    /// is the only way that number reaches it.
+    #[test]
+    fn a_job_is_told_the_room_its_host_requires() {
+        let mut host = host_fixture();
+        host.job_room_wait_seconds += 45;
+        for runner in &host.runners {
+            assert_eq!(
+                told(&host, runner, consts::JOB_ROOM_BYTES_ENV),
+                PathBuf::from(host.free_bytes_for_a_job.to_string()),
+                "{} tells the room a job needs",
+                runner.name
+            );
+            assert_eq!(
+                told(&host, runner, consts::JOB_ROOM_WAIT_ENV),
+                PathBuf::from(host.job_room_wait_seconds.to_string()),
+                "{} tells how long a job waits for it",
+                runner.name
+            );
+        }
     }
 
     /// A job of the previous layout builds and caches where its workflows and
@@ -310,7 +392,12 @@ pub(crate) mod tests {
         let host = host_fixture();
         for runner in &host.runners {
             for (name, value) in previous_layout().linux.told {
-                assert_eq!(told(runner, &name), value, "{} tells {name}", runner.name);
+                assert_eq!(
+                    told(&host, runner, &name),
+                    value,
+                    "{} tells {name}",
+                    runner.name
+                );
             }
         }
     }
@@ -322,27 +409,84 @@ pub(crate) mod tests {
     fn a_job_bootstraps_xtask_beside_its_lanes() {
         let host = host_fixture();
         let runner = host.runner("kithara-ci-octocat").expect("runner");
-        let root = told(runner, "CARGO_TARGET_DIR");
-        let xtask = told(runner, "KITHARA_XTASK_TARGET");
+        let root = told(&host, runner, "CARGO_TARGET_DIR");
+        let xtask = told(&host, runner, "KITHARA_XTASK_TARGET");
 
         assert_eq!(xtask.parent(), Some(root.as_path()));
         assert_eq!(xtask.file_name(), Some(OsStr::new(consts::XTASK_BUILD)));
     }
 
+    #[test]
+    fn private_cache_scopes_isolate_files_at_the_same_trust() {
+        let mut host = host_fixture();
+        "network".clone_into(&mut host.runners[0].cache_scope);
+        host.runners[0].sccache_s3_env_file = "/etc/kithara-ci/cache/network.env".into();
+        host.runners[0].labels = ["self-hosted", "linux", "x64", "kithara-network"]
+            .map(String::from)
+            .into();
+        let network = &host.runners[0];
+        for ordinary in &host.runners[1..] {
+            assert_eq!(network.cache_trust, ordinary.cache_trust);
+            assert_ne!(
+                Container::build_slots(&host, network),
+                Container::build_slots(&host, ordinary)
+            );
+            assert_ne!(
+                Container::kache(&host, network),
+                Container::kache(&host, ordinary)
+            );
+            assert_ne!(
+                Container::cargo_home(&host, network),
+                Container::cargo_home(&host, ordinary)
+            );
+        }
+    }
+
+    /// Gradle keeps the distribution its wrapper names and every plugin it
+    /// resolves under its user home. A container built for one job starts that
+    /// home empty, so every Android job downloaded the toolchain again and the
+    /// lane went red whenever a download timed out.
+    #[test]
+    fn an_android_runner_keeps_its_own_gradle_home_across_jobs() {
+        let host = host_fixture();
+        let gradle = Path::new(consts::GRADLE_HOME_MOUNT);
+        let mut android = 0;
+        for runner in &host.runners {
+            let mounted = Container::mounts(&host, runner)
+                .into_iter()
+                .find(|(_, at)| Path::new(at) == gradle)
+                .map(|(source, _)| PathBuf::from(source));
+            if matches!(runner.flavor, RunnerFlavor::Android) {
+                android += 1;
+                assert_eq!(
+                    mounted,
+                    Some(host.cache_root.join("gradle").join(&runner.name)),
+                    "{}",
+                    runner.name
+                );
+            } else {
+                assert_eq!(mounted, None, "{}", runner.name);
+            }
+        }
+        assert!(android > 0, "the fixture serves an Android runner");
+    }
+
     /// Cargo's home holds what jobs download and what they unpack it into, and
     /// a review job must never write what a trusted job reads: two runners
-    /// share a home exactly when they share a trust.
+    /// share a home exactly when they share a cache scope.
     #[test]
-    fn runners_share_a_cargo_home_exactly_when_they_share_a_trust() {
+    fn runners_share_a_cargo_home_exactly_when_they_share_a_scope() {
         let mut host = host_fixture();
         host.runners[0].cache_trust = CacheTrust::Trusted;
-        let home = |runner: &LinuxRunner| mounted_at(&host, runner, &told(runner, "CARGO_HOME"));
+        "trusted".clone_into(&mut host.runners[0].cache_scope);
+        let home =
+            |runner: &LinuxRunner| mounted_at(&host, runner, &told(&host, runner, "CARGO_HOME"));
 
         for first in &host.runners {
             for second in &host.runners {
                 assert_eq!(
                     home(first) == home(second),
-                    first.cache_trust == second.cache_trust,
+                    first.cache_scope == second.cache_scope,
                     "{} and {}",
                     first.name,
                     second.name
@@ -351,22 +495,23 @@ pub(crate) mod tests {
         }
     }
 
-    /// A lane's build is reused by whichever runner of its trust runs the lane
-    /// next, so runners keep their lanes' slots where every runner of a trust
+    /// A lane's build is reused by whichever runner of its scope runs the lane
+    /// next, so runners keep their lanes' slots where every runner of a scope
     /// sees them, and a review job never builds in a slot a trusted job reads.
     #[test]
-    fn runners_share_lane_slots_exactly_when_they_share_a_trust() {
+    fn runners_share_lane_slots_exactly_when_they_share_a_scope() {
         let mut host = host_fixture();
         host.runners[0].cache_trust = CacheTrust::Trusted;
+        "trusted".clone_into(&mut host.runners[0].cache_scope);
         let slots = |runner: &LinuxRunner| {
-            mounted_at(&host, runner, &told(runner, consts::BUILD_SLOTS_ENV))
+            mounted_at(&host, runner, &told(&host, runner, consts::BUILD_SLOTS_ENV))
         };
 
         for first in &host.runners {
             for second in &host.runners {
                 assert_eq!(
                     slots(first) == slots(second),
-                    first.cache_trust == second.cache_trust,
+                    first.cache_scope == second.cache_scope,
                     "{} and {}",
                     first.name,
                     second.name
@@ -378,17 +523,18 @@ pub(crate) mod tests {
     /// Every compile in a container reaches kache's store and remote through
     /// the host file the runner writes, whatever command started it: a stress
     /// run or the xtask bootstrap compiled cold into a store thrown away with
-    /// the container. The store is one per trust, as the Cargo home is.
+    /// the container. The store is one per scope, as the Cargo home is.
     #[test]
-    fn every_compile_reaches_its_trusts_kache() {
+    fn every_compile_reaches_its_scopes_kache() {
         let mut host = host_fixture();
         host.runners[0].cache_trust = CacheTrust::Trusted;
+        "trusted".clone_into(&mut host.runners[0].cache_scope);
         let store =
             |runner: &LinuxRunner| mounted_at(&host, runner, Path::new(consts::KACHE_MOUNT));
 
         for runner in &host.runners {
             assert_eq!(
-                told(runner, "KACHE_HOST_CONFIG"),
+                told(&host, runner, "KACHE_HOST_CONFIG"),
                 Path::new(consts::KACHE_MOUNT).join(consts::KACHE_HOST_FILE),
                 "{}",
                 runner.name
@@ -397,7 +543,7 @@ pub(crate) mod tests {
                 store(runner),
                 host.cache_root
                     .join(consts::KACHE_DIR)
-                    .join(runner.cache_trust.as_str())
+                    .join(&runner.cache_scope)
                     .to_string_lossy()
             );
         }
@@ -405,14 +551,28 @@ pub(crate) mod tests {
 
     #[test]
     fn containers_own_compiler_cpu_admission() {
-        for runner in &host_fixture().runners {
+        let host = host_fixture();
+        for runner in &host.runners {
             assert!(
-                Container::environment(runner)
+                Container::environment(&host, runner)
                     .iter()
                     .any(|entry| entry == "KACHE_SCHEDULER=0"),
                 "{} shares kache's CPU scheduler with other containers",
                 runner.name
             );
+        }
+    }
+
+    #[test]
+    fn job_temporary_files_use_the_bounded_memory_mount() {
+        let specification = Container::tmpfs();
+        let (mount, options) = specification.split_once(':').unwrap();
+        assert!(options.split(',').any(|option| option.starts_with("size=")));
+        assert!(options.split(',').any(|option| option == "nosuid"));
+        assert!(options.split(',').any(|option| option == "nodev"));
+        let host = host_fixture();
+        for runner in &host.runners {
+            assert_eq!(told(&host, runner, "TMPDIR"), Path::new(mount));
         }
     }
 
@@ -424,11 +584,11 @@ pub(crate) mod tests {
         let runner = host.runner("kithara-ci-octocat").expect("runner");
 
         assert!(
-            !Container::environment(runner)
+            !Container::environment(&host, runner)
                 .iter()
                 .any(|entry| entry.starts_with("SCCACHE_DIR=")),
             "{:?}",
-            Container::environment(runner)
+            Container::environment(&host, runner)
         );
     }
 
@@ -446,7 +606,7 @@ pub(crate) mod tests {
                 .iter()
                 .any(|(_, at)| Path::new(value).starts_with(at))
         };
-        let environment = Container::environment(runner);
+        let environment = Container::environment(&host, runner);
         let said: Vec<&str> = environment
             .iter()
             .filter_map(|entry| entry.split_once('='))
@@ -504,7 +664,7 @@ pub(crate) mod tests {
     fn a_job_is_told_which_linker_to_use() {
         let host = host_fixture();
         let runner = host.runner("kithara-ci-octocat").expect("runner");
-        let environment = Container::environment(runner);
+        let environment = Container::environment(&host, runner);
 
         for (name, value) in consts::LINUX_LINKER_ENV {
             assert!(
@@ -524,7 +684,7 @@ pub(crate) mod tests {
         let [first, second, ..] = host.runners.as_slice() else {
             panic!("the host fixture serves more than one runner");
         };
-        let environment = Container::environment(first);
+        let environment = Container::environment(&host, first);
         let models = environment
             .iter()
             .find_map(|entry| entry.strip_prefix("KITHARA_BEAT_MODEL_CACHE="))
@@ -548,7 +708,7 @@ pub(crate) mod tests {
         let host = host_fixture();
         let runner = host.runner("kithara-ci-octocat").expect("runner");
 
-        assert!(Container::environment(runner).contains(&format!(
+        assert!(Container::environment(&host, runner).contains(&format!(
             "SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}",
             SCCACHE_IDLE_TIMEOUT = consts::SCCACHE_IDLE_TIMEOUT
         )));

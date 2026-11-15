@@ -437,9 +437,15 @@ fn iced_leaves_the_hole_an_outline_asked_for() {
 
 #[kithara::test]
 fn iced_paints_what_a_clip_contains() {
+    let rgba = through_iced(&clipped());
+    let x = pixel_index(consts::ORIGIN.0 + consts::INSIDE.x + consts::INSIDE.w / 2.0);
+    let y = pixel_index(consts::ORIGIN.1 + consts::INSIDE.y + consts::INSIDE.h / 2.0);
+    let at = (y * usize::from(consts::SURFACE.0) + x) * 4;
     assert!(
-        clip_is_on_top(&through_iced(&clipped())),
-        "the iced backend painted its own geometry over what the clip contained"
+        clip_is_on_top(&rgba),
+        "the iced backend painted its own geometry over what the clip contained: centre={:?}, bytes={}",
+        rgba.get(at..at + 4),
+        rgba.len()
     );
 }
 

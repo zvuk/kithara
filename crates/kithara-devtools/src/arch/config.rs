@@ -572,72 +572,33 @@ pub(crate) struct NoLibStaticsThreshold {
     pub(crate) exempt_crates: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
 #[config(builder(none), fields(value))]
 pub(crate) struct PlatformLayerHygieneThreshold {
+    /// Enables the consumer's explicitly configured platform ownership policy.
+    #[serde(default)]
+    pub(crate) enabled: bool,
     /// Source root whose files this check governs, workspace-relative and
     /// trailing-slashed.
-    #[serde(default = "default_platform_root")]
+    #[serde(default)]
     pub(crate) root: String,
     /// Files sanctioned to name `std::sync::Arc` directly: the ownership
     /// primitive itself and the wasm shim that has no platform Arc to reach
     /// for.
-    #[serde(default = "default_arc_owner_files")]
+    #[serde(default)]
     pub(crate) arc_owner_files: Vec<String>,
     /// Sub-directories of the root the check does not read: the backends and
     /// the platform-specific trees whose job is to name the primitives the
     /// rest of the crate must not.
-    #[serde(default = "default_platform_excluded_subtrees")]
+    #[serde(default)]
     pub(crate) excluded_subtrees: Vec<String>,
     /// Sub-paths that implement the abstraction rather than consume it.
-    #[serde(default = "default_platform_impl_subtrees")]
+    #[serde(default)]
     pub(crate) impl_subtrees: Vec<String>,
 }
 
-fn default_arc_owner_files() -> Vec<String> {
-    [
-        "crates/kithara-platform/src/system/ownership.rs",
-        "crates/kithara-platform/src/wasm/sync/mod.rs",
-    ]
-    .map(String::from)
-    .to_vec()
-}
-
-fn default_platform_excluded_subtrees() -> Vec<String> {
-    ["backend/", "system/", "loom/", "wasm/"]
-        .map(String::from)
-        .to_vec()
-}
-
-fn default_platform_impl_subtrees() -> Vec<String> {
-    [
-        "flash/sync/",
-        "flash/tokio/",
-        "flash/system/",
-        "common/cancel/",
-        "common/time.rs",
-    ]
-    .map(String::from)
-    .to_vec()
-}
-
-fn default_platform_root() -> String {
-    "crates/kithara-platform/src/".to_owned()
-}
-
-impl Default for PlatformLayerHygieneThreshold {
-    fn default() -> Self {
-        Self {
-            arc_owner_files: default_arc_owner_files(),
-            excluded_subtrees: default_platform_excluded_subtrees(),
-            impl_subtrees: default_platform_impl_subtrees(),
-            root: default_platform_root(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
 #[config(builder(none), fields(value))]
 pub(crate) struct CancelRootSitesThreshold {
@@ -657,27 +618,11 @@ pub(crate) struct CancelRootSitesThreshold {
     /// `CancelToken::root` and the never-cancelled sentinel
     /// `CancelToken::never`. Both root a new cancel tree; `.child()` — the
     /// sanctioned derivation — is not one of these.
-    #[serde(default = "default_cancel_root_patterns")]
+    #[serde(default)]
     pub(crate) patterns: Vec<String>,
 }
 
-fn default_cancel_root_patterns() -> Vec<String> {
-    ["CancelToken::root", "CancelToken::never"]
-        .map(String::from)
-        .to_vec()
-}
-
-impl Default for CancelRootSitesThreshold {
-    fn default() -> Self {
-        Self {
-            allowed_files: Vec::new(),
-            exempt_crates: Vec::new(),
-            patterns: default_cancel_root_patterns(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
 #[config(builder(none), fields(value))]
 pub(crate) struct SmoothingPrimitiveSitesThreshold {
@@ -685,59 +630,23 @@ pub(crate) struct SmoothingPrimitiveSitesThreshold {
     pub(crate) allowed_files: Vec<String>,
     #[serde(default)]
     pub(crate) exempt_crates: Vec<String>,
-    #[serde(default = "default_smoothing_primitive_patterns")]
+    #[serde(default)]
     pub(crate) patterns: Vec<String>,
-}
-
-fn default_smoothing_primitive_patterns() -> Vec<String> {
-    ["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"]
-        .map(String::from)
-        .to_vec()
-}
-
-impl Default for SmoothingPrimitiveSitesThreshold {
-    fn default() -> Self {
-        Self {
-            allowed_files: Vec::new(),
-            exempt_crates: Vec::new(),
-            patterns: default_smoothing_primitive_patterns(),
-        }
-    }
 }
 
 /// Files allowed to name firewheel's DSP helpers directly, and the helper
 /// modules the facade owns.
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
 #[config(builder(none), fields(value))]
 pub(crate) struct FirewheelDspFacadeThreshold {
     #[serde(default)]
     pub(crate) allowed_files: Vec<String>,
-    #[serde(default = "default_firewheel_facade_modules")]
+    #[serde(default)]
     pub(crate) modules: Vec<String>,
 }
 
-fn default_firewheel_facade_modules() -> Vec<String> {
-    [
-        "dsp::fade",
-        "dsp::mix",
-        "dsp::filter::smoothing_filter",
-        "param::smoother",
-    ]
-    .map(String::from)
-    .to_vec()
-}
-
-impl Default for FirewheelDspFacadeThreshold {
-    fn default() -> Self {
-        Self {
-            allowed_files: Vec::new(),
-            modules: default_firewheel_facade_modules(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
 #[config(builder(none), fields(value))]
 pub(crate) struct TokioDepQuarantineThreshold {
@@ -755,24 +664,8 @@ pub(crate) struct TokioDepQuarantineThreshold {
     pub(crate) exempt_crates: Vec<String>,
     /// Crate names quarantined: a *production* (non-dev, non-build) dependency
     /// on any of these is forbidden outside the platform owner / exemptions.
-    #[serde(default = "default_quarantined_crates")]
+    #[serde(default)]
     pub(crate) quarantined: Vec<String>,
-}
-
-fn default_quarantined_crates() -> Vec<String> {
-    ["tokio", "tokio-util", "tokio-stream"]
-        .map(String::from)
-        .to_vec()
-}
-
-impl Default for TokioDepQuarantineThreshold {
-    fn default() -> Self {
-        Self {
-            allowed_crates: Vec::new(),
-            exempt_crates: Vec::new(),
-            quarantined: default_quarantined_crates(),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
@@ -1178,47 +1071,65 @@ pub(crate) struct ModuleLayer {
 mod tests {
     use super::*;
 
-    /// A namespace with no `thresholds.toml` section must still know what it
-    /// looks for. A derived `Default` hands the check an empty list and the
-    /// ratchet goes quiet instead of failing.
     #[test]
-    fn a_threshold_built_from_default_keeps_its_subjects() {
+    fn product_ownership_requires_explicit_subjects() {
         let thresholds = ThresholdsConfig::default();
-
-        assert_eq!(
-            thresholds.cancel_root_sites.patterns,
-            ["CancelToken::root", "CancelToken::never"]
-        );
-        assert_eq!(
-            thresholds.smoothing_primitive_sites.patterns,
-            ["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"]
-        );
-        assert_eq!(
-            thresholds.firewheel_dsp_facade.modules,
-            [
-                "dsp::fade",
-                "dsp::mix",
-                "dsp::filter::smoothing_filter",
-                "param::smoother"
-            ]
-        );
-        assert_eq!(
-            thresholds.tokio_dep_quarantine.quarantined,
-            ["tokio", "tokio-util", "tokio-stream"]
-        );
         assert_eq!(thresholds.field_passthrough.max_depth, 8);
-        assert_eq!(
-            thresholds.platform_layer_hygiene.root,
-            "crates/kithara-platform/src/"
-        );
-        assert_eq!(thresholds.platform_layer_hygiene.arc_owner_files.len(), 2);
+        assert!(thresholds.cancel_root_sites.patterns.is_empty());
+        assert!(thresholds.smoothing_primitive_sites.patterns.is_empty());
+        assert!(thresholds.firewheel_dsp_facade.modules.is_empty());
+        assert!(thresholds.tokio_dep_quarantine.quarantined.is_empty());
+        assert!(thresholds.platform_layer_hygiene.root.is_empty());
+        assert!(thresholds.platform_layer_hygiene.arc_owner_files.is_empty());
     }
 
-    /// The other half of the same trap. A present table takes the per-field
-    /// defaults, never the written `Default`, so a project that sets one key of
-    /// a threshold must keep the rest of that threshold's subjects.
     #[test]
-    fn a_partly_configured_threshold_keeps_the_keys_it_left_alone() {
+    fn configured_ownership_subjects_override_neutral_defaults() {
+        let thresholds: ThresholdsConfig = toml::from_str(
+            r#"
+[cancel_root_sites]
+patterns = ["Shutdown::forever"]
+
+[smoothing_primitive_sites]
+patterns = ["MySmoother::new"]
+
+[firewheel_dsp_facade]
+modules = ["dsp::mix"]
+
+[tokio_dep_quarantine]
+quarantined = ["other-runtime"]
+
+[platform_layer_hygiene]
+enabled = true
+root = "packages/platform/src/"
+arc_owner_files = ["packages/platform/src/owner.rs"]
+"#,
+        )
+        .expect("explicit ownership subjects");
+
+        assert_eq!(thresholds.cancel_root_sites.patterns, ["Shutdown::forever"]);
+        assert_eq!(
+            thresholds.smoothing_primitive_sites.patterns,
+            ["MySmoother::new"]
+        );
+        assert_eq!(thresholds.firewheel_dsp_facade.modules, ["dsp::mix"]);
+        assert_eq!(
+            thresholds.tokio_dep_quarantine.quarantined,
+            ["other-runtime"]
+        );
+        assert!(thresholds.platform_layer_hygiene.enabled);
+        assert_eq!(
+            thresholds.platform_layer_hygiene.root,
+            "packages/platform/src/"
+        );
+        assert_eq!(
+            thresholds.platform_layer_hygiene.arc_owner_files,
+            ["packages/platform/src/owner.rs"]
+        );
+    }
+
+    #[test]
+    fn partial_config_keeps_generic_defaults_and_does_not_select_ownership() {
         let thresholds: ThresholdsConfig = toml::from_str(
             r#"
 [field_passthrough]
@@ -1247,31 +1158,25 @@ excluded_subtrees = ["demo/"]
             thresholds.field_passthrough.transparent_wrappers,
             ["Arc", "Rc", "Box", "RefCell", "Cell", "Mutex", "RwLock"]
         );
-        assert_eq!(
-            thresholds.cancel_root_sites.patterns,
-            ["CancelToken::root", "CancelToken::never"]
+        assert!(thresholds.cancel_root_sites.patterns.is_empty());
+        assert!(thresholds.smoothing_primitive_sites.patterns.is_empty());
+        assert!(thresholds.firewheel_dsp_facade.modules.is_empty());
+        assert!(thresholds.tokio_dep_quarantine.quarantined.is_empty());
+        assert!(thresholds.platform_layer_hygiene.root.is_empty());
+        assert!(thresholds.platform_layer_hygiene.arc_owner_files.is_empty());
+        assert!(!thresholds.platform_layer_hygiene.enabled);
+    }
+
+    #[test]
+    fn ownership_config_rejects_unknown_fields_and_invalid_enable_values() {
+        assert!(
+            toml::from_str::<ThresholdsConfig>("[platform_layer_hygiene]\nenabled='yes'").is_err()
         );
-        assert_eq!(
-            thresholds.smoothing_primitive_sites.patterns,
-            ["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"]
+        assert!(
+            toml::from_str::<ThresholdsConfig>(
+                "[platform_layer_hygiene]\nenabled=true\nunknown=true"
+            )
+            .is_err()
         );
-        assert_eq!(
-            thresholds.firewheel_dsp_facade.modules,
-            [
-                "dsp::fade",
-                "dsp::mix",
-                "dsp::filter::smoothing_filter",
-                "param::smoother"
-            ]
-        );
-        assert_eq!(
-            thresholds.tokio_dep_quarantine.quarantined,
-            ["tokio", "tokio-util", "tokio-stream"]
-        );
-        assert_eq!(
-            thresholds.platform_layer_hygiene.root,
-            "crates/kithara-platform/src/"
-        );
-        assert_eq!(thresholds.platform_layer_hygiene.arc_owner_files.len(), 2);
     }
 }

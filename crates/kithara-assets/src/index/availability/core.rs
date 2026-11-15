@@ -1,16 +1,6 @@
 #![forbid(unsafe_code)]
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Weak;
-use std::{
-    collections::HashMap,
-    ops::Range,
-    path::PathBuf,
-    sync::{
-        OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{collections::HashMap, ops::Range, path::PathBuf};
 
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
@@ -20,8 +10,7 @@ use rangemap::RangeSet;
 
 use crate::{
     consts,
-    error::AssetsResult,
-    index::persistence::{FlushHub, Flushable},
+    index::persistence::{IndexCell, IndexState},
     layout::{ResourceKey, ResourceKeyKind},
 };
 
@@ -67,7 +56,7 @@ impl Availability {
 /// Opaque handle to the aggregate byte availability index.
 #[derive(Clone)]
 pub(crate) struct AvailabilityIndex {
-    pub(super) inner: Arc<InnerIndex>,
+    pub(super) inner: Arc<IndexCell<InnerIndex>>,
 }
 
 /// One resource's availability, readable without blocking.
@@ -96,23 +85,10 @@ pub(super) type AssetTree = HashMap<String, Arc<HashMap<String, Entry>>>;
 pub(super) struct InnerIndex {
     /// Maps `asset_root` -> `RelativePath` -> `Availability`
     pub(super) assets: ArcSwap<AssetTree>,
-    /// `true` when the in-memory aggregate has uncommitted writes
-    /// since the last successful flush.
-    pub(super) dirty: AtomicBool,
-    /// Set by [`AvailabilityIndex::attach_to`]. While `None`,
-    /// `ScopedAvailabilityObserver` falls back to the legacy
-    /// "explicit checkpoint only" contract — every observer event
-    /// just marks `dirty` so the next call to
-    /// [`AvailabilityIndex::flush`] writes the snapshot.
-    pub(super) hub: OnceLock<Arc<FlushHub>>,
     /// Committed files still awaiting their durability barrier. The flush
     /// forces these down before writing the snapshot, so a resource is
     /// never named in the manifest ahead of its own bytes.
     pub(super) pending_durability: DashMap<PathBuf, ResourceKey>,
-    /// Disk-backed persist target. Set once via
-    /// `AvailabilityIndex::enable_persistence`. Native only.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) persist: OnceLock<super::disk::AvailabilityPersist>,
     /// Resource snapshots displaced by range updates, held until quiesced.
     retired_snapshots: Mutex<Retired<Availability>>,
     /// Trees displaced by structural edits, held until quiesced.
@@ -122,16 +98,6 @@ pub(super) struct InnerIndex {
 impl AvailabilityIndex {
     pub(crate) fn new() -> Self {
         Self::default()
-    }
-
-    /// Bind this aggregate to a [`FlushHub`] for coordinated flushing.
-    /// Called once per `AssetStore` build; subsequent calls are no-ops.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn attach_to(&self, hub: &Arc<FlushHub>) {
-        if self.inner.hub.set(Arc::clone(hub)).is_err() {
-            return;
-        }
-        hub.register(Arc::downgrade(&self.inner) as Weak<dyn Flushable>);
     }
 
     pub(crate) fn available_ranges(&self, key: &ResourceKey) -> RangeSet<u64> {
@@ -153,7 +119,7 @@ impl AvailabilityIndex {
         let mut removed = false;
         self.edit_tree(|tree| removed = tree.remove(asset_root).is_some());
         if removed {
-            self.mark_dirty();
+            self.inner.mark_dirty();
         }
     }
 
@@ -164,7 +130,7 @@ impl AvailabilityIndex {
             return true;
         }
         let (root, path) = Self::resolve_refs(key);
-        let tree = self.inner.assets.load();
+        let tree = self.inner.state.assets.load();
         tree.get(root)
             .and_then(|asset| asset.get(path))
             .is_some_and(|entry| entry.load().contains(&range))
@@ -178,16 +144,17 @@ impl AvailabilityIndex {
     /// closure must therefore be idempotent - every caller here is (map
     /// inserts and removals).
     pub(super) fn edit_tree(&self, mut edit: impl FnMut(&mut AssetTree)) {
-        let displaced = self.inner.assets.rcu(|tree| {
+        let displaced = self.inner.state.assets.rcu(|tree| {
             let mut next = AssetTree::clone(tree);
             edit(&mut next);
             next
         });
-        self.inner.retired_trees.lock().retire(displaced);
+        self.inner.state.retired_trees.lock().retire(displaced);
     }
 
     fn entry(&self, asset_root: &str, path: &str) -> Option<Entry> {
         self.inner
+            .state
             .assets
             .load()
             .get(asset_root)
@@ -198,32 +165,10 @@ impl AvailabilityIndex {
     /// Lock-free like [`Self::contains_range`]: guards only, never ownership.
     pub(crate) fn final_len(&self, key: &ResourceKey) -> Option<u64> {
         let (root, path) = Self::resolve_refs(key);
-        let tree = self.inner.assets.load();
+        let tree = self.inner.state.assets.load();
         tree.get(root)
             .and_then(|asset| asset.get(path))
             .and_then(|entry| entry.load().final_len)
-    }
-
-    /// Force a synchronous flush. Routes through [`FlushHub::flush_now`]
-    /// when a hub is attached, or runs the inline serialise+write path
-    /// otherwise.
-    ///
-    /// # Errors
-    ///
-    /// Propagates the first per-source flush error encountered.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn flush(&self) -> AssetsResult<()> {
-        if let Some(hub) = self.inner.hub.get() {
-            return hub.flush_now();
-        }
-        if !self.inner.dirty.swap(false, Ordering::AcqRel) {
-            return Ok(());
-        }
-        let result = Flushable::flush(&*self.inner);
-        if result.is_err() {
-            self.inner.dirty.store(true, Ordering::Release);
-        }
-        result
     }
 
     fn insert_or_get_entry(&self, asset_root: &str, path: &str) -> Entry {
@@ -244,16 +189,9 @@ impl AvailabilityIndex {
         winner
     }
 
-    fn mark_dirty(&self) {
-        self.inner.dirty.store(true, Ordering::Release);
-        if let Some(hub) = self.inner.hub.get() {
-            hub.signal();
-        }
-    }
-
     pub(crate) fn record_commit(&self, key: &ResourceKey, final_len: u64) {
         if self.update_commit(key, final_len) {
-            self.mark_dirty();
+            self.inner.mark_dirty();
         }
     }
 
@@ -270,12 +208,13 @@ impl AvailabilityIndex {
     fn record_file_commit(&self, key: &ResourceKey, path: PathBuf, final_len: u64) {
         let pending = self
             .inner
+            .state
             .pending_durability
             .entry(path)
             .or_insert_with(|| key.clone());
         self.update_commit(key, final_len);
         drop(pending);
-        self.mark_dirty();
+        self.inner.mark_dirty();
     }
 
     pub(crate) fn record_write(&self, key: &ResourceKey, range: Range<u64>) {
@@ -285,7 +224,7 @@ impl AvailabilityIndex {
         let (root, path) = Self::resolve_refs(key);
         let entry = self.insert_or_get_entry(root, path);
         if self.update(&entry, |next| next.insert(range.clone())) {
-            self.mark_dirty();
+            self.inner.mark_dirty();
         }
     }
 
@@ -304,7 +243,7 @@ impl AvailabilityIndex {
             }
         });
         if removed {
-            self.mark_dirty();
+            self.inner.mark_dirty();
         }
     }
 
@@ -334,7 +273,7 @@ impl AvailabilityIndex {
             });
         });
         if dropped {
-            self.mark_dirty();
+            self.inner.mark_dirty();
         }
     }
 
@@ -351,49 +290,24 @@ impl AvailabilityIndex {
             changed = mutate(&mut next);
             next
         });
-        self.inner.retired_snapshots.lock().retire(displaced);
+        self.inner.state.retired_snapshots.lock().retire(displaced);
         changed
     }
 }
 
-impl Flushable for InnerIndex {
-    fn dirty(&self) -> &AtomicBool {
-        &self.dirty
-    }
-
-    fn flush(&self) -> AssetsResult<()> {
-        self.flush_with_durability(false)
-    }
-
-    fn flush_durable(&self) -> AssetsResult<()> {
-        self.flush_with_durability(true)
-    }
-
-    fn name(&self) -> &'static str {
-        "availability"
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-impl InnerIndex {
-    fn flush_with_durability(&self, _durable: bool) -> AssetsResult<()> {
-        Ok(())
-    }
+impl IndexState for InnerIndex {
+    const NAME: &'static str = "availability";
 }
 
 impl Default for AvailabilityIndex {
     fn default() -> Self {
         Self {
-            inner: Arc::new(InnerIndex {
+            inner: Arc::new(IndexCell::new(InnerIndex {
                 assets: ArcSwap::from_pointee(AssetTree::new()),
-                #[cfg(not(target_arch = "wasm32"))]
-                persist: OnceLock::new(),
-                hub: OnceLock::new(),
-                dirty: AtomicBool::new(false),
                 pending_durability: DashMap::new(),
                 retired_snapshots: Mutex::new(Retired::default()),
                 retired_trees: Mutex::new(Retired::default()),
-            }),
+            })),
         }
     }
 }
@@ -401,7 +315,7 @@ impl Default for AvailabilityIndex {
 impl std::fmt::Debug for AvailabilityIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AvailabilityIndex")
-            .field("tracked_assets", &self.inner.assets.load().len())
+            .field("tracked_assets", &self.inner.state.assets.load().len())
             .finish()
     }
 }
@@ -454,12 +368,14 @@ impl AvailabilityObserver for ScopedAvailabilityObserver {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
+    use std::sync::atomic::Ordering;
+
     use kithara_platform::{sync::Weak, time::Duration};
     use kithara_test_utils::kithara;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::index::persistence::IndexFile;
+    use crate::index::persistence::{Flushable, IndexFile};
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn availability_default_is_empty() {
@@ -657,7 +573,7 @@ mod tests {
         let idx = AvailabilityIndex::new();
         let k = ResourceKey::relative("test_asset", "file1");
         idx.record_commit(&k, 10);
-        let tree = idx.inner.assets.load_full();
+        let tree = idx.inner.state.assets.load_full();
         let snapshot = idx
             .entry("test_asset", "file1")
             .expect("a committed resource has an entry")
@@ -693,7 +609,7 @@ mod tests {
         let idx = AvailabilityIndex::new();
         let k = ResourceKey::relative("test_asset", "file1");
         idx.record_write(&k, 0..10);
-        let tree = idx.inner.assets.load();
+        let tree = idx.inner.state.assets.load();
         let reader = tree
             .get("test_asset")
             .and_then(|asset| asset.get("file1"))
@@ -724,7 +640,7 @@ mod tests {
     fn displaced_tree_is_freed_by_the_writer() {
         let idx = AvailabilityIndex::new();
         idx.record_write(&ResourceKey::relative("test_asset", "file1"), 0..10);
-        let reader = idx.inner.assets.load();
+        let reader = idx.inner.state.assets.load();
         let displaced: Weak<AssetTree> = Arc::downgrade(&reader);
 
         idx.record_write(&ResourceKey::relative("test_asset", "file2"), 0..10);
@@ -788,7 +704,7 @@ mod tests {
 
         let idx = AvailabilityIndex::new();
         idx.load_from(&file, &mut buf).unwrap();
-        assert!(idx.inner.assets.load().is_empty());
+        assert!(idx.inner.state.assets.load().is_empty());
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -801,6 +717,6 @@ mod tests {
 
         let idx = AvailabilityIndex::new();
         idx.load_from(&file, &mut buf).unwrap();
-        assert!(idx.inner.assets.load().is_empty());
+        assert!(idx.inner.state.assets.load().is_empty());
     }
 }

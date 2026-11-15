@@ -1,12 +1,17 @@
 use std::ops::Range;
 
 use kithara_platform::time::Duration;
+use kithara_signal::OutputContext;
 use kithara_test_macros as kithara;
-use kithara_warp::RenderContext;
 use num_traits::ToPrimitive;
 
 use super::{PlayerTrack, ReadOutcome, RtSink};
-use crate::bridge::{DeckEvent, PlaybackFault, RtMetrics, SlotState};
+use crate::bridge::{DeckEvent, ParameterCurve, PlaybackFault, RtMetrics, SlotState};
+
+pub(crate) struct TrackBuffers<'block, 'scratch, 'bus> {
+    pub(crate) scratch: &'block mut [&'scratch mut [f32]],
+    pub(crate) bus: &'block mut [&'bus mut [f32]],
+}
 
 /// Result of an exact packet-backed render range.
 #[derive(Debug)]
@@ -46,7 +51,7 @@ impl PlayerTrack {
         if self.state != SlotState::Playing {
             return false;
         }
-        let Some(outcome) = self.resource.poll_end(budget) else {
+        let Some(outcome) = self.resource.poll_end(budget, false) else {
             return false;
         };
         let event = match outcome {
@@ -64,6 +69,11 @@ impl PlayerTrack {
             }
             ReadOutcome::Full { .. } | ReadOutcome::Partial { .. } => return false,
         };
+        self.finish_terminal(event, offset, sink);
+        true
+    }
+
+    fn finish_terminal(&mut self, event: DeckEvent, offset: usize, sink: &mut RtSink<'_>) {
         self.finish_underrun(offset, sink);
         if self.stopping() {
             self.finish_stop(sink.at(offset));
@@ -72,25 +82,25 @@ impl PlayerTrack {
         self.state = SlotState::Ended;
         self.shut();
         sink.report(event);
-        true
     }
 
     #[kithara::probe(
         track_id = self.item_id.as_u64(),
-        output_base = context.map(|context| i64::from(context.output().output_frames().start)),
+        output_base = context.map(|context| i64::from(context.output_frames().start)),
         range_start = range.start,
         range_end = range.end,
         served_media_frames = self.resource.position().map_or(0, kithara_signal::SourceSpan::end)
     )]
     pub(crate) fn render(
         &mut self,
-        context: Option<&RenderContext>,
-        scratch: &mut [&mut [f32]],
-        bus: &mut [&mut [f32]],
+        context: Option<&OutputContext>,
+        buffers: TrackBuffers<'_, '_, '_>,
         range: Range<usize>,
         budget: &mut usize,
         sink: &mut RtSink<'_>,
+        curve: Option<&ParameterCurve>,
     ) -> TrackReadOutcome {
+        let TrackBuffers { scratch, bus } = buffers;
         if self.state == SlotState::Ended {
             return TrackReadOutcome::Eof;
         }
@@ -108,8 +118,7 @@ impl PlayerTrack {
             kithara::probe_event!(
                 pcm_context_refused,
                 track_id = self.item_id.as_u64(),
-                output_base =
-                    context.map(|context| i64::from(context.output().output_frames().start)),
+                output_base = context.map(|context| i64::from(context.output_frames().start)),
                 range_start = range.start,
                 range_end = range.end
             );
@@ -128,10 +137,16 @@ impl PlayerTrack {
             range.len()
         };
         let requested = range.start..range.start.saturating_add(limit);
+        if let Some(end) = self.pay_owed(budget) {
+            return end;
+        }
         let recovery_position = self.media_position();
-        let outcome = self
-            .resource
-            .read(context, scratch, requested.clone(), budget);
+        let outcome = if self.owed() == 0 {
+            self.resource
+                .read(context, scratch, requested.clone(), budget)
+        } else {
+            ReadOutcome::Full { frames: 0 }
+        };
         let frames = match outcome {
             ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
             ReadOutcome::Eof => return TrackReadOutcome::Eof,
@@ -142,6 +157,8 @@ impl PlayerTrack {
         if frames > 0 {
             self.end_underrun(range.start, recovery_position, true, sink);
             let written = range.start..range.start.saturating_add(frames);
+            self.output
+                .apply(curve, sink.start, scratch, written.clone());
             self.gate.apply(scratch, written.clone());
             self.fade.mix_range(scratch, bus, written);
         }
@@ -161,6 +178,26 @@ impl PlayerTrack {
             },
             ReadOutcome::Eof | ReadOutcome::Failed(_) => unreachable!(),
         }
+    }
+
+    /// Drops the lane frames a session-time dropout missed before any plays;
+    /// a debt PCM cannot cover yet keeps the track silent.
+    fn pay_owed(&mut self, budget: &mut usize) -> Option<TrackReadOutcome> {
+        let owed = usize::try_from(self.owed()).unwrap_or(usize::MAX);
+        if owed == 0 {
+            return None;
+        }
+        let dropped = match self.resource.discard(owed, budget) {
+            ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
+            ReadOutcome::Eof => return Some(TrackReadOutcome::Eof),
+            ReadOutcome::Failed(kind) => {
+                return Some(TrackReadOutcome::Failed(PlaybackFault::Source(kind.into())));
+            }
+        };
+        self.paid = self
+            .paid
+            .saturating_add(u32::try_from(dropped).unwrap_or(u32::MAX));
+        None
     }
 
     fn media_position(&self) -> Option<Duration> {
@@ -183,6 +220,7 @@ impl PlayerTrack {
         recovered: bool,
         sink: &mut RtSink<'_>,
     ) {
+        self.paid = 0;
         if self.gap > 0 {
             sink.report(DeckEvent::UnderrunEnded {
                 slot: sink.slot,
@@ -212,10 +250,13 @@ impl PlayerTrack {
                     position: self.media_position(),
                 });
             }
-            self.gap = self
-                .gap
-                .saturating_add(u32::try_from(limit - frames).unwrap_or(u32::MAX));
+            let missing = u32::try_from(limit - frames).unwrap_or(u32::MAX);
+            self.gap = self.gap.saturating_add(missing);
         }
+    }
+
+    pub(in crate::rt) fn prepare_offline(&mut self) -> bool {
+        self.state == SlotState::Playing && !self.gate.is_shut() && self.resource.prepare_offline()
     }
 
     /// Reads a fading tail; `usize` frame counts fit within `f32`'s finite range.
@@ -225,30 +266,45 @@ impl PlayerTrack {
         right: &mut [f32],
         _metrics: &RtMetrics,
         budget: &mut usize,
+        wait_for_pcm: bool,
     ) -> usize {
         let length = left.len().min(right.len());
         if self.state != SlotState::Playing || length == 0 {
             return 0;
         }
-        let gain = self.gain();
+        let gain = self.gain()
+            * self
+                .output
+                .gain()
+                .to_f32()
+                .expect("prepared output gain fits f32");
         let mut buffers = [&mut left[..length], &mut right[..length]];
-        let written = match self.resource.read(None, &mut buffers, 0..length, budget) {
-            ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
-            ReadOutcome::Eof | ReadOutcome::Failed(_) => 0,
-        };
-        for (index, (left, right)) in left[..written]
-            .iter_mut()
-            .zip(&mut right[..written])
+        let written =
+            match self
+                .resource
+                .read_in(None, &mut buffers, 0..length, budget, wait_for_pcm)
+            {
+                ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
+                ReadOutcome::Eof | ReadOutcome::Failed(_) => 0,
+            };
+        let mut gains = [0.0; crate::consts::FADE_CHUNK];
+        for (block, (left, right)) in left[..written]
+            .chunks_mut(crate::consts::FADE_CHUNK)
+            .zip(right[..written].chunks_mut(crate::consts::FADE_CHUNK))
             .enumerate()
         {
-            let progress = if length <= 1 {
-                1.0
-            } else {
-                index.to_f32().unwrap_or(f32::MAX) / (length - 1).to_f32().unwrap_or(f32::MAX)
-            };
-            let level = gain * (1.0 - progress);
-            *left *= level;
-            *right *= level;
+            let gains = &mut gains[..left.len()];
+            for (offset, level) in gains.iter_mut().enumerate() {
+                let index = block * crate::consts::FADE_CHUNK + offset;
+                let progress = if length <= 1 {
+                    1.0
+                } else {
+                    index.to_f32().unwrap_or(f32::MAX) / (length - 1).to_f32().unwrap_or(f32::MAX)
+                };
+                *level = gain * (1.0 - progress);
+            }
+            kithara_dsp::multiply_in_place(left, gains);
+            kithara_dsp::multiply_in_place(right, gains);
         }
         written
     }
@@ -261,7 +317,6 @@ mod tests {
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
     use kithara_test_utils::kithara;
-    use kithara_warp::RenderContext;
 
     use crate::{
         rt::track::{PcmConsumer, PlayerResource},
@@ -281,12 +336,11 @@ mod tests {
             None,
         )
         .expect("fixture output range is ordered");
-        let context = RenderContext::new(output, None)
-            .expect("fixture context is valid")
+        let context = output
             .for_output_range(40..80)
             .expect("fixture subrange is valid");
 
-        let spec = AudioSpec::new(2, context.output().sample_rate());
+        let spec = AudioSpec::new(2, context.sample_rate());
         let mut ring = PacketRing::new(spec, Duration::from_secs(1), 1);
         ring.push(PcmPacket::Chunk(Box::new(chunk(
             spec,
@@ -303,7 +357,7 @@ mod tests {
         .expect("resource");
         resource.refresh_mark(&mut 1);
         let frontier = resource
-            .mark(context.output().output_frames().start)
+            .mark(context.output_frames().start)
             .expect("mapped mark");
 
         assert_eq!(frontier.lane.frame, 8_000);

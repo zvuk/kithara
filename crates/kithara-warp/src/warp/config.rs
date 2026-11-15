@@ -2,12 +2,12 @@ use std::num::NonZeroUsize;
 
 use kithara_config::Config;
 use kithara_derive::Patch;
-use kithara_platform::sync::Arc;
 use kithara_stretch::{
-    ElasticBackendConfig, ElasticBackendConfigPatch, ElasticBackendConfigPatchError, StretchKind,
+    BackendCapabilities, ElasticBackendConfig, ElasticBackendConfigPatch,
+    ElasticBackendConfigPatchError, StretchKind,
 };
 
-use crate::{RegionPlan, consts};
+use crate::{Pitch, consts};
 
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
@@ -26,29 +26,24 @@ pub struct WarpConfig {
         patch(skip)
     )]
     speed: f32,
-    /// Whether a renderer built from this configuration starts on a
-    /// pitch-preserving engine, where its backend has one.
+    /// Pitch a renderer built from this configuration starts at, where its
+    /// backend has keylock.
     #[config(
         skip = "construction value the render lane changes live",
         builder(default),
         get(copy),
         patch(skip)
     )]
-    keylock: bool,
-    /// Stretch engine a renderer built from this configuration starts on.
+    pitch: Pitch,
+    /// Stretch engine every renderer built from this configuration renders on.
     #[config(
-        skip = "construction value the render lane changes live",
+        skip = "construction value fixed for the renderer's life",
         builder(default),
         get(copy),
         patch(skip)
     )]
     backend: StretchKind,
-    /// Per-region ratio corrections a renderer built from this configuration
-    /// applies over source frames.
-    #[config(skip = "shared immutable region plan", get(ref), patch(skip))]
-    region_plan: Option<Arc<RegionPlan>>,
     /// Backend preparation geometry, independent of compiled engine choices.
-    /// The render lane owns backend selection.
     #[config(nested, builder(default), get(copy), patch(nested, fallible))]
     backends: ElasticBackendConfig,
     /// Maximum source frames admitted to one elastic render operation.
@@ -61,15 +56,23 @@ pub struct WarpConfig {
 }
 
 impl WarpConfig {
-    /// A copy whose renderer starts at `speed` on `backend`, keylocked where
-    /// `keylock`: where a track's render lane stands when it opens, before
-    /// the lane's first command.
+    /// `pitch` where this configuration's backend can shift it apart from
+    /// speed; `None` on a backend without keylock.
     #[must_use]
-    pub fn starting_at(&self, speed: f32, keylock: bool, backend: StretchKind) -> Self {
+    pub fn pitch_control(&self, pitch: Pitch) -> Option<Pitch> {
+        self.backend
+            .capabilities()
+            .contains(BackendCapabilities::KEYLOCK)
+            .then_some(pitch)
+    }
+
+    /// A copy whose renderer starts at `speed` and `pitch`: where a track's
+    /// render lane stands when it opens, before its first command.
+    #[must_use]
+    pub fn starting_at(&self, speed: f32, pitch: Pitch) -> Self {
         Self {
             speed,
-            keylock,
-            backend,
+            pitch,
             ..self.clone()
         }
     }
@@ -80,6 +83,19 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    #[kithara::test]
+    fn a_pitch_is_controllable_only_on_a_backend_with_keylock() {
+        for kind in StretchKind::all() {
+            let config = WarpConfig::builder().backend(*kind).build();
+            let keylock = kind.capabilities().contains(BackendCapabilities::KEYLOCK);
+            assert_eq!(
+                config.pitch_control(Pitch::HELD),
+                keylock.then_some(Pitch::HELD),
+                "{kind}"
+            );
+        }
+    }
 
     #[kithara::test]
     #[case::default(None, None)]

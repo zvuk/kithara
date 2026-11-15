@@ -81,9 +81,9 @@ impl Transport {
             .exchange
             .open(HostRequest {
                 method,
+                body,
                 url,
                 headers,
-                body,
             })
             .await?;
         let mut response = Response::builder().status(status);

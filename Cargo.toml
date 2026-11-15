@@ -52,6 +52,7 @@ members = [
     "crates/kithara-stream",
     "crates/kithara-stretch",
     "crates/kithara-sync",
+    "crates/kithara-test-args",
     "crates/kithara-test-fixtures",
     "crates/kithara-test-macros",
     "crates/kithara-test-utils",
@@ -83,6 +84,8 @@ members = [
     "tests/crates/host",
     "tests/crates/play",
     "tests/crates/queue",
+    "tests/crates/queue-network",
+    "tests/crates/queue-zvuk",
     "tests/crates/stream",
     "tests/crates/sync",
     "tests/crates/warp",
@@ -132,6 +135,7 @@ default-members = [
     "crates/kithara-download",
     "crates/kithara-stream",
     "crates/kithara-sync",
+    "crates/kithara-test-args",
     "crates/kithara-test-fixtures",
     "crates/kithara-test-macros",
     "crates/kithara-test-utils",
@@ -162,6 +166,8 @@ default-members = [
     "tests/crates/host",
     "tests/crates/play",
     "tests/crates/queue",
+    "tests/crates/queue-network",
+    "tests/crates/queue-zvuk",
     "tests/crates/stream",
     "tests/crates/warp",
 ]
@@ -338,6 +344,7 @@ kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha5", d
 kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha5", default-features = false }
 kithara-stretch = { path = "crates/kithara-stretch", version = "0.0.1-alpha5", default-features = false }
 kithara-sync = { path = "crates/kithara-sync", version = "0.0.1-alpha5", default-features = false }
+kithara-test-args = { path = "crates/kithara-test-args", version = "0.0.1-alpha5" }
 kithara-test-dylib = { path = "tests/crates/dylib", version = "0.0.1-alpha5" }
 kithara-test-fixtures = { path = "crates/kithara-test-fixtures", version = "0.0.1-alpha5", default-features = false }
 kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha5" }
@@ -369,6 +376,7 @@ apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 arbitrary = { version = "1", features = ["derive"] }
 
 arc-swap = "1.9"
+arrayvec = "0.7"
 
 # memory profiling
 assert_no_alloc = "1.1"
@@ -377,6 +385,7 @@ assert_no_alloc = "1.1"
 async-trait = "0.1.92"
 
 # fast interleave/deinterleave
+audioadapter = "5"
 audioadapter-buffers = { version = "5.2", default-features = false, features = ["std"] }
 axum = "0.8.9"
 base64 = "0.23.1"
@@ -387,12 +396,14 @@ biquad = "0.6.0"
 
 # delegation
 bitflags = "2.13"
+blake3 = { version = "1.8", default-features = false }
 
 # Apple platform support
 block2 = "0.6.2"
 
 # storage (range maps + mmap)
 bon = "3.10"
+brotli = "8.0.4"
 bungee-sys = "0.1.1"
 bytes = "1.12.1"
 cargo_metadata = "0.23"
@@ -426,6 +437,8 @@ filetime = "0.2.29"
 firewheel = { version = "0.14.0", default-features = false, features = ["scheduled_events", "std", "tracing"] }
 firewheel-core = { version = "0.14.0", default-features = false, features = ["std", "serde"] }
 firewheel-web-audio = { version = "0.6.0", default-features = false }
+flate2 = "1.1.10"
+foldhash = { version = "0.2", default-features = false }
 fs4 = "1.1.0"
 futures = "0.3.34"
 
@@ -434,6 +447,8 @@ futures-lite = "2"
 getrandom = "0.4.3"
 glob = "0.3"
 gloo-timers = { version = "0.4", features = ["futures"] }
+# The package graph `nextest-filtering` parses a filterset against.
+guppy = "0.19.1"
 
 # hex encoding
 hex = "0.4"
@@ -475,7 +490,10 @@ memory-stats = "1.2"
 mmap-io = { version = "1.0", default-features = false }
 naga = { version = "27", features = ["wgsl-in", "termcolor"] }
 ndk-context = "0.1.1"
-nix = { version = "0.31", features = ["resource", "signal"] }
+# The filterset parser of the pinned `cargo-nextest` (`.config/ci-pins.toml`),
+# so a filterset is rejected exactly when the runner would reject it.
+nextest-filtering = "=0.23.0"
+nix = { version = "0.31", features = ["poll", "resource", "signal"] }
 num-traits = { version = "0.2", default-features = false }
 obfstr = "0.4.6"
 objc2 = "0.6.4"
@@ -532,6 +550,7 @@ signal-hook = "0.4"
 signalsmith-stretch = "0.1.3"
 skrifa = "0.37"
 smallvec = "1"
+socket2 = "0.6.5"
 symphonia = { version = "0.6.1", features = ["all", "opt-simd"] }
 symphonia-codec-aac = "0.6.1"
 symphonia-codec-pcm = "0.6.1"
@@ -597,7 +616,14 @@ windows-sys = "0.61"
 # already builds this exact version, so it costs no extra compilation.
 winit = "0.30"
 wreq = "=6.0.0-rc.31"
-wreq-util = "=3.0.0-rc.14"
+
+# Source lint gates run from the cached dev binary and spend most CPU in analysis and parsing.
+[profile.dev.package.kithara-devtools]
+opt-level = 2
+[profile.dev.package.syn]
+opt-level = 2
+[profile.dev.package.proc-macro2]
+opt-level = 2
 
 # Optimise CPU-heavy audio dependencies in debug builds so the audio
 # worker thread can keep up with real-time playback.  Without this,
@@ -686,6 +712,17 @@ strip = "symbols"
 [profile.release.package."*"]
 opt-level = 3
 
+# The vector kernels of the audio thread. At "z" the size heuristics keep
+# filter state on the stack and outline the inner loops;
+# `docs/guides/performance/dispatch-build.md` owns the measured cost.
+[profile.release.package.kithara-dsp]
+opt-level = 3
+
+# The source kernel of time-stretch and varispeed runs once per output frame;
+# at "z" its window and tap bookkeeping outline and stay scalar.
+[profile.release.package.kithara-warp]
+opt-level = 3
+
 # Best-of-both-worlds profile for maximum testing speed.
 # Combines release-grade runtime performance (opt-level 3) with fast
 # parallel compilation (codegen-units 16, LTO off).
@@ -752,6 +789,12 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-queue-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-queue-network-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-queue-zvuk-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-stream-tests]

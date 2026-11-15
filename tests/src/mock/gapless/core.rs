@@ -10,7 +10,7 @@ pub use kithara::{
     decode::{GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, TrackMetadata},
     events::{EventBus, TrackId},
     platform::time::{self, Duration},
-    play::{PlayerEvent, ResourceConfig, ResourceSrc},
+    play::{CrossfaderGain, PlayerEvent, ResourceConfig, ResourceSrc},
     queue::{TrackSource, Transition},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     stream::AudioCodec,
@@ -179,7 +179,12 @@ pub async fn render_synthetic_fused_deficit_seam(
     )
     .await;
     harness
-        .with_queue(move |queue| queue.set_level(FUSED_FIXTURE_MASTER_LEVEL))
+        .with_queue(move |queue| {
+            queue.set_crossfader(
+                CrossfaderGain::checked(FUSED_FIXTURE_MASTER_LEVEL)
+                    .expect("the master level is a crossfader gain"),
+            )
+        })
         .await
         .expect("set the mix level");
     let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation, stereo);

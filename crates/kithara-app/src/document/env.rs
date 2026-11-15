@@ -6,7 +6,7 @@ use serde_yaml_ng::Value;
 /// it sits at. Carries every pair, so one startup reports the whole gap instead
 /// of the first hole in it. Expansion runs over the merged tree, so the position
 /// is what tells an operator which of the two documents to fix.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 #[derive(derive_more::Error)]
 #[error(ignore)]
@@ -22,8 +22,8 @@ impl fmt::Display for MissingEnv {
     }
 }
 
-/// Replace every `$VAR` and `${VAR}` reference in `value` with what `lookup`
-/// resolves, walking the whole tree.
+/// Replace every `$VAR` and `${VAR}` reference in `value`, which sits at
+/// `path` in the document, with what `lookup` resolves, walking the whole tree.
 ///
 /// An empty value counts as unresolved: a blank key reaches the key server as a
 /// rejected request, which is harder to read than a refusal to start.
@@ -32,10 +32,11 @@ impl fmt::Display for MissingEnv {
 /// Returns every name that resolved to nothing, with the position it sits at.
 pub(crate) fn expand(
     value: &mut Value,
+    path: &str,
     lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<(), MissingEnv> {
     let mut missing = BTreeSet::new();
-    walk(value, "", lookup, &mut missing);
+    walk(value, path, lookup, &mut missing);
     if missing.is_empty() {
         Ok(())
     } else {
@@ -146,7 +147,7 @@ mod tests {
         let pairs = env(&[("KITHARA_TOKEN", "secret")]);
         let mut value: Value = serde_yaml_ng::from_str("key: $KITHARA_TOKEN").expect("valid yaml");
 
-        expand(&mut value, &lookup(&pairs)).expect("every reference resolves");
+        expand(&mut value, "", &lookup(&pairs)).expect("every reference resolves");
 
         assert_eq!(value["key"], Value::from("secret"));
     }
@@ -157,7 +158,7 @@ mod tests {
         let mut value: Value = serde_yaml_ng::from_str("key: https://${KITHARA_HOST}/master.m3u8")
             .expect("valid yaml");
 
-        expand(&mut value, &lookup(&pairs)).expect("every reference resolves");
+        expand(&mut value, "", &lookup(&pairs)).expect("every reference resolves");
 
         assert_eq!(value["key"], Value::from("https://cdn.example/master.m3u8"));
     }
@@ -170,7 +171,7 @@ mod tests {
         )
         .expect("valid yaml");
 
-        expand(&mut value, &lookup(&pairs)).expect("every reference resolves");
+        expand(&mut value, "", &lookup(&pairs)).expect("every reference resolves");
 
         assert_eq!(
             value["drm"]["providers"][0]["headers"]["X-Auth-Token"],
@@ -183,7 +184,7 @@ mod tests {
         let pairs = env(&[]);
         let mut value: Value = serde_yaml_ng::from_str("key: costs 5$ today").expect("valid yaml");
 
-        expand(&mut value, &lookup(&pairs)).expect("no reference to resolve");
+        expand(&mut value, "", &lookup(&pairs)).expect("no reference to resolve");
 
         assert_eq!(value["key"], Value::from("costs 5$ today"));
     }
@@ -194,7 +195,7 @@ mod tests {
         let mut value: Value =
             serde_yaml_ng::from_str("a: $KITHARA_ONE\nb: ${KITHARA_TWO}\n").expect("valid yaml");
 
-        let missing = expand(&mut value, &lookup(&pairs)).expect_err("both names are unset");
+        let missing = expand(&mut value, "", &lookup(&pairs)).expect_err("both names are unset");
 
         let report = missing.to_string();
         assert!(report.contains("KITHARA_ONE"), "{report}");
@@ -209,7 +210,7 @@ mod tests {
         )
         .expect("valid yaml");
 
-        let missing = expand(&mut value, &lookup(&pairs)).expect_err("the name is unset");
+        let missing = expand(&mut value, "", &lookup(&pairs)).expect_err("the name is unset");
 
         let report = missing.to_string();
         assert!(report.contains("drm.providers[0].cipher_key"), "{report}");
@@ -221,7 +222,7 @@ mod tests {
         let mut value: Value = serde_yaml_ng::from_str("key: $KITHARA_TOKEN").expect("valid yaml");
 
         let missing =
-            expand(&mut value, &lookup(&pairs)).expect_err("an empty value is not a value");
+            expand(&mut value, "", &lookup(&pairs)).expect_err("an empty value is not a value");
 
         assert!(missing.to_string().contains("KITHARA_TOKEN"));
     }

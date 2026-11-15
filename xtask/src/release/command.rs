@@ -28,6 +28,12 @@ pub(crate) struct ReleaseArgs {
 
 #[derive(Debug, clap::Subcommand)]
 enum ReleaseCommand {
+    /// Build and sign a self-contained universal macOS application.
+    App {
+        /// Keychain identity name or fingerprint; also `KITHARA_APP_SIGN_IDENTITY`.
+        #[arg(long)]
+        identity: Option<String>,
+    },
     /// Render the changelog from the history and the release tags.
     Changelog {
         /// Name the commits after the last release tag as this version.
@@ -53,6 +59,7 @@ pub(crate) fn run(args: &ReleaseArgs, ctx: &Ctx) -> Result<()> {
     let cfg = &ext.release;
     let tools = &ctx.config.tools;
     match &args.command {
+        ReleaseCommand::App { identity } => super::app::build(ctx, identity.as_deref()),
         ReleaseCommand::Changelog { version } => {
             if let Some(version) = version {
                 tag::validate_version(version)?;
@@ -290,13 +297,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::config::DocsChannel;
+    use crate::{config::DocsChannel, consts};
 
     fn config() -> ReleaseConfig {
         ReleaseConfig {
             core_asset: "primary.zip".into(),
             merged_asset: "single.zip".into(),
-            platform_assets: vec!["kithara.aar".into()],
+            platform_assets: vec!["kithara.aar".into(), consts::MACOS_APP_ARCHIVE.into()],
             docs: BTreeMap::from([(
                 "apple".to_string(),
                 DocsChannel {
@@ -334,11 +341,22 @@ mod tests {
         for name in ["primary.zip", "single.zip", "kithara.aar"] {
             fs::write(dir.path().join(name), b"x").expect("write artifact");
         }
+        fs::write(dir.path().join(consts::MACOS_APP_ARCHIVE), b"app")
+            .expect("write application artifact");
 
         let error = release_assets(&cfg, dir.path()).expect_err("docs.zip is missing");
         assert!(error.to_string().contains("docs.zip"), "{error}");
 
         fs::write(dir.path().join("docs.zip"), b"x").expect("write artifact");
-        assert_eq!(release_assets(&cfg, dir.path()).unwrap().len(), 4);
+        fs::remove_file(dir.path().join(consts::MACOS_APP_ARCHIVE))
+            .expect("remove application artifact");
+        let error = release_assets(&cfg, dir.path()).expect_err("application is missing");
+        assert!(
+            error.to_string().contains(consts::MACOS_APP_ARCHIVE),
+            "{error}"
+        );
+        fs::write(dir.path().join(consts::MACOS_APP_ARCHIVE), b"app")
+            .expect("write application artifact");
+        assert_eq!(release_assets(&cfg, dir.path()).unwrap().len(), 5);
     }
 }

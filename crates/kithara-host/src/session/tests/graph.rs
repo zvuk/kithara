@@ -1,6 +1,5 @@
 use std::num::NonZeroU32;
 
-use firewheel::FirewheelContext;
 use kithara_bufpool::HasPool;
 use kithara_command::{Live, ScopeId, ScopedReceipt, When};
 use kithara_effects::LimiterConfig;
@@ -14,11 +13,14 @@ use super::super::{
     dispatch::tick_session,
     graph::{drop_idle_context, idle, install_deck, remove_deck},
     protocol::SessionError,
-    queue::settle_receipt,
-    state::{HostRoot, RootView, SessionState},
+    queue::{place_moved, settle_receipt},
+    state::{DeckNode, HostRoot, RootView, SessionState, SessionStream},
     transport::observe_commits,
 };
-use crate::{HostSettings, HostSettingsChange, HostSettingsExec, rt::SessionOutput};
+use crate::{
+    HostSettings, HostSettingsChange, HostSettingsExec, rt::SessionOutput,
+    session::context::SessionGraph,
+};
 
 pub(crate) struct GraphSession<T> {
     state: SessionState<T, TestPools>,
@@ -46,22 +48,24 @@ impl<T> GraphSession<T> {
 
     pub(crate) fn new<F>(start: F) -> Self
     where
-        F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
+        F: FnMut(&mut SessionGraph, u32, &mut [DeckNode]) -> Result<T, String> + Send + 'static,
     {
         Self::with_sample_rate(Self::DEFAULT_SAMPLE_RATE, start)
     }
 
-    pub(crate) fn with_sample_rate<F>(rate: NonZeroU32, start: F) -> Self
+    pub(crate) fn with_sample_rate<F>(rate: NonZeroU32, mut start: F) -> Self
     where
-        F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
+        F: FnMut(&mut SessionGraph, u32, &mut [DeckNode]) -> Result<T, String> + Send + 'static,
     {
         Self {
-            state: state_for(rate, start),
+            state: state_for(rate, move |ctx, rate, decks| {
+                start(ctx, rate, decks).map(|backend| SessionStream::Realtime { _backend: backend })
+            }),
             scopes: Vec::new(),
         }
     }
 
-    pub(crate) fn ctx_mut(&mut self) -> Option<&mut FirewheelContext> {
+    pub(crate) fn ctx_mut(&mut self) -> Option<&mut SessionGraph> {
         self.state.ctx.as_mut()
     }
 
@@ -132,6 +136,7 @@ impl<T> GraphSession<T> {
     }
 
     fn settle(&mut self) {
+        let mut moved = Vec::new();
         while let Some(receipt) = self
             .state
             .channel
@@ -139,13 +144,18 @@ impl<T> GraphSession<T> {
             .and_then(kithara_command::ScopedSender::receipt)
         {
             if let ScopedReceipt::Root(receipt) = receipt {
-                settle_receipt(&mut self.state, &receipt);
+                settle_receipt(&mut self.state, &receipt, &mut moved);
             }
         }
+        place_moved(&mut self.state, moved);
     }
 
     pub(crate) fn stream_mut(&mut self) -> Option<&mut T> {
-        self.state.stream.as_mut()
+        match self.state.stream.as_mut()? {
+            SessionStream::Realtime { _backend } => Some(_backend),
+            #[cfg(feature = "offline")]
+            SessionStream::Offline(_) => None,
+        }
     }
 
     pub(crate) fn transport(&mut self) -> Option<SessionTransportSnapshot> {
@@ -160,14 +170,19 @@ impl<T> GraphSession<T> {
 
 pub(crate) fn state<T, F>(start: F) -> GraphSession<T>
 where
-    F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
+    F: FnMut(&mut SessionGraph, u32, &mut [DeckNode]) -> Result<T, String> + Send + 'static,
 {
     GraphSession::new(start)
 }
 
-pub(crate) fn state_for<T, F, S>(sample_rate: NonZeroU32, start_stream_fn: F) -> SessionState<T, S>
+pub(crate) fn state_for<T, F>(
+    sample_rate: NonZeroU32,
+    mut start_stream_fn: F,
+) -> SessionState<T, TestPools>
 where
-    F: FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
+    F: FnMut(&mut SessionGraph, u32, &mut [DeckNode]) -> Result<SessionStream<T>, String>
+        + Send
+        + 'static,
 {
     let (root, root_view) = empty_root(sample_rate);
     let settings = HostSettings::builder().sample_rate(sample_rate).build();
@@ -175,13 +190,13 @@ where
         root,
         root_view,
         super::super::state::SessionBufferConfig::default(),
-        SessionOutput::new(LimiterConfig::default()),
+        SessionOutput::new(LimiterConfig::default(), pools()),
         Live::new(settings).expect("fixture settings"),
-        crate::HostConfig::<S>::builder()
+        crate::HostConfig::builder(pools())
             .settings(settings)
             .build()
             .channel_config(),
-        start_stream_fn,
+        move |ctx, rate, decks, _previous| start_stream_fn(ctx, rate, decks),
     )
 }
 

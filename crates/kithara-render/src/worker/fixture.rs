@@ -7,10 +7,9 @@ pub(crate) fn terminal_ring(
     blocking: bool,
     spec: kithara_signal::AudioSpec,
 ) -> (PcmReceiver, impl FnMut(PcmPacket) -> Result<(), PcmPacket>) {
-    use ringbuf::traits::Producer;
     let (receiver, mut producer) = super::reader::packet_fixture(blocking, spec);
     (receiver, move |packet| {
-        let result = producer.forward.try_push(packet);
+        let result = producer.push(packet);
         producer.signal();
         result
     })
@@ -38,12 +37,9 @@ where
         kithara_command::channel(kithara_command::ChannelConfig::builder().build());
     let config = kithara_warp::WarpConfig::builder().build();
     let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
-    let drain = kithara_effects::EffectDrain::new(0, &pools).expect("empty effect drain");
     let warp = crate::WarpSource::new(
         source,
         renderer,
-        Vec::new(),
-        drain,
         spec,
         pools.clone(),
         crate::LaneSetup {

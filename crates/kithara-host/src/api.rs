@@ -1,3 +1,5 @@
+use std::num::NonZeroU16;
+
 use kithara_dsp::fade::{self, FadeCurve};
 pub use kithara_play::{
     SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo, TempoError,
@@ -5,6 +7,13 @@ pub use kithara_play::{
 };
 
 use crate::error::PlayError;
+
+/// Beats in one bar of the session: the metronome accents and the accepted
+/// tempo map count bars of this many beats from session beat 0.
+pub const SESSION_BEATS_PER_BAR: NonZeroU16 = match NonZeroU16::new(4) {
+    Some(beats) => beats,
+    None => unreachable!(),
+};
 
 /// Which side of the DJ crossfader a mix input is assigned to. `Bypass` is unity
 /// at any position, for an ordinary fader with no crossfade.

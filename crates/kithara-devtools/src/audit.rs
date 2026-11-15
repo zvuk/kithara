@@ -142,13 +142,16 @@ fn run_autofix(ctx: &Ctx) {
         ctx,
     ));
     section("autofix: xtask lint");
-    report_autofix(lint::run(&lint::LintArgs {
-        command: None,
-        crates: Vec::new(),
-        paths: Vec::new(),
-        allow_dirty: true,
-        fix: true,
-    }));
+    report_autofix(lint::run(
+        &lint::LintArgs {
+            command: None,
+            crates: Vec::new(),
+            paths: Vec::new(),
+            allow_dirty: true,
+            fix: true,
+        },
+        ctx,
+    ));
     section("autofix: clippy (2/2)");
     report_autofix(run_external(
         "cargo",

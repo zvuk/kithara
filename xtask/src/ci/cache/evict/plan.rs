@@ -160,6 +160,25 @@ mod tests {
     }
 
     #[test]
+    fn snapshots_share_the_quota_and_keep_recently_read_outputs() {
+        let hash = crate::consts::ENTRY_HASH;
+        let snapshot = format!("target-snapshots/{hash}/{hash}.tar");
+        let compiler = format!("sccache/a/b/c/{hash}");
+        let mut listing = Listing::default();
+        listing.insert(&snapshot, 900, 1);
+        listing.insert(&compiler, 300, 2);
+        let snapshot = Entry::parse(&snapshot).expect("an evictable snapshot");
+        let compiler = Entry::parse(&compiler).unwrap();
+
+        assert_eq!(victims(&listing, &HashMap::new(), 1500)[0].entry, snapshot);
+        let reads = HashMap::from([(snapshot, 3)]);
+        let selected = victims(&listing, &reads, 1500);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].entry, compiler);
+        assert!(still_unused(&selected, &HashMap::from([(compiler, 4)])).is_empty());
+    }
+
+    #[test]
     fn a_kache_entry_is_both_of_its_objects() {
         let hash = crate::consts::ENTRY_HASH;
         let manifest = format!("kache/v3/manifests/serde/{hash}.json");

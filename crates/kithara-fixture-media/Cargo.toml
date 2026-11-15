@@ -46,7 +46,7 @@ sha2 = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 
 tempfile = { workspace = true }
 

@@ -7,24 +7,23 @@ use firewheel::{
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_command::{LevelInbox, ScopeId, Target};
 use kithara_dsp::param::SmootherConfig;
-use kithara_signal::{FrameCount, SegmentId, SessionFrame};
+use kithara_signal::{FrameCount, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
-use kithara_warp::RenderContext;
 use ringbuf::HeapProd;
 use triple_buffer::Input;
 
 use super::{
     super::{
-        command::{Armed, answer_stop},
+        command::{Armed, EqPrograms, FilterPrograms, answer_stop, output_curve},
         context::read_render_context,
         tail::SlotTail,
-        track::{PlayerTrack, RtSink},
+        track::{PlayerTrack, RtSink, TrackBuffers},
     },
     shape::StreamShape,
 };
 use crate::{
     bridge::{
-        DeckEvent, DeckMixSettings, DeckProtocol, DeckSnapshot, MixerInputs, RtMetrics,
+        DeckEvent, DeckMixSettings, DeckPart, DeckProtocol, DeckSnapshot, MixerInputs, RtMetrics,
         SessionInbox, Slot, SlotSnapshot, SlotState,
     },
     rt::{RenderPass, TrackSlots},
@@ -53,14 +52,29 @@ pub(in crate::rt) struct Deck {
     pub(in crate::rt) evict_frames: usize,
     pub(in crate::rt) mix: DeckMixSettings,
     pub(in crate::rt) render: RenderPass,
+    pub(in crate::rt) eq_programs: EqPrograms,
+    pub(in crate::rt) filter_programs: FilterPrograms,
     events: HeapProd<DeckEvent>,
     pub(in crate::rt) metrics: RtMetrics,
     pub(in crate::rt) sample_rate: NonZeroU32,
     pub(in crate::rt) declick: SmootherConfig,
+    pub(in crate::rt) epoch: Option<SessionEpoch>,
+}
+
+pub(in crate::rt) struct PreparedDeck {
+    pub(in crate::rt) shape: StreamShape,
+    scratch: [SampleBuffer; crate::consts::MIN_STEREO],
+    tracks: TrackSlots,
+    armed: Vec<Option<Armed>>,
+    tails: Vec<SlotTail>,
+    held: Vec<Option<SegmentId>>,
+    recycle: Vec<usize>,
+    render: RenderPass,
 }
 
 impl<E: SessionInbox> DeckMixer<E> {
     /// Allocates every slot tail and the fixed render scratch before stream processing.
+    /// The scope snapshot is published by the first actual render.
     ///
     /// # Errors
     /// Returns a pool error if either scratch or any required tail cannot be allocated.
@@ -72,52 +86,149 @@ impl<E: SessionInbox> DeckMixer<E> {
     where
         S: HasPool<f32>,
     {
+        let prepared = Self::prepare(&inputs, shape, pools)?;
+        Ok(Self::assemble(inputs, prepared))
+    }
+
+    pub(in crate::rt) fn prepare<S>(
+        inputs: &MixerInputs,
+        shape: StreamShape,
+        pools: &PoolRegion<S>,
+    ) -> Result<PreparedDeck, PoolError>
+    where
+        S: HasPool<f32>,
+    {
+        let config = inputs.config;
+        let slots = config.slots();
+        let capacity = usize::try_from(shape.max_block_frames.get()).unwrap_or(usize::MAX);
+        let tail_frames = FrameCount::new(
+            config
+                .declick_frames(shape.sample_rate)
+                .get()
+                .max(config.evict_fade().get()),
+        );
+        Ok(PreparedDeck {
+            shape,
+            tails: (0..slots.get())
+                .map(|_| SlotTail::new(pools, tail_frames))
+                .collect::<Result<Vec<_>, _>>()?,
+            scratch: [
+                pools.get_with_len::<f32>(capacity)?,
+                pools.get_with_len::<f32>(capacity)?,
+            ],
+            render: RenderPass::new(pools, shape, config)?,
+            tracks: TrackSlots::new(slots),
+            armed: vec![None; slots.get()],
+            held: vec![None; slots.get()],
+            recycle: vec![0; slots.get()],
+        })
+    }
+
+    pub(in crate::rt) fn assemble(inputs: MixerInputs, prepared: PreparedDeck) -> Self {
+        let shape = prepared.shape;
         let MixerInputs {
             scope,
             events,
             snapshot,
             config,
         } = inputs;
-        let slots = config.slots();
         let capacity = usize::try_from(shape.max_block_frames.get()).unwrap_or(usize::MAX);
         let declick_frames = config.declick_frames(shape.sample_rate).get();
         let evict_frames = config.evict_fade().get();
-        let tail_frames = FrameCount::new(declick_frames.max(evict_frames));
-        let tails = (0..slots.get())
-            .map(|_| SlotTail::new(pools, tail_frames))
-            .collect::<Result<Vec<_>, _>>()?;
-        let scratch = [
-            pools.get_with_len::<f32>(capacity)?,
-            pools.get_with_len::<f32>(capacity)?,
-        ];
         let mix = config.mix();
-        let mut mixer = Self {
+        Self {
             scope,
             snapshot,
-            scratch,
+            scratch: prepared.scratch,
             capacity,
             blocks: 0,
             recycle_per_block: config.recycle_per_block().get(),
             retired: false,
             session: PhantomData,
             deck: Deck {
-                tracks: TrackSlots::new(slots),
-                armed: vec![None; slots.get()],
-                tails,
-                held: vec![None; slots.get()],
-                recycle: vec![0; slots.get()],
+                tracks: prepared.tracks,
+                armed: prepared.armed,
+                tails: prepared.tails,
+                held: prepared.held,
+                recycle: prepared.recycle,
                 declick_frames,
                 evict_frames,
-                render: RenderPass::new(pools, shape, mix.gain(), config)?,
+                render: prepared.render,
+                eq_programs: EqPrograms::new(scope, config.eq_bands()),
+                filter_programs: FilterPrograms::new(scope),
                 mix,
                 events,
                 metrics: RtMetrics::default(),
                 sample_rate: shape.sample_rate,
                 declick: config.declick(),
+                epoch: None,
             },
+        }
+    }
+
+    pub(in crate::rt) fn update_sample_rate(&mut self, rate: NonZeroU32) {
+        self.deck.update_host_sample_rate(rate);
+    }
+
+    pub(in crate::rt) fn prepare_offline(
+        &mut self,
+        level: Option<LevelInbox<'_, DeckProtocol>>,
+        start: SessionFrame,
+        frames: usize,
+        rate: NonZeroU32,
+    ) -> usize {
+        self.update_sample_rate(rate);
+        let frames = frames.min(self.capacity);
+        let Some(mut level) = level.filter(|_| !self.retired) else {
+            return frames;
         };
-        mixer.publish(SessionFrame::new(0));
-        Ok(mixer)
+        let waits = self
+            .deck
+            .tracks
+            .iter_mut()
+            .any(|(_, track)| track.waits_offline())
+            || level.pending_commands().any(|part| match part {
+                DeckPart::Attach { pcm, .. } | DeckPart::Replace { pcm, .. } => pcm.waits_offline(),
+                _ => false,
+            });
+        if !waits {
+            return frames;
+        }
+        self.deck.recycle.fill(usize::MAX);
+        self.deck.arrivals(&mut level);
+        loop {
+            let Some(due) = level.next_due(start, 1) else {
+                break;
+            };
+            self.deck.take_due(due, true, true);
+            self.deck.resolve_armed(&mut level, start, start);
+        }
+        loop {
+            self.deck.maintain();
+            for (_, track) in self.deck.tracks.iter_mut() {
+                track.prepare_offline();
+            }
+            let ended = self.deck.observe_ends(0, start, &mut level);
+            self.deck.fire_ended(&mut level, start, start, true, true);
+            if !ended {
+                break;
+            }
+        }
+        let commands = level
+            .frames_until_due(start)
+            .and_then(|frames| usize::try_from(frames).ok())
+            .unwrap_or(frames);
+        self.deck
+            .tracks
+            .iter_mut()
+            .filter_map(|(_, track)| {
+                track
+                    .prepare_offline()
+                    .then(|| track.frames_until_boundary(start))
+                    .flatten()
+            })
+            .fold(frames.min(commands), usize::min)
+            .max(1)
     }
 
     #[must_use]
@@ -132,7 +243,7 @@ impl<E: SessionInbox> DeckMixer<E> {
     pub(super) fn render_block(
         &mut self,
         level: Option<LevelInbox<'_, DeckProtocol>>,
-        context: Option<&RenderContext>,
+        context: Option<&OutputContext>,
         start: SessionFrame,
         buffers: &mut ProcBuffers,
         frames: usize,
@@ -145,6 +256,8 @@ impl<E: SessionInbox> DeckMixer<E> {
             if let Some(mut level) = level {
                 sounded = self.render_block_in(&mut level, context, start, buffers, frames);
                 if level.is_closing() && self.deck.tails_quiet() {
+                    self.deck.cancel_eq_epoch(&mut level);
+                    self.deck.cancel_filter_epoch(&mut level);
                     level.retire();
                     self.retired = true;
                 }
@@ -168,12 +281,16 @@ impl<E: SessionInbox> DeckMixer<E> {
     pub(super) fn render_block_in(
         &mut self,
         level: &mut LevelInbox<'_, DeckProtocol>,
-        context: Option<&RenderContext>,
+        context: Option<&OutputContext>,
         start: SessionFrame,
         buffers: &mut ProcBuffers,
         frames: usize,
     ) -> bool {
         self.deck.recycle.fill(self.recycle_per_block);
+        if let Some(context) = context {
+            self.deck
+                .observe_output_epoch(level, context.session_epoch(), start);
+        }
         self.deck.arrivals(level);
         let mut sounded = false;
         let mut cursor = 0;
@@ -185,14 +302,15 @@ impl<E: SessionInbox> DeckMixer<E> {
                 let Some(due) = level.next_due(start, cursor.saturating_add(1)) else {
                     break;
                 };
-                self.deck.take_due(due, context.is_some());
+                self.deck.take_due(due, context.is_some(), false);
                 self.deck.resolve_armed(level, start, at);
             }
             self.deck.maintain();
             if context.is_some() {
-                self.deck.observe_ends(cursor, start);
+                self.deck.observe_ends(cursor, start, level);
             }
-            self.deck.fire_ended(level, start, at, context.is_some());
+            self.deck
+                .fire_ended(level, start, at, context.is_some(), false);
             let command_frames = level
                 .frames_until_due(at)
                 .and_then(|count| usize::try_from(count).ok())
@@ -214,9 +332,9 @@ impl<E: SessionInbox> DeckMixer<E> {
                 context,
                 buffers,
                 &mut self.scratch,
-                self.capacity,
                 cursor..end,
                 start,
+                level,
             );
             self.deck.advance(cursor..end, start, level);
             cursor = end;
@@ -234,7 +352,9 @@ impl<E: SessionInbox> DeckMixer<E> {
                 self.deck
                     .tracks
                     .at(slot)
-                    .map_or_else(SlotSnapshot::default, |track| slot_snapshot(track, at))
+                    .map_or_else(SlotSnapshot::default, |track| {
+                        slot_snapshot(track, at, self.deck.epoch)
+                    })
             };
         }
         snapshot.sample_rate = self.deck.sample_rate.get();
@@ -242,13 +362,28 @@ impl<E: SessionInbox> DeckMixer<E> {
         snapshot.metrics = self.deck.metrics.snapshot();
         let bands = self.deck.render.read_eq(snapshot.eq.gains_mut());
         snapshot.eq.set_bands(bands);
+        self.deck.eq_programs.publish(
+            &mut snapshot.eq,
+            if self.retired { None } else { self.deck.epoch },
+        );
+        self.deck.filter_programs.publish(
+            &mut snapshot.filter,
+            if self.retired { None } else { self.deck.epoch },
+            self.deck.render.filter_knob(),
+        );
         self.snapshot.publish();
     }
 }
 
-fn slot_snapshot(track: &PlayerTrack, at: SessionFrame) -> SlotSnapshot {
+fn slot_snapshot(
+    track: &PlayerTrack,
+    at: SessionFrame,
+    epoch: Option<SessionEpoch>,
+) -> SlotSnapshot {
     let position = track.position();
     SlotSnapshot {
+        binding: epoch.and_then(|epoch| track.slot_binding(epoch)),
+        output: track.output_snapshot(),
         state: track.state(),
         mark: track.mark(at),
         position,
@@ -273,17 +408,32 @@ impl Deck {
         start: SessionFrame,
         level: &mut LevelInbox<'_, DeckProtocol>,
     ) {
-        for (slot, track) in self.tracks.iter_mut() {
-            let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, start);
-            track.advance(range.clone(), &mut sink);
-            let Some((seq, resume)) = track.take_stop() else {
+        let at = range.end.checked_sub(1).map(|last| {
+            SessionFrame::new(
+                i64::from(start).saturating_add(i64::try_from(last).unwrap_or(i64::MAX)),
+            )
+        });
+        for slot in self.tracks.slots() {
+            let Some(track) = self.tracks.at_mut(slot) else {
                 continue;
             };
-            if level
-                .committed_mut(seq)
-                .is_some_and(|commands| answer_stop(commands, slot, resume))
+            let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, start);
+            track.advance(range.clone(), &mut sink);
+            let completed = track.output_program().zip(at).and_then(|(seq, at)| {
+                let curve =
+                    output_curve(level, Some(seq), slot).expect("the output program is active");
+                track.advance_output(curve, at)
+            });
+            let stopped = track.take_stop();
+            if let Some((seq, resume)) = stopped
+                && level
+                    .committed_mut(seq)
+                    .is_some_and(|commands| answer_stop(commands, slot, resume))
             {
-                level.complete(seq, ());
+                self.complete_output(level, seq);
+            }
+            if let Some(seq) = completed {
+                self.complete_output(level, seq);
             }
         }
     }
@@ -294,31 +444,48 @@ impl Deck {
         }
     }
 
-    fn observe_ends(&mut self, cursor: usize, start: SessionFrame) {
-        for (slot, track) in self.tracks.iter_mut() {
+    fn observe_ends(
+        &mut self,
+        cursor: usize,
+        start: SessionFrame,
+        level: &mut LevelInbox<'_, DeckProtocol>,
+    ) -> bool {
+        let mut ended = false;
+        for slot in self.tracks.slots() {
+            let Some(track) = self.tracks.at_mut(slot) else {
+                continue;
+            };
             let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, start);
-            track.poll_end(cursor, &mut self.recycle[slot.index()], &mut sink);
+            if track.poll_end(cursor, &mut self.recycle[slot.index()], &mut sink) {
+                ended = true;
+                let curve = output_curve(level, track.output_program(), slot);
+                let completed = track.cancel_output(curve, sink.at(cursor));
+                if let Some(seq) = completed {
+                    self.complete_output(level, seq);
+                }
+            }
         }
+        ended
     }
 
     fn render_range(
         &mut self,
-        context: Option<&RenderContext>,
+        context: Option<&OutputContext>,
         buffers: &mut ProcBuffers,
         scratch: &mut [SampleBuffer; crate::consts::MIN_STEREO],
-        capacity: usize,
         range: Range<usize>,
         start: SessionFrame,
+        level: &mut LevelInbox<'_, DeckProtocol>,
     ) -> bool {
-        if context.is_none()
-            || range.end > capacity
-            || buffers.outputs.len() < crate::consts::MIN_STEREO
-            || buffers
-                .outputs
-                .iter()
-                .take(crate::consts::MIN_STEREO)
-                .any(|channel| range.end > channel.len())
-        {
+        let [scratch_left, scratch_right] = scratch;
+        let capacity = scratch_left.len().min(scratch_right.len());
+        if context.is_none() {
+            for tail in &mut self.tails {
+                tail.advance(range.len());
+            }
+            return false;
+        }
+        if !output_covers(buffers, range.end, capacity) {
             for tail in &mut self.tails {
                 tail.advance(range.len());
             }
@@ -329,7 +496,6 @@ impl Deck {
                 track.snap_gate();
             }
         }
-        let [scratch_left, scratch_right] = scratch;
         let mut read = [
             &mut scratch_left[..capacity],
             &mut scratch_right[..capacity],
@@ -337,21 +503,33 @@ impl Deck {
         let (out_left, out_right) = buffers.outputs.split_at_mut(1);
         let mut bus = [&mut out_left[0][..], &mut out_right[0][..]];
         let mut sounded = false;
-        for (slot, track) in self.tracks.iter_mut() {
+        for slot in self.tracks.slots() {
+            let Some(track) = self.tracks.at_mut(slot) else {
+                continue;
+            };
             if track.state() != SlotState::Playing {
                 continue;
             }
             let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, start);
+            let curve = output_curve(level, track.output_program(), slot);
             let outcome = track.render(
                 context,
-                &mut read,
-                &mut bus,
+                TrackBuffers {
+                    scratch: &mut read,
+                    bus: &mut bus,
+                },
                 range.clone(),
                 &mut self.recycle[slot.index()],
                 &mut sink,
+                curve,
             );
-            if let Some(offset) = outcome.ended_at(&range) {
-                track.poll_end(offset, &mut self.recycle[slot.index()], &mut sink);
+            if let Some(seq) = track.poll_output_end(
+                outcome.ended_at(&range),
+                &mut self.recycle[slot.index()],
+                &mut sink,
+                curve,
+            ) {
+                self.complete_output(level, seq);
             }
             sounded = true;
         }
@@ -362,12 +540,13 @@ impl Deck {
                 sounded = true;
             }
         }
-        if sounded {
-            self.render
-                .finish(&mut left[range.clone()], &mut right[range]);
-        } else {
-            self.render.idle();
-        }
+        sounded |= self.render.ringing();
+        self.finish_range(
+            level,
+            start,
+            range.clone(),
+            sounded.then_some([&mut left[range.clone()], &mut right[range]]),
+        );
         sounded
     }
 
@@ -402,13 +581,7 @@ impl<E: SessionInbox> AudioNodeProcessor for DeckMixer<E> {
         extra: &mut ProcExtra,
     ) -> ProcessStatus {
         let start = SessionFrame::new(info.clock_samples.0);
-        let geometry_valid = info.frames <= self.capacity
-            && buffers.outputs.len() >= crate::consts::MIN_STEREO
-            && buffers
-                .outputs
-                .iter()
-                .take(crate::consts::MIN_STEREO)
-                .all(|channel| channel.len() >= info.frames)
+        let geometry_valid = output_covers(&buffers, info.frames, self.capacity)
             && self.deck.tails.iter().all(|tail| {
                 tail.capacity() >= self.deck.declick_frames.max(self.deck.evict_frames)
             });
@@ -427,4 +600,14 @@ impl<E: SessionInbox> AudioNodeProcessor for DeckMixer<E> {
             ProcessStatus::ClearAllOutputs
         }
     }
+}
+
+fn output_covers(buffers: &ProcBuffers, end: usize, capacity: usize) -> bool {
+    end <= capacity
+        && buffers.outputs.len() >= crate::consts::MIN_STEREO
+        && buffers
+            .outputs
+            .iter()
+            .take(crate::consts::MIN_STEREO)
+            .all(|channel| channel.len() >= end)
 }

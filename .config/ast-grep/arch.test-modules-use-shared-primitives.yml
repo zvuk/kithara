@@ -30,7 +30,7 @@ rule:
             - kind: call_expression
             - has:
                 field: function
-                regex: 'TcpListener::bind$'
+                regex: "TcpListener::bind$"
             - has:
                 field: arguments
                 regex: '"127\.0\.0\.1:0"'
@@ -38,17 +38,17 @@ rule:
             - kind: call_expression
             - has:
                 field: function
-                regex: '^(?:::)?tracing_subscriber::(?:fmt|registry)$'
+                regex: "^(?:::)?tracing_subscriber::(?:fmt|registry)$"
         - all:
             - kind: function_item
             - has:
                 field: name
-                regex: '^(?:wait_until|virtual_pace|temp_dir|temp_path|cancel_token)$'
+                regex: "^(?:wait_until|virtual_pace|temp_dir|temp_path|cancel_token)$"
         - all:
             - kind: struct_item
             - has:
                 field: name
-                regex: '^(?:TestHttpServer|TestTempDir|Xorshift64|TestServerHelper|OfflinePlayer|OfflineHostHarness|DiskQueue)$'
+                regex: "^(?:TestHttpServer|TestTempDir|Xorshift64|TestServerHelper|OfflinePlayer|OfflineHostHarness|DiskQueue)$"
     # Inside a module gated on `test` by the attributes directly above it.
     - inside:
         kind: mod_item

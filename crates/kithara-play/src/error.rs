@@ -1,11 +1,7 @@
 use kithara_audio::TrackFailureKind;
 use kithara_bufpool::PoolError;
 use kithara_platform::time::Duration;
-use kithara_render::{
-    InvalidCrossfade,
-    bridge::{DeckRefusal, InvalidMixLevel},
-    rt::BufferGeometryError,
-};
+use kithara_render::{InvalidCrossfade, bridge::DeckRefusal, rt::BufferGeometryError};
 
 use crate::{
     api::{SlotId, TrackId},
@@ -27,7 +23,7 @@ pub enum PlayError {
     #[error("the {0} queue has no room")]
     Full(&'static str),
 
-    #[error("a later consecutive tempo change superseded this one")]
+    #[error("a newer change of the same setting took this change's place")]
     Superseded,
 
     #[error("the deck refused a batch: {0:?}")]
@@ -145,11 +141,5 @@ impl From<InvalidCrossfade> for PlayError {
             name: name.into(),
             value,
         }
-    }
-}
-
-impl From<InvalidMixLevel> for PlayError {
-    fn from(InvalidMixLevel { level }: InvalidMixLevel) -> Self {
-        Self::MixLevel { level }
     }
 }

@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::Path};
 
+use anyhow::{Context, Result};
 use serde::Deserialize;
 
 /// External programs this project addresses by role rather than by a literal
@@ -32,6 +33,21 @@ pub struct ToolEntry {
 }
 
 impl ToolsConfig {
+    /// Load only external program settings from the project configuration.
+    ///
+    /// # Errors
+    /// Returns an error when the file or its tools table cannot be read or parsed.
+    pub fn load(workspace_root: &Path) -> Result<Self> {
+        let mut table: toml::Table = super::project::load_optional_config(
+            &workspace_root.join(crate::consts::PROJECT_CONFIG_REL),
+            "project tools config",
+        )?;
+        table.remove("tools").map_or_else(
+            || Ok(Self::default()),
+            |tools| tools.try_into().context("parse project tools config"),
+        )
+    }
+
     /// What to print when `role` is missing, falling back to the caller's
     /// compiled hint when the config carries none.
     #[must_use]
@@ -64,6 +80,57 @@ impl ToolsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn project(contents: &str) -> tempfile::TempDir {
+        let root = tempfile::tempdir().expect("project directory");
+        std::fs::create_dir(root.path().join(".config")).expect("config directory");
+        std::fs::write(
+            root.path().join(crate::consts::PROJECT_CONFIG_REL),
+            contents,
+        )
+        .expect("project config");
+        root
+    }
+
+    #[test]
+    fn loading_tools_does_not_parse_unrelated_project_settings() {
+        let root = project(
+            "[tools.kache]\nprogram = '/pinned tools/kache'\n[stress.modes.future]\nfuture_budget = 1\n",
+        );
+
+        assert!(super::super::project::ProjectConfig::load(root.path()).is_err());
+        let tools = ToolsConfig::load(root.path()).expect("tools settings are independent");
+        assert_eq!(tools.program("kache"), "/pinned tools/kache");
+    }
+
+    #[test]
+    fn loading_tools_preserves_missing_configuration_defaults() {
+        let absent = tempfile::tempdir().expect("project without config");
+        assert_eq!(
+            ToolsConfig::load(absent.path()).unwrap().program("kache"),
+            "kache"
+        );
+        for contents in ["", "[stress.modes.future]\nfuture_budget = 1\n"] {
+            let root = project(contents);
+            assert_eq!(
+                ToolsConfig::load(root.path()).unwrap().program("kache"),
+                "kache"
+            );
+        }
+    }
+
+    #[test]
+    fn loading_tools_rejects_invalid_owned_settings_and_toml() {
+        for contents in [
+            "tools = 7",
+            "[tools.kache]\nprogram = 7",
+            "[tools.kache]\nfuture_program = 'kache'",
+            "[stress",
+        ] {
+            let root = project(contents);
+            assert!(ToolsConfig::load(root.path()).is_err(), "{contents}");
+        }
+    }
 
     #[test]
     fn an_unlisted_role_resolves_to_its_own_name() {

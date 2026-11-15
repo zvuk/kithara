@@ -4,12 +4,7 @@ use kithara::{
     platform::{CancelToken, tokio},
 };
 use kithara_app::{
-    config::AppConfig,
-    document::Config,
-    gui,
-    logging::init_tracing,
-    memory, plugins,
-    pools::{self, AppHost},
+    config::AppConfig, document::Config, gui, logging::init_tracing, memory, plugins, pools,
 };
 use kithara_app_library::{Environment, Secrets};
 
@@ -22,15 +17,14 @@ struct Args {
     #[arg(long, value_enum, default_value_t)]
     host: gui::Host,
 
-    /// Configuration document to read. Defaults to `kithara.yaml` beside the
-    /// executable when one is there.
+    /// Configuration document to read. Bundled apps use Application Support;
+    /// unpackaged binaries use `kithara.yaml` beside the executable.
     #[arg(long)]
     config: Option<std::path::PathBuf>,
 
     /// Folder holding the UI package to draw from. An override on top of the
     /// document's `app.ui_package`: a path here wins regardless of what the
-    /// document says. With neither, the package a release lays out beside the
-    /// executable draws.
+    /// document says. With neither, the release's packaged resources draw.
     #[arg(long)]
     ui_package: Option<std::path::PathBuf>,
 
@@ -53,11 +47,14 @@ struct Args {
 static HEAP: memory::Ceiling = memory::Ceiling;
 
 fn shipped_ui_package() -> Option<std::path::PathBuf> {
-    Some(std::env::current_exe().ok()?.parent()?.join("assets/ui"))
+    Some(super::resources::directory(&std::env::current_exe().ok()?)?.join("assets/ui"))
 }
 
-fn config_beside_binary() -> Option<std::path::PathBuf> {
-    Some(std::env::current_exe().ok()?.parent()?.join("kithara.yaml"))
+fn default_config() -> Option<std::path::PathBuf> {
+    super::resources::configuration(
+        &std::env::current_exe().ok()?,
+        std::env::home_dir().as_deref(),
+    )
 }
 
 /// The value `result` holds; its error is printed and ends the process.
@@ -88,11 +85,15 @@ pub(super) fn main(shutdown: CancelToken) -> AppResult {
     let args = Args::parse();
     let document = or_exit(Config::load(
         args.config.as_deref(),
-        config_beside_binary().as_deref(),
+        default_config().as_deref(),
     ));
     if args.dump_config {
         println!("{}", document.dump());
         return Ok(());
+    }
+
+    if let Some(parent) = document.overlay().and_then(std::path::Path::parent) {
+        std::fs::create_dir_all(parent)?;
     }
 
     let directives = document
@@ -100,6 +101,9 @@ pub(super) fn main(shutdown: CancelToken) -> AppResult {
         .log_directives
         .unwrap_or_else(|| vec!["info".to_string()]);
     init_tracing(&directives.iter().map(String::as_str).collect::<Vec<&str>>())?;
+    for provider in document.disabled_providers() {
+        tracing::warn!("{provider}");
+    }
     let runtime = tokio::runtime::Runtime::new()?;
     let _runtime_guard = runtime.enter();
 
@@ -130,8 +134,8 @@ pub(super) fn main(shutdown: CancelToken) -> AppResult {
         config.ui_package = Some(package);
     }
 
-    let host = AppHost::new(
-        HostConfig::builder()
+    let host = pools::host(
+        HostConfig::builder(config.worker.pools().clone())
             .settings(
                 HostSettings::builder()
                     .maybe_sample_rate(config.sample_rate)

@@ -36,7 +36,7 @@ pub(crate) struct ProvisionArgs {
     #[arg(long, env = "KITHARA_CI_HOST_CONFIG")]
     config: Option<PathBuf>,
     /// Reviewed build pins tracked in the repository.
-    #[arg(long, env = "KITHARA_CI_PINS", default_value = consts::PINS_PATH)]
+    #[arg(long, default_value = consts::PINS_PATH)]
     pins: PathBuf,
 }
 
@@ -56,6 +56,19 @@ mod tests {
     use clap::Parser;
 
     use crate::Cli;
+
+    #[test]
+    fn provisioning_uses_reviewed_checkout_pins() {
+        use clap::{Args as _, FromArgMatches as _};
+
+        use super::ProvisionArgs;
+
+        let matches = ProvisionArgs::augment_args(clap::Command::new("provision"))
+            .try_get_matches_from(["provision"])
+            .unwrap();
+        let args = ProvisionArgs::from_arg_matches(&matches).unwrap();
+        assert_eq!(args.pins, std::path::Path::new(crate::consts::PINS_PATH));
+    }
 
     /// A machine provisions itself with no platform in the command line: the
     /// pipeline that runs this serves both hosts from one job definition, and

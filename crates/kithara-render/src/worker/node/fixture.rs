@@ -2,7 +2,6 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::{AudioSource, Fetch, SeekOutcome, SourceEnd, TrackStep};
 use kithara_command::{ChannelConfig, Sender, channel};
-use kithara_effects::EffectDrain;
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -48,6 +47,19 @@ pub(in crate::worker) async fn prepared_node_with_info<T>(
 where
     T: AudioSource<Chunk = AudioChunk>,
 {
+    prepared_node_with_cancel(source, capacity, preload, initial, None).await
+}
+
+pub(in crate::worker) async fn prepared_node_with_cancel<T>(
+    source: T,
+    capacity: usize,
+    preload: usize,
+    initial: AudioChunkInfo,
+    cancel: Option<kithara_platform::CancelToken>,
+) -> (DecoderNode<T, TestPools>, PcmReceiver, Sender<LaneProtocol>)
+where
+    T: AudioSource<Chunk = AudioChunk>,
+{
     let pools = pools();
     let spec = initial.spec;
     let (lane, inbox) = channel(ChannelConfig::builder().build());
@@ -57,8 +69,6 @@ where
     let source = WarpSource::new(
         source,
         Warp::new((), &config).renderer(spec, pools.clone()),
-        Vec::new(),
-        EffectDrain::new(0, &pools).expect("drain"),
         spec,
         pools.clone(),
         crate::LaneSetup {
@@ -69,7 +79,7 @@ where
     );
     let (receiver, producer) = PacketRing::new(spec, Duration::from_secs(1), capacity).into_ends();
     (
-        DecoderNode::new(source, producer, None, initial, None, pools, None),
+        DecoderNode::new(source, producer, None, initial, None, pools, cancel),
         receiver,
         lane,
     )

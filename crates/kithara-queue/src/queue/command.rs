@@ -3,9 +3,10 @@ use kithara_command::{Mailbox, Postbox, Seq, When};
 use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_play::{
-    DeckEqChange, DeckMixSettingsChange, EqBandConfig, GainDb, InterruptionKind, Outbox,
-    OutputSnapshot, PlayError, Player, Position, Track, TrackCommand, TrackFactory, TrackSettings,
-    TrackSettingsChange, TrackStatus as PlayingStatus,
+    CrossfaderGain, DeckEqChange, DeckFxChange, DeckMixSettingsChange, EqBandConfig, FilterKnob,
+    GainDb, InterruptionKind, Outbox, OutputSnapshot, PitchStep, PlayError, Player, Position,
+    SeekBatch, Track, TrackCommand, TrackFactory, TrackSettings, TrackSettingsChange,
+    TrackStatus as PlayingStatus, Trim,
 };
 use kithara_signal::{FaderValue, SessionFrame};
 
@@ -57,12 +58,20 @@ where
         to: Position,
     },
     ConfigureTrack(TrackSettingsChange, When<SessionFrame>),
+    StepPitch(PitchStep),
+    GainProgram {
+        item: TrackId,
+        program: kithara_play::SlotGainProgram,
+    },
+    EqGainProgram(kithara_play::EqGainProgram),
+    FilterProgram(kithara_play::FilterProgram),
     ConfigureQueue(QueueSettingsChange, When<SessionFrame>),
     SetActionAtItemEnd(ActionAtItemEnd),
     SetPlaybackOrder(PlaybackOrder),
     SetRepeat(RepeatMode),
     SetVolume(f32),
-    SetLevel(f32),
+    SetTrim(Trim),
+    SetCrossfader(CrossfaderGain),
     SetMuted(bool),
     SetEqGain {
         band: usize,
@@ -70,6 +79,14 @@ where
     },
     SetEqLayout(Vec<EqBandConfig>),
     ResetEq,
+    Fx {
+        at: When<SessionFrame>,
+        changes: Vec<DeckFxChange>,
+    },
+    Filter {
+        at: When<SessionFrame>,
+        knob: FilterKnob,
+    },
     NotifyInterruption(InterruptionKind),
     Tick,
     Close,
@@ -126,7 +143,8 @@ where
             | QueueCommand::SetPlaybackOrder(_)
             | QueueCommand::SetRepeat(_)
             | QueueCommand::SetVolume(_)
-            | QueueCommand::SetLevel(_)
+            | QueueCommand::SetTrim(_)
+            | QueueCommand::SetCrossfader(_)
             | QueueCommand::SetMuted(_)
             | QueueCommand::SetEqGain { .. }
             | QueueCommand::SetEqLayout(_)
@@ -170,6 +188,31 @@ where
             QueueCommand::Pause { at } => self.pause_at(at, out),
             QueueCommand::Seek { to } => self.seek_to(to, out),
             QueueCommand::ConfigureTrack(change, at) => self.configure_tracks(change, at, out),
+            QueueCommand::StepPitch(step) => self.step_pitch(step, out),
+            QueueCommand::Fx { at, changes } => out.fx(at, changes).map_err(Into::into),
+            QueueCommand::Filter { at, knob } => out
+                .mix(at, DeckMixSettingsChange::Filter(knob))
+                .map(Some)
+                .map_err(Into::into),
+            QueueCommand::GainProgram { item, program } => {
+                let index = self
+                    .active
+                    .position(|active| {
+                        active.role != Role::Leaving
+                            && active.track.snapshot().as_ref().item == item
+                    })
+                    .ok_or(PlayError::NotReady)?;
+                self.active
+                    .get_mut(index)
+                    .ok_or(PlayError::NotReady)?
+                    .track
+                    .apply(TrackCommand::GainProgram(program), out)
+                    .map_err(Into::into)
+            }
+            QueueCommand::EqGainProgram(program) => {
+                out.eq_gain_program(program).map_err(Into::into)
+            }
+            QueueCommand::FilterProgram(program) => out.filter_program(program).map_err(Into::into),
             QueueCommand::NotifyInterruption(kind) => {
                 self.deck.suspended = out.notify_interruption(kind)?;
                 Ok(None)
@@ -284,8 +327,12 @@ where
                 )
                 .map(Some)
                 .map_err(Into::into),
-            QueueCommand::SetLevel(level) => out
-                .mix(When::Next, DeckMixSettingsChange::Level(level))
+            QueueCommand::SetTrim(trim) => out
+                .mix(When::Next, DeckMixSettingsChange::Trim(trim))
+                .map(Some)
+                .map_err(Into::into),
+            QueueCommand::SetCrossfader(gain) => out
+                .mix(When::Next, DeckMixSettingsChange::Crossfader(gain))
                 .map(Some)
                 .map_err(Into::into),
             QueueCommand::SetMuted(muted) => out
@@ -344,10 +391,7 @@ where
                 .set_playing(false);
             return self.transition_loaded(out).map_err(Into::into);
         }
-        if self.pending_handover.is_some()
-            && let Some(target) = self.target.as_mut()
-            && self.current == Some(target.to)
-        {
+        if let Some(target) = self.target.as_mut().filter(|target| !target.auto) {
             target.set_playing(false);
         }
         self.cancel_auto(out)?;
@@ -386,10 +430,7 @@ where
             );
         }
         if self.active_current_index().is_some() {
-            if self.pending_handover.is_some()
-                && let Some(target) = self.target.as_mut()
-                && self.current == Some(target.to)
-            {
+            if let Some(target) = self.target.as_mut().filter(|target| !target.auto) {
                 target.set_playing(true);
             }
             let sent = self.transport(TrackCommand::Play { at }, out)?;
@@ -449,6 +490,21 @@ where
             .ok_or(PlayError::NoActiveSlot)?
             .track
             .apply(command, out)
+    }
+
+    fn step_pitch(
+        &mut self,
+        step: PitchStep,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        let Some(pitch) = self.config.pitch() else {
+            return Ok(None);
+        };
+        let stepped = pitch.step(step);
+        if stepped == pitch {
+            return Ok(None);
+        }
+        self.configure_tracks(TrackSettingsChange::Pitch(stepped), When::Next, out)
     }
 
     fn configure_tracks(
@@ -616,15 +672,15 @@ where
             return Ok(None);
         }
         let item = active.item;
-        let sent = active.track.apply(TrackCommand::Seek { to }, out)?;
+        let sent = active.track.seek(to, out)?;
         self.withdraw_auto(out)?;
-        self.held_position = sent.map(|seq| SeekPosition::Pending {
+        self.held_position = sent.map(|sent| SeekPosition::Pending {
             item,
-            seq,
+            sent,
             to,
             segment: None,
         });
-        Ok(sent)
+        Ok(sent.map(SeekBatch::seq))
     }
 }
 

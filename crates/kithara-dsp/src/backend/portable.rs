@@ -4,16 +4,36 @@ use fearless_simd::{Level, dispatch, prelude::*};
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use super::cascade::Cascade;
-pub(crate) use super::interpolate::interpolate;
-#[cfg(feature = "spectrum")]
-use super::simd::zip_map;
 use super::simd::{padded, update};
 #[cfg(all(feature = "spectrum", not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) use super::spectrum::{Dft, Work, correlate};
+pub(crate) use super::{
+    delay::{blend as delay_blend, diffuse as delay_diffuse},
+    interpolate::interpolate,
+};
 
 mod consts {
     /// Scale that turns the sum of a pair into its mean.
     pub(super) const PAIR_MEAN: f32 = 0.5;
+}
+
+pub(crate) fn svf_gains<S: Simd>(simd: S, cutoffs: &[f64], rate: f64, gains: &mut [f64]) {
+    for gain in super::svf::cutoff_angles(simd, cutoffs, rate, gains) {
+        *gain = gain.tan();
+    }
+}
+
+pub(crate) fn multiply_in_place(samples: &mut [f32], gains: &[f32]) -> usize {
+    dispatch!(Level::new(), simd => multiply_in_place_kernel(simd, samples, gains))
+}
+
+#[inline(always)]
+pub(super) fn multiply_in_place_kernel<S: Simd>(
+    simd: S,
+    samples: &mut [f32],
+    gains: &[f32],
+) -> usize {
+    update(simd, samples, [gains], |x, [gain]| Mul::mul(x, gain))
 }
 
 pub(crate) fn deinterleave_pair(input: &[f32], left: &mut [f32], right: &mut [f32]) -> usize {
@@ -132,21 +152,6 @@ pub(super) fn downmix_pair_kernel<S: Simd>(simd: S, input: &[f32], mono: &mut [f
     frames
 }
 
-pub(crate) fn peak(samples: &[f32]) -> f32 {
-    dispatch!(Level::new(), simd => peak_kernel(simd, samples))
-}
-
-#[inline(always)]
-pub(super) fn peak_kernel<S: Simd>(simd: S, samples: &[f32]) -> f32 {
-    let mut blocks = samples.chunks_exact(S::f32s::LEN);
-    let mut peak = S::f32s::splat(simd, 0.0);
-    for block in &mut blocks {
-        peak = peak.max(S::f32s::from_slice(simd, block).abs());
-    }
-    peak.max(padded(simd, blocks.remainder()).abs())
-        .reduce_max()
-}
-
 #[cfg(feature = "spectrum")]
 pub(crate) fn multiply(a: &[f32], b: &[f32], output: &mut [f32]) -> usize {
     dispatch!(Level::new(), simd => multiply_kernel(simd, a, b, output))
@@ -156,6 +161,38 @@ pub(crate) fn multiply(a: &[f32], b: &[f32], output: &mut [f32]) -> usize {
 #[inline(always)]
 pub(super) fn multiply_kernel<S: Simd>(simd: S, a: &[f32], b: &[f32], output: &mut [f32]) -> usize {
     zip_map(simd, [a, b], output, Mul::mul)
+}
+
+/// `output[i] = f(a[i], b[i])` over the common prefix of the three
+/// slices, a vector at a time; returns the prefix length.
+#[cfg(feature = "spectrum")]
+#[inline(always)]
+fn zip_map<S: Simd, F: Fn(S::f32s, S::f32s) -> S::f32s>(
+    simd: S,
+    [a, b]: [&[f32]; 2],
+    output: &mut [f32],
+    f: F,
+) -> usize {
+    let len = a.len().min(b.len()).min(output.len());
+    let (Some(a), Some(b), Some(output)) = (a.get(..len), b.get(..len), output.get_mut(..len))
+    else {
+        return 0;
+    };
+    let lanes = S::f32s::LEN;
+    let mut lefts = a.chunks_exact(lanes);
+    let mut rights = b.chunks_exact(lanes);
+    let mut outputs = output.chunks_exact_mut(lanes);
+    for ((x, y), out) in (&mut lefts).zip(&mut rights).zip(&mut outputs) {
+        f(S::f32s::from_slice(simd, x), S::f32s::from_slice(simd, y)).store_slice(out);
+    }
+    let tail = f(
+        padded(simd, lefts.remainder()),
+        padded(simd, rights.remainder()),
+    );
+    for (slot, value) in outputs.into_remainder().iter_mut().zip(tail.as_slice()) {
+        *slot = *value;
+    }
+    len
 }
 
 /// `Σ a[i]·b[i]` over the common prefix: one multiply-add per lane, then

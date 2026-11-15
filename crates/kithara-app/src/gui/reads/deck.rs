@@ -1,5 +1,6 @@
 use kithara::{
     effects::GainDb,
+    play::Pitch,
     ui::render::{Node, ReadValue, Scope, WaveformView},
 };
 use num_traits::cast::AsPrimitive;
@@ -8,10 +9,7 @@ use super::value::{Value, impl_child_node};
 use crate::{
     deck::{EqMode, TempoPercent},
     engine::DeckSnapshot,
-    gui::{
-        deck::consts::TEMPO_RANGE,
-        ui::{cache::DeckCache, scope::deck_index},
-    },
+    gui::{deck::consts::TEMPO_RANGE, ui::cache::DeckCache},
     state::AbrVariant,
 };
 
@@ -26,7 +24,12 @@ impl<'a> DecksNode<'a> {
     }
 
     fn deck(self, scope: Scope<'_>) -> Option<DeckNode<'a>> {
-        self.decks.get(deck_index(scope.get("deck")?)?).copied()
+        let letter = scope.get("deck")?;
+
+        self.decks
+            .iter()
+            .find(|deck| deck.shown.letter == letter)
+            .copied()
     }
 }
 
@@ -77,6 +80,10 @@ impl_child_node!(DeckNode<'a>, |this, segment, _scope| {
             shown: this.shown,
             mode: this.eq_mode,
         }),
+        "key" => Box::new(KeyNode {
+            shown: this.shown,
+            cache: this.cache,
+        }),
         "stream" => Box::new(StreamNode {
             shown: this.shown,
             cache: this.cache,
@@ -118,6 +125,7 @@ impl_child_node!(PlaybackNode<'a>, |this, segment, _scope| {
             cues: &[],
         }),
         "playing" => ReadValue::Bool(this.shown.playing),
+        "synced" => ReadValue::Bool(this.shown.synced),
         "position_secs" => ReadValue::Scalar(this.shown.position.max(0.0)),
         "duration_secs" => ReadValue::Scalar(this.shown.duration.max(0.0)),
         "position_normalized" => ReadValue::Scalar(this.normalized()),
@@ -157,6 +165,24 @@ impl<'a> Node<'a> for TempoNode {
         let range = f64::from(TEMPO_RANGE);
         let value = match segment {
             "rate" => ReadValue::Scalar((f64::from(f32::from(self.tempo)) + range) / (range * 2.0)),
+            _ => return None,
+        };
+        Some(Box::new(Value(value)))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct KeyNode<'a> {
+    cache: &'a DeckCache,
+    shown: &'a DeckSnapshot,
+}
+
+impl<'a> Node<'a> for KeyNode<'a> {
+    fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
+        let value = match segment {
+            "locked" => ReadValue::Bool(self.shown.pitch.is_some_and(Pitch::keylock)),
+            "lock_hidden" => ReadValue::Bool(self.shown.pitch.is_none()),
+            "transpose" => ReadValue::Text(&self.cache.transpose),
             _ => return None,
         };
         Some(Box::new(Value(value)))

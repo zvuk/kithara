@@ -12,7 +12,7 @@ use tracing::warn;
 
 use super::layout;
 use crate::{
-    ci::{Claim, claim_beside_alias},
+    ci::{Claim, claim_sources},
     consts,
 };
 
@@ -178,8 +178,17 @@ pub(super) fn build(
     .with_context(|| format!("lock {subject}"))?;
     let lease = kithara_devtools::lease::hold(target)
         .with_context(|| format!("lease xtask build directory {}", target.display()))?;
+    if crate::ci::ci_in(var)
+        && let Err(error) = crate::ci::collect_garbage(target, consts::GARBAGE_WINDOW)
+    {
+        warn!(%error, path = %target.display(), "xtask build units could not be collected");
+    }
     Ok(BuildLock {
-        _sources: claim_beside_alias(checkout, target, var)?,
+        _sources: if crate::ci::ci_in(var) {
+            Some(claim_sources(checkout, target)?)
+        } else {
+            None
+        },
         _lock: lock,
         _lease: lease,
     })
@@ -339,6 +348,7 @@ mod tests {
         ffi::OsString,
         fs::{self, FileTimes},
         path::{Path, PathBuf},
+        process::Command,
         sync::{
             Arc, Barrier,
             atomic::{AtomicUsize, Ordering},
@@ -644,6 +654,45 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn entering_an_xtask_build_collects_superseded_cargo_units() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let checkout = crate::ci::fixture::git_checkout(&[("src/lib.rs", "")]);
+        let target = temp.path().join("target");
+        let profile = target.join("debug");
+        fs::create_dir_all(profile.join("deps"))?;
+        let old = "1111111111111111";
+        let current = "2222222222222222";
+        for (hash, age) in [(old, 3 * consts::DAY), (current, Duration::ZERO)] {
+            let unit = profile.join(".fingerprint").join(format!("xtask-{hash}"));
+            fs::create_dir_all(&unit)?;
+            fs::write(
+                unit.join("bin-xtask.json"),
+                r#"{"features":"[]","deps":[]}"#,
+            )?;
+            let fingerprint = unit.join("bin-xtask");
+            fs::write(&fingerprint, hash)?;
+            fs::File::options()
+                .write(true)
+                .open(fingerprint)?
+                .set_modified(SystemTime::now() - age)?;
+            fs::write(profile.join("deps").join(format!("xtask-{hash}")), "binary")?;
+        }
+
+        let _build = super::build(checkout.path(), &target, &|name| {
+            (name == "CI").then(|| OsString::from("true"))
+        })?;
+
+        assert!(!profile.join("deps").join(format!("xtask-{old}")).exists());
+        assert!(
+            profile
+                .join("deps")
+                .join(format!("xtask-{current}"))
+                .is_file()
+        );
+        Ok(())
+    }
+
     /// In a CI job xtask builds in the runner's build root, beside the alias
     /// the lanes build through, and claims its directory as a lane claims its
     /// own: left unclaimed, it would build against the stamps the last lane's
@@ -663,6 +712,71 @@ mod tests {
         assert!(
             target.join(consts::SOURCES_RECORD).is_file(),
             "xtask built in its directory without claiming it"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_ci_build_without_an_alias_rebuilds_a_changed_dependency() -> Result<()> {
+        let checkout = crate::ci::fixture::git_checkout(&[
+            (
+                "Cargo.toml",
+                "[package]\nname='bootstrap-source-probe'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nprobe-dependency={path='dependency'}\n",
+            ),
+            (
+                "dependency/Cargo.toml",
+                "[package]\nname='probe-dependency'\nversion='0.1.0'\nedition='2024'\n",
+            ),
+            ("dependency/src/lib.rs", "pub fn old_api() {}\n"),
+            (
+                "src/main.rs",
+                "fn main() { probe_dependency::old_api(); }\n",
+            ),
+        ]);
+        let target = tempfile::tempdir()?;
+        let ci = |name: &str| (name == "CI").then(|| OsString::from("true"));
+        let compile = || {
+            Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+                .current_dir(checkout.path())
+                .env("CARGO_TARGET_DIR", target.path())
+                .env_remove("RUSTC_WRAPPER")
+                .args(["build", "--offline", "--quiet", "--message-format=json"])
+                .output()
+        };
+        {
+            let _build = super::build(checkout.path(), target.path(), &ci)?;
+            let first = compile()?;
+            assert!(first.status.success(), "{first:?}");
+        }
+        {
+            let _build = super::build(checkout.path(), target.path(), &ci)?;
+            let warm = compile()?;
+            assert!(warm.status.success(), "{warm:?}");
+            assert!(
+                String::from_utf8_lossy(&warm.stdout).lines().all(|line| {
+                    !line.contains("\"reason\":\"compiler-artifact\"")
+                        || line.contains("\"fresh\":true")
+                }),
+                "unchanged content must reuse the retained target: {warm:?}"
+            );
+        }
+        let dependency = checkout.path().join("dependency/src/lib.rs");
+        fs::write(&dependency, "pub fn added_api() {}\n")?;
+        fs::File::options()
+            .write(true)
+            .open(&dependency)?
+            .set_modified(SystemTime::UNIX_EPOCH + consts::DAY)?;
+        fs::write(
+            checkout.path().join("src/main.rs"),
+            "fn main() { probe_dependency::added_api(); }\n",
+        )?;
+
+        let _build = super::build(checkout.path(), target.path(), &ci)?;
+        let changed = compile()?;
+        assert!(
+            changed.status.success(),
+            "the retained target used dependency metadata from another source: {}",
+            String::from_utf8_lossy(&changed.stderr)
         );
         Ok(())
     }

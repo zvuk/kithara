@@ -8,7 +8,6 @@ use kithara_audio::{Audio, AudioReadError, ResamplerBackend, SeekOutcome, TrackF
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_command::{ChannelConfig, Inbox, Sender, channel};
 use kithara_decode::DecodeError;
-use kithara_effects::EffectDrain;
 use kithara_events::EventBus;
 use kithara_platform::{
     sync::Arc, thread::ThreadClass, time::Duration, tokio::task::spawn_blocking,
@@ -22,7 +21,9 @@ use kithara_worker::{
 
 use super::{
     DecoderNode, PcmReceiver, PlayWorkerConfig, TrackConfig,
+    reader::PcmLead,
     scheduler::{PlaybackObserver, StreamWake},
+    track::pcm_quantum,
 };
 use crate::{
     LaneProtocol, ServiceClass, WarpSource,
@@ -132,10 +133,21 @@ impl<S> PlayWorker<S> {
         &self.0.pools
     }
 
-    /// Longest park duration before the render dispatcher checks for new work.
-    #[must_use]
-    pub fn wake_allowance(&self) -> Duration {
-        self.0.dispatcher.wake_allowance()
+    delegate::delegate! {
+        to self.0.dispatcher {
+            /// Longest park duration before the render dispatcher checks for new work.
+            #[must_use]
+            pub fn wake_allowance(&self) -> Duration;
+            /// Stop this playback scheduler and wait for native thread and TLS teardown.
+            ///
+            /// Call from a non-realtime thread after releasing its players. A shared base
+            /// worker and sibling dispatchers remain running.
+            ///
+            /// # Errors
+            /// Returns an error when called on this scheduler or when its thread panicked.
+            #[cfg(not(target_arch = "wasm32"))]
+            pub fn shutdown_and_join(&self) -> Result<(), kithara_worker::ShutdownError>;
+        }
     }
 
     pub fn wake(&self) {
@@ -196,7 +208,6 @@ where
     {
         let TrackConfig {
             audio,
-            effects,
             engine_load,
             warp,
             preload_chunks,
@@ -233,19 +244,15 @@ where
                 end_timestamp: position,
                 ..AudioChunkInfo::default()
             };
-            let (mut receiver, port) = PcmReceiver::new(
-                audio_buffer_chunks,
+            let (receiver, port) = PcmReceiver::new(
+                PcmLead::new(audio_buffer_chunks, pcm_quantum(&warp)),
                 block_on_underrun,
                 wake,
                 &audio,
                 position,
             );
             let activity = audio.take_activity_writer();
-            let mut warp = Warp::new(
-                (),
-                &warp.starting_at(warp.speed(), start.keylock, start.backend),
-            );
-            receiver.render_publisher = warp.take_publisher();
+            let warp = Warp::new((), &warp.starting_at(warp.speed(), start.pitch));
             let pools = self.pools().clone();
             let dispatch = tracing::dispatcher::get_default(Clone::clone);
             let span = tracing::Span::current();
@@ -269,12 +276,9 @@ where
                 .map_err(|error| DecodeError::audio_stream("lane renderer preparation task", error))
                 .map_err(decode_refusal)?
                 .map_err(decode_refusal)?;
-            let drain = EffectDrain::new(effects.len(), self.pools())?;
             let source = WarpSource::new(
                 audio,
                 renderer,
-                effects,
-                drain,
                 spec,
                 self.pools().clone(),
                 crate::LaneSetup {
@@ -366,9 +370,7 @@ mod tests {
     use kithara_audio::{AudioConfig, NoResamplerBackend};
     use kithara_file::{File, FileConfig, FileSrc};
     use kithara_platform::CancelScope;
-    use kithara_sync::SpeedCurve;
     use kithara_test_utils::kithara;
-    use kithara_warp::StretchKind;
 
     use super::*;
     use crate::test_pools::pools;
@@ -387,11 +389,7 @@ mod tests {
             AudioConfig::<File<_>, NoResamplerBackend>::for_stream(file).build()
         };
         let (_sender, inbox) = play.lane_channel();
-        let start = LaneStart {
-            speed: SpeedCurve::Constant(1.0),
-            keylock: false,
-            backend: StretchKind::default(),
-        };
+        let start = LaneStart::default();
         let preparation =
             play.load::<File<_>, NoResamplerBackend, _>(audio(), Duration::ZERO, start, inbox);
         let source = Audio::<Stream<File<_>>>::prepare(
@@ -462,11 +460,7 @@ mod tests {
             .cancel(audio_cancel.token())
             .build();
         let (_sender, inbox) = play.lane_channel();
-        let start = LaneStart {
-            speed: SpeedCurve::Constant(1.0),
-            keylock: false,
-            backend: StretchKind::default(),
-        };
+        let start = LaneStart::default();
         let mut opening = Box::pin(play.load::<GatedFailure, NoResamplerBackend, _>(
             audio,
             Duration::ZERO,

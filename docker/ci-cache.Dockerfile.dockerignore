@@ -9,6 +9,8 @@
 !tests/**
 !xtask/
 !xtask/**
+!docker/
+!docker/ci.Dockerfile
 **/target
 **/.git
 xtask/.xtask-cache

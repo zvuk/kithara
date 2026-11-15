@@ -1,6 +1,7 @@
 use kithara_effects::GainDb;
 use kithara_play::{
-    DeckEqChange, DeckMixSettings, DeckMixSettingsChange, DeckMixerConfig, HostedDeck,
+    CrossfaderGain, DeckEqChange, DeckMixSettings, DeckMixSettingsChange, DeckMixerConfig,
+    HostedDeck,
 };
 use kithara_test_utils::off_thread::OffThread;
 
@@ -10,7 +11,9 @@ fn mix_level(state: &mut TestState, id: BeatGridId) -> f32 {
     let mut level = None;
     state
         .owner
-        .with_deck(id, &mut |_, _, pass| level = Some(pass.mix.level()))
+        .with_deck(id, &mut |_, _, pass| {
+            level = Some(f32::from(pass.mix.crossfader()));
+        })
         .expect("held deck");
     level.expect("owner lent the confirmed mix")
 }
@@ -20,9 +23,10 @@ fn apply_level(
     id: BeatGridId,
     level: f32,
 ) -> Result<kithara_command::Seq, PlayError> {
+    let level = CrossfaderGain::checked(level).expect("fixture levels are crossfader gains");
     let mut result = Err(PlayError::NotReady);
     state.owner.with_deck(id, &mut |_, out, _| {
-        result = out.mix(When::Next, DeckMixSettingsChange::Level(level));
+        result = out.mix(When::Next, DeckMixSettingsChange::Crossfader(level));
     })?;
     result
 }
@@ -83,7 +87,10 @@ async fn a_default_deck_renders_at_unity_gain() {
                 .block_on_underrun(true)
                 .build();
             let deck = Queue::new(QueueConfig::builder().prep(prep).build());
-            assert_eq!(deck.mixer_config().mix().level(), 1.0);
+            assert_eq!(
+                deck.mixer_config().mix().crossfader(),
+                CrossfaderGain::DEFAULT
+            );
             assert!(state.stream.is_none());
             let id = BeatGridId::allocate().expect("fixture deck id");
             ask(
@@ -129,19 +136,6 @@ fn independent_deck_levels_publish_only_after_rendering() {
 }
 
 #[kithara::test]
-fn invalid_levels_send_no_batch_or_mutation() {
-    let mut state = test_state(start_route_loss_stream);
-    let id = insert(&mut state);
-    for bad in [f32::NAN, f32::INFINITY, 1.5, -0.1] {
-        let error = apply_level(&mut state, id, bad).expect_err("invalid level");
-        assert!(matches!(error, PlayError::MixLevel { .. }));
-        assert_eq!(mix_level(&mut state, id), 1.0);
-    }
-    assert_applied(settle_block(&mut state, &mut 0), []);
-    assert_eq!(mix_level(&mut state, id), 1.0);
-}
-
-#[kithara::test]
 fn registration_adopts_the_decks_configured_level() {
     let mut state = test_state(start_route_loss_stream);
     let prep = ResourcePrep::builder()
@@ -152,12 +146,16 @@ fn registration_adopts_the_decks_configured_level() {
             .prep(prep)
             .mixer(
                 DeckMixerConfig::builder()
-                    .mix(DeckMixSettings::builder().level(0.2).build())
+                    .mix(
+                        DeckMixSettings::builder()
+                            .crossfader(CrossfaderGain::checked(0.2).expect("a crossfader gain"))
+                            .build(),
+                    )
                     .build(),
             )
             .build(),
     );
-    assert_eq!(deck.mixer_config().mix().level(), 0.2);
+    assert_eq!(f32::from(deck.mixer_config().mix().crossfader()), 0.2);
     let id = BeatGridId::allocate().expect("fixture deck id");
     ask(
         &mut state,
@@ -267,28 +265,6 @@ fn a_refused_group_sends_none_of_its_staged_eq_changes() {
     assert_eq!(applied.gain(0), Some(GainDb::from(-6.0)));
     assert_eq!(applied.gain(1), Some(GainDb::from(3.0)));
     assert_eq!(mix_level(&mut state, id), 1.0);
-}
-
-#[kithara::test]
-fn an_invalid_deck_level_does_not_cancel_an_independent_valid_level() {
-    for bad in [f32::NAN, f32::INFINITY, 1.5, -0.1] {
-        let mut state = test_state(start_route_loss_stream);
-        let first = insert(&mut state);
-        let second = insert(&mut state);
-        state.owner.begin_pass();
-        let valid = apply_level(&mut state, first, 0.5).expect("independent valid level");
-        let error = apply_level(&mut state, second, bad).expect_err("invalid level");
-        assert!(matches!(error, PlayError::MixLevel { .. }));
-        assert_eq!(mix_level(&mut state, first), 1.0);
-        assert_eq!(mix_level(&mut state, second), 1.0);
-        assert_applied(settle_block(&mut state, &mut 0), [valid]);
-        assert_eq!(mix_level(&mut state, first), 0.5);
-        assert_eq!(
-            mix_level(&mut state, second),
-            1.0,
-            "level {bad} leaked a mutation"
-        );
-    }
 }
 
 #[kithara::test]

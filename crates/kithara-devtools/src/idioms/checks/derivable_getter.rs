@@ -104,7 +104,12 @@ impl Check for DerivableGetter {
         for manifest in manifests {
             let source = fs::read_to_string(&manifest)
                 .with_context(|| format!("read {}", manifest.display()))?;
-            let Some(rewritten) = crate::manifest::add_workspace_dependency(&source, "fieldwork")?
+            let Some(rewritten) = crate::manifest::add_workspace_dependency(
+                &source,
+                "fieldwork",
+                &manifest,
+                ctx.metadata,
+            )?
             else {
                 continue;
             };

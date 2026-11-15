@@ -48,19 +48,14 @@ pub(crate) struct Registry {
 }
 
 impl Registry {
-    pub(crate) fn reschedule(&mut self) {
+    fn reschedule(&mut self) {
         self.slots.reschedule(|peer| self.peers.priority(peer));
     }
 
-    async fn process_batch(&mut self, batch: BatchGroup, inner: &DownloaderInner) -> usize {
+    fn process_batch(&mut self, batch: BatchGroup, inner: &DownloaderInner) -> usize {
         let result = batch.process(inner);
-        let capacity_blocked = !result.pending.is_empty()
-            && inner.inflight.load(Ordering::Relaxed) >= inner.config.max_concurrent;
         self.slots
             .requeue_pending(result.pending, |peer| self.peers.priority(peer));
-        if capacity_blocked {
-            inner.capacity_notify.notified().await;
-        }
         result.dispatched
     }
 
@@ -70,6 +65,7 @@ impl Registry {
     /// Returns [`FetchProgress`] so quiet completion wakes cannot trigger the downloader watchdog.
     /// ABR deadlines, the tick timestamp, and batch enqueue stamps share the
     /// session clock.
+    /// Peer updates and cancellation reconcile even when no fetch slot is free.
     #[kithara::flash(true)]
     pub(crate) async fn tick(
         &mut self,
@@ -100,7 +96,9 @@ impl Registry {
             let stats = self.peers.poll(cx, inner, &mut self.slots);
             aggregate.drained_cmds += stats.drained_cmds;
             aggregate.peer_batches += stats.peer_batches;
-            if deadline_elapsed || aggregate.abr_ticked || self.slots.has_work() {
+            self.reschedule();
+            let capacity = inner.inflight.load(Ordering::Relaxed) < inner.config.max_concurrent;
+            if deadline_elapsed || aggregate.abr_ticked || (self.slots.has_work() && capacity) {
                 Poll::Ready(())
             } else {
                 Poll::Pending
@@ -116,7 +114,7 @@ impl Registry {
 
         let urgent_batch = self.slots.take(0..2);
         if !urgent_batch.is_empty() {
-            dispatched += self.process_batch(urgent_batch, inner).await;
+            dispatched += self.process_batch(urgent_batch, inner);
             return classify_progress(
                 inflight_enter,
                 inner.inflight.load(Ordering::Relaxed),
@@ -142,7 +140,7 @@ impl Registry {
 
         let demand_batch = self.slots.take(2..4);
         if !demand_batch.is_empty() {
-            dispatched += self.process_batch(demand_batch, inner).await;
+            dispatched += self.process_batch(demand_batch, inner);
         }
 
         classify_progress(
@@ -196,6 +194,69 @@ const fn classify_progress(
         return FetchProgress::Stalled;
     }
     FetchProgress::Idle
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use std::num::NonZeroU64;
+
+    use kithara_abr::AbrPeerId;
+    use kithara_net::NetError;
+    use kithara_platform::{
+        CancelGroup, CancelToken,
+        time::Instant,
+        tokio::{sync::oneshot, task::spawn},
+    };
+    use kithara_test_utils::{cancel_token, kithara};
+    use url::Url;
+
+    use super::Registry;
+    use crate::{
+        FetchCmd, RequestId, RequestPriority,
+        peer::{InternalCmd, ResponseTarget, SlotEntry},
+    };
+
+    #[kithara::test(miri, tokio, multi_thread)]
+    async fn queued_commands_wake_and_answer_across_registry_teardown(cancel_token: CancelToken) {
+        let mut registry = Registry::default();
+        let peer_cancel = cancel_token.child();
+        let (response, receiver) = oneshot::channel();
+        let answer = spawn(receiver);
+        registry.slots.enqueue(
+            0,
+            SlotEntry {
+                peer_cancel: peer_cancel.clone(),
+                cmd: InternalCmd {
+                    peer_id: AbrPeerId::new(NonZeroU64::MIN),
+                    cancel: CancelGroup::new(vec![peer_cancel.child()]),
+                    cmd: FetchCmd::get(
+                        Url::parse("http://example.test/queued").expect("source URI"),
+                    )
+                    .build(),
+                    enqueued_at: Instant::now(),
+                    bus: None,
+                    peer: None,
+                    request_id: RequestId::new(NonZeroU64::MIN),
+                    priority: RequestPriority::High,
+                    response: ResponseTarget::Channel(response),
+                },
+            },
+        );
+        registry.slots.urgent_notified().await;
+        assert_eq!(
+            registry.slots.len(),
+            1,
+            "publication wakes the queued owner"
+        );
+        drop(registry);
+        assert!(
+            matches!(
+                answer.await.expect("response task"),
+                Ok(Err(NetError::Cancelled))
+            ),
+            "owner teardown answers the receiving task instead of dropping its response"
+        );
+    }
 }
 
 #[cfg(test)]

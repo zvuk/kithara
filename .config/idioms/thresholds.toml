@@ -37,6 +37,7 @@ keep_manual_method_attrs = []
 
 [derivable_event]
 enabled = true
+owner_path = "crates/kithara-events"
 
 [derivable_from]
 enabled = true

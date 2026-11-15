@@ -5,10 +5,11 @@ use kithara::{
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
+        tokio::{runtime::Handle, task::spawn_blocking_on},
     },
     play::{DeckMixerConfig, PlayWorkerConfig, ResourcePrep, TrackSettings},
     queue::{QueueConfig, QueueSettings},
-    warp::{StretchKind, WarpCapabilities, WarpConfig},
+    warp::{Pitch, WarpConfig},
 };
 
 use super::resource::ResourceFactory;
@@ -23,13 +24,12 @@ use crate::{
 };
 
 /// The Warp configuration every FFI player starts its tracks on: keylocked on
-/// Apple when the selected backend preserves pitch.
+/// Apple.
 fn player_warp() -> WarpConfig {
-    let keylock = cfg!(all(feature = "apple", target_vendor = "apple"))
-        && StretchKind::default()
-            .capabilities()
-            .contains(WarpCapabilities::KEYLOCK);
-    WarpConfig::builder().keylock(keylock).build()
+    let keylock = cfg!(all(feature = "apple", target_vendor = "apple"));
+    WarpConfig::builder()
+        .maybe_pitch(keylock.then_some(Pitch::HELD))
+        .build()
 }
 
 /// Build the default `NetOptions`. The `dev` feature enables the
@@ -38,44 +38,6 @@ fn player_warp() -> WarpConfig {
 fn default_net_options() -> NetOptions {
     const INSECURE: bool = cfg!(feature = "dev");
     NetOptions::builder().is_insecure(INSECURE).build()
-}
-
-#[derive(Clone, Copy, Default, Debug)]
-pub(crate) struct PeakBitrate {
-    pub(crate) cellular_bps: f64,
-    pub(crate) wifi_bps: f64,
-}
-
-impl PeakBitrate {
-    /// Effective ABR cap, in bits/sec, derived from the configured
-    /// `wifi_bps` and `cellular_bps` ceilings.
-    /// Returns `None` when both are unset (`0.0`), letting ABR consider
-    /// every variant. Saturates at [`u64::MAX`] for absurdly large
-    /// inputs (real bitrates fit comfortably in `u64`, but `UniFFI`
-    /// `f64` callers can pass anything).
-    pub(crate) fn effective_cap(self) -> Option<u64> {
-        const U64_MAX_AS_F64: f64 = 18_446_744_073_709_551_615.0;
-        let limits = [self.wifi_bps, self.cellular_bps]
-            .into_iter()
-            .filter(|v| *v > 0.0);
-        let cap = limits
-            .reduce(f64::min)
-            .filter(|v| v.is_finite() && *v > 0.0)?;
-        if cap >= U64_MAX_AS_F64 {
-            return Some(u64::MAX);
-        }
-        #[cfg_attr(
-            all(),
-            expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "non-negative finite bitrate clamped above; the cast is safe for any\
-                          realistic peak bitrate"
-            )
-        )]
-        let cap_u64 = cap.trunc() as u64;
-        Some(cap_u64)
-    }
 }
 
 /// Native engine behind the [`crate::player::AudioPlayer`] facade.
@@ -96,13 +58,10 @@ pub(crate) struct NativeInner {
     /// separate scope.
     pub(super) shutdown: CancelToken,
     pub(super) queue: FfiQueueControl,
-    pub(super) queue_owner: HostOwned<FfiQueue>,
+    /// The queue's seat in the process Host; taken only by `Drop`.
+    pub(super) queue_owner: Option<HostOwned<FfiQueue>>,
     pub(super) event_bridge: Mutex<Option<EventBridge>>,
     pub(super) observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
-    /// Bandwidth caps configured via `update_peak_bitrate`. Wifi value
-    /// drives the ABR cap unless cellular is tighter; cellular is held
-    /// for future network-state-aware switching.
-    pub(super) peak_bitrate: Mutex<PeakBitrate>,
 }
 
 impl NativeInner {
@@ -127,7 +86,9 @@ impl NativeInner {
         );
         let queue_store = store.handle().clone();
         let warp = player_warp();
-        let track = TrackSettings::builder().keylock(warp.keylock()).build();
+        let track = TrackSettings::builder()
+            .pitch(warp.pitch_control(warp.pitch()).unwrap_or_default())
+            .build();
         let prep = ResourcePrep::builder()
             .worker(worker)
             .warp(warp)
@@ -163,10 +124,9 @@ impl NativeInner {
         let resources = ResourceFactory::new(store, downloader, key_options);
         let inner = Self {
             resources,
-            queue_owner,
+            queue_owner: Some(queue_owner),
             queue,
             shutdown: cancel,
-            peak_bitrate: Mutex::default(),
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),
@@ -204,49 +164,28 @@ impl NativeInner {
 }
 
 impl Drop for NativeInner {
-    /// Fire the master cancel pulse so the shutdown signal reaches subsystems before
-    /// structural Arc teardown unwinds. The facade owns `NativeInner` by value, so this
-    /// runs exactly when the `AudioPlayer` is dropped.
+    /// Leave the process Host, stop the event bridge, then fire the master
+    /// cancel pulse. The facade owns `NativeInner` by value, so this runs
+    /// exactly when the `AudioPlayer` is dropped. A drop inside a runtime
+    /// context (an observer releasing the final player from its callback)
+    /// hands that blocking teardown to the runtime's blocking pool instead of
+    /// stalling the async task that delivered the event.
     fn drop(&mut self) {
-        if let Err(error) = session::remove(&self.queue_owner) {
-            tracing::error!(?error, "failed to remove FFI Queue from the process Host");
+        let owner = self.queue_owner.take();
+        let bridge = self.event_bridge.lock().take();
+        let shutdown = self.shutdown.clone();
+        let teardown = move || {
+            if let Some(owner) = owner
+                && let Err(error) = session::remove(&owner)
+            {
+                tracing::error!(?error, "failed to remove FFI Queue from the process Host");
+            }
+            drop(bridge);
+            shutdown.cancel();
+        };
+        match Handle::try_current() {
+            Ok(runtime) => drop(spawn_blocking_on(&runtime, teardown)),
+            Err(_) => teardown(),
         }
-        self.shutdown.cancel();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[kithara::test]
-    fn update_peak_bitrate_remembers_both_limits() {
-        crate::mock::offline();
-        let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
-        inner.update_peak_bitrate(2_000_000.0, 500_000.0);
-        let snapshot = *inner.peak_bitrate.lock();
-        assert!((snapshot.wifi_bps - 2_000_000.0).abs() < f64::EPSILON);
-        assert!((snapshot.cellular_bps - 500_000.0).abs() < f64::EPSILON);
-    }
-
-    #[kithara::test]
-    fn peak_bitrate_effective_cap_picks_min_non_zero() {
-        let pb = PeakBitrate {
-            wifi_bps: 2_000_000.0,
-            cellular_bps: 500_000.0,
-        };
-        assert_eq!(pb.effective_cap(), Some(500_000));
-
-        let pb = PeakBitrate {
-            wifi_bps: 0.0,
-            cellular_bps: 750_000.0,
-        };
-        assert_eq!(pb.effective_cap(), Some(750_000));
-
-        let pb = PeakBitrate {
-            wifi_bps: 0.0,
-            cellular_bps: 0.0,
-        };
-        assert_eq!(pb.effective_cap(), None);
     }
 }

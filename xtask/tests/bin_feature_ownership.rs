@@ -1,7 +1,14 @@
-use std::{fs, path::Path};
+use std::{fs, path::PathBuf};
 
 use cargo_metadata::MetadataCommand;
 use syn::{Expr, ExprMethodCall, Lit, visit::Visit};
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+        .parent()
+        .expect("xtask has a workspace root")
+        .to_path_buf()
+}
 
 #[derive(Default)]
 struct Requests(Vec<Vec<Option<String>>>);
@@ -31,7 +38,7 @@ impl<'ast> Visit<'ast> for Requests {
 
 #[test]
 fn explicit_binary_features_are_owned_by_the_manifest() {
-    let tooling = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let tooling = workspace_root().join("xtask");
     let metadata = MetadataCommand::new()
         .manifest_path(tooling.join("Cargo.toml"))
         .no_deps()
@@ -99,4 +106,50 @@ fn explicit_binary_features_are_owned_by_the_manifest() {
         checked > 0,
         "the source scan must exercise a binary request"
     );
+}
+
+#[test]
+fn bootstrap_does_not_require_the_cli_dependency_closure() {
+    let manifest: toml::Table = include_str!("../Cargo.toml").parse().unwrap();
+    assert_eq!(
+        manifest["features"]["default"].as_array().unwrap(),
+        &[toml::Value::from("cli")]
+    );
+    let cli = manifest["features"]["cli"].as_array().unwrap();
+    let dependencies = manifest["dependencies"].as_table().unwrap().iter().chain(
+        manifest["target"]["cfg(unix)"]["dependencies"]
+            .as_table()
+            .unwrap()
+            .iter(),
+    );
+    for (name, dependency) in dependencies {
+        if matches!(
+            name.as_str(),
+            "hex" | "sha2" | "serde_json" | "tempfile" | "socket2" | "nix"
+        ) {
+            assert!(dependency.get("optional").is_none(), "{name}");
+        } else {
+            assert_eq!(
+                dependency.get("optional").and_then(toml::Value::as_bool),
+                Some(true),
+                "{name}"
+            );
+            assert!(
+                cli.contains(&toml::Value::from(format!("dep:{name}"))),
+                "{name}"
+            );
+        }
+    }
+    for target in manifest["bin"].as_array().unwrap() {
+        let name = target["name"].as_str().unwrap();
+        if name == "xtask" {
+            assert_eq!(
+                target["required-features"].as_array().unwrap(),
+                &[toml::Value::from("cli")]
+            );
+        } else {
+            assert!(target.get("required-features").is_none(), "{name}");
+            assert!(target["path"].as_str().unwrap().starts_with("bin/"));
+        }
+    }
 }

@@ -4,7 +4,6 @@ use ffmpeg::{
         Id, context::Context as CodecContext, encoder::Audio as AudioEncoder,
         flag::Flags as CodecFlags,
     },
-    encoder::find as find_encoder,
 };
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::filter::Graph;
@@ -13,7 +12,7 @@ use kithara_stream::{AudioCodec, ContainerFormat};
 use super::{
     PacketCodec, RebaseRates, build_direct_filter,
     bytes::encode_bytes_audio,
-    collect_encoded_packets, ensure_ffmpeg_initialized,
+    collect_encoded_packets, ensure_ffmpeg_initialized, find_encoder,
     pcm::{
         consts::PCM_INPUT_FORMAT, drain_filtered_frames, flush_filter, pump_pcm_frames,
         send_eof_to_encoder, send_frame_to_filter,

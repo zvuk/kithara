@@ -31,6 +31,14 @@ impl StretchKind {
             Self::Identity => BackendCapabilities::empty(),
         }
     }
+
+    /// Compiled backends that render every function in `capabilities`, in [`Self::all`] order.
+    pub fn supporting(capabilities: BackendCapabilities) -> impl Iterator<Item = Self> {
+        Self::all()
+            .iter()
+            .copied()
+            .filter(move |backend| backend.capabilities().contains(capabilities))
+    }
 }
 
 /// The first compiled-in backend, in [`StretchKind::all`] selector order.

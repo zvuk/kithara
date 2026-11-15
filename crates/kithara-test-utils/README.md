@@ -48,7 +48,7 @@ emits the same probe records through `tracing`.
 
 <tr><th>Module</th><th>Feature</th><th>Role</th></tr>
 
-<tr><td><code>test</code></td><td>always on; the tracing helpers need <code>subscriber</code> on <code>wasm32</code></td><td>Re-exports <code>kithara_test_macros::test</code>; <code>init_tracing</code>, <code>setup_tracing</code>, <code>setup_tracing_with_filter</code> helpers</td></tr>
+<tr><td><code>test</code></td><td><code>test</code>; tracing also needs <code>subscriber</code> on <code>wasm32</code></td><td>Test tracing, clock measurement and USDT subscriber helpers</td></tr>
 
 <tr><td><code>hang</code></td><td><code>hang</code> (default)</td><td>Hang-watchdog primitives used by <code>#[kithara::test]</code>; <code>noop</code> fallback when the feature is off</td></tr>
 
@@ -60,9 +60,7 @@ emits the same probe records through `tracing`.
 
 <tr><td><code>kithara_platform</code></td><td>always on</td><td>Re-export used by macro expansions that need flash control paths</td></tr>
 
-<tr><td><code>kithara</code></td><td>always on</td><td>Re-exports macros from <code>kithara-test-macros</code> so consumers can write <code>#[kithara::test]</code>, <code>#[kithara::probe]</code>, <code>#[kithara::mock]</code>, <code>#[kithara::fixture]</code>, <code>#[kithara::flash]</code>, <code>#[kithara::hang_watchdog]</code>, <code>#[kithara::rtsan_allow_blocking]</code>, <code>#[kithara::rtsan_forbid_blocking]</code>, and the <code>Probe</code> derive</td></tr>
-
-<tr><td><code>kithara_facade</code></td><td>always on</td><td>Facade-path flash macro re-export used by the public <code>kithara</code> crate</td></tr>
+<tr><td><code>kithara</code></td><td>instrumentation always; test DSL with <code>test</code></td><td>Re-exports macros from <code>kithara-test-macros</code> so consumers can write <code>#[kithara::test]</code>, <code>#[kithara::probe]</code>, <code>#[kithara::mock]</code>, <code>#[kithara::fixture]</code>, <code>#[kithara::flash]</code>, <code>#[kithara::hang_watchdog]</code>, <code>#[kithara::rtsan_allow_blocking]</code>, <code>#[kithara::rtsan_forbid_blocking]</code>, and the <code>Probe</code> derive</td></tr>
 
 </table>
 
@@ -72,9 +70,19 @@ emits the same probe records through `tracing`.
 
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
 
+<tr><td><code>test</code></td><td>yes</td><td>Test, fixture and asset macros, test runtime helpers and cancel-token fixtures; also enabled by <code>mock</code>, <code>http-server</code> and <code>temp-dir</code></td></tr>
+
 <tr><td><code>flash</code></td><td>no</td><td>Forward flash virtual-time support to <code>kithara-platform</code></td></tr>
 
 <tr><td><code>hang</code></td><td>yes</td><td>Real hang-watchdog implementation (otherwise no-op)</td></tr>
+
+<tr><td><code>http-server</code></td><td>no</td><td>Local axum HTTP server for tests (native only)</td></tr>
+
+<tr><td><code>temp-dir</code></td><td>no</td><td>Temporary-directory fixtures</td></tr>
+
+<tr><td><code>load</code></td><td>no</td><td>One spinning thread per CPU during every <code>#[kithara::test]</code> body; enabled by <code>just test run --load=on</code></td></tr>
+
+<tr><td><code>no-block</code></td><td>no</td><td>Forward the blocking-call detector to <code>kithara-platform</code></td></tr>
 
 <tr><td><code>mock</code></td><td>no</td><td>Pulls <code>unimock</code> into the dependency graph; enables real <code>kithara::mock</code> expansion</td></tr>
 
@@ -82,17 +90,16 @@ emits the same probe records through `tracing`.
 
 <tr><td><code>usdt</code></td><td>no</td><td>Enables USDT probe emission: native DTrace on macOS and <code>tracing</code> on other targets (otherwise no-op)</td></tr>
 
-<tr><td><code>client-reqwest</code></td><td>no</td><td>Empty compatibility feature; selects no HTTP or TLS dependencies</td></tr>
-
-<tr><td><code>client-wreq</code></td><td>no</td><td>Empty compatibility feature; selects no HTTP or TLS dependencies</td></tr>
-
-<tr><td><code>tls-rustls</code></td><td>no</td><td>Empty compatibility feature; selects no HTTP or TLS dependencies</td></tr>
-
-<tr><td><code>tls-native</code></td><td>no</td><td>Empty compatibility feature; selects no HTTP or TLS dependencies</td></tr>
+<tr><td><code>client-reqwest</code>, <code>client-wreq</code>, <code>tls-rustls</code>, <code>tls-native</code></td><td>no</td><td>Empty compatibility features; select no HTTP or TLS dependencies</td></tr>
 
 </table>
 
 Consumer crates enable `usdt` only when they need real USDT emission.
+
+With defaults disabled, instrumentation remains available without `test`; the
+test, fixture and asset macro entrypoints are absent. Test-utils defaults
+enable `hang` and `test`. The public `kithara` facade has its own `test`
+feature for its test and fixture exports.
 
 ## Integration
 
@@ -100,14 +107,14 @@ Consumed by workspace `[dev-dependencies]` and independent native/wasm test suit
 
 ### Independent consumers
 
-The minimal native consumer needs only `kithara-test-utils` with default features
-disabled. Plain tests, `#[case]` parameterization, fixture injection, `serial`, and
+The minimal native test consumer needs only `kithara-test-utils` with default
+features disabled and `test` enabled. Plain tests, `#[case]` parameterization, fixture injection, `serial`, and
 current-thread async tests use its re-exported runtime. Generated serialization
 wrappers require no direct `serial_test` dependency.
 
 ```toml
 [dev-dependencies]
-kithara-test-utils = { git = "https://github.com/zvuk/kithara", rev = "<tested-commit>", default-features = false }
+kithara-test-utils = { git = "https://github.com/zvuk/kithara", rev = "<tested-commit>", default-features = false, features = ["test"] }
 ```
 
 Use the same tested commit for all Kithara dependencies. Optional capabilities
@@ -125,20 +132,12 @@ is a separate timeout mechanism; it does not prove an active hang watchdog.
 `hang_timeout_secs(N)` sets the budget for watchdog helpers called inside the
 test. With `usdt` disabled, native consumers need no DTrace or USDT tooling.
 
-The [standalone tests](../../xtask/tests/fixtures/test_utils.rs) run in a temporary
-workspace outside the checkout. The runner creates its manifest from the root
-dependency versions and reuses one lockfile throughout the matrix. Its minimal,
-mock, multithread, hang, and config/derive modes run separately from the product
-workspace. The negative watchdog test runs only in a child process with an
-independent deadline. All temporary sources, build output and diagnostic files
-are removed when the command exits; results and failures appear in its normal
-log output. Wasm wrapper checks establish compilation only.
-
-Run `just test test-utils` for the full matrix. To verify a published git
-revision, set `KITHARA_TEST_UTILS_REV` to its full SHA and
-`KITHARA_TEST_UTILS_GIT_URL` to its repository URL without credentials.
-The runner prepares dependencies, then repeats tests with locked offline resolution.
-CI pins the tests to the checked-out revision automatically.
+The [standalone tests](../../xtask/tests/fixtures/test_utils.rs) build these
+modes (minimal, mock, multithread, hang, config/derive) in a temporary workspace
+outside the checkout; wasm wrapper checks establish compilation only. Run
+`just test test-utils` for the matrix. To verify a published git revision, set
+`KITHARA_TEST_UTILS_REV` to its full SHA and `KITHARA_TEST_UTILS_GIT_URL` to its
+repository URL without credentials.
 
 ### Integration tests live elsewhere
 

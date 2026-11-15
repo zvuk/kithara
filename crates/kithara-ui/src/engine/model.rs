@@ -4,6 +4,7 @@ use crate::interact::{
     CursorShape, Hit, Hover, Outcome, ScrollAxis, TextInputLayout,
     recognizers::{DragEvent, Scalar, Track, WheelStep},
 };
+pub(crate) use crate::render::document::Presses;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ScrollConfig {
@@ -89,8 +90,8 @@ pub(super) struct Identity {
 
 /// What a pressed activation publishes.
 pub(crate) enum Press {
-    /// The control's own activation.
-    Activate,
+    /// The control's own activation, and the presses it declares besides.
+    Activate(Presses),
     /// The text of the item pressed, by index; an item without one ignores the
     /// press.
     Texts(Vec<Option<String>>),
@@ -166,10 +167,10 @@ pub(crate) enum Descriptor {
 }
 
 impl Descriptor {
-    pub(crate) fn activation(path: String) -> Self {
+    pub(crate) fn pressable(path: String, presses: Presses) -> Self {
         Self::Activation {
             path,
-            press: Press::Activate,
+            press: Press::Activate(presses),
         }
     }
 
@@ -332,6 +333,8 @@ impl Descriptor {
 pub(crate) enum EngineEvent {
     Scalar(f64),
     Activate,
+    SecondaryActivate,
+    DoubleActivate,
     Crossing(bool),
     Index(usize),
     Drag { event: DragEvent, index: usize },

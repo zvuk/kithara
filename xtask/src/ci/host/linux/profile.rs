@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     net::Ipv4Addr,
     path::{Path, PathBuf},
@@ -9,7 +9,11 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::ci::{
-    config::{default_build_cache_size, is_whole_gigabytes, parse_build_cache_size},
+    cache::scope_bucket,
+    config::{
+        default_build_cache_size, default_cleanup_deadline_seconds, default_job_room_wait_seconds,
+        is_whole_gigabytes, parse_build_cache_size,
+    },
     environment::CacheTrust,
 };
 
@@ -26,14 +30,33 @@ pub(crate) struct LinuxHost {
     pub(crate) build_cache_size: String,
     /// Directory holding the caches jobs keep between runs.
     pub(crate) cache_root: PathBuf,
+    /// Separate compiler-store volume, keeping its journal away from target writes.
+    #[serde(default)]
+    pub(super) compiler_cache_root: Option<PathBuf>,
+    /// Scoped credentials with an endpoint reachable from image builds.
+    pub(crate) image_cache_env_file: PathBuf,
     /// Whole gigabytes, such as `50G`, each trust's compiler-cache store may
     /// hold. Defaulted: installed profiles predate the store.
     #[serde(default = "default_compiler_cache_size")]
     pub(crate) compiler_cache_size: String,
+    /// How long one cleanup pass may run before systemd ends it as wedged.
+    /// Defaulted: installed profiles predate it, and refusing to load would
+    /// kill the cleanup.
+    #[serde(default = "default_cleanup_deadline_seconds")]
+    pub(crate) cleanup_deadline_seconds: u64,
     /// Docker network the runners are confined to.
     pub(crate) network: String,
     /// Address block of that network, fenced off from the rest of the machine.
     pub(crate) subnet: String,
+    /// Bytes a job needs free on `cache_root`'s volume before it starts:
+    /// the room one cold lane build takes. Required: the room depends on the
+    /// machine's builds, and no number fits every machine.
+    pub(crate) free_bytes_for_a_job: u64,
+    /// How long a job waits for that room before refusing to start.
+    /// Defaulted as on the Mac: it is matched to the claim a dead job leaves,
+    /// not to the machine.
+    #[serde(default = "default_job_room_wait_seconds")]
+    pub(crate) job_room_wait_seconds: u64,
     /// Serialised last: TOML requires tables after plain values.
     ///
     /// The repositories this machine serves, each with the token that mints
@@ -71,6 +94,8 @@ pub(crate) struct WindowsGuest {
     pub(crate) name: String,
     /// Which repository of [`LinuxHost::repositories`] this guest enrols with.
     pub(crate) repository: String,
+    /// Scoped credentials with an endpoint reachable from the guest network.
+    pub(crate) sccache_s3_env_file: PathBuf,
     pub(crate) vcpus: u32,
     pub(crate) memory_mib: u32,
     pub(crate) disk_gib: u32,
@@ -101,6 +126,8 @@ pub(crate) struct LinuxRunner {
     pub(crate) sccache_s3_env_file: PathBuf,
     /// Whether these credentials may publish immutable target snapshots.
     pub(crate) cache_trust: CacheTrust,
+    /// Isolates mutable cache files for runners sharing the same credentials and trust.
+    pub(crate) cache_scope: String,
     /// How many cores one job may use. Handed to the container as a set of
     /// core numbers rather than a share of the machine: a share is a CFS
     /// quota, which throttles a job without telling it anything, so `nproc`
@@ -133,13 +160,19 @@ pub(crate) enum RunnerFlavor {
     Android,
 }
 
-/// What one trust's store may hold when the profile does not say: every
-/// runner of the trust shares it, and kache evicts to it.
+/// What one scope's store may hold when the profile does not say: every
+/// runner of the scope shares it, and kache evicts to it.
 fn default_compiler_cache_size() -> String {
     "50G".to_owned()
 }
 
 impl LinuxHost {
+    pub(super) fn compiler_cache_root(&self) -> PathBuf {
+        self.compiler_cache_root
+            .clone()
+            .unwrap_or_else(|| self.cache_root.join(crate::consts::KACHE_DIR))
+    }
+
     pub(crate) fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("reading Linux CI profile {}", path.display()))?;
@@ -159,13 +192,31 @@ impl LinuxHost {
                 "Linux CI profile compiler_cache_size must be a positive whole number followed by G"
             );
         }
+        // systemd reads a start timeout of zero as none at all.
+        if self.cleanup_deadline_seconds == 0 {
+            bail!("Linux CI profile cleanup_deadline_seconds must be positive");
+        }
         if !self.cache_root.is_absolute() {
             bail!("Linux CI profile cache_root must be an absolute path");
+        }
+        if self
+            .compiler_cache_root
+            .as_ref()
+            .is_some_and(|root| !root.is_absolute())
+        {
+            bail!("Linux CI profile compiler_cache_root must be an absolute path");
+        }
+        if !self.image_cache_env_file.is_absolute() {
+            bail!("Linux CI image builds must name their S3 environment by absolute path");
         }
         if !safe_name(&self.network) {
             bail!("Linux CI profile network contains unsupported characters");
         }
         parse_subnet(&self.subnet)?;
+        // A job needing no room would be admitted onto a full volume.
+        if self.free_bytes_for_a_job == 0 {
+            bail!("Linux CI profile free_bytes_for_a_job must be positive");
+        }
         if self.repositories.is_empty() {
             bail!("Linux CI profile must define at least one repository");
         }
@@ -187,11 +238,28 @@ impl LinuxHost {
             self.credential(&windows.repository)?;
         }
         let mut seen = BTreeSet::new();
+        let mut scopes = BTreeMap::new();
+        let mut credential_roles = BTreeMap::new();
         for runner in &self.runners {
             runner.validate()?;
             self.credential(&runner.repository)?;
             if !seen.insert(runner.name.as_str()) {
                 bail!("Linux CI profile defines runner {} twice", runner.name);
+            }
+            let binding = (runner.cache_trust, &runner.sccache_s3_env_file);
+            if let Some(previous) = scopes.insert(&runner.cache_scope, binding)
+                && previous != binding
+            {
+                bail!(
+                    "Linux CI cache scope {} binds different credentials or trust levels",
+                    runner.cache_scope
+                );
+            }
+            if let Some(network) =
+                credential_roles.insert(&runner.sccache_s3_env_file, runner.is_network())
+                && network != runner.is_network()
+            {
+                bail!("Network cache credentials cannot be shared with ordinary runners");
             }
         }
         Ok(())
@@ -241,6 +309,9 @@ impl RepositoryCredential {
 
 impl WindowsGuest {
     fn validate(&self) -> Result<()> {
+        if !self.sccache_s3_env_file.is_absolute() {
+            bail!("the Windows guest must name its S3 cache environment by absolute path");
+        }
         if !safe_name(&self.name) {
             bail!("Linux CI profile's Windows guest name is unusable");
         }
@@ -260,7 +331,15 @@ impl WindowsGuest {
 }
 
 impl LinuxRunner {
+    fn is_network(&self) -> bool {
+        self.labels
+            .iter()
+            .any(|label| label.eq_ignore_ascii_case("kithara-network"))
+    }
+
     fn validate(&self) -> Result<()> {
+        scope_bucket(&self.cache_scope)
+            .with_context(|| format!("Linux CI runner {} has an invalid cache scope", self.name))?;
         if !safe_name(&self.name) {
             bail!("Linux CI runner name contains unsupported characters");
         }
@@ -278,6 +357,19 @@ impl LinuxRunner {
         }
         if self.labels.is_empty() || self.labels.iter().any(|label| !safe_label(label)) {
             bail!("Linux CI runner {} has an unusable label", self.name);
+        }
+        if self.is_network()
+            && self.labels.iter().any(|label| {
+                !matches!(
+                    label.to_ascii_lowercase().as_str(),
+                    "self-hosted" | "linux" | "x64" | "kithara-network"
+                )
+            })
+        {
+            bail!(
+                "Network runner {} advertises ordinary workflow labels",
+                self.name
+            );
         }
         if self.devices.iter().any(|device| !device.is_absolute()) {
             bail!("Linux CI runner {} names a relative device", self.name);
@@ -345,7 +437,7 @@ pub(crate) mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("linux-host.toml");
         let source =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-linux-host.toml");
+            crate::testing::workspace::root().join("xtask/tests/fixtures/ci-linux-host.toml");
         let text = fs::read_to_string(&source).expect("fixture profile");
         let without: String = text
             .lines()
@@ -369,7 +461,7 @@ pub(crate) mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("linux-host.toml");
         let source =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-linux-host.toml");
+            crate::testing::workspace::root().join("xtask/tests/fixtures/ci-linux-host.toml");
         let text = fs::read_to_string(&source).expect("fixture profile");
         let without: String = text
             .lines()
@@ -384,6 +476,39 @@ pub(crate) mod tests {
                 .compiler_cache_size,
             default_compiler_cache_size()
         );
+    }
+
+    /// Installed profiles predate the cleanup deadline, and the binary reaches
+    /// every host before its profile does.
+    #[test]
+    fn a_profile_without_a_cleanup_deadline_still_loads() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("linux-host.toml");
+        let source =
+            crate::testing::workspace::root().join("xtask/tests/fixtures/ci-linux-host.toml");
+        let text = fs::read_to_string(&source).expect("fixture profile");
+        let without: String = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("cleanup_deadline_seconds"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        fs::write(&path, without).expect("write profile");
+
+        assert_eq!(
+            LinuxHost::load(&path)
+                .expect("profile loads")
+                .cleanup_deadline_seconds,
+            default_cleanup_deadline_seconds()
+        );
+    }
+
+    /// A deadline of zero would be written into the unit as no deadline.
+    #[test]
+    fn a_cleanup_deadline_of_zero_is_refused() {
+        let mut host = host_fixture();
+        host.cleanup_deadline_seconds = 0;
+
+        assert!(host.validate().is_err());
     }
 
     /// kache reads the budget as whole gigabytes; anything else would reach
@@ -402,7 +527,7 @@ pub(crate) mod tests {
     /// runner and one that reaches the hardware a plain one must not.
     pub(crate) fn host_fixture() -> LinuxHost {
         LinuxHost::load(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-linux-host.toml"),
+            &crate::testing::workspace::root().join("xtask/tests/fixtures/ci-linux-host.toml"),
         )
         .expect("the fixture profile must load")
     }
@@ -412,6 +537,101 @@ pub(crate) mod tests {
         let host = host_fixture();
         assert!(host.runner("kithara-ci-octocat").is_ok());
         assert!(host.runner("absent").is_err());
+    }
+
+    #[test]
+    fn compiler_store_root_requires_an_absolute_path() {
+        let mut host = host_fixture();
+        host.compiler_cache_root = Some("relative-store".into());
+
+        let error = host.validate().expect_err("relative compiler store");
+
+        assert!(
+            error
+                .to_string()
+                .contains("compiler_cache_root must be an absolute path")
+        );
+    }
+
+    /// A job told it needs no room would be admitted onto a full volume.
+    #[test]
+    fn a_job_room_of_zero_is_refused() {
+        let mut host = host_fixture();
+        host.free_bytes_for_a_job = 0;
+
+        assert!(host.validate().is_err());
+    }
+
+    /// The wait is matched to the claim a dead job leaves, as on the Mac.
+    #[test]
+    fn a_profile_without_a_job_room_wait_waits_as_the_mac_does() {
+        assert_eq!(
+            host_fixture().job_room_wait_seconds,
+            default_job_room_wait_seconds()
+        );
+    }
+
+    #[test]
+    fn a_cache_scope_cannot_bind_different_credentials() {
+        let mut host = host_fixture();
+        host.runners[1].sccache_s3_env_file = "/etc/kithara-ci/cache/network.env".into();
+        let error = host
+            .validate()
+            .expect_err("a scope must have one credential file");
+        assert!(
+            error
+                .to_string()
+                .contains("binds different credentials or trust")
+        );
+    }
+
+    #[test]
+    fn a_cache_scope_cannot_bind_different_trust_levels() {
+        let mut host = host_fixture();
+        host.runners[1].cache_trust = CacheTrust::Trusted;
+        let error = host
+            .validate()
+            .expect_err("a scope must have one trust level");
+        assert!(
+            error
+                .to_string()
+                .contains("binds different credentials or trust")
+        );
+    }
+
+    #[test]
+    fn a_cache_scope_cannot_escape_the_host_cache_root() {
+        let mut host = host_fixture();
+        "../network".clone_into(&mut host.runners[0].cache_scope);
+        assert!(host.validate().is_err());
+    }
+
+    #[test]
+    fn network_runners_cannot_share_credentials_or_labels_with_general_jobs() {
+        let mut host = host_fixture();
+        "network".clone_into(&mut host.runners[0].cache_scope);
+        host.runners[0].sccache_s3_env_file = "/etc/kithara-ci/cache/network.env".into();
+        host.runners[0].labels = ["self-hosted", "linux", "x64", "Kithara-Network"]
+            .map(String::from)
+            .into();
+        host.validate()
+            .expect("the private Network runner is valid");
+
+        host.runners[0].labels.push("kithara".into());
+        assert!(
+            host.validate()
+                .expect_err("no ordinary jobs")
+                .to_string()
+                .contains("ordinary workflow labels")
+        );
+        assert_eq!(host.runners[0].labels.pop().as_deref(), Some("kithara"));
+        host.runners[0].sccache_s3_env_file = host.runners[1].sccache_s3_env_file.clone();
+        assert!(
+            host.validate()
+                .expect_err("no shared credentials")
+                .to_string()
+                .contains("credentials cannot be shared")
+        );
     }
 
     /// The point of the split: one machine, two repositories, and each runner

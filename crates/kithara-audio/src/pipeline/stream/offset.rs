@@ -33,6 +33,12 @@ impl<R: SessionReader> Read for OffsetReader<R> {
 }
 
 impl<R: SessionReader> Seek for OffsetReader<R> {
+    fn stream_position(&mut self) -> io::Result<u64> {
+        self.shared
+            .stream_position()
+            .map(|position| position.saturating_sub(self.base_offset))
+    }
+
     /// Preserve the shared reader's blocking seek mode during an owning-thread search.
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         match pos {

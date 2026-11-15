@@ -134,8 +134,10 @@ fn apply_queue(
         suspended: false,
         now: SessionFrame::new(0),
         delivery: FrameCount::new(128),
+        deck_delivery: FrameCount::new(128),
         output: &output,
         deck: &deck,
+        planned_tempo: &kithara_play::mock::planned_tempo(),
     };
     let mut scope = rig.ring.scope(rig.scope).expect("queue scope");
     let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);

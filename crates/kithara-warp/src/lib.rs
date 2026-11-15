@@ -7,11 +7,11 @@ mod coordinate;
 #[cfg(feature = "render")]
 mod render;
 mod segment;
-mod temporal;
 #[cfg(all(test, feature = "render"))]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
+mod pitch;
 mod warp;
 
 pub use beat_grid::{
@@ -26,18 +26,15 @@ pub use coordinate::{
 };
 pub(crate) use kithara_signal::{SessionEpoch, SessionFrame};
 #[cfg(feature = "render")]
+pub use kithara_stretch::{BackendCapabilities as WarpCapabilities, StretchKind};
+pub use pitch::{Pitch, PitchStep, Semitones};
+#[cfg(feature = "render")]
 pub use render::{SourceTrajectory, WarpRenderError, WarpRenderer};
 pub use segment::{
     BeatEvidence, BeatMarker, BeatsPerMinute, BeatsPerMinuteError, MapRegion, MapRegionError,
     MapSegment, Meter, MeterError, MeterFacts, SegmentEndpoint, SegmentError, SegmentFacts,
     SegmentSet,
 };
-pub use temporal::{
-    ActiveRegion, GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext,
-    RenderPublisher, RenderReader, RenderSnapshot,
-};
-#[cfg(feature = "render")]
-pub use temporal::{StretchKind, WarpCapabilities};
 #[cfg(feature = "render")]
 pub use warp::{Warp, WarpConfig, WarpConfigPatch, WarpConfigPatchError};
 pub use warp::{WarpCursor, WarpMap, WarpMapRevision};

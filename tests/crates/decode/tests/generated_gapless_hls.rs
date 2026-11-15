@@ -36,7 +36,6 @@ async fn server() -> TestServerHelper {
     tokio,
     multi_thread,
     serial,
-    flash(false),
     timeout(Duration::from_secs(90)),
     hang_timeout_secs(2)
 )]

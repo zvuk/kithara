@@ -5,7 +5,7 @@ use super::{
     super::{processor::Deck, track::PlayerTrack},
     state::{Armed, EndAction, shifted_slot},
 };
-use crate::bridge::{DeckPart, DeckProtocol, DeckRefusal, Slot};
+use crate::bridge::{DeckFxChange, DeckPart, DeckProtocol, DeckRefusal, Slot};
 
 impl Deck {
     pub(in crate::rt) fn arrivals(&mut self, level: &mut LevelInbox<'_, DeckProtocol>) {
@@ -35,7 +35,12 @@ impl Deck {
         }
     }
 
-    pub(in crate::rt) fn take_due(&mut self, mut due: Due<'_, DeckProtocol>, context_valid: bool) {
+    pub(in crate::rt) fn take_due(
+        &mut self,
+        mut due: Due<'_, DeckProtocol>,
+        context_valid: bool,
+        wait_for_pcm: bool,
+    ) {
         if due
             .commands()
             .iter()
@@ -48,23 +53,41 @@ impl Deck {
             due.refuse(reason);
             return;
         }
+        if let Err(reason) = Self::validate_eq_at(due.commands(), due.at())
+            .and_then(|()| Self::validate_filter_at(due.commands(), due.at()))
+        {
+            due.refuse(reason);
+            return;
+        }
+        if !context_valid
+            && due.commands().iter().any(|part| {
+                matches!(
+                    part,
+                    DeckPart::GainProgram { .. }
+                        | DeckPart::EqProgram { .. }
+                        | DeckPart::FilterProgram { .. }
+                )
+            })
+        {
+            due.refuse(DeckRefusal::AxisRestarted);
+            return;
+        }
         let at = due.at();
         let seq = due.seq();
         let length = due.commands().len();
         for remaining in (0..length).rev() {
             let part = due.commands_mut().remove(0);
+            self.interrupt_eq(&mut due, &part);
+            self.interrupt_filter(&mut due, &part);
+            self.interrupt_output(&mut due, &part);
             if let Some(slot) = shifted_slot(&part) {
                 self.interrupt_stop(&mut due, slot, remaining);
             }
-            if let Some(returned) = self.apply(part, at, seq, context_valid) {
+            if let Some(returned) = self.apply(part, at, seq, context_valid, wait_for_pcm) {
                 due.commands_mut().push(returned);
             }
         }
-        if due
-            .commands()
-            .iter()
-            .any(|part| matches!(part, DeckPart::Stop { .. }))
-        {
+        if !self.output_finished(due.commands(), seq) {
             due.commit();
         } else {
             due.apply(());
@@ -116,6 +139,7 @@ impl Deck {
         start: SessionFrame,
         at: SessionFrame,
         context_valid: bool,
+        wait_for_pcm: bool,
     ) {
         loop {
             let next = self
@@ -142,6 +166,7 @@ impl Deck {
             }
             let seq = due.seq();
             let part = due.commands_mut().remove(0);
+            self.interrupt_output(&mut due, &part);
             match &part {
                 DeckPart::Chain { from, to } => {
                     self.interrupt_stop(&mut due, *from, 0);
@@ -155,7 +180,7 @@ impl Deck {
                     }
                 }
             }
-            if let Some(returned) = self.apply(part, at, seq, context_valid) {
+            if let Some(returned) = self.apply(part, at, seq, context_valid, wait_for_pcm) {
                 due.commands_mut().push(returned);
             }
             due.apply(());
@@ -172,10 +197,13 @@ impl Deck {
     }
 
     pub(in crate::rt) fn validate(&mut self, commands: &[DeckPart]) -> Result<(), DeckRefusal> {
+        self.validate_output_programs(commands)?;
+        self.validate_eq_programs(commands)?;
+        self.validate_filter_programs(commands)?;
         for (entry, slot) in self.held.iter_mut().zip(self.tracks.slots()) {
             *entry = self.tracks.at(slot).map(PlayerTrack::segment);
         }
-        for part in commands {
+        for (part_index, part) in commands.iter().enumerate() {
             match part {
                 DeckPart::Attach { slot, segment, .. } => {
                     let Some(entry) = self.held.get_mut(slot.index()) else {
@@ -233,7 +261,26 @@ impl Deck {
                         }
                     }
                 }
-                DeckPart::Mix(_) | DeckPart::Eq(_) | DeckPart::Returned(_) => {}
+                DeckPart::Fx(change) => {
+                    let unit = change.unit();
+                    if unit >= self.render.fx_units() {
+                        return Err(DeckRefusal::MissingFxUnit { unit });
+                    }
+                    if let DeckFxChange::Param { change, .. } = change
+                        && !commands.get(..part_index).is_some_and(|preceding| {
+                            self.render.accepts_fx(unit, *change, preceding)
+                        })
+                    {
+                        return Err(DeckRefusal::RefusedFxParam { unit });
+                    }
+                }
+                DeckPart::Clock { .. }
+                | DeckPart::Mix(_)
+                | DeckPart::Eq(_)
+                | DeckPart::GainProgram { .. }
+                | DeckPart::EqProgram { .. }
+                | DeckPart::FilterProgram { .. }
+                | DeckPart::Returned(_) => {}
             }
         }
         Ok(())

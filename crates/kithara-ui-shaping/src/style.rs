@@ -10,7 +10,7 @@ pub enum FontWeight {
 }
 
 /// A family a text style is set in.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum FontFamily {
     Display,
     Sans,

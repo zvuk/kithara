@@ -84,7 +84,6 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     let soft_timeout = inner.config.soft_timeout;
     let inflight = inner.inflight.clone();
     let fetch_waker = inner.fetch_waker.clone();
-    let capacity_notify = Arc::clone(&inner.capacity_notify);
     let abr = Arc::clone(&inner.abr);
     let downloader_cancel = inner.cancel.clone();
     let peer_id = internal.peer_id;
@@ -145,7 +144,6 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
         )
         .await;
         inflight.fetch_sub(1, Ordering::Relaxed);
-        capacity_notify.notify_one();
         fetch_waker.wake();
     });
 }

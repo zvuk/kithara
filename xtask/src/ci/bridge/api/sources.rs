@@ -15,43 +15,59 @@ impl Github {
         repository: &str,
         sha: &str,
     ) -> Result<Vec<Value>> {
-        if !simple_repository(repository) || !validate_sha(sha) {
-            bail!("invalid GitHub workflow repository or head SHA");
-        }
-        paginated(
-            |page| {
-                self.request(
-                    &Method::GET,
-                    &format!(
-                        "/repos/{repository}/actions/workflows/ci.yml/runs?head_sha={sha}&per_page=100&page={page}"
-                    ),
-                    None,
-                )
-            },
+        self.source_entries(
+            repository,
+            sha,
+            &format!("actions/runs?head_sha={sha}&per_page=100"),
             Some("workflow_runs"),
         )
     }
 
-    pub(in crate::ci::bridge) fn workflow_jobs(
+    pub(in crate::ci::bridge) fn source_statuses(
         &self,
         repository: &str,
-        run_id: u64,
-        attempt: u64,
+        sha: &str,
     ) -> Result<Vec<Value>> {
-        if !simple_repository(repository) {
-            bail!("invalid GitHub workflow repository");
+        self.source_entries(
+            repository,
+            sha,
+            &format!("commits/{sha}/statuses?per_page=100"),
+            None,
+        )
+    }
+
+    pub(in crate::ci::bridge) fn source_check_runs(
+        &self,
+        repository: &str,
+        sha: &str,
+    ) -> Result<Vec<Value>> {
+        self.source_entries(
+            repository,
+            sha,
+            &format!("commits/{sha}/check-runs?filter=latest&per_page=100"),
+            Some("check_runs"),
+        )
+    }
+
+    fn source_entries(
+        &self,
+        repository: &str,
+        sha: &str,
+        path: &str,
+        field: Option<&str>,
+    ) -> Result<Vec<Value>> {
+        if !simple_repository(repository) || !validate_sha(sha) {
+            bail!("invalid GitHub source repository or head SHA");
         }
         paginated(
             |page| {
                 self.request(
                     &Method::GET,
-                    &format!(
-                        "/repos/{repository}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page={page}"
-                    ),
+                    &format!("/repos/{repository}/{path}&page={page}"),
                     None,
                 )
             },
-            Some("jobs"),
+            field,
         )
     }
 }
@@ -111,6 +127,8 @@ pub(super) fn pull_request(value: &Value) -> Result<PullRequest> {
     let draft = value["draft"]
         .as_bool()
         .context("GitHub pull response has no draft flag")?;
+    let tests = xtask::ci::github::pr_tests_block(value["body"].as_str().unwrap_or_default())
+        .map_err(|error| error.to_string());
     Ok(PullRequest {
         number,
         head_sha,
@@ -118,5 +136,6 @@ pub(super) fn pull_request(value: &Value) -> Result<PullRequest> {
         head_branch,
         scope: if draft { Scope::Draft } else { Scope::Full },
         author,
+        tests,
     })
 }

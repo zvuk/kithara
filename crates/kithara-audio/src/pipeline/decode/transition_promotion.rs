@@ -29,7 +29,22 @@ impl ActiveDecode {
             self.discontinuity_revision = self.discontinuity_revision.wrapping_add(1);
         }
         match prepared.join {
-            PromotionJoin::HardCut => self.blender.replace_active(incoming_profile),
+            PromotionJoin::HardCut => {
+                self.blender.replace_active(incoming_profile);
+                kithara_test_macros::probe_event!(
+                    gapless_join_completed,
+                    variant = prepared.transition.incoming_variant().get(),
+                    end_ns = prepared
+                        .generation
+                        .staged
+                        .front()
+                        .and_then(|chunk| chunk
+                            .meta
+                            .source_geometry()
+                            .and_then(|span| span.position_at(u64::from(chunk.meta.frames))))
+                        .and_then(|end| u64::try_from(end.as_nanos()).ok()),
+                );
+            }
             PromotionJoin::Blend { .. } => self.blender.commit_join(),
         }
         std::mem::replace(&mut self.active, prepared.generation)

@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use crate::{
-    arch, arch::ArchArgs, common::style::bold_cyan, idioms, idioms::IdiomsArgs, style,
+    Ctx, arch, arch::ArchArgs, common::style::bold_cyan, idioms, idioms::IdiomsArgs, style,
     style::StyleArgs,
 };
 
@@ -40,17 +40,23 @@ pub enum LintCommand {
     Idioms(IdiomsArgs),
 }
 
-pub(crate) fn run(args: &LintArgs) -> Result<()> {
+pub(crate) fn run(args: &LintArgs, ctx: &Ctx) -> Result<()> {
     match &args.command {
-        Some(LintCommand::Arch(a)) => arch::run(a),
-        Some(LintCommand::Style(a)) => style::run(a),
-        Some(LintCommand::Idioms(a)) => idioms::run(a),
-        None => run_all(&args.crates, &args.paths, args.fix, args.allow_dirty),
+        Some(LintCommand::Arch(a)) => arch::run(a, ctx),
+        Some(LintCommand::Style(a)) => style::run(a, ctx),
+        Some(LintCommand::Idioms(a)) => idioms::run(a, ctx),
+        None => run_all(&args.crates, &args.paths, args.fix, args.allow_dirty, ctx),
     }
 }
 
-fn run_all(crates: &[String], paths: &[PathBuf], fix: bool, allow_dirty: bool) -> Result<()> {
-    let mut failures: Vec<&'static str> = Vec::new();
+fn run_all(
+    crates: &[String],
+    paths: &[PathBuf],
+    fix: bool,
+    allow_dirty: bool,
+    ctx: &Ctx,
+) -> Result<()> {
+    let mut failures = Vec::new();
     let arch_args = ArchArgs {
         config_dir: ".config/arch".into(),
         crates: crates.to_vec(),
@@ -75,16 +81,16 @@ fn run_all(crates: &[String], paths: &[PathBuf], fix: bool, allow_dirty: bool) -
     };
 
     println!("{}", bold_cyan("══ arch ══"));
-    if arch::run(&arch_args).is_err() {
-        failures.push("arch");
+    if let Err(error) = arch::run(&arch_args, ctx) {
+        failures.push(format!("arch: {error:#}"));
     }
     println!("\n{}", bold_cyan("══ style ══"));
-    if style::run(&style_args).is_err() {
-        failures.push("style");
+    if let Err(error) = style::run(&style_args, ctx) {
+        failures.push(format!("style: {error:#}"));
     }
     println!("\n{}", bold_cyan("══ idioms ══"));
-    if idioms::run(&idioms_args).is_err() {
-        failures.push("idioms");
+    if let Err(error) = idioms::run(&idioms_args, ctx) {
+        failures.push(format!("idioms: {error:#}"));
     }
 
     if failures.is_empty() {

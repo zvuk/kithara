@@ -232,6 +232,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
 async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -255,11 +256,37 @@ async fn repeat_one_natural_advance_keeps_current_track() {
             mode: kithara::queue::QueueRepeatMode::One,
         })
     ));
-    let _ = render_loop(&queue, &harness, MAX_BLOCKS).await;
+    let mut loads: EventReceiver<TestEvent> = queue.subscribe();
+    let mut repeats = 0;
+    for _ in 0..MAX_BLOCKS {
+        let _ = render_loop(&queue, &harness, 1).await;
+        while let Ok(envelope) = receiver.try_recv() {
+            match envelope.event {
+                QueueEvent::TrackStatusChanged {
+                    id: reloading,
+                    status: TrackStatus::Pending,
+                } if reloading == id => {
+                    wait_for_loader_done_event(&mut loads, &queue, id, LOCAL_LOAD_DEADLINE)
+                        .await
+                        .expect("the repeat resource loads before offline callbacks resume");
+                }
+                QueueEvent::CurrentTrackAdvance {
+                    id: Some(repeated),
+                    reason: AdvanceReason::NaturalEof,
+                } if repeated == id => repeats += 1,
+                _ => {}
+            }
+        }
+    }
+    assert!(repeats > 0, "natural EOF must restart the selected track");
     assert_eq!(queue.current().map(|entry| entry.id), Some(id));
     assert!(
         queue.is_playing(),
-        "repeat one must restart after natural EOF"
+        "repeat one must restart after natural EOF: current={:?}, deck={:?}, metrics={:?}, next_event={:?}",
+        queue.current().map(|entry| (entry.id, entry.status)),
+        harness.deck_snapshot(),
+        harness.metrics(),
+        receiver.try_recv().map(|envelope| envelope.event),
     );
     drop(queue);
     harness.close().await;
@@ -1695,7 +1722,11 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
 
     assert!(
         mean_mid > 0.005,
-        "no signal mid-playback (mean={mean_mid}) — decoder likely self-armed"
+        "no signal mid-playback (mean={mean_mid}) — decoder likely self-armed; onset={onset}, window={window}, pcm_samples={}, current={:?}, deck={:?}, metrics={:?}",
+        pcm.len(),
+        queue.current().map(|entry| (entry.id, entry.status)),
+        harness.deck_snapshot(),
+        harness.metrics(),
     );
     assert_eq!(
         queue.current_index(),

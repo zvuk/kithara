@@ -443,13 +443,58 @@ fn update_rejects_completed_chunk_regression() {
 fn parser_rejects_truncation_corrupt_offsets_and_index_flags() {
     const PAYLOAD_END_FIELD: usize = 64;
     const LATEST_PAYLOAD_OFFSET_FIELD: usize = 72;
+    const HEADER_VERSION: u32 = 0x4b41_4604;
 
     let bytes = create_bytes(analysis(1, &[(0, 16)], false));
-    for cut in [0, consts::HEADER_LEN - 1, bytes.len() - 1] {
+    for cut in [
+        0,
+        16,
+        48,
+        consts::HEADER_FIELDS_LEN,
+        consts::HEADER_FIELDS_LEN + 4 + consts::FINGERPRINT_MAX,
+        consts::HEADER_LEN - 1,
+        bytes.len() - 1,
+    ] {
+        assert!(
+            matches!(
+                AnalysisFile::parse(&bytes[..cut], &fingerprint()),
+                Err(AnalysisFileError::Corrupt)
+            ),
+            "cut at {cut}"
+        );
+    }
+
+    for corrupt_later_field in [false, true] {
+        let mut wrong_version = bytes.clone();
+        wrong_version[..4].copy_from_slice(&(HEADER_VERSION + 1).to_le_bytes());
+        if corrupt_later_field {
+            wrong_version[4] = 2;
+        }
         assert!(matches!(
-            AnalysisFile::parse(&bytes[..cut], &fingerprint()),
-            Err(AnalysisFileError::Corrupt)
+            AnalysisFile::parse(&wrong_version, &fingerprint()),
+            Err(AnalysisFileError::Version { found, expected })
+                if found == HEADER_VERSION + 1 && expected == HEADER_VERSION
         ));
+    }
+
+    for (name, range, value) in [
+        ("settled byte", 4..5, 2),
+        ("identity padding", 5..8, 1),
+        ("geometry padding", 20..24, 1),
+        ("zero sample rate", 16..20, 0),
+        ("zero chunk size", 32..40, 0),
+        ("revision disagreement", 8..16, 0),
+        ("settled disagreement", 4..5, 1),
+    ] {
+        let mut corrupt = bytes.clone();
+        corrupt[range].fill(value);
+        assert!(
+            matches!(
+                AnalysisFile::parse(&corrupt, &fingerprint()),
+                Err(AnalysisFileError::Corrupt)
+            ),
+            "{name}"
+        );
     }
 
     let mut corrupt_latest = bytes.clone();

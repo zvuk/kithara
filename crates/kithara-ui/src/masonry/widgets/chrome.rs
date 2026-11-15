@@ -88,6 +88,7 @@ where
                 color: self.skin.rgba(role.color),
                 lit: None,
                 text: Box::new(TextContext::from(self.skin.text_resources.as_ref())),
+                room: f32::INFINITY,
             }),
             Size::new(Length::Fill, Length::Fixed(metrics.footer_height)),
             Vec::new(),
@@ -139,10 +140,7 @@ where
             self.chrome_frame(metrics.header_frame),
         );
         let path = header_path(self.ctx.ui.resolve(module.instance()));
-        header.set_actions(
-            Some(self.event(move || control_event(&path, ControlAction::Activate))),
-            None,
-        );
+        header.set_primary(self.event(move || control_event(&path, ControlAction::Activate)));
         header
     }
 }

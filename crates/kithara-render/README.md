@@ -15,18 +15,19 @@
 # kithara-render
 
 The render stages of Kithara playback. On the producer side a decoded audio
-source passes through its Warp renderer and effect chain, one render quantum at
-a time, before the result enters the play output ring. On the audio thread a
-deck mixes the tracks it holds, applying each command batch at the session
-frame it is due on. Enable `mock` to drive a deck's audio-thread end from a
-test in place of a `DeckMixer`.
+source passes through its Warp renderer, one render quantum at a time, before
+the result enters the play output ring. On the audio thread a deck mixes its
+tracks, then runs EQ, FX units and the prepared Filter before its output fader.
+Command batches and prepared parameter programmes execute on session frames;
+manual parameter changes revoke only their addressed programme. Enable `mock`
+to drive a deck's audio-thread end from a test in place of a `DeckMixer`.
 
 ## Usage
 
 ```rust,ignore
 use kithara_render::WarpSource;
 
-let stage = WarpSource::new(source, renderer, effects, drain, spec, pools);
+let stage = WarpSource::new(source, renderer, spec, pools, lane);
 // `stage` is itself an `AudioSource`: the play worker steps it like any
 // decoded source and writes what it produces into the output ring.
 ```
@@ -37,7 +38,7 @@ let stage = WarpSource::new(source, renderer, effects, drain, spec, pools);
 
 <tr><th>Type</th><th>Role</th></tr>
 
-<tr><td><code>WarpSource</code></td><td>Steps a decoded source through Warp and effects, keeps staged input across seeks and drains, and reports where a lane entering its plan starts decoding</td></tr>
+<tr><td><code>WarpSource</code></td><td>Steps a decoded source through Warp, keeps staged input across seeks and drains, and reports where a lane entering its plan starts decoding</td></tr>
 
 <tr><td><code>rt::DeckMixer</code></td><td>The deck on the audio thread: takes its command batches at their frames and mixes its tracks, crossfades and declicks between them</td></tr>
 

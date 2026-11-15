@@ -162,14 +162,17 @@ impl<'ast> Visit<'ast> for FacadeVisitor<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arch::config::FirewheelDspFacadeThreshold;
 
     fn lines(source: &str) -> Vec<usize> {
         let file = syn::parse_file(source).expect("fixture parses");
-        facade_bypass_lines(
-            &file,
-            &forbidden_modules(&FirewheelDspFacadeThreshold::default().modules),
-        )
+        let modules = [
+            "dsp::fade",
+            "dsp::mix",
+            "dsp::filter::smoothing_filter",
+            "param::smoother",
+        ]
+        .map(str::to_owned);
+        facade_bypass_lines(&file, &forbidden_modules(&modules))
     }
 
     #[test]

@@ -9,6 +9,13 @@ use std::{
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
+        .parent()
+        .expect("xtask has a workspace root")
+        .to_path_buf()
+}
+
 mod consts {
     pub(super) const FILE: &str = "test_model.onnx";
     pub(super) const BYTES: &[u8] = b"pinned model bytes for build-script contracts";
@@ -133,9 +140,7 @@ impl Fixture {
     }
 
     fn cargo_fixture(&self) -> PathBuf {
-        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("repository root");
+        let repository = workspace_root();
         let workspace: toml::Table = fs::read_to_string(repository.join("Cargo.toml"))
             .expect("workspace manifest")
             .parse()
@@ -215,12 +220,10 @@ fn main() {{
     }
 
     fn cargo_build(&self, root: &Path) -> Vec<serde_json::Value> {
-        let pins: toml::Table = fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../.config/ci-pins.toml"),
-        )
-        .expect("repository CI pins")
-        .parse()
-        .expect("CI toolchain declarations");
+        let pins: toml::Table = fs::read_to_string(workspace_root().join(".config/ci-pins.toml"))
+            .expect("repository CI pins")
+            .parse()
+            .expect("CI toolchain declarations");
         let output = Command::new("cargo")
             .args(["build", "--offline", "--message-format=json"])
             .current_dir(root)

@@ -78,10 +78,9 @@ mod consts {
 
     pub(super) const MAX_FLIGHT_CHANNEL_BYTES: usize = 32 * 1024;
 
-    pub(super) const MAX_THREADS_BYTES: usize = 16 * 1024;
-
+    // Keep worst-case JSON expansion below the exclusive envelope limit.
+    pub(super) const MAX_THREADS_BYTES: usize = 32 * 1024 - 1;
     pub(super) const MAX_JSON_EXPANSION: usize = 6;
-
     pub(super) const ENVELOPE_OVERHEAD_BYTES: usize = 16 * 1024;
 
     pub(super) const MAX_BOUNDED_INPUT_BYTES: usize = 12 * MAX_NEXTEST_FIELD_BYTES

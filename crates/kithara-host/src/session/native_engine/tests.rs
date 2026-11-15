@@ -19,16 +19,19 @@ use kithara_platform::{thread::JoinHandle, time::Duration};
 #[cfg(feature = "offline")]
 use kithara_play::{DeckPass, HostedDeck, Outbox};
 #[cfg(feature = "offline")]
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 #[cfg(feature = "offline")]
-use kithara_test_utils::{bufpool::TestPools, wait_until_blocking};
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    wait_until_blocking,
+};
 #[cfg(feature = "offline")]
 use kithara_warp::BeatGridState;
 
 #[cfg(feature = "offline")]
 use super::super::protocol::HostDispatcher;
-use super::backend::cpal_config;
+use super::config::cpal_config;
 #[cfg(feature = "offline")]
 use super::{
     super::{
@@ -117,6 +120,7 @@ impl HostOwner<TestPools> for RigOwner {
 
     delegate::delegate! {
         to self.0 {
+            fn poll_output(&mut self) -> std::task::Poll<Result<(), PlayError>>;
             fn register(&mut self, id: DeckId, deck: Box<Self::Deck>) -> Result<(), PlayError>;
             fn each_deck(
                 &mut self,
@@ -142,7 +146,7 @@ impl HostOwner<TestPools> for RigOwner {
             fn transport(&mut self) -> Option<crate::api::SessionTransportSnapshot>;
             fn begin_pass(&mut self);
             fn pass(&mut self) -> Vec<HostSettled>;
-            fn clock(&self) -> Option<(SessionFrame, FrameCount)>;
+            fn clock(&self) -> Option<crate::PassClock>;
             fn host_room(&self) -> usize;
         }
     }
@@ -151,12 +155,6 @@ impl HostOwner<TestPools> for RigOwner {
         match command {
             Command::Host(command) => HostCore::<TestPools>::release_id(command),
             Command::Render { .. } => None,
-        }
-    }
-    fn is_next_tempo(command: &Command) -> bool {
-        match command {
-            Command::Host(command) => HostCore::<TestPools>::is_next_tempo(command),
-            Command::Render { .. } => false,
         }
     }
 }
@@ -181,13 +179,11 @@ fn deck_session() -> (Arc<SessionClient<Command>>, JoinHandle<()>, RootView) {
             root,
             view.clone(),
             SessionBufferConfig::default(),
-            SessionOutput::new(LimiterConfig::default()),
+            SessionOutput::new(LimiterConfig::default(), pools()),
             Live::new(HostSettings::builder().sample_rate(sample_rate).build())
                 .expect("fixture settings"),
-            crate::HostConfig::<TestPools>::builder()
-                .build()
-                .channel_config(),
-            crate::session::offline::mock::start,
+            crate::HostConfig::builder(pools()).build().channel_config(),
+            |ctx, rate, decks, _previous| crate::session::offline::mock::start(ctx, rate, decks),
         );
         ready.send(view).expect("owner thread publishes its view");
         engine_thread(&cmd_rx, mailbox, RigOwner(HostCore::new(state, inbox)));
@@ -214,20 +210,7 @@ fn shut_down(client: &SessionClient<Command>, worker: JoinHandle<()>) {
 
 #[cfg(feature = "offline")]
 fn ask(client: &SessionClient<Command>, command: Command) -> Result<(), &'static str> {
-    let command_name = match &command {
-        Command::Host(command) => match command {
-            HostCommand::Register { .. } => "Register",
-            HostCommand::Configure(..) => "Configure",
-            HostCommand::Close(_) => "Close",
-            HostCommand::Release(_) => "Release",
-            HostCommand::AttachOutputs { .. } => "AttachOutputs",
-            HostCommand::DetachOutputs { .. } => "DetachOutputs",
-            HostCommand::Restart => "Restart",
-            HostCommand::_Marker(_) => "_Marker",
-        },
-        Command::Render { .. } => "Render",
-    };
-    dispatch(client, command, command_name).map_err(|_| "native command refused")
+    dispatch(client, command).map_err(|_| "native command refused")
 }
 
 #[cfg(feature = "offline")]

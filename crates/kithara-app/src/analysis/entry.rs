@@ -129,15 +129,22 @@ impl Entry {
             .held
             .as_ref()
             .map(|progress| progress.analysis().clone());
-        if analysis.is_none() && self.prepared.is_empty() {
-            return;
-        }
-        self.tx
-            .send_replace(Some(TrackArtifacts::new(analysis, self.prepared.clone())));
+        let failed = self.pass_failed();
+        let published = (analysis.is_some() || failed || !self.prepared.is_empty())
+            .then(|| TrackArtifacts::new(analysis, self.prepared.clone(), failed));
+        self.tx.send_replace(published);
+    }
+
+    const fn pass_failed(&self) -> bool {
+        matches!(self.stage, Stage::Failed(_))
     }
 
     pub(crate) fn set_stage(&mut self, stage: Stage) {
+        let failed = self.pass_failed();
         self.stage = stage;
+        if failed != self.pass_failed() {
+            self.republish();
+        }
     }
 
     pub(crate) fn value_for(&self, axis: NonZeroU32) -> Option<AnalysisProgress> {

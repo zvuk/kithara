@@ -204,10 +204,7 @@ mod tests {
     use crate::Cli;
 
     fn example() -> String {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join(".config/bridge/config.example.toml");
+        let path = crate::testing::workspace::root().join(".config/bridge/config.example.toml");
         std::fs::read_to_string(path).unwrap()
     }
 

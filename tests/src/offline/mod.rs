@@ -16,8 +16,8 @@ mod worker;
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 pub use app::{
-    AppQueueFixture, LazyAppQueueFixture, app_disk_asset_store, app_drm, app_queue,
-    app_track_source, insecure_app_queue, prod_document,
+    AppQueueFixture, LazyAppQueueFixture, app_drm, app_queue, app_track_source, insecure_app_queue,
+    prod_document,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use disk_queue::{DiskQueue, RenderPacing};

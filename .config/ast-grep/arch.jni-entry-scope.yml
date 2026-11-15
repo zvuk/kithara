@@ -39,7 +39,7 @@ rule:
         - kind: function_item
         - has:
             field: name
-            regex: '^Java_'
+            regex: "^Java_"
         - not:
             has:
               field: body

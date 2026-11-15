@@ -147,6 +147,7 @@ exempt_crates = [
 ]
 
 [platform_layer_hygiene]
+enabled = true
 # The crate that owns the platform abstraction. Files under it consume the
 # abstraction; the sub-trees below implement it or are the backends it wraps,
 # so naming a primitive there is the job, not a violation.
@@ -167,6 +168,7 @@ arc_owner_files = [
 ]
 
 [cancel_root_sites]
+patterns = ["CancelToken::root", "CancelToken::never"]
 # Crates whose production *is* test scaffolding (helpers, mocks): their
 # hard-coded `CancelToken::root()` / `CancelToken::never()` calls are
 # indistinguishable from test fixtures and don't root an orphan tree.
@@ -202,6 +204,12 @@ allowed_files = [
 exempt_crates = ["kithara-test-utils", "kithara-test-macros", "xtask"]
 
 [firewheel_dsp_facade]
+modules = [
+  "dsp::fade",
+  "dsp::mix",
+  "dsp::filter::smoothing_filter",
+  "param::smoother",
+]
 # The facade modules are the only files that name firewheel's DSP helpers.
 allowed_files = [
   "crates/kithara-dsp/src/fade.rs",
@@ -209,6 +217,7 @@ allowed_files = [
 ]
 
 [tokio_dep_quarantine]
+quarantined = ["tokio", "tokio-util", "tokio-stream"]
 # Crates whose direct tokio dependency is never flagged. `kithara-platform` is
 # the quarantine OWNER (it wraps tokio behind `kithara_platform::{tokio,time,
 # sync}`). `kithara-workspace-hack` is the feature-unification shim that must

@@ -1,10 +1,11 @@
-use kithara_assets::{AssetStore, StorageBackend};
+use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
 use kithara_command::mailbox;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::{CancelScope, CancelToken, tokio::runtime::Handle as RuntimeHandle};
 use kithara_play::{
-    PlayError, Player, PlayerEvent, PlayerFactory, TrackFactory, TrackStatus as PlayingStatus,
+    PlayError, Player, PlayerEvent, PlayerFactory, SeekBatch, Track, TrackFactory,
+    TrackStatus as PlayingStatus,
 };
 use kithara_signal::{FrameCount, SessionFrame};
 
@@ -19,6 +20,16 @@ use crate::{QueueConfig, QueueEvent, loader::Loader, navigation::NavigationState
 /// Cloneable command capability and the queue's published state.
 /// Commands answer after the owner accepts and sends them; executor effects
 /// enter the published state on their receipts.
+///
+/// Effects belong to the deck, so no control addresses an effect of one item:
+/// ```compile_fail
+/// fn bind<S>(queue: &kithara_queue::QueueControl<S>)
+/// where
+///     S: kithara_bufpool::HasPool<u8> + Send + Sync + 'static,
+/// {
+///     let _ = queue.eq_band(0, 0);
+/// }
+/// ```
 #[derive_where::derive_where(Clone)]
 pub struct QueueControl<S>
 where
@@ -74,7 +85,6 @@ where
         let loader = config.prep.as_ref().map(|prep| {
             let store = config.store.clone().unwrap_or_else(|| {
                 AssetStore::builder(prep.worker.pools().clone())
-                    .backend(StorageBackend::default())
                     .cancel(shutdown.child())
                     .build()
             });
@@ -98,6 +108,7 @@ where
             &navigation,
             config.settings,
             config.track,
+            config.pitch(),
             config.action_at_item_end,
             deck.clone(),
         );
@@ -173,6 +184,17 @@ where
         self.active.position(|active| active.role == Role::Current)
     }
 
+    /// The active track the view shows: the current one, else the incoming
+    /// transition target.
+    pub(super) fn shown_index(&self) -> Option<usize> {
+        self.active_current_index().or_else(|| {
+            self.target.and_then(|target| {
+                self.active
+                    .position(|active| active.item == target.to && active.role == Role::Incoming)
+            })
+        })
+    }
+
     pub(super) fn earliest(&self) -> Result<SessionFrame, PlayError> {
         self.clock
             .map(|(now, delivery)| now + delivery)
@@ -195,40 +217,18 @@ where
 
     /// Publishes before announcing, so an event's reader sees its state.
     pub(super) fn publish(&mut self) {
-        if let Some(SeekPosition::Pending { item, segment, .. }) = self.held_position {
-            let active = self
-                .active_current_index()
-                .or_else(|| {
-                    self.target.and_then(|target| {
-                        self.active.position(|active| {
-                            active.item == target.to && matches!(active.role, Role::Incoming)
-                        })
-                    })
-                })
-                .and_then(|index| self.active.get(index));
-            if active.is_none_or(|active| active.item != item)
-                || active.is_some_and(|active| {
-                    segment.is_some_and(|segment| {
-                        active
-                            .track
-                            .snapshot()
-                            .as_ref()
-                            .mark
-                            .is_some_and(|mark| mark.lane.segment == segment)
-                    })
-                })
-            {
-                self.held_position = None;
-            }
-        }
+        self.settle_held_position();
         self.events.extend(self.tracks.drain_events());
+
         let snapshot = self.queue_snapshot();
         let previous = self.view.read();
         let rate = snapshot.applied_rate();
         let rate_changed = previous.applied_rate() != rate;
         let previous_mix = previous.deck.mix;
         let mix = snapshot.deck.mix;
+        let upcoming_changed = previous.upcoming != snapshot.upcoming;
         self.view.publish(snapshot);
+
         if rate_changed {
             self.bus.publish(PlayerEvent::RateChanged { rate });
         }
@@ -247,6 +247,43 @@ where
                     .publish(PlayerEvent::CurrentItemChanged { item: *id });
             }
             self.bus.publish(event);
+        }
+        if upcoming_changed {
+            self.bus.publish(QueueEvent::UpcomingChanged);
+        }
+    }
+
+    /// Lets a pending seek's held position go once the shown track applied
+    /// the seek or shows another item.
+    fn settle_held_position(&mut self) {
+        let Some(SeekPosition::Pending {
+            item,
+            sent,
+            segment,
+            ..
+        }) = self.held_position
+        else {
+            return;
+        };
+
+        let active = self
+            .shown_index()
+            .and_then(|index| self.active.get_mut(index));
+        if active.is_none_or(|active| {
+            active.item != item
+                || match sent {
+                    SeekBatch::Lane(seq) => active.track.seek_applied(seq).is_some(),
+                    SeekBatch::Deck(_) => segment.is_some_and(|segment| {
+                        active
+                            .track
+                            .snapshot()
+                            .as_ref()
+                            .mark
+                            .is_some_and(|mark| mark.lane.segment == segment)
+                    }),
+                }
+        }) {
+            self.held_position = None;
         }
     }
 
@@ -314,6 +351,7 @@ pub(crate) mod tests {
     };
     use kithara_signal::{FrameCount, SessionFrame};
     use kithara_test_utils::kithara;
+    use kithara_worker::{Worker, WorkerConfig};
 
     use super::{
         super::{QueueCommand, types::Placement},
@@ -326,10 +364,24 @@ pub(crate) mod tests {
         test_pools::{TestPools, pools},
     };
 
-    /// No queue test ever streams bytes, so the store is here to be wired, not
-    /// to hold anything. The default backend would map a file under the shared
-    /// temp root, which every parallel test process also owns and which Miri
-    /// cannot map at all.
+    pub(crate) struct WorkerOwner(pub(crate) Worker);
+
+    impl Drop for WorkerOwner {
+        fn drop(&mut self) {
+            self.0.shutdown();
+        }
+    }
+
+    #[kithara::fixture]
+    pub(crate) fn worker_owner() -> WorkerOwner {
+        let mut config = WorkerConfig::new();
+        if let Ok(runtime) = RuntimeHandle::try_current() {
+            config = config.with_runtime(runtime);
+        }
+        WorkerOwner(Worker::new(config))
+    }
+
+    /// Queue unit tests use memory storage so their fixture also works under Miri.
     pub(in crate::queue) fn make_store() -> AssetStore<TestPools> {
         AssetStore::builder(pools())
             .backend(StorageBackend::Memory)
@@ -339,20 +391,71 @@ pub(crate) mod tests {
     /// A queue the mock session holds, seated the way a Host's insert seats it.
     /// A queue its Host has seated on a deck slot, with the mock that answers
     /// as the slot's audio thread.
-    pub(in crate::queue) fn make_queue() -> (Queue<TestPools>, DeckRig<TestPools>) {
-        let mut queue = Queue::new(queue_config());
+    pub(in crate::queue) fn make_queue(worker: &Worker) -> (Queue<TestPools>, DeckRig<TestPools>) {
+        let mut queue = Queue::new(queue_config(worker));
         queue.clock = Some((SessionFrame::new(0), FrameCount::new(128)));
         queue.deck.mixer.sample_rate = mock::SAMPLE_RATE.get();
         let audio_thread = DeckRig::new(DeckMixerConfig::default()).expect("deck scope");
         (queue, audio_thread)
     }
 
-    fn queue_config() -> QueueConfig<TestPools> {
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+    fn queue_config(worker: &Worker) -> QueueConfig<TestPools> {
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::builder(pools())
+                .worker(worker.clone())
+                .build(),
+        );
         QueueConfig::builder()
             .prep(ResourcePrep::builder().worker(worker).build())
             .store(make_store())
             .build()
+    }
+
+    #[kithara::test(native)]
+    fn default_queue_stores_have_independent_disk_roots(#[by_ref] worker_owner: &WorkerOwner) {
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::builder(pools())
+                .worker(worker_owner.0.clone())
+                .build(),
+        );
+        let queue = |store: Option<AssetStore<TestPools>>| {
+            Queue::new(
+                QueueConfig::builder()
+                    .prep(ResourcePrep::builder().worker(worker.clone()).build())
+                    .maybe_store(store)
+                    .build(),
+            )
+        };
+        let output = mock::output(None).get();
+        let track_config = |queue: &Queue<TestPools>, id| {
+            queue
+                .loader
+                .as_ref()
+                .expect("prepared queue has a loader")
+                .build_config(
+                    TrackId(id),
+                    crate::TrackSource::Uri("https://example.com/track.mp3".into()),
+                    &output,
+                )
+                .expect("build a bare URI track config")
+        };
+        let first = queue(None);
+        let second = queue(None);
+        let first_track = track_config(&first, 1);
+        let next_track = track_config(&first, 2);
+        let second_track = track_config(&second, 3);
+        assert!(first_track.store().is_same(next_track.store()));
+        assert_ne!(
+            first_track.store().root_dir(),
+            second_track.store().root_dir(),
+            "independent queues must not compete over persisted indices"
+        );
+        let shared = queue(Some(first_track.store().clone()));
+        assert!(
+            track_config(&shared, 4)
+                .store()
+                .is_same(first_track.store())
+        );
     }
 
     pub(in crate::queue) fn with_outbox<Value>(
@@ -367,8 +470,10 @@ pub(crate) mod tests {
             suspended: false,
             now: SessionFrame::new(0),
             delivery: FrameCount::new(128),
+            deck_delivery: FrameCount::new(128),
             output: &output,
             deck: &deck,
+            planned_tempo: &mock::planned_tempo(),
         };
         let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
         let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
@@ -414,13 +519,13 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn queue_new_constructs_without_panic() {
-        let (_queue, _audio_thread) = make_queue();
+    fn queue_new_constructs_without_panic(#[by_ref] worker_owner: &WorkerOwner) {
+        let (_queue, _audio_thread) = make_queue(&worker_owner.0);
     }
 
     #[kithara::test]
-    fn a_control_reads_closed_once_its_queue_is_dropped() {
-        let (queue, _audio_thread) = make_queue();
+    fn a_control_reads_closed_once_its_queue_is_dropped(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, _audio_thread) = make_queue(&worker_owner.0);
         let control = queue.control();
         assert!(!control.is_closed(), "the queue still owns its mailbox");
 
@@ -430,11 +535,13 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn queue_registers_its_resident_players_deck_with_the_session() {
+    fn queue_registers_its_resident_players_deck_with_the_session(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
         let mut host = kithara_host::Host::new(kithara_host::HostConfig::offline(pools()).build())
             .expect("offline host");
         let deck = host
-            .insert(Queue::new(queue_config()))
+            .insert(Queue::new(queue_config(&worker_owner.0)))
             .expect("host registers the queue");
         let deck_id = deck.id();
         assert!(!deck.is_closed());
@@ -457,8 +564,10 @@ pub(crate) mod tests {
 
     #[kithara::test]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-    fn a_control_command_runs_when_the_holder_drains_the_queue() {
-        let (mut queue, mut rig) = make_queue();
+    fn a_control_command_runs_when_the_holder_drains_the_queue(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let control = queue.control();
         let (woke_tx, woke_rx) = mpsc::channel();
         HostedDeck::hold(&mut queue, Waker::from(Arc::new(Wakes(woke_tx))));
@@ -518,8 +627,10 @@ pub(crate) mod tests {
     /// until the executor holding the queue drains it.
     #[kithara::test(tokio)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-    async fn a_load_reaches_its_track_only_when_the_holder_drains_the_queue() {
-        let (mut queue, mut rig) = make_queue();
+    async fn a_load_reaches_its_track_only_when_the_holder_drains_the_queue(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let (woke_tx, mut woke_rx) = unbounded_channel();
         rig.dispatcher
             .hold(Waker::from(Arc::new(WakesTask(woke_tx))));
@@ -530,7 +641,7 @@ pub(crate) mod tests {
             QueueCommand::Append {
                 position: Position::ZERO,
                 id,
-                source: "/kithara/missing-track.wav".into(),
+                source: concat!(env!("CARGO_MANIFEST_DIR"), "/missing-track.wav").into(),
             },
         )
         .expect("an open queue appends");
@@ -585,8 +696,8 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn a_closed_queue_rejects_mutation() {
-        let (mut queue, mut rig) = make_queue();
+    fn a_closed_queue_rejects_mutation(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
 
         with_outbox(&mut queue, &mut rig, |queue, _, out| {
             HostedDeck::close(queue, out)
@@ -610,8 +721,8 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn retained_config_follows_live_queue_controls() {
-        let (mut queue, mut rig) = make_queue();
+    fn retained_config_follows_live_queue_controls(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         apply(
             &mut queue,
             &mut rig,
@@ -643,12 +754,127 @@ pub(crate) mod tests {
         );
     }
 
+    /// Each Next press enters the track the queue announced as upcoming,
+    /// across a shuffle cycle boundary, for several seeds. The deck's four
+    /// slots hold the first track and three presses: the fixture never
+    /// retires an outgoing tail.
+    #[kithara::test(tokio)]
+    async fn under_shuffle_next_enters_the_announced_upcoming_track(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        for seed in 0..8 {
+            let (mut queue, mut rig, dir) = crate::mock::empty_queue(&worker_owner.0);
+            queue.navigation = crate::navigation::tests::seeded(seed);
+            for _ in 0..3 {
+                apply(
+                    &mut queue,
+                    &mut rig,
+                    QueueCommand::Append {
+                        position: Position::ZERO,
+                        id: TrackId::allocate(),
+                        source: crate::TrackSource::Uri(crate::mock::fixture_uri(
+                            dir.path(),
+                            "entry.wav",
+                        )),
+                    },
+                )
+                .expect("append");
+            }
+            apply(
+                &mut queue,
+                &mut rig,
+                QueueCommand::SetPlaybackOrder(PlaybackOrder::Shuffle),
+            )
+            .expect("shuffle");
+            apply(
+                &mut queue,
+                &mut rig,
+                QueueCommand::SetRepeat(RepeatMode::All),
+            )
+            .expect("repeat");
+            crate::mock::answer_load(&mut queue, &mut rig, crate::mock::FixtureSource::Synthetic)
+                .await;
+            crate::mock::finish(&mut queue, &mut rig);
+
+            for press in 0..3 {
+                let announced = queue.control().upcoming();
+                assert!(announced.is_some(), "a repeating cycle goes on");
+
+                apply(
+                    &mut queue,
+                    &mut rig,
+                    QueueCommand::Next(super::super::Transition::None),
+                )
+                .expect("next");
+                crate::mock::answer_load(
+                    &mut queue,
+                    &mut rig,
+                    crate::mock::FixtureSource::Synthetic,
+                )
+                .await;
+                crate::mock::finish(&mut queue, &mut rig);
+
+                assert_eq!(
+                    queue.current, announced,
+                    "seed {seed}, press {press}: Next enters the announced track"
+                );
+            }
+            drop((queue, rig));
+            dir.finish().await;
+        }
+    }
+
+    /// Turning repeat on at the last track makes the first track upcoming,
+    /// and the queue says so: the deck follows the upcoming track on this
+    /// event, though no transition target changed.
+    #[kithara::test(tokio)]
+    async fn turning_repeat_on_announces_the_new_upcoming_track(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (mut queue, first, second, mut rig, dir) =
+            crate::mock::selected(&worker_owner.0, crate::mock::FixtureSource::Synthetic).await;
+        let control = queue.control();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Next(super::super::Transition::None),
+        )
+        .expect("next");
+        crate::mock::answer_load(&mut queue, &mut rig, crate::mock::FixtureSource::Synthetic).await;
+        crate::mock::finish(&mut queue, &mut rig);
+        assert_eq!(queue.current, Some(second));
+        assert_eq!(control.upcoming(), None, "the last track ends the queue");
+        let mut events = control.subscribe::<QueueEvent>();
+
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::SetRepeat(RepeatMode::All),
+        )
+        .expect("repeat");
+
+        assert_eq!(control.upcoming(), Some(first));
+        let heard: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+            .map(|envelope| envelope.event)
+            .collect();
+        assert!(
+            heard
+                .iter()
+                .any(|event| matches!(event, QueueEvent::UpcomingChanged)),
+            "the new upcoming track is announced: {heard:?}"
+        );
+        drop((queue, rig));
+        dir.finish().await;
+    }
+
     /// A queue event is heard only with the view that shows it, in the order
     /// the queue made its changes: a handle that hears a track change reads
     /// that change.
     #[kithara::test]
-    fn a_current_item_event_is_published_with_its_committed_queue_view() {
-        let (mut queue, _) = make_queue();
+    fn a_current_item_event_is_published_with_its_committed_queue_view(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (mut queue, _) = make_queue(&worker_owner.0);
         let control = queue.control();
         let id = TrackId::allocate();
         queue.insert_entry(
@@ -686,8 +912,8 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn a_queue_event_is_heard_with_the_view_that_shows_it() {
-        let (mut queue, mut rig) = make_queue();
+    fn a_queue_event_is_heard_with_the_view_that_shows_it(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let control = queue.control();
         let id = TrackId::allocate();
         apply(
@@ -728,9 +954,10 @@ pub(crate) mod tests {
                     QueueEvent::RepeatModeChanged {
                         mode: QueueRepeatMode::All,
                     },
+                    QueueEvent::UpcomingChanged,
                 ] if *changed == id
             ),
-            "the publish announces both changes in order: {heard:?}"
+            "the publish announces its changes in order: {heard:?}"
         );
         assert_eq!(
             control.track(id).map(|track| track.status),
@@ -740,8 +967,8 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn cached_position_unknown_after_construction() {
-        let (queue, _audio_thread) = make_queue();
+    fn cached_position_unknown_after_construction(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, _audio_thread) = make_queue(&worker_owner.0);
         assert_eq!(
             queue.queue_snapshot().track.map(|track| track.position),
             None
@@ -749,15 +976,18 @@ pub(crate) mod tests {
         assert_eq!(queue.control().position_seconds(), None);
     }
 
-    fn armed_queue(id: TrackId) -> (Queue<TestPools>, DeckRig<TestPools>, Seq, Seq) {
-        let (mut queue, mut rig) = make_queue();
+    fn armed_queue(
+        worker: &Worker,
+        id: TrackId,
+    ) -> (Queue<TestPools>, DeckRig<TestPools>, Seq, Seq) {
+        let (mut queue, mut rig) = make_queue(worker);
         apply(
             &mut queue,
             &mut rig,
             QueueCommand::Append {
                 position: Position::ZERO,
                 id,
-                source: "/kithara/missing-track.wav".into(),
+                source: concat!(env!("CARGO_MANIFEST_DIR"), "/missing-track.wav").into(),
             },
         )
         .expect("append transition fixture");
@@ -787,7 +1017,7 @@ pub(crate) mod tests {
             QueueCommand::Append {
                 position: Position::ZERO,
                 id: other,
-                source: "/kithara/other-missing-track.wav".into(),
+                source: concat!(env!("CARGO_MANIFEST_DIR"), "/other-missing-track.wav").into(),
             },
         )
         .expect("append unrelated track");
@@ -801,14 +1031,14 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn atomic_cached_position_unknown_loads_none() {
-        let (queue, _rig) = make_queue();
+    fn atomic_cached_position_unknown_loads_none(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, _rig) = make_queue(&worker_owner.0);
         assert_eq!(queue.control().position_seconds(), None);
     }
 
     #[kithara::test]
-    fn atomic_cached_position_round_trip_zero() {
-        let (mut queue, mut rig) = make_queue();
+    fn atomic_cached_position_round_trip_zero(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         apply(
             &mut queue,
             &mut rig,
@@ -820,15 +1050,15 @@ pub(crate) mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn crossfade_arm_is_armed_for_matches_track() {
-        let (queue, _rig, _, _) = armed_queue(TrackId(2));
+    async fn crossfade_arm_is_armed_for_matches_track(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, _rig, _, _) = armed_queue(&worker_owner.0, TrackId(2));
         assert!(queue.target.is_some_and(|target| target.to == TrackId(2)));
         assert!(!queue.target.is_some_and(|target| target.to == TrackId(3)));
     }
 
     #[kithara::test]
-    fn cached_position_round_trips_through_queue() {
-        let (mut queue, mut rig) = make_queue();
+    fn cached_position_round_trips_through_queue(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         apply(
             &mut queue,
             &mut rig,
@@ -842,14 +1072,14 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn crossfade_arm_disarmed_after_construction() {
-        let (queue, _rig) = make_queue();
+    fn crossfade_arm_disarmed_after_construction(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, _rig) = make_queue(&worker_owner.0);
         assert_eq!(queue.target.map(|target| target.to), None);
     }
 
     #[kithara::test(tokio)]
-    async fn crossfade_arm_take_only_disarms_matching_track() {
-        let (mut queue, _rig, seq, unrelated) = armed_queue(TrackId(9));
+    async fn crossfade_arm_take_only_disarms_matching_track(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, _rig, seq, unrelated) = armed_queue(&worker_owner.0, TrackId(9));
         assert_eq!(queue.target.map(|target| target.to), Some(TrackId(9)));
         queue
             .transition_applied(
@@ -872,19 +1102,21 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn the_configured_prefetch_lead_reaches_the_player() {
-        let mut config = queue_config();
+    fn the_configured_prefetch_lead_reaches_the_player(#[by_ref] worker_owner: &WorkerOwner) {
+        let mut config = queue_config(&worker_owner.0);
         config.preload_lead = Duration::from_secs(8);
         let queue = Queue::new(config);
         assert!((queue.config.preload_lead.as_secs_f32() - 8.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test(native)]
-    fn queue_hands_its_session_the_resident_players_sync_attachment() {
+    fn queue_hands_its_session_the_resident_players_sync_attachment(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
         use kithara_host::{DeckId, Host, HostConfig, HostOwner};
 
         let expected = DeckId::allocate().expect("fixture deck id");
-        let queue = Queue::new(queue_config());
+        let queue = Queue::new(queue_config(&worker_owner.0));
         let control = queue.control();
         let append = control
             .postbox
@@ -941,8 +1173,10 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn queue_control_post_preserves_order_and_reports_the_owner_outcome() {
-        let (mut queue, mut rig) = make_queue();
+    fn queue_control_post_preserves_order_and_reports_the_owner_outcome(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let control = queue.control();
         let first = TrackId(41);
         let second = TrackId(42);
@@ -1001,8 +1235,8 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn queue_control_rejects_mutation_after_close() {
-        let (mut queue, mut rig) = make_queue();
+    fn queue_control_rejects_mutation_after_close(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let control = queue.control();
         let close = control
             .postbox
@@ -1035,8 +1269,8 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
-    fn close_waits_for_an_admitted_queue_mutation() {
-        let (mut queue, mut rig) = make_queue();
+    fn close_waits_for_an_admitted_queue_mutation(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let control = queue.control();
         let mutation = control
             .postbox

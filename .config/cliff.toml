@@ -143,6 +143,8 @@ tag_pattern = "v[0-9].*"
 topo_order = false
 sort_commits = "newest"
 commit_preprocessors = [
+  # A generic such as Option<T> would otherwise render as an HTML tag.
+  { pattern = '(\w[\w:]*<[^>\s]*>)', replace = '`${1}`' },
   { pattern = '\(#(\d+)\)', replace = "([#${1}](https://github.com/zvuk/kithara/pull/${1}))" },
 ]
 # Groups carry a hidden ordinal so Keep a Changelog order survives the

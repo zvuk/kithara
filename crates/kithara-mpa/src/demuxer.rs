@@ -393,6 +393,25 @@ impl<'s> MpaReader<'s> {
         Ok(())
     }
 
+    fn start_pending_seek(
+        &mut self,
+        pending: PendingSeek,
+        bounds: (Timestamp, Option<Timestamp>),
+        is_seekable: bool,
+        packet_buf: &mut [u8],
+    ) -> Result<PendingSeek> {
+        let (min_ts, max_ts) = bounds;
+        match pending.mode {
+            SeekMode::Coarse if is_seekable => {
+                self.preseek_coarse(pending.required_ts, min_ts, max_ts, packet_buf)?;
+            }
+            SeekMode::Accurate => self.preseek_accurate(pending.required_ts, min_ts)?,
+            SeekMode::Coarse => (),
+        }
+
+        Ok(pending)
+    }
+
     /// Seeks using caller-provided packet scratch storage.
     ///
     /// # Errors
@@ -404,17 +423,7 @@ impl<'s> MpaReader<'s> {
         packet_buf: &mut [u8],
     ) -> Result<SeekedTo> {
         let pending = self.pending_seek.take();
-        let required_ts = match *to {
-            SeekTo::Timestamp { ts, .. } => ts,
-            SeekTo::Time { time, .. } => {
-                let tb = self.tracks[0]
-                    .time_base
-                    .ok_or(Error::SeekError(SeekErrorKind::Unseekable))?;
-
-                tb.calc_timestamp(time)
-                    .ok_or(Error::SeekError(SeekErrorKind::OutOfRange))?
-            }
-        };
+        let required_ts = required_timestamp(to, &self.tracks[0])?;
 
         let dur_ts = self.tracks[0].num_frames.map(Duration::from);
 
@@ -426,13 +435,7 @@ impl<'s> MpaReader<'s> {
             .and_then(|dur| min_ts.checked_add(dur))
             .and_then(|dur| dur.checked_add(Duration::from(delay + padding)));
 
-        if required_ts < min_ts {
-            return seek_error(SeekErrorKind::OutOfRange);
-        } else if let Some(max_ts) = max_ts
-            && required_ts > max_ts
-        {
-            return seek_error(SeekErrorKind::OutOfRange);
-        }
+        check_seek_bounds(required_ts, min_ts, max_ts)?;
 
         let is_seekable = self.reader.is_seekable();
 
@@ -444,22 +447,17 @@ impl<'s> MpaReader<'s> {
 
         let mut pending = match pending {
             Some(pending) if pending.required_ts == required_ts && pending.mode == mode => pending,
-            _ => {
-                match mode {
-                    SeekMode::Coarse if is_seekable => {
-                        self.preseek_coarse(required_ts, min_ts, max_ts, packet_buf)?;
-                    }
-                    SeekMode::Accurate => self.preseek_accurate(required_ts, min_ts)?,
-                    SeekMode::Coarse => (),
-                }
-
+            _ => self.start_pending_seek(
                 PendingSeek {
                     required_ts,
                     mode,
                     frames: Default::default(),
                     n_parsed: 0,
-                }
-            }
+                },
+                (min_ts, max_ts),
+                is_seekable,
+                packet_buf,
+            )?,
         };
 
         let scanned = self.scan_to(&mut pending);
@@ -577,6 +575,36 @@ impl<'s> MpaReader<'s> {
             metadata: opts.external_data.metadata.unwrap_or_default(),
         })
     }
+}
+
+fn required_timestamp(to: &SeekTo, track: &Track) -> Result<Timestamp> {
+    match *to {
+        SeekTo::Timestamp { ts, .. } => Ok(ts),
+        SeekTo::Time { time, .. } => {
+            let tb = track
+                .time_base
+                .ok_or(Error::SeekError(SeekErrorKind::Unseekable))?;
+
+            tb.calc_timestamp(time)
+                .ok_or(Error::SeekError(SeekErrorKind::OutOfRange))
+        }
+    }
+}
+
+fn check_seek_bounds(
+    required_ts: Timestamp,
+    min_ts: Timestamp,
+    max_ts: Option<Timestamp>,
+) -> Result<()> {
+    if required_ts < min_ts {
+        return seek_error(SeekErrorKind::OutOfRange);
+    } else if let Some(max_ts) = max_ts
+        && required_ts > max_ts
+    {
+        return seek_error(SeekErrorKind::OutOfRange);
+    }
+
+    Ok(())
 }
 
 /// Rolls the reader back to `checkpoint` when `result` is a transient

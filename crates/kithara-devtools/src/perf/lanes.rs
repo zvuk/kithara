@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
-use serde::{Deserialize, Serialize};
 
 use crate::common::project::{PerfConfig, PerfLane};
 
@@ -84,18 +83,6 @@ impl RunPaths {
     pub(crate) fn slow_md(&self) -> PathBuf {
         self.run_dir.join("slow.md")
     }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct RepeatMeta {
-    pub(crate) exit_code: Option<i32>,
-    pub(crate) commit: String,
-    pub(crate) lane: String,
-    pub(crate) run_id: String,
-    pub(crate) features: Vec<String>,
-    pub(crate) duration_secs: f64,
-    pub(crate) repeat: u32,
-    pub(crate) started_unix: u64,
 }
 
 pub(crate) fn sanitize(name: &str) -> String {

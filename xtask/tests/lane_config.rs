@@ -1,9 +1,98 @@
-use std::{fs, path::Path};
+use std::{fs, path::PathBuf};
 
-fn workspace_root() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+fn workspace_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
         .parent()
         .expect("xtask has a workspace root")
+        .to_path_buf()
+}
+
+#[test]
+fn publication_is_a_verified_gate_for_review_main_and_dispatch() {
+    let config = xtask_config();
+    let lane = &config["ext"]["ci"]["lanes"]["crates-publish"];
+    assert_eq!(lane["role"].as_str(), Some("gate"));
+    assert_eq!(lane["program"].as_str(), Some("just"));
+    assert_eq!(lane["cache_group"].as_str(), Some("host"));
+    let os: Vec<_> = lane["os"]
+        .as_array()
+        .expect("both publication executors")
+        .iter()
+        .map(|entry| entry.as_str().unwrap())
+        .collect();
+    assert_eq!(os, ["macos", "linux"]);
+    let kinds = lane["kinds_github"]
+        .as_array()
+        .expect("GitHub publication kinds");
+    for kind in ["branch", "merge-request", "main", "nightly"] {
+        assert!(
+            kinds.iter().any(|entry| entry.as_str() == Some(kind)),
+            "{kind}"
+        );
+    }
+    assert!(
+        lane["kinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|kind| kind.as_str() == Some("quarantine"))
+    );
+    let steps = lane["steps"].as_array().expect("publication steps");
+    assert_eq!(steps.len(), 1);
+    let args: Vec<_> = steps[0]["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap())
+        .collect();
+    assert_eq!(args, ["release", "crates", "--dry-run"]);
+}
+
+#[test]
+fn deep_bench_keeps_one_executor_for_both_hosts() {
+    let config = xtask_config();
+    let lane = &config["ext"]["ci"]["lanes"]["deep-bench"];
+    assert_eq!(strings(&lane["os"]), ["linux", "macos"]);
+    assert_eq!(lane["cache_group"].as_str(), Some("host"));
+    assert_eq!(lane["timeout_minutes"].as_integer(), Some(120));
+    assert_eq!(strings(&lane["steps"][0]["args"]), ["perf", "bench", "ci"]);
+}
+
+#[test]
+fn config_reads_follow_the_running_checkout() {
+    if std::env::var_os("KITHARA_LANE_CONFIG_RELOCATION_TEST").is_some() {
+        assert_eq!(xtask_config()["relocated"].as_bool(), Some(true));
+        return;
+    }
+    let checkout = tempfile::tempdir().expect("relocated checkout");
+    let package = checkout.path().join("xtask");
+    fs::create_dir(&package).expect("relocated package");
+    fs::create_dir(checkout.path().join(".config")).expect("relocated configuration");
+    fs::write(
+        checkout.path().join(".config/xtask.toml"),
+        "relocated = true\n",
+    )
+    .expect("relocated configuration content");
+    let output = std::process::Command::new(std::env::current_exe().expect("current test binary"))
+        .args([
+            "--exact",
+            "config_reads_follow_the_running_checkout",
+            "--nocapture",
+        ])
+        .env("CARGO_MANIFEST_DIR", package)
+        .env("KITHARA_LANE_CONFIG_RELOCATION_TEST", "1")
+        .output()
+        .expect("run the same binary with the relocated package context");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("running 1 test"),
+        "child did not execute: {stdout} {stderr}"
+    );
+    assert!(
+        output.status.success(),
+        "relocated configuration read failed: {stdout} {stderr}"
+    );
 }
 
 /// Every test package — the integration-tests root and each package under
@@ -50,9 +139,7 @@ fn every_test_package_keeps_its_code_at_opt_level_one_under_test_release() {
 // otherwise `--lane=selenium-firefox` reports Firefox and runs Chrome.
 #[test]
 fn a_selenium_lane_names_its_browser_in_its_own_environment() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -89,9 +176,7 @@ fn a_selenium_lane_names_its_browser_in_its_own_environment() {
 // - so this also fixes the number a green lane may not be bought with.
 #[test]
 fn the_coverage_bar_is_declared_once_and_enforced_where_it_is_declared() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let recipe = fs::read_to_string(root.join(".config/just/test.just"))
         .expect("the test recipes are readable");
 
@@ -154,6 +239,7 @@ fn the_catalog_accepts_exactly_the_pipeline_kinds_the_executor_knows() {
     assert_eq!(
         listed,
         vec![
+            "bench",
             "branch",
             "platforms",
             "merge-request",
@@ -168,16 +254,14 @@ fn the_catalog_accepts_exactly_the_pipeline_kinds_the_executor_knows() {
 }
 
 fn xtask_pipeline_kind_names() -> Vec<String> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let source = fs::read_to_string(root.join("xtask/src/consts.rs"))
         .expect("the xtask constants source is readable");
     let start = source
         .find("pub(crate) const PIPELINE_KINDS")
         .expect("PIPELINE_KINDS is declared");
     let body = &source[start..];
-    // Skip past the `: [&str; 8]` type annotation first, so the brackets found
+    // Skip past the type annotation first, so the brackets found
     // below are the array literal's, not the type's.
     let assigned = body.find('=').expect("PIPELINE_KINDS is assigned a value");
     let body = &body[assigned..];
@@ -191,9 +275,7 @@ fn xtask_pipeline_kind_names() -> Vec<String> {
 }
 
 fn xtask_lane_role_names() -> Vec<String> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let source = fs::read_to_string(root.join("xtask/src/consts.rs"))
         .expect("the xtask constants source is readable");
     let start = source
@@ -217,9 +299,7 @@ fn xtask_lane_role_names() -> Vec<String> {
 // workflows can stop restating them. This names the lanes that must be there.
 #[test]
 fn the_catalog_declares_every_lane_the_github_workflows_will_ask_for() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -234,7 +314,11 @@ fn the_catalog_declares_every_lane_the_github_workflows_will_ask_for() {
         "linux-msrv",
         "linux-perf-memory",
         "linux-test-real-clock",
-        "linux-support",
+        "linux-tooling",
+        "linux-harness",
+        "linux-fixtures",
+        "linux-net-host",
+        "linux-broadcast",
         "deep-rtsan-fast",
         "deep-rtsan-file",
         "deep-rtsan-hls",
@@ -260,9 +344,7 @@ fn the_catalog_declares_every_lane_the_github_workflows_will_ask_for() {
 // missing directory as "nothing to report" rather than an error.
 #[test]
 fn every_deep_rtsan_lane_names_its_backend_and_quality_report_names_its_artifacts_path() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -327,9 +409,7 @@ fn every_deep_rtsan_lane_names_its_backend_and_quality_report_names_its_artifact
 // nothing else would say so.
 #[test]
 fn every_declared_lane_names_a_known_role_and_known_kinds() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask has a workspace root");
+    let root = workspace_root();
     let config: toml::Value = toml::from_str(
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
@@ -366,10 +446,10 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
 
 /// The kinds a lane enters the GitHub fan-out under: its own `kinds_github`
 /// where it is declared, the shared `kinds` otherwise, and none at all for a lane
-/// that is not Linux-only, because that fan-out has only Linux machines.
+/// that cannot run on Linux, because that fan-out has only Linux machines.
 fn github_membership(lane: &toml::Value) -> Vec<&str> {
     let os = lane.get("os").map_or_else(Vec::new, strings);
-    if os != ["linux"] {
+    if !os.contains(&"linux") {
         return Vec::new();
     }
     lane.get("kinds_github")
@@ -399,6 +479,20 @@ fn xtask_config() -> toml::Value {
     .expect("xtask config is valid TOML")
 }
 
+#[test]
+fn both_hosts_restore_lint_builds_after_local_eviction() {
+    let config = xtask_config();
+    for name in ["apple-lint", "linux-lint"] {
+        assert_eq!(
+            ci_lanes(&config)[name]
+                .get("target_snapshot")
+                .and_then(toml::Value::as_str),
+            Some(name),
+            "{name} must restore build-script output as well as compiler entries"
+        );
+    }
+}
+
 /// On GitHub a push with a pull request ready for review is a `merge-request`
 /// pipeline and any other push a `branch` one. They differ in how much of the
 /// suite a lane runs, never in which lanes run: a ready pull request that also
@@ -420,10 +514,11 @@ fn a_ready_pull_request_schedules_exactly_the_lanes_a_branch_push_does() {
 /// The product suite is what a `test run` naming no lane runs. Every lane a
 /// branch push schedules for it runs one command, apart from the toggles it
 /// asks for, so the clocks it is run under are the only difference between
-/// their counts. Only a branch push narrows it to the lanes the push touched;
-/// a ready pull request runs it whole, as the default branch does.
+/// their counts. That command is the same on every kind: a branch push runs it
+/// over the draft scope by its kind alone, and only the Apple gate names the
+/// selection a branch verdict reads.
 #[test]
-fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_branch_push() {
+fn the_product_suite_lanes_differ_only_in_their_toggles_and_run_one_command_on_every_kind() {
     let config = xtask_config();
     let mut recipes = Vec::new();
     for (name, lane) in ci_lanes(&config) {
@@ -437,43 +532,39 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_bra
         for step in steps {
             let args = step.get("args").map_or_else(Vec::new, strings);
             if !matches!(args.as_slice(), ["test", "run", ..])
-                || args.iter().any(|arg| arg.starts_with("--lane"))
+                || args
+                    .iter()
+                    .any(|arg| arg.starts_with("--lane") || *arg == "-E")
             {
                 continue;
             }
-            assert!(
-                !args.contains(&"--touched"),
-                "lane `{name}` narrows the suite on kinds other than a branch push"
-            );
             let by_kind = step
                 .get("args_by_kind")
                 .and_then(toml::Value::as_table)
                 .cloned()
                 .unwrap_or_default();
-            assert_eq!(
-                by_kind.keys().map(String::as_str).collect::<Vec<_>>(),
-                ["branch"],
-                "lane `{name}` runs the suite whole on every kind but a branch push"
-            );
-            let branch = strings(&by_kind["branch"]);
-            assert!(
-                branch.contains(&"--touched"),
-                "lane `{name}` runs the whole suite on a branch push"
-            );
-            assert_eq!(
-                branch
-                    .iter()
-                    .copied()
-                    .filter(|arg| {
-                        *arg != "--touched"
-                            && !(name == "apple-test"
-                                && *arg
-                                    == "--selection-output=.ci-artifacts/junit/apple-test.selection.json")
-                    })
-                    .collect::<Vec<_>>(),
-                args,
-                "lane `{name}` narrows a different command than it runs whole"
-            );
+            if name == "apple-test" {
+                let mut branch = args.clone();
+                branch.insert(
+                    2,
+                    "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
+                );
+                assert_eq!(
+                    by_kind.keys().map(String::as_str).collect::<Vec<_>>(),
+                    ["branch"],
+                    "the Apple gate adds only the branch selection"
+                );
+                assert_eq!(
+                    strings(&by_kind["branch"]),
+                    branch,
+                    "the Apple gate runs a different command on a branch push"
+                );
+            } else {
+                assert!(
+                    by_kind.is_empty(),
+                    "lane `{name}` runs a different command on some kind"
+                );
+            }
             let command: Vec<&str> = args
                 .iter()
                 .copied()
@@ -504,6 +595,58 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_bra
             other, recipe,
             "lanes `{first}` and `{name}` build or run the product suite differently"
         );
+    }
+}
+
+/// The suites `just test` does not carry run under their own configuration,
+/// each in a lane of its own that names it alone: whole on a ready pull
+/// request and the default branch, and over the draft scope on a branch push,
+/// which the branch kind alone asks for.
+#[test]
+fn every_own_configuration_suite_is_a_lane_of_every_reviewed_kind() {
+    let config = xtask_config();
+    for suite in ["tooling", "harness", "fixtures", "net-host", "broadcast"] {
+        let flag = format!("--lane={suite}");
+        let lanes: Vec<(&String, &toml::Value)> = ci_lanes(&config)
+            .iter()
+            .filter(|(_, lane)| {
+                lane.get("steps")
+                    .and_then(toml::Value::as_array)
+                    .is_some_and(|steps| {
+                        steps.iter().any(|step| {
+                            step.get("args")
+                                .is_some_and(|args| strings(args).contains(&flag.as_str()))
+                        })
+                    })
+            })
+            .collect();
+        let [(name, lane)] = lanes.as_slice() else {
+            panic!("suite `{suite}` runs in {} lanes, not one", lanes.len());
+        };
+        for step in lane["steps"].as_array().expect("steps") {
+            if !step
+                .get("args")
+                .is_some_and(|args| strings(args).contains(&flag.as_str()))
+            {
+                continue;
+            }
+            assert_eq!(
+                step.get("args").map(strings),
+                Some(vec!["test", "run", flag.as_str()]),
+                "lane `{name}` runs `{suite}` with a selection of its own"
+            );
+            assert!(
+                step.get("args_by_kind").is_none(),
+                "lane `{name}` runs `{suite}` differently on some kind"
+            );
+        }
+        let kinds = github_membership(lane);
+        for kind in ["branch", "merge-request", "main"] {
+            assert!(
+                kinds.contains(&kind),
+                "lane `{name}` does not run `{suite}` on `{kind}`"
+            );
+        }
     }
 }
 

@@ -3,6 +3,7 @@ mod core;
 mod lifecycle;
 mod mapping;
 mod native;
+mod native_control;
 mod projected;
 mod render;
 pub(in crate::render) mod residency;

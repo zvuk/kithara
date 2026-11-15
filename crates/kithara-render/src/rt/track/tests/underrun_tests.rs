@@ -3,14 +3,19 @@ use std::num::NonZeroU32;
 
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{OutputContext, SegmentId, SessionEpoch, SessionFrame};
-use kithara_test_utils::kithara;
-use kithara_warp::RenderContext;
+use kithara_test_utils::{
+    kithara,
+    test::{usdt, wall_sleep},
+    wait_until_blocking,
+};
 use ringbuf::{
     HeapRb,
     traits::{Consumer, Split},
 };
 
-use super::super::{PcmConsumer, PlayerResource, PlayerTrack, RtSink, TrackReadOutcome};
+use super::super::{
+    PcmConsumer, PlayerResource, PlayerTrack, RtSink, TrackBuffers, TrackReadOutcome,
+};
 use crate::{
     bridge::{DeckEvent, Fade, RtMetrics, Slot},
     mock::pcm_fixture::{PcmFixture, chunk},
@@ -19,7 +24,7 @@ use crate::{
 };
 
 #[kithara::test(native)]
-fn a_blocking_read_waits_for_the_lane_instead_of_underrunning() {
+fn offline_preparation_waits_for_the_lane_instead_of_underrunning() {
     use kithara_platform::{thread, time::Duration};
 
     let runtime = kithara_platform::tokio::runtime::Builder::new_current_thread()
@@ -40,17 +45,22 @@ fn a_blocking_read_waits_for_the_lane_instead_of_underrunning() {
         .build(Box::new(resource));
     track.start(Fade::Declick);
     let start = SessionFrame::new(15_408);
-    let output = OutputContext::new(
+    let context = OutputContext::new(
         start..SessionFrame::new(15_410),
         rate,
         SessionEpoch::new(1),
         None,
     )
     .expect("output range");
-    let context = RenderContext::new(output, None).expect("render context");
-    // The lane publishes only after the reader has parked on the empty ring.
+    let trace = usdt::scope();
     let writer = thread::spawn_named("late-lane", move || {
-        thread::sleep(Duration::from_millis(20));
+        wait_until_blocking(
+            Duration::from_secs(1),
+            "the PCM reader enters its wait",
+            || usdt::last("pcm_wait_started").is_some(),
+        )
+        .expect("observe the actual wait before delaying its producer");
+        wall_sleep(Duration::from_millis(20));
         fixture
             .push(PcmPacket::Chunk(Box::new(chunk(
                 SegmentId::FIRST,
@@ -66,15 +76,21 @@ fn a_blocking_read_waits_for_the_lane_instead_of_underrunning() {
     let mut bus_left = [0.0; 2];
     let mut bus_right = [0.0; 2];
     let mut sink = RtSink::new(&mut events, &metrics, Slot::new(0), start);
+    assert!(track.prepare_offline());
+    let prepared_waits = trace.events_of("pcm_wait_started").len();
     let outcome = track.render(
         Some(&context),
-        &mut [&mut left, &mut right],
-        &mut [&mut bus_left, &mut bus_right],
+        TrackBuffers {
+            scratch: &mut [&mut left, &mut right],
+            bus: &mut [&mut bus_left, &mut bus_right],
+        },
         0..2,
         &mut 16,
         &mut sink,
+        None,
     );
     assert!(matches!(outcome, TrackReadOutcome::Full { frames: 2, .. }));
+    assert_eq!(trace.events_of("pcm_wait_started").len(), prepared_waits);
     assert_eq!(left, [0.7, 0.8]);
     assert_eq!(right, left);
     assert_eq!(track.gap, 0);
@@ -82,6 +98,27 @@ fn a_blocking_read_waits_for_the_lane_instead_of_underrunning() {
     assert!(received.try_pop().is_none());
     let _fixture = writer.join().expect("the late lane publishes");
     assert!(!track.resource.consumer.get().receiver.is_closed());
+    let entries = trace.events_of("pcm_wait_started");
+    let exits = trace.events_of("pcm_wait_finished");
+    let truncated = usdt::recorded().1;
+    drop(trace);
+    assert!(
+        !entries.is_empty(),
+        "a late lane must cause an observed wait"
+    );
+    assert_eq!(entries.len(), exits.len());
+    assert!(!truncated);
+    let waited: Duration = entries
+        .iter()
+        .zip(&exits)
+        .map(|(entry, exit)| {
+            assert_eq!(entry.thread, exit.thread);
+            exit.wall_time
+                .checked_duration_since(entry.wall_time)
+                .expect("the same wait uses one real monotonic clock")
+        })
+        .sum();
+    assert!(waited >= Duration::from_millis(20), "{waited:?}");
 }
 
 #[kithara::test(native, tokio)]
@@ -100,14 +137,13 @@ async fn underrun_edges_emit_once_per_starvation_window() {
         .build(Box::new(resource));
     track.start(Fade::Declick);
     let start = SessionFrame::new(15_408);
-    let output = OutputContext::new(
+    let context = OutputContext::new(
         start..SessionFrame::new(15_410),
         rate,
         SessionEpoch::new(1),
         None,
     )
     .expect("output range");
-    let context = RenderContext::new(output, None).expect("render context");
     let (mut events, mut receiver) = HeapRb::<DeckEvent>::new(8).split();
     let metrics = RtMetrics::default();
     let mut left = [0.0; 2];
@@ -119,11 +155,14 @@ async fn underrun_edges_emit_once_per_starvation_window() {
         assert!(matches!(
             track.render(
                 Some(&context),
-                &mut [&mut left, &mut right],
-                &mut [&mut bus_left, &mut bus_right],
+                TrackBuffers {
+                    scratch: &mut [&mut left, &mut right],
+                    bus: &mut [&mut bus_left, &mut bus_right]
+                },
                 0..2,
                 &mut 16,
-                &mut sink
+                &mut sink,
+                None,
             ),
             TrackReadOutcome::Full { frames: 0, .. }
         ));
@@ -150,11 +189,14 @@ async fn underrun_edges_emit_once_per_starvation_window() {
     assert!(matches!(
         track.render(
             Some(&context),
-            &mut [&mut left, &mut right],
-            &mut [&mut bus_left, &mut bus_right],
+            TrackBuffers {
+                scratch: &mut [&mut left, &mut right],
+                bus: &mut [&mut bus_left, &mut bus_right]
+            },
             0..2,
             &mut 16,
-            &mut sink
+            &mut sink,
+            None,
         ),
         TrackReadOutcome::Full { frames: 2, .. }
     ));
@@ -167,11 +209,14 @@ async fn underrun_edges_emit_once_per_starvation_window() {
     assert!(matches!(
         track.render(
             Some(&context),
-            &mut [&mut left, &mut right],
-            &mut [&mut bus_left, &mut bus_right],
+            TrackBuffers {
+                scratch: &mut [&mut left, &mut right],
+                bus: &mut [&mut bus_left, &mut bus_right]
+            },
             0..2,
             &mut 16,
             &mut sink,
+            None,
         ),
         TrackReadOutcome::Full { frames: 0, .. }
     ));
@@ -199,4 +244,27 @@ async fn underrun_edges_emit_once_per_starvation_window() {
     assert!(matches!(receiver.try_pop(), Some(DeckEvent::Ended { .. })));
     assert!(receiver.try_pop().is_none());
     assert_eq!(metrics.snapshot().underruns(), 2);
+}
+
+#[kithara::test(native, tokio, hang_timeout_secs(1))]
+async fn a_graph_read_does_not_wait_for_an_offline_lane() {
+    let mut fixture = PcmFixture::new(8, true).await;
+    let mut resource = PlayerResource::new(
+        PcmConsumer::new(fixture.receiver.take().expect("receiver")),
+        Arc::from("unprepared-offline"),
+        &pools(),
+    )
+    .expect("resource");
+    let trace = usdt::scope();
+    let mut left = [99.0; 2];
+    let mut right = [99.0; 2];
+    let outcome = resource.read(None, &mut [&mut left, &mut right], 0..2, &mut 16);
+    assert!(matches!(
+        outcome,
+        crate::rt::track::ReadOutcome::Full { frames: 0 }
+    ));
+    assert_eq!(left, [0.0; 2]);
+    assert_eq!(right, left);
+    assert!(trace.events_of("pcm_wait_started").is_empty());
+    drop(trace);
 }

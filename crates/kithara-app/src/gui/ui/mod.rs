@@ -5,7 +5,6 @@ pub(crate) mod endpoints;
 mod events;
 pub(super) mod modules;
 pub(super) mod package;
-pub(super) mod scope;
 #[cfg(all(test, feature = "masonry"))]
 mod settings;
 #[cfg(test)]

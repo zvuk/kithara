@@ -168,12 +168,12 @@ where
     /// Capped at the owed window, so the outgoing look-ahead cannot hold
     /// downloader capacity the incoming construction is waiting on. Owed is
     /// everything the splice still consumes: the reader's own segment and the
-    /// next; every segment up to a latched cut that lies further ahead, plus
-    /// one for the frame that straddles it; and every segment of a range the
-    /// reader is parked on — the demuxer consumes past the projected cursor,
-    /// and a window sized to the projection alone leaves the queue head one
-    /// past the cap forever. Only bytes past all of that are dead to the
-    /// splice.
+    /// next, counting a cursor in the init prefix as segment 0; every segment
+    /// up to a latched cut that lies further ahead, plus one for the frame
+    /// that straddles it; and every segment of a range the reader is parked
+    /// on — the demuxer consumes past the projected cursor, and a window sized
+    /// to the projection alone leaves the queue head one past the cap forever.
+    /// Only bytes past all of that are dead to the splice.
     pub(crate) fn dispatch_owed(
         &self,
         ctx: &crate::variant::PlanCtx<S>,
@@ -185,8 +185,9 @@ where
 
     fn owed_segment_end(&self, latch: Duration) -> Option<u32> {
         let read_end = self
-            .find_at_offset(self.projected_position().byte)
-            .map(|(seg_idx, _, _)| seg_idx.saturating_add(1));
+            .variant
+            .demand_segment_at_offset(self.projected_position().byte)
+            .map(|seg_idx| seg_idx.saturating_add(1));
         let latch_end = self
             .variant
             .segment_index_at_time(latch)

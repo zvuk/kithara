@@ -3,7 +3,8 @@ name = "kithara-net"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-license.workspace = true
+license = "Apache-2.0"
+license-file = "../../LICENSE-APACHE"
 repository.workspace = true
 description = "Streaming HTTP for audio: retry, timeout, byte ranges."
 keywords = ["http", "networking", "streaming", "audio", "download"]
@@ -19,7 +20,7 @@ default = ["client-reqwest", "tls-rustls"]
 # portable default; `client-wreq` (BoringSSL + browser TLS/HTTP2 emulation) and
 # `client-apple` (NSURLSession) are native-only opt-ins.
 client-reqwest = ["dep:reqwest", "dep:tower-layer", "dep:tower-service"]
-client-wreq = ["dep:tower-layer", "dep:tower-service", "dep:wreq", "dep:wreq-util"]
+client-wreq = ["dep:brotli", "dep:flate2", "dep:tower-layer", "dep:tower-service", "dep:wreq"]
 client-apple = ["dep:dashmap", "dep:kithara-apple", "kithara-apple/foundation"]
 # `client-host` runs every request through the `host::HostTransport` a host
 # application installs once per process with `host::install`.
@@ -77,6 +78,8 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 kithara-apple = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+brotli = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
 # hotpath drives the `perf`/`memprof` profiling knobs and does not build on
 # wasm32; gate it here so the `perf` feature stays inert on wasm.
 hotpath = { workspace = true, optional = true }
@@ -91,21 +94,20 @@ wreq = { workspace = true, optional = true, features = [
     "stream",
     "zstd",
 ] }
-wreq-util = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
 kithara-net = { path = ".", default-features = false, features = ["mock"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang"] }
 
 futures = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-platform = { workspace = true, features = ["tokio-rt-multi-thread"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["http-server"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "http-server"] }
 
 axum = { workspace = true }
 serde_yaml_ng = { workspace = true }

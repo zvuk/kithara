@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use kithara_devtools::{CoreCommand, Ctx};
+use kithara_devtools::{CoreCommand, Ctx, lint::LintCommand, stress::StressCommand};
 
 mod agent_hook;
 mod android;
@@ -9,6 +9,9 @@ mod child;
 mod ci;
 mod config;
 mod job;
+#[cfg(unix)]
+mod measure_child;
+mod miri;
 mod mutants;
 mod parity;
 mod publish;
@@ -67,6 +70,11 @@ enum Command {
     Ci(CiArgs),
     /// Verify test utilities outside workspace feature unification.
     TestUtils,
+    /// Run or validate the declared Miri selection.
+    Miri(miri::MiriArgs),
+    /// Measure one native child without changing its execution environment.
+    #[cfg(unix)]
+    MeasureChild(measure_child::MeasureChildArgs),
     /// Publish all public crates to crates.io in dependency order.
     Publish(PublishArgs),
     /// Run explicitly scoped mutation suites.
@@ -106,6 +114,10 @@ fn work() -> anyhow::Result<()> {
         .compact()
         .try_init();
     let cli = Cli::parse();
+    #[cfg(unix)]
+    if let Command::MeasureChild(args) = &cli.command {
+        return measure_child::run(args);
+    }
     // Cargo and nextest invoke these from the crate they are building, where
     // the repository root the self-cache resolves stays out of reach.
     if let Command::Android { command } = &cli.command
@@ -125,18 +137,32 @@ fn work() -> anyhow::Result<()> {
     // leaves the shared target directory alone while work runs in it.
     let _target = ci::hold_target(&ctx.root, &|name| std::env::var_os(name))?;
 
+    if let Command::Core(CoreCommand::Lint(args)) = &cli.command
+        && (args.command.is_none() || matches!(args.command, Some(LintCommand::Arch(_))))
+    {
+        miri::check(&ctx)?;
+    }
+
     match cli.command {
         Command::Android { command } => android::run(command, &ctx),
         Command::Apple { command } => apple::run(command, &ctx),
         Command::Wasm { command } => wasm::run(command, &ctx),
         Command::Ci(ref args) => ci::run(args, &ctx),
         Command::TestUtils => test_utils::run(&ctx),
+        Command::Miri(ref args) => miri::run(args, &ctx),
+        #[cfg(unix)]
+        Command::MeasureChild(ref args) => measure_child::run(args),
         Command::Publish(ref args) => publish::run(args, &ctx),
         Command::Mutants(ref args) => mutants::run(args, &ctx),
         Command::Parity(ref args) => parity::run(args, &ctx),
         Command::Release(ref args) => release::run(args, &ctx),
         Command::AgentHook => agent_hook::run(),
         Command::SelfCache(ref args) => self_cache::run(args),
+        Command::Core(CoreCommand::Stress {
+            command: StressCommand::Run(args),
+        }) => args.run_with_build_admission(&ctx, &|build| {
+            ci::admit_linux_build(build, &|name| std::env::var_os(name))
+        }),
         Command::Core(cmd) => kithara_devtools::run(&cmd, &ctx),
     }
 }
@@ -171,7 +197,7 @@ mod tests {
 
     /// `.cargo/config.toml` aliases `cargo xtask` to `cargo run --package xtask`,
     /// which refuses to pick when the package carries several binaries.
-    /// `src/bin/fake-tool.rs` is the second one, so the manifest has to name this
+    /// Auxiliary entry points live in `bin/`, so the manifest has to name this
     /// file's binary as the default or every `cargo xtask` invocation fails.
     #[test]
     fn the_cargo_xtask_alias_resolves_to_this_binary() {

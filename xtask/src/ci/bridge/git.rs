@@ -1,10 +1,13 @@
 use std::{
     fs,
+    io::Write,
+    num::NonZeroU64,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
 
 use anyhow::{Context, Result, bail};
+use tempfile::NamedTempFile;
 
 use super::{
     api::{Github, Gitlab},
@@ -131,6 +134,25 @@ impl GitRepo {
         Ok(())
     }
 
+    pub(super) fn review_size(&self, target: &str, head: &str) -> Result<(u64, NonZeroU64)> {
+        let text = self
+            .file_at(target, ".config/xtask.toml")?
+            .context("PR target has no readable .config/xtask.toml")?;
+        let document: toml::Value =
+            toml::from_str(&text).context("parse PR target xtask config")?;
+        let ci = document
+            .get("ext")
+            .and_then(|ext| ext.get("ci"))
+            .context("PR target xtask config has no [ext.ci]")?;
+        let limit: NonZeroU64 = ci
+            .get("pr_review_line_limit")
+            .context("PR target must set ext.ci.pr_review_line_limit")?
+            .clone()
+            .try_into()
+            .context("parse PR target ext.ci.pr_review_line_limit")?;
+        Ok((self.review_lines(target, head)?, limit))
+    }
+
     /// Added text lines in the pull request, excluding unchanged moves.
     pub(super) fn review_lines(&self, base: &str, head: &str) -> Result<u64> {
         let numstat = self.run(
@@ -167,13 +189,18 @@ impl GitRepo {
                 "diff",
                 "--name-only",
                 "--no-renames",
+                "--ignore-submodules=none",
                 "-z",
                 "--merge-base",
                 base,
                 head,
                 "--",
             ])
-            .args(consts::CONTROL_PATHS)
+            .args(
+                consts::CONTROL_PATHS
+                    .iter()
+                    .map(|path| path.trim_end_matches('/')),
+            )
             .output()
             .context("running git diff for CI control paths")?;
         let paths = String::from_utf8(checked(output, "git diff for CI control paths")?)
@@ -267,23 +294,42 @@ impl GitRepo {
     }
 
     fn restore_control_paths(&self, tree: &Path, base: &str) -> Result<()> {
-        for path in consts::CONTROL_PATHS {
-            let path = path.trim_end_matches('/');
-            if self.exists_at(base, path)? {
-                git_in(tree, &["checkout", base, "--", path])?;
-            } else {
-                git_in(
-                    tree,
-                    &["rm", "-r", "--force", "--ignore-unmatch", "--", path],
-                )?;
-            }
+        let head = head_of(tree)?;
+        let paths = self.changed_control_paths(base, &head)?;
+        if paths.is_empty() {
+            return Ok(());
         }
+        let mut pathspec =
+            NamedTempFile::new_in(&self.root).context("creating trusted control pathspec")?;
+        for path in paths {
+            write!(pathspec, "{path}\0").context("writing trusted control pathspec")?;
+        }
+        let pathspec_arg = format!("--pathspec-from-file={}", path_text(pathspec.path())?);
+        git_in(
+            tree,
+            &[
+                "--literal-pathspecs",
+                "restore",
+                "--source",
+                base,
+                "--staged",
+                "--worktree",
+                "--no-overlay",
+                "--pathspec-file-nul",
+                &pathspec_arg,
+            ],
+        )?;
         Ok(())
     }
 
     fn commit_worktree(tree: &Path, head: &str) -> Result<String> {
         git_in(tree, &["add", "--all"])?;
-        if git_in(tree, &["diff", "--cached", "--quiet"]).is_ok() {
+        if git_in(
+            tree,
+            &["diff", "--ignore-submodules=none", "--cached", "--quiet"],
+        )
+        .is_ok()
+        {
             // Nothing was restored, but a merge may still have moved the tree,
             // so the answer is where the worktree stands — not the head it
             // started from.
@@ -297,7 +343,10 @@ impl GitRepo {
                 "user.name=kithara-bridge",
                 "-c",
                 "user.email=kithara-bridge@localhost",
+                "-c",
+                "diff.ignoreSubmodules=none",
                 "commit",
+                "--no-gpg-sign",
                 "--quiet",
                 "--message",
                 &message,
@@ -528,6 +577,7 @@ fn merge_base_into(tree: &Path, base: &str) -> Result<bool> {
             "-c",
             "user.email=kithara-bridge@localhost",
             "merge",
+            "--no-gpg-sign",
             "--quiet",
             "--no-ff",
             "--message",
@@ -611,6 +661,7 @@ mod tests {
         git(&work, &["init", "--quiet", "--initial-branch=main"]);
         git(&work, &["config", "user.email", "t@e.st"]);
         git(&work, &["config", "user.name", "test"]);
+        git(&work, &["config", "commit.gpgsign", "false"]);
         fs::create_dir_all(work.join("xtask/src")).unwrap();
         fs::create_dir_all(work.join(".config")).unwrap();
         fs::write(work.join("xtask/src/main.rs"), "// trusted\n").unwrap();
@@ -696,6 +747,88 @@ mod tests {
         repo.run(&["fetch", "--no-tags", work.to_str().unwrap(), &head], None)
             .unwrap();
         head
+    }
+
+    #[test]
+    fn review_size_uses_current_target_policy_not_pull_policy() {
+        let (state, repo, ..) = repository();
+        let work = state.path().join("work");
+        let policy = work.join(".config/xtask.toml");
+        fs::write(&policy, "[ext.ci]\npr_review_line_limit = 7\n").unwrap();
+        let base = commit_review(&repo, &work);
+
+        fs::write(&policy, "[ext.ci]\npr_review_line_limit = 9000\n").unwrap();
+        fs::write(work.join("added.rs"), "added\n".repeat(7)).unwrap();
+        let head = commit_review(&repo, &work);
+        let measured = repo.review_size(&base, &head);
+        assert_eq!(
+            measured.as_ref().unwrap(),
+            &(8, NonZeroU64::new(7).unwrap())
+        );
+        let status = crate::ci::bridge::checks::review_size(&measured);
+        assert_eq!(status.state, "failure");
+        assert!(status.description.starts_with("8/7 "));
+
+        git(
+            &work,
+            &["checkout", "--quiet", "-b", "updated-target", &base],
+        );
+        fs::write(&policy, "[ext.ci]\npr_review_line_limit = 9\n").unwrap();
+        let target = commit_review(&repo, &work);
+        let measured = repo.review_size(&target, &head);
+        assert_eq!(
+            measured.as_ref().unwrap(),
+            &(8, NonZeroU64::new(9).unwrap())
+        );
+        let status = crate::ci::bridge::checks::review_size(&measured);
+        assert_eq!(status.state, "success");
+        assert!(status.description.starts_with("8/9 "));
+    }
+
+    #[test]
+    fn review_size_accepts_unknown_target_lane_fields() {
+        let (state, repo, ..) = repository();
+        let work = state.path().join("work");
+        fs::write(
+            work.join(".config/xtask.toml"),
+            "[ext.ci]\npr_review_line_limit = 7\n[ext.ci.lanes.x]\ntest_packages = ['future-package']\nfuture_lane_option = true\n",
+        )
+        .unwrap();
+        let target = commit_review(&repo, &work);
+        fs::write(work.join("added.rs"), "added\n".repeat(3)).unwrap();
+        let head = commit_review(&repo, &work);
+
+        let measured = repo.review_size(&target, &head);
+        assert!(measured.is_ok(), "target review policy: {measured:#?}");
+        assert_eq!(measured.unwrap(), (3, NonZeroU64::new(7).unwrap()));
+    }
+
+    #[test]
+    fn review_size_reports_missing_or_invalid_target_policy_as_error() {
+        let (state, repo, ..) = repository();
+        let work = state.path().join("work");
+        let path = work.join(".config/xtask.toml");
+        for policy in [
+            None,
+            Some("[ext.ci]\n"),
+            Some("[ext.ci]\npr_review_line_limit = 0\n"),
+            Some("[ext.ci]\npr_review_line_limit = -1\n"),
+            Some("[ext.ci]\npr_review_line_limit = 'unlimited'\n"),
+            Some("[ext.ci\n"),
+        ] {
+            if let Some(policy) = policy {
+                fs::write(&path, policy).unwrap();
+            } else {
+                fs::remove_file(&path).unwrap();
+            }
+            let target = commit_review(&repo, &work);
+            let measured = repo.review_size(&target, &target);
+            assert!(measured.is_err(), "{policy:?}");
+            assert_eq!(
+                crate::ci::bridge::checks::review_size(&measured).state,
+                "error"
+            );
+        }
     }
 
     #[test]
@@ -798,6 +931,87 @@ mod tests {
         assert_eq!(blob(&repo, &judged, "xtask/src/main.rs"), "// trusted\n");
     }
 
+    #[test]
+    fn untrusted_judgement_restores_the_complete_control_tree() {
+        let (state, repo, base, _product, _head, _additive) = repository();
+        let work = state.path().join("work");
+        fs::write(work.join("xtask/[added].rs"), "untrusted addition\n").unwrap();
+        fs::write(work.join(".config/nextest.toml"), "untrusted profile\n").unwrap();
+        fs::write(work.join(".gitlab"), "untrusted directory replacement\n").unwrap();
+        fs::remove_file(work.join("xtask/src/main.rs")).unwrap();
+        let head = commit_review(&repo, &work);
+        assert!(repo.exists_at(&head, ".gitlab").unwrap());
+        assert!(
+            repo.changed_control_paths(&base, &head)
+                .unwrap()
+                .contains(&"xtask/[added].rs".to_owned())
+        );
+
+        let restored = judged(&repo, &base, &head, true);
+        assert_eq!(
+            repo.changed_control_paths(&base, &restored).unwrap(),
+            Vec::<String>::new(),
+            "untrusted additions and deletions cannot change the trusted control tree"
+        );
+        assert_eq!(blob(&repo, &restored, "src.rs"), "product\n");
+        assert!(!repo.exists_at(&restored, ".gitlab").unwrap());
+
+        let trusted = judged(&repo, &base, &head, false);
+        assert_eq!(
+            blob(&repo, &trusted, "xtask/[added].rs"),
+            "untrusted addition\n"
+        );
+        assert_eq!(
+            blob(&repo, &trusted, ".config/nextest.toml"),
+            "untrusted profile\n"
+        );
+        assert_eq!(blob(&repo, &trusted, "src.rs"), "product\n");
+        assert_eq!(
+            blob(&repo, &trusted, ".gitlab"),
+            "untrusted directory replacement\n"
+        );
+    }
+
+    #[test]
+    fn ignored_submodules_cannot_hide_control_gitlinks() {
+        let (state, repo, base, product, _head, _additive) = repository();
+        let work = state.path().join("work");
+        git(
+            &work,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{base},ci/link"),
+            ],
+        );
+        git(&work, &["commit", "--quiet", "-m", "trusted gitlink"]);
+        let trusted_base = head_of(&work).unwrap();
+        git(
+            &work,
+            &[
+                "update-index",
+                "--cacheinfo",
+                &format!("160000,{product},ci/link"),
+            ],
+        );
+        git(&work, &["commit", "--quiet", "-m", "changed gitlink"]);
+        let head = head_of(&work).unwrap();
+        repo.run(&["fetch", "--no-tags", work.to_str().unwrap(), &head], None)
+            .unwrap();
+        git(&repo.root, &["config", "diff.ignoreSubmodules", "all"]);
+
+        let restored = judged(&repo, &trusted_base, &head, true);
+        let oid = repo
+            .run(&["rev-parse", &format!("{restored}:ci/link")], None)
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(oid).unwrap().trim(),
+            base,
+            "the trusted gitlink OID must survive porcelain diff preferences"
+        );
+    }
+
     /// A trusted author's change to the judge is what their run has to exercise,
     /// so it survives — while everything they did not touch still comes from the
     /// base.
@@ -813,6 +1027,22 @@ mod tests {
     #[test]
     fn judged_commit_is_deterministic_for_the_exact_key() {
         let (_state, repo, base, _product, head, _additive) = repository();
+        assert_eq!(
+            judged(&repo, &base, &head, true),
+            judged(&repo, &base, &head, true)
+        );
+    }
+
+    #[test]
+    fn judged_commit_does_not_inherit_interactive_signing() {
+        let (state, repo, base, _product, head, _additive) = repository();
+        let signer = crate::testing::install_double(&state.path().join("tools"), "gpg");
+        git(&repo.root, &["config", "commit.gpgsign", "true"]);
+        git(&repo.root, &["config", "gpg.format", "openpgp"]);
+        git(
+            &repo.root,
+            &["config", "gpg.program", signer.to_str().unwrap()],
+        );
         assert_eq!(
             judged(&repo, &base, &head, true),
             judged(&repo, &base, &head, true)

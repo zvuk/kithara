@@ -264,6 +264,30 @@ fn woken_async_task_stays_counted_until_repolled() {
     );
 }
 
+#[kithara::test(native, flash(false))]
+fn dropping_a_participating_task_preserves_its_borrowed_receiver() {
+    let _g = guard();
+    reset();
+    let (sender, receiver) = crate::tokio::broadcast::channel::<u8>(1);
+    let mut task = Box::pin(participate(
+        async move {
+            let mut receiver = receiver;
+            receiver.recv().await.expect("sender stays open")
+        },
+        Location::caller(),
+    ));
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+
+    assert!(task.as_mut().poll(&mut cx).is_pending());
+    drop(task);
+    assert!(
+        sender.send(1).is_err(),
+        "cancelled task released its receiver"
+    );
+    assert_eq!(forward::async_active_count(), 0);
+}
+
 /// A pinning task's spawn site says WHERE it came from, never what it is doing.
 /// A run's nine hangs were all pinned by one task at one spawn site, with
 /// nothing in the dump to separate a task spinning through wake-poll-park from
@@ -2901,10 +2925,10 @@ fn a_timed_panicking_child_releases_its_joiner_and_preserves_the_payload() {
     reset();
     let _ambient = ambient_scope(true);
     let _flash = enter_dynamic(true);
-    kithara_test_utils::hang::suppress_expected_panic_dumps();
     let error = super::participate_sync(|| {
         let child = crate::thread::spawn_named("panicking-join-child", || {
             crate::thread::sleep(Duration::from_secs(1));
+            kithara_test_utils::hang::suppress_expected_panic_dumps();
             panic!("native child panic");
         });
         child.join().expect_err("native panic remains an error")
@@ -2912,6 +2936,50 @@ fn a_timed_panicking_child_releases_its_joiner_and_preserves_the_payload() {
     assert_eq!(error.downcast_ref::<&str>(), Some(&"native child panic"));
     assert_eq!(super::system::FLASH.active_count(), 0);
     assert_eq!(super::system::FLASH.timed_count(), 0);
+}
+
+#[cfg(not(feature = "loom"))]
+#[kithara::test(native, flash(false), timeout(Duration::from_secs(2)))]
+fn a_platform_thread_is_finished_when_its_closure_returns() {
+    /// Holds the OS thread past its closure until the test lets it go.
+    struct HeldTeardown(mpsc::Receiver<()>);
+    impl Drop for HeldTeardown {
+        fn drop(&mut self) {
+            let _ = self.0.recv();
+        }
+    }
+    thread_local! {
+        static TEARDOWN: std::cell::RefCell<Option<HeldTeardown>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    let _g = guard();
+    reset();
+    let _ambient = ambient_scope(true);
+    let _flash = enter_dynamic(true);
+    let started = Instant::now();
+    let (release, held) = mpsc::channel();
+    let finished = super::participate_sync(|| {
+        let child = crate::thread::spawn_named("held-teardown-child", move || {
+            TEARDOWN.with(|teardown| *teardown.borrow_mut() = Some(HeldTeardown(held)));
+        });
+        let mut polls = 0;
+        while !child.is_finished() && polls < 1_000 {
+            crate::thread::sleep(Duration::from_millis(1));
+            polls += 1;
+        }
+        let finished = child.is_finished();
+        release
+            .send(())
+            .expect("the child's teardown waits for release");
+        child.join().expect("the child returns");
+        finished
+    });
+    assert!(
+        finished,
+        "a returned closure is finished before its OS thread ends"
+    );
+    assert!(started.elapsed() <= Duration::from_millis(1));
 }
 
 #[kithara::test(loom)]

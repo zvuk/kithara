@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use num_traits::cast::AsPrimitive;
 use parley::{
@@ -20,6 +20,7 @@ pub struct TextContext {
     faces: FaceBlobs,
     fonts: FontContext,
     layout: LayoutContext<()>,
+    families: BTreeMap<&'static str, &'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -61,6 +62,7 @@ impl From<&TextResources> for TextContext {
                 source_cache: SourceCache::default(),
             },
             layout: LayoutContext::new(),
+            families: resources.families().clone(),
         }
     }
 }
@@ -75,7 +77,10 @@ impl TextContext {
         let mut builder = self
             .layout
             .ranged_builder(&mut self.fonts, content, 1.0, false);
-        builder.push_default(ParleyFamily::Named(Cow::Borrowed(style.font.family_name())));
+        let family = style.font.family_name();
+        builder.push_default(ParleyFamily::Named(Cow::Borrowed(
+            self.families.get(family).copied().unwrap_or(family),
+        )));
         builder.push_default(StyleProperty::FontWeight(parley_weight(style.weight)));
         builder.push_default(StyleProperty::FontSize(style.size));
         builder.push_default(StyleProperty::LetterSpacing(style.spacing * style.size));

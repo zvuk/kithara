@@ -53,12 +53,6 @@ pub fn glide_two_tones() -> &'static [f32] {
     &consts::TWO_TONES
 }
 
-/// Complex points at three radii, followed by signed zeros and axes.
-#[must_use]
-pub fn polar_points() -> (&'static [f32], &'static [f32]) {
-    (&consts::POLAR_RE, &consts::POLAR_IM)
-}
-
 /// Full-depth duck input at the canonical limiter ceiling.
 #[must_use]
 pub fn host_metronome_held() -> &'static [f32] {

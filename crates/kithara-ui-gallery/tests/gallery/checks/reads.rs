@@ -616,7 +616,7 @@ fn clock_controls_update_source_tempo_grid_and_key_lock() {
         hand.reads.get("clock.grid.click"),
         Some(ReadValue::Bool(true))
     );
-    hand.press("clock-components/key-lock/toggle");
+    hand.press("clock-components/key-lock/chip/toggle");
     assert_eq!(
         hand.reads.get("deck.key.locked@deck=a"),
         Some(ReadValue::Bool(false))

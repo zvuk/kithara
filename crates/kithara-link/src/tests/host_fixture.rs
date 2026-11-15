@@ -6,7 +6,8 @@ use std::{
 
 use kithara_command::{Rejection, Seq, When};
 use kithara_host::{
-    DeckId, HostCommand, HostOwner, HostSettingsChange, HostSettingsExec, HostSettled, api::Tempo,
+    DeckId, HostCommand, HostOwner, HostSettingsChange, HostSettingsExec, HostSettled, PassClock,
+    api::Tempo,
 };
 use kithara_play::{
     DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, Player, SessionError,
@@ -19,6 +20,15 @@ use kithara_test_utils::bufpool::TestPools;
 use kithara_warp::{BeatGridRevision, BeatGridStamp};
 
 use super::fixtures::{Control, Deck, Rig, Sequence, rate, trajectory};
+
+/// The scripted pass clock at `now`, with the fixture's 128-frame leads.
+fn fixture_clock(now: i64) -> PassClock {
+    PassClock {
+        now: SessionFrame::new(now),
+        delivery: FrameCount::new(128),
+        deck_delivery: FrameCount::new(128),
+    }
+}
 use crate::{
     GridAnswer, LinkedDeck, LinkedHost, LinkedHostConfig, LinkedHostDeck, LinkedPlayer,
     LinkedSnapshot, TempoTrajectory,
@@ -119,12 +129,15 @@ impl LinkedDeck<TestPools> for ObservedDeck {
     fn retime(
         &mut self,
         trajectory: &TempoTrajectory,
-        at: SessionFrame,
+        frames: &[SessionFrame],
         out: &mut Outbox<'_, TestPools>,
     ) {
-        self.probe
-            .read(|observation| observation.trajectories.push((at, trajectory.clone())));
-        LinkedPlayer::retime(&mut self.inner, trajectory, at, out);
+        self.probe.read(|observation| {
+            observation
+                .trajectories
+                .extend(frames.iter().map(|at| (*at, trajectory.clone())));
+        });
+        LinkedPlayer::retime(&mut self.inner, trajectory, frames, out);
         self.publish();
     }
     fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, TestPools>) {
@@ -160,7 +173,11 @@ impl LinkedDeck<TestPools> for ObservedDeck {
 }
 
 pub(super) struct HostScript {
-    pub clock: Option<(SessionFrame, FrameCount)>,
+    pub clock: Option<PassClock>,
+    /// The accepted tempo map the scripted Host lends its decks: an accepted
+    /// timed tempo puts its step on it, an accepted tempo without a pass clock
+    /// sets its first tempo, and a new axis starts it from the axis anchor.
+    pub planned: TempoTrajectory,
     pub transport: Option<SessionTransportSnapshot>,
     pub room: usize,
     pub reject: Option<PlayError>,
@@ -177,7 +194,7 @@ impl HostControl {
     }
 
     pub(super) fn at(&self, now: i64) {
-        self.edit(|script| script.clock = Some((SessionFrame::new(now), FrameCount::new(128))));
+        self.edit(|script| script.clock = Some(fixture_clock(now)));
     }
 
     pub(super) fn axis(&self, epoch: u64, frame: i64, beat: f64, bpm: f64, sample_rate: u32) {
@@ -191,6 +208,12 @@ impl HostControl {
         )
         .expect("axis anchor");
         self.edit(|script| {
+            if script
+                .transport
+                .is_none_or(|transport| transport.session_epoch() != SessionEpoch::new(epoch))
+            {
+                script.planned.reaxis_observed(anchor);
+            }
             script.transport = Some(SessionTransportSnapshot::new(
                 position,
                 tempo,
@@ -204,6 +227,12 @@ impl HostControl {
             ));
         });
         self.at(frame);
+    }
+
+    /// Takes the step on `frame` off the accepted map, as the Host does for a
+    /// tempo it refuses.
+    pub(super) fn unplan(&self, frame: i64) {
+        self.edit(|script| script.planned.withdraw(SessionFrame::new(frame)));
     }
 
     pub(super) fn answer(
@@ -258,6 +287,17 @@ impl HostSettingsExec<()> for ScriptedHost {
             if let Some(error) = script.reject.take() {
                 return Err(error);
             }
+            match at {
+                When::At(frame) => {
+                    script.planned.withdraw(frame);
+                    script
+                        .planned
+                        .push(frame, value)
+                        .expect("a scripted tempo step fits the accepted map");
+                }
+                When::Next => script.planned.initial_tempo(value),
+                When::Deferred => {}
+            }
             let seq = self.sequence.next();
             script.sent.push((seq, value, at));
             Ok(Some(seq))
@@ -268,6 +308,9 @@ impl HostSettingsExec<()> for ScriptedHost {
 impl HostOwner<TestPools> for ScriptedHost {
     type Command = HostCommand<TestPools, LinkedHostDeck<TestPools>>;
     type Deck = LinkedHostDeck<TestPools>;
+    fn poll_output(&mut self) -> std::task::Poll<Result<(), PlayError>> {
+        std::task::Poll::Ready(Ok(()))
+    }
     fn apply(&mut self, command: Self::Command) -> Result<Option<Seq>, PlayError> {
         match command {
             HostCommand::Register { id, deck } => self.register(id, deck).map(|()| None),
@@ -287,12 +330,12 @@ impl HostOwner<TestPools> for ScriptedHost {
         &mut self,
         visit: &mut dyn FnMut(DeckId, &mut Self::Deck, &mut Outbox<'_, TestPools>, DeckPass<'_>),
     ) {
-        let (now, delivery) = self
-            .clock()
-            .unwrap_or((SessionFrame::new(0), FrameCount::new(128)));
+        let PassClock { now, delivery, .. } = self.clock().unwrap_or_else(|| fixture_clock(0));
+        let planned = self.control.edit(|script| script.planned.clone());
         for record in &mut self.decks {
             record.rig.now = now;
             record.rig.delivery = delivery;
+            record.rig.planned = planned.clone();
             record
                 .rig
                 .run_pass(|out, pass| visit(record.id, &mut record.deck, out, pass));
@@ -303,9 +346,7 @@ impl HostOwner<TestPools> for ScriptedHost {
         id: DeckId,
         visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_, TestPools>, DeckPass<'_>),
     ) -> Result<(), PlayError> {
-        let (now, delivery) = self
-            .clock()
-            .unwrap_or((SessionFrame::new(0), FrameCount::new(128)));
+        let PassClock { now, delivery, .. } = self.clock().unwrap_or_else(|| fixture_clock(0));
         let record = self
             .decks
             .iter_mut()
@@ -313,12 +354,13 @@ impl HostOwner<TestPools> for ScriptedHost {
             .ok_or(SessionError::DeckNotFound(id))?;
         record.rig.now = now;
         record.rig.delivery = delivery;
+        record.rig.planned = self.control.edit(|script| script.planned.clone());
         record
             .rig
             .run_pass(|out, pass| visit(&mut record.deck, out, pass));
         Ok(())
     }
-    fn clock(&self) -> Option<(SessionFrame, FrameCount)> {
+    fn clock(&self) -> Option<PassClock> {
         self.control.edit(|script| script.clock)
     }
     fn transport(&mut self) -> Option<SessionTransportSnapshot> {
@@ -342,9 +384,6 @@ impl HostOwner<TestPools> for ScriptedHost {
     fn release_id(_command: &Self::Command) -> Option<DeckId> {
         None
     }
-    fn is_next_tempo(_command: &Self::Command) -> bool {
-        false
-    }
     fn pass(&mut self) -> Vec<HostSettled> {
         self.control
             .edit(|script| std::mem::take(&mut script.answers))
@@ -355,7 +394,8 @@ pub(super) type Host = LinkedHost<TestPools, ScriptedHost>;
 
 pub(super) fn host() -> (Host, HostControl) {
     let control = HostControl(Arc::new(Mutex::new(HostScript {
-        clock: Some((SessionFrame::new(0), FrameCount::new(128))),
+        clock: Some(fixture_clock(0)),
+        planned: trajectory(120.0, 4),
         transport: None,
         room: 32,
         reject: None,
@@ -370,7 +410,6 @@ pub(super) fn host() -> (Host, HostControl) {
                     decks: Vec::new(),
                     sequence: Sequence::new(),
                 })
-                .trajectory(trajectory(120.0, 4))
                 .build(),
         ),
         control,
@@ -418,6 +457,16 @@ pub(super) fn tempo(host: &mut Host, bpm: f64, frame: i64) -> Result<Option<Seq>
         HostCommand::Configure(
             HostSettingsChange::Tempo(Tempo::new(bpm).expect("test tempo")),
             When::At(SessionFrame::new(frame)),
+        )
+        .into(),
+    )
+}
+
+pub(super) fn next_tempo(host: &mut Host, bpm: f64) -> Result<Option<Seq>, PlayError> {
+    host.apply(
+        HostCommand::Configure(
+            HostSettingsChange::Tempo(Tempo::new(bpm).expect("test tempo")),
+            When::Next,
         )
         .into(),
     )

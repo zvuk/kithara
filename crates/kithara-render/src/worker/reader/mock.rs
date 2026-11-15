@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use kithara_decode::TrackMetadata;
 use kithara_platform::{
     sync::{Arc, ThreadGate, WaitGate},
@@ -12,13 +14,14 @@ use kithara_test_utils::{
 use kithara_worker::{DispatcherConfig, Wake, Worker, WorkerConfig};
 use ringbuf::{
     HeapRb,
-    traits::{Consumer, Observer, Producer, Split},
+    traits::{Consumer, Observer, Split},
 };
 use triple_buffer::triple_buffer;
 
 use super::{
     PcmPacket, PcmReceiver,
     core::{FinalWake, PcmProducer},
+    lead::PcmLead,
 };
 use crate::worker::scheduler::StreamWake;
 
@@ -42,7 +45,7 @@ impl PacketRing {
         )
     }
 
-    pub(in crate::worker) fn with_wake(
+    pub(crate) fn with_wake(
         spec: AudioSpec,
         duration: Duration,
         capacity: usize,
@@ -102,6 +105,41 @@ impl PacketRing {
         wake: StreamWake,
         origin: Duration,
     ) -> Self {
+        Self::with_lead(
+            spec,
+            duration,
+            (capacity, reverse_capacity),
+            unframed(capacity),
+            blocking,
+            wake,
+            origin,
+        )
+    }
+
+    /// A ring whose producer bounds its lead in frames, sized like a loaded lane.
+    #[cfg(test)]
+    pub(in crate::worker) fn framed(spec: AudioSpec, lead: PcmLead, wake: StreamWake) -> Self {
+        let slots = lead.slots();
+        Self::with_lead(
+            spec,
+            Some(Duration::from_secs(1)),
+            (slots, slots + 2),
+            lead,
+            false,
+            wake,
+            Duration::ZERO,
+        )
+    }
+
+    fn with_lead(
+        spec: AudioSpec,
+        duration: Option<Duration>,
+        (capacity, reverse_capacity): (usize, usize),
+        lead: PcmLead,
+        blocking: bool,
+        wake: StreamWake,
+        origin: Duration,
+    ) -> Self {
         let (forward_tx, forward_rx) = HeapRb::new(capacity).split();
         let (reverse_tx, reverse_rx) = HeapRb::new(reverse_capacity).split();
         let (playing_tx, playing_rx) = triple_buffer(&false);
@@ -111,7 +149,6 @@ impl PacketRing {
 
         Self {
             receiver: Some(PcmReceiver {
-                render_publisher: None,
                 spec,
                 forward: forward_rx,
                 reverse: reverse_tx,
@@ -127,6 +164,7 @@ impl PacketRing {
             producer: PcmProducer {
                 forward: forward_tx,
                 reverse: reverse_rx,
+                lead,
                 playing: playing_rx,
                 ready: FinalWake(ready),
                 events: kithara_events::EventBus::default(),
@@ -185,14 +223,12 @@ impl PacketRing {
                 .and_then(|(origin, length)| origin.checked_add(length))
                 .and_then(|end| end.checked_sub(chunk.meta.media_origin?));
         }
-        self.producer
-            .forward
-            .try_push(packet)
-            .expect("packet ring space");
+        self.producer.push(packet).expect("packet ring space");
+        self.producer.signal();
     }
 
     pub fn returned(&mut self) -> Option<PcmPacket> {
-        self.producer.reverse.try_pop()
+        self.producer.reclaim()
     }
 }
 
@@ -251,7 +287,6 @@ pub(in crate::worker) fn packet_fixture(
         worker.dispatcher(DispatcherConfig::builder().name("terminal-fixture").build());
     (
         PcmReceiver {
-            render_publisher: None,
             playing,
             spec,
             forward: received,
@@ -267,11 +302,21 @@ pub(in crate::worker) fn packet_fixture(
         PcmProducer {
             forward,
             reverse,
+            lead: unframed(8),
             playing: activity,
             ready: FinalWake(ready),
             events: kithara_events::EventBus::default(),
             output_pending: false,
         },
+    )
+}
+
+/// A packet-count ring: the lead never binds before the slots do.
+fn unframed(capacity: usize) -> PcmLead {
+    PcmLead::new(
+        NonZeroUsize::new(capacity).expect("nonzero fixture ring"),
+        NonZeroUsize::new(usize::MAX / capacity.saturating_add(1))
+            .expect("nonzero fixture quantum"),
     )
 }
 
@@ -306,20 +351,19 @@ pub fn wait_for_packet(receiver: &PcmReceiver) {
                 .and_then(kithara_abr::AbrHandle::current_variant_index),
         )
     };
+    let mut waited = None;
     loop {
-        hang_tick!(context("before_predicate", None));
         let since = ready.current();
+        let expired = __hang_detector.remaining().is_zero();
         if receiver.forward.try_peek().is_some() || !receiver.forward.write_is_held() {
             hang_reset!();
             return;
         }
+        if expired {
+            hang_tick!(context("expired_without_packet", waited));
+        }
         receiver.wake.wake();
-        let mut edge_moved = false;
-        hang_park!(
-            |remaining: Duration| {
-                edge_moved = ready.wait_timeout(since, remaining);
-            },
-            context("after_wait_before_predicate", Some((since, edge_moved)))
-        );
+        let edge_moved = ready.wait_timeout(since, __hang_detector.remaining());
+        waited = Some((since, edge_moved));
     }
 }

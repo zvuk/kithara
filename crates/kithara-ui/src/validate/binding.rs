@@ -24,6 +24,8 @@ pub(super) enum BindingSide {
 pub(crate) const fn read_kind(control: &ControlNode) -> Option<ValueKind> {
     match control {
         ControlNode::DeckSummary { .. }
+        | ControlNode::Row { .. }
+        | ControlNode::Column { .. }
         | ControlNode::Text { .. }
         | ControlNode::Readout { .. }
         | ControlNode::Search { .. }
@@ -60,8 +62,6 @@ pub(crate) const fn read_kind(control: &ControlNode) -> Option<ValueKind> {
         ControlNode::VuStereo { .. } | ControlNode::VuVertical { .. } => Some(ValueKind::Stereo),
         ControlNode::Placed { .. } => Some(ValueKind::Point),
         ControlNode::Pressable { .. }
-        | ControlNode::Row { .. }
-        | ControlNode::Column { .. }
         | ControlNode::Include { .. }
         | ControlNode::Reveal { .. }
         | ControlNode::Scroll { .. }

@@ -15,6 +15,18 @@ pub struct LevelInbox<'inbox, P: Protocol> {
 }
 
 impl<'inbox, P: Protocol> LevelInbox<'inbox, P> {
+    /// Borrows all retained commands without judging, scheduling or answering them.
+    /// Includes scheduled, deferred, parked and committed batches, in no execution order.
+    pub fn pending_commands(&self) -> impl Iterator<Item = &P::Command> {
+        self.docket
+            .schedule
+            .iter()
+            .chain(&self.docket.arrived)
+            .chain(&self.docket.parked)
+            .chain(self.docket.committed.iter().map(|(_, sent)| sent))
+            .flat_map(|sent| &sent.batch.commands)
+    }
+
     pub(super) fn reborrow(&mut self) -> LevelInbox<'_, P> {
         LevelInbox {
             docket: self.docket,
@@ -32,6 +44,9 @@ impl<'inbox, P: Protocol> LevelInbox<'inbox, P> {
             /// Whether this level still holds the parked batch.
             #[must_use]
             pub fn is_parked(&self, seq: Seq) -> bool;
+            /// Borrows one committed batch without changing its custody.
+            #[must_use]
+            pub fn committed(&self, seq: Seq) -> Option<&[P::Command]>;
             /// Edits a committed batch in place without taking it out of this level.
             pub fn committed_mut(&mut self, seq: Seq) -> Option<&mut [P::Command]>;
         }

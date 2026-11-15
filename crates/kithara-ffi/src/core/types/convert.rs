@@ -1,11 +1,12 @@
 use kithara::{
+    abr::AbrMode,
     play::{CrossfadeCurve, CrossfadeSettings, PlayError, TimeRange},
     queue::{ActionAtItemEnd, PlaybackOrder, QueueError, RepeatMode, Transition},
 };
 
 use super::{
-    FfiActionAtItemEnd, FfiCrossfadeCurve, FfiCrossfadeSettings, FfiError, FfiPlaybackOrder,
-    FfiRepeatMode, FfiTimeRange, FfiTransition, duration_to_seconds,
+    FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeCurve, FfiCrossfadeSettings, FfiError,
+    FfiPlaybackOrder, FfiRepeatMode, FfiTimeRange, FfiTransition, duration_to_seconds,
 };
 
 impl From<PlayError> for FfiError {
@@ -174,5 +175,43 @@ impl TryFrom<FfiTransition> for Transition {
                 settings: settings.try_into()?,
             },
         })
+    }
+}
+
+impl From<FfiAbrMode> for AbrMode {
+    fn from(mode: FfiAbrMode) -> Self {
+        match mode {
+            FfiAbrMode::Auto => Self::Auto(None),
+            FfiAbrMode::Manual { variant_index } => Self::manual(variant_index as usize),
+        }
+    }
+}
+
+/// ABR bandwidth cap, in bits/sec, from the caller's Wi-Fi and cellular
+/// ceilings: the tighter of the non-zero ones. `None` when both are unset
+/// (`0.0`), letting ABR consider every variant. Saturates at [`u64::MAX`]:
+/// FFI callers pass any `f64`.
+pub(crate) fn peak_bitrate_cap(wifi_bps: f64, cellular_bps: f64) -> Option<u64> {
+    let cap = [wifi_bps, cellular_bps]
+        .into_iter()
+        .filter(|v| *v > 0.0)
+        .reduce(f64::min)
+        .filter(|v| v.is_finite())?;
+    Some(num_traits::cast(cap.trunc()).unwrap_or(u64::MAX))
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::peak_bitrate_cap;
+
+    #[kithara::test]
+    fn peak_bitrate_cap_picks_the_tighter_non_zero_ceiling() {
+        assert_eq!(peak_bitrate_cap(2_000_000.0, 500_000.0), Some(500_000));
+        assert_eq!(peak_bitrate_cap(0.0, 750_000.0), Some(750_000));
+        assert_eq!(peak_bitrate_cap(0.0, 0.0), None);
+        assert_eq!(peak_bitrate_cap(f64::INFINITY, 0.0), None);
+        assert_eq!(peak_bitrate_cap(1e30, 0.0), Some(u64::MAX));
     }
 }

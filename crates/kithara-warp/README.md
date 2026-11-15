@@ -14,39 +14,18 @@
 
 # kithara-warp
 
-Beat-map geometry and the source-generic resident Warp decorator for Kithara.
+Tempo for a playing track. `Warp<S>` wraps a decoded source and
+`WarpRenderer` renders it at a speed, a ramp, or a sequence of steps
+(`SpeedCurve`), with or without key lock, through a `kithara-stretch` engine.
+`WarpMap` maps a track's beat grid onto the session grid for beat sync.
 
-The crate owns native map coordinates, immutable beat-map snapshots, beat
-alignment edges, the presentation frontier, `Warp<S>`, `WarpConfig`, live
-temporal controls, and the synchronous `WarpRenderer<S>` that drives a
-`kithara-stretch::ElasticEngine`. Select at least one backend feature:
-`stretch-identity`, `stretch-glide`, `stretch-signalsmith`, or `stretch-bungee`.
-Identity passes decoded audio through; DSP backends expose rate and keylock
-through their capabilities. It does not decode audio, own source lifecycle,
-own `Player` / `PlayWorker` / Host/session state, access storage, or analyze
-samples.
+Every rendered chunk reports exactly which source frames it came from
+(`AudioChunkInfo::source_span`), and fractional phase survives block
+boundaries, seeks, and engine changes. Engine latency is absorbed during
+preparation, not by the consumer.
 
-`WarpMap::projected` uses stamped source/session grid alignment; grid
-materialization stays outside rendering. The lane uses `prepare_quantum` and
-`render_quantum`, and retires EOF output with `drain(output_limit)`. These
-operations stop before the next accepted lane batch and publish the exact
-output-to-source mapping in every `AudioChunkInfo::source_span`. Fractional phase
-survives quantum boundaries, EOF draining and backend changes; region boundaries
-split mapped runs rather than interpolating source endpoints in consumers.
-
-The `kithara-sync` values `SpeedCurve::Constant`, `Ramp { to, frames }` and `Steps` count integer output
-frames from acceptance. A replacement starts at the current position and speed;
-ramps integrate linearly and the final speed holds. Engine latency is discarded
-during preparation/re-priming, not subtracted by the PCM consumer. Worker-side
-preparation selects Signalsmith/Bungee for keylock. Varispeed samples the mapped
-source coordinates with phase-preserving interpolation and anti-alias filtering.
-Engine selection checks backend capabilities at runtime.
-Identity preserves the original sample buffer at every requested speed and does
-not support region plans or keylock. DSP backends preserve decoded samples at
-unity. The complete-source-chunk `render` interface retains its unprimed engine
-contract for constant speeds; it returns the source unchanged for a curve that
-needs output-indexed quanta. Exact lane positions come only from prepared quanta.
-The `render` feature exposes the resident decorator, renderer, and engine
-configuration; geometry and temporal controls remain available without it.
+Enable at least one engine: `stretch-signalsmith`, `stretch-bungee`,
+`stretch-glide`, or `stretch-identity`. The `render` feature adds the
+renderer; beat-map geometry is available without it.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-warp) for ownership and dependency boundaries.
