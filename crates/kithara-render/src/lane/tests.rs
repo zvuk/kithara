@@ -6,7 +6,7 @@ use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
 use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
-use kithara_warp::{Warp, WarpConfig, WarpRenderer};
+use kithara_warp::{Pitch, Warp, WarpConfig, WarpRenderer};
 
 use crate::{
     LaneCommand, LaneFrame, LaneProtocol, LaneTarget,
@@ -183,7 +183,11 @@ fn an_earlier_alignment_rejects_old_future_speed_and_keeps_fresh_controls() {
         1_024,
         vec![LaneCommand::SetSpeed(SpeedCurve::Constant(1.5))],
     );
-    let keylock = send(&mut fixture, 768, vec![LaneCommand::SetKeylock(false)]);
+    let keylock = send(
+        &mut fixture,
+        768,
+        vec![LaneCommand::SetPitch(Pitch::default())],
+    );
     let aligned = send(
         &mut fixture,
         256,

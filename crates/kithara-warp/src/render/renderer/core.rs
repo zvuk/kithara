@@ -15,7 +15,7 @@ use super::{
     super::trajectory::{Fraction, Trajectory},
     target::PreparedTarget,
 };
-use crate::{WarpConfig, WarpRenderError};
+use crate::{Pitch, Semitones, WarpConfig, WarpRenderError};
 
 /// The speed a renderer renders at and the revision that set it.
 #[derive(Clone, Copy, Debug)]
@@ -39,6 +39,28 @@ impl RateTarget {
     pub(in crate::render) const fn speed(self) -> f32 {
         self.speed
     }
+}
+
+impl Pitch {
+    fn honoured_by(self, kind: StretchKind) -> Self {
+        if kind.capabilities().contains(BackendCapabilities::KEYLOCK) {
+            self
+        } else {
+            Self::default()
+        }
+    }
+
+    fn pitch_engine(self) -> bool {
+        self.keylock() || self.shift() != Semitones::DEFAULT
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct PitchLayout {
+    stages: Option<usize>,
+    native: bool,
+    keylocked_unity: bool,
+    passthrough: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -99,8 +121,8 @@ pub struct WarpRenderer<S> {
     pub(in crate::render) pools: PoolRegion<S>,
     /// Engine kind currently prepared by the scheduler shell.
     pub(in crate::render) current_kind: StretchKind,
-    /// Whether the lane last asked for a keylock engine.
-    pub(in crate::render) requested_keylock: bool,
+    /// Pitch the lane last asked for.
+    pub(in crate::render) requested_pitch: Pitch,
     /// Whether previous input ran through the backend. Drives a clean backend
     /// reset when the renderer returns to unity passthrough.
     pub(in crate::render) active: bool,
@@ -113,7 +135,7 @@ pub struct WarpRenderer<S> {
     pub(in crate::render) deferred_trajectory: Option<Trajectory>,
     /// Speed the law holds up to a step taken ahead of its lane frame.
     pub(in crate::render) speed_ahead: Option<f32>,
-    pub(in crate::render) current_keylock: bool,
+    pub(in crate::render) current_pitch_engine: bool,
     /// One scheduler-shell rebuild requested for a re-prime or after a checked
     /// engine failure. The intent is consumed even when preparation fails.
     pub(in crate::render) rebuild_pending: bool,
@@ -131,9 +153,9 @@ where
     pub(in crate::render) const MAX_OUTPUT_FRAMES: usize = 163_840;
     /// Build the slot at the source `spec` from the construction values of `config`.
     pub(crate) fn new(config: &WarpConfig, spec: AudioSpec, pools: PoolRegion<S>) -> Self {
-        let requested_keylock = config.keylock();
-        let (current_kind, current_keylock) =
-            Self::stretch_for(config.backend(), requested_keylock);
+        let requested_pitch = config.pitch();
+        let (current_kind, current_pitch_engine) =
+            Self::stretch_for(config.backend(), requested_pitch);
         let speed = config.speed();
         let target = Self::prepare_target(config, spec, &pools, PreparedTarget::default(), true)
             .unwrap_or_else(|error| {
@@ -151,8 +173,8 @@ where
             engine: target.engine,
             retired_engine: None,
             current_kind,
-            current_keylock,
-            requested_keylock,
+            current_pitch_engine,
+            requested_pitch,
             backend_transition_pending: false,
             reprime_pending: false,
             stateless_tail_owed: None,
@@ -234,7 +256,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             self.prepare(spec);
         }
         if self.transition_pending()
-            || self.stretch_target() != (self.current_kind, self.current_keylock)
+            || self.stretch_target() != (self.current_kind, self.current_pitch_engine)
         {
             return Err(WarpRenderError::NeedsService);
         }
@@ -242,7 +264,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             return Err(ElasticError::EnginePreparation("engine is unavailable").into());
         }
         if !self.active && self.projection.is_some() {
-            let stages = self.trajectory.projection_stages()?;
+            let stages = self.projection_stages()?;
             if let Some(projection) = self.projection.as_mut() {
                 projection.stages = stages;
             }
@@ -254,9 +276,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.active
             && !self.trajectory.requires_quanta()
             && self.mapped_render
-            && self.current_keylock
+            && self.current_pitch_engine
             && self.keylocked_unity()
-            && self.stretch_target() == (self.current_kind, self.current_keylock)
+            && self.stretch_target() == (self.current_kind, self.current_pitch_engine)
             && !self.backend_transition_pending
             && !self.reset_pending
             && !self.rebuild_pending
@@ -404,7 +426,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     pub(in crate::render) fn engine_outdated(&self) -> bool {
         !self.active
             && (!self.requires_staging() || !self.unity_passthrough(self.rate.speed()))
-            && self.stretch_target() != (self.current_kind, self.current_keylock)
+            && self.stretch_target() != (self.current_kind, self.current_pitch_engine)
     }
 }
 
@@ -515,7 +537,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// differs from the current one, and drops a quantum prepared before.
     pub(super) fn retarget_engine(&mut self) {
         let target = self.stretch_target();
-        let changed = target != (self.current_kind, self.current_keylock);
+        let changed = target != (self.current_kind, self.current_pitch_engine);
         let retire = changed && (self.active || self.mapped_render);
         if target.0.capabilities().contains(BackendCapabilities::RATE) {
             self.reprime_pending |= retire;
@@ -532,13 +554,58 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.rebuild_pending = true;
     }
 
-    /// Render from the next prepared quantum on with a keylock engine when `on`
-    /// and the backend has one. A running engine retires its tail into a
-    /// crossfade and the new engine re-primes from the source history on this
-    /// frame.
-    pub fn set_keylock(&mut self, on: bool) {
-        self.requested_keylock = on;
+    /// Render from the next prepared quantum on at `pitch`, as far as the
+    /// backend honours it. A change of engine retires the running one's tail
+    /// into a crossfade and the new engine re-primes from the source history on
+    /// this frame.
+    pub fn set_pitch(&mut self, pitch: Pitch) {
+        let layout = self.pitch_layout();
+        self.requested_pitch = pitch;
+        self.retarget_pitch(layout);
+    }
+
+    fn mapped_unity(&self) -> bool {
+        self.mapped_render && self.keylocked_unity()
+    }
+
+    fn pitch_layout(&self) -> PitchLayout {
+        PitchLayout {
+            stages: self.projection_stages().ok(),
+            native: self.engine.as_ref().is_some_and(|engine| {
+                matches!(
+                    self.native_projection_rates(
+                        engine.capabilities(),
+                        self.pitch_controls().keylock()
+                    ),
+                    Ok(Some(_))
+                )
+            }),
+            keylocked_unity: self.keylocked_unity(),
+            passthrough: self.unity_passthrough(self.rate.speed()),
+        }
+    }
+
+    fn retarget_pitch(&mut self, layout: PitchLayout) {
         self.retarget_engine();
+        if self.pitch_layout() != layout {
+            let leaves_unity =
+                self.mapped_render && layout.keylocked_unity && !self.keylocked_unity();
+            self.reprime_pending |= self.reprimes(leaves_unity, self.rate.speed());
+        }
+    }
+
+    fn reprimes(&self, leaves_unity: bool, speed: f32) -> bool {
+        (self.active || leaves_unity)
+            && (self.mapped_render || !self.unity_passthrough(speed))
+            && self
+                .stretch_target()
+                .0
+                .capabilities()
+                .contains(BackendCapabilities::RATE)
+            && self
+                .engine
+                .as_ref()
+                .is_some_and(|engine| engine.capabilities().latency().first() > 0)
     }
 
     /// Render from the next prepared quantum on at the speed `curve` holds,
@@ -550,7 +617,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// Rejects nonfinite or unsupported speeds, unordered steps, and mappings
     /// that exceed the checked rational representation. Rejection changes no state.
     pub fn set_speed(&mut self, curve: SpeedCurve, revision: u64) -> Result<(), WarpRenderError> {
-        let was_unity = self.mapped_render && self.keylocked_unity();
+        let was_unity = self.mapped_unity();
         let mut trajectory = self.trajectory.clone();
         let target = RateTarget::new(trajectory.replace(curve)?, revision);
         let continues_native = self.can_continue_native(&trajectory)?;
@@ -561,17 +628,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.trajectory = trajectory;
         self.speed_ahead = None;
         let leaves_unity = was_unity && !self.keylocked_unity();
-        let needs_reprime = (self.active || leaves_unity)
-            && (self.mapped_render || !self.unity_passthrough(target.speed()))
-            && self
-                .stretch_target()
-                .0
-                .capabilities()
-                .contains(BackendCapabilities::RATE)
-            && self
-                .engine
-                .as_ref()
-                .is_some_and(|engine| engine.capabilities().latency().first() > 0);
+        let needs_reprime = self.reprimes(leaves_unity, target.speed());
         self.reprime_pending = !continues_native && (self.reprime_pending || needs_reprime);
         self.rate = target;
         self.prepared_quantum = None;
@@ -593,18 +650,26 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.rate.revision()
     }
 
-    /// The engine `kind` and `keylock` ask for: keylock only where the backend
-    /// has it.
-    pub(super) fn stretch_for(kind: StretchKind, keylock: bool) -> (StretchKind, bool) {
-        (
-            kind,
-            keylock && kind.capabilities().contains(BackendCapabilities::KEYLOCK),
-        )
+    /// The engine `kind` asks for under `controls`: one that shifts pitch
+    /// apart from speed wherever `kind` honours them.
+    pub(super) fn stretch_for(kind: StretchKind, controls: Pitch) -> (StretchKind, bool) {
+        (kind, controls.honoured_by(kind).pitch_engine())
     }
 
     /// The engine the lane last asked for on the built backend.
     pub(in crate::render) fn stretch_target(&self) -> (StretchKind, bool) {
-        Self::stretch_for(self.current_kind, self.requested_keylock)
+        Self::stretch_for(self.current_kind, self.requested_pitch)
+    }
+
+    /// The pitch controls the lane last asked for, as the built backend
+    /// honours them.
+    pub(in crate::render) fn pitch_controls(&self) -> Pitch {
+        self.requested_pitch.honoured_by(self.current_kind)
+    }
+
+    /// Pitch factor for source advancing `speed` frames per output frame.
+    pub(in crate::render) fn target_pitch(&self, speed: f64) -> f64 {
+        self.pitch_controls().factor(speed)
     }
 
     /// Whether a live active-to-unity transition still owns queued samples.
@@ -614,10 +679,14 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     }
 
     pub(in crate::render) fn unity_passthrough(&self, speed: f32) -> bool {
-        !self.requires_staging() || self.trajectory.passthrough_speed(speed)
+        !self.requires_staging()
+            || (self.pitch_controls().shift() == Semitones::DEFAULT
+                && self.trajectory.passthrough_speed(speed))
     }
 
     pub(in crate::render) fn keylocked_unity(&self) -> bool {
-        self.current_keylock && self.trajectory.constant_unity()
+        self.current_pitch_engine
+            && self.pitch_controls().shift() == Semitones::DEFAULT
+            && self.trajectory.constant_unity()
     }
 }

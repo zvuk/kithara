@@ -471,6 +471,18 @@ fn an_alignment_replaces_older_future_speeds_without_cancelling_keylock() {
         position: Duration::ZERO,
     });
     let mut rig = rig();
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Configure(TrackSettingsChange::Pitch(Pitch::HELD), When::Next),
+    )
+    .expect("initial keylock sequence");
+    assert!(matches!(
+        lane_commands(&mut inbox).as_slice(),
+        [LaneCommand::SetPitch(Pitch::HELD)]
+    ));
+    track.settle_lane();
+    assert_eq!(track.settings.config().pitch(), Pitch::HELD);
     let obsolete = in_pass(&mut rig, frame(0), |out| {
         track.apply(
             TrackCommand::SetSpeed {
@@ -484,7 +496,10 @@ fn an_alignment_replaces_older_future_speeds_without_cancelling_keylock() {
     .expect("speed sequence");
     let keylock = in_pass(&mut rig, frame(0), |out| {
         track.apply(
-            TrackCommand::Configure(TrackSettingsChange::Keylock(false), When::At(frame(18_000))),
+            TrackCommand::Configure(
+                TrackSettingsChange::Pitch(Pitch::default()),
+                When::At(frame(18_000)),
+            ),
             out,
         )
     })
@@ -545,7 +560,7 @@ fn an_alignment_replaces_older_future_speeds_without_cancelling_keylock() {
         )
         .expect("keylock remains scheduled");
     assert_eq!(due.seq(), keylock);
-    assert!(matches!(due.commands(), [LaneCommand::SetKeylock(false)]));
+    assert!(matches!(due.commands(), [LaneCommand::SetPitch(pitch)] if *pitch == Pitch::default()));
     due.apply(kithara_render::LaneApplied {
         source_basis: None,
         engine_latency: FrameCount::new(0),
@@ -564,7 +579,7 @@ fn an_alignment_replaces_older_future_speeds_without_cancelling_keylock() {
     );
     track.settle_lane();
     assert_eq!(track.settings.config().speed(), 1.25);
-    assert!(!track.settings.config().keylock());
+    assert_eq!(track.settings.config().pitch(), Pitch::default());
     inbox.drain();
     let due = inbox
         .next_due(

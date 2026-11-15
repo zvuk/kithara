@@ -131,11 +131,7 @@ fn load(sender: &mut Sender<Loads>, source: Source) -> Seq {
                     item: source,
                     class: ServiceClass::Warm,
                     position: Duration::ZERO,
-                    start: LaneStart {
-                        speed: SpeedCurve::Constant(1.0),
-                        keylock: false,
-                        backend: StretchKind::default(),
-                    },
+                    start: LaneStart::default(),
                     inbox: channel(ChannelConfig::builder().build()).1,
                 }))],
             },

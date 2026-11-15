@@ -3,8 +3,8 @@ use std::num::NonZeroU32;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_play::{
-    DeckMixerConfig, DeckPass, EqBandConfig, HostedDeck, Outbox, Player, Position, TrackReceipt,
-    mock,
+    DeckMixerConfig, DeckPass, EqBandConfig, HostedDeck, Outbox, Pitch, PitchStep, PlayError,
+    Player, Position, Semitones, TrackReceipt, mock,
 };
 use kithara_render::rt::StreamShape;
 use kithara_signal::{FrameCount, SessionFrame};
@@ -236,29 +236,14 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
     fixture_directory.finish().await;
 }
 
-#[kithara::test(tokio)]
-async fn keylock_set_on_a_playing_queue_reads_back_and_reaches_a_track_appended_after_it(
-    #[by_ref] worker_owner: &WorkerOwner,
-) {
-    let (mut queue, _, _, mut rig, dir) = selected(&worker_owner.0, FixtureSource::Synthetic).await;
-    let control = queue.control();
-    assert!(!control.keylock(), "the queue starts with keylock off");
-
-    drive_call(
-        &mut queue,
-        control.clone(),
-        |control| control.set_keylock(true),
-        |queue| {
-            state::tests::with_outbox(queue, &mut rig, |queue, pass, out| {
-                HostedDeck::drain(queue, pass, out);
-            });
-        },
-    )
-    .expect("keylock accepted");
-    assert!(control.keylock(), "the setting reads back once accepted");
-
+/// Appends `next` to `queue`, selects it and returns where its lane starts.
+fn append_and_select(
+    queue: &mut Queue<TestPools>,
+    rig: &mut mock::DeckRig<TestPools>,
+    dir: &crate::mock::QueueFixture,
+) -> kithara_render::LaneStart {
     let next = TrackId::allocate();
-    with_outbox(&mut queue, &mut rig, |queue, out| {
+    with_outbox(queue, rig, |queue, out| {
         Player::apply(
             queue,
             QueueCommand::Append {
@@ -278,11 +263,71 @@ async fn keylock_set_on_a_playing_queue_reads_back_and_reaches_a_track_appended_
         )
     })
     .expect("append and select the next track");
-    let request = requested_load(&mut rig, load_seq(&queue, next));
-    assert!(
-        request.start.keylock,
-        "the next track starts with keylock: {:?}",
-        request.start
+    requested_load(rig, load_seq(queue, next)).start
+}
+
+#[kithara::test(tokio)]
+async fn keylock_toggled_on_a_playing_queue_reads_back_and_reaches_a_track_appended_after_it(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, _, _, mut rig, dir) = selected(&worker_owner.0, FixtureSource::Synthetic).await;
+    let control = queue.control();
+    assert_eq!(
+        control.pitch(),
+        Some(Pitch::default()),
+        "the queue starts with keylock off"
+    );
+
+    drive_call(
+        &mut queue,
+        control.clone(),
+        |control| control.step_pitch(PitchStep::ToggleKeylock),
+        |queue| {
+            state::tests::with_outbox(queue, &mut rig, |queue, pass, out| {
+                HostedDeck::drain(queue, pass, out);
+            });
+        },
+    )
+    .expect("keylock accepted");
+    let held = Pitch::HELD;
+    assert_eq!(
+        control.pitch(),
+        Some(held),
+        "the step reads back once accepted"
+    );
+
+    let start = append_and_select(&mut queue, &mut rig, &dir);
+    assert_eq!(start.pitch, held, "the next track starts with keylock");
+    drop((queue, rig));
+    dir.finish().await;
+}
+
+/// Two steps in one pass both count: the deck reads back two semitones up
+/// and a track appended afterwards starts there.
+#[kithara::test(tokio)]
+async fn two_pitch_steps_in_one_pass_read_back_and_reach_a_track_appended_after_them(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, _, _, mut rig, dir) = selected(&worker_owner.0, FixtureSource::Synthetic).await;
+    let control = queue.control();
+
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        for _ in 0..2 {
+            Player::apply(queue, QueueCommand::StepPitch(PitchStep::Up), out)?;
+        }
+        Ok::<(), PlayError>(())
+    })
+    .expect("both steps accepted");
+    queue.publish();
+    let raised = Pitch::Vinyl {
+        shift: Semitones::checked(2).expect("fixture shift is in range"),
+    };
+    assert_eq!(control.pitch(), Some(raised), "both steps read back");
+
+    let start = append_and_select(&mut queue, &mut rig, &dir);
+    assert_eq!(
+        start.pitch, raised,
+        "the next track starts at the deck's pitch: {start:?}"
     );
     drop((queue, rig));
     dir.finish().await;

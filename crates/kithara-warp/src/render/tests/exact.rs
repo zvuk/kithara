@@ -8,7 +8,7 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{WarpRenderer, chunk, fixtures::LaneFeed, renderer, spec};
-use crate::WarpConfig;
+use crate::{Pitch, WarpConfig};
 
 #[kithara::test]
 #[kithara::hang_watchdog]
@@ -17,7 +17,7 @@ fn interrupted_keylock_crossfades_keep_the_current_curve_and_phase() {
         let mut renderer = renderer(
             &WarpConfig::builder()
                 .backend(StretchKind::Signalsmith)
-                .keylock(true)
+                .pitch(Pitch::HELD)
                 .speed(0.5)
                 .build(),
         );
@@ -26,10 +26,10 @@ fn interrupted_keylock_crossfades_keep_the_current_curve_and_phase() {
         while frame < 64 {
             hang_tick!();
             if frame == 7 {
-                renderer.set_keylock(false);
+                renderer.set_pitch(Pitch::default());
             }
             if frame == 11 {
-                renderer.set_keylock(true);
+                renderer.set_pitch(Pitch::HELD);
                 renderer
                     .set_speed(
                         SpeedCurve::Ramp {
@@ -128,7 +128,7 @@ fn a_failed_large_mapping_cannot_leak_scratch_into_a_smaller_quantum(#[case] bac
     let mut renderer = renderer(
         &WarpConfig::builder()
             .backend(backend)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .speed(0.5)
             .build(),
     );
@@ -190,7 +190,7 @@ fn a_large_drain_limit_is_only_an_upper_bound(#[case] backend: StretchKind) {
     let mut renderer = renderer(
         &WarpConfig::builder()
             .backend(backend)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .speed(0.5)
             .build(),
     );
@@ -339,7 +339,7 @@ fn primed_native_unity_keeps_the_physical_impulse_at_its_source_frame(
     let mut renderer = renderer(
         &WarpConfig::builder()
             .backend(backend)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .speed(1.0)
             .build(),
     );
@@ -407,7 +407,7 @@ fn an_unbounded_output_budget_stays_within_the_resident_shape(#[case] backend: S
     let mut renderer = renderer(
         &WarpConfig::builder()
             .backend(backend)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .speed(4.0)
             .build(),
     );
@@ -463,7 +463,7 @@ fn switching_to_keylock_retains_the_full_reprime_history(#[case] backend: Stretc
     for _ in 0..64 {
         mapped_render(&mut renderer, &mut source, 512);
     }
-    renderer.set_keylock(true);
+    renderer.set_pitch(Pitch::HELD);
     renderer
         .set_speed(SpeedCurve::Constant(0.05), 2)
         .expect("speed");
@@ -496,14 +496,14 @@ fn switching_to_keylock_retains_the_full_reprime_history(#[case] backend: Stretc
 fn keylock_replacement_is_source_aligned_and_quantum_independent() {
     let config = WarpConfig::builder()
         .backend(StretchKind::Signalsmith)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .speed(0.5)
         .build();
     let mut render = |budgets: &[usize]| {
         let mut renderer = renderer(&config);
         let mut source = 0;
         mapped_render(&mut renderer, &mut source, 31);
-        renderer.set_keylock(false);
+        renderer.set_pitch(Pitch::default());
         renderer
             .prepare_engine_latency(spec())
             .expect("replacement");
@@ -578,7 +578,7 @@ pub(super) fn assert_fades_from(output: &[[f32; 2]], tail: &[[f32; 2]]) {
 fn fractional_mapping_continues_through_speed_and_keylock_changes(#[case] backend: StretchKind) {
     let config = WarpConfig::builder()
         .backend(backend)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .speed(0.5)
         .build();
     let mut renderer = renderer(&config);
@@ -589,7 +589,7 @@ fn fractional_mapping_continues_through_speed_and_keylock_changes(#[case] backen
     renderer
         .set_speed(SpeedCurve::Constant(1.0), 1)
         .expect("speed");
-    renderer.set_keylock(false);
+    renderer.set_pitch(Pitch::default());
     let second = mapped_render(&mut renderer, &mut source, 5);
     assert_eq!(second.frames(), 5);
     assert_positions(&second, 0, |frame| 3.5 + frame_f64(frame));
@@ -627,7 +627,7 @@ fn curve_output_for(
     };
     let config = WarpConfig::builder()
         .backend(backend)
-        .keylock(backend != StretchKind::Glide)
+        .maybe_pitch((backend != StretchKind::Glide).then_some(Pitch::HELD))
         .speed(0.5)
         .build();
     let mut renderer = renderer(&config);
@@ -696,7 +696,7 @@ fn native_curves_are_exact_and_partition_independent(#[case] backend: StretchKin
 fn native_minimum_speed_keeps_exact_positions(#[case] backend: StretchKind) {
     let config = WarpConfig::builder()
         .backend(backend)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .speed(0.05)
         .build();
     let mut renderer = renderer(&config);
@@ -717,7 +717,7 @@ fn native_pitch_cascade_reports_its_full_latency(#[case] backend: StretchKind) {
     let mut single = renderer(
         &WarpConfig::builder()
             .backend(backend)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .speed(0.5)
             .build(),
     );
@@ -728,7 +728,7 @@ fn native_pitch_cascade_reports_its_full_latency(#[case] backend: StretchKind) {
     let mut slow = renderer(
         &WarpConfig::builder()
             .backend(backend)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .speed(0.05)
             .build(),
     );
@@ -743,7 +743,7 @@ fn native_pitch_cascade_reports_its_full_latency(#[case] backend: StretchKind) {
 fn replacing_a_curve_during_drain_applies_at_the_next_frame(#[case] backend: StretchKind) {
     let config = WarpConfig::builder()
         .backend(backend)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .speed(0.5)
         .build();
     let mut renderer = renderer(&config);
@@ -770,7 +770,7 @@ fn replacing_a_curve_during_drain_applies_at_the_next_frame(#[case] backend: Str
 fn repriming_reads_the_published_history_not_the_replacement_curve(#[case] backend: StretchKind) {
     let config = WarpConfig::builder()
         .backend(backend)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .speed(0.5)
         .build();
     let mut renderer = renderer(&config);
@@ -876,7 +876,7 @@ fn replacing_a_ramp_preserves_its_exact_current_speed_and_position() {
 fn eof_drain_obeys_each_output_budget_and_keeps_mapping(#[case] backend: StretchKind) {
     let config = WarpConfig::builder()
         .backend(backend)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .speed(0.5)
         .build();
     let mut renderer = renderer(&config);
@@ -950,7 +950,7 @@ fn keylock_retirement_crossfades_the_drained_tail_into_exact_mapped_output(
 ) {
     let config = WarpConfig::builder()
         .backend(backend)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .speed(0.5)
         .build();
     let exact = |frame: usize| {
@@ -969,7 +969,7 @@ fn keylock_retirement_crossfades_the_drained_tail_into_exact_mapped_output(
     renderer
         .set_speed(SpeedCurve::Constant(1.0), 2)
         .expect("speed");
-    renderer.set_keylock(false);
+    renderer.set_pitch(Pitch::default());
     let mut output = Vec::new();
     while output.len() < tail.len() + latency {
         let quantum = mapped_render(&mut renderer, &mut source, 128);
@@ -989,7 +989,7 @@ fn keylock_retirement_crossfades_the_drained_tail_into_exact_mapped_output(
 fn terminal_quantum_and_drain_do_not_map_padding_as_source(#[case] backend: StretchKind) {
     let config = WarpConfig::builder()
         .backend(backend)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .speed(0.5)
         .build();
     let mut renderer = renderer(&config);
@@ -1049,7 +1049,7 @@ fn native_moving_curve_eof_preserves_duration_mapping_and_drain_partitions(
     let render = |short, budget| {
         let config = WarpConfig::builder()
             .backend(backend)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .speed(1.125)
             .build();
         let mut renderer = renderer(&config);
