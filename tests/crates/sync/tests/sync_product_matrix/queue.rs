@@ -2092,6 +2092,39 @@ fn assert_entry_boundaries(o: &LinkObservation, voices: &[Voice]) {
     }
 }
 
+fn outgoing_fade_entries(o: &LinkObservation) -> Vec<&serde_json::Value> {
+    let end = o
+        .timeline
+        .iter()
+        .rposition(|event| event["event"] == "command" && event["details"]["Fade"]["dir"] == "In")
+        .unwrap_or(o.timeline.len());
+    o.timeline[..end]
+        .iter()
+        .rev()
+        .filter(|event| event["event"] == "entry")
+        .take(16)
+        .collect()
+}
+
+#[kithara::test]
+fn outgoing_fade_diagnostics_keep_recent_entries_before_the_last_incoming_fade() {
+    let mut o = LinkObservation::default();
+    let fade = serde_json::json!({"event": "command", "details": {"Fade": {"dir": "In"}}});
+    o.timeline.push(fade.clone());
+    for frame in 0..20 {
+        o.timeline
+            .push(serde_json::json!({"event": "entry", "frame": frame}));
+    }
+    assert!(outgoing_fade_entries(&o).is_empty());
+    o.timeline.push(fade);
+    o.timeline
+        .push(serde_json::json!({"event": "entry", "frame": 99}));
+    let entries = outgoing_fade_entries(&o);
+    assert_eq!(entries.len(), 16);
+    assert_eq!(entries[0]["frame"], 19);
+    assert_eq!(entries[15]["frame"], 4);
+}
+
 fn assert_transport(
     o: &LinkObservation,
     voices: &[Voice],
@@ -2141,7 +2174,15 @@ fn assert_transport(
         "nonblocking source playback has no underrun/fault: {:?}",
         capture.faults
     );
-    assert_eq!(capture.faded.len(), 4, "four real outgoing crossfades");
+    assert_eq!(
+        capture.faded.len(),
+        4,
+        "four real outgoing crossfades; fades={:?}, ended={:?}, entries={:?}, receipts={:?}",
+        capture.fades,
+        capture.ended,
+        outgoing_fade_entries(o),
+        o.placement_receipts,
+    );
     match kind {
         MusicCase::Natural => {
             assert_eq!(capture.ended.len(), 1, "last source reaches natural end");

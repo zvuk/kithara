@@ -195,10 +195,10 @@ async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u
         vec![0.5; expected.len()],
         "the oracle hears the turn, the program and the takeover"
     );
-    assert_eq!(bits(&take), bits(&expected));
     assert_eq!(tap.drops(), 0);
     underruns.checkpoint(harness.metrics(), true, "Filter final complete edges");
     assert_eq!(harness.metrics().underruns(), 0);
+    assert_eq!(bits(&take), bits(&expected));
     harness.close().await;
 }
 
