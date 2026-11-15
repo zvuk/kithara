@@ -276,7 +276,6 @@ pub(crate) async fn track_sourced(
     let src = ResourceSrc::parse(url).expect("fixture url parses");
     let config = AppResourceConfig::for_src(src)
         .downloader(app.downloader.clone())
-        .worker(app.worker.clone())
         .store(app.store.clone())
         .audio(app.audio.clone())
         .maybe_preload_chunks(app.preload_chunks)

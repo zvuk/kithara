@@ -249,7 +249,11 @@ async fn load_track_propagates_host_sample_rate() {
     let loaded = rig
         .load_fixture(
             &prep.worker,
-            ResourceLoad::new(prepared, Box::new(AudioObserverSlot::default().relay())),
+            ResourceLoad::new(
+                prepared,
+                prep.worker.clone(),
+                Box::new(AudioObserverSlot::default().relay()),
+            ),
             Duration::ZERO,
         )
         .await

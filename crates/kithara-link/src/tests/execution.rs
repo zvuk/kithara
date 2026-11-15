@@ -61,10 +61,9 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
-        .worker(worker.clone())
         .host_sample_rate(mock::SAMPLE_RATE)
         .build();
-    let (_, source) = mock::resource_tracks(&config).expect("local source");
+    let source = mock::resource_tracks(&config, &worker).expect("local source");
     let futures::future::Either::Left(source) = source else {
         panic!("WAV is a local source")
     };
@@ -94,7 +93,11 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     rig.with_outbox(|out| {
         deck.apply(
             TrackCommand::Load {
-                item: ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay())),
+                item: ResourceLoad::new(
+                    config,
+                    worker.clone(),
+                    Box::new(AudioObserverSlot::default().relay()),
+                ),
                 position: position(0),
             },
             out,
@@ -338,7 +341,6 @@ async fn native_linked(
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
-        .worker(worker.clone())
         .host_sample_rate(mock::SAMPLE_RATE)
         .build();
     let track: PlayerImpl = PlayerImpl::new(PlayerConfig {
@@ -358,7 +360,11 @@ async fn native_linked(
     let loading = native_marked(&mut rig, SegmentId::FIRST, |out| {
         deck.apply(
             TrackCommand::Load {
-                item: ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay())),
+                item: ResourceLoad::new(
+                    config,
+                    worker.clone(),
+                    Box::new(AudioObserverSlot::default().relay()),
+                ),
                 position: position(0),
             },
             out,

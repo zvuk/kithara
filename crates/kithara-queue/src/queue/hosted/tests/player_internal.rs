@@ -195,6 +195,7 @@ async fn a_selected_resource_adopts_the_session_wake_mode(#[by_ref] worker_owner
     let bus = prepared.bus().expect("prepared event bus").clone();
     let item = kithara_play::ResourceLoad::new(
         prepared,
+        prep.worker.clone(),
         Box::new(kithara_audio::AudioObserverSlot::default().relay()),
     );
     let (_control, inbox) = prep.worker.lane_channel();

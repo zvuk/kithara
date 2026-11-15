@@ -31,7 +31,7 @@ impl PlayerImpl {
         if out.dispatcher_available() == 0 {
             return Err(PlayError::Full("dispatcher"));
         }
-        let (lane, inbox) = item.lane_channel()?;
+        let (lane, inbox) = item.lane_channel();
         let geometry = item.lane_geometry()?;
         self.class = if self.seat.slot().is_some() {
             ServiceClass::Warm

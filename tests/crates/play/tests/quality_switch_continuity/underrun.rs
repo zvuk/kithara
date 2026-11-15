@@ -4,7 +4,6 @@ use cochlea_features::{Audio as ProbeAudio, SegmentOpts, count_silent_segments};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     platform::{time::SystemTime, tokio::join},
-    play::{PlayWorker, PlayWorkerConfig},
     queue::ItemEvent,
 };
 use kithara_integration_tests::{
@@ -306,13 +305,11 @@ async fn prepare_paced_player(
                 .expect("fixture resources"),
         )
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let downloader = TestServerHelper::new().await.modeled_downloader();
     let config =
         kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Url(master_url.clone()))
             .store(store)
             .downloader(downloader)
-            .worker(worker)
             .initial_abr_mode(AbrMode::manual(initial_variant))
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()

@@ -100,9 +100,9 @@ async fn a_deck_attaches_fades_and_retires_without_allocating() {
     let load: ResourceLoad = ResourceLoad::new(
         ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
             .store(AssetStore::builder(pools()).build())
-            .worker(worker.clone())
             .host_sample_rate(SAMPLE_RATE)
             .build(),
+        worker.clone(),
         Box::new(AudioObserverSlot::default().relay()),
     );
     let (_sender, lane_inbox) = worker.lane_channel();

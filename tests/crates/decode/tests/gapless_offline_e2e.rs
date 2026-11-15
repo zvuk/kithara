@@ -246,8 +246,8 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(
     );
 
     let probe_worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-    let probe = create_apple_fused_resource(&probe_worker, &apple_probe.1, temp_dir.path()).await;
-    let probe = kithara_integration_tests::mock::open_resource(&probe)
+    let probe = create_apple_fused_resource(&apple_probe.1, temp_dir.path()).await;
+    let probe = kithara_integration_tests::mock::open_resource(&probe, &probe_worker)
         .await
         .expect("open Apple fused probe");
     let probe = drain_resource_to_eof(probe).await;
@@ -309,8 +309,8 @@ async fn render_apple_fused_deficit_seam(
     )
     .await;
 
-    let first = create_apple_fused_resource(harness.worker(), first_source, cache_dir).await;
-    let second = create_apple_fused_resource(harness.worker(), second_source, cache_dir).await;
+    let first = create_apple_fused_resource(first_source, cache_dir).await;
+    let second = create_apple_fused_resource(second_source, cache_dir).await;
 
     let [first_id, _second_id] = load_tagged_queue(&harness, [first, second]).await;
 

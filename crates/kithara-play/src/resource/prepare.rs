@@ -127,7 +127,6 @@ where
             bus,
             cancel: Some(cancel),
             cancel_link,
-            worker: Some(self.worker.clone()),
             block_on_underrun: self.block_on_underrun,
             preload_chunks,
             audio_buffer_chunks,

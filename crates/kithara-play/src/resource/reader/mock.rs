@@ -4,7 +4,6 @@ use futures::future::Either;
 use kithara_audio::ResamplerBackend;
 use kithara_bufpool::HasPool;
 use kithara_command::Inbox;
-use kithara_decode::DecodeError;
 use kithara_events::EventBus;
 use kithara_platform::{maybe_send::BoxFuture, sync::Arc, time::Duration};
 use kithara_render::{LaneProtocol, LaneStart, LoadRefusal, OpenedPcm, TrackConfig};
@@ -25,13 +24,11 @@ type OpenedLane<L> = Result<(OpenedPcm, L, FrameCount), LoadRefusal>;
 
 pub fn resource_tracks<S>(
     config: &ResourceConfig<S>,
-) -> Result<(PlayWorker<S>, ResourceTrack<S>), LoadRefusal>
+    worker: &PlayWorker<S>,
+) -> Result<ResourceTrack<S>, LoadRefusal>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
-        detail: "ResourceConfig requires an explicit PlayWorker",
-    })?;
     let track = match SourceType::detect(&config.src)? {
         SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
             let audio = config.clone().build_file_config(None);
@@ -44,7 +41,7 @@ where
             Either::Right(config.build_track_config(audio))
         }
     };
-    Ok((worker, track))
+    Ok(track)
 }
 
 /// Opens an explicit source configuration through the real dispatcher and lane.
@@ -86,7 +83,7 @@ where
                 Ok((opened, ResourceLane::new(lane, cancel, None), latency))
             })
         }),
-        channel: Some(Box::new(move || channel_worker.lane_channel())),
+        channel: Box::new(move || channel_worker.lane_channel()),
         cancel: None,
         geometry,
     }

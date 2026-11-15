@@ -343,6 +343,7 @@ impl ManualHosts {
                             TrackCommand::Load {
                                 item: ResourceLoad::new(
                                     prepared,
+                                    deck.prep.worker.clone(),
                                     Box::new(AudioObserverSlot::default().relay()),
                                 ),
                                 position: Duration::ZERO,

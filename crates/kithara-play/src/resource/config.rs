@@ -18,7 +18,7 @@ use kithara_waveform::Waveform;
 use url::Url;
 
 use super::{ArtifactSource, ResourceSrc, resampler::PlaybackResamplerBackend};
-use crate::{EngineLoad, PlayWorker};
+use crate::EngineLoad;
 
 /// Unified configuration for opening an audio resource.
 ///
@@ -139,9 +139,6 @@ where
     /// default.
     #[config(skip = "transferred to the render lane's packet rings")]
     pub(crate) audio_buffer_chunks: Option<NonZeroUsize>,
-    /// Playback worker installed by player preparation before lane admission.
-    #[config(skip = "transferred to the playback worker")]
-    pub(crate) worker: Option<PlayWorker<S>>,
     /// Resident Warp resources and live temporal controls. Not a document
     /// key: a player-managed resource has this overwritten with the player's
     /// own `warp`, which is where a document's `player.warp:` section lands.
@@ -165,10 +162,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{
-        PlayWorkerConfig,
-        test_pools::{TestPools, pools},
-    };
+    use crate::test_pools::{TestPools, pools};
 
     fn downloader() -> Downloader {
         let config = kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
@@ -193,10 +187,6 @@ mod tests {
         Ok(ResourceConfig::for_src(ResourceSrc::parse(input)?)
             .store(store())
             .build())
-    }
-
-    fn worker() -> PlayWorker<TestPools> {
-        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
     #[kithara::test]
@@ -440,27 +430,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn config_worker_default_none() {
-        let config = test_config("https://example.com/song.mp3").unwrap();
-        assert!(config.worker.is_none());
-    }
-
-    #[kithara::test]
     fn config_stretch_defaults_to_unity() {
         let config = test_config("https://example.com/song.mp3").unwrap();
         assert!((config.warp.speed() - 1.0).abs() < f32::EPSILON);
-    }
-
-    #[kithara::test]
-    fn config_with_worker_sets_field() {
-        let worker = worker();
-        let config: ResourceConfig<TestPools> =
-            ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
-                .store(store())
-                .worker(worker.clone())
-                .build();
-        let configured = config.worker.as_ref().expect("worker must be configured");
-        assert!(std::ptr::eq(configured.pools(), worker.pools()));
     }
 
     #[kithara::test]

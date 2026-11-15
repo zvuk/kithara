@@ -85,7 +85,6 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
         AppResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("waveform url"))
             .downloader(server.downloader())
             .store(store.clone())
-            .worker(worker.clone())
             .build();
 
     // Player consumer of the same URL through the same shared store. Built

@@ -215,8 +215,12 @@ where
             .build();
     let prepared = prep.prepare(config, output)?;
     let bus = prepared.bus.clone().ok_or(PlayError::Closed)?;
-    let item = ResourceLoad::new(prepared, Box::new(AudioObserverSlot::default().relay()));
-    let (_control, inbox) = item.lane_channel()?;
+    let item = ResourceLoad::new(
+        prepared,
+        prep.worker.clone(),
+        Box::new(AudioObserverSlot::default().relay()),
+    );
+    let (_control, inbox) = item.lane_channel();
     assert_requested_render_off_bus(
         LoadRequest {
             item,
@@ -816,7 +820,7 @@ where
         position: Duration,
     ) -> Result<Loaded<OpenedTrack>, PlayError> {
         let _io = kithara_platform::flash::real_io();
-        let (lane_sender, lane) = item.lane_channel()?;
+        let (lane_sender, lane) = item.lane_channel();
         let loaded = self
             .load_request_fixture(
                 worker,

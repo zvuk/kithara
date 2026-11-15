@@ -76,8 +76,8 @@ where
     /// - [`TrackSource::Config`] is passed through untouched (DRM keys,
     ///   headers, format hints preserved).
     ///
-    /// Both paths finish with the deck's prepare, so the worker, the session
-    /// output and the bus labelled with the track are injected.
+    /// Both paths finish with the deck's preparation of session output and
+    /// a bus labelled with the track. The open takes the deck's worker separately.
     pub(crate) fn build_config(
         &self,
         id: TrackId,
@@ -119,7 +119,10 @@ where
         let runtime = self.runtime.as_ref().ok_or(QueueError::NoRuntime)?;
         self.read_cover(runtime, id, &config, &load);
         self.watch_for_slow_transfer(runtime, id, &config, &load);
-        Ok((ResourceLoad::new(config, observer), load))
+        Ok((
+            ResourceLoad::new(config, self.prep.worker.clone(), observer),
+            load,
+        ))
     }
 
     /// Read the track's cover beside its audio, over the load's transport and

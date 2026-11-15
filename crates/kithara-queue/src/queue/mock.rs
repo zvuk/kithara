@@ -261,7 +261,11 @@ async fn decoded_fixture(
     let prepared = prep
         .prepare(config, &mock::output(None).get())
         .expect("prepared fixture");
-    let item = ResourceLoad::new(prepared, Box::new(AudioObserverSlot::default().relay()));
+    let item = ResourceLoad::new(
+        prepared,
+        prep.worker.clone(),
+        Box::new(AudioObserverSlot::default().relay()),
+    );
     let mut opening = std::pin::pin!(rig.load_fixture(worker, item, Duration::ZERO));
     loop {
         hang_tick!();

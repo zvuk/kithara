@@ -123,14 +123,17 @@ fn load(worker: &PlayWorker<TestPools>, dir: &TestTempDir, name: &str) -> Batch<
     };
     let config = ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
         .store(store)
-        .worker(worker.clone())
         .warp(warp)
         .build();
     Batch {
         basis: Vec::new(),
         commands: vec![DispatcherCommand::Load(Box::new(LoadRequest {
             class: ServiceClass::Warm,
-            item: ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay())),
+            item: ResourceLoad::new(
+                config,
+                worker.clone(),
+                Box::new(AudioObserverSlot::default().relay()),
+            ),
             position: Duration::ZERO,
             start,
             inbox: worker.lane_channel().1,
@@ -315,7 +318,6 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
             .backend(StorageBackend::Memory)
             .build(),
     )
-    .worker(worker.clone())
     .host_sample_rate(rate)
     .events(bus)
     .decoder(
@@ -325,7 +327,11 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
             .build(),
     )
     .build();
-    let item = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
+    let item = ResourceLoad::new(
+        config,
+        worker.clone(),
+        Box::new(AudioObserverSlot::default().relay()),
+    );
     let (mut dispatcher, inbox) = channel::<Loads>(ChannelConfig::builder().build());
     let _driver = worker
         .start_dispatcher(inbox)
@@ -808,7 +814,6 @@ mod initial_hls {
         .store(kithara_integration_tests::disk_asset_store(path))
         .downloader(create_test_downloader())
         .initial_abr_mode(AbrMode::manual(0))
-        .worker(worker.clone())
         .host_sample_rate(rate)
         .events(bus)
         .decoder(
@@ -818,7 +823,11 @@ mod initial_hls {
                 .build(),
         )
         .build();
-        ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()))
+        ResourceLoad::new(
+            config,
+            worker.clone(),
+            Box::new(AudioObserverSlot::default().relay()),
+        )
     }
 
     pub(super) fn assert_held_events(events: &mut EventReceiver<AudioEvent>) {

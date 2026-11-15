@@ -108,6 +108,7 @@ pub(super) fn resource() -> ResourceLoad {
         )
         .store(AssetStore::builder(pools()).build())
         .build(),
+        PlayWorker::new(kithara_play::PlayWorkerConfig::builder(pools()).build()),
         Box::new(AudioObserverSlot::default().relay()),
     )
 }

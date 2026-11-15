@@ -216,15 +216,17 @@ fn unseated_track() -> Track {
 }
 
 pub(super) fn item() -> ResourceLoad {
+    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build());
     let src = ResourceSrc::parse("https://example.com/song.mp3").expect("valid test source");
     let config = ResourceConfig::<TestPools>::for_src(src)
         .store(AssetStore::builder(pools()).build())
-        .worker(crate::PlayWorker::new(
-            crate::PlayWorkerConfig::builder(pools()).build(),
-        ))
         .host_sample_rate(mock::SAMPLE_RATE)
         .build();
-    ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()))
+    ResourceLoad::new(
+        config,
+        worker,
+        Box::new(AudioObserverSlot::default().relay()),
+    )
 }
 
 pub(super) fn lane() -> (Sender<LaneProtocol>, Inbox<LaneProtocol>) {
@@ -513,7 +515,11 @@ async fn a_rejected_launch_leaves_the_member_silent() {
             &mock::output(None).get(),
         )
         .expect("prepared source");
-    let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
+    let load = ResourceLoad::new(
+        config,
+        worker.clone(),
+        Box::new(AudioObserverSlot::default().relay()),
+    );
     hang_tick!("rejected launch: opening audible fixture".to_owned());
     let opened = rig
         .deck
@@ -1506,20 +1512,16 @@ fn worker_handoff_geometry_derives_source_output_and_beat_together() {
 }
 
 #[kithara::test]
-#[case::absent_owner(0)]
 #[case::closed_dispatcher(1)]
 #[case::unready_geometry(2)]
 fn a_staged_preparation_needs_an_owner_and_a_stageable_load(#[case] refusal: u8) {
     let mut rig = rig();
     let mut track = track(A);
+    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build());
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
         ResourceSrc::parse("https://example.com/song.mp3").expect("original source"),
     )
     .store(AssetStore::builder(pools()).build())
-    .maybe_worker(
-        (refusal != 0)
-            .then(|| crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build())),
-    )
     .host_sample_rate(mock::SAMPLE_RATE)
     .audio_buffer_chunks(if refusal == 2 {
         std::num::NonZeroUsize::MAX
@@ -1527,7 +1529,11 @@ fn a_staged_preparation_needs_an_owner_and_a_stageable_load(#[case] refusal: u8)
         std::num::NonZeroUsize::new(3).expect("ring depth")
     })
     .build();
-    let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
+    let load = ResourceLoad::new(
+        config,
+        worker,
+        Box::new(AudioObserverSlot::default().relay()),
+    );
     if refusal == 1 {
         let (_, replacement) = channel(ChannelConfig::builder().build());
         drop(std::mem::replace(&mut rig.deck.opens, replacement));
@@ -1673,18 +1679,20 @@ async fn play_after_an_ended_seek_preserves_its_segment_and_receipt(#[case] offs
 
 #[kithara::test]
 fn playback_shared_seek_epoch_increments() {
+    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build());
     let mut rig = rig();
     let mut track = track(A);
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
         ResourceSrc::parse("https://example.com/song.mp3").expect("original source"),
     )
     .store(AssetStore::builder(pools()).build())
-    .worker(crate::PlayWorker::new(
-        crate::PlayWorkerConfig::builder(pools()).build(),
-    ))
     .host_sample_rate(mock::SAMPLE_RATE)
     .build();
-    let item = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
+    let item = ResourceLoad::new(
+        config,
+        worker,
+        Box::new(AudioObserverSlot::default().relay()),
+    );
     rig.with_outbox(|out| {
         track.apply(
             TrackCommand::Load {
@@ -1960,10 +1968,9 @@ pub(super) async fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTra
     let worker = rig.worker().clone();
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
-        .worker(worker.clone())
         .host_sample_rate(mock::SAMPLE_RATE)
         .build();
-    let (_, config) = mock::resource_tracks(&config).expect("local source configuration");
+    let config = mock::resource_tracks(&config, &worker).expect("local source configuration");
     let futures::future::Either::Left(config) = config else {
         panic!("WAV is a file source")
     };
@@ -3150,13 +3157,12 @@ fn repeat_wav_load(
     let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build());
     let config = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
-        .worker(worker.clone())
         .host_sample_rate(mock::SAMPLE_RATE)
         // WHY: The mixer rig renders offline, so a read waits for the worker's
         // PCM instead of underrunning; the oracle counts blocks, not wall time.
         .block_on_underrun(true)
         .build();
-    let (_, config) = mock::resource_tracks(&config).expect("file config");
+    let config = mock::resource_tracks(&config, &worker).expect("file config");
     let futures::future::Either::Left(config) = config else {
         panic!("WAV source")
     };

@@ -24,7 +24,7 @@ track. A player plays once it is inserted into a `kithara-host` Host.
 ```rust
 use kithara_assets::AssetStore;
 use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
-use kithara_play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc};
+use kithara_play::{ResourceConfig, ResourceSrc};
 
 pool_schema! {
     pub AppPools {
@@ -38,13 +38,11 @@ let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
     .bytes(config())
     .samples(config())
     .build()?;
-let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
 
 // `.m3u8` opens as HLS, anything else as a progressive file.
 let track: ResourceConfig<AppPools> =
     ResourceConfig::for_src(ResourceSrc::parse("https://example.com/track.m3u8")?)
         .store(AssetStore::builder(pools).build())
-        .worker(worker)
         .build();
 ```
 
