@@ -145,7 +145,7 @@ fn one_pole<const CHANNELS: usize>(c: &mut Criterion) {
         for (name, level) in [("native", Level::new()), ("fallback", Level::fallback())] {
             let mut actual = template.clone();
             let mut state = [0.0; CHANNELS];
-            let mut slices = actual.each_mut().map(|p| Some(p.as_mut_slice()));
+            let mut slices = actual.each_mut().map(Vec::as_mut_slice);
             dispatch!(level, s => backend::one_pole::low_pass_kernel(s, 0.2, &mut state, &mut slices, frames));
             assert_eq!(
                 actual
@@ -165,7 +165,7 @@ fn one_pole<const CHANNELS: usize>(c: &mut Criterion) {
                 b.iter_batched_ref(
                     || template.clone(),
                     |planes| {
-                        let mut slices = black_box(&mut *planes).each_mut().map(|p| Some(p.as_mut_slice()));
+                        let mut slices = black_box(&mut *planes).each_mut().map(Vec::as_mut_slice);
                         dispatch!(level, s => backend::one_pole::low_pass_kernel(s, 0.2, &mut state, &mut slices, frames));
                         black_box((planes, &state));
                     },

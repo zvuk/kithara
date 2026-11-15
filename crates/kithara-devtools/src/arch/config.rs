@@ -632,6 +632,9 @@ pub(crate) struct SmoothingPrimitiveSitesThreshold {
     pub(crate) exempt_crates: Vec<String>,
     #[serde(default)]
     pub(crate) patterns: Vec<String>,
+    /// Names denied only when they implement scalar parameter recurrence.
+    #[serde(default)]
+    pub(crate) recurrence_patterns: Vec<String>,
 }
 
 /// Files allowed to name firewheel's DSP helpers directly, and the helper
@@ -1077,6 +1080,12 @@ mod tests {
         assert_eq!(thresholds.field_passthrough.max_depth, 8);
         assert!(thresholds.cancel_root_sites.patterns.is_empty());
         assert!(thresholds.smoothing_primitive_sites.patterns.is_empty());
+        assert!(
+            thresholds
+                .smoothing_primitive_sites
+                .recurrence_patterns
+                .is_empty()
+        );
         assert!(thresholds.firewheel_dsp_facade.modules.is_empty());
         assert!(thresholds.tokio_dep_quarantine.quarantined.is_empty());
         assert!(thresholds.platform_layer_hygiene.root.is_empty());
@@ -1092,6 +1101,7 @@ patterns = ["Shutdown::forever"]
 
 [smoothing_primitive_sites]
 patterns = ["MySmoother::new"]
+recurrence_patterns = ["CustomRecurrence"]
 
 [firewheel_dsp_facade]
 modules = ["dsp::mix"]
@@ -1111,6 +1121,10 @@ arc_owner_files = ["packages/platform/src/owner.rs"]
         assert_eq!(
             thresholds.smoothing_primitive_sites.patterns,
             ["MySmoother::new"]
+        );
+        assert_eq!(
+            thresholds.smoothing_primitive_sites.recurrence_patterns,
+            ["CustomRecurrence"]
         );
         assert_eq!(thresholds.firewheel_dsp_facade.modules, ["dsp::mix"]);
         assert_eq!(

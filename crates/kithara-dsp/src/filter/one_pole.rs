@@ -46,19 +46,17 @@ impl<const CHANNELS: usize> OnePoleLowPass<CHANNELS> {
         planes: &mut [P],
         range: Range<usize>,
     ) -> Result<(), FilterError> {
-        if planes.len() != CHANNELS
-            || planes
-                .iter()
-                .any(|plane| plane.get(range.clone()).is_none())
+        let planes: &mut [P; CHANNELS] = planes.try_into().map_err(|_| FilterError::Shape)?;
+        if planes
+            .iter()
+            .any(|plane| plane.get(range.clone()).is_none())
         {
             return Err(FilterError::Shape);
         }
-        let mut planes = planes.iter_mut();
-        let mut ranges: [Option<&mut [f32]>; CHANNELS] =
-            std::array::from_fn(|_| planes.next().and_then(|plane| plane.get_mut(range.clone())));
-        if ranges.iter().any(Option::is_none) {
-            return Err(FilterError::Shape);
-        }
+        let mut ranges = planes.each_mut().map(|plane| {
+            let tail = plane.split_at_mut(range.start).1;
+            tail.split_at_mut(range.len()).0
+        });
         backend::one_pole_low_pass(self.coefficient, &mut self.state, &mut ranges, range.len());
         Ok(())
     }

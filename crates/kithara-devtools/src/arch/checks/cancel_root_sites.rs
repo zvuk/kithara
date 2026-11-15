@@ -166,7 +166,7 @@ fn collect_test_ranges(items: &[Item], out: &mut Vec<(usize, usize)>) {
     }
 }
 
-fn attrs_indicate_test(attrs: &[Attribute]) -> bool {
+pub(super) fn attrs_indicate_test(attrs: &[Attribute]) -> bool {
     for attr in attrs {
         if attr.path().is_ident("cfg") {
             let mut found = false;
@@ -346,6 +346,141 @@ mod tests {
                 assert!(findings[0].key.starts_with(expected));
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn smoothing_distinguishes_scalar_targets_from_audio_buffers() -> Result<()> {
+        let workspace = tempdir()?;
+        fs::create_dir_all(workspace.path().join("src"))?;
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname='kithara-dsp'\nversion='0.1.0'\nedition='2024'\n",
+        )?;
+        fs::write(workspace.path().join("src/lib.rs"), "")?;
+        let metadata = MetadataCommand::new()
+            .manifest_path(workspace.path().join("Cargo.toml"))
+            .no_deps()
+            .exec()?;
+        let mut config = ArchConfig::default();
+        config.thresholds.smoothing_primitive_sites.patterns =
+            ["SmoothingFilter", "smoothing_coeff"]
+                .map(String::from)
+                .to_vec();
+        config
+            .thresholds
+            .smoothing_primitive_sites
+            .recurrence_patterns = ["one_pole", "OnePole", "ConfiguredRecurrence"]
+            .map(String::from)
+            .to_vec();
+        let mut failures = Vec::new();
+        for (name, source, violation) in [
+            (
+                "control",
+                "fn one_pole(target: f32, state: &mut f32) -> f32 { *state += 0.1 * (target - *state); *state }",
+                true,
+            ),
+            (
+                "control_type",
+                "struct OnePole { current: f32 } impl OnePole { fn next(&mut self, target: f32) -> f32 { self.current += 0.1 * (target - self.current); self.current } }",
+                true,
+            ),
+            (
+                "pure_control",
+                "fn one_pole(current: f32, target: f32, gain: f32) -> f32 { current + gain * (target - current) }",
+                true,
+            ),
+            (
+                "scalar_step",
+                "fn one_pole(x: f32, state: f32, a: f32) -> f32 { a*x + (1.0-a)*state }",
+                true,
+            ),
+            (
+                "configured_control",
+                "fn ConfiguredRecurrence(target: f32, state: &mut f32) { *state += 0.1 * (target - *state); }",
+                true,
+            ),
+            (
+                "configured_audio",
+                "fn ConfiguredRecurrence(samples: &mut [f32], state: &mut f32) { for sample in samples { *state = 0.5 * *state + 0.5 * *sample; *sample = *state; } }",
+                false,
+            ),
+            (
+                "control_bank",
+                "fn one_pole(target: f32, states: &mut [f32]) { for state in states { *state += 0.1 * (target - *state); } }",
+                true,
+            ),
+            (
+                "control_decay",
+                "fn one_pole(state: &mut f32, coefficient: f32) { *state *= coefficient; }",
+                true,
+            ),
+            (
+                "mixed",
+                "fn one_pole(target: f32, state: &mut f32, samples: &mut [f32]) -> f32 { *state += 0.1 * (target - *state); *state }",
+                true,
+            ),
+            (
+                "coefficient_design",
+                "fn one_pole_coefficient(damping: f32) -> f32 { damping * 0.4 }",
+                false,
+            ),
+            (
+                "backend/damping",
+                "fn one_pole(samples: &mut [f32], state: &mut f32) { for sample in samples { *state = 0.5 * *state + 0.5 * *sample; *sample = *state; } }",
+                false,
+            ),
+            (
+                "renamed",
+                "fn one_pole(samples: &mut [f32], state: &mut f32) { for sample in samples { *state = 0.5 * *state + 0.5 * *sample; *sample = *state; } }",
+                false,
+            ),
+            (
+                "audio_cursor",
+                "fn one_pole(samples: &mut [f32], state: &mut f32) { let mut frames = 0; for sample in samples { *state = 0.5 * *state + 0.5 * *sample; *sample = *state; frames += 1; } }",
+                false,
+            ),
+            (
+                "filter",
+                "pub struct OnePole<const N: usize> { state: [f32; N] } impl<const N: usize> OnePole<N> { pub fn process<P: std::ops::DerefMut<Target = [f32]>>(&mut self, planes: &mut [P]) { backend::one_pole(&mut self.state, planes); } }",
+                false,
+            ),
+            (
+                "namespace",
+                "mod one_pole; pub use one_pole::OnePole;",
+                false,
+            ),
+            (
+                "known_type",
+                "fn build() { SmoothingFilter::new(0.5); }",
+                true,
+            ),
+            ("known_import", "use filter::SmoothingFilter;", true),
+            (
+                "known_coefficient",
+                "fn smoothing_coeff(seconds: f32) -> f32 { seconds.exp() }",
+                true,
+            ),
+            (
+                "known_in_audio",
+                "fn process(samples: &mut [f32]) { let smoothing_coeff = 0.5; samples.fill(smoothing_coeff); }",
+                true,
+            ),
+        ] {
+            let relative = PathBuf::from(format!("src/{name}.rs"));
+            let file = workspace.path().join(&relative);
+            fs::create_dir_all(file.parent().expect("fixture parent"))?;
+            fs::write(&file, source)?;
+            let scope = Scope::new(Vec::new(), vec![relative]);
+            let context = Context::new(&config, &metadata, workspace.path(), &scope);
+            let findings = SmoothingPrimitiveSites.run(&context)?;
+            if findings.is_empty() == violation {
+                failures.push(format!(
+                    "{name}: expected violation={violation}, got {findings:?}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
         Ok(())
     }
 

@@ -70,7 +70,10 @@ fn low_pass_matches_scalar_state_and_partition_reset_bits() {
     verify::<1>();
     verify::<2>();
     verify::<3>();
+    verify::<4>();
+    verify::<5>();
     verify::<8>();
+    verify::<9>();
     let mut filter = OnePoleLowPass::<1>::new(0.5).unwrap();
     let mut impulse = vec![1.0_f32, 0.0, 0.0, 0.0, 0.0];
     filter.process(&mut [&mut impulse[..]], 0..5).unwrap();
