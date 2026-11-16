@@ -7,9 +7,8 @@ use kithara::{
     host::{DeckId, HostOwned},
     link::LinkedHostCommand,
     platform::CancelToken,
-    play::{DeckMixerConfig, PlayError, ResourcePrep, TrackSettings},
+    play::{DeckMixerConfig, Pitch, PitchStep, PlayError, ResourcePrep, TrackSettings},
     queue::{QueueConfig, QueueError, Transition},
-    warp::WarpCapabilities,
 };
 use kithara_config::Configure;
 use tracing::{debug, error};
@@ -131,7 +130,11 @@ impl DeckRecord {
             .store(config.store.clone())
             .cancel(cancel.clone())
             .mixer(DeckMixerConfig::builder().eq_bands(config.eq_bands).build())
-            .track(TrackSettings::builder().keylock(true).build())
+            .track(
+                TrackSettings::builder()
+                    .pitch(config.warp.pitch_control(Pitch::HELD).unwrap_or_default())
+                    .build(),
+            )
             .build();
 
         queue_config.apply(config.queue.clone()).map_err(|error| {
@@ -179,11 +182,6 @@ impl DeckRecord {
     pub(crate) fn snapshot(&self) -> DeckSnapshot {
         let synced = self.shows_sync();
         let queue = self.queue();
-        let keylock = queue.keylock();
-        let holds_pitch = queue
-            .backend()
-            .capabilities()
-            .contains(WarpCapabilities::KEYLOCK);
         self.controller.read(|state| {
             let tempo = if self.synced && !synced {
                 TempoPercent::at_speed(state.speed)
@@ -197,8 +195,7 @@ impl DeckRecord {
                 .eq_bands(self.eq_bands.clone())
                 .tempo(tempo)
                 .synced(synced)
-                .keylock(keylock)
-                .holds_pitch(holds_pitch)
+                .maybe_pitch(queue.pitch())
                 .state(state)
                 .build()
         })
@@ -247,11 +244,9 @@ impl DeckRecord {
         }
     }
 
-    fn toggle_keylock(&self) {
-        let queue = self.queue();
-        let on = !queue.keylock();
-        if let Err(error) = queue.set_keylock(on) {
-            error!(deck = %self.id(), on, %error, "keylock refused");
+    fn step_pitch(&self, step: PitchStep) {
+        if let Err(error) = self.queue().step_pitch(step) {
+            error!(deck = %self.id(), ?step, %error, "pitch step refused");
         }
     }
 
@@ -446,7 +441,7 @@ impl DeckSet {
             DeckCmd::SetTempo(tempo) => record.set_tempo(tempo),
             DeckCmd::SetQuality(variant) => record.set_quality(variant),
             DeckCmd::ToggleSync => Self::toggle_sync(&self.host, record),
-            DeckCmd::ToggleKeylock => record.toggle_keylock(),
+            DeckCmd::Pitch(step) => record.step_pitch(step),
         }
     }
 

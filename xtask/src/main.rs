@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use kithara_devtools::{CoreCommand, Ctx, stress::StressCommand};
+use kithara_devtools::{CoreCommand, Ctx, lint::LintCommand, stress::StressCommand};
 
 mod agent_hook;
 mod android;
@@ -11,6 +11,7 @@ mod config;
 mod job;
 #[cfg(unix)]
 mod measure_child;
+mod miri;
 mod mutants;
 mod parity;
 mod publish;
@@ -69,6 +70,8 @@ enum Command {
     Ci(CiArgs),
     /// Verify test utilities outside workspace feature unification.
     TestUtils,
+    /// Run or validate the declared Miri selection.
+    Miri(miri::MiriArgs),
     /// Measure one native child without changing its execution environment.
     #[cfg(unix)]
     MeasureChild(measure_child::MeasureChildArgs),
@@ -134,12 +137,19 @@ fn work() -> anyhow::Result<()> {
     // leaves the shared target directory alone while work runs in it.
     let _target = ci::hold_target(&ctx.root, &|name| std::env::var_os(name))?;
 
+    if let Command::Core(CoreCommand::Lint(args)) = &cli.command
+        && (args.command.is_none() || matches!(args.command, Some(LintCommand::Arch(_))))
+    {
+        miri::check(&ctx)?;
+    }
+
     match cli.command {
         Command::Android { command } => android::run(command, &ctx),
         Command::Apple { command } => apple::run(command, &ctx),
         Command::Wasm { command } => wasm::run(command, &ctx),
         Command::Ci(ref args) => ci::run(args, &ctx),
         Command::TestUtils => test_utils::run(&ctx),
+        Command::Miri(ref args) => miri::run(args, &ctx),
         #[cfg(unix)]
         Command::MeasureChild(ref args) => measure_child::run(args),
         Command::Publish(ref args) => publish::run(args, &ctx),

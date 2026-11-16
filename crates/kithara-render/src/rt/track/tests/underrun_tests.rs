@@ -8,7 +8,6 @@ use kithara_test_utils::{
     test::{usdt, wall_sleep},
     wait_until_blocking,
 };
-use kithara_warp::RenderContext;
 use ringbuf::{
     HeapRb,
     traits::{Consumer, Split},
@@ -46,14 +45,13 @@ fn offline_preparation_waits_for_the_lane_instead_of_underrunning() {
         .build(Box::new(resource));
     track.start(Fade::Declick);
     let start = SessionFrame::new(15_408);
-    let output = OutputContext::new(
+    let context = OutputContext::new(
         start..SessionFrame::new(15_410),
         rate,
         SessionEpoch::new(1),
         None,
     )
     .expect("output range");
-    let context = RenderContext::new(output, None).expect("render context");
     let trace = usdt::scope();
     let writer = thread::spawn_named("late-lane", move || {
         wait_until_blocking(
@@ -139,14 +137,13 @@ async fn underrun_edges_emit_once_per_starvation_window() {
         .build(Box::new(resource));
     track.start(Fade::Declick);
     let start = SessionFrame::new(15_408);
-    let output = OutputContext::new(
+    let context = OutputContext::new(
         start..SessionFrame::new(15_410),
         rate,
         SessionEpoch::new(1),
         None,
     )
     .expect("output range");
-    let context = RenderContext::new(output, None).expect("render context");
     let (mut events, mut receiver) = HeapRb::<DeckEvent>::new(8).split();
     let metrics = RtMetrics::default();
     let mut left = [0.0; 2];

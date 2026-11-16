@@ -43,7 +43,7 @@ pub fn interpolate_frame(
 /// [`InterpError::InvalidShape`] if nonzero channels lack output scratch,
 /// offsets and weights are empty or unequal, or any frame extends outside
 /// `samples` (including offset overflow). Refusal leaves all output untouched.
-#[inline]
+#[inline(never)]
 pub fn weighted_frames(
     samples: &[f32],
     offsets: &[usize],
@@ -75,4 +75,64 @@ pub fn weighted_frames(
         *total = sum;
     }
     Ok(())
+}
+
+/// Writes the weighted sums of `weights.len()` consecutive frames, `stride`
+/// samples apart and starting at `samples[0]`, into `output[..channels]`, with
+/// the order and refusal contract of [`weighted_frames`] for offsets
+/// `0, stride, 2 * stride, ...`.
+///
+/// # Errors
+/// [`InterpError::InvalidShape`] if nonzero channels lack output scratch,
+/// `weights` is empty, `channels` exceeds `stride`, or the frames extend
+/// outside `samples`.
+#[inline(never)]
+pub fn weighted_run(
+    samples: &[f32],
+    weights: &[f64],
+    stride: usize,
+    channels: usize,
+    output: &mut [f64],
+) -> Result<(), InterpError> {
+    if channels == 0 {
+        return Ok(());
+    }
+    let output = output
+        .get_mut(..channels)
+        .ok_or(InterpError::InvalidShape)?;
+    if channels > stride || weights.is_empty() {
+        return Err(InterpError::InvalidShape);
+    }
+    let len = weights
+        .len()
+        .checked_sub(1)
+        .and_then(|taps| taps.checked_mul(stride))
+        .and_then(|start| start.checked_add(channels))
+        .ok_or(InterpError::InvalidShape)?;
+    let frames = samples.get(..len).ok_or(InterpError::InvalidShape)?;
+    match (stride, channels) {
+        (1, 1) => weighted_run_sums::<1>(frames, weights, output),
+        (2, 2) => weighted_run_sums::<2>(frames, weights, output),
+        (4, 4) => weighted_run_sums::<4>(frames, weights, output),
+        _ => {
+            for (channel, total) in output.iter_mut().enumerate() {
+                let mut sum = 0.0;
+                for (sample, &weight) in frames.iter().skip(channel).step_by(stride).zip(weights) {
+                    sum += f64::from(*sample) * weight;
+                }
+                *total = sum;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn weighted_run_sums<const CHANNELS: usize>(frames: &[f32], weights: &[f64], output: &mut [f64]) {
+    let mut sums = [0.0_f64; CHANNELS];
+    for (frame, &weight) in frames.as_chunks::<CHANNELS>().0.iter().zip(weights) {
+        for (sum, &sample) in sums.iter_mut().zip(frame) {
+            *sum += f64::from(sample) * weight;
+        }
+    }
+    output.copy_from_slice(&sums);
 }

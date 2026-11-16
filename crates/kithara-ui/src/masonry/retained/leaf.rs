@@ -26,8 +26,8 @@ use crate::{
         solve::{Length, Size},
     },
     interact::{
-        CursorShape, Hit, Input, MOUSE, Outcome, PointerInput, PointerOwnership, PointerPhase,
-        masonry::{cursor_icon, pointer_button},
+        CursorShape, Hit, Input, Outcome, PointerInput, PointerOwnership, PointerPhase,
+        masonry::{cursor_icon, pointer_button, portable_pointer_id},
     },
     masonry::{external::ExternalImageDeclaration, shader::ShaderDeclaration},
     module::TextAlign,
@@ -238,19 +238,16 @@ impl Leaf {
         }
     }
 
-    /// `transform` is every enclosing object's pose, folded into this leaf's
-    /// own box. A shader paints its own pass into the scene and is the one leaf
-    /// an object cannot move, because nothing it draws goes through the list.
-    pub(crate) fn paint(&mut self, bounds: Rect, transform: Transform, scene: &mut Scene) {
+    /// Draws in the leaf's own box. Every enclosing object's pose is the
+    /// node's Masonry transform, which moves this picture and the region that
+    /// answers the pointer as one.
+    pub(crate) fn paint(&mut self, bounds: Rect, scene: &mut Scene) {
         if let Self::Control(control) = self {
-            replay(
-                &control.draw_list(bounds, transform),
-                &mut VelloBackend::new(scene),
-            );
+            replay(&control.draw_list(bounds), &mut VelloBackend::new(scene));
             return;
         }
         let mut list = DrawListBuilder::default();
-        list.transformed(transform, |list| match self {
+        match self {
             Self::Empty | Self::Control(_) | Self::Vis(_) => {}
             Self::Shader(shader) => shader.paint(bounds, scene),
             Self::Text {
@@ -279,9 +276,9 @@ impl Leaf {
             Self::Custom {
                 widget, skin, text, ..
             } => {
-                widget.paint(list, &mut TextMeasurer::new(text), bounds, skin);
+                widget.paint(&mut list, &mut TextMeasurer::new(text), bounds, skin);
             }
-        });
+        }
         let list = list.finish();
         if let Self::Custom {
             widget, pictures, ..
@@ -465,7 +462,11 @@ where
             y: point.y.as_(),
         });
         Some(Input::Pointer(PointerInput::new(
-            MOUSE, button, phase, at, clicks,
+            portable_pointer_id(event),
+            button,
+            phase,
+            at,
+            clicks,
         )))
     }
 

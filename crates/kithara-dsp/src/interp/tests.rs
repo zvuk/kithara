@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use kithara_test_utils::kithara;
 
-use super::{InterpError, Interpolation, RateRamp, interpolate};
+use super::{InterpError, Interpolation, RateRamp, interpolate, sinc_hann_weights};
 
 const METHODS: [Interpolation; 4] = [
     Interpolation::Linear,
@@ -153,4 +153,38 @@ fn positions_stop_before_the_end() {
     );
     assert_eq!(hold.offset(4).to_bits(), 5.0_f64.to_bits());
     assert_eq!(hold.positions(f64::NAN, 6.0, &mut output), 0);
+}
+
+/// The Hann-windowed sinc evaluated directly, one tap at a time.
+///
+/// `window_radius` is the positive distance from the window's center to its zero.
+/// Callers supply finite distances inside that radius and a cutoff in `(0, 1]`.
+fn sinc_hann_weight(distance: f64, cutoff: f64, window_radius: f64) -> f64 {
+    let angle = std::f64::consts::PI * distance * cutoff;
+    let sinc = if angle == 0.0 {
+        cutoff
+    } else {
+        angle.sin() / (std::f64::consts::PI * distance)
+    };
+    let window = (1.0 + (std::f64::consts::PI * distance / window_radius).cos()) * 0.5;
+    sinc * window
+}
+
+#[kithara::test]
+#[case::whole_tap(0.0, 1.0)]
+#[case::fractional_unity_cutoff(0.375, 1.0)]
+#[case::downsampling(0.5, 1.0 / 1.088_435)]
+#[case::steep_downsampling(0.999, 0.25)]
+fn rotated_taps_match_the_scalar_weight(#[case] fraction: f64, #[case] cutoff: f64) {
+    const RADIUS: i32 = 16;
+    let width = f64::from(RADIUS + 1);
+    let mut weights = [0.0; 2 * RADIUS as usize + 1];
+    sinc_hann_weights(-f64::from(RADIUS) - fraction, cutoff, width, &mut weights);
+    for (tap, weight) in (-RADIUS..=RADIUS).zip(weights) {
+        let expected = sinc_hann_weight(f64::from(tap) - fraction, cutoff, width);
+        assert!(
+            (weight - expected).abs() <= 1e-12,
+            "tap {tap}: {weight} vs {expected}"
+        );
+    }
 }

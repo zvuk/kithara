@@ -39,6 +39,14 @@ compiler producing a normalized UI tree for renderers.
   the existing app, while the optional `masonry` feature mounts the same compiled document and
   neutral solver into retained Masonry widgets with a public custom-content seam, typed actions,
   portable pointer capture, and native popover/window layers.
+- Content an application installs with `MasonryHost::with_custom` hears every pointer under its
+  own id, button and click count, and is hit in the local space it was painted in under any
+  object pose with an inverse; a pose without one is refused, and a gesture it held is
+  cancelled. It paints only when told: `MasonryRoot::invalidate(path)` schedules one redraw
+  for state the application keeps, `CustomWidget::repaint` keeps frames coming only while it
+  asks, and a window drives `MasonryRoot::needs_frame` and `complete_frame` the way the window
+  runner does. Masonry holds one pointer capture at a time, so a second pointer's release ends
+  the first one's capture too; the widget tells its pointers apart by id.
 
 ## Integration
 

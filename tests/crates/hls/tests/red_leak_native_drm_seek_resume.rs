@@ -7,7 +7,7 @@ use kithara::{
     audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
     download::{Downloader, DownloaderConfig},
     hls::{Hls, HlsConfig},
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{CancelToken, time, time::Duration},
     play::{PlayWorker, PlayWorkerConfig},
     stream::Stream,
@@ -189,9 +189,8 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
     );
 
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             cancel.clone(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

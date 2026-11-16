@@ -40,7 +40,7 @@ pub(crate) async fn run(
     engine.is_shut_down()
 }
 
-#[cfg(all(test, not(feature = "broadcast")))]
+#[cfg(test)]
 mod tests {
     use std::convert::Infallible;
 

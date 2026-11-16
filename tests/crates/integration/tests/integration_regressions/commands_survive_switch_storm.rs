@@ -106,9 +106,8 @@ async fn commands_still_work_after_a_switch_storm(tone_mp3: &'static [u8], temp_
         .collect();
     let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(kithara_integration_tests::TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

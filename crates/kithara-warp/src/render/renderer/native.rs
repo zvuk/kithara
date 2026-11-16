@@ -56,7 +56,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         capabilities: ElasticCapabilities,
         keylock: bool,
     ) -> Result<Option<(f64, f64)>, ElasticError> {
-        if !keylock || self.plan.is_some() {
+        if !keylock {
             return Ok(None);
         }
         let (minimum, maximum) = trajectory.speed_bounds()?;
@@ -309,7 +309,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     }
 
     fn check_native_origin(&self, span: SourceSpan) -> Result<(), ElasticError> {
-        let expected = self.mapped_position(span.start(), self.spec.sample_rate, 0)?;
+        let expected = self
+            .trajectory
+            .at_offset(span.start(), self.spec.sample_rate, 0)?;
         let actual = span
             .source_ratio_at(0)
             .ok_or(ElasticError::SampleCountOverflow)?;
@@ -407,7 +409,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .process(request, source, output)?;
         projection.feed = Some(source_range.end);
         projection.audible = Some(audible);
-        projection.cached_span = cached_span;
+        projection.cached_span = Some(cached_span);
         projection.offset = 0;
         Ok(())
     }
@@ -419,7 +421,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         speed: f64,
     ) -> Result<(), ElasticError> {
         self.check_native_origin(span)?;
-        self.apply_pitch(1.0)?;
+        self.apply_pitch(self.target_pitch(speed))?;
         if !self.active {
             self.prime_native_projection(span)?;
         }

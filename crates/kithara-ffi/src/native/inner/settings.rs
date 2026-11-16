@@ -1,8 +1,9 @@
 use kithara::{abr::AbrMode, queue::RepeatMode};
 
-use super::{NativeInner, PeakBitrate};
+use super::NativeInner;
 use crate::types::{
-    FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiError, FfiPlaybackOrder, FfiRepeatMode,
+    FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiError, FfiPlaybackOrder,
+    FfiRepeatMode, peak_bitrate_cap,
 };
 impl NativeInner {
     pub(crate) fn eq_band_count(&self) -> u32 {
@@ -21,11 +22,7 @@ impl NativeInner {
         let Some(handle) = self.queue.current_abr_handle() else {
             return;
         };
-        let abr_mode = match mode {
-            FfiAbrMode::Auto => AbrMode::Auto(None),
-            FfiAbrMode::Manual { variant_index } => AbrMode::manual(variant_index as usize),
-        };
-        if let Err(err) = handle.set_mode(abr_mode) {
+        if let Err(err) = handle.set_mode(AbrMode::from(mode)) {
             tracing::warn!(?err, "set_abr_mode rejected by ABR state");
         }
     }
@@ -67,13 +64,8 @@ impl NativeInner {
     }
 
     pub(crate) fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {
-        let updated = PeakBitrate {
-            cellular_bps,
-            wifi_bps,
-        };
-        *self.peak_bitrate.lock() = updated;
         if let Some(handle) = self.queue.current_abr_handle() {
-            handle.set_max_bandwidth_bps(updated.effective_cap());
+            handle.set_max_bandwidth_bps(peak_bitrate_cap(wifi_bps, cellular_bps));
         }
     }
 }

@@ -51,6 +51,8 @@ use kithara_test_utils::TestHttpServer;
 use tempfile::TempDir;
 use url::Url;
 
+mod filter_chain;
+
 mod consts {
     pub(super) const HLS_SEGMENT_COUNT: usize = 6;
     pub(super) const HLS_SEGMENT_SIZE: usize = 96_000;
@@ -551,11 +553,17 @@ fn bench_render_buffers(c: &mut Criterion) {
     }
     group.finish();
 }
+#[path = "support/deck_eq_curves.rs"]
+mod deck_eq_curves;
+#[path = "support/filter_sweep.rs"]
+mod filter_sweep;
 #[path = "support/slot_gain.rs"]
 mod slot_gain;
 
 criterion_group!(
     benches,
+    deck_eq_curves::bench,
+    filter_sweep::bench,
     slot_gain::host_curve,
     slot_gain::gain_shape,
     bench_resampler_process,
@@ -563,6 +571,7 @@ criterion_group!(
     bench_hls_stream_seek_read,
     bench_layout,
     bench_render_buffers,
-    render_buffer_cases::bench
+    render_buffer_cases::bench,
+    filter_chain::bench
 );
 criterion_main!(benches);

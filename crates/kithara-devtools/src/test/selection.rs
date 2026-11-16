@@ -91,7 +91,7 @@ pub(super) fn select_lane<'a>(
     let explicit_lane = match request.lanes.as_slice() {
         [] => None,
         [lane] => Some(lane.as_str()),
-        _ => bail!("more than one --lane needs --touched to choose between them"),
+        _ => bail!("--lane names one lane; run each lane on its own"),
     };
     let lane_name = match request.loom {
         Some(true) => {
@@ -140,7 +140,7 @@ pub(crate) struct LaneToggles {
 /// declares that feature: the tools have no `no-block`, the UI crates have no
 /// `flash`. Cargo applies an unqualified feature to every selected package and
 /// fails the run when none of them declares it, so a run-wide request — the
-/// gate asks every touched lane for the detector — must leave such a lane
+/// gate asks every lane it runs for the detector — must leave such a lane
 /// alone. A lane that merely defaults a toggle off still honours the request.
 pub(super) fn toggle(
     name: &str,

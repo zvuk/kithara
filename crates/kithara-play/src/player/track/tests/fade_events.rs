@@ -96,12 +96,12 @@ async fn a_fade_out_takes_back_a_play_it_precedes_and_fades_one_it_follows(
     let mut rig = rig();
     let (mut track, _lane) = loaded(&mut rig, A, "fade").await;
     if waits {
-        track.ready = None;
+        track.segment.ready = false;
     }
     let start = command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: play });
     let fade = fade_out(&mut track, &mut rig, frame(fade_at));
     if waits {
-        track.ready = Some(track.segment);
+        track.segment.ready = true;
         rig.with_outbox(|out| track.tick(frame(0), out))
             .expect("live scope");
     }

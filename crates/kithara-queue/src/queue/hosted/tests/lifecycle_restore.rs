@@ -71,8 +71,8 @@ fn advance_stops_at_end() {
 }
 
 #[kithara::test(tokio)]
-async fn insert_and_remove_preserve_resource() {
-    let (mut queue, _, _dir) = empty_queue();
+async fn insert_and_remove_preserve_resource(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, _, fixture_directory) = empty_queue(&worker_owner.0);
     let id = TrackId::allocate();
     queue.insert_entry(
         id,
@@ -83,13 +83,18 @@ async fn insert_and_remove_preserve_resource() {
     let removed = queue.tracks.records_mut().remove(0);
     assert_eq!(removed.source.uri(), Some("first"));
     assert_eq!(queue.tracks.records().len(), 0);
+    drop(queue);
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[case(false)]
 #[case(true)]
-async fn announce_carries_the_item_identity(#[case] loaded: bool) {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn announce_carries_the_item_identity(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] loaded: bool,
+) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let id = TrackId::from(7_u64);
     apply(
         &mut queue,
@@ -112,7 +117,7 @@ async fn announce_carries_the_item_identity(#[case] loaded: bool) {
     )
     .expect("select identity");
     if loaded {
-        answer_load(&mut queue, &mut rig, &dir).await;
+        answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
         crate::mock::finish(&mut queue, &mut rig);
     } else {
         let incoming = queue
@@ -150,11 +155,14 @@ async fn announce_carries_the_item_identity(#[case] loaded: bool) {
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(changes(&mut events), [Some(id)]);
     assert!(events.try_recv().is_err());
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn clear_resets_cursor_and_announce() {
-    let (mut queue, first, second, mut rig, dir) = crate::mock::selected().await;
+async fn clear_resets_cursor_and_announce(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, first, second, mut rig, dir) =
+        crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
     apply(
         &mut queue,
         &mut rig,
@@ -164,7 +172,7 @@ async fn clear_resets_cursor_and_announce() {
         },
     )
     .expect("select second");
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.control().current_index(), Some(1));
     apply(&mut queue, &mut rig, QueueCommand::RemoveAll).expect("clear");
@@ -191,17 +199,19 @@ async fn clear_resets_cursor_and_announce() {
         },
     )
     .expect("select fresh first");
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.control().current_index(), Some(0));
     assert_eq!(changes(&mut events), [Some(first)]);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn mark_announced_uses_swap_semantics() {
-    let (mut queue, first, second, mut rig, dir) = pending_selection();
+async fn mark_announced_uses_swap_semantics(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, first, second, mut rig, dir) = pending_selection(&worker_owner.0);
     let mut events = queue.control().subscribe();
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(changes(&mut events), [Some(first)]);
     apply(
@@ -224,24 +234,30 @@ async fn mark_announced_uses_swap_semantics() {
         },
     )
     .expect("different item");
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(changes(&mut events), [Some(second)]);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn player_advance_emits_event() {
-    let (mut queue, _, second, mut rig, dir) = crate::mock::selected().await;
+async fn player_advance_emits_event(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, _, second, mut rig, dir) =
+        crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
     let mut events = queue.control().subscribe();
     apply(&mut queue, &mut rig, QueueCommand::Next(Transition::None)).expect("next");
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
     assert!(matches!(changes(&mut events).as_slice(), [Some(id)] if *id == second));
+    drop((queue, rig));
+    dir.finish().await;
 }
 
-#[kithara::test(tokio)]
-async fn player_advance_through_queue() {
-    let (mut queue, _, second, mut rig, dir) = crate::mock::selected().await;
+#[kithara::test(miri, tokio)]
+async fn player_advance_through_queue(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, _, second, mut rig, dir) =
+        crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
     let third = TrackId::allocate();
     apply(
         &mut queue,
@@ -253,25 +269,51 @@ async fn player_advance_through_queue() {
         },
     )
     .expect("third");
-    assert_eq!(queue.control().current_index(), Some(0));
+    assert_eq!(
+        queue.control().current_index(),
+        Some(0),
+        "load and start the first item"
+    );
     apply(&mut queue, &mut rig, QueueCommand::Next(Transition::None)).expect("second");
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
-    assert_eq!(queue.control().current_index(), Some(1));
-    assert_eq!(queue.current, Some(second));
+    assert_eq!(
+        queue.control().current_index(),
+        Some(1),
+        "advance and admit the second item"
+    );
+    assert_eq!(
+        queue.current,
+        Some(second),
+        "settle the second item as current"
+    );
     apply(&mut queue, &mut rig, QueueCommand::Next(Transition::None)).expect("third");
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
-    assert_eq!(queue.control().current_index(), Some(2));
+    assert_eq!(
+        queue.control().current_index(),
+        Some(2),
+        "advance and admit the third item"
+    );
     apply(&mut queue, &mut rig, QueueCommand::Next(Transition::None)).expect("exhausted");
-    assert_eq!(queue.control().current_index(), Some(2));
+    assert_eq!(
+        queue.control().current_index(),
+        Some(2),
+        "exhaustion retains the final cursor"
+    );
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[case(false, 2)]
 #[case(true, 3)]
-async fn player_insert_scenarios(#[case] insert_at_position: bool, #[case] expected_count: usize) {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn player_insert_scenarios(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] insert_at_position: bool,
+    #[case] expected_count: usize,
+) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     for _ in 0..2 {
         apply(
             &mut queue,
@@ -297,14 +339,17 @@ async fn player_insert_scenarios(#[case] insert_at_position: bool, #[case] expec
         .expect("insert first");
     }
     assert_eq!(queue.tracks.records().len(), expected_count);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[case::existing_item(0)]
 #[case::out_of_bounds(1)]
 #[case::shift_current_index(2)]
-async fn player_remove_at_scenarios(#[case] scenario: u8) {
-    let (mut queue, first, second, mut rig, dir) = crate::mock::selected().await;
+async fn player_remove_at_scenarios(#[by_ref] worker_owner: &WorkerOwner, #[case] scenario: u8) {
+    let (mut queue, first, second, mut rig, dir) =
+        crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
     if scenario == 1 {
         apply(&mut queue, &mut rig, QueueCommand::Remove(second)).expect("one item");
         let unknown = TrackId::from(5_u64);
@@ -334,19 +379,21 @@ async fn player_remove_at_scenarios(#[case] scenario: u8) {
             },
         )
         .expect("select third");
-        answer_load(&mut queue, &mut rig, &dir).await;
+        answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
         crate::mock::finish(&mut queue, &mut rig);
         assert_eq!(queue.control().current_index(), Some(2));
         apply(&mut queue, &mut rig, QueueCommand::Remove(first)).expect("remove earlier");
         assert_eq!(queue.control().current_index(), Some(1));
         assert_eq!(queue.tracks.records().len(), 2);
     }
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn cold_navigation_and_removal_preserve_item_identity() {
+async fn cold_navigation_and_removal_preserve_item_identity(#[by_ref] worker_owner: &WorkerOwner) {
     for count in [2, 3] {
-        let (mut queue, mut rig, dir) = empty_queue();
+        let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
         let ids = [
             TrackId::allocate(),
             TrackId::allocate(),
@@ -393,15 +440,17 @@ async fn cold_navigation_and_removal_preserve_item_identity() {
             assert_eq!(queue.control().tracks().len(), 1);
             assert_eq!(queue.control().tracks()[0].id, ids[1]);
             assert_eq!(queue.control().current_index(), None);
+            drop((queue, rig));
+            dir.finish().await;
             continue;
         }
-        answer_load(&mut queue, &mut rig, &dir).await;
+        answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
         crate::mock::finish(&mut queue, &mut rig);
         assert_eq!(queue.control().current_index(), Some(0));
         assert_eq!(queue.control().current().expect("initial item").id, ids[0]);
         for (index, &id) in ids.iter().enumerate().skip(1) {
             apply(&mut queue, &mut rig, QueueCommand::Next(Transition::None)).expect("next");
-            answer_load(&mut queue, &mut rig, &dir).await;
+            answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
             crate::mock::finish(&mut queue, &mut rig);
             assert_eq!(queue.control().current_index(), Some(index));
             assert_eq!(queue.control().current().expect("advanced item").id, id);
@@ -426,14 +475,17 @@ async fn cold_navigation_and_removal_preserve_item_identity() {
         apply(&mut queue, &mut rig, QueueCommand::Remove(ids[2])).expect("remove current");
         assert_eq!(queue.control().tracks().len(), 1);
         assert_eq!(queue.control().tracks()[0].id, ids[1]);
+        drop((queue, rig));
+        dir.finish().await;
     }
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn remove_at_shifts_current_and_reopens_announce() {
+async fn remove_at_shifts_current_and_reopens_announce(#[by_ref] worker_owner: &WorkerOwner) {
     hang_tick!();
-    let (mut queue, first, _, mut rig, dir) = crate::mock::selected().await;
+    let (mut queue, first, _, mut rig, dir) =
+        crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
     hang_reset!();
     let third = TrackId::allocate();
     apply(
@@ -456,7 +508,7 @@ async fn remove_at_shifts_current_and_reopens_announce() {
     )
     .expect("select third");
     hang_tick!();
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     hang_reset!();
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.control().current_index(), Some(2));
@@ -474,13 +526,16 @@ async fn remove_at_shifts_current_and_reopens_announce() {
     .expect("same identity at shifted position");
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(changes(&mut events), [Some(third)]);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn replacing_current_item_re_announces_on_next_play() {
+async fn replacing_current_item_re_announces_on_next_play(#[by_ref] worker_owner: &WorkerOwner) {
     hang_tick!();
-    let (mut queue, first, _, mut rig, dir) = crate::mock::selected().await;
+    let (mut queue, first, _, mut rig, dir) =
+        crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
     hang_reset!();
     let replacement = TrackId::allocate();
     assert_ne!(replacement, first);
@@ -507,17 +562,19 @@ async fn replacing_current_item_re_announces_on_next_play() {
     )
     .expect("play replacement");
     hang_tick!();
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     hang_reset!();
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.control().current_index(), Some(0));
     assert_eq!(changes(&mut events), [Some(replacement)]);
     assert_eq!(queue.tracks.records().len(), 2);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn select_item_out_of_range_returns_typed_error() {
-    let (mut queue, mut rig, _dir) = empty_queue();
+async fn select_item_out_of_range_returns_typed_error(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, fixture_directory) = empty_queue(&worker_owner.0);
     let id = TrackId::from(5_u64);
     let err = with_outbox(&mut queue, &mut rig, |queue, out| {
         queue.apply_command(
@@ -532,11 +589,13 @@ async fn select_item_out_of_range_returns_typed_error() {
     .expect_err("unknown item");
     assert!(matches!(err, QueueError::UnknownTrackId(actual) if actual == id));
     assert_eq!(queue.tracks.records().len(), 0);
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn checked_crossfade_update_respects_closed_owner() {
-    let (mut queue, mut rig, _dir) = empty_queue();
+async fn checked_crossfade_update_respects_closed_owner(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, fixture_directory) = empty_queue(&worker_owner.0);
     let settings = crate::CrossfadeSettings {
         duration: 2.0,
         ..Default::default()
@@ -565,12 +624,18 @@ async fn checked_crossfade_update_respects_closed_owner() {
         Err(PlayError::Closed)
     ));
     assert_eq!(queue.config.settings.crossfade().duration, 2.0);
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test]
-fn player_config_values_follow_live_controls() {
+fn player_config_values_follow_live_controls(#[by_ref] worker_owner: &WorkerOwner) {
     let prep = ResourcePrep::builder()
-        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::builder(pools())
+                .worker(worker_owner.0.clone())
+                .build(),
+        ))
         .build();
     let mut queue = Queue::new(
         QueueConfig::builder()
@@ -642,17 +707,38 @@ fn player_config_values_follow_live_controls() {
     assert!(queue.control().is_muted());
 }
 
-#[kithara::test(tokio)]
-async fn remove_all_items_releases_output_state_and_allows_fresh_playback() {
-    let (mut queue, first, _, mut rig, dir) = crate::mock::selected().await;
-    assert!(queue.control().is_playing());
-    assert!(queue.active_current_index().is_some());
+#[kithara::test(miri, tokio)]
+async fn remove_all_items_releases_output_state_and_allows_fresh_playback(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, first, _, mut rig, dir) =
+        crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
+    assert!(
+        queue.control().is_playing(),
+        "the loaded first item is playing"
+    );
+    assert!(
+        queue.active_current_index().is_some(),
+        "the playing item owns an active slot"
+    );
     apply(&mut queue, &mut rig, QueueCommand::RemoveAll).expect("remove all");
     crate::mock::finish(&mut queue, &mut rig);
-    assert!(!queue.control().is_playing());
-    assert!(queue.active_current_index().is_none());
-    assert!(queue.control().current_abr_handle().is_none());
-    assert!((queue.control().rate() - 0.0).abs() < f32::EPSILON);
+    assert!(
+        !queue.control().is_playing(),
+        "clearing the queue stops playback"
+    );
+    assert!(
+        queue.active_current_index().is_none(),
+        "clearing the queue releases the active slot"
+    );
+    assert!(
+        queue.control().current_abr_handle().is_none(),
+        "clearing releases ABR ownership"
+    );
+    assert!(
+        (queue.control().rate() - 0.0).abs() < f32::EPSILON,
+        "clearing publishes a stopped rate"
+    );
     apply(
         &mut queue,
         &mut rig,
@@ -664,18 +750,26 @@ async fn remove_all_items_releases_output_state_and_allows_fresh_playback() {
     )
     .expect("fresh item");
     apply(&mut queue, &mut rig, QueueCommand::Play { at: When::Next }).expect("fresh playback");
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     crate::mock::finish(&mut queue, &mut rig);
-    assert!(queue.control().is_playing());
-    assert!(queue.active_current_index().is_some());
+    assert!(
+        queue.control().is_playing(),
+        "the fresh load restarts playback"
+    );
+    assert!(
+        queue.active_current_index().is_some(),
+        "the fresh load owns a new active slot"
+    );
     apply(&mut queue, &mut rig, QueueCommand::RemoveAll).expect("final clear");
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn an_inserted_resource_adopts_the_session_wake_mode() {
+async fn an_inserted_resource_adopts_the_session_wake_mode(#[by_ref] worker_owner: &WorkerOwner) {
     use kithara_render::DispatcherCommand;
 
-    let (mut queue, mut rig, dir) = empty_queue();
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let source = fixture_uri(dir.path(), "inserted.wav");
     crate::mock::seed_fixture(
         queue.config.store.as_ref().expect("fixture store"),
@@ -719,11 +813,14 @@ async fn an_inserted_resource_adopts_the_session_wake_mode() {
     )
     .await
     .expect("an admitted source keeps reader events off the audio callback bus");
+    drop(due);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn close_waits_for_an_admitted_operation() {
-    let (mut queue, mut rig, _dir) = empty_queue();
+async fn close_waits_for_an_admitted_operation(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, fixture_directory) = empty_queue(&worker_owner.0);
     let id = TrackId::allocate();
     let postbox = queue.postbox.clone();
     let operation = postbox
@@ -760,12 +857,14 @@ async fn close_waits_for_an_admitted_operation() {
         Err(PlayError::Closed)
     ));
     assert!(matches!(queue.ensure_open(), Err(PlayError::Closed)));
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
-async fn drop_does_not_wait_for_an_admitted_operation() {
-    let (mut queue, _, _dir) = empty_queue();
+async fn drop_does_not_wait_for_an_admitted_operation(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, _, fixture_directory) = empty_queue(&worker_owner.0);
     let observer = queue.shutdown.child();
     let postbox = queue.postbox.clone();
     let _ticket = postbox
@@ -784,12 +883,14 @@ async fn drop_does_not_wait_for_an_admitted_operation() {
         "drop cancels the subtree while the admitted operation remains outstanding"
     );
     drop(operation);
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
-async fn player_lifecycle_admits_only_one_concurrent_close() {
-    let (mut queue, _, _, mut rig, _dir) = crate::mock::selected().await;
+async fn player_lifecycle_admits_only_one_concurrent_close(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, _, _, mut rig, fixture_directory) =
+        crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;
     {
         let mut port = rig.ring.scope(rig.scope).expect("deck scope");
         for _ in 0..port.available() {
@@ -839,11 +940,15 @@ async fn player_lifecycle_admits_only_one_concurrent_close() {
     })
     .expect("already closed cleanup is idempotent");
     assert!(queue.shutdown.is_cancelled());
+    drop((queue, rig));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn prepare_config_per_track_cancel_is_child_of_player_master() {
-    let (queue, _, dir) = empty_queue();
+async fn prepare_config_per_track_cancel_is_child_of_player_master(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (queue, _, dir) = empty_queue(&worker_owner.0);
     let prepared = queue
         .config
         .prep
@@ -870,12 +975,20 @@ async fn prepare_config_per_track_cancel_is_child_of_player_master() {
         observer.is_cancelled(),
         "dropping the owner cancels the per-track child via its master"
     );
+    dir.finish().await;
 }
 
 #[kithara::test]
-fn prepare_config_preserves_caller_supplied_master(cancel_token: CancelToken) {
+fn prepare_config_preserves_caller_supplied_master(
+    #[by_ref] worker_owner: &WorkerOwner,
+    cancel_token: CancelToken,
+) {
     let prep = ResourcePrep::builder()
-        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::builder(pools())
+                .worker(worker_owner.0.clone())
+                .build(),
+        ))
         .build();
     let queue: Queue<TestPools> = Queue::new(
         QueueConfig::builder()
@@ -909,8 +1022,10 @@ fn prepare_config_preserves_caller_supplied_master(cancel_token: CancelToken) {
 }
 
 #[kithara::test(tokio)]
-async fn prebound_session_rejects_a_player_built_for_another_sample_rate() {
-    let (queue, _, dir) = empty_queue();
+async fn prebound_session_rejects_a_player_built_for_another_sample_rate(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (queue, _, dir) = empty_queue(&worker_owner.0);
     let output =
         kithara_play::SessionOutputView::new(NonZeroU32::new(48_000).expect("session rate"));
     let prepared = queue
@@ -937,4 +1052,6 @@ async fn prebound_session_rejects_a_player_built_for_another_sample_rate() {
             .map(NonZeroU32::get),
         Some(48_000)
     );
+    drop(queue);
+    dir.finish().await;
 }

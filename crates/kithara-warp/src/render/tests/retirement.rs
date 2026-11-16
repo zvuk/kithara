@@ -1,4 +1,4 @@
-use Control::{Backend, Curve, Keylock, Speed};
+use Control::{Curve, Speed, ToggleKeylock};
 use kithara_signal::ExponentialApproach;
 use kithara_stretch::{BackendCapabilities, StretchKind};
 use kithara_sync::SpeedCurve;
@@ -10,7 +10,7 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{exact::mapped_signal, renderer, spec};
-use crate::WarpConfig;
+use crate::{Pitch, PitchStep, WarpConfig};
 
 /// Output frames at which a script presses.
 const PRESSES: [usize; 2] = [22_050, 66_150];
@@ -27,10 +27,9 @@ const IN_FADE: usize = 512;
 /// A lane control a press applies.
 #[derive(Clone, Copy, Debug)]
 enum Control {
-    Keylock(bool),
+    ToggleKeylock,
     Speed(f32),
     Curve(ExponentialApproach),
-    Backend(StretchKind),
 }
 
 /// Controls the lane applies as one batch at an output frame. Presses at one
@@ -63,7 +62,7 @@ impl Scenario {
 fn config(backend: StretchKind, keylock: bool, speed: f32) -> WarpConfig {
     WarpConfig::builder()
         .backend(backend)
-        .keylock(keylock)
+        .maybe_pitch(keylock.then_some(Pitch::HELD))
         .speed(speed)
         .build()
 }
@@ -82,14 +81,15 @@ fn render(config: &WarpConfig, presses: &[Press], frames: usize, tone: &[f32]) -
         while let Some(press) = presses.next_if(|press| press.frame == mono.len()) {
             for control in &press.batch {
                 match *control {
-                    Keylock(on) => fx.set_keylock(on),
+                    ToggleKeylock => {
+                        fx.set_pitch(fx.requested_pitch.step(PitchStep::ToggleKeylock));
+                    }
                     Speed(speed) => fx
                         .set_speed(SpeedCurve::Constant(speed), fx.render_revision() + 1)
                         .expect("valid speed"),
                     Curve(curve) => fx
                         .set_speed(SpeedCurve::Approach(curve), fx.render_revision() + 1)
                         .expect("valid tempo curve"),
-                    Backend(kind) => fx.set_backend(kind),
                 }
             }
             fx.prepare_engine_latency(spec()).expect("prepared batch");
@@ -113,29 +113,28 @@ fn steps(mono: &[f32]) -> impl Iterator<Item = f32> + '_ {
 
 /// From the step into the first press on, every step stays within the
 /// steepest steady side's step plus the gain slope of the shortest keylock
-/// fade across both sides. The sides are every backend, keylock state and
-/// speed of the script.
+/// fade across both sides. The sides are every keylock state and distinct
+/// speed of the script on its backend; equal sides render equal twins.
 fn assert_continuous(tone: &[f32], scenario: &Scenario) {
-    let mut backends = vec![scenario.backend];
     let mut speeds = vec![scenario.speed];
+    let mut add_speed = |speed: f32| {
+        if !speeds.iter().any(|side| side.to_bits() == speed.to_bits()) {
+            speeds.push(speed);
+        }
+    };
     for control in scenario.presses.iter().flat_map(|press| &press.batch) {
         match *control {
-            Backend(kind) => backends.push(kind),
-            Speed(speed) => speeds.push(speed),
+            Speed(speed) => add_speed(speed),
             Curve(curve) => {
-                speeds.push(curve.initial().to_f32().expect("initial speed fits f32"));
-                speeds.push(curve.target().to_f32().expect("target speed fits f32"));
+                add_speed(curve.initial().to_f32().expect("initial speed fits f32"));
+                add_speed(curve.target().to_f32().expect("target speed fits f32"));
             }
-            Keylock(_) => {}
+            ToggleKeylock => {}
         }
     }
-    let sides: Vec<WarpConfig> = backends
+    let sides: Vec<WarpConfig> = speeds
         .iter()
-        .flat_map(|&backend| {
-            speeds
-                .iter()
-                .flat_map(move |&speed| [false, true].map(|on| config(backend, on, speed)))
-        })
+        .flat_map(|&speed| [false, true].map(|on| config(scenario.backend, on, speed)))
         .collect();
     let output = scenario.played(tone);
     let from = scenario.presses[0].frame - 1;
@@ -148,7 +147,7 @@ fn assert_continuous(tone: &[f32], scenario: &Scenario) {
         .fold(0.0, f32::max);
     let fade = sides
         .iter()
-        .filter(|side| side.keylock())
+        .filter(|side| side.pitch().keylock())
         .map(|side| {
             renderer(side)
                 .prepare_engine_latency(spec())
@@ -401,8 +400,8 @@ fn retirement_scripts(backend: StretchKind) -> Vec<Scenario> {
         for keylock in [false, true] {
             for back in [PRESSES[1], PRESSES[0] + IN_FADE] {
                 let presses = vec![
-                    press(PRESSES[0], &[Keylock(!keylock)]),
-                    press(back, &[Keylock(keylock)]),
+                    press(PRESSES[0], &[ToggleKeylock]),
+                    press(back, &[ToggleKeylock]),
                 ];
                 scenarios.push(script(keylock, speed, presses));
             }
@@ -414,14 +413,14 @@ fn retirement_scripts(backend: StretchKind) -> Vec<Scenario> {
             1.08,
             vec![
                 press(PRESSES[0] - IN_FADE, &[Speed(1.5)]),
-                press(PRESSES[0], &[Keylock(false)]),
+                press(PRESSES[0], &[ToggleKeylock]),
             ],
         ),
         script(
             false,
             1.0,
             vec![
-                press(PRESSES[0], &[Keylock(true)]),
+                press(PRESSES[0], &[ToggleKeylock]),
                 press(PRESSES[1], &[Speed(1.08)]),
             ],
         ),
@@ -429,32 +428,10 @@ fn retirement_scripts(backend: StretchKind) -> Vec<Scenario> {
         script(
             false,
             1.0,
-            vec![press(PRESSES[0], &[Keylock(true), Speed(1.08)])],
+            vec![press(PRESSES[0], &[ToggleKeylock, Speed(1.08)])],
         ),
     ]);
     scenarios
-}
-
-/// A keylock backend change fades the source-supported prefix of the old
-/// engine's tail into the new engine.
-#[kithara::test]
-fn keylock_backend_change_keeps_the_tone_continuous(warp_sine: Vec<f32>) {
-    let backends: Vec<_> = StretchKind::supporting(BackendCapabilities::KEYLOCK).collect();
-    assert!(!backends.is_empty(), "the build compiles a keylock backend");
-    for pair in backends.windows(2) {
-        assert_continuous(
-            &warp_sine,
-            &Scenario {
-                backend: pair[0],
-                keylock: true,
-                speed: 1.08,
-                presses: vec![Press {
-                    frame: PRESSES[0],
-                    batch: vec![Backend(pair[1])],
-                }],
-            },
-        );
-    }
 }
 
 /// Batches the lane applies before one render sound as their net batch: two
@@ -477,7 +454,7 @@ fn batches_before_a_render_sound_as_their_net_batch(warp_sine: Vec<f32>) {
                 })
                 .collect(),
         };
-        let (on, tempo) = (Keylock(true), Speed(1.08));
+        let (on, tempo) = (ToggleKeylock, Speed(1.08));
         for (batches, net) in [
             (
                 at_press(true, 1.08, &[&[Speed(1.0)], &[tempo]]),

@@ -7,10 +7,9 @@ pub(crate) fn terminal_ring(
     blocking: bool,
     spec: kithara_signal::AudioSpec,
 ) -> (PcmReceiver, impl FnMut(PcmPacket) -> Result<(), PcmPacket>) {
-    use ringbuf::traits::Producer;
     let (receiver, mut producer) = super::reader::packet_fixture(blocking, spec);
     (receiver, move |packet| {
-        let result = producer.forward.try_push(packet);
+        let result = producer.push(packet);
         producer.signal();
         result
     })

@@ -5,7 +5,7 @@ use std::{
     process::Command,
 };
 
-use cargo_metadata::{Metadata, MetadataCommand, Package};
+use cargo_metadata::{Metadata, MetadataCommand};
 use tempfile::TempDir;
 
 use super::{NextestAction, request::TestRequest, resolve, selection::requested};
@@ -107,17 +107,6 @@ fn engine_trace_consumers_do_not_build_devtools_commands() {
     assert!(packages.contains("kithara-devtools-trace-format"));
 }
 
-/// A member's directory relative to the workspace root, with a trailing
-/// slash, the way a lane's `owns` entries spell directories.
-fn member_dir(metadata: &Metadata, package: &Package) -> String {
-    let dir = package
-        .manifest_path
-        .parent()
-        .and_then(|dir| dir.strip_prefix(&metadata.workspace_root).ok())
-        .expect("a member lives under the workspace root");
-    format!("{dir}/")
-}
-
 /// The members a lane's cargo options select.
 pub(crate) fn selected_by<'a>(
     cargo: &TestCargoOptions,
@@ -158,46 +147,6 @@ fn build_closure<'a>(selected: &BTreeSet<&'a str>, metadata: &'a Metadata) -> BT
         }
     }
     built
-}
-
-/// Every member whose sources a lane owns is a member the lane builds: the
-/// member an owned path lies in, and every member that lies under an owned
-/// directory. Otherwise `--touched` answers a change to that member with a
-/// lane that never compiles it.
-#[test]
-fn a_lane_builds_every_member_whose_sources_it_owns() {
-    let metadata = this_workspace();
-    let project = ProjectConfig::load(&root()).expect("load repository config");
-    let members = metadata
-        .workspace_packages()
-        .into_iter()
-        .map(|package| (member_dir(&metadata, package), package.name.as_str()))
-        .collect::<Vec<_>>();
-    let mut failures = BTreeSet::new();
-    for (lane_name, lane) in &project.test.lanes {
-        let selected = selected_by(&lane.cargo, &metadata);
-        for owned in &lane.owns {
-            let containing = members
-                .iter()
-                .filter(|(dir, _)| owned.starts_with(dir.as_str()))
-                .max_by_key(|(dir, _)| dir.len());
-            let contained = members
-                .iter()
-                .filter(|(dir, _)| dir.starts_with(owned.as_str()));
-            for (_, member) in containing.into_iter().chain(contained) {
-                if !selected.contains(member) {
-                    failures.insert(format!(
-                        "lane `{lane_name}` owns `{owned}` but does not build `{member}`"
-                    ));
-                }
-            }
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "{}",
-        failures.into_iter().collect::<Vec<_>>().join("\n")
-    );
 }
 
 /// Every feature a lane resolves to, at its defaults and with each toggle it

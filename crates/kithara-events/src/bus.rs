@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(event.event, expected);
     }
 
-    #[kithara::test(tokio)]
+    #[kithara::test(miri, tokio)]
     #[case(TestEvent::EndOfStream)]
     #[case(TestEvent::Error {
         error: "network".to_string(),
@@ -212,7 +212,7 @@ mod tests {
         ));
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn clone_shares_channel() {
         let bus1 = EventBus::new(16);
         let bus2 = bus1.clone();
@@ -368,7 +368,7 @@ mod tests {
         assert_eq!(grandchild.label.track, Some(TrackId(12)));
     }
 
-    #[kithara::test(tokio)]
+    #[kithara::test(miri, tokio)]
     async fn overflow_event_publishes_exact_drop_count() {
         let bus = EventBus::new(16);
         let deferred = crate::DeferredBus::<TestEvent>::new(bus.clone(), 2);

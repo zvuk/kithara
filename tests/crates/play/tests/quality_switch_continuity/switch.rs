@@ -281,7 +281,22 @@ pub(super) fn drain_decoder_events(
     events: &mut EventReceiver<TestEvent>,
     frame_end: usize,
 ) -> Vec<DecoderObservation> {
+    drain_decoder_lifecycle(events, frame_end).changes
+}
+
+/// Decoder lifecycle events drained after one rendered block.
+pub(super) struct DecoderLifecycle {
+    pub(super) changes: Vec<DecoderObservation>,
+    /// The decoder parked its playing generation for a pending variant transition.
+    pub(super) held: bool,
+}
+
+pub(super) fn drain_decoder_lifecycle(
+    events: &mut EventReceiver<TestEvent>,
+    frame_end: usize,
+) -> DecoderLifecycle {
     let mut decoder_events = Vec::new();
+    let mut held = false;
     loop {
         let envelope = match events.try_recv() {
             Ok(envelope) => envelope,
@@ -290,17 +305,16 @@ pub(super) fn drain_decoder_events(
                 panic!("decoder event stream became unreliable at frame {frame_end}: {error}")
             }
         };
-        if let TestEvent::Decoder(DecoderEvent::DecoderChanged {
-            backend,
-            cause,
-            codec,
-            sample_rate,
-            channels,
-            variant,
-            ..
-        }) = envelope.event
-        {
-            decoder_events.push(DecoderObservation {
+        match envelope.event {
+            TestEvent::Decoder(DecoderEvent::DecoderChanged {
+                backend,
+                cause,
+                codec,
+                sample_rate,
+                channels,
+                variant,
+                ..
+            }) => decoder_events.push(DecoderObservation {
                 frame_end,
                 backend,
                 cause,
@@ -308,10 +322,15 @@ pub(super) fn drain_decoder_events(
                 sample_rate,
                 channels,
                 variant,
-            });
+            }),
+            TestEvent::Decoder(DecoderEvent::TransitionHold { .. }) => held = true,
+            _ => {}
         }
     }
-    decoder_events
+    DecoderLifecycle {
+        changes: decoder_events,
+        held,
+    }
 }
 
 pub(super) fn assert_initial_decoder(
@@ -483,10 +502,17 @@ async fn prepare_player(
 /// clock only moves once the worker has parked. Without the guard this `sleep`
 /// is a real `tokio` timer — the test macro rewrites time calls in the test
 /// body, not in the helpers it calls — and the consumer then advances at host
-/// speed against a producer advancing at virtual speed. With a one-chunk output
-/// ring that mismatch is audible: a loaded host drains the ring and the feeder
-/// hands out zeros, so the length of the silence is a property of the machine
-/// rather than of the pipeline under test.
+/// speed against a producer advancing at virtual speed, and a loaded host can
+/// drain the ring faster than the producer refills it, so the length of any
+/// silence becomes a property of the machine rather than of the pipeline under
+/// test.
+///
+/// A flashless build has no guard at all: the consumer and every producer run
+/// on real time behind the lane ring the product ships, and a host that
+/// deschedules them for longer than that lead starves whichever deck renders
+/// next, switched or not. A continuity oracle
+/// over such a capture therefore judges only the frames a variant transition
+/// owns, which the product's own decoder events and deck snapshots bound.
 #[kithara::flash(true)]
 pub(super) async fn render_paced(
     player: &OfflinePlayer,

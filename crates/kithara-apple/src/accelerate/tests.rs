@@ -1,13 +1,16 @@
 use std::num::NonZeroUsize;
 
-use kithara_test_fixtures::unit_fixtures::{accelerate_ramp, accelerate_wave};
+use kithara_test_fixtures::{
+    portable::sine_440,
+    unit_fixtures::{accelerate_ramp, accelerate_wave},
+};
 use kithara_test_utils::kithara;
 
 use super::{
     BiquadError, DftError, MultichannelBiquad, OutOfWindow, RealDft, add_f32, affine_f32,
     correlate_f32, deinterleave_pair_f32, downmix_pair_f32, interleave_pair_f32,
     linear_interpolate_f32, max_magnitude_f32, multiply_f32, multiply_in_place_f32,
-    quadratic_interpolate_f32, scale_add_f32, sub_f32, sum_squares_f32,
+    quadratic_interpolate_f32, scale_add_f32, sub_f32, sum_squares_f32, tangent_f64,
 };
 
 const SPECIALS: [f32; 8] = [
@@ -21,6 +24,81 @@ const SPECIALS: [f32; 8] = [
     f32::NAN,
 ];
 const UNWRITTEN: f32 = -1.0;
+
+#[kithara::test(native)]
+fn tangent_double_preserves_prefix_special_values_and_precision() {
+    let input = [
+        0.0,
+        -0.0,
+        f64::from_bits(1),
+        -f64::from_bits(1),
+        0.1,
+        1.0,
+        f64::NAN,
+        f64::INFINITY,
+    ];
+    let mut output = [-7.0; 9];
+    assert_eq!(tangent_f64(&input, &mut output), input.len());
+    for (actual, input) in output.iter().zip(input) {
+        let expected = input.tan();
+        if input.abs() < f64::MIN_POSITIVE {
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        } else if expected.is_nan() {
+            assert!(actual.is_nan());
+        } else {
+            assert!((actual - expected).abs() <= 8.0 * f64::EPSILON * expected.abs());
+        }
+    }
+    assert_eq!(output[8], -7.0);
+    assert_eq!(tangent_f64(&input, &mut output[..2]), 2);
+    let before = output;
+    assert_eq!(tangent_f64(&[], &mut output), 0);
+    assert_eq!(tangent_f64(&input, &mut []), 0);
+    assert_eq!(output.map(f64::to_bits), before.map(f64::to_bits));
+}
+
+#[kithara::test(native)]
+fn tangent_double_is_bit_identical_across_widths_offsets_and_partitions() {
+    let angles = [
+        0.0,
+        f64::from_bits(1),
+        1e-100,
+        0.001,
+        0.2,
+        0.8,
+        1.5,
+        std::f64::consts::FRAC_PI_2,
+    ];
+    let input: Vec<_> = angles.into_iter().cycle().take(1_027).collect();
+    let expected: Vec<_> = input
+        .iter()
+        .map(|&angle| {
+            let mut output = [0.0];
+            assert_eq!(tangent_f64(&[angle], &mut output), 1);
+            output[0].to_bits()
+        })
+        .collect();
+    for width in [1, 2, 3, 7, 13, 16, 31, 255, 256, 257, 1_027] {
+        for offset in 0..4 {
+            let mut output = vec![-7.0; input.len() + offset + 1];
+            for (input, output) in input
+                .chunks(width)
+                .zip(output[offset..offset + input.len()].chunks_mut(width))
+            {
+                assert_eq!(tangent_f64(input, output), input.len());
+            }
+            assert_eq!(
+                output[offset..offset + input.len()]
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert!(output[..offset].iter().all(|value| *value == -7.0));
+            assert_eq!(output.last(), Some(&-7.0));
+        }
+    }
+}
 
 /// `N` samples on the boundary `RealDft` takes its planes on.
 #[repr(C, align(64))]
@@ -167,12 +245,108 @@ fn multichannel_biquad_rejects_a_shape_it_was_not_built_for() {
 }
 
 #[kithara::test(native)]
+fn multichannel_biquad_keeps_a_finite_prefix_before_a_future_nan() {
+    let mut filter =
+        MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
+    filter
+        .set_section(0, [1.0, 0.0, 0.0, -0.5, 0.0])
+        .expect("one section");
+    let mut plane = vec![1.0, 0.0, f32::NAN, 1.0e-10, 1.0];
+    filter
+        .process(&mut [plane.as_mut_slice()], 0..5)
+        .expect("whole stream");
+    assert_eq!(bits([plane[0], plane[1]]), bits([1.0, 0.5]));
+    assert!(plane[2..].iter().all(|sample| sample.is_nan()));
+}
+
+#[kithara::test(native)]
+fn multichannel_biquad_reapplying_equal_coefficients_is_bit_neutral() {
+    // RBJ low-pass, 800 Hz at 44.1 kHz, Q = 1/sqrt(2).
+    let w = std::f32::consts::TAU * 800.0 / 44_100.0;
+    let alpha = w.sin() * std::f32::consts::FRAC_1_SQRT_2;
+    let a0 = 1.0 + alpha;
+    let b = (1.0 - w.cos()) / 2.0 / a0;
+    let section = [b, 2.0 * b, b, -2.0 * w.cos() / a0, (1.0 - alpha) / a0];
+    let mut once =
+        MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
+    let mut repeated =
+        MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
+    once.set_section(0, section).expect("one section");
+    repeated.set_section(0, section).expect("one section");
+    let input: Vec<f32> = (0_u16..256)
+        .map(|frame| (f32::from(frame) * 0.142_5).sin())
+        .collect();
+    let mut expected = input.clone();
+    let frames = expected.len();
+    once.process(&mut [expected.as_mut_slice()], 0..frames)
+        .expect("whole stream");
+    let mut actual = input;
+    for frame in 0..actual.len() {
+        repeated.set_section(0, section).expect("same section");
+        repeated
+            .process(&mut [actual.as_mut_slice()], frame..frame + 1)
+            .expect("one frame");
+    }
+    assert_eq!(
+        actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+        expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+    );
+}
+
+#[kithara::test(native)]
+fn multichannel_biquad_refuses_the_entire_shape_without_advancing_history() {
+    let mut filter =
+        MultichannelBiquad::new(NonZeroUsize::MIN.saturating_add(1), NonZeroUsize::MIN)
+            .expect("native setup");
+    filter
+        .set_section(0, [1.0, 0.0, 0.0, -0.5, 0.0])
+        .expect("one section");
+    let mut short = [vec![1.0, 0.0, 0.0], vec![0.0]];
+    let before = short.clone();
+    assert_eq!(filter.process(&mut short, 0..3), Err(BiquadError::Shape));
+    assert_eq!(short, before);
+    let mut probe = [vec![0.0; 3], vec![0.0; 3]];
+    filter.process(&mut probe, 0..3).expect("complete planes");
+    assert_eq!(probe, [vec![0.0; 3], vec![0.0; 3]]);
+}
+
+#[kithara::test(native)]
 fn max_magnitude_reads_the_largest_absolute_value() {
     assert_eq!(
         max_magnitude_f32(&[0.5, -2.0, 1.0]).to_bits(),
         2.0_f32.to_bits()
     );
     assert_eq!(max_magnitude_f32(&[]).to_bits(), 0.0_f32.to_bits());
+    // NaNs and subnormals have backend-specific maximum ordering.
+    let specials = [
+        0.0,
+        -0.0,
+        f32::MIN_POSITIVE,
+        f32::MAX,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    for len in [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 63, 64, 66, 258, 1023, 4096,
+    ] {
+        let sine = &sine_440()[..len];
+        let with_specials: Vec<f32> = specials
+            .iter()
+            .copied()
+            .chain(sine.iter().copied())
+            .take(len)
+            .collect();
+        for samples in [sine, with_specials.as_slice()] {
+            let expected = samples
+                .iter()
+                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+            assert_eq!(
+                max_magnitude_f32(samples).to_bits(),
+                expected.to_bits(),
+                "native peak at {len}"
+            );
+        }
+    }
 }
 
 #[kithara::test(native)]

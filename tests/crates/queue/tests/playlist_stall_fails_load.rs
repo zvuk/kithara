@@ -5,7 +5,7 @@ use kithara::{
     download::{Downloader, DownloaderConfig},
     events::{EventReceiver, TrackId},
     host::HostConfig,
-    net::{HttpClient, NetOptions, RetryPolicy},
+    net::{NetOptions, RetryPolicy},
     platform::{
         CancelToken,
         sync::Arc,
@@ -90,7 +90,7 @@ async fn stalled_master_playlist_fails_load(
         .build();
     let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+        DownloaderConfig::for_client(TestServerHelper::shared_client(net, CancelToken::never()))
             .runtime(kithara::platform::tokio::runtime::Handle::current())
             .build(),
     );

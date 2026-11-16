@@ -1,9 +1,7 @@
 use kithara_command::Seq;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
-use kithara_play::{
-    HostedDeck, OpenedTrack, Player, TrackReceipt, TrackStatus as PlayingStatus, mock,
-};
+use kithara_play::{OpenedTrack, Player, TrackReceipt, TrackStatus as PlayingStatus, mock};
 use kithara_render::{
     Dispatched, DispatcherCommand, LaneId, Loaded, ServiceClass,
     bridge::{DeckEvent, DeckPart, Fade, FadeDir},
@@ -15,6 +13,7 @@ use super::super::slots::Role;
 use crate::{
     ActionAtItemEnd, Queue, QueueCommand, TrackSource, Transition,
     mock::{TestPools, fixture_uri, pending_selection, with_outbox},
+    queue::{WorkerOwner, worker_owner},
 };
 
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
@@ -148,22 +147,16 @@ async fn open(
         .last()
         .expect("fixture load")
         .seq();
-    let mut loaded =
-        crate::mock::loaded_request(queue.worker().expect("fixture worker"), rig, seq).await;
-    hang_reset!();
-    let source = loaded
-        .opened
-        .pcm
-        .next_chunk_info()
-        .expect("prepared fixture source");
-    let (opened, packets) = crate::mock::opened_with_source(
-        loaded.opened,
+    let (loaded, packets) = crate::mock::synthetic_request(
+        queue,
+        rig,
+        seq,
         kithara_signal::AudioChunkInfo {
             media_end: Some(Duration::from_secs(10)),
-            ..source
+            ..crate::mock::fixture_chunk()
         },
     );
-    loaded.opened = opened;
+    hang_reset!();
     sources.push(packets);
     let lane = loaded.lane;
     dispatcher(queue, rig, Some(loaded), priorities);
@@ -194,8 +187,8 @@ fn select_successor(
 }
 
 #[kithara::test(tokio)]
-async fn track_state_is_leading() {
-    let (mut queue, first, second, mut rig, dir) = pending_selection();
+async fn track_state_is_leading(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, first, second, mut rig, dir) = pending_selection(&worker_owner.0);
     queue.config.action_at_item_end = ActionAtItemEnd::None;
     let mut priorities = Vec::new();
     let mut sources = Vec::new();
@@ -294,6 +287,8 @@ async fn track_state_is_leading() {
             .current_track()
             .is_some_and(|track| track.snapshot().item == second)
     );
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -303,8 +298,12 @@ async fn track_state_is_leading() {
 #[case("preloading", ServiceClass::Warm)]
 #[case("finished", ServiceClass::Idle)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn track_state_maps_to_service_class(#[case] phase: &str, #[case] expected: ServiceClass) {
-    let (mut queue, first, second, mut rig, dir) = pending_selection();
+async fn track_state_maps_to_service_class(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] phase: &str,
+    #[case] expected: ServiceClass,
+) {
+    let (mut queue, first, second, mut rig, dir) = pending_selection(&worker_owner.0);
     queue.config.action_at_item_end = ActionAtItemEnd::None;
     let mut priorities = Vec::new();
     let mut sources = Vec::new();
@@ -416,4 +415,6 @@ async fn track_state_maps_to_service_class(#[case] phase: &str, #[case] expected
         Some(expected),
         "actual {phase} lifecycle must prioritize its own lane"
     );
+    drop((queue, rig));
+    dir.finish().await;
 }

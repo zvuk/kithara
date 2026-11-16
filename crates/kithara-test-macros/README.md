@@ -19,6 +19,11 @@ Proc-macro crate providing unified test attributes (`#[kithara::test]`,
 emission is gated by the `usdt` feature; mock emission is gated by
 `cfg(any(test, feature = "mock"))`; flash is gated by the `flash` feature.
 
+The `test` feature enables `test`, `fixture` and `asset` macros and their
+argument parser. It is off by default; production instrumentation remains
+available without the test DSL.
+Test-utils forwards this opt-in through its own `test` feature.
+
 ## Usage
 
 ```rust
@@ -63,7 +68,9 @@ include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`,
 `loom`, and `flash(true|false)`. `loom` is a synchronous, unit-returning,
 opt-in model marker run by `just test run --loom=on`; ordinary test lanes execute it once
 without Loom exploration. Supports `#[case]` / `#[case::name]` parameterization and
-fixture injection. `#[future]` injects an unpolled async fixture;
+fixture injection. The `miri` flag opts a test into the interpreter lane;
+unmarked tests still compile under Miri and are reported ignored. Native execution
+is unchanged. `#[future]` injects an unpolled async fixture;
 `#[future(awt)]` awaits the fixture before the test body and retains its value
 until test teardown. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-macros) for per-flag semantics and the
 Flash/Loom debugging rules.
@@ -75,7 +82,7 @@ A bare `#[kithara::probe]` is a marker probe (cheap auto-fields only); parenthes
 ## Integration
 
 Use the `kithara_test_utils::kithara` re-export in independent consumers as well as
-workspace tests. With test-utils default features disabled, plain, parameterized,
+workspace tests. With test-utils defaults disabled and `test` enabled, plain, parameterized,
 fixture, serialized, and current-thread async tests need no direct Tokio or
 `serial_test` dependency.
 

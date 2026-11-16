@@ -13,6 +13,8 @@ mod wasm;
 pub(crate) use hls::post_token;
 pub use hls::{CreateHlsError, CreatedHls, HlsFixtureBuilder};
 #[cfg(not(target_arch = "wasm32"))]
+pub use modeled::ModeledServer;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use native::router;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{

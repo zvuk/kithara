@@ -10,7 +10,6 @@ use kithara_test_utils::{
     kithara,
     test::usdt::{self, ProbeEvent},
 };
-use kithara_warp::RenderContext;
 
 use super::{
     DeckMixerConfig, DeckPart, Fade, PcmConsumer, PlayerResource, Slot, StreamShape, TestEnds,
@@ -144,17 +143,13 @@ fn render_block(processor: &mut DeadlineMixer, out_l: &mut [f32], out_r: &mut [f
         SessionFrame::new(i64::try_from(processor.frame).expect("frame fits session clock"));
     processor.frame += u64::try_from(frames).expect("frames fit clock");
     let end = SessionFrame::new(i64::try_from(processor.frame).expect("frame fits session clock"));
-    let context = RenderContext::new_linear(
-        OutputContext::new(
-            start..end,
-            processor.shape.sample_rate,
-            SessionEpoch::new(0),
-            None,
-        )
-        .expect("output range"),
+    let context = OutputContext::new(
+        start..end,
+        processor.shape.sample_rate,
+        SessionEpoch::new(0),
         None,
     )
-    .expect("render context");
+    .expect("output range");
     processor.mixer.inbox.0.drain();
     let level = processor
         .mixer

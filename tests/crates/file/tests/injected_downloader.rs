@@ -7,7 +7,7 @@ use kithara::{
     download::{Downloader, DownloaderConfig, DownloaderEvent},
     events::EventBus,
     file::{File, FileConfig, FileEvent, FileSrc},
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     stream::Stream,
 };
@@ -18,7 +18,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
 async fn an_injected_downloader_carries_the_remote_file_requests() {
     let bytes: Vec<_> = (0..4096)
         .map(|i| u8::try_from(i % 251).expect("fixture byte fits"))
@@ -36,9 +36,8 @@ async fn an_injected_downloader_carries_the_remote_file_requests() {
     });
     let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())
@@ -77,7 +76,7 @@ async fn an_injected_downloader_carries_the_remote_file_requests() {
     );
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
 #[case::uncached(false)]
 #[case::cached(true)]
 async fn a_remote_file_without_a_downloader_is_refused(

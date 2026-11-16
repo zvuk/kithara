@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use kithara::{analysis::Waveform, platform::tokio::runtime::Handle, ui::render::WaveBucket};
+use kithara::{
+    analysis::Waveform, platform::tokio::runtime::Handle, play::Pitch, ui::render::WaveBucket,
+};
 use num_traits::cast::ToPrimitive;
 
 use super::{artwork::Artwork, modules::Modules, window::WindowState};
@@ -10,6 +12,10 @@ use crate::{
     engine::{DeckSnapshot, EngineSnapshot},
     gui::view::track_subtitle,
 };
+
+mod consts {
+    pub(super) const MINUS_SIGN: char = '\u{2212}';
+}
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -89,6 +95,7 @@ pub(in crate::gui) struct DeckCache {
     pub(in crate::gui) remain: String,
     pub(in crate::gui) subtitle: String,
     pub(in crate::gui) tempo: String,
+    pub(in crate::gui) transpose: String,
     pub(in crate::gui) wave: Vec<WaveBucket>,
     pub(in crate::gui) wave_revision: u64,
     wave_src: Option<ArtifactId>,
@@ -158,6 +165,7 @@ impl DeckCache {
             runtime,
         );
         self.tempo = format_tempo(deck.speed);
+        self.transpose = format_transpose(deck.pitch);
         self.bpm = format_bpm(deck.analysis.bpm, deck.speed);
         self.remain = format_remain(deck);
         self.subtitle = track_subtitle(deck);
@@ -202,6 +210,17 @@ fn format_tempo(speed: f32) -> String {
     format!("{:+.1}%", tenths / 10.0 + 0.0)
 }
 
+fn format_transpose(pitch: Option<Pitch>) -> String {
+    let shift = pitch.map_or(0, |(Pitch::Vinyl { shift } | Pitch::Held { shift })| {
+        i8::from(shift)
+    });
+    match shift {
+        0 => String::new(),
+        up if up > 0 => format!("+{up}"),
+        down => format!("{}{}", consts::MINUS_SIGN, down.unsigned_abs()),
+    }
+}
+
 fn format_bpm(source: Option<f32>, speed: f32) -> String {
     const EM_DASH: char = '\u{2014}';
 
@@ -209,11 +228,9 @@ fn format_bpm(source: Option<f32>, speed: f32) -> String {
 }
 
 fn format_remain(deck: &DeckSnapshot) -> String {
-    const MINUS_SIGN: char = '\u{2212}';
-
     let left = (deck.duration - deck.position).max(0.0);
     let total = left.floor().to_u64().unwrap_or(0);
-    format!("{MINUS_SIGN}{:02}:{:02}", total / 60, total % 60)
+    format!("{}{:02}:{:02}", consts::MINUS_SIGN, total / 60, total % 60)
 }
 
 fn waveform_buckets(wave: &Waveform) -> impl Iterator<Item = WaveBucket> + '_ {
@@ -361,8 +378,7 @@ mod tests {
             .eq_bands(Vec::new())
             .tempo(TempoPercent::DEFAULT)
             .synced(false)
-            .keylock(false)
-            .holds_pitch(true)
+            .pitch(Pitch::default())
             .state(ui)
             .build()
     }

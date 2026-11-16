@@ -577,6 +577,69 @@ fn merge_request_dispatch_is_admitted_without_duplicate_push_pipelines() {
 }
 
 #[test]
+fn bench_preview_is_optional_and_outside_the_verdict() {
+    let config = GitlabConfig::load(&workspace_root());
+    for name in ["deep:rtsan", "deep:bench"] {
+        let rules = config
+            .definition(name)
+            .get("rules")
+            .and_then(Value::as_sequence)
+            .unwrap();
+        for kind in ["branch", "merge-request", "quarantine"] {
+            let condition = format!("$KITHARA_PIPELINE_KIND == \"{kind}\"");
+            let rule = rules
+                .iter()
+                .filter_map(Value::as_mapping)
+                .find(|rule| rule.get("if").and_then(Value::as_str) == Some(condition.as_str()))
+                .unwrap();
+            assert_eq!(rule.get("when").and_then(Value::as_str), Some("manual"));
+            assert_eq!(
+                rule.get("allow_failure").and_then(Value::as_bool),
+                Some(true)
+            );
+            assert_eq!(
+                rule.get("interruptible").and_then(Value::as_bool),
+                Some(true)
+            );
+        }
+    }
+    let needs = config
+        .definition("verdict")
+        .get("needs")
+        .and_then(Value::as_sequence)
+        .unwrap();
+    assert!(
+        !needs
+            .iter()
+            .any(|need| need.get("job").and_then(Value::as_str) == Some("deep:bench"))
+    );
+}
+
+#[test]
+fn bench_pipeline_is_admitted_only_on_the_native_default_branch() {
+    let dispatch = yaml(workspace_root().join(".gitlab-ci.yml"));
+    let expected = "($CI_PIPELINE_SOURCE == \"web\" || $CI_PIPELINE_SOURCE == \"api\") && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $BENCH_TARGET && $RUN_BENCHMARKS == \"1\"";
+    let rules = dispatch["dispatch:bench"]["rules"].as_sequence().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_exact_rule(rules[0].as_mapping().unwrap(), expected, None);
+    assert!(
+        dispatch["workflow"]["rules"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|rule| rule.get("if").and_then(Value::as_str) == Some(expected))
+    );
+    assert_eq!(
+        dispatch["dispatch:bench"]["variables"]["KITHARA_PIPELINE_KIND"].as_str(),
+        Some("bench")
+    );
+    assert_eq!(
+        dispatch["dispatch:bench"]["interruptible"].as_bool(),
+        Some(false)
+    );
+}
+
+#[test]
 fn child_pipeline_includes_apple_lanes_and_the_blocking_verdict() {
     let pipeline = yaml(workspace_root().join(".gitlab/ci/pipeline.yml"));
     let pipeline = mapping(&pipeline, "the child pipeline");
@@ -844,6 +907,7 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         "apple:ios-test",
         "apple:lint",
         "apple:msrv",
+        "apple:pr-tests",
         "apple:safari",
         "apple:swift-test",
         "apple:test",
@@ -963,7 +1027,7 @@ fn semver_audit_blocks_release_builds_but_not_other_pipeline_kinds() {
         BTreeSet::from(["release".to_owned(), "weekly".to_owned()])
     );
 
-    for job in ["release:xcframework", "release:android"] {
+    for job in ["release:xcframework", "release:android", "release:app"] {
         let needs = config
             .effective_value(job, "needs")
             .expect("release build declares its prerequisites");
@@ -977,6 +1041,39 @@ fn semver_audit_blocks_release_builds_but_not_other_pipeline_kinds() {
             "{job} must wait for semver when a release schedules it"
         );
     }
+}
+
+#[test]
+fn the_application_archive_reaches_the_release_publisher() {
+    let config = GitlabConfig::load(&workspace_root());
+    assert_eq!(
+        config.effective_value("release:app", "tags"),
+        Some(serde_yaml_ng::from_str::<Value>("[kithara-release]").unwrap()),
+        "signing belongs to the protected release runner"
+    );
+    let paths = config.definition("release:app")["artifacts"]["paths"]
+        .as_sequence()
+        .expect("application artifacts");
+    for name in [
+        "Kithara-macos-universal.zip",
+        "Kithara-macos-universal.zip.sha256",
+    ] {
+        assert!(
+            paths.iter().any(|path| path.as_str() == Some(name)),
+            "{name}"
+        );
+    }
+    let needs = config
+        .effective_value("release:publish", "needs")
+        .expect("publish prerequisites");
+    assert!(
+        needs
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|need| need["job"].as_str() == Some("release:app")
+                && need["artifacts"].as_bool() == Some(true))
+    );
 }
 
 // The other direction. A lane that names the pipelines it belongs to and that no
@@ -1103,14 +1200,27 @@ fn a_draft_pull_request_runs_as_a_branch_under_quarantine_trust() {
     );
 }
 
-/// `--touched` measures a branch from the default branch, which on `GitLab` is
-/// not `main`.
+/// A draft's test block fails the pipeline before the suite that would run
+/// it: the check runs only when a draft carries a block, and the suite waits
+/// for it.
 #[test]
-fn a_touched_run_measures_from_the_default_branch() {
-    let pipeline = yaml(workspace_root().join(".gitlab/ci/pipeline.yml"));
+fn a_draft_test_block_is_checked_before_the_suite_runs() {
+    let apple = yaml(workspace_root().join(".gitlab/ci/apple.yml"));
+    let check = &apple["apple:pr-tests"];
     assert_eq!(
-        pipeline["variables"]["KITHARA_TOUCHED_BASE"].as_str(),
-        Some("$CI_DEFAULT_BRANCH")
+        check["rules"][0]["if"].as_str(),
+        Some("$KITHARA_PIPELINE_KIND == \"branch\" && $KITHARA_PR_TESTS")
+    );
+    assert_eq!(check["script"][0].as_str(), Some("just ci pr-tests"));
+    let needs = apple["apple:test"]["needs"]
+        .as_sequence()
+        .expect("the suite names what it waits for");
+    assert!(
+        needs
+            .iter()
+            .any(|need| need["job"].as_str() == Some("apple:pr-tests")
+                && need["optional"].as_bool() == Some(true)),
+        "the suite does not wait for the block check: {needs:?}"
     );
 }
 

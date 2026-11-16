@@ -130,7 +130,7 @@ usdt = ["dep:kithara", "kithara/usdt"]
 kithara-command = { workspace = true, optional = true }
 kithara-events = { workspace = true }
 kithara-render = { workspace = true, optional = true }
-kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang", "http-server", "subscriber", "temp-dir"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "mock", "hang", "http-server", "subscriber", "temp-dir"] }
 
 # Crypto (for HLS encryption tests)
 aes = { workspace = true }
@@ -173,7 +173,7 @@ uuid = { workspace = true }
 # `FDK_archdef.h` has no branch for MSVC on ARM64 and stops at `fatal error
 # C1021: invalid preprocessor command`, so that one target goes without.
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
-kithara = { workspace = true, default-features = false, optional = true }
+kithara = { features = ["test"], workspace = true, default-features = false, optional = true }
 
 # `bungee-sys` builds through `cmake`/MSVC and fails there; `kithara-stretch`
 # already drops the dependency for that target (see its `Cargo.toml`), so
@@ -181,10 +181,10 @@ kithara = { workspace = true, default-features = false, optional = true }
 # exist, the same failure wasm32 gets if it asks for the feature that block
 # above never lists.
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
-kithara = { workspace = true, default-features = false, optional = true }
+kithara = { features = ["test"], workspace = true, default-features = false, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
-kithara = { workspace = true, default-features = false, optional = true, features = ["full", "encode", "fdk-aac", "ffmpeg", "symphonia", "opus", "ape", "client-reqwest", "tls-rustls"] }
+kithara = { workspace = true, default-features = false, optional = true, features = ["test", "full", "encode", "fdk-aac", "ffmpeg", "symphonia", "opus", "ape", "client-reqwest", "tls-rustls"] }
 kithara-app = { workspace = true, default-features = false, optional = true }
 kithara-app-library = { workspace = true, optional = true }
 kithara-devtools-trace-format = { workspace = true, optional = true }
@@ -195,10 +195,10 @@ keyring-core = { workspace = true, optional = true, features = ["sample"] }
 # by target triple. Android stretches through Signalsmith, the backend
 # `kithara-ffi`'s `android` feature selects.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
-kithara = { workspace = true, default-features = false, optional = true, features = ["stretch-bungee"] }
+kithara = { workspace = true, default-features = false, optional = true, features = ["test", "stretch-bungee"] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
-kithara = { workspace = true, default-features = false, optional = true }
+kithara = { features = ["test"], workspace = true, default-features = false, optional = true }
 
 # --- Apple hardware backend (macOS/iOS only) ---
 # Forwarded so `DecoderBackend::Apple` is in scope for tests that
@@ -206,11 +206,11 @@ kithara = { workspace = true, default-features = false, optional = true }
 # `feature = "apple"` + matching `target_os`, so without these entries
 # the test crate cannot reference it.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-kithara = { workspace = true, default-features = false, optional = true, features = ["apple"] }
+kithara = { workspace = true, default-features = false, optional = true, features = ["test", "apple"] }
 
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true, default-features = false, optional = true }
+kithara = { features = ["test"], workspace = true, default-features = false, optional = true }
 kithara-dsp = { workspace = true }
 kithara-encode = { workspace = true, default-features = false, optional = true }
 kithara-record = { workspace = true, features = ["assets"], optional = true }
@@ -253,7 +253,7 @@ uuid = { workspace = true, features = ["v4"] }
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Native C++ stretchers are unavailable on wasm.
-kithara = { workspace = true, default-features = false, optional = true }
+kithara = { features = ["test"], workspace = true, default-features = false, optional = true }
 
 # Only `signal` reaches wasm: the store and its accessors are a host
 # filesystem, and the wasm lane names assets through `SignalAsset` instead,
@@ -274,7 +274,7 @@ web-sys = { workspace = true }
 
 # --- Android hardware backend (android only) ---
 [target.'cfg(target_os = "android")'.dependencies]
-kithara = { workspace = true, features = ["download", "android"] }
+kithara = { workspace = true, features = ["test", "download", "android"] }
 
 [dev-dependencies]
 

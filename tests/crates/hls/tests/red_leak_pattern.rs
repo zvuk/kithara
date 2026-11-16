@@ -11,7 +11,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     download::{Downloader, DownloaderConfig, FetchCmd, Peer},
     hls::{Hls, HlsConfig},
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{
         CancelToken,
         sync::Arc,
@@ -66,11 +66,9 @@ impl Peer for ImmortalPeer {
 async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn StdError + Send + Sync>>
 {
     let cancel = CancelToken::never();
-    let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(kithara_integration_tests::TestServerHelper::shared_client(
             NetOptions::default(),
-            pools,
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())
@@ -126,9 +124,8 @@ async fn red_hls_source_drop_leaks_peer(
     let pools = pools();
 
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(kithara_integration_tests::TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             CancelToken::never(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

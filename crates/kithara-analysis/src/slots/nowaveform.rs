@@ -45,16 +45,12 @@ pub(crate) const fn write_resume(_slot: &Slot) -> Option<Vec<u8>> {
 }
 
 pub(crate) fn restore<S>(
-    _slot: &mut Slot,
+    slot: &mut Slot,
     _pools: &PoolRegion<S>,
     resume: Option<&WaveformResume>,
 ) -> Result<(), BlobError>
 where
     S: HasPool<f32>,
 {
-    if resume.is_none() {
-        Ok(())
-    } else {
-        Err(BlobError::Corrupt)
-    }
+    super::restore(slot.0.as_mut(), resume, |pass, _| match *pass {})
 }

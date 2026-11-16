@@ -1,14 +1,14 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 #[cfg(feature = "spectrum")]
 use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, prediction_difference};
 use kithara_dsp::{
     fade::{self, FadeCurve},
-    filter::{Biquad, Coefficients, Hertz, Type},
+    filter::{Biquad, Coefficients, Hertz, Response, StateVariableFilter, Type},
     interp::{InterpError, Interpolation, interpolate, interpolate_frame, weighted_frames},
 };
 use kithara_test_utils::{bufpool::pools, kithara};
@@ -21,6 +21,7 @@ const TWO: NonZeroUsize = NonZeroUsize::MIN.saturating_add(1);
 const SIX: NonZeroUsize = NonZeroUsize::MIN.saturating_add(5);
 const TWELVE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(11);
 const PLANE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(FRAMES + 7);
+const WINDOW: NonZeroUsize = NonZeroUsize::MIN.saturating_add(299);
 #[cfg(feature = "spectrum")]
 const LAGS: NonZeroUsize = NonZeroUsize::MIN.saturating_add(511);
 
@@ -116,6 +117,7 @@ fn biquad_never_allocates_after_construction() {
             .process(&mut planes, 0..FRAMES / 2)
             .expect("shape matches");
         lookahead.copy_state(&filter).expect("same shape");
+        filter.reset();
         lookahead
             .process(&mut planes, FRAMES / 2..FRAMES)
             .expect("shape matches");
@@ -131,6 +133,39 @@ fn biquad_never_allocates_after_construction() {
         filter
             .process(&mut planes, 0..FRAMES)
             .expect("silence resets");
+    });
+}
+
+#[kithara::test(native)]
+fn state_variable_filter_construction_and_processing_never_allocate() {
+    let mut filter = assert_no_alloc(StateVariableFilter::<2>::new);
+    let cutoffs: Vec<_> = (0..FRAMES)
+        .map(|frame| 200.0 + 4.0 * f64::from(u16::try_from(frame).expect("frame")))
+        .collect();
+    let rate = NonZeroU32::new(48_000).expect("nonzero rate");
+    let mut planes = vec![vec![0.25_f32; FRAMES]; 2];
+    assert_no_alloc(|| {
+        filter
+            .process(
+                &mut planes,
+                0..FRAMES,
+                &cutoffs,
+                rate,
+                1.0,
+                Response::LowPass,
+            )
+            .expect("shape matches");
+        filter.reset();
+        filter
+            .process(
+                &mut planes,
+                0..FRAMES,
+                &cutoffs,
+                rate,
+                1.0,
+                Response::HighPass,
+            )
+            .expect("shape matches");
     });
 }
 
@@ -273,6 +308,39 @@ fn spectral_prediction_never_allocates() {
 }
 
 #[kithara::test(native)]
+fn minimum_window_process_set_len_and_reset_never_allocate() {
+    let mut window = kithara_dsp::envelope::MinimumWindow::new(WINDOW, &pools())
+        .expect("the older targets fit the region");
+    let mut targets = [0.0_f32; FRAMES];
+    assert_no_alloc(|| {
+        for frames in [
+            FRAMES,
+            0,
+            1,
+            WINDOW.get() - 2,
+            WINDOW.get() - 1,
+            WINDOW.get(),
+            FRAMES,
+        ] {
+            let ascending = std::iter::successors(Some(0.0_f32), |value| Some(value + 1.0));
+            for (target, value) in targets.iter_mut().zip(ascending) {
+                *target = value;
+            }
+            assert_eq!(window.process(&mut targets[..frames]), frames);
+        }
+        window.reset();
+        window
+            .set_len(NonZeroUsize::MIN)
+            .expect("one target fits every window");
+        assert_eq!(window.process(&mut targets), FRAMES);
+        window
+            .set_len(WINDOW)
+            .expect("the capacity fits its own window");
+        assert_eq!(window.process(&mut targets), FRAMES);
+    });
+}
+
+#[kithara::test(native)]
 fn delay_reads_writes_and_reset_never_allocate() {
     let mut line = kithara_dsp::delay::DelayLine::new(TWO, PLANE, &pools()).expect("line fits");
     let integer = line.tap(512.0).expect("tap in range");
@@ -293,6 +361,26 @@ fn delay_reads_writes_and_reset_never_allocate() {
         line.reset();
     });
     assert!(output.iter().all(|sample| *sample == 0.25));
+}
+
+#[kithara::test(native)]
+fn diffuser_process_and_reset_never_allocate() {
+    let line = kithara_dsp::delay::DelayLine::new(TWO, PLANE, &pools()).expect("line fits");
+    let mut section = kithara_dsp::delay::DelayDiffuser::<2>::new(line, 0.5).unwrap();
+    let mut left = [0.125; FRAMES];
+    let mut right = [-0.25; FRAMES];
+    assert_no_alloc(|| {
+        for range in [0..0, 0..1, 1..513, 513..FRAMES, 0..FRAMES] {
+            section
+                .process(&mut [&mut left[..], &mut right[..]], range)
+                .unwrap();
+        }
+        section.reset();
+        section
+            .process(&mut [&mut left[..], &mut right[..]], 0..FRAMES)
+            .unwrap();
+    });
+    assert!(left.iter().chain(&right).all(|sample| sample.is_finite()));
 }
 
 #[kithara::test(native)]

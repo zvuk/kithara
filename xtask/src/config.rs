@@ -79,6 +79,8 @@ pub(crate) struct CiLaneConfig {
     pub(crate) left_behind_by: String,
     pub(crate) program: String,
     pub(crate) steps: Vec<CiLaneStep>,
+    /// Packages selected by the lane's interpreter test command.
+    pub(crate) test_packages: Vec<String>,
     /// Pipeline kinds this lane refuses rather than runs. A lane that is not
     /// scheduled in a pipeline never reaches this; one that is scheduled and
     /// declines has to say so where the schedule can be read against it.

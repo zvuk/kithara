@@ -1,6 +1,6 @@
 use std::{
     num::NonZeroUsize,
-    ops::{Add, Div, Mul, Shr, Sub},
+    ops::{Add, Deref, Div, Mul, Range, Shr, Sub},
 };
 
 use fearless_simd::{Level, dispatch, prelude::*};
@@ -437,4 +437,53 @@ fn crossfade_linear_blend<S: Simd>(
         .bitcast::<S::u32s>()
         .simd_eq(incoming.bitcast::<S::u32s>())
         .select(incoming, blended)
+}
+
+/// The first frame of `range` where every plane holds `|x| <= limit`, or its
+/// end. The caller has checked that every plane covers the entire range.
+pub(crate) fn first_quiet<P: Deref<Target = [f32]>>(
+    planes: &[P],
+    range: Range<usize>,
+    limit: f32,
+) -> usize {
+    dispatch!(Level::new(), simd => first_quiet_kernel(simd, planes, range, limit))
+}
+
+#[inline(always)]
+pub(super) fn first_quiet_kernel<S: Simd, P: Deref<Target = [f32]>>(
+    simd: S,
+    planes: &[P],
+    range: Range<usize>,
+    limit: f32,
+) -> usize {
+    let bound = S::f32s::splat(simd, limit);
+    let mut frame = range.start;
+    while let Some(end) = frame
+        .checked_add(S::f32s::LEN)
+        .filter(|end| *end <= range.end)
+    {
+        let mut quiet = u64::MAX;
+        for plane in planes {
+            let block = plane.get(frame..end).expect("validated plane range");
+            quiet &= S::f32s::from_slice(simd, block)
+                .abs()
+                .simd_le(bound)
+                .to_bitmask();
+            if quiet == 0 {
+                break;
+            }
+        }
+        if quiet != 0 {
+            let lane = usize::try_from(quiet.trailing_zeros()).expect("SIMD lane fits usize");
+            return frame.saturating_add(lane);
+        }
+        frame = end;
+    }
+    (frame..range.end)
+        .find(|frame| {
+            planes
+                .iter()
+                .all(|plane| plane.get(*frame).expect("validated frame").abs() <= limit)
+        })
+        .unwrap_or(range.end)
 }

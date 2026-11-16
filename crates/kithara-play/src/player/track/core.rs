@@ -1,16 +1,11 @@
-use std::{
-    cell::{Cell, RefCell},
-    collections::VecDeque,
-    marker::PhantomData,
-};
+use std::{cell::RefCell, marker::PhantomData};
 
 use kithara_abr::AbrHandle;
 use kithara_command::{Live, Sender, Seq, Target, When};
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
-use kithara_platform::time::Duration;
 use kithara_render::{
-    LaneCommand, LaneFrame, LaneId, LaneProtocol, ServiceClass,
+    LaneCommand, LaneFrame, LaneProtocol, ServiceClass,
     bridge::{DeckPart, Fade, Slot, SlotMark, TrackClock},
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
@@ -22,57 +17,45 @@ use super::{
         settings::{PlayerConfig, TrackSettings, TrackSettingsChange},
     },
     geometry::*,
+    seat::Seat,
+    segment::{Adoptions, Segment},
     state::*,
 };
-use crate::PlayError;
+use crate::{PlayError, resource::LaneGeometry};
 
 /// The sole segment issuer and command producer for one track.
 pub struct PlayerImpl<S> {
     pub(super) item: TrackId,
-    pub(super) slot: Option<Slot>,
+    pub(super) seat: Seat,
     pub(super) class: ServiceClass,
     pub(super) lane: Option<Sender<LaneProtocol>>,
-    pub(super) lane_id: Option<LaneId>,
+    pub(super) registration: Registration,
     pub(super) settings: Live<TrackSettings, LaneProtocol>,
     pub(super) output: kithara_render::bridge::SlotOutputSnapshot,
     pub(super) status: TrackStatus,
     pub(super) loading: Option<Loading>,
-    pub(super) attaching: Option<Attaching>,
-    pub(super) segment: SegmentId,
-    pub(super) ready: Option<SegmentId>,
+    pub(super) segment: Segment,
     pub(super) issued_segment: SegmentId,
-    pub(super) adopting: Vec<Adoption>,
-    pub(super) newest_epoch_pending: Option<Seq>,
-    pub(super) lane_commands: Vec<LaneOperation>,
+    pub(super) adoptions: Adoptions,
+    pub(super) lane_history: LaneHistory,
     pub(super) playback_commands: Vec<PlaybackOperation>,
-    pub(super) speed_answers: VecDeque<SpeedAnswer>,
-    pub(super) segment_speed: f32,
     pub(super) play: Option<When<SessionFrame>>,
     pub(super) repeat: bool,
     /// The clock the track keeps through a dropout.
     pub(super) clock: TrackClock,
     /// The clock its seated RT track was last sent.
     pub(super) seated_clock: TrackClock,
-    pub(super) releasing: bool,
     pub(super) resume: Option<SlotMark>,
     pub(super) mark: Option<SlotMark>,
-    pub(super) attach_at: Option<SessionFrame>,
-    pub(super) ring_depth: FrameCount,
+    pub(super) geometry: LaneGeometry,
     pub(super) engine_latency: FrameCount,
-    pub(super) declick: FrameCount,
     pub(super) position: Position,
-    pub(super) segment_origin: Option<Position>,
     pub(super) source_basis: Option<AudioChunkInfo>,
     pub(super) observed_source: Option<AudioChunkInfo>,
     pub(super) projected_end: RefCell<Option<ProjectedEnd>>,
-    /// Cleared by lane-history mutations; entries name every other projection input.
-    pub(super) speed_projection: Cell<Option<SpeedProjection>>,
-    pub(super) duration: Option<Duration>,
-    pub(super) visible_origin: Option<Duration>,
-    pub(super) media_origin: Option<Duration>,
+    pub(super) extent: Extent,
     pub(super) abr: Option<AbrHandle>,
     pub(super) metadata: TrackMetadata,
-    pub(super) release: Option<Seq>,
     pub(super) marker: PhantomData<fn() -> S>,
 }
 
@@ -84,47 +67,34 @@ impl<S> PlayerImpl<S> {
     pub fn new(config: PlayerConfig) -> Result<Self, PlayError> {
         Ok(Self {
             item: config.item,
-            slot: config.slot,
+            seat: config.slot.map_or(Seat::Unseated, Seat::Named),
             class: ServiceClass::default(),
             lane: None,
-            lane_id: None,
+            registration: Registration::None,
             settings: Live::new(config.settings)?,
             output: kithara_render::bridge::SlotOutputSnapshot::default(),
             status: TrackStatus::Idle,
             loading: None,
-            attaching: None,
-            segment: SegmentId::FIRST,
-            ready: None,
+            segment: Segment::issued(SegmentId::FIRST, None, config.settings.speed()),
             issued_segment: SegmentId::FIRST,
-            adopting: Vec::new(),
-            newest_epoch_pending: None,
-            lane_commands: Vec::new(),
+            adoptions: Adoptions::default(),
+            lane_history: LaneHistory::default(),
             playback_commands: Vec::new(),
-            speed_answers: VecDeque::new(),
-            segment_speed: config.settings.speed(),
             play: None,
             repeat: false,
             clock: TrackClock::Media,
             seated_clock: TrackClock::Media,
-            releasing: false,
             resume: None,
             mark: None,
-            attach_at: None,
-            ring_depth: FrameCount::new(0),
+            geometry: LaneGeometry::default(),
             engine_latency: FrameCount::new(0),
-            declick: FrameCount::new(0),
             position: Position::ZERO,
-            segment_origin: None,
             source_basis: None,
             observed_source: None,
             projected_end: RefCell::new(None),
-            speed_projection: Cell::new(None),
-            duration: None,
-            visible_origin: None,
-            media_origin: None,
+            extent: Extent::default(),
             abr: None,
             metadata: TrackMetadata::default(),
-            release: None,
             marker: PhantomData,
         })
     }
@@ -135,18 +105,18 @@ impl<S> PlayerImpl<S> {
     }
 
     pub(super) fn seat(&self) -> Result<Slot, PlayError> {
-        self.slot.ok_or(PlayError::NoActiveSlot)
+        self.seat.slot().ok_or(PlayError::NoActiveSlot)
     }
 
     #[must_use]
     pub fn attached(&self) -> bool {
-        self.attaching.is_some() || self.attach_at.is_some()
+        matches!(self.seat, Seat::Attaching { .. } | Seat::Attached { .. })
     }
 
     /// Content position of a raw source time. A raw time read from the
     /// source keeps the observed source's frame grid across the subtraction.
     pub(super) fn content_position(&self, raw: Position) -> Option<Position> {
-        let origin = self.media_origin?;
+        let origin = self.extent.media_origin?;
         Some(self.observed_source.map_or_else(
             || raw.saturating_sub(origin),
             |source| source.spec.elapsed_since(origin, raw),
@@ -155,7 +125,8 @@ impl<S> PlayerImpl<S> {
 
     pub(super) fn content_mark_position(&self, mark: SlotMark) -> Option<Position> {
         if mark.lane.frame == 0 {
-            self.media_origin
+            self.extent
+                .media_origin
                 .map(|origin| mark.position.saturating_sub(origin))
         } else {
             self.content_position(mark.position)
@@ -163,7 +134,8 @@ impl<S> PlayerImpl<S> {
     }
 
     pub(super) fn raw_position(&self, position: Position) -> Result<Position, PlayError> {
-        self.media_origin
+        self.extent
+            .media_origin
             .and_then(|origin| origin.checked_add(position))
             .ok_or(PlayError::Untimed)
     }
@@ -172,40 +144,40 @@ impl<S> PlayerImpl<S> {
         if let Some(mark) = self
             .resume
             .or(self.mark)
-            .filter(|mark| mark.lane.segment == self.segment)
+            .filter(|mark| mark.lane.segment == self.segment.id)
         {
             return Ok(mark.position);
         }
-        self.segment_origin.ok_or(PlayError::Untimed)
+        self.segment.origin.ok_or(PlayError::Untimed)
     }
 
     pub(super) fn observe(&mut self, out: &Outbox<'_, S>) {
         if self.loading.is_some() {
             return;
         }
-        if let Some(seat) = self.slot
+        if let Some(seat) = self.seat.slot()
             && let Some(pass) = out.pass()
             && let Some(slot) = pass.deck.slots.get(seat.index())
         {
             self.mark = slot.mark;
             if slot.binding.is_some_and(|binding| {
-                binding.item() == self.item && binding.segment() == self.segment
+                binding.item() == self.item && binding.segment() == self.segment.id
             }) {
                 self.output = slot.output;
             }
-            if let Some(source) = slot.source.filter(|info| info.segment == self.segment)
-                && self.attach_at.is_some()
+            if let Some(source) = slot.source.filter(|info| info.segment == self.segment.id)
+                && self.seat.attached_at().is_some()
                 && !matches!(self.status, TrackStatus::Released)
             {
-                if self.segment_origin.is_none() {
-                    self.segment_origin = Some(source.timestamp);
+                if self.segment.origin.is_none() {
+                    self.segment.origin = Some(source.timestamp);
                 }
                 self.observed_source = Some(source);
-                self.visible_origin = source.visible_origin;
-                self.media_origin = source.media_origin;
-                self.duration = source.media_end;
+                self.extent = Extent::of(Some(source));
             }
-            if let Some(mark) = slot.mark.filter(|mark| mark.lane.segment == self.segment)
+            if let Some(mark) = slot
+                .mark
+                .filter(|mark| mark.lane.segment == self.segment.id)
                 && slot.position.is_finite()
                 && slot.position >= 0.0
                 && let Some(position) = self.content_mark_position(mark)
@@ -223,12 +195,13 @@ impl<S> PlayerImpl<S> {
         if let When::At(frame) = at {
             let pass = out.pass().ok_or(PlayError::Untimed)?;
             let origin = self
-                .attach_at
+                .seat
+                .attached_at()
                 .map_or(pass.now, |attach| attach.max(pass.now));
             if frame < origin + pass.deck_delivery {
                 return Err(PlayError::Late);
             }
-            if self.attach_at.is_none() {
+            if self.seat.attached_at().is_none() {
                 return Err(PlayError::Untimed);
             }
         }
@@ -248,11 +221,11 @@ impl<S> PlayerImpl<S> {
             When::At(frame) => {
                 self.check_when(at, out)?;
                 let pass = out.pass().ok_or(PlayError::Untimed)?;
-                if frame < pass.earliest() + self.ring_depth + self.engine_latency {
+                if frame < pass.earliest() + self.geometry.ring_depth + self.engine_latency {
                     return Err(PlayError::Late);
                 }
                 let mark = self.mark.ok_or(PlayError::Untimed)?;
-                if mark.lane.segment != self.segment
+                if mark.lane.segment != self.segment.id
                     || !matches!(self.status, TrackStatus::Playing { .. })
                 {
                     return Err(PlayError::Untimed);
@@ -275,7 +248,7 @@ impl<S> PlayerImpl<S> {
         commands: Vec<LaneCommand>,
         when: When<LaneFrame>,
     ) -> Result<Seq, PlayError> {
-        if self.adopting.iter().any(|adoption| adoption.cancelled) {
+        if self.adoptions.cancelling() {
             return Err(PlayError::NotReady);
         }
         let session = match when {
@@ -284,13 +257,12 @@ impl<S> PlayerImpl<S> {
         };
         let lane = self.lane.as_mut().ok_or(PlayError::NotReady)?;
         let seq = Outbox::<S>::lane(lane, when, commands.clone())?;
-        self.speed_projection.set(None);
-        self.lane_commands
-            .extend(commands.into_iter().map(|command| {
+        self.lane_history
+            .submit(commands.into_iter().map(|command| {
                 tracing::debug!(
                     item = u64::from(self.item),
                     seq = seq.get(),
-                    current_segment = self.segment.get(),
+                    current_segment = self.segment.id.get(),
                     requested_when = ?when,
                     paused_resume = ?self.resume,
                     mark = ?self.mark,
@@ -322,7 +294,7 @@ impl<S> PlayerImpl<S> {
                 LaneOperation {
                     seq,
                     when,
-                    segment: self.segment,
+                    segment: self.segment.id,
                     session,
                     command,
                     verdict: None,
@@ -338,7 +310,7 @@ impl<S> PlayerImpl<S> {
     ) -> Result<When<LaneFrame>, PlayError> {
         let start = i64::from(at)
             .checked_sub(
-                i64::try_from(self.declick.get())
+                i64::try_from(self.geometry.declick.get())
                     .map_err(|error| PlayError::Internal(error.to_string()))?,
             )
             .map(SessionFrame::new)
@@ -349,7 +321,7 @@ impl<S> PlayerImpl<S> {
     /// Drops the start this track still owes, with its pending attachment's.
     pub(super) fn withdraw_play(&mut self) {
         self.play = None;
-        if let Some(attaching) = self.attaching.as_mut() {
+        if let Some(attaching) = self.seat.attaching_mut() {
             attaching.play = None;
         }
     }

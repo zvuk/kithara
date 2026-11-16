@@ -3,10 +3,10 @@ use kithara_command::{Mailbox, Postbox, Seq, When};
 use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_play::{
-    CrossfaderGain, DeckEqChange, DeckFxChange, DeckMixSettingsChange, EqBandConfig, GainDb,
-    InterruptionKind, Outbox, OutputSnapshot, PlayError, Player, Position, SeekBatch, Track,
-    TrackCommand, TrackFactory, TrackSettings, TrackSettingsChange, TrackStatus as PlayingStatus,
-    Trim,
+    CrossfaderGain, DeckEqChange, DeckFxChange, DeckMixSettingsChange, EqBandConfig, FilterKnob,
+    GainDb, InterruptionKind, Outbox, OutputSnapshot, PitchStep, PlayError, Player, Position,
+    SeekBatch, Track, TrackCommand, TrackFactory, TrackSettings, TrackSettingsChange,
+    TrackStatus as PlayingStatus, Trim,
 };
 use kithara_signal::{FaderValue, SessionFrame};
 
@@ -58,10 +58,13 @@ where
         to: Position,
     },
     ConfigureTrack(TrackSettingsChange, When<SessionFrame>),
+    StepPitch(PitchStep),
     GainProgram {
         item: TrackId,
         program: kithara_play::SlotGainProgram,
     },
+    EqGainProgram(kithara_play::EqGainProgram),
+    FilterProgram(kithara_play::FilterProgram),
     ConfigureQueue(QueueSettingsChange, When<SessionFrame>),
     SetActionAtItemEnd(ActionAtItemEnd),
     SetPlaybackOrder(PlaybackOrder),
@@ -79,6 +82,10 @@ where
     Fx {
         at: When<SessionFrame>,
         changes: Vec<DeckFxChange>,
+    },
+    Filter {
+        at: When<SessionFrame>,
+        knob: FilterKnob,
     },
     NotifyInterruption(InterruptionKind),
     Tick,
@@ -181,7 +188,12 @@ where
             QueueCommand::Pause { at } => self.pause_at(at, out),
             QueueCommand::Seek { to } => self.seek_to(to, out),
             QueueCommand::ConfigureTrack(change, at) => self.configure_tracks(change, at, out),
+            QueueCommand::StepPitch(step) => self.step_pitch(step, out),
             QueueCommand::Fx { at, changes } => out.fx(at, changes).map_err(Into::into),
+            QueueCommand::Filter { at, knob } => out
+                .mix(at, DeckMixSettingsChange::Filter(knob))
+                .map(Some)
+                .map_err(Into::into),
             QueueCommand::GainProgram { item, program } => {
                 let index = self
                     .active
@@ -197,6 +209,10 @@ where
                     .apply(TrackCommand::GainProgram(program), out)
                     .map_err(Into::into)
             }
+            QueueCommand::EqGainProgram(program) => {
+                out.eq_gain_program(program).map_err(Into::into)
+            }
+            QueueCommand::FilterProgram(program) => out.filter_program(program).map_err(Into::into),
             QueueCommand::NotifyInterruption(kind) => {
                 self.deck.suspended = out.notify_interruption(kind)?;
                 Ok(None)
@@ -474,6 +490,21 @@ where
             .ok_or(PlayError::NoActiveSlot)?
             .track
             .apply(command, out)
+    }
+
+    fn step_pitch(
+        &mut self,
+        step: PitchStep,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        let Some(pitch) = self.config.pitch() else {
+            return Ok(None);
+        };
+        let stepped = pitch.step(step);
+        if stepped == pitch {
+            return Ok(None);
+        }
+        self.configure_tracks(TrackSettingsChange::Pitch(stepped), When::Next, out)
     }
 
     fn configure_tracks(

@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, num::NonZeroU32, ops::Range};
+use std::{convert::Infallible, marker::PhantomData, num::NonZeroU32, ops::Range};
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
@@ -102,11 +102,7 @@ where
     where
         S: HasPool<f32>,
     {
-        if resume.is_none() {
-            Ok(())
-        } else {
-            Err(BlobError::Corrupt)
-        }
+        super::restore(None::<&mut Infallible>, resume, |pass, _| match *pass {})
     }
 
     pub(crate) fn snapshot<S>(

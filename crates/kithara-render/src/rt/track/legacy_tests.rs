@@ -6,7 +6,6 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use kithara_test_utils::kithara;
-use kithara_warp::RenderContext;
 use ringbuf::{
     HeapProd, HeapRb,
     traits::{Consumer, Split},
@@ -113,14 +112,13 @@ fn render_track(
     range: std::ops::Range<usize>,
     sink: &mut RtSink<'_>,
 ) -> TrackReadOutcome {
-    let output = OutputContext::new(
+    let context = OutputContext::new(
         SessionFrame::new(0)..SessionFrame::new(512),
         spec().sample_rate,
         SessionEpoch::new(0),
         None,
     )
     .expect("output block");
-    let context = RenderContext::new_linear(output, None).expect("render context");
     let outcome = track.render(
         Some(&context),
         TrackBuffers { scratch, bus },

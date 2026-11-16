@@ -14,19 +14,10 @@
 
 # kithara-signal
 
-`kithara-signal` is Kithara's dependency-light decoded-audio data plane.
-
-It owns the value types shared by decoders, playback, Warp, and streaming
-analysis: format, owning chunk, timeline/provenance facts, frame/sample units,
-the physical session output axis, pure sample/time conversion, frame-range
-coverage, and the versioned blob framing that stores it.
-`SourceSpan` preserves the exact rational source/output relation through nested
-consumer slices; rounded source endpoints never become a new mapping basis.
-Pool-region mechanics remain in `kithara-bufpool`. Encoded/container media facts remain in
-`kithara-stream`. Musical geometry — beats, grids, warping — remains in
-`kithara-warp`.
-
-The crate has no decoder, network, asset, worker, scheduler, Warp, stretch,
-player, analyzer, backend feature, or configuration responsibility.
+Value types for decoded audio, shared by decoders, playback, and analysis:
+format (`AudioSpec`), chunks and their timeline, frame and sample units,
+sample/time conversion, frame-range coverage, and the session output axis.
+`SourceSpan` keeps the exact source-to-output mapping through nested slices.
+No I/O, no threads, no backend features.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-signal) for the ownership contract.

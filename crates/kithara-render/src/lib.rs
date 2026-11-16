@@ -32,4 +32,5 @@ pub use source::WarpSource;
 pub use worker::{
     DecoderNode, EngineLoad, EngineLoadSnapshot, LoadRefusal, PcmPacket, PcmReceiver, PlayWorker,
     PlayWorkerConfig, PlayWorkerConfigPatch, StreamWake, TrackConfig, TrackConfigPatch,
+    pcm_quantum,
 };

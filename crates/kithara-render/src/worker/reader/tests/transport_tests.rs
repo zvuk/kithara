@@ -1,7 +1,7 @@
 use kithara_platform::sync::WaitGate;
 use kithara_signal::SegmentId;
 use kithara_test_utils::kithara;
-use ringbuf::traits::{Observer, Producer};
+use ringbuf::traits::Observer;
 
 use super::super::core::PcmReceiver;
 use crate::{
@@ -158,7 +158,7 @@ fn ready_packet_is_checked_after_a_timed_park(#[case] fixture_wait: bool) {
     // Keep the producer alive without notifying, so only the park deadline wakes the reader.
     let publish = kithara_platform::thread::spawn(move || {
         super::progress_tests::wait_for_demand(&wake, baseline);
-        producer.forward.try_push(packet).expect("packet fits");
+        producer.push(packet).expect("packet fits");
         producer
     });
     let receiver = fixture.receiver.as_ref().expect("receiver");

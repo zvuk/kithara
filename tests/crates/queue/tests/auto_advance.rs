@@ -232,6 +232,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
 async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -281,7 +282,11 @@ async fn repeat_one_natural_advance_keeps_current_track() {
     assert_eq!(queue.current().map(|entry| entry.id), Some(id));
     assert!(
         queue.is_playing(),
-        "repeat one must restart after natural EOF"
+        "repeat one must restart after natural EOF: current={:?}, deck={:?}, metrics={:?}, next_event={:?}",
+        queue.current().map(|entry| (entry.id, entry.status)),
+        harness.deck_snapshot(),
+        harness.metrics(),
+        receiver.try_recv().map(|envelope| envelope.event),
     );
     drop(queue);
     harness.close().await;
@@ -1717,7 +1722,11 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
 
     assert!(
         mean_mid > 0.005,
-        "no signal mid-playback (mean={mean_mid}) — decoder likely self-armed"
+        "no signal mid-playback (mean={mean_mid}) — decoder likely self-armed; onset={onset}, window={window}, pcm_samples={}, current={:?}, deck={:?}, metrics={:?}",
+        pcm.len(),
+        queue.current().map(|entry| (entry.id, entry.status)),
+        harness.deck_snapshot(),
+        harness.metrics(),
     );
     assert_eq!(
         queue.current_index(),

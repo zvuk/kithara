@@ -158,10 +158,7 @@ pub(super) fn geometry(
     warp: &kithara_warp::WarpConfig,
     audio_buffer_chunks: NonZeroUsize,
 ) -> Result<FrameCount, PlayError> {
-    let source_block = warp.source_block_frames().get();
-    let packet = warp
-        .render_quantum_frames()
-        .map_or(source_block, |quantum| quantum.get().min(source_block));
+    let packet = kithara_render::pcm_quantum(warp).get();
     audio_buffer_chunks
         .get()
         .checked_add(1)
@@ -171,12 +168,21 @@ pub(super) fn geometry(
         .ok_or_else(|| PlayError::Internal("lane ring frame depth overflow".into()))
 }
 
+/// The lane sizes a source's configuration fixes before it opens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LaneGeometry {
+    /// Maximum rendered lead, including the held packet.
+    pub(crate) ring_depth: FrameCount,
+    /// Length of the lane's Jump ramp.
+    pub(crate) declick: FrameCount,
+}
+
 /// A single-use source open and its preparation-owned lane wiring.
 pub struct ResourceLoad<S, B = PlaybackResamplerBackend> {
     pub(super) opener: Box<ResourceOpener>,
     pub(super) channel: Option<Box<dyn Fn() -> LaneChannel + Send>>,
     pub(super) cancel: Option<CancelToken>,
-    pub(super) geometry: Result<(FrameCount, FrameCount), PlayError>,
+    pub(super) geometry: Result<LaneGeometry, PlayError>,
     pub(super) marker: PhantomData<ResourceMarker<S, B>>,
 }
 
@@ -199,8 +205,7 @@ impl<S, B> ResourceLoad<S, B> {
         Ok(channel())
     }
 
-    /// Maximum rendered lead, including the held packet, and the lane's Jump ramp.
-    pub(crate) fn lane_geometry(&self) -> Result<(FrameCount, FrameCount), PlayError> {
+    pub(crate) fn lane_geometry(&self) -> Result<LaneGeometry, PlayError> {
         self.geometry.clone()
     }
 }
@@ -229,9 +234,7 @@ where
         }
     }
 
-    fn config_geometry(
-        config: &ResourceConfig<S, B>,
-    ) -> Result<(FrameCount, FrameCount), PlayError> {
+    fn config_geometry(config: &ResourceConfig<S, B>) -> Result<LaneGeometry, PlayError> {
         config.worker.as_ref().ok_or_else(|| {
             PlayError::Internal("ResourceConfig requires an explicit PlayWorker".into())
         })?;
@@ -241,7 +244,10 @@ where
         let rate = config.host_sample_rate.ok_or_else(|| {
             PlayError::Internal("lane geometry requires the prepared host sample rate".into())
         })?;
-        Ok((ring_depth, track.declick_frames(rate)))
+        Ok(LaneGeometry {
+            ring_depth,
+            declick: track.declick_frames(rate),
+        })
     }
 
     async fn load(
@@ -418,13 +424,14 @@ mod tests {
             )
             .worker(worker)
             .build();
+        let wake = kithara_worker::Wake::default();
         let resource = {
             // WHY: The fixture's disk open must consume real time before the watchdog expires.
             let _real_io = kithara_platform::flash::real_io();
             hang_tick!("direct resource awaits its source open".to_owned());
             kithara_platform::time::timeout(
                 __hang_detector.remaining(),
-                Resource::open(config, kithara_worker::Wake::default()),
+                Resource::open(config, wake.clone()),
             )
             .await
             .expect("direct reader opens within the watchdog budget")
@@ -434,21 +441,30 @@ mod tests {
         let mut reader: Box<dyn AudioReader> = resource.into();
         assert_eq!(reader.spec().sample_rate, crate::mock::SAMPLE_RATE);
         let mut frames = 0;
-        for _ in 0..8192 {
+        loop {
             hang_tick!(format!("direct reader waits for EOF after {frames} frames"));
             match reader.next_chunk().expect("decoded chunk") {
                 ChunkOutcome::Chunk(chunk) => {
                     frames += chunk.frames();
                     hang_reset!();
                 }
-                ChunkOutcome::Pending { .. } => kithara_platform::tokio::task::yield_now().await,
+                ChunkOutcome::Pending { .. } => {
+                    // WHY: the source reads on real threads and wakes the
+                    // reader's owner once the bytes it waits for land.
+                    let _real_io = kithara_platform::flash::real_io();
+                    let wake = wake.clone();
+                    let budget = __hang_detector.remaining();
+                    let _ = kithara_platform::tokio::task::spawn_blocking(move || {
+                        kithara_worker::mock::wait_wake(&wake, budget)
+                    })
+                    .await;
+                }
                 ChunkOutcome::Eof { .. } => {
                     assert_eq!(frames, 4096);
                     return;
                 }
             }
         }
-        panic!("direct reader did not reach EOF");
     }
 
     #[kithara::test]
@@ -475,7 +491,10 @@ mod tests {
         .build();
         let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
 
-        let (ring_depth, _) = load.lane_geometry().expect("bounded lane geometry");
+        let ring_depth = load
+            .lane_geometry()
+            .expect("bounded lane geometry")
+            .ring_depth;
 
         assert_eq!(ring_depth, FrameCount::new(expected_frames));
     }
@@ -1202,15 +1221,7 @@ mod tests {
         let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
         let (_sender, inbox) = load.lane_channel().expect("configured worker lane channel");
         let refused = load
-            .open(
-                Duration::ZERO,
-                LaneStart {
-                    speed: SpeedCurve::Constant(1.0),
-                    keylock: false,
-                    backend: StretchKind::default(),
-                },
-                inbox,
-            )
+            .open(Duration::ZERO, LaneStart::default(), inbox)
             .await
             .map(|(opened, _, _)| opened);
 
@@ -1273,15 +1284,7 @@ mod tests {
             let (sender, inbox) = load.lane_channel().expect("configured worker lane channel");
             async move {
                 let opened = load
-                    .open(
-                        Duration::ZERO,
-                        LaneStart {
-                            speed: SpeedCurve::Constant(1.0),
-                            keylock: false,
-                            backend: StretchKind::default(),
-                        },
-                        inbox,
-                    )
+                    .open(Duration::ZERO, LaneStart::default(), inbox)
                     .await
                     .map(|(opened, _, _)| opened);
                 drop(sender);

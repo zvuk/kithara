@@ -546,20 +546,30 @@ fn expand_modal(
     })
 }
 
+struct Presses<'a> {
+    press: &'a BindingRef,
+    secondary: Option<&'a BindingRef>,
+    double: Option<&'a BindingRef>,
+}
+
 fn expand_pressable(
     context: &Context<'_>,
     node: &ControlNode,
     id: &NodeId,
-    declared: (&BindingRef, Option<&BindingRef>),
+    declared: &Presses<'_>,
     child: &ControlNode,
     depth: usize,
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
-    let (press, secondary) = declared;
     machine.budget.charge(&context.origin)?;
     let path = child_path(&context.prefix, id);
-    let press = context.substitute(press, &path)?;
-    let secondary = secondary
+    let press = context.substitute(declared.press, &path)?;
+    let secondary = declared
+        .secondary
+        .map(|binding| context.substitute(binding, &path))
+        .transpose()?;
+    let double = declared
+        .double
         .map(|binding| context.substitute(binding, &path))
         .transpose()?;
     machine.visit(
@@ -567,6 +577,7 @@ fn expand_pressable(
             write: Some(&press),
             writes: SlotWrites {
                 secondary: secondary.as_ref(),
+                double: double.as_ref(),
                 ..SlotWrites::default()
             },
             ..ControlSite::new(node, &path)
@@ -576,6 +587,12 @@ fn expand_pressable(
     Ok(ExpandedNode::Pressable {
         path: machine.interner.intern(&path, &context.origin)?,
         press: intern_binding(machine.interner, &press, &context.origin)?,
+        secondary: secondary
+            .map(|binding| intern_binding(machine.interner, &binding, &context.origin))
+            .transpose()?,
+        double: double
+            .map(|binding| intern_binding(machine.interner, &binding, &context.origin))
+            .transpose()?,
         child: Box::new(walk_child(context, child, 0, depth, machine)?),
     })
 }
@@ -814,16 +831,16 @@ pub(in crate::expand) fn walk(
             id,
             press,
             secondary,
+            double,
             child,
-        } => expand_pressable(
-            context,
-            node,
-            id,
-            (press, secondary.as_ref()),
-            child,
-            depth,
-            machine,
-        ),
+        } => {
+            let declared = Presses {
+                press,
+                secondary: secondary.as_ref(),
+                double: double.as_ref(),
+            };
+            expand_pressable(context, node, id, &declared, child, depth, machine)
+        }
         ControlNode::Object {
             id,
             transform,

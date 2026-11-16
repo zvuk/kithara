@@ -11,14 +11,14 @@ mod consts {
     /// A section that passes its input through.
     pub(super) const IDENTITY: [f32; 5] = [1.0, 0.0, 0.0, 0.0, 0.0];
     /// Section memory below this on every entry restarts from zero at the
-    /// end of a call, before its free decay reaches subnormals.
+    /// end of each sample, before its free decay reaches subnormals.
     pub(super) const FLUSH_FLOOR: f32 = 1.0e-30;
 }
 
 /// Direct form I sections run on every channel, `S::f32s::LEN` channels per
 /// vector. Channel `c`, section `s` keeps `[x1, x2, y1, y2]` at
-/// `state[c × sections + s]`. A call ends by zeroing every section memory
-/// that has fallen below `1e-30`, so a silent channel beside a playing one
+/// `state[c × sections + s]`. Each sample zeroes section memory
+/// only when every entry is below `1e-30`, so a silent channel beside a playing one
 /// stops ringing before subnormals.
 pub(crate) struct Cascade {
     channels: NonZeroUsize,
@@ -131,15 +131,23 @@ pub(super) fn cascade_kernel<S: Simd, P: DerefMut<Target = [f32]>>(
                         *slot = *sample;
                     }
                 }
+                let floor = S::f32s::splat(simd, consts::FLUSH_FLOOR);
+                let below = x1.abs().simd_lt(floor)
+                    & x2.abs().simd_lt(floor)
+                    & y1.abs().simd_lt(floor)
+                    & y2.abs().simd_lt(floor);
+                (x1, x2, y1, y2) = (
+                    below.select(zero, x1),
+                    below.select(zero, x2),
+                    below.select(zero, y1),
+                    below.select(zero, y2),
+                );
             }
             for (lane, channel) in states.chunks_mut(sections).enumerate() {
                 if let Some(delay) = channel.get_mut(section) {
                     let memory = [x1, x2, y1, y2]
                         .map(|vector| vector.as_slice().get(lane).copied().unwrap_or(0.0));
-                    let ringing = memory
-                        .iter()
-                        .any(|value| value.abs() >= consts::FLUSH_FLOOR);
-                    *delay = if ringing { memory } else { [0.0; 4] };
+                    *delay = memory;
                 }
             }
         }

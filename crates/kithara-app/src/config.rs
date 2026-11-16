@@ -126,6 +126,8 @@ pub struct AppConfig {
     pub audio: AudioConfigPatch,
     #[config(patch(skip))]
     pub preload_chunks: Option<NonZeroUsize>,
+    /// Rendered lead of each lane behind its reader's packet, in render
+    /// quanta counted in frames.
     #[config(patch(skip))]
     pub audio_buffer_chunks: Option<NonZeroUsize>,
     #[config(builder(default = WarpConfig::builder().build()), patch(skip))]

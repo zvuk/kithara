@@ -76,7 +76,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn an_empty_owner_is_returned_unchanged() {
         let Err(owner) = split(Vec::<f32>::new()) else {
             panic!("an empty slice cannot hold a ring");
@@ -84,7 +84,7 @@ mod tests {
         assert!(owner.is_empty());
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn the_ring_wraps_in_place_and_drops_its_owner_once() {
         let drops = Arc::new(AtomicUsize::new(0));
         let owner = Owned {
@@ -113,7 +113,7 @@ mod tests {
         assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn the_halves_cross_threads() {
         let Ok((mut prod, mut cons)) = split(vec![0.0_f32; 8]) else {
             panic!("a non-empty owner forms a ring");

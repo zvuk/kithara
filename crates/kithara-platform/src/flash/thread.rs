@@ -330,6 +330,19 @@ where
     JoinHandle { native, exit }
 }
 
+/// Spawn a pool thread without reserving clock credit for its idle lifetime.
+/// Each job must capture its context with [`wrap_pool_task`].
+#[track_caller]
+pub fn spawn_pool_thread<F, T, N: Into<String>>(name: N, f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let (work, exit) = signalling(f);
+    let native = crate::backend::thread::spawn_named_uncounted(name, work);
+    JoinHandle { native, exit }
+}
+
 /// Under `flash`, a sleep registers a pure timed waiter on the quiescence
 /// engine (deadline = virtual now + `duration`) and blocks off-lock until the
 /// engine crosses it — collapsing to zero real wall-clock like every other

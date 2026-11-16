@@ -1381,6 +1381,8 @@ fn build_merged(arch: &ArchBuild, msrc: &[PathBuf], tools: &ToolsConfig) -> Resu
         "-emit-library",
         "-static",
         "-enable-library-evolution",
+        "-swift-version",
+        "5",
         "-module-name",
         arch.module,
         "-emit-module-path",
@@ -1908,6 +1910,48 @@ fn require_apple_needles<'a>(needles: &'a [String], key: &str) -> Result<&'a [St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn merged_framework_emits_a_swift_5_interface() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        let tools = ToolsConfig::default();
+        let sdk = sdk_path("iphoneos", &tools)?;
+        let source = root.join("Probe.swift");
+        fs::write(&source, "public var value: Int = 42\n")?;
+        fs::write(root.join("module.modulemap"), "module ProbeFFI {}\n")?;
+        let arch = ArchBuild {
+            module: "Probe",
+            triple: "arm64-apple-ios15.6",
+            sdk: &sdk,
+            module_map: root,
+            rust_lib: root,
+            out: root,
+            module_triple: "arm64-apple-ios",
+            rx_out: root,
+        };
+
+        build_merged(&arch, &[source], &tools)?;
+
+        fs::rename(
+            root.join("arm64-apple-ios.swiftinterface"),
+            root.join("Probe.swiftinterface"),
+        )?;
+        fs::remove_file(root.join("Probe.swiftmodule"))?;
+        let consumer = root.join("Consumer.swift");
+        fs::write(&consumer, "import Probe\nlet result: Int = Probe.value\n")?;
+        let mut command = Command::new(tools.program("xcrun"));
+        command
+            .args(["swiftc", "-typecheck", "-sdk"])
+            .arg(&sdk)
+            .args(["-target", arch.triple, "-I"])
+            .arg(root)
+            .arg(consumer);
+        run_quiet(&mut command, "import the merged Swift interface")?;
+        assert!(root.join("libProbeSwift.a").is_file());
+        Ok(())
+    }
 
     /// A release slice is fat-LTO'd and stripped, which removes every Rust
     /// name, so only an import the slice still needs at link time can prove

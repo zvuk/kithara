@@ -51,7 +51,6 @@ struct CacheKey {
 #[derive(Clone, Debug)]
 struct CacheEntry<R> {
     reader: R,
-    hits: usize,
     writer: Weak<()>,
 }
 
@@ -220,20 +219,14 @@ where
             .count()
     }
 
-    /// The victim is chosen by fewest hits, with ties falling to the least-recently-used end, since
-    /// iteration yields most- to least-recently-used and a later equal candidate is the better
-    /// victim.
+    /// The victim is the least recently used evictable entry: iteration yields most- to
+    /// least-recently-used, so the last candidate is the one to drop.
     fn pop_evictable(&self, cache: &mut CacheMap<A>) -> Option<CacheKey> {
         let key = cache
             .iter()
-            .filter_map(|(key, entry)| {
-                if Self::is_protected_resource(entry) || self.is_pinned_key(key) {
-                    return None;
-                }
-                Some((key.clone(), entry.hits))
-            })
-            .reduce(|best, cand| if cand.1 <= best.1 { cand } else { best })
-            .map(|(key, _)| key)?;
+            .filter(|(key, entry)| !Self::is_protected_resource(entry) && !self.is_pinned_key(key))
+            .map(|(key, _)| key.clone())
+            .last()?;
         cache.pop(&key)?;
         Some(key)
     }
@@ -255,21 +248,12 @@ where
         while Self::retained_bytes(cache, pinned) > max_bytes {
             let Some(key) = cache
                 .iter()
-                .filter_map(|(key, entry)| {
-                    let bytes = Self::committed_bytes(entry)?;
-                    if bytes == 0 || Self::is_pinned(pinned, key) {
-                        return None;
-                    }
-                    Some((key.clone(), entry.hits))
+                .filter(|(key, entry)| {
+                    Self::committed_bytes(entry).is_some_and(|bytes| bytes > 0)
+                        && !Self::is_pinned(pinned, key)
                 })
-                .reduce(|best, candidate| {
-                    if candidate.1 <= best.1 {
-                        candidate
-                    } else {
-                        best
-                    }
-                })
-                .map(|(key, _)| key)
+                .map(|(key, _)| key.clone())
+                .last()
             else {
                 break;
             };
@@ -417,10 +401,7 @@ where
         };
         let mut cache = self.cache.lock();
 
-        let hit = cache.get_mut(&cache_key).map(|entry| {
-            entry.hits = entry.hits.saturating_add(1);
-            entry.clone()
-        });
+        let hit = cache.get(&cache_key).cloned();
         if let Some(hit) = hit {
             if hit.is_writing() {
                 drop(cache);
@@ -436,7 +417,6 @@ where
                 cache_key,
                 CacheEntry {
                     reader: writer.reader(),
-                    hits: hit.hits,
                     writer: Arc::downgrade(&writing),
                 },
             );
@@ -457,7 +437,6 @@ where
             cache_key,
             CacheEntry {
                 reader: reader_for_cache,
-                hits: 1,
                 writer,
             },
         );
@@ -515,8 +494,7 @@ where
         let mut cache = self.cache.lock();
 
         let dead = cache.peek(&cache_key).is_some_and(CacheEntry::is_dead);
-        if !dead && let Some(entry) = cache.get_mut(&cache_key) {
-            entry.hits = entry.hits.saturating_add(1);
+        if !dead && let Some(entry) = cache.get(&cache_key) {
             return Ok(self.wrap_reader(key, entry.reader.clone()));
         }
 
@@ -539,7 +517,6 @@ where
             cache_key,
             CacheEntry {
                 reader: res.clone(),
-                hits: 1,
                 writer: Weak::new(),
             },
         );
@@ -843,6 +820,39 @@ mod tests {
             [keys[0].clone()],
             "ephemeral backend must invalidate the displaced key"
         );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn an_unread_arrival_outlives_entries_read_before_it() {
+        let mem = Arc::new(MemAssetStore::new(
+            CancelToken::never(),
+            None,
+            crate::test_pools::pools(),
+        ));
+        let (mut invalidations, cb) = record_invalidations();
+        let cached = CachedAssets::new(mem, NonZeroUsize::new(3).unwrap(), Some(cb), true);
+        let keys: Vec<ResourceKey> = (0..5)
+            .map(|i| ResourceKey::relative(consts::LAYER_ROOT, format!("seg_{i}.m4s")))
+            .collect();
+        let mut readers = Vec::new();
+        for key in &keys[..3] {
+            commit_writer(cached.acquire_resource(key, None).unwrap(), b"data");
+            readers.push(cached.acquire_resource(key, None).unwrap());
+        }
+
+        commit_writer(cached.acquire_resource(&keys[3], None).unwrap(), b"data");
+        commit_writer(cached.acquire_resource(&keys[4], None).unwrap(), b"data");
+
+        // A prefetched segment the reader has not reached yet is the newest
+        // data in an ephemeral store; displacing it ahead of segments already
+        // played makes the next arrival evict it again, and the refetches
+        // never let the reader catch up.
+        assert_eq!(
+            drained(&mut invalidations),
+            [keys[0].clone(), keys[1].clone()],
+            "the least recently used entries must go first"
+        );
+        drop(readers);
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

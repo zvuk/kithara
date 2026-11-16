@@ -605,6 +605,7 @@ mod tests {
     use kithara_test_utils::kithara;
     #[cfg(not(target_arch = "wasm32"))]
     use kithara_test_utils::off_thread::OffThread;
+    use kithara_worker::Worker;
 
     use super::*;
     use crate::{
@@ -612,7 +613,9 @@ mod tests {
         event::QueueEvent,
         queue::{
             QueueCommand,
-            state::tests::{apply, make_queue, wait_for_queue_event, with_outbox},
+            state::tests::{
+                WorkerOwner, apply, make_queue, wait_for_queue_event, with_outbox, worker_owner,
+            },
         },
         test_pools::{TestPools, pools},
     };
@@ -622,9 +625,13 @@ mod tests {
     #[cfg(target_arch = "wasm32")]
     type QueueHost = Host<TestPools>;
 
-    fn insert_queue(host: &mut Host<TestPools>) -> HostOwned<Queue<TestPools>> {
+    fn insert_queue(worker: &Worker, host: &mut Host<TestPools>) -> HostOwned<Queue<TestPools>> {
         let prep = ResourcePrep::builder()
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools())
+                    .worker(worker.clone())
+                    .build(),
+            ))
             .build();
         let config = QueueConfig::builder()
             .prep(prep)
@@ -640,9 +647,10 @@ mod tests {
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     #[kithara::flash(io)]
-    async fn hosted_queue() -> (HostOwned<Queue<TestPools>>, QueueHost) {
+    async fn hosted_queue(worker: &Worker) -> (HostOwned<Queue<TestPools>>, QueueHost) {
         hang_tick!();
-        let fixture = time::timeout(__hang_detector.remaining(), async {
+        let worker = worker.clone();
+        let fixture = time::timeout(__hang_detector.remaining(), async move {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let host = OffThread::spawn("queue-lifecycle-host", || {
@@ -650,15 +658,15 @@ mod tests {
                 })
                 .await
                 .expect("fixture offline Host");
-                let queue = host.call(insert_queue).await;
+                let queue = host.call(move |host| insert_queue(&worker, host)).await;
                 (queue, host)
             }
             #[cfg(target_arch = "wasm32")]
             {
-                spawn_blocking(|| {
+                spawn_blocking(move || {
                     let mut host = Host::new(HostConfig::offline(pools()).build())
                         .expect("fixture offline Host");
-                    let queue = insert_queue(&mut host);
+                    let queue = insert_queue(&worker, &mut host);
                     (queue, host)
                 })
                 .await
@@ -720,8 +728,8 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn len_is_empty_reflect_append() {
-        let (queue, host) = hosted_queue().await;
+    async fn len_is_empty_reflect_append(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, host) = hosted_queue(&worker_owner.0).await;
         assert!(queue.is_empty());
         let _ = append(&queue, "https://example.com/a.mp3").await;
         let _ = append(&queue, "https://example.com/b.mp3").await;
@@ -731,8 +739,10 @@ mod tests {
 
     #[kithara::test(tokio)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    async fn append_returns_monotonic_ids_and_emits_track_added() {
-        let (queue, host) = hosted_queue().await;
+    async fn append_returns_monotonic_ids_and_emits_track_added(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (queue, host) = hosted_queue(&worker_owner.0).await;
         let mut rx = queue.subscribe();
         let a = append(&queue, "https://example.com/a.mp3").await;
         let b = append(&queue, "https://example.com/b.mp3").await;
@@ -759,8 +769,8 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn remove_drops_from_queue_and_emits() {
-        let (queue, host) = hosted_queue().await;
+    async fn remove_drops_from_queue_and_emits(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, host) = hosted_queue(&worker_owner.0).await;
         let a = append(&queue, "https://example.com/a.mp3").await;
         let _b = append(&queue, "https://example.com/b.mp3").await;
         let mut rx = queue.subscribe();
@@ -780,8 +790,8 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn clear_empties_queue() {
-        let (queue, host) = hosted_queue().await;
+    async fn clear_empties_queue(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, host) = hosted_queue(&worker_owner.0).await;
         let _a = append(&queue, "https://example.com/a.mp3").await;
         let _b = append(&queue, "https://example.com/b.mp3").await;
         assert_eq!(queue.len(), 2);
@@ -793,8 +803,8 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn clear_discards_old_eof_before_reinsert() {
-        let (mut queue, mut rig) = make_queue();
+    async fn clear_discards_old_eof_before_reinsert(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let old = TrackId::allocate();
         apply(
             &mut queue,
@@ -839,8 +849,8 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn set_tracks_replaces_queue() {
-        let (queue, host) = hosted_queue().await;
+    async fn set_tracks_replaces_queue(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, host) = hosted_queue(&worker_owner.0).await;
         let _a = append(&queue, "https://example.com/a.mp3").await;
         command(&queue, |control| {
             control.set_tracks(
@@ -859,8 +869,8 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn insert_after_id_places_next() {
-        let (queue, host) = hosted_queue().await;
+    async fn insert_after_id_places_next(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, host) = hosted_queue(&worker_owner.0).await;
         let a = append(&queue, "https://example.com/a.mp3").await;
         let b = append(&queue, "https://example.com/b.mp3").await;
         let mid = command(&queue, move |control| {
@@ -875,8 +885,8 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn track_source_is_keyed_by_id_across_removal() {
-        let (queue, host) = hosted_queue().await;
+    async fn track_source_is_keyed_by_id_across_removal(#[by_ref] worker_owner: &WorkerOwner) {
+        let (queue, host) = hosted_queue(&worker_owner.0).await;
         let a = append(&queue, "https://example.com/a.mp3").await;
         let b = append(&queue, "https://example.com/b.mp3").await;
 
@@ -908,8 +918,8 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn begin_dedupes_live_attempt() {
-        let (mut queue, mut rig) = make_queue();
+    async fn begin_dedupes_live_attempt(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         queue.insert_entry(
             TrackId(1),
             concat!(env!("CARGO_MANIFEST_DIR"), "/missing.wav").into(),
@@ -941,8 +951,10 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn selection_reflects_only_the_requested_live_attempt() {
-        let (mut queue, mut rig) = make_queue();
+    async fn selection_reflects_only_the_requested_live_attempt(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         for id in [TrackId(1), TrackId(2)] {
             queue.insert_entry(
                 id,
@@ -988,8 +1000,10 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn promote_waiting_reuses_its_open_and_preserves_its_claim() {
-        let (mut queue, mut rig) = make_queue();
+    async fn promote_waiting_reuses_its_open_and_preserves_its_claim(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         queue.insert_entry(
             TrackId(1),
             concat!(env!("CARGO_MANIFEST_DIR"), "/missing.wav").into(),
@@ -1061,8 +1075,8 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn promote_keeps_attempt_holding_permit() {
-        let (mut queue, mut rig) = make_queue();
+    async fn promote_keeps_attempt_holding_permit(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         queue.insert_entry(
             TrackId(1),
             concat!(env!("CARGO_MANIFEST_DIR"), "/missing.wav").into(),
@@ -1110,8 +1124,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn promote_vacant_is_noop() {
-        let (mut queue, mut rig) = make_queue();
+    fn promote_vacant_is_noop(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         queue.insert_entry(
             TrackId(1),
             concat!(env!("CARGO_MANIFEST_DIR"), "/missing.wav").into(),
@@ -1134,10 +1148,12 @@ mod tests {
     }
 
     #[kithara::test]
-    fn config_failure_without_runtime_updates_tracks_synchronously() {
+    fn config_failure_without_runtime_updates_tracks_synchronously(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
         use kithara_events::Envelope;
 
-        let (mut queue, mut rig) = make_queue();
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
         let source: TrackSource<TestPools> = "not a url".into();
         for id in [TrackId(42), TrackId(43)] {
             queue.insert_entry(id, source.clone(), Position::ZERO, Placement::Append);

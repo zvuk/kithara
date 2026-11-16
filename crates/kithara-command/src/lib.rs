@@ -28,7 +28,7 @@ mod receipt;
 mod wakes;
 
 pub use channel::{
-    Deferred, Due, Inbox, LevelInbox, Port, SendError, Sender, Step, channel, scoped,
+    Deferred, Due, Inbox, LevelInbox, Port, SendError, Sender, Step, Timed, channel, scoped,
 };
 pub use config::ChannelConfig;
 pub use live::{Live, LiveError, SettledChange};

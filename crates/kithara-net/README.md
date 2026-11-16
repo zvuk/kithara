@@ -69,7 +69,7 @@ The inactivity timeout bounds response headers and each body-chunk wait separate
 - `client-apple` — macOS/iOS `NSURLSession` backend; shadows the reqwest/wreq seam on Apple platforms when enabled.
 - `tls-rustls` (default) / `tls-native` — TLS selection for the reqwest path only.
 - `mock` — `NetMock`, a deterministic client for tests that must not reach the network (native only).
-- `probe` — enables USDT probes for tracing.
+- `usdt` — USDT probes for tracing.
 - `perf` — enables `hotpath` instrumentation.
 
 ## Integration

@@ -8,7 +8,10 @@ use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_signal::{SegmentId, SessionFrame};
 
-use super::{DeckMixSettingsChange, SlotBinding, SlotGainProgram, SlotMark};
+use super::{
+    DeckMixSettingsChange, EqBinding, EqGainProgram, FilterBinding, FilterProgram, SlotBinding,
+    SlotGainProgram, SlotMark,
+};
 use crate::{CrossfadeSettings, rt::track::PlayerResource};
 
 /// One scoped deck's commands, clock and verdicts.
@@ -72,6 +75,19 @@ pub enum DeckRefusal {
     RefusedFxParam {
         unit: usize,
     },
+    EqOutdated {
+        band: usize,
+    },
+    EqUnavailable {
+        band: usize,
+    },
+    EqProgramClock {
+        band: usize,
+    },
+    EqProgramCapacity,
+    FilterOutdated,
+    FilterProgramClock,
+    FilterProgramCapacity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -143,6 +159,16 @@ pub enum DeckPart {
     Mix(DeckMixSettingsChange),
     Eq(DeckEqChange),
     Fx(DeckFxChange),
+    FilterProgram {
+        binding: FilterBinding,
+        authority: Option<Seq>,
+        program: FilterProgram,
+    },
+    EqProgram {
+        binding: EqBinding,
+        authority: Option<Seq>,
+        program: EqGainProgram,
+    },
     GainProgram {
         slot: Slot,
         binding: SlotBinding,
@@ -312,6 +338,26 @@ impl fmt::Debug for DeckPart {
             Self::Mix(change) => formatter.debug_tuple("Mix").field(change).finish(),
             Self::Eq(change) => formatter.debug_tuple("Eq").field(change).finish(),
             Self::Fx(change) => formatter.debug_tuple("Fx").field(change).finish(),
+            Self::FilterProgram {
+                binding,
+                authority,
+                program,
+            } => formatter
+                .debug_struct("FilterProgram")
+                .field("binding", binding)
+                .field("authority", authority)
+                .field("program", program)
+                .finish(),
+            Self::EqProgram {
+                binding,
+                authority,
+                program,
+            } => formatter
+                .debug_struct("EqProgram")
+                .field("binding", binding)
+                .field("authority", authority)
+                .field("program", program)
+                .finish(),
             Self::GainProgram {
                 slot,
                 binding,

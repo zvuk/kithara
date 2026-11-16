@@ -9,9 +9,8 @@ pub(super) struct TestRequest {
     pub(super) net_backend: Option<String>,
     pub(super) no_block: Option<bool>,
     pub(super) load: Option<bool>,
-    /// Lanes named with `--lane`. One picks the lane to run; with `--touched`
-    /// they name the lanes the touched paths may run, the default lane when
-    /// none is named.
+    /// Lanes named with `--lane`; one picks the lane to run, none the
+    /// default lane.
     pub(super) lanes: Vec<String>,
     /// A filterset every lane the request runs is narrowed to. A
     /// passed-through `-E` is a union member, so it could widen a selection;
@@ -20,7 +19,9 @@ pub(super) struct TestRequest {
     pub(super) expected_tests: Option<PathBuf>,
     pub(super) selection_output: Option<PathBuf>,
     pub(super) passthrough: Vec<String>,
-    pub(super) touched: bool,
+    /// Run only the lane's share of the draft scope: the required packages and
+    /// what the pull request names.
+    pub(super) draft: bool,
 }
 
 impl TestRequest {
@@ -36,7 +37,7 @@ impl TestRequest {
             selection_output: None,
             passthrough: Vec::new(),
             flash: None,
-            touched: false,
+            draft: false,
         };
         let mut iter = args.iter();
         while let Some(arg) = iter.next() {
@@ -65,7 +66,7 @@ impl TestRequest {
                         .ok_or_else(|| anyhow::anyhow!("--load requires a value"))?;
                     request.load = Some(parse_toggle("load", value)?);
                 }
-                "--touched" => request.touched = true,
+                "--draft" => request.draft = true,
                 "--loom=off" | "--loom=false" | "--no-loom" => request.loom = Some(false),
                 "--loom=on" | "--loom=true" => request.loom = Some(true),
                 "--loom" => {
@@ -162,8 +163,8 @@ impl TestRequest {
     }
 
     fn validate_expected_selection(&self) -> Result<()> {
-        if self.touched {
-            bail!("--expected-tests requires one lane and cannot be combined with --touched");
+        if self.draft {
+            bail!("--expected-tests requires one lane and cannot be combined with --draft");
         }
         super::inventory::inventory_args(&self.passthrough)?;
         Ok(())

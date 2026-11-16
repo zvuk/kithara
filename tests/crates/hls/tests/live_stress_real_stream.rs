@@ -19,7 +19,7 @@ use kithara::{
     download::{Downloader, DownloaderConfig},
     events::EventBus,
     hls::{Hls, HlsConfig},
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig},
     signal::AudioChunk,
@@ -127,11 +127,10 @@ fn abr_switched(audio: &LiveAudio) -> bool {
         .is_some_and(|variant| variant != 0)
 }
 
-fn switch_trigger_downloader(pools: &Pools, cancel: &CancelToken) -> Downloader {
+fn switch_trigger_downloader(_pools: &Pools, cancel: &CancelToken) -> Downloader {
     Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools.clone(),
             cancel.child(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

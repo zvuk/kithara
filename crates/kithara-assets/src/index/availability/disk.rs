@@ -5,30 +5,23 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, ErrorKind},
     path::{Path, PathBuf},
+    sync::atomic::Ordering,
 };
 
 use arc_swap::ArcSwap;
 use kithara_bufpool::ByteBuffer;
-use kithara_platform::sync::{Arc, Mutex};
-use kithara_storage::StorageError;
-use rkyv::rancor::Error;
+use kithara_platform::sync::Arc;
 use same_file::Handle;
 
 use super::core::{AssetTree, Availability, AvailabilityIndex, Entry, InnerIndex};
 use crate::{
-    error::{AssetsError, AssetsResult},
+    error::AssetsResult,
     index::persistence::{
-        IndexFile,
+        FlushHub, Flushable, IndexFile, read_archived,
         schema::{AssetAvailabilityFile, AvailabilityFile, ResourceAvailabilityFile},
+        write_record,
     },
 };
-
-pub(super) struct AvailabilityPersist {
-    file: IndexFile,
-    /// One writer at a time for `availability.bin`: the snapshot and the
-    /// atomic rename that publishes it are one step.
-    writing: Mutex<()>,
-}
 
 impl AvailabilityIndex {
     /// Enable disk persistence rooted at `path`. Hydrates the in-memory
@@ -41,27 +34,43 @@ impl AvailabilityIndex {
         if let Err(e) = self.load_from(&file, &mut buffer) {
             tracing::debug!("read existing availability.bin failed: {e}");
         }
-        let _ = self.inner.persist.set(AvailabilityPersist {
-            file,
-            writing: Mutex::new(()),
-        });
+        self.inner.persist_to(file, InnerIndex::write_manifest);
+    }
+
+    /// Bind this aggregate to a [`FlushHub`] for coordinated flushing.
+    /// Called once per `AssetStore` build; subsequent calls are no-ops.
+    pub(crate) fn attach_to(&self, hub: &Arc<FlushHub>) {
+        self.inner.attach_to(hub);
+    }
+
+    /// Force a synchronous flush. Routes through [`FlushHub::flush_now`]
+    /// when a hub is attached, or runs the inline serialise+write path
+    /// otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the first per-source flush error encountered.
+    pub(crate) fn flush(&self) -> AssetsResult<()> {
+        if let Some(hub) = self.inner.hub() {
+            return hub.flush_now();
+        }
+        if !self.inner.dirty.swap(false, Ordering::AcqRel) {
+            return Ok(());
+        }
+        let result = Flushable::flush(&*self.inner);
+        if result.is_err() {
+            self.inner.dirty.store(true, Ordering::Release);
+        }
+        result
     }
 
     /// Load the availability index from a persistent resource.
     pub(crate) fn load_from(&self, file: &IndexFile, buf: &mut ByteBuffer) -> AssetsResult<()> {
-        file.read_into(buf)?;
-        if buf.is_empty() {
+        let Some(archived) =
+            read_archived::<crate::index::schema::ArchivedAvailabilityFile>(file, buf)?
+        else {
             return Ok(());
-        }
-
-        let archived =
-            match rkyv::access::<crate::index::schema::ArchivedAvailabilityFile, Error>(buf) {
-                Ok(archived) => archived,
-                Err(e) => {
-                    tracing::debug!("Failed to validate availability index: {}", e);
-                    return Ok(());
-                }
-            };
+        };
 
         let mut loaded = AssetTree::new();
         for (root, asset_record) in archived.assets.iter() {
@@ -98,7 +107,7 @@ impl AvailabilityIndex {
     /// production flush path goes through [`super::Flushable::flush`].
     #[cfg(test)]
     pub(crate) fn persist_to(&self, file: &IndexFile) -> AssetsResult<()> {
-        write_aggregate(&snapshot_aggregate(&self.inner), file, false)
+        write_record(file, &snapshot_aggregate(&self.inner.state), false)
     }
 }
 
@@ -147,14 +156,10 @@ impl InnerIndex {
 
     /// Committed files are forced onto the medium before the manifest names them; reversed, a crash
     /// could leave the manifest vouching for bytes that never landed.
-    pub(super) fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
-        let Some(p) = self.persist.get() else {
-            return Ok(());
-        };
-        let _writing = p.writing.lock();
+    pub(super) fn write_manifest(&self, file: &IndexFile, durable: bool) -> AssetsResult<()> {
         let index = snapshot_aggregate(self);
         self.barrier_pending_files(&index)?;
-        write_aggregate(&index, &p.file, durable)
+        write_record(file, &index, durable)
     }
 }
 
@@ -215,12 +220,6 @@ fn snapshot_aggregate(inner: &InnerIndex) -> AvailabilityFile {
     AvailabilityFile { assets, version: 1 }
 }
 
-fn write_aggregate(index: &AvailabilityFile, file: &IndexFile, durable: bool) -> AssetsResult<()> {
-    let bytes = rkyv::to_bytes::<Error>(index)
-        .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
-    file.write(&bytes, durable)
-}
-
 #[cfg(test)]
 mod tests {
     use std::{fs, ops::Range};
@@ -234,7 +233,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::{index::ScopedAvailabilityObserver, layout::ResourceKey};
+    use crate::{error::AssetsError, index::ScopedAvailabilityObserver, layout::ResourceKey};
 
     struct CheckpointOnCommit {
         observer: Arc<ScopedAvailabilityObserver>,
@@ -432,7 +431,7 @@ mod tests {
         let resource = open_observed_resource(canonical.clone(), index.clone(), key);
         resource.write_at(0, b"payload").unwrap();
         resource.commit(Some(7)).unwrap();
-        let selected = snapshot_aggregate(&index.inner);
+        let selected = snapshot_aggregate(&index.inner.state);
         let opened = OpenOptions::new().write(true).open(&canonical).unwrap();
 
         resource.reactivate().unwrap();
@@ -463,7 +462,7 @@ mod tests {
         resource.write_at(0, b"payload").unwrap();
         resource.commit(Some(7)).unwrap();
         index.flush().unwrap();
-        let selected = snapshot_aggregate(&index.inner);
+        let selected = snapshot_aggregate(&index.inner.state);
         let previous = fs::read(&manifest).unwrap();
 
         resource.reactivate().unwrap();
@@ -471,7 +470,7 @@ mod tests {
         resource.commit(Some(final_len as u64)).unwrap();
         assert_eq!(fs::metadata(&canonical).unwrap().len(), final_len as u64);
 
-        assert!(index.inner.barrier_pending_files(&selected).is_err());
+        assert!(index.inner.state.barrier_pending_files(&selected).is_err());
         assert_eq!(fs::read(&manifest).unwrap(), previous);
         index.flush().unwrap();
 

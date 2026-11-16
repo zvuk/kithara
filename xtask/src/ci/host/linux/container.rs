@@ -22,7 +22,7 @@ pub(super) struct Container<'a> {
     pub(super) image: String,
     pub(super) network: &'a str,
     /// Which cores its jobs may use, as a set rather than a share. See
-    /// [`super::services::cpuset`].
+    /// [`super::cpu::assignments`].
     pub(super) cpuset: String,
     pub(super) memory: &'a str,
     /// The slice that caps the fleet as a whole. A runner's own `memory` never

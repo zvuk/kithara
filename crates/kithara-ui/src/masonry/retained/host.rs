@@ -27,6 +27,7 @@ use super::{
 };
 use crate::{
     draw::{Rgba, Transform},
+    engine::Presses,
     expand::{Binding, ControlSpec, ExpandedNode},
     hosts::{
         controls::Draws,
@@ -230,6 +231,20 @@ where
             None,
             None,
         )
+    }
+
+    /// The content the application installed at `path`, mounted where the
+    /// document's control would have stood and kept findable by that path so
+    /// the application can say when the state it shows changed.
+    fn installed(
+        &self,
+        widget: Box<dyn CustomWidget<Action = HostAction>>,
+        path: &str,
+        declared: Size<Length>,
+    ) -> MasonryNode<Action> {
+        let mut output = self.custom_leaf(widget, None, declared);
+        output.watch_custom(path);
+        output
     }
 
     /// One flow's children, split into the layout each asks for and the node
@@ -559,9 +574,9 @@ where
                     }
                 )
             },
-            |widget| self.custom_leaf(widget, None, declared),
+            |widget| self.installed(widget, path, declared),
         );
-        output.place(transform);
+        output.place(path, transform);
         if self.ctx.ui.driven {
             output.watch_placement(path_id);
         }
@@ -597,10 +612,7 @@ where
                 output.host_engine(Rc::clone(&self.map_event), self.skin);
             }
         } else if activates(spec) {
-            output.set_actions(
-                Some(self.control_action(path.to_owned(), ControlAction::Activate)),
-                None,
-            );
+            output.set_primary(self.control_action(path.to_owned(), ControlAction::Activate));
         }
         output
     }
@@ -750,10 +762,7 @@ where
             NewWidget::new(PopoverLayer::new(content, declared, state, at, align, skin)).erased()
         });
         let path = self.ctx.ui.resolve(popover.path()).to_owned();
-        output.set_actions(
-            Some(self.control_action(path, ControlAction::Activate)),
-            None,
-        );
+        output.set_primary(self.control_action(path, ControlAction::Activate));
         output
     }
 
@@ -781,6 +790,8 @@ where
     fn pressable(
         &mut self,
         path: InternId,
+        presses: Presses,
+        _owner: InputOwner,
         child: Self::Output,
         size: Option<SizeSpec>,
     ) -> Self::Output {
@@ -791,14 +802,11 @@ where
         output.add_engine_control(
             HostedControlPlan::Activation {
                 path: path.to_owned(),
+                presses,
             },
             true,
         );
         output.host_engine(Rc::clone(&self.map_event), self.skin);
-        output.set_actions(
-            None,
-            Some(self.control_action(path.to_owned(), ControlAction::SecondaryActivate)),
-        );
         output
     }
 

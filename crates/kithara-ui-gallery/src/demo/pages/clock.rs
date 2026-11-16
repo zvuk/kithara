@@ -49,6 +49,8 @@ pub(crate) struct ClockState {
     click: bool,
     family_step: bool,
     key_locked: bool,
+    transpose: i8,
+    transpose_label: String,
     link: bool,
     midi_send: bool,
     quantize: bool,
@@ -67,6 +69,8 @@ impl Default for ClockState {
             snap: true,
             click: false,
             key_locked: true,
+            transpose: 0,
+            transpose_label: String::new(),
             link: true,
             midi_send: false,
             bpm: 124.0,
@@ -102,6 +106,11 @@ impl ClockState {
             ("clock.double", WriteValue::Trigger) => self.set_bpm(self.bpm * 2.0),
             ("clock.reset", WriteValue::Trigger) => self.set_bpm(124.0),
             ("deck.key.toggle_lock", WriteValue::Trigger) => self.key_locked = !self.key_locked,
+            ("deck.key.transpose_up", WriteValue::Trigger) => self.transpose_to(self.transpose + 1),
+            ("deck.key.transpose_down", WriteValue::Trigger) => {
+                self.transpose_to(self.transpose - 1);
+            }
+            ("deck.key.transpose_reset", WriteValue::Trigger) => self.transpose_to(0),
             _ => {}
         }
     }
@@ -135,6 +144,7 @@ impl ClockState {
             "clock.source.stretch" => ReadValue::Text(source?.stretch),
             "clock.source.synced" => ReadValue::Bool(source?.id != "c" && source?.id != "d"),
             "deck.key.locked" => ReadValue::Bool(self.key_locked),
+            "deck.key.transpose" => ReadValue::Text(&self.transpose_label),
             _ => return None,
         };
         Some(value)
@@ -151,6 +161,17 @@ impl ClockState {
 
     fn step(&mut self, steps: f64) {
         self.set_bpm(self.bpm + steps);
+    }
+
+    fn transpose_to(&mut self, semitones: i8) {
+        const MINUS_SIGN: char = '\u{2212}';
+
+        self.transpose = semitones.clamp(-12, 12);
+        self.transpose_label = match self.transpose {
+            0 => String::new(),
+            up if up > 0 => format!("+{up}"),
+            down => format!("{MINUS_SIGN}{}", down.unsigned_abs()),
+        };
     }
 }
 

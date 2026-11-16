@@ -1,0 +1,13 @@
+[binaries]
+"kithara-queue-tests::queue" = [
+  "kithara-queue-tests::queue",
+  "kithara-queue-zvuk-tests::queue_zvuk",
+]
+"kithara-queue-tests::network" = [
+  "kithara-queue-network-tests::network",
+  "kithara-queue-zvuk-tests::network",
+]
+"kithara-queue-tests::network_manual" = [
+  "kithara-queue-network-tests::network_manual",
+  "kithara-queue-zvuk-tests::network_manual",
+]

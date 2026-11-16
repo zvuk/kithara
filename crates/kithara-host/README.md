@@ -14,29 +14,48 @@
 
 # kithara-host
 
-`kithara-host` owns Kithara's multi-player session, shared Firewheel output
-graph, session transport, and platform audio backend. A player/deck remains in
-`kithara-play`; pure synchronization values and laws belong to `kithara-sync`,
-while beat-map projection and rendering belong to `kithara-warp`.
+The output session. A `Host` owns the audio device (or an offline renderer),
+the shared output graph that mixes every deck, the session transport, and the
+master limiter.
 
-Callers fully construct a player or decorator and transfer that instance with
-`Host::insert`. The Host attaches its opaque session capability exactly once
-and retains the instance; callers receive a typed `HostOwned` control endpoint,
-not the player value or its session dispatcher. Insertion registers deck controls
-and validates known output geometry without opening an audio device. Playback
-starts the output graph and allocates its slot, validating the actual output
-geometry before rendering. Remove the deck or close the Host to release its
-resources.
+## Usage
 
-`Host<S>` shares the player's closed buffer-pool schema. Insertion accepts only
-players with that same schema, while each registered deck retains its existing
-`PoolRegion<S>` handle for graph-node scratch allocation.
+```rust
+use kithara_host::{Host, HostConfig};
+use kithara_queue::{Queue, QueueConfig};
 
-`HostConfig<S>` directly selects and configures a realtime or offline session.
-With the `offline` feature, the same `Host<S>` drives its owned graph without an
-audio device and implements `kithara_output::OfflineRenderer` for exact finite
-output-frame ranges. Its offline variant carries the pool, render quantum,
-latency, worker, task, and dispatcher budgets.
+let mut host = Host::new(HostConfig::builder().build())?;
+let deck = host.insert(Queue::new(queue_config))?;
+deck.play();
+// Removing the deck or dropping the Host releases its resources.
+host.remove(&deck)?;
+```
 
-The current crate is a mechanical ownership extraction. Runtime invariants and
-dependency boundaries are documented in [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-host).
+`insert` takes ownership of a fully built player or queue and returns a
+`HostOwned` control handle. The audio device opens when the first deck plays.
+
+A limiter lookahead of `L` frames delays the whole output, metronome included:
+the first `L` output frames are silent pre-roll.
+
+## Key Types
+
+- `Host` — the session; `insert`, `remove`, settings, subscriptions.
+- `HostConfig` — realtime (device) or, with the `offline` feature, offline
+  session: block size, deck limits, limiter, starting settings.
+- `HostOwned` — control handle of an inserted deck.
+- `HostSettings` — sample rate, session tempo, metronome, and ducking; they
+  change while the session runs.
+
+## Features
+
+- `offline` — render a fixed range of frames without an audio device
+  (`kithara_output::OfflineRenderer`).
+- `backend-cpal` — native output through CPAL.
+
+## Integration
+
+Players come from `kithara-play` and `kithara-queue`; `kithara-link` decorates
+the Host to keep decks on one tempo. All decks share the Host's buffer-pool
+schema.
+
+See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-host) for detailed contracts, invariants, and internals.

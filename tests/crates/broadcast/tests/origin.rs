@@ -113,13 +113,37 @@ impl Playlist {
     }
 
     pub(super) fn uris_after_last_discontinuity(&self) -> Option<Vec<&str>> {
-        let start = self.entries.iter().rposition(|entry| entry.discontinuity)?;
+        let start = match self.entries.iter().rposition(|entry| entry.discontinuity) {
+            Some(start) => start,
+            None if self.discontinuity_sequence > 0 => 0,
+            None => return None,
+        };
         Some(
             self.entries[start..]
                 .iter()
                 .map(|entry| entry.uri.as_str())
                 .collect(),
         )
+    }
+}
+
+#[kithara::test]
+fn discontinuity_uris_include_boundaries_that_left_the_window() {
+    for (sequence, marker, expected) in [
+        (0, "", None),
+        (1, "", Some(vec!["seg/4.aac", "seg/5.aac"])),
+        (0, "#EXT-X-DISCONTINUITY\n", Some(vec!["seg/5.aac"])),
+        (1, "#EXT-X-DISCONTINUITY\n", Some(vec!["seg/5.aac"])),
+    ] {
+        let playlist = Playlist::parse(format!(
+            "#EXTM3U\n\
+             #EXT-X-TARGETDURATION:1\n\
+             #EXT-X-MEDIA-SEQUENCE:4\n\
+             #EXT-X-DISCONTINUITY-SEQUENCE:{sequence}\n\
+             #EXTINF:0.5,\nseg/4.aac\n\
+             {marker}#EXTINF:0.5,\nseg/5.aac\n"
+        ));
+        assert_eq!(playlist.uris_after_last_discontinuity(), expected);
     }
 }
 

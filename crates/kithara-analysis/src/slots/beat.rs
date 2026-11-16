@@ -11,7 +11,7 @@ pub(crate) use crate::beat::{DetectOutput, DetectRequest};
 use crate::{
     BeatArtifact, BlobError,
     analyzer::{BeatAnalysisConfig, default_beat_detector},
-    beat::{BeatDetector, BeatPass, BeatPassConfig, GridParams},
+    beat::{BeatAnalyzer, BeatDetector, BeatPassConfig, GridParams, extend_over},
     progress::BeatResume,
 };
 
@@ -54,7 +54,7 @@ where
                 .resampler(config.resampler.clone())
                 .pools(pools.clone())
                 .build();
-            BeatPass::new(pass)
+            BeatAnalyzer::new(pass)
         }))
     }
 
@@ -109,7 +109,7 @@ where
 }
 
 #[derive_where::derive_where(Default)]
-pub(crate) struct Slot<B>(Option<BeatPass<B>>)
+pub(crate) struct Slot<B>(Option<BeatAnalyzer<B>>)
 where
     B: ResamplerBackend;
 
@@ -131,18 +131,20 @@ where
     }
 
     fn close_if_failed(&mut self) {
-        if let Some(error) = self.0.as_ref().and_then(BeatPass::failure) {
+        if let Some(error) = self.0.as_ref().and_then(BeatAnalyzer::failure) {
             warn!(?error, "beat analysis failed; the pass reads on without it");
             self.0 = None;
         }
     }
 
     pub(crate) fn coverage<'a>(&'a self, seen: &'a RangeSet<u64>) -> &'a RangeSet<u64> {
-        self.0.as_ref().map_or(seen, BeatPass::coverage)
+        self.0.as_ref().map_or(seen, BeatAnalyzer::coverage)
     }
 
     pub(crate) fn intake(&self) -> Intake {
-        self.0.as_ref().map_or(Intake::Anywhere, BeatPass::intake)
+        self.0
+            .as_ref()
+            .map_or(Intake::Anywhere, BeatAnalyzer::intake)
     }
 
     pub(crate) fn prepare_detection<S>(
@@ -174,8 +176,10 @@ where
             return false;
         };
         let took = match detector {
-            Some(detector) => analyzer.push(pools, pcm, channels, at, opens, detector.as_ref()),
-            None => analyzer.push_deferred(pools, pcm, channels, at, opens),
+            Some(detector) => {
+                analyzer.push_interleaved(pools, pcm, channels, at, opens, detector.as_ref())
+            }
+            None => analyzer.push_interleaved_deferred(pools, pcm, channels, at, opens),
         };
         self.close_if_failed();
         took
@@ -189,11 +193,9 @@ where
     where
         S: HasPool<f32>,
     {
-        match (self.0.as_mut(), resume) {
-            (Some(analyzer), Some(resume)) => analyzer.restore(pools, resume),
-            (None, None) => Ok(()),
-            (Some(_), None) | (None, Some(_)) => Err(BlobError::Corrupt),
-        }
+        super::restore(self.0.as_mut(), resume, |analyzer, resume| {
+            analyzer.restore(pools, resume)
+        })
     }
 
     pub(crate) fn snapshot<S>(
@@ -207,9 +209,22 @@ where
         S: HasPool<f32>,
     {
         let analyzer = self.0.as_mut()?;
-        match detector {
-            Some(detector) => analyzer.snapshot(pools, detector.as_ref(), ending, extent),
-            None => analyzer.snapshot_deferred(ending, extent),
+        let grid = match detector {
+            Some(detector) => analyzer.snapshot(pools, detector.as_ref(), ending),
+            None => analyzer.snapshot_deferred(ending),
+        };
+        match grid {
+            Ok(grid) => {
+                let grid = match extent {
+                    Some(extent) => extend_over(grid, extent, analyzer.source_rate()),
+                    None => grid,
+                };
+                Some((grid, analyzer.unanalysed(extent)))
+            }
+            Err(error) => {
+                warn!(?error, "beat analysis failed; leaving the beat slot empty");
+                None
+            }
         }
     }
 

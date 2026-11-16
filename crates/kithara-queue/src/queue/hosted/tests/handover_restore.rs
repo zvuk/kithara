@@ -1,6 +1,7 @@
 use kithara_command::{Batch, Port, Receipt};
 use kithara_play::{DeckEvent, DeckMixSettingsChange, Position, TrackCommand};
 use kithara_render::bridge::{DeckProtocol, PlaybackFault, Slot, SlotState};
+use kithara_worker::Worker;
 
 use super::*;
 use crate::{
@@ -12,12 +13,24 @@ struct HandoverRig {
     queue: Queue<TestPools>,
     deck: mock::DeckRig<TestPools>,
     loader: mock::DeckRig<TestPools>,
-    dir: TestTempDir,
+    dir: QueueFixture,
     ids: [TrackId; 3],
     last_lane: Option<kithara_render::LaneId>,
 }
 
 impl HandoverRig {
+    async fn finish(self) {
+        let Self {
+            queue,
+            deck,
+            loader,
+            dir,
+            ..
+        } = self;
+        drop((queue, deck, loader));
+        dir.finish().await;
+    }
+
     fn on_pass<Value>(
         &mut self,
         now: SessionFrame,
@@ -78,24 +91,29 @@ impl HandoverRig {
     }
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    async fn playing() -> Self {
+    async fn playing(worker: &Worker) -> Self {
         hang_tick!();
-        let rig = Self::playing_with_sources(["item-1.wav", "item-2.wav", "item-3.wav"]).await;
+        let rig =
+            Self::playing_with_sources(worker, ["item-1.wav", "item-2.wav", "item-3.wav"]).await;
         hang_reset!();
         rig
     }
 
     #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    async fn playing_with_sources(names: [&str; 3]) -> Self {
-        Self::playing_with_config(names, DeckMixerConfig::default()).await
+    async fn playing_with_sources(worker: &Worker, names: [&str; 3]) -> Self {
+        Self::playing_with_config(worker, names, DeckMixerConfig::default()).await
     }
 
     #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    async fn playing_with_config(names: [&str; 3], config: DeckMixerConfig) -> Self {
+    async fn playing_with_config(
+        worker: &Worker,
+        names: [&str; 3],
+        config: DeckMixerConfig,
+    ) -> Self {
         hang_tick!();
-        let (mut queue, _, dir) = empty_queue();
+        let (mut queue, _, dir) = empty_queue(worker);
         queue.config.mixer = config;
         queue.active = crate::queue::slots::Slots::new(config.slots().get());
         queue.deck = crate::queue::view::DeckObservation::new(config);
@@ -520,10 +538,13 @@ fn detached(parts: &[DeckPart]) -> Vec<Slot> {
 #[kithara::test(tokio)]
 #[case::chain_first(false)]
 #[case::stop_first(true)]
-async fn a_pause_over_a_held_native_chain_stops_the_stitched_successor(#[case] stop_first: bool) {
+async fn a_pause_over_a_held_native_chain_stops_the_stitched_successor(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] stop_first: bool,
+) {
     use kithara_render::bridge::Returned;
 
-    let mut rig = HandoverRig::playing().await;
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let outgoing = rig.slot(0);
     let incoming = rig.arm(1).await;
     let source = rig.source(1).to_owned();
@@ -608,6 +629,7 @@ async fn a_pause_over_a_held_native_chain_stops_the_stitched_successor(#[case] s
         changes, 1,
         "the original Chain publishes its successor once"
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -615,11 +637,12 @@ async fn a_pause_over_a_held_native_chain_stops_the_stitched_successor(#[case] s
 #[case::remove_first(true)]
 #[kithara::hang_watchdog]
 async fn removing_a_successor_over_a_held_native_chain_enters_the_next_item(
+    #[by_ref] worker_owner: &WorkerOwner,
     #[case] remove_first: bool,
 ) {
     use kithara_render::{Dispatched, DispatcherCommand, bridge::Returned};
 
-    let mut rig = HandoverRig::playing().await;
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let outgoing = rig.slot(0);
     let outgoing_source = rig.source(0).to_owned();
     let incoming = rig.arm(1).await;
@@ -797,6 +820,7 @@ async fn removing_a_successor_over_a_held_native_chain_enters_the_next_item(
         changes, 1,
         "the native C entry publishes the surviving successor once"
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -808,13 +832,14 @@ async fn removing_a_successor_over_a_held_native_chain_enters_the_next_item(
 #[case::selected_remove_first(false, true, true)]
 #[kithara::hang_watchdog]
 async fn removing_an_unstarted_chain_target_keeps_the_confirmed_current(
+    #[by_ref] worker_owner: &WorkerOwner,
     #[case] refused: bool,
     #[case] remove_first: bool,
     #[case] select_following: bool,
 ) {
     use kithara_render::bridge::{DeckRefusal, Returned};
 
-    let mut rig = HandoverRig::playing().await;
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let outgoing = rig.slot(0);
     let outgoing_source = rig.source(0).to_owned();
     let incoming = rig.arm(1).await;
@@ -1006,6 +1031,7 @@ async fn removing_an_unstarted_chain_target_keeps_the_confirmed_current(
         assert!(rig.queue.track(removed_item).is_none());
         assert_eq!(events(&mut observed).iter().filter(|event| matches!(event,
             QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::UserSelect } if *id == following_item)).count(), 1);
+        rig.finish().await;
         return;
     }
     assert!(rig.queue.target.is_none());
@@ -1042,6 +1068,7 @@ async fn removing_an_unstarted_chain_target_keeps_the_confirmed_current(
     assert_eq!(rig.queue.current, Some(rig.ids[0]));
     assert!(events(&mut observed).iter().all(|event| !matches!(event,
         QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == removed_item || *id == following_item)));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -1049,6 +1076,7 @@ async fn removing_an_unstarted_chain_target_keeps_the_confirmed_current(
 #[case::refused(true)]
 #[kithara::hang_watchdog]
 async fn removing_an_unstarted_staged_replacement_does_not_select_its_neighbor(
+    #[by_ref] worker_owner: &WorkerOwner,
     #[case] refused: bool,
 ) {
     use kithara_render::{
@@ -1059,8 +1087,12 @@ async fn removing_an_unstarted_staged_replacement_does_not_select_its_neighbor(
     let config = DeckMixerConfig::builder()
         .slots(std::num::NonZeroUsize::new(2).expect("two mixer slots"))
         .build();
-    let mut rig =
-        HandoverRig::playing_with_config(["item-1.wav", "item-2.wav", "item-3.wav"], config).await;
+    let mut rig = HandoverRig::playing_with_config(
+        &worker_owner.0,
+        ["item-1.wav", "item-2.wav", "item-3.wav"],
+        config,
+    )
+    .await;
     let old_slot = rig.slot(0);
     let old_source = rig.source(0).to_owned();
     rig.arm(1).await;
@@ -1168,6 +1200,7 @@ async fn removing_an_unstarted_staged_replacement_does_not_select_its_neighbor(
         due.apply(data);
         hang_reset!();
     }
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
@@ -1176,12 +1209,13 @@ async fn removing_an_unstarted_staged_replacement_does_not_select_its_neighbor(
 #[case::refused_explicit(false, true)]
 #[kithara::hang_watchdog]
 async fn a_rejected_removal_detach_finishes_its_custody_gate(
+    #[by_ref] worker_owner: &WorkerOwner,
     #[case] stale: bool,
     #[case] explicit: bool,
 ) {
     use kithara_render::bridge::DeckRefusal;
 
-    let mut rig = HandoverRig::playing().await;
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let incoming = rig.arm(1).await;
     let incoming_source = rig.source(1).to_owned();
     let following_item = rig.ids[2];
@@ -1433,13 +1467,17 @@ async fn a_rejected_removal_detach_finishes_its_custody_gate(
     );
     rig.settle(next);
     assert_eq!(rig.queue.current, Some(removed_item));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[case::crossfade(false)]
 #[case::chain(true)]
-async fn a_native_handover_answers_after_its_player_changes_segment(#[case] chained: bool) {
-    let mut rig = HandoverRig::playing().await;
+async fn a_native_handover_answers_after_its_player_changes_segment(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] chained: bool,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     let incoming = rig.slot(1);
     let mut observed = rig.queue.control().subscribe::<QueueEvent>();
@@ -1492,11 +1530,14 @@ async fn a_native_handover_answers_after_its_player_changes_segment(#[case] chai
         changed, 1,
         "the native verdict changes the sounding item once"
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_native_handover_refusal_survives_its_player_changing_segment() {
-    let mut rig = HandoverRig::playing().await;
+async fn a_native_handover_refusal_survives_its_player_changing_segment(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     let mut observed = rig.queue.control().subscribe::<QueueEvent>();
     let seq = rig
@@ -1536,11 +1577,14 @@ async fn a_native_handover_refusal_survives_its_player_changing_segment() {
         event,
         QueueEvent::CrossfadeStarted { .. } | QueueEvent::CurrentTrackChanged { .. }
     )));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn an_unrelated_native_receipt_cannot_publish_a_pending_handover() {
-    let mut rig = HandoverRig::playing().await;
+async fn an_unrelated_native_receipt_cannot_publish_a_pending_handover(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     let wanted = rig
         .select(1, Transition::Crossfade)
@@ -1567,11 +1611,14 @@ async fn an_unrelated_native_receipt_cannot_publish_a_pending_handover() {
         .expect("entry block");
     rig.settle(entry);
     assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_repeat_receipt_names_the_new_slot_of_the_same_item() {
-    let mut rig = HandoverRig::playing().await;
+async fn a_repeat_receipt_names_the_new_slot_of_the_same_item(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.apply(QueueCommand::SetRepeat(crate::RepeatMode::One))
         .expect("repeat one");
     rig.queue.config.action_at_item_end = ActionAtItemEnd::None;
@@ -1675,11 +1722,14 @@ async fn a_repeat_receipt_names_the_new_slot_of_the_same_item() {
     assert_eq!(events(&mut receiver).iter().filter(|event| matches!(event,
         QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::NaturalEof } if *id == rig.ids[0]
     )).count(), 1);
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn returning_to_an_outgoing_item_commits_its_new_native_slot() {
-    let mut rig = HandoverRig::playing().await;
+async fn returning_to_an_outgoing_item_commits_its_new_native_slot(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let old_slot = rig.slot(0);
     let source = rig.source(0).to_owned();
     rig.arm(1).await;
@@ -1733,13 +1783,17 @@ async fn returning_to_an_outgoing_item_commits_its_new_native_slot() {
     assert_eq!(events(&mut receiver).iter().filter(|event| matches!(event,
         QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::UserSelect } if *id == rig.ids[0]
     )).count(), 1);
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[case::sequence(false)]
 #[case::basis(true)]
-async fn a_foreign_native_receipt_cannot_answer_the_queues_entry(#[case] foreign_basis: bool) {
-    let mut rig = HandoverRig::playing().await;
+async fn a_foreign_native_receipt_cannot_answer_the_queues_entry(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] foreign_basis: bool,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     let receipt = rig
         .entry(1, Transition::Crossfade)
@@ -1767,16 +1821,23 @@ async fn a_foreign_native_receipt_cannot_answer_the_queues_entry(#[case] foreign
         kithara_play::Settled::Applied { seq: answered, at }
         if answered == seq && at == SessionFrame::new(128)));
     assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
-async fn returning_to_an_outgoing_item_replaces_its_old_owner_in_the_same_slot() {
+async fn returning_to_an_outgoing_item_replaces_its_old_owner_in_the_same_slot(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
     let config = DeckMixerConfig::builder()
         .slots(std::num::NonZeroUsize::new(2).expect("two mixer slots"))
         .build();
-    let mut rig =
-        HandoverRig::playing_with_config(["item-1.wav", "item-2.wav", "item-3.wav"], config).await;
+    let mut rig = HandoverRig::playing_with_config(
+        &worker_owner.0,
+        ["item-1.wav", "item-2.wav", "item-3.wav"],
+        config,
+    )
+    .await;
     let old_slot = rig.slot(0);
     let old_lane = rig.last_lane.expect("original A lane");
     let source = rig.source(0).to_owned();
@@ -1879,16 +1940,23 @@ async fn returning_to_an_outgoing_item_replaces_its_old_owner_in_the_same_slot()
         hang_reset!();
     }
     assert_eq!(releases, 1);
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
-async fn a_held_applied_replacement_commits_its_active_owner_before_a_superseding_target() {
+async fn a_held_applied_replacement_commits_its_active_owner_before_a_superseding_target(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
     let config = DeckMixerConfig::builder()
         .slots(std::num::NonZeroUsize::new(2).expect("two mixer slots"))
         .build();
-    let mut rig =
-        HandoverRig::playing_with_config(["item-1.wav", "item-2.wav", "item-3.wav"], config).await;
+    let mut rig = HandoverRig::playing_with_config(
+        &worker_owner.0,
+        ["item-1.wav", "item-2.wav", "item-3.wav"],
+        config,
+    )
+    .await;
     let old_slot = rig.slot(0);
     let source = rig.source(0).to_owned();
     rig.arm(1).await;
@@ -1991,16 +2059,23 @@ async fn a_held_applied_replacement_commits_its_active_owner_before_a_supersedin
             .count(),
         1
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
-async fn a_replacement_settles_returned_pcm_before_the_queue_replaces_its_owner() {
+async fn a_replacement_settles_returned_pcm_before_the_queue_replaces_its_owner(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
     let config = DeckMixerConfig::builder()
         .slots(std::num::NonZeroUsize::new(1).expect("one mixer slot"))
         .build();
-    let mut rig =
-        HandoverRig::playing_with_config(["item-1.wav", "item-2.wav", "item-3.wav"], config).await;
+    let mut rig = HandoverRig::playing_with_config(
+        &worker_owner.0,
+        ["item-1.wav", "item-2.wav", "item-3.wav"],
+        config,
+    )
+    .await;
     let old_lane = rig.last_lane.expect("original opened lane");
     let old_slot = rig.slot(0);
     let source = fixture_uri(rig.dir.path(), "item-1.wav");
@@ -2073,11 +2148,14 @@ async fn a_replacement_settles_returned_pcm_before_the_queue_replaces_its_owner(
         releases, 1,
         "the previous Player releases its answered lane before eviction"
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_chain_enters_on_its_native_receipt_instead_of_a_player_observation() {
-    let mut rig = HandoverRig::playing().await;
+async fn a_chain_enters_on_its_native_receipt_instead_of_a_player_observation(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.chain();
     let receipt = rig
@@ -2120,11 +2198,14 @@ async fn a_chain_enters_on_its_native_receipt_instead_of_a_player_observation() 
         kithara_play::Settled::Applied { seq: answered, at }
         if answered == seq && at == SessionFrame::new(128)));
     assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn cancelling_a_parked_chain_answers_it_before_the_predecessors_eof() {
-    let mut rig = HandoverRig::playing().await;
+async fn cancelling_a_parked_chain_answers_it_before_the_predecessors_eof(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.queue.insert_entry(
         rig.ids[2],
@@ -2159,13 +2240,17 @@ async fn cancelling_a_parked_chain_answers_it_before_the_predecessors_eof() {
         .expect("manual entry within one block");
     rig.settle(entry);
     assert_eq!(rig.queue.current, Some(rig.ids[2]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[case::native_chain(true)]
 #[case::timed_fade(false)]
-async fn a_changed_projected_end_only_withdraws_a_timed_handover(#[case] chained: bool) {
-    let mut rig = HandoverRig::playing().await;
+async fn a_changed_projected_end_only_withdraws_a_timed_handover(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] chained: bool,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.apply(QueueCommand::ConfigureQueue(
         QueueSettingsChange::Gapless(chained),
@@ -2262,6 +2347,7 @@ async fn a_changed_projected_end_only_withdraws_a_timed_handover(#[case] chained
         assert_eq!(rig.queue.target.expect("retimed target").bound, projected);
         assert_eq!(rig.queue.current, Some(rig.ids[0]));
     }
+    rig.finish().await;
 }
 
 #[kithara::hang_watchdog]
@@ -2276,8 +2362,8 @@ fn events(receiver: &mut kithara_events::EventReceiver<QueueEvent>) -> Vec<Queue
 }
 
 #[kithara::test(tokio)]
-async fn arm_next_loads_item_and_returns_src() {
-    let mut rig = HandoverRig::playing().await;
+async fn arm_next_loads_item_and_returns_src(#[by_ref] worker_owner: &WorkerOwner) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let slot = rig.arm(1).await;
     assert_eq!(rig.armed(), Some(rig.ids[1]));
     assert_eq!(rig.source(1), fixture_uri(rig.dir.path(), "item-2.wav"));
@@ -2286,11 +2372,14 @@ async fn arm_next_loads_item_and_returns_src() {
         rig.queue.track(rig.ids[1]).expect("record").status,
         TrackStatus::Loaded
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_rejected_retained_chain_does_not_rewrite_the_new_selection() {
-    let mut rig = HandoverRig::playing().await;
+async fn a_rejected_retained_chain_does_not_rewrite_the_new_selection(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.chain();
     let seq = rig
@@ -2321,11 +2410,12 @@ async fn a_rejected_retained_chain_does_not_rewrite_the_new_selection() {
     assert_eq!(remaining.bound, target.bound);
     assert_eq!(remaining.continued, target.continued);
     assert_eq!(remaining.stale, target.stale);
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn arm_next_idempotent_for_same_index() {
-    let mut rig = HandoverRig::playing().await;
+async fn arm_next_idempotent_for_same_index(#[by_ref] worker_owner: &WorkerOwner) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let first = rig.arm(1).await;
     let before = rig.source(1).to_owned();
     let count = rig.queue.active.len();
@@ -2347,11 +2437,12 @@ async fn arm_next_idempotent_for_same_index() {
         rig.deck.opens.next_due((), 1).is_none(),
         "idempotent preload does not reopen the source"
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn arm_next_returns_none_for_empty_slot() {
-    let (mut queue, mut deck, _dir) = empty_queue();
+async fn arm_next_returns_none_for_empty_slot(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut deck, fixture_directory) = empty_queue(&worker_owner.0);
     let result = with_outbox(&mut queue, &mut deck, |queue, out| {
         queue.next_target(
             Transition::None,
@@ -2366,11 +2457,13 @@ async fn arm_next_returns_none_for_empty_slot() {
     assert!(result.is_none());
     assert!(queue.target.is_none());
     assert_eq!(queue.active.len(), 0);
+    drop((queue, deck));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn arm_next_replaces_previously_armed_slot() {
-    let mut rig = HandoverRig::playing().await;
+async fn arm_next_replaces_previously_armed_slot(#[by_ref] worker_owner: &WorkerOwner) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     let before = rig.source(1).to_owned();
     rig.select(2, Transition::None)
@@ -2378,11 +2471,12 @@ async fn arm_next_replaces_previously_armed_slot() {
     rig.load(2, 162.0).await;
     assert_ne!(before, rig.source(2));
     assert_eq!(rig.armed(), Some(rig.ids[2]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn commit_next_advances_index_and_publishes_event() {
-    let mut rig = HandoverRig::playing().await;
+async fn commit_next_advances_index_and_publishes_event(#[by_ref] worker_owner: &WorkerOwner) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     let mut receiver = rig.queue.control().subscribe();
     let receipts = rig.entry(1, Transition::None);
@@ -2393,11 +2487,12 @@ async fn commit_next_advances_index_and_publishes_event() {
     assert!(first_eight.iter().any(|envelope| {
         matches!(envelope.event, QueueEvent::CurrentTrackChanged { id: Some(id) } if id == rig.ids[1])
     }), "the current-item announcement is among the first eight events");
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn commit_next_index_mismatch_returns_typed_error() {
-    let mut rig = HandoverRig::playing().await;
+async fn commit_next_index_mismatch_returns_typed_error(#[by_ref] worker_owner: &WorkerOwner) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     let unknown = TrackId::allocate();
     let error = with_outbox(&mut rig.queue, &mut rig.deck, |queue, out| {
@@ -2414,21 +2509,26 @@ async fn commit_next_index_mismatch_returns_typed_error() {
     assert!(matches!(error, QueueError::UnknownTrackId(requested) if requested == unknown));
     assert_eq!(rig.armed(), Some(rig.ids[1]));
     assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn commit_next_without_arm_returns_not_ready() {
-    let (mut queue, mut deck, _dir) = empty_queue();
+async fn commit_next_without_arm_returns_not_ready(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut deck, fixture_directory) = empty_queue(&worker_owner.0);
     let error = with_outbox(&mut queue, &mut deck, |queue, out| {
         queue.send_transition(0, SessionFrame::new(128), out)
     })
     .expect_err("there is no prepared transition");
     assert!(matches!(error, PlayError::NotReady));
+    drop((queue, deck));
+    fixture_directory.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn commit_next_publishes_snapshot_before_current_item_changed() {
-    let mut rig = HandoverRig::playing().await;
+async fn commit_next_publishes_snapshot_before_current_item_changed(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     let mut receiver = rig.queue.control().subscribe();
     let receipts = rig.entry(1, Transition::Crossfade);
@@ -2453,22 +2553,28 @@ async fn commit_next_publishes_snapshot_before_current_item_changed() {
     assert!(matches!(receiver.try_recv().expect("advance reason").event,
         QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::UserSelect } if id == rig.ids[1]));
     assert_eq!(rig.queue.control().duration_seconds(), Some(162.0));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn committed_item_outlives_a_block_the_outgoing_item_was_rendering() {
-    let mut rig = HandoverRig::playing().await;
+async fn committed_item_outlives_a_block_the_outgoing_item_was_rendering(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     let receipts = rig.entry(1, Transition::Crossfade);
     rig.settle(receipts);
     rig.outgoing_observation(0);
     assert_eq!(rig.queue.control().duration_seconds(), Some(162.0));
     assert_eq!(rig.queue.control().position_seconds(), Some(0.0));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_rejected_fade_in_leaves_the_playhead_on_the_playing_item() {
-    let mut rig = HandoverRig::playing().await;
+async fn a_rejected_fade_in_leaves_the_playhead_on_the_playing_item(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.outgoing_observation(0);
     rig.fill_to_room(0);
@@ -2478,11 +2584,12 @@ async fn a_rejected_fade_in_leaves_the_playhead_on_the_playing_item() {
     assert!(matches!(error, PlayError::Full("deck")));
     assert_eq!(rig.queue.control().duration_seconds(), Some(64.295));
     assert_eq!(rig.queue.control().position_seconds(), Some(62.3));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn pending_next_state_maps_activated_bool() {
-    let mut rig = HandoverRig::playing().await;
+async fn pending_next_state_maps_activated_bool(#[by_ref] worker_owner: &WorkerOwner) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     assert!(!rig.queue.current.is_some_and(|id| id == rig.ids[1]));
     let receipts = rig.entry(1, Transition::None);
@@ -2498,11 +2605,12 @@ async fn pending_next_state_maps_activated_bool() {
             .role,
         Role::Current
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn select_item_on_armed_index_promotes_armed_slot() {
-    let mut rig = HandoverRig::playing().await;
+async fn select_item_on_armed_index_promotes_armed_slot(#[by_ref] worker_owner: &WorkerOwner) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let armed = rig.arm(1).await;
     let source = rig.source(1).to_owned();
     let receipts = rig.entry(1, Transition::None);
@@ -2518,21 +2626,25 @@ async fn select_item_on_armed_index_promotes_armed_slot() {
     assert_eq!(rig.slot(1), armed);
     assert_eq!(rig.source(1), source);
     rig.assert_no_pending_load();
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[should_panic(expected = "promotion reuses the opened lane")]
-async fn the_promotion_reuse_check_rejects_an_additional_load() {
-    let mut rig = HandoverRig::playing().await;
+async fn the_promotion_reuse_check_rejects_an_additional_load(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.select(2, Transition::None)
         .expect("another selection loads");
     rig.assert_no_pending_load();
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn unarm_next_clears_when_not_activated_and_unloads() {
-    let mut rig = HandoverRig::playing().await;
+async fn unarm_next_clears_when_not_activated_and_unloads(#[by_ref] worker_owner: &WorkerOwner) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     let source = rig.source(1).to_owned();
     with_outbox(&mut rig.queue, &mut rig.deck, Queue::cancel_auto).expect("unarm preload");
@@ -2544,11 +2656,14 @@ async fn unarm_next_clears_when_not_activated_and_unloads() {
             .iter()
             .any(|part| matches!(part, DeckPart::Detach { .. }))
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn select_item_clears_pending_next_and_unloads_preloaded_track() {
-    let mut rig = HandoverRig::playing().await;
+async fn select_item_clears_pending_next_and_unloads_preloaded_track(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let armed_slot = rig.arm(1).await;
     let source = rig.source(1).to_owned();
     rig.select(2, Transition::None)
@@ -2560,11 +2675,14 @@ async fn select_item_clears_pending_next_and_unloads_preloaded_track() {
     assert_eq!(rig.armed(), None);
     assert_eq!(rig.queue.control().current_index(), Some(2));
     assert_eq!(source, fixture_uri(rig.dir.path(), "item-2.wav"));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn selecting_another_item_cancels_the_successor_preload_instead_of_unloading_it() {
-    let mut rig = HandoverRig::playing().await;
+async fn selecting_another_item_cancels_the_successor_preload_instead_of_unloading_it(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let second_slot = rig.arm(1).await;
     rig.chain();
     let stitched = rig.stitch();
@@ -2584,12 +2702,15 @@ async fn selecting_another_item_cancels_the_successor_preload_instead_of_unloadi
         Some(2),
         "the applied selection leads over the successor it fades out"
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
-async fn a_refused_selection_keeps_a_successor_already_stitched_in_and_reports_it() {
-    let mut rig = HandoverRig::playing().await;
+async fn a_refused_selection_keeps_a_successor_already_stitched_in_and_reports_it(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.chain();
     let stitched = rig.stitch();
@@ -2633,11 +2754,14 @@ async fn a_refused_selection_keeps_a_successor_already_stitched_in_and_reports_i
     }
     rig.settle(stitched);
     assert_eq!(rig.queue.control().current_index(), Some(1));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn re_arming_keeps_a_successor_already_stitched_in_and_reports_it() {
-    let mut rig = HandoverRig::playing().await;
+async fn re_arming_keeps_a_successor_already_stitched_in_and_reports_it(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.chain();
     let stitched = rig.stitch();
@@ -2646,11 +2770,14 @@ async fn re_arming_keeps_a_successor_already_stitched_in_and_reports_it() {
     rig.settle(stitched);
     assert_eq!(rig.queue.control().current_index(), Some(1));
     assert_eq!(rig.armed(), Some(rig.ids[2]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_re_armed_successor_the_audio_thread_stitched_in_is_promoted() {
-    let mut rig = HandoverRig::playing().await;
+async fn a_re_armed_successor_the_audio_thread_stitched_in_is_promoted(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.chain();
     rig.select(2, Transition::None).expect("re-arm accepted");
@@ -2666,12 +2793,15 @@ async fn a_re_armed_successor_the_audio_thread_stitched_in_is_promoted() {
     rig.settle(applied);
     assert_eq!(rig.queue.control().current_index(), Some(2));
     assert_eq!(rig.armed(), None);
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
-async fn a_chained_successor_that_ends_in_its_stitch_block_is_reported() {
-    let mut rig = HandoverRig::playing().await;
+async fn a_chained_successor_that_ends_in_its_stitch_block_is_reported(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let second = rig.arm(1).await;
     rig.chain();
     let applied = rig.stitch();
@@ -2686,11 +2816,14 @@ async fn a_chained_successor_that_ends_in_its_stitch_block_is_reported() {
     rig.settle(applied);
     assert_eq!(rig.queue.control().current_index(), Some(1));
     assert_eq!(rig.armed(), None);
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_withdrawn_successor_that_ends_in_its_stitch_block_is_reported() {
-    let mut rig = HandoverRig::playing().await;
+async fn a_withdrawn_successor_that_ends_in_its_stitch_block_is_reported(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let second = rig.arm(1).await;
     rig.chain();
     let applied = rig.stitch();
@@ -2706,11 +2839,14 @@ async fn a_withdrawn_successor_that_ends_in_its_stitch_block_is_reported() {
     });
     rig.settle(applied);
     assert_eq!(rig.queue.control().current_index(), Some(1));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_successor_whose_cancel_the_ring_refused_is_reported_when_stitched_in_later() {
-    let mut rig = HandoverRig::playing().await;
+async fn a_successor_whose_cancel_the_ring_refused_is_reported_when_stitched_in_later(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.chain();
     rig.fill_to_room(0);
@@ -2733,11 +2869,14 @@ async fn a_successor_whose_cancel_the_ring_refused_is_reported_when_stitched_in_
     });
     rig.settle(applied);
     assert_eq!(rig.queue.control().current_index(), Some(1));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_re_armed_successor_that_fails_in_its_stitch_block_is_reported() {
-    let mut rig = HandoverRig::playing().await;
+async fn a_re_armed_successor_that_fails_in_its_stitch_block_is_reported(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.chain();
     rig.select(2, Transition::None).expect("re-arm third");
@@ -2758,11 +2897,14 @@ async fn a_re_armed_successor_that_fails_in_its_stitch_block_is_reported() {
     rig.settle(applied);
     assert_eq!(rig.queue.control().current_index(), Some(2));
     assert_eq!(rig.armed(), None);
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn an_unloaded_successor_whose_cancel_the_ring_refused_leaves_the_question() {
-    let mut rig = HandoverRig::playing().await;
+async fn an_unloaded_successor_whose_cancel_the_ring_refused_leaves_the_question(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.chain();
     rig.fill_to_room(0);
@@ -2788,11 +2930,14 @@ async fn an_unloaded_successor_whose_cancel_the_ring_refused_leaves_the_question
             .iter()
             .all(|active| active.item != rig.ids[1])
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn eof_playback_stopped_notification_maps_to_item_end_event() {
-    let mut rig = HandoverRig::playing().await;
+async fn eof_playback_stopped_notification_maps_to_item_end_event(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.only_current(0);
     let mut receiver = rig.queue.control().subscribe();
     rig.event(DeckEvent::Ended {
@@ -2813,11 +2958,14 @@ async fn eof_playback_stopped_notification_maps_to_item_end_event() {
     });
     assert!(rig.queue.control().current().is_none());
     assert!(events(&mut receiver).is_empty());
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn an_ended_current_keeps_its_successor_uncommitted_until_the_native_receipt() {
-    let mut rig = HandoverRig::playing().await;
+async fn an_ended_current_keeps_its_successor_uncommitted_until_the_native_receipt(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.chain();
     let pending = rig.queue.pending_handover.expect("pending native Chain");
@@ -2860,11 +3008,14 @@ async fn an_ended_current_keeps_its_successor_uncommitted_until_the_native_recei
     rig.apply(QueueCommand::Previous(Transition::None))
         .expect("native handover committed A to history");
     assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[0]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn playback_stopped_notification_does_not_map_to_item_end_event() {
-    let mut rig = HandoverRig::playing().await;
+async fn playback_stopped_notification_does_not_map_to_item_end_event(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.only_current(0);
     let mut receiver = rig.queue.control().subscribe();
     rig.apply(QueueCommand::Pause { at: When::Next })
@@ -2878,11 +3029,12 @@ async fn playback_stopped_notification_does_not_map_to_item_end_event() {
         events(&mut receiver).is_empty(),
         "ordinary stop is not a natural end"
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn end_of_the_held_slot_is_the_leading_track() {
-    let mut rig = HandoverRig::playing().await;
+async fn end_of_the_held_slot_is_the_leading_track(#[by_ref] worker_owner: &WorkerOwner) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.only_current(0);
     let held = rig.slot(0);
     let current = rig.queue.current_track().expect("leader").snapshot();
@@ -2908,11 +3060,14 @@ async fn end_of_the_held_slot_is_the_leading_track() {
         ),
         "{observed:?}"
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn end_of_a_slot_the_phase_does_not_hold_is_a_background_track() {
-    let mut rig = HandoverRig::playing().await;
+async fn end_of_a_slot_the_phase_does_not_hold_is_a_background_track(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let background = rig.arm(1).await;
     let active = rig
         .queue
@@ -2933,11 +3088,14 @@ async fn end_of_a_slot_the_phase_does_not_hold_is_a_background_track() {
     });
     assert_eq!(rig.queue.current, Some(rig.ids[0]));
     assert!(events(&mut receiver).is_empty());
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn the_outgoing_half_of_a_crossfade_is_not_the_leading_track() {
-    let mut rig = HandoverRig::playing_with_sources(["item-1.wav"; 3]).await;
+async fn the_outgoing_half_of_a_crossfade_is_not_the_leading_track(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing_with_sources(&worker_owner.0, ["item-1.wav"; 3]).await;
     let same = rig.source(0).to_owned();
     rig.queue.tracks.records_mut()[1].source = TrackSource::Uri(same.clone());
     rig.arm(1).await;
@@ -2966,11 +3124,14 @@ async fn the_outgoing_half_of_a_crossfade_is_not_the_leading_track() {
         events(&mut receiver).is_empty(),
         "an outgoing end never advances a second time"
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn the_promoted_half_of_a_crossfade_is_the_leading_track() {
-    let mut rig = HandoverRig::playing_with_sources(["item-1.wav"; 3]).await;
+async fn the_promoted_half_of_a_crossfade_is_the_leading_track(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing_with_sources(&worker_owner.0, ["item-1.wav"; 3]).await;
     let same = rig.source(0).to_owned();
     rig.queue.tracks.records_mut()[1].source = TrackSource::Uri(same.clone());
     rig.arm(1).await;
@@ -3003,11 +3164,14 @@ async fn the_promoted_half_of_a_crossfade_is_the_leading_track() {
         ),
         "{observed:?}"
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn start_of_a_slot_the_phase_does_not_hold_is_a_background_item() {
-    let mut rig = HandoverRig::playing().await;
+async fn start_of_a_slot_the_phase_does_not_hold_is_a_background_item(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let background = rig.arm(1).await;
     let mut receiver = rig.queue.control().subscribe();
     with_outbox(&mut rig.queue, &mut rig.deck, |queue, out| {
@@ -3047,6 +3211,7 @@ async fn start_of_a_slot_the_phase_does_not_hold_is_a_background_item() {
     assert_eq!(rig.source(1), fixture_uri(rig.dir.path(), "item-2.wav"));
     assert_eq!(rig.queue.current, Some(rig.ids[0]));
     assert!(events(&mut receiver).is_empty());
+    rig.finish().await;
 }
 
 impl HandoverRig {
@@ -3080,20 +3245,23 @@ impl HandoverRig {
         assert_eq!(self.queue.current, Some(self.ids[0]));
     }
 
-    async fn with_previous_history() -> Self {
+    async fn with_previous_history(worker: &Worker) -> Self {
         let config = DeckMixerConfig::builder()
             .slots(std::num::NonZeroUsize::new(3).expect("three history slots"))
             .build();
         let mut rig =
-            Self::playing_with_config(["item-1.wav", "item-2.wav", "item-3.wav"], config).await;
+            Self::playing_with_config(worker, ["item-1.wav", "item-2.wav", "item-3.wav"], config)
+                .await;
         rig.seed_previous_history();
         rig
     }
 }
 
 #[kithara::test(tokio)]
-async fn cancelling_previous_preserves_the_uncommitted_history_entry() {
-    let mut rig = HandoverRig::with_previous_history().await;
+async fn cancelling_previous_preserves_the_uncommitted_history_entry(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::with_previous_history(&worker_owner.0).await;
     rig.apply(QueueCommand::Previous(Transition::None))
         .expect("previous request");
     assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[1]));
@@ -3108,11 +3276,14 @@ async fn cancelling_previous_preserves_the_uncommitted_history_entry() {
         Some(rig.ids[1]),
         "cancellation cannot consume the history entry"
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn refused_previous_preserves_the_uncommitted_history_entry() {
-    let mut rig = HandoverRig::with_previous_history().await;
+async fn refused_previous_preserves_the_uncommitted_history_entry(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::with_previous_history(&worker_owner.0).await;
     rig.arm(1).await;
     let seq = rig
         .apply(QueueCommand::Previous(Transition::None))
@@ -3140,11 +3311,14 @@ async fn refused_previous_preserves_the_uncommitted_history_entry() {
         Some(rig.ids[1]),
         "a native rejection cannot consume the history entry"
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn applied_previous_commits_backwards_once_without_bouncing() {
-    let mut rig = HandoverRig::with_previous_history().await;
+async fn applied_previous_commits_backwards_once_without_bouncing(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::with_previous_history(&worker_owner.0).await;
     rig.arm(1).await;
     rig.arm(2).await;
     let mut observed = rig.queue.control().subscribe::<QueueEvent>();
@@ -3187,11 +3361,14 @@ async fn applied_previous_commits_backwards_once_without_bouncing() {
         vec![rig.ids[1], rig.ids[2]],
         "one cursor commit per native Previous"
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_late_applied_previous_commits_its_original_history_before_the_new_target() {
-    let mut rig = HandoverRig::with_previous_history().await;
+async fn a_late_applied_previous_commits_its_original_history_before_the_new_target(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::with_previous_history(&worker_owner.0).await;
     rig.arm(1).await;
     rig.arm(2).await;
     let mut observed = rig.queue.control().subscribe::<QueueEvent>();
@@ -3266,11 +3443,14 @@ async fn a_late_applied_previous_commits_its_original_history_before_the_new_tar
     rig.apply(QueueCommand::Previous(Transition::None))
         .expect("history after the new target");
     assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[1]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_current_reselect_restores_its_resource_after_a_held_applied_previous() {
-    let mut rig = HandoverRig::with_previous_history().await;
+async fn a_current_reselect_restores_its_resource_after_a_held_applied_previous(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::with_previous_history(&worker_owner.0).await;
     let original_slot = rig.slot(0);
     let original_source = rig.source(0).to_owned();
     rig.arm(1).await;
@@ -3348,11 +3528,14 @@ async fn a_current_reselect_restores_its_resource_after_a_held_applied_previous(
     rig.apply(QueueCommand::Previous(Transition::None))
         .expect("history after restored A");
     assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[1]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn reselecting_current_keeps_an_automatic_chain_owned_by_its_receipt() {
-    let mut rig = HandoverRig::playing().await;
+async fn reselecting_current_keeps_an_automatic_chain_owned_by_its_receipt(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     rig.arm(1).await;
     rig.chain();
     let slot = rig.slot(0);
@@ -3396,11 +3579,14 @@ async fn reselecting_current_keeps_an_automatic_chain_owned_by_its_receipt() {
     rig.apply(QueueCommand::Previous(Transition::None))
         .expect("successor commits the old current to history");
     assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[0]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn reselecting_current_preserves_a_held_applied_automatic_chain_and_its_history() {
-    let mut rig = HandoverRig::playing().await;
+async fn reselecting_current_preserves_a_held_applied_automatic_chain_and_its_history(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
     let old_slot = rig.slot(0);
     let source = rig.source(0).to_owned();
     rig.arm(1).await;
@@ -3465,11 +3651,14 @@ async fn reselecting_current_preserves_a_held_applied_automatic_chain_and_its_hi
     assert_eq!(events(&mut receiver).iter().filter(|event| matches!(event,
         QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::UserPrev } if *id == rig.ids[0]
     )).count(), 1);
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn reselecting_current_without_a_pending_handover_keeps_the_shortcut() {
-    let mut rig = HandoverRig::with_previous_history().await;
+async fn reselecting_current_without_a_pending_handover_keeps_the_shortcut(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::with_previous_history(&worker_owner.0).await;
     rig.arm(1).await;
     rig.arm(2).await;
     let slot = rig.slot(0);
@@ -3491,13 +3680,17 @@ async fn reselecting_current_without_a_pending_handover_keeps_the_shortcut() {
             .iter()
             .all(|event| !matches!(event, QueueEvent::CurrentTrackChanged { .. }))
     );
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[case::once(false)]
 #[case::repeated(true)]
-async fn a_current_reselect_keeps_pause_control_until_the_previous_answer(#[case] repeated: bool) {
-    let mut rig = HandoverRig::with_previous_history().await;
+async fn a_current_reselect_keeps_pause_control_until_the_previous_answer(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] repeated: bool,
+) {
+    let mut rig = HandoverRig::with_previous_history(&worker_owner.0).await;
     rig.arm(1).await;
     rig.arm(2).await;
     let slot = rig.slot(0);
@@ -3587,11 +3780,14 @@ async fn a_current_reselect_keeps_pause_control_until_the_previous_answer(#[case
     ));
     assert_eq!(rig.deck.mixer.held(slot), Some(source.as_str()));
     rig.assert_no_pending_load();
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_rejected_previous_leaves_the_reselected_current_and_history_intact() {
-    let mut rig = HandoverRig::with_previous_history().await;
+async fn a_rejected_previous_leaves_the_reselected_current_and_history_intact(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::with_previous_history(&worker_owner.0).await;
     rig.arm(1).await;
     let released_slot = rig.arm(2).await;
     let released_source = rig.source(2).to_owned();
@@ -3654,11 +3850,14 @@ async fn a_rejected_previous_leaves_the_reselected_current_and_history_intact() 
     rig.apply(QueueCommand::Previous(Transition::None))
         .expect("uncommitted previous stays in history");
     assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[1]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn cancelling_a_current_reselect_preserves_current_until_the_original_verdict() {
-    let mut rig = HandoverRig::with_previous_history().await;
+async fn cancelling_a_current_reselect_preserves_current_until_the_original_verdict(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::with_previous_history(&worker_owner.0).await;
     rig.arm(1).await;
     rig.arm(2).await;
     let slot = rig.slot(0);
@@ -3704,11 +3903,14 @@ async fn cancelling_a_current_reselect_preserves_current_until_the_original_verd
         "original B's actual verdict survives cancellation of A intent"
     );
     assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[2]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_current_reselect_can_resume_while_its_pause_answer_is_pending() {
-    let mut rig = HandoverRig::with_previous_history().await;
+async fn a_current_reselect_can_resume_while_its_pause_answer_is_pending(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::with_previous_history(&worker_owner.0).await;
     rig.arm(1).await;
     rig.arm(2).await;
     let slot = rig.slot(0);
@@ -3822,11 +4024,14 @@ async fn a_current_reselect_can_resume_while_its_pause_answer_is_pending() {
     rig.apply(QueueCommand::Previous(Transition::None))
         .expect("history after resumed A");
     assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[1]));
+    rig.finish().await;
 }
 
 #[kithara::test(tokio)]
-async fn a_rejected_current_reselect_pause_retires_its_actual_sequence() {
-    let mut rig = HandoverRig::with_previous_history().await;
+async fn a_rejected_current_reselect_pause_retires_its_actual_sequence(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::with_previous_history(&worker_owner.0).await;
     rig.arm(1).await;
     rig.arm(2).await;
     let slot = rig.slot(0);
@@ -3927,4 +4132,5 @@ async fn a_rejected_current_reselect_pause_retires_its_actual_sequence() {
         .collect::<Vec<_>>();
     assert_eq!(changed, vec![rig.ids[1]], "refused A never becomes current");
     rig.assert_no_pending_load();
+    rig.finish().await;
 }

@@ -4,7 +4,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     download::{Downloader, DownloaderConfig},
     host::HostConfig,
-    net::{HttpClient, NetOptions},
+    net::NetOptions,
     platform::{CancelScope, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourcePrep, ResourceSrc},
     queue::{Queue, QueueConfig, QueueEvent, TrackSource, TrackStatus, Transition},
@@ -17,7 +17,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::SignalAsset;
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
 #[case::absent(false)]
 #[case::present(true)]
 async fn a_remote_uri_track_takes_the_queue_downloader(#[case] present: bool) {
@@ -38,15 +38,14 @@ async fn a_remote_uri_track_takes_the_queue_downloader(#[case] present: bool) {
     }
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
 async fn a_caller_built_config_keeps_its_downloader() {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::MP3_SINE1K_48K_1S);
     let scope = CancelScope::new(None);
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
+        DownloaderConfig::for_client(TestServerHelper::shared_client(
             NetOptions::default(),
-            pools(),
             scope.token().child(),
         ))
         .runtime(kithara::platform::tokio::runtime::Handle::current())

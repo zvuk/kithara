@@ -28,7 +28,8 @@ use crate::{
     error::UiDocError,
     ids::SourceUri,
     interact::{
-        Input, PointerButton, PointerInput, PointerPhase, ScrollAxis, masonry::masonry_text_event,
+        Input, PointerButton, PointerInput, PointerPhase, ScrollAxis,
+        masonry::{masonry_pointer_id, masonry_text_event},
     },
     masonry::retained::{MasonryHost, MasonryRoot, MasonryState},
     module::ViewSet,
@@ -236,7 +237,7 @@ where
     fn pointer_event(&mut self, input: PointerInput) -> Option<PointerEvent> {
         let at = self.pointer;
         let scale = self.scale;
-        let pointer = pointer_info(PointerId::new(input.id.0.checked_add(1)?)?);
+        let pointer = pointer_info(masonry_pointer_id(input.id)?);
         let button = pointer_button(input.button);
         let mut buttons = self.buttons.get(&input.id.0).copied().unwrap_or_default();
         match input.phase {

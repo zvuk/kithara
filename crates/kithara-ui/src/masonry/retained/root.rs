@@ -5,8 +5,7 @@ use masonry::{
     accesskit::TreeUpdate,
     app::{RenderRoot, RenderRootOptions, RenderRootSignal},
     core::{
-        CursorIcon, ErasedAction, Handled, NewWidget, PointerEvent, TextEvent, Widget, WidgetId,
-        WindowEvent,
+        CursorIcon, ErasedAction, Handled, PointerEvent, TextEvent, Widget, WidgetId, WindowEvent,
     },
     kurbo::{Point, Rect as MasonryRect},
     ui_events::keyboard::{Key, NamedKey},
@@ -17,7 +16,7 @@ use thiserror::Error;
 use super::{
     built::{
         BlockRegistration, MasonryNode, NodeBox, PopoverRegistration, Registrations, RootParts,
-        Watched, WindowTracker, Within,
+        Watched, WindowTracker, Within, installed_at, stack_modals_on_top,
     },
     custom::HostAction,
     node::Node,
@@ -28,6 +27,7 @@ use super::{
 #[cfg(feature = "capture")]
 use crate::draw::Rgba;
 use crate::{
+    backends::affine,
     draw::Pt,
     hosts::drag::DragSession,
     interact::{
@@ -171,7 +171,7 @@ where
     ///
     /// Returns whether an animation frame, rather than an ordinary redraw, was
     /// requested. Every unrelated platform signal remains queued in order.
-    pub(crate) fn complete_frame(&mut self) -> bool {
+    pub fn complete_frame(&mut self) -> bool {
         let animation = complete_frame_signals(&mut self.platform);
         animation || self.animates || std::mem::take(&mut self.moved)
     }
@@ -283,7 +283,7 @@ where
     }
 
     /// Reports whether Masonry requested another paint or animation frame.
-    pub(crate) fn needs_frame(&self) -> bool {
+    pub fn needs_frame(&self) -> bool {
         frame_requested(&self.platform) || self.animates || self.moved
     }
 
@@ -827,7 +827,7 @@ where
                 let mut node = widget.downcast::<Node>();
                 let moved = node.widget.place(transform);
                 if moved {
-                    node.ctx.request_paint_only();
+                    node.ctx.set_transform(affine(transform));
                 }
                 moved
             });
@@ -837,6 +837,24 @@ where
             moved |= placed;
         }
         moved
+    }
+
+    /// Repaints what the application installed at `path` with
+    /// [`MasonryHost::with_custom`](super::MasonryHost::with_custom) after it
+    /// changed state the host cannot see, which such a widget otherwise idles
+    /// on. One redraw follows, and frames only while its `repaint` asks for
+    /// them; it is not measured again. Returns whether anything is installed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MasonryRootError`] when a widget violates the typed action contract.
+    pub fn invalidate(&mut self, path: &str) -> Result<bool, MasonryRootError> {
+        let installed = installed_at(&self.watched, path);
+        for id in &installed {
+            self.root.edit_widget(*id, Node::invalidate);
+        }
+        self.sync()?;
+        Ok(!installed.is_empty())
     }
 
     /// Refreshes mounted values and poses without rebuilding, preserving in-flight
@@ -919,7 +937,7 @@ where
                         lit
                     });
                 }
-                Watched::Placed { .. } | Watched::Zone { .. } => {}
+                Watched::Custom { .. } | Watched::Placed { .. } | Watched::Zone { .. } => {}
             }
         }
         moved
@@ -951,27 +969,6 @@ where
         }
         self.sync_menus();
     }
-}
-
-/// Stacks every modal above the other surfaces and layers, under only the
-/// window's own layer, whatever its place in the document: the layer order is
-/// the paint order, and the surface order is the order input finds them in.
-fn stack_modals_on_top(
-    layers: &mut [NewWidget<dyn Widget>],
-    popovers: &mut [Within<PopoverRegistration>],
-    window: Option<&WindowTracker>,
-) {
-    popovers.sort_by_key(|popover| matches!(popover.item.state.kind(), SurfaceKind::Modal));
-    let modals: Vec<WidgetId> = popovers
-        .iter()
-        .filter(|popover| matches!(popover.item.state.kind(), SurfaceKind::Modal))
-        .map(|popover| popover.item.layer)
-        .collect();
-    let edges = window.and_then(|window| window.layer);
-    layers.sort_by_key(|layer| {
-        let id = layer.id();
-        (Some(id) == edges, modals.contains(&id))
-    });
 }
 
 fn complete_frame_signals(signals: &mut Vec<RenderRootSignal>) -> bool {

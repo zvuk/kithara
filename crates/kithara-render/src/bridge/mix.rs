@@ -1,5 +1,6 @@
 use kithara_config::Config;
 use kithara_derive::{Patch, Ranged};
+use kithara_effects::filter::FilterKnob;
 use kithara_signal::FaderValue;
 
 /// The linear amplitude a deck's slot sum enters its chain at, before its
@@ -17,8 +18,8 @@ pub struct CrossfaderGain(f32);
 /// How loud a deck sounds, changed while it plays.
 ///
 /// A change of one field goes to the deck as one [`DeckPart::Mix`](super::DeckPart::Mix); the
-/// deck applies it on its frame and ramps its trim to [`DeckMixSettings::trim`] and its output
-/// to [`DeckMixSettings::output_gain`].
+/// deck applies it on its frame and ramps its trim to [`DeckMixSettings::trim`], its filter
+/// knob to [`DeckMixSettings::filter`] and its output to [`DeckMixSettings::output_gain`].
 #[derive(Clone, Copy, Debug, PartialEq, Config, Patch)]
 #[config(default, fields(value, get(copy)))]
 pub struct DeckMixSettings {
@@ -34,6 +35,9 @@ pub struct DeckMixSettings {
     /// The crossfader's share of the deck, at unity unless changed.
     #[config(live, builder(default = CrossfaderGain::DEFAULT))]
     crossfader: CrossfaderGain,
+    /// The deck filter knob after the FX units, at its transparent center unless changed.
+    #[config(live, builder(default = FilterKnob::DEFAULT))]
+    filter: FilterKnob,
 }
 
 impl DeckMixSettings {

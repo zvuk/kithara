@@ -7,13 +7,16 @@ use kithara_test_utils::kithara;
 
 use crate::{
     QueueCommand, QueueEvent, TrackSource, Transition,
-    mock::{answer_load, empty_queue, finish, fixture_uri, seed_fixture, with_outbox},
+    mock::{
+        FixtureSource, answer_load, empty_queue, finish, fixture_uri, seed_fixture, with_outbox,
+    },
+    queue::{WorkerOwner, worker_owner},
 };
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
-async fn notification_changed_carries_src() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn notification_changed_carries_src(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let expected_source = fixture_uri(dir.path(), "next.mp3");
     seed_fixture(
         queue.config.store.as_ref().expect("fixture store"),
@@ -44,7 +47,7 @@ async fn notification_changed_carries_src() {
         )
         .expect("select source");
     });
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     finish(&mut queue, &mut rig);
     let notification = std::iter::from_fn(|| {
         hang_tick!();
@@ -63,12 +66,14 @@ async fn notification_changed_carries_src() {
         panic!("changed identity must retain a URI source");
     };
     assert_eq!(source, expected_source);
+    drop((queue, rig));
+    dir.finish().await;
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn notification_clone() {
-    let (mut queue, mut rig, dir) = empty_queue();
+async fn notification_clone(#[by_ref] worker_owner: &WorkerOwner) {
+    let (mut queue, mut rig, dir) = empty_queue(&worker_owner.0);
     let expected_source = fixture_uri(dir.path(), "ended.mp3");
     seed_fixture(
         queue.config.store.as_ref().expect("fixture store"),
@@ -98,7 +103,7 @@ async fn notification_clone() {
         .expect("select stopped source");
     });
     hang_tick!();
-    answer_load(&mut queue, &mut rig, &dir).await;
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
     hang_reset!();
     finish(&mut queue, &mut rig);
     let slot = queue
@@ -172,4 +177,6 @@ async fn notification_clone() {
         panic!("cloned stopped identity must retain a URI source");
     };
     assert_eq!(source, expected_source);
+    drop((queue, rig));
+    dir.finish().await;
 }

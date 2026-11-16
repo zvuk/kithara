@@ -275,7 +275,9 @@ impl std::fmt::Debug for FlushHub {
 /// Propagates the underlying flush error.
 pub(crate) fn flush_sync(source: &dyn Flushable) -> AssetsResult<()> {
     source.dirty().store(true, Ordering::Release);
-    source.flush()
+    source.flush()?;
+    source.dirty().store(false, Ordering::Release);
+    Ok(())
 }
 
 #[cfg(test)]

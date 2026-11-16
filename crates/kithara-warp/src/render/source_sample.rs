@@ -1,3 +1,4 @@
+use kithara_dsp::interp::{sinc_hann_weights, weighted_frames, weighted_run};
 use kithara_stretch::ElasticError;
 use num_traits::{AsPrimitive, ToPrimitive};
 
@@ -7,14 +8,10 @@ use super::renderer::residency::SourceResidency;
 #[path = "tests/source_sample.rs"]
 mod frame_tests;
 
-pub(super) fn source_frame(
-    resident: &SourceResidency,
+/// Splits an exact source position into its frame and the fraction past it.
+pub(super) fn split_position(
     position: (u128, std::num::NonZeroU128),
-    speed: f64,
-    terminal: Option<u64>,
-    output: &mut [f32],
-) -> Result<(), ElasticError> {
-    let channels = output.len();
+) -> Result<(i64, f64), ElasticError> {
     let (numerator, denominator) = position;
     let denominator = denominator.get();
     let source =
@@ -25,6 +22,17 @@ pub(super) fn source_frame(
         / denominator
             .to_f64()
             .ok_or(ElasticError::SampleCountOverflow)?;
+    Ok((source, fraction))
+}
+
+pub(super) fn source_frame(
+    resident: &SourceResidency,
+    (source, fraction): (i64, f64),
+    speed: f64,
+    terminal: Option<u64>,
+    output: &mut [f32],
+) -> Result<(), ElasticError> {
+    let channels = output.len();
     let first = i64::try_from(resident.origin.ok_or(ElasticError::EmptySource)?)
         .map_err(|_| ElasticError::SampleCountOverflow)?;
     let last = terminal
@@ -112,7 +120,6 @@ fn downsample_source_frame(
 ) -> Result<(), ElasticError> {
     let radius = i64::try_from(crate::consts::SOURCE_RADIUS)
         .map_err(|_| ElasticError::SampleCountOverflow)?;
-    let cutoff = speed.recip();
     let channels = output.len();
     let first = sample_frame(-radius)?;
     let last = sample_frame(radius.min(i64::MAX - source))?;
@@ -120,40 +127,96 @@ fn downsample_source_frame(
     source
         .checked_add(radius)
         .ok_or(ElasticError::SampleCountOverflow)?;
+    let mut weights = [0.0; crate::consts::SOURCE_TAPS];
+    let sum = tap_weights(radius, fraction, speed, &mut weights)?;
+    if first == source - radius && last == source + radius {
+        return interior_taps(resident, window.start, &weights, sum, output);
+    }
+    let offsets = clamped_offsets(source, radius, first, last, window.start, channels);
+    clamped_taps(resident, &offsets, &weights, sum, output)
+}
+
+fn tap_weights(
+    radius: i64,
+    fraction: f64,
+    speed: f64,
+    weights: &mut [f64; crate::consts::SOURCE_TAPS],
+) -> Result<f64, ElasticError> {
     let width = (radius + 1)
         .to_f64()
         .ok_or(ElasticError::SampleCountOverflow)?;
-    let mut weights = 0.0;
-    let mut tap = -radius;
-    let tap_weights: [f64; 2 * crate::consts::SOURCE_RADIUS + 1] = std::array::from_fn(|_| {
-        let distance: f64 = tap.as_();
-        tap += 1;
-        let weight = kithara_dsp::interp::sinc_hann_weight(distance - fraction, cutoff, width);
-        weights += weight;
-        weight
-    });
-    // Admitted endpoint projection is equivalent for every tap in the checked radius.
-    let offsets: [usize; 2 * crate::consts::SOURCE_RADIUS + 1] = std::array::from_fn(|index| {
-        let offset: i64 = index.as_();
-        let frame = (source + (offset - radius)).max(first).min(last);
-        let relative: usize = (frame - first).as_();
-        window.start + relative * channels
-    });
+    let first_tap: f64 = (-radius).as_();
+    sinc_hann_weights(first_tap - fraction, speed.recip(), width, weights);
+    Ok(weights.iter().sum())
+}
+
+fn interior_taps(
+    resident: &SourceResidency,
+    start: usize,
+    weights: &[f64; crate::consts::SOURCE_TAPS],
+    sum: f64,
+    output: &mut [f32],
+) -> Result<(), ElasticError> {
+    let channels = output.len();
     let mut totals = [0.0; 8];
     for (group, output) in output.chunks_mut(totals.len()).enumerate() {
-        kithara_dsp::interp::weighted_frames(
-            &resident.samples[group * totals.len()..],
-            &offsets,
-            &tap_weights,
+        weighted_run(
+            &resident.samples[start + group * totals.len()..],
+            weights,
+            channels,
             output.len(),
             &mut totals,
         )
         .map_err(|_| ElasticError::SampleCountOverflow)?;
-        for (sample, &total) in output.iter_mut().zip(&totals) {
-            *sample = (total / weights)
-                .to_f32()
-                .ok_or(ElasticError::SampleCountOverflow)?;
-        }
+        normalize(&totals, sum, output)?;
+    }
+    Ok(())
+}
+
+// Admitted endpoint projection is equivalent for every tap in the checked radius.
+fn clamped_offsets(
+    source: i64,
+    radius: i64,
+    first: i64,
+    last: i64,
+    window_start: usize,
+    channels: usize,
+) -> [usize; crate::consts::SOURCE_TAPS] {
+    std::array::from_fn(|index| {
+        let offset: i64 = index.as_();
+        let frame = (source + (offset - radius)).max(first).min(last);
+        let relative: usize = (frame - first).as_();
+        window_start + relative * channels
+    })
+}
+
+fn clamped_taps(
+    resident: &SourceResidency,
+    offsets: &[usize; crate::consts::SOURCE_TAPS],
+    weights: &[f64; crate::consts::SOURCE_TAPS],
+    sum: f64,
+    output: &mut [f32],
+) -> Result<(), ElasticError> {
+    let mut totals = [0.0; 8];
+    for (group, output) in output.chunks_mut(totals.len()).enumerate() {
+        weighted_frames(
+            &resident.samples[group * totals.len()..],
+            offsets,
+            weights,
+            output.len(),
+            &mut totals,
+        )
+        .map_err(|_| ElasticError::SampleCountOverflow)?;
+        normalize(&totals, sum, output)?;
+    }
+    Ok(())
+}
+
+fn normalize(totals: &[f64], weights: f64, output: &mut [f32]) -> Result<(), ElasticError> {
+    for (sample, &total) in output.iter_mut().zip(totals) {
+        *sample = (total / weights)
+            .to_f32()
+            .ok_or(ElasticError::SampleCountOverflow)?;
     }
     Ok(())
 }
@@ -218,7 +281,7 @@ mod tests {
             )
             .expect("exact mapped source span");
         let mut output = [0.0];
-        source_frame(&resident, (16, NonZeroU128::MIN), 4.0, None, &mut output)
+        source_frame(&resident, (16, 0.0), 4.0, None, &mut output)
             .expect("all filter taps are in the resident source window");
         let actual = output[0];
         assert_eq!(actual, 0.25);
@@ -245,8 +308,14 @@ mod tests {
                     (65, NonZeroU128::new(4).expect("phase")),
                 ] {
                     let mut output = [0.0; 4];
-                    source_frame(&resident, position, speed, None, &mut output[..channels])
-                        .expect("one mapped frame across independent channels");
+                    source_frame(
+                        &resident,
+                        split_position(position).expect("representable position"),
+                        speed,
+                        None,
+                        &mut output[..channels],
+                    )
+                    .expect("one mapped frame across independent channels");
                     assert!((0.25..=17.0 / 64.0).contains(&output[0]));
                     assert_eq!(output[1].to_bits(), (-output[0]).to_bits());
                     if channels == 4 {
@@ -283,7 +352,8 @@ mod tests {
         let mut output = [0.0];
         source_frame(
             &resident,
-            (2 * denominator.get() - 1, denominator),
+            split_position((2 * denominator.get() - 1, denominator))
+                .expect("representable position"),
             1.0,
             None,
             &mut output,
@@ -329,10 +399,11 @@ mod tests {
                     let mut output = [0.0];
                     source_frame(
                         &resident,
-                        (
+                        split_position((
                             u128::try_from(index).expect("source frame"),
                             NonZeroU128::MIN,
-                        ),
+                        ))
+                        .expect("representable position"),
                         speed,
                         None,
                         &mut output,
@@ -346,7 +417,8 @@ mod tests {
                     let mut output = [0.0];
                     source_frame(
                         &resident,
-                        (phase_denominator.get() + numerator, phase_denominator),
+                        split_position((phase_denominator.get() + numerator, phase_denominator))
+                            .expect("representable position"),
                         speed,
                         None,
                         &mut output,
@@ -437,8 +509,13 @@ mod tests {
                                     terminal,
                                     &mut expected,
                                 );
-                                let result =
-                                    source_frame(&resident, position, speed, terminal, &mut actual);
+                                let result = source_frame(
+                                    &resident,
+                                    split_position(position).expect("representable position"),
+                                    speed,
+                                    terminal,
+                                    &mut actual,
+                                );
                                 assert_eq!(result, reference);
                                 for (actual, expected) in actual.into_iter().zip(expected) {
                                     assert_eq!(actual.to_bits(), expected.to_bits());
@@ -480,7 +557,13 @@ mod tests {
             let mut expected = actual.clone();
             let position = (u128::from(source), NonZeroU128::MIN);
             let reference = scalar_source_frame(&resident, position, 4.0, None, &mut expected);
-            let result = source_frame(&resident, position, 4.0, None, &mut actual);
+            let result = source_frame(
+                &resident,
+                split_position(position).expect("representable position"),
+                4.0,
+                None,
+                &mut actual,
+            );
             assert_eq!(result, reference);
             assert_eq!(
                 actual
@@ -527,7 +610,8 @@ mod tests {
         assert_eq!(
             source_frame(
                 &resident,
-                (u128::from(maximum), NonZeroU128::MIN),
+                split_position((u128::from(maximum), NonZeroU128::MIN))
+                    .expect("representable position"),
                 4.0,
                 None,
                 &mut output,
@@ -591,16 +675,20 @@ mod tests {
             .map_err(|_| ElasticError::SampleCountOverflow)?;
         let cutoff = speed.recip();
         let mut taps = [(0, 0.0); 2 * crate::consts::SOURCE_RADIUS + 1];
+        let mut tap_weights = [0.0; 2 * crate::consts::SOURCE_RADIUS + 1];
+        sinc_hann_weights(
+            (-radius)
+                .to_f64()
+                .ok_or(ElasticError::SampleCountOverflow)?
+                - fraction,
+            cutoff,
+            (radius + 1)
+                .to_f64()
+                .ok_or(ElasticError::SampleCountOverflow)?,
+            &mut tap_weights,
+        );
         let mut weights = 0.0;
-        for (tap, offset) in taps.iter_mut().zip(-radius..=radius) {
-            let distance = offset.to_f64().ok_or(ElasticError::SampleCountOverflow)? - fraction;
-            let weight = kithara_dsp::interp::sinc_hann_weight(
-                distance,
-                cutoff,
-                (radius + 1)
-                    .to_f64()
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            );
+        for ((tap, offset), weight) in taps.iter_mut().zip(-radius..=radius).zip(tap_weights) {
             *tap = (sample_offset(offset)?, weight);
             weights += weight;
         }

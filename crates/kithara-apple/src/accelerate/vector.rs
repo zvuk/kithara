@@ -2,7 +2,36 @@ use std::ptr;
 
 use super::ffi::{
     vDSP_conv, vDSP_maxmgv, vDSP_svesq, vDSP_vadd, vDSP_vmul, vDSP_vsma, vDSP_vsmsa, vDSP_vsub,
+    vvtan,
 };
+
+/// Native double-precision tangent over the common prefix; returns its length.
+/// Signed zeros and subnormal inputs retain their exact tangent bits.
+#[must_use]
+pub fn tangent_f64(input: &[f64], output: &mut [f64]) -> usize {
+    let len = input.len().min(output.len());
+    let input = &input[..len];
+    let output = &mut output[..len];
+    tangent_vforce(input, output);
+    for (input, output) in input.iter().zip(output) {
+        // tan(x) rounds to x here; vForce is permitted to flush subnormals.
+        if input.abs() < f64::MIN_POSITIVE {
+            *output = *input;
+        }
+    }
+    len
+}
+
+fn tangent_vforce(input: &[f64], output: &mut [f64]) {
+    const MAXIMUM: usize = 2_147_483_647;
+    for (input, output) in input.chunks(MAXIMUM).zip(output.chunks_mut(MAXIMUM)) {
+        let Ok(count) = i32::try_from(input.len()) else {
+            return;
+        };
+        // SAFETY: both nonoverlapping slices hold count doubles; vForce is synchronous.
+        unsafe { vvtan(output.as_mut_ptr(), input.as_ptr(), ptr::from_ref(&count)) };
+    }
+}
 
 /// The largest `|x|` in `samples`; `0.0` for an empty slice.
 #[must_use]

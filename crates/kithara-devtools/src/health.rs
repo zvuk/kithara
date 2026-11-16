@@ -17,7 +17,6 @@ use crate::{
     Ctx,
     common::{project::ProjectConfig, timestamp::utc_timestamp},
     consts,
-    touched::fetch_args,
     verdict::ChildFailure,
 };
 
@@ -250,7 +249,17 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
         Stage::new(
             "semver-baseline",
             "git",
-            &fetch_args("main").each_ref().map(String::as_str),
+            // The infinite depth also deepens a checkout of the tip alone down
+            // to where its branch left `main`; on a complete clone it is a
+            // plain fetch.
+            &[
+                "fetch",
+                "--no-tags",
+                "--quiet",
+                "--depth=2147483647",
+                "origin",
+                "+refs/heads/main:refs/remotes/origin/main",
+            ],
         ),
         Stage::new(
             "semver-checks",

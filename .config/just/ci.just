@@ -11,10 +11,10 @@ run *ARGS:
 lanes *ARGS:
     just _xtask ci lanes "$@"
 
-# Print whether the branch changes any scoped test lane's owned paths.
+# Check the draft's pull request test block in `KITHARA_PR_TESTS`.
 [positional-arguments]
-touched *ARGS:
-    just _xtask ci touched "$@"
+pr-tests *ARGS:
+    just _xtask ci pr-tests "$@"
 
 # Run one declared lane in an environment the executor already prepared.
 [positional-arguments]

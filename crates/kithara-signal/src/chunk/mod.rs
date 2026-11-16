@@ -4,7 +4,7 @@ mod source_span;
 
 pub use audio::{AudioChunk, AudioChunkInfo};
 pub use segment::SegmentId;
-pub use source_span::{SourceInverse, SourceSpan};
+pub use source_span::{SourceInverse, SourceSpan, SourceStep, SourceSteps};
 
 #[cfg(test)]
 mod tests;

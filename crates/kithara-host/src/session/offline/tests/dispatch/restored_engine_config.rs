@@ -51,7 +51,7 @@ fn retained_values_include_layout_and_exclude_injected_resources() {
         state
             .ctx
             .as_ref()
-            .and_then(FirewheelContext::stream_info)
+            .and_then(|ctx| ctx.stream_info())
             .expect("started stream")
             .num_stream_out_channels,
         2,

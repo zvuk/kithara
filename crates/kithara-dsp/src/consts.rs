@@ -1,3 +1,6 @@
+/// Frames per diffuser span in its scratch planes.
+pub(crate) const DIFFUSER_SCRATCH_FRAMES: usize = 128;
+
 /// Fewest factors of two in an FFT length vDSP's real DFT builds.
 pub(crate) const FFT_MIN_TWOS: u32 = 4;
 /// Hann window: `w[n] = A0 − A0·cos(2πn / (N − 1))`.
@@ -20,6 +23,5 @@ pub(crate) const SETTLE_CHUNK: usize = 64;
 pub(crate) const SETTLE_FLOOR_LOG2: f64 = -24.0;
 /// Biquad input and output peaks at or below this reset the state.
 pub(crate) const SILENT_PEAK: f32 = 1.0e-9;
-/// Frames a biquad section remembers: a quiet call proves the state silent
-/// only when it covers them.
+/// Consecutive stream frames required to retire a quiet biquad state.
 pub(crate) const SECTION_MEMORY: usize = 2;

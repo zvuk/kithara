@@ -9,7 +9,7 @@ use anyhow::Result;
 use tempfile::TempDir;
 
 use super::{
-    command::{execute, lane_command, run_each, touched_command},
+    command::{execute, requested_lane},
     request::TestRequest,
     selection::{lane_features, requested, select_lane, validate_config},
     *,
@@ -22,9 +22,16 @@ use crate::{
         TestNetBackendConfig, TestNextestRunner, TestNoBlockConfig, TestRunner, WorkspaceScan,
     },
     consts,
-    touched::Touched,
     verdict::ChildFailure,
 };
+
+fn lane_command(
+    test: &TestCommandConfig,
+    lane_name: &str,
+    request: &TestRequest,
+) -> Result<Command> {
+    requested_lane(test, lane_name, request)?.command(NextestAction::Run, &request.passthrough)
+}
 
 fn args_of(cmd: &Command) -> Vec<String> {
     cmd.get_args()
@@ -257,7 +264,7 @@ pub(super) fn synthetic_project() -> ProjectConfig {
         test: TestCommandConfig {
             lanes,
             net_backends,
-            shared_paths: Vec::new(),
+            required: crate::common::project::TestRequiredConfig::default(),
             default_lane: "workspace".to_owned(),
             default_backend: "http".to_owned(),
             nextest_config: ".config/nextest.toml".to_owned(),
@@ -1067,35 +1074,6 @@ fn a_lane_whose_previous_report_cannot_be_removed_still_runs() {
     );
 }
 
-/// The gate's last line names every red lane with its own reason, not
-/// only that some failed.
-#[cfg(unix)]
-#[test]
-fn every_red_touched_lane_keeps_its_own_error() {
-    let project = synthetic_project();
-
-    let error = run_each(&["first".to_owned(), "second".to_owned()], |lane| {
-        execute(&project.test, Path::new("."), lane, &mut failing(&[]))
-    })
-    .expect_err("both lanes fail");
-
-    assert_eq!(
-        error
-            .downcast_ref::<ChildFailure>()
-            .map(ChildFailure::exit_code),
-        Some(1)
-    );
-    let error = error.to_string();
-    assert!(
-        error.contains("test lane `first` failed (exit code 1)"),
-        "{error}"
-    );
-    assert!(
-        error.contains("test lane `second` failed (exit code 1)"),
-        "{error}"
-    );
-}
-
 #[test]
 fn a_tolerated_flake_without_an_owner_is_not_configuration() {
     let mut project = synthetic_project();
@@ -1470,78 +1448,6 @@ fn a_caller_filterset_passes_through_an_unfiltered_lane() {
     );
 }
 
-/// A touched run narrowed to packages builds what the whole lane builds: its
-/// command is the whole lane's with one filterset more, and a caller's
-/// filterset narrows that one further.
-#[test]
-fn a_narrowed_touched_run_builds_what_the_whole_lane_builds() {
-    let project = synthetic_project();
-    let request = TestRequest::parse(&[
-        "--profile".to_owned(),
-        "ci".to_owned(),
-        "-E".to_owned(),
-        "test(seek)".to_owned(),
-    ])
-    .expect("parse request");
-    let narrowed = Touched::Narrowed {
-        lane: "workspace".to_owned(),
-        packages: BTreeSet::from(["demo".to_owned(), "demo-web".to_owned()]),
-    };
-    let without_filtersets = |args: Vec<String>| {
-        let mut kept = Vec::new();
-        let mut iter = args.into_iter();
-        while let Some(arg) = iter.next() {
-            if arg == "-E" {
-                iter.next();
-            } else {
-                kept.push(arg);
-            }
-        }
-        kept
-    };
-
-    let whole = args_of(
-        &touched_command(
-            &project.test,
-            &Touched::Whole("workspace".to_owned()),
-            &request,
-        )
-        .expect("whole command"),
-    );
-    let narrowed =
-        args_of(&touched_command(&project.test, &narrowed, &request).expect("narrowed command"));
-
-    assert_eq!(
-        without_filtersets(narrowed.clone()),
-        without_filtersets(whole)
-    );
-    assert!(
-        narrowed
-            .windows(2)
-            .any(|pair| pair == ["-E", "(package(demo) | package(demo-web)) & ((test(seek)))"]),
-        "{narrowed:?}"
-    );
-}
-
-/// A `cargo test` lane has no filterset to narrow it by package.
-#[test]
-fn a_cargo_test_lane_refuses_a_narrowed_run() {
-    let project = synthetic_project();
-    let request = TestRequest::parse(&[]).expect("parse request");
-    let narrowed = Touched::Narrowed {
-        lane: "browser".to_owned(),
-        packages: BTreeSet::from(["demo-web".to_owned()]),
-    };
-
-    let error = touched_command(&project.test, &narrowed, &request)
-        .expect_err("a cargo test lane narrowed by package");
-
-    assert!(
-        format!("{error:#}").contains("a filterset cannot narrow"),
-        "{error:#}"
-    );
-}
-
 fn request_of(args: &[&str]) -> Result<TestRequest> {
     TestRequest::parse(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
 }
@@ -1581,25 +1487,6 @@ fn a_narrowed_request_runs_only_what_every_filterset_selects() {
             .chain(&unfiltered)
             .any(|arg| arg.contains("--narrow")),
         "the harness consumes its own flag"
-    );
-}
-
-/// A touched run narrowed to packages is narrowed by the request as well.
-#[test]
-fn a_narrowed_request_narrows_a_touched_run() {
-    let project = synthetic_project();
-    let request = request_of(&["--narrow", "test(seek)"]).expect("parse request");
-    let touched = Touched::Narrowed {
-        lane: "workspace".to_owned(),
-        packages: BTreeSet::from(["demo".to_owned()]),
-    };
-
-    let args = args_of(&touched_command(&project.test, &touched, &request).expect("command"));
-
-    assert_eq!(
-        filtersets(&args),
-        ["(test(seek)) & ((package(demo)))"],
-        "{args:?}"
     );
 }
 

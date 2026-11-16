@@ -80,7 +80,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn flush_only_delivers_when_armed() {
         let wake = DeferredWake::default();
         let target = Arc::new(WakeCounter::default());
@@ -94,7 +94,7 @@ mod tests {
         assert!(!wake.flush(), "pending cleared: no repeat delivery");
     }
 
-    #[kithara::test]
+    #[kithara::test(miri)]
     fn immediate_delivery_keeps_an_armed_wake_pending() {
         let wake = DeferredWake::default();
         let target = Arc::new(WakeCounter::default());

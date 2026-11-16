@@ -72,6 +72,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       kind: ${{ steps.kind.outputs.kind }}
+      pr-tests: ${{ steps.kind.outputs.pr-tests }}
     steps:
       - name: Checkout hosted gate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -88,10 +89,12 @@ jobs:
       # The pipeline kind every role below runs under. A push to the default
       # branch is `main`. A push to a branch with a pull request open for
       # review where pull requests land - the repository this one was forked
-      # from, or this one when it is no fork - is `merge-request`; any other
-      # push, a draft's included, is `branch`. Nothing here reacts to a pull
-      # request, so marking a draft ready starts nothing: the next push, or a
-      # re-run of this one, asks again.
+      # from, or this one when it is no fork - is `merge-request` and runs
+      # everything; any other push, a draft's included, is `branch` and runs
+      # the draft scope: the required tests and the draft's `kithara-tests`
+      # block, read here from the same pulls call. Nothing here reacts to a
+      # pull request; the bridge dispatches this workflow when a draft turns
+      # ready.
       - name: Name the pipeline kind
         id: kind
         env:
@@ -103,30 +106,15 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           if [ "$REF" = "refs/heads/$DEFAULT_BRANCH" ]; then
-            kind=main
+            echo "kind=main" >> "$GITHUB_OUTPUT"
           else
             upstream=$(gh api "repos/$REPOSITORY" --jq '.parent.full_name // .full_name')
-            ready=$(gh api "repos/$upstream/pulls?head=$OWNER:$BRANCH&state=open" --jq 'map(select(.draft | not)) | length')
-            if [ "$ready" -gt 0 ]; then kind=merge-request; else kind=branch; fi
+            # Assignment preserves an API failure: a draft whose pull request
+            # cannot be read is an error, not a full run.
+            PULLS=$(gh api "repos/$upstream/pulls?head=$OWNER:$BRANCH&state=open")
+            export PULLS
+            cargo run --locked -p xtask --no-default-features --bin ci-bootstrap -- github kind
           fi
-          echo "kind=$kind" >> "$GITHUB_OUTPUT"
-
-  ui-select:
-    name: Select UI ownership
-    needs: authorize
-    runs-on: [self-hosted, linux, x64, kithara-report]
-    timeout-minutes: 10
-    outputs:
-      ui_required: ${{ steps.ui.outputs.ui_required }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Select UI ownership
-        id: ui
-        run: |
-          ui_required=$(just ci touched --lane ui)
-          echo "ui_required=$ui_required" >> "$GITHUB_OUTPUT"
 
   # Every gate lane, from the one catalog. What each of them runs, how long it
   # may take, how much history it reads and what it leaves behind is declared in
@@ -137,7 +125,7 @@ jobs:
   # The kind comes from the authorization job. A `branch` or `merge-request`
   # push runs the lanes that name its kind; the two schedule the same lanes, and
   # a lane that runs the product suite runs it whole on a ready pull request and
-  # only what the push touched on any other branch push. A `main` push asks for
+  # only the draft scope on any other branch push. A `main` push asks for
   # `all`, a full run: every lane that some full kind (main, nightly, weekly,
   # release, platforms) schedules.
   lanes:
@@ -147,6 +135,7 @@ jobs:
     with:
       role: gate
       kind: ${{ needs.authorize.outputs.kind }}
+      pr-tests: ${{ needs.authorize.outputs.pr-tests }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
 
@@ -160,6 +149,7 @@ jobs:
     with:
       role: deep
       kind: ${{ needs.authorize.outputs.kind }}
+      pr-tests: ${{ needs.authorize.outputs.pr-tests }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
 
@@ -177,6 +167,7 @@ jobs:
     with:
       role: platforms
       kind: ${{ needs.authorize.outputs.kind }}
+      pr-tests: ${{ needs.authorize.outputs.pr-tests }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
 
@@ -190,18 +181,21 @@ jobs:
     with:
       role: quality
       kind: ${{ needs.authorize.outputs.kind }}
+      pr-tests: ${{ needs.authorize.outputs.pr-tests }}
       only: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
 
+  # A ready pull request runs everything, the UI suite included; a draft runs
+  # it only when asked for by name.
   ui:
     name: UI
-    needs: [authorize, ui-select]
+    needs: authorize
     if: >-
       vars.KITHARA_GPU_RUNNER_LABELS != ''
       && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      || needs.authorize.outputs.kind == 'merge-request'
       || contains(format(' {0} ', inputs.required_lanes), ' all ')
-      || contains(format(' {0} ', inputs.required_lanes), ' deep-ui ')
-      || needs.ui-select.outputs.ui_required == 'true')
+      || contains(format(' {0} ', inputs.required_lanes), ' deep-ui '))
     uses: ./.github/workflows/ui.yml
 
   # The Android baseline needs an emulator, which only the KVM runner pool
@@ -228,7 +222,6 @@ jobs:
     if: ${{ always() && (github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != '') }}
     needs:
       - authorize
-      - ui-select
       - lanes
       - deep
       - platforms
@@ -247,5 +240,5 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
           REQUIRED_LANES: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes || '' }}
-          TOUCHED_UI_REQUIRED: ${{ vars.KITHARA_GPU_RUNNER_LABELS != '' && needs.ui-select.outputs.ui_required == 'true' }}
+          READY_UI_REQUIRED: ${{ vars.KITHARA_GPU_RUNNER_LABELS != '' && needs.authorize.outputs.kind == 'merge-request' }}
         run: cargo run --locked -p xtask --no-default-features --bin ci-bootstrap -- github required

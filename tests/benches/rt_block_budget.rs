@@ -19,7 +19,11 @@ use firewheel::{
 };
 use kithara::{
     audio::{AudioConfig, mock::TestPcmReader},
-    effects::{LimiterConfig, node::LimiterNode},
+    effects::{
+        LimiterConfig, LookaheadMs,
+        eq::{EqConfig, EqLayout, generate_log_spaced_bands},
+        node::LimiterNode,
+    },
     file::{File, FileConfig, FileSrc},
     platform::{
         sync::Arc,
@@ -28,8 +32,6 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
     queue::TrackSource,
     signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame, TransportRevision},
-    sync::SpeedCurve,
-    warp::{RenderContext, StretchKind},
 };
 use kithara_command::{
     Batch, ChannelConfig, LevelInbox, Port, ScopeId, ScopedConfig, ScopedInbox, ScopedSender,
@@ -43,8 +45,9 @@ use kithara_integration_tests::{
 use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, LaneProtocol, LaneStart, LaneTask,
     bridge::{
-        CrossfaderGain, DeckEnds, DeckMixSettingsChange, DeckPart, DeckProtocol, Fade,
-        SessionInbox, Slot, SlotState, scope_channels,
+        CrossfaderGain, CurveShape, DeckEnds, DeckEqChange, DeckMixSettingsChange, DeckPart,
+        DeckProtocol, EqGainProgram, Fade, FilterProgram, ParameterKnot, SessionInbox, Slot,
+        SlotState, scope_channels,
     },
     rt::{
         DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context,
@@ -62,11 +65,21 @@ mod consts {
     pub(super) const CROSSFADE_SECONDS: f32 = 120.0;
     pub(super) const CROSSFADE_DEPTH: f32 = 0.7;
     pub(super) const CROSSFADE_POSITION: f32 = 0.3;
+    /// The highest rate a Host accepts. Its master limiter reserves the
+    /// lookahead line for this rate, so the bench limiter does as well.
+    pub(super) const HOST_RATE_BOUND: u32 = 768_000;
+    /// Each lane and track count is measured at these lookaheads in turn: none,
+    /// which builds no delay line, and 5 ms, 240 frames at 48 kHz.
+    pub(super) const LOOKAHEAD_MS: [f32; 2] = [0.0, 5.0];
     pub(super) const MEASURED_BLOCKS: usize = 20_000;
     pub(super) const SAMPLE_RATE: u32 = 48_000;
     pub(super) const TRACK_COUNTS: [usize; 3] = [1, 2, 4];
     pub(super) const TRACK_SECONDS: f64 = 600.0;
     pub(super) const WARMUP_BLOCKS: usize = 2_000;
+    /// EQ bands of the automation lanes, the deck program capacity.
+    pub(super) const EQ_BANDS: usize = 16;
+    /// Blocks rendered between preparing the automated stages and their programs.
+    pub(super) const SETTLE_BLOCKS: usize = 4;
 }
 
 /// What the tracks of a lane mix through on every measured block.
@@ -78,12 +91,15 @@ enum Lane {
     Gain,
     /// One equal-power crossfade that spans every warm-up and measured block.
     Crossfade,
+    /// An EQ layout, with `filter` deck filter knob programs and `eq` band
+    /// gain programs moving on every warm-up and measured frame.
+    Automation { filter: usize, eq: usize },
 }
 
 impl Lane {
     fn fade(self) -> Fade {
         match self {
-            Self::Settled | Self::Gain => Fade::Declick,
+            Self::Settled | Self::Gain | Self::Automation { .. } => Fade::Declick,
             Self::Crossfade => Fade::Crossfade(
                 CrossfadeSettings::new(
                     consts::CROSSFADE_SECONDS,
@@ -96,11 +112,12 @@ impl Lane {
         }
     }
 
-    const fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Self::Settled => "settled",
-            Self::Gain => "settled gain",
-            Self::Crossfade => "active crossfade",
+            Self::Settled => "settled".to_owned(),
+            Self::Gain => "settled gain".to_owned(),
+            Self::Crossfade => "active crossfade".to_owned(),
+            Self::Automation { filter, eq } => format!("filter {filter} + eq {eq}"),
         }
     }
 }
@@ -108,6 +125,7 @@ impl Lane {
 struct Measurement {
     durations: Vec<Duration>,
     lane: Lane,
+    lookahead_frames: usize,
     peak: f32,
     tracks: usize,
 }
@@ -154,8 +172,13 @@ struct BenchMixer {
 }
 
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn processor(count: usize, lane: Lane) -> BenchMixer {
-    let config = DeckMixerConfig::default();
+async fn processor(count: usize, lane: Lane, limiter: LimiterConfig) -> BenchMixer {
+    let config = match lane {
+        Lane::Automation { .. } => DeckMixerConfig::builder()
+            .eq_bands(consts::EQ_BANDS)
+            .build(),
+        _ => DeckMixerConfig::default(),
+    };
     let (mut control, inbox) = scoped_channel(
         ScopedConfig::builder()
             .scope(
@@ -207,11 +230,7 @@ async fn processor(count: usize, lane: Lane) -> BenchMixer {
             .audio_buffer_chunks(NonZeroUsize::new(32).expect("ring chunks"))
             .build();
         let (sender, inbox) = worker.lane_channel();
-        let start = LaneStart {
-            speed: SpeedCurve::Constant(1.0),
-            keylock: false,
-            backend: StretchKind::default(),
-        };
+        let start = LaneStart::default();
         let (pcm, task, _) = {
             let _real_io = kithara::platform::flash::real_io();
             kithara::platform::time::timeout(
@@ -275,12 +294,16 @@ async fn processor(count: usize, lane: Lane) -> BenchMixer {
         ..StreamInfo::default()
     };
     let mut state = None;
-    let limiter = LimiterNode::new(LimiterConfig::default())
-        .construct_processor(
-            &EmptyConfig,
-            ConstructProcessorContext::new(NodeID::DANGLING, &stream, &mut state),
-        )
-        .expect("bench master limiter");
+    let limiter = LimiterNode::new(
+        limiter,
+        non_zero(consts::HOST_RATE_BOUND, "Host rate bound"),
+        pools,
+    )
+    .construct_processor(
+        &EmptyConfig,
+        ConstructProcessorContext::new(NodeID::DANGLING, &stream, &mut state),
+    )
+    .expect("bench master limiter");
     BenchMixer {
         processor,
         limiter: Box::new(limiter),
@@ -318,17 +341,13 @@ fn render_block(mixer: &mut BenchMixer, out_l: &mut [f32], out_r: &mut [f32]) ->
     let end = mixer.frame + i64::try_from(frames).expect("bench frames fit i64");
     publish_render_context(
         &mut mixer.extra.store,
-        RenderContext::new_linear(
-            OutputContext::new(
-                SessionFrame::new(mixer.frame)..SessionFrame::new(end),
-                non_zero(consts::SAMPLE_RATE, "sample rate"),
-                SessionEpoch::new(0),
-                Some(TransportRevision::first()),
-            )
-            .expect("bench output range"),
-            None,
+        OutputContext::new(
+            SessionFrame::new(mixer.frame)..SessionFrame::new(end),
+            non_zero(consts::SAMPLE_RATE, "sample rate"),
+            SessionEpoch::new(0),
+            Some(TransportRevision::first()),
         )
-        .expect("bench linear context"),
+        .expect("bench output range"),
     )
     .expect("bench context slot");
     let info = ProcInfo {
@@ -377,6 +396,95 @@ fn render_block(mixer: &mut BenchMixer, out_l: &mut [f32], out_r: &mut [f32]) ->
     elapsed
 }
 
+fn send_parts(mixer: &mut BenchMixer, at: When<SessionFrame>, commands: Vec<DeckPart>) {
+    let scope = mixer.deck.scope;
+    mixer
+        .control
+        .scope(scope)
+        .expect("bench scope")
+        .send(
+            at,
+            Batch {
+                basis: Vec::new(),
+                commands,
+            },
+        )
+        .expect("bench deck channel capacity");
+    mixer.control.publish().expect("publish bench commands");
+}
+
+fn linear(start: i64, end: i64, from: f64, to: f64) -> Vec<ParameterKnot> {
+    vec![
+        ParameterKnot::new(SessionFrame::new(start), from, CurveShape::LINEAR)
+            .expect("bench first knot"),
+        ParameterKnot::new(SessionFrame::new(end), to, CurveShape::HOLD).expect("bench last knot"),
+    ]
+}
+
+/// Installs an EQ layout, then programs that keep moving through every
+/// warm-up and measured frame. The knob program stays in the low-pass half,
+/// so the deck filter runs on every frame.
+fn automate(
+    mixer: &mut BenchMixer,
+    filter: usize,
+    eq: usize,
+    out_l: &mut [f32],
+    out_r: &mut [f32],
+) {
+    for _ in 0..consts::SETTLE_BLOCKS {
+        render_block(mixer, out_l, out_r);
+    }
+    let rate = non_zero(consts::SAMPLE_RATE, "sample rate");
+    let layout = EqLayout::new(
+        &EqConfig::builder(pools()).build(),
+        &generate_log_spaced_bands(consts::EQ_BANDS),
+        rate,
+    )
+    .expect("bench EQ layout");
+    send_parts(
+        mixer,
+        When::Next,
+        vec![DeckPart::Eq(DeckEqChange::Layout(Box::new(layout)))],
+    );
+    for _ in 0..consts::SETTLE_BLOCKS {
+        render_block(mixer, out_l, out_r);
+    }
+    let block = i64::from(consts::BLOCK_FRAMES);
+    let start = mixer.frame + 2 * block;
+    let blocks = consts::WARMUP_BLOCKS + consts::MEASURED_BLOCKS + consts::SETTLE_BLOCKS;
+    let end = start + block * i64::try_from(blocks).expect("bench blocks fit i64");
+    let snapshot = mixer.deck.snapshot.read();
+    let filter_binding = snapshot.filter.binding().expect("observed output stream");
+    let eq_binding = snapshot.eq.binding().expect("installed EQ layout");
+    let mut parts: Vec<DeckPart> = (0..filter)
+        .map(|_| DeckPart::FilterProgram {
+            binding: filter_binding,
+            authority: snapshot.filter.authority(),
+            program: FilterProgram::new(linear(start, end, -1.0, -0.1))
+                .expect("bench filter program"),
+        })
+        .collect();
+    for band in 0..eq {
+        parts.push(DeckPart::EqProgram {
+            binding: eq_binding,
+            authority: snapshot.eq.authority(band),
+            program: EqGainProgram::new(band, linear(start, end, -24.0, 6.0))
+                .expect("bench EQ program"),
+        });
+    }
+    // A program's batch is due on its first knot.
+    send_parts(mixer, When::At(SessionFrame::new(start)), parts);
+    for _ in 0..consts::SETTLE_BLOCKS {
+        render_block(mixer, out_l, out_r);
+    }
+    let snapshot = mixer.deck.snapshot.read();
+    let running = usize::from(snapshot.filter.program().is_some())
+        + (0..consts::EQ_BANDS)
+            .filter(|band| snapshot.eq.program(*band).is_some())
+            .count();
+    assert_eq!(running, filter + eq, "every bench program must be admitted");
+}
+
 fn peak_of(samples: &[f32]) -> f32 {
     samples.iter().fold(0.0_f32, |acc, s| acc.max(s.abs()))
 }
@@ -394,14 +502,17 @@ fn every_slot_fading(mixer: &mut BenchMixer) -> bool {
         .all(|slot| slot.gain > 0.0 && slot.gain < 1.0)
 }
 
-fn measure(tracks: usize, lane: Lane) -> Measurement {
+fn measure(tracks: usize, lane: Lane, limiter: LimiterConfig) -> Measurement {
     let runtime = tokio::runtime::Runtime::new().expect("bench runtime");
-    let mut processor = runtime.block_on(processor(tracks, lane));
+    let mut processor = runtime.block_on(processor(tracks, lane, limiter));
     let _runtime = runtime.enter();
 
     let frames = block_frames();
     let mut out_l = vec![0.0_f32; frames];
     let mut out_r = vec![0.0_f32; frames];
+    if let Lane::Automation { filter, eq } = lane {
+        automate(&mut processor, filter, eq, &mut out_l, &mut out_r);
+    }
 
     for _ in 0..consts::WARMUP_BLOCKS {
         render_block(&mut processor, &mut out_l, &mut out_r);
@@ -456,6 +567,7 @@ fn measure(tracks: usize, lane: Lane) -> Measurement {
     Measurement {
         durations,
         lane,
+        lookahead_frames: limiter.latency_frames(non_zero(consts::SAMPLE_RATE, "sample rate")),
         peak,
         tracks,
     }
@@ -494,19 +606,29 @@ fn main() {
         consts::WARMUP_BLOCKS,
     );
     println!(
-        "{:>16}  {:>7}  {:>22}  {:>22}  {:>22}",
-        "lane", "tracks", "p50", "p99", "max"
+        "{:>16}  {:>7}  {:>9}  {:>22}  {:>22}  {:>22}",
+        "lane", "tracks", "lookahead", "p50", "p99", "max"
     );
 
-    for (lane, count) in [Lane::Settled, Lane::Gain, Lane::Crossfade]
+    let automation = [(0, 0), (1, 0), (0, 16), (1, 15)]
+        .map(|(filter, eq)| Lane::Automation { filter, eq })
+        .into_iter()
+        .flat_map(|lane| consts::LOOKAHEAD_MS.map(|ms| ((lane, 1), ms)));
+    for ((lane, count), lookahead) in [Lane::Settled, Lane::Gain, Lane::Crossfade]
         .into_iter()
         .flat_map(|lane| consts::TRACK_COUNTS.map(|count| (lane, count)))
+        .flat_map(|row| consts::LOOKAHEAD_MS.map(|ms| (row, ms)))
+        .chain(automation)
     {
-        let measurement = measure(count, lane);
+        let limiter = LimiterConfig::builder()
+            .lookahead_ms(LookaheadMs::try_from(lookahead).expect("bench lookahead in range"))
+            .build();
+        let measurement = measure(count, lane, limiter);
         println!(
-            "{:>16}  {:>7}  {:>22}  {:>22}  {:>22}",
+            "{:>16}  {:>7}  {:>9}  {:>22}  {:>22}  {:>22}",
             measurement.lane.label(),
             measurement.tracks,
+            measurement.lookahead_frames,
             cell(measurement.percentile(50), budget),
             cell(measurement.percentile(99), budget),
             cell(measurement.max(), budget),

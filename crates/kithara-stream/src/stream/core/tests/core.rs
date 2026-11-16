@@ -467,7 +467,7 @@ fn probe_read_arms_peer_wake_on_core_without_notifying() {
     assert!(!wake.flush(), "the arm coalesced into a single delivery");
 }
 
-#[kithara::test]
+#[kithara::test(miri)]
 fn read_notifies_peer_wake_immediately_off_core() {
     // Consumer read path: a not-ready probe wakes the peer IMMEDIATELY (the
     // consumer is off the RT core), so a blocking read is not stalled
@@ -633,7 +633,7 @@ fn try_read_returns_seek_pending_when_flushing() {
     ));
 }
 
-#[kithara::test]
+#[kithara::test(miri)]
 fn try_read_returns_seek_pending_when_epoch_changes_after_wait() {
     let writer = ActivityWriter::new();
     let source = SeekDuringWaitSource {
@@ -725,7 +725,7 @@ impl Read for RetiringRead<'_> {
     }
 }
 
-#[kithara::test]
+#[kithara::test(miri)]
 fn read_exact_stops_when_its_decoder_generation_retires_after_a_prefix() {
     let source = ScriptSource::new(
         ActivityWriter::new(),

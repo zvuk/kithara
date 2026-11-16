@@ -8,7 +8,7 @@ use firewheel::{
 use kithara_command::scoped_channel;
 use kithara_config::Config;
 use kithara_platform::time::Duration;
-use kithara_test_utils::bufpool::TestPools;
+use kithara_test_utils::bufpool::pools;
 use kithara_warp::BeatGridId;
 
 use super::*;
@@ -43,9 +43,7 @@ fn extra(ducking: Option<SessionDuckingMode>) -> ProcExtra {
     let (logger, _receiver) = realtime_logger(RealtimeLoggerConfig::default());
     let mut store = ProcStore::with_capacity(1);
     if let Some(ducking) = ducking {
-        let config = crate::HostConfig::<TestPools>::builder()
-            .build()
-            .channel_config();
+        let config = crate::HostConfig::builder(pools()).build().channel_config();
         let (_sender, inbox) = scoped_channel(config);
         let grid = SessionGridGeneration::new(BeatGridId::allocate().expect("grid"));
         assert!(

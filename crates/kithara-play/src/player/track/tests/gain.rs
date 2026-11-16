@@ -64,7 +64,7 @@ fn prepared_outputs() -> PreparedOutputs {
     let (mut dispatcher, _dispatch_inbox) = channel(ChannelConfig::builder().build());
     let (first, first_lane) = prepared_track();
     let (mut second, second_lane) = prepared_track();
-    second.slot = Some(B);
+    second.seat = seated(B);
     let mut tracks = [first, second];
     for ((track, slot), sample) in tracks.iter().zip([A, B]).zip([0.5, -0.25]) {
         mixer
@@ -265,7 +265,7 @@ fn gain_program_late_and_unready_requests_leave_applied_pcm_unchanged() {
         tracks[0].apply(TrackCommand::GainProgram(late), out)
     });
     assert!(matches!(result, Err(PlayError::Late)));
-    tracks[0].ready = None;
+    tracks[0].segment.ready = false;
     let result = with_mixer(&mut mixer, &mut dispatcher, frame(ORIGIN + 2), |out| {
         tracks[0].apply(TrackCommand::GainProgram(programs()[0].clone()), out)
     });

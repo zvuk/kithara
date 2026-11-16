@@ -1,7 +1,7 @@
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::{InterpError, interpolate_frame, weighted_frames};
+use super::{InterpError, interpolate_frame, weighted_frames, weighted_run};
 
 #[kithara::test]
 fn frame_interpolation_preserves_f64_phase_and_common_prefix() {
@@ -217,4 +217,49 @@ fn weighted_shape_refusal_precedes_all_writes() {
         Ok(())
     );
     assert_eq!(output, [7.0; 7]);
+}
+
+#[kithara::test]
+fn a_consecutive_run_sums_like_its_offsets() {
+    let weights: Vec<f64> = (0..33).map(|tap| (f64::from(tap) * 0.37).sin()).collect();
+    for (stride, channels) in [
+        (1_usize, 1_usize),
+        (2, 2),
+        (3, 3),
+        (4, 4),
+        (8, 8),
+        (9, 1),
+        (9, 8),
+    ] {
+        let samples: Vec<f32> = [0.25, -0.5, 0.75, -0.125, 0.5, -0.75, 1.0, -1.0, 0.375]
+            .into_iter()
+            .cycle()
+            .take(320)
+            .collect();
+        let offsets: Vec<usize> =
+            std::iter::successors(Some(0), |offset: &usize| offset.checked_add(stride))
+                .take(33)
+                .collect();
+        let mut expected = [0.0; 8];
+        let mut actual = [0.0; 8];
+        weighted_frames(&samples, &offsets, &weights, channels, &mut expected).expect("offsets");
+        weighted_run(&samples, &weights, stride, channels, &mut actual).expect("run");
+        assert_eq!(
+            actual
+                .iter()
+                .take(channels)
+                .map(|sum| sum.to_bits())
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .take(channels)
+                .map(|sum| sum.to_bits())
+                .collect::<Vec<_>>(),
+            "{channels} of {stride} channels"
+        );
+    }
+    assert_eq!(
+        weighted_run(&[0.0; 3], &weights, 1, 1, &mut [0.0; 1]),
+        Err(InterpError::InvalidShape)
+    );
 }

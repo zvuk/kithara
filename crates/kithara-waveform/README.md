@@ -14,19 +14,10 @@
 
 # kithara-waveform
 
-`kithara-waveform` owns the three-band waveform: its value type, its stored
-byte form, its tunables, and the streaming analyzer that produces it.
-
-The model, its codec, its parameters, and its resume record are available
-without the `dsp` feature, so a consumer that only displays or transports a
-waveform runs no analysis. The parameters name their FFT length as a
-`kithara_dsp::spectrum::FftLen`, so `kithara-dsp` is always a dependency; only
-`dsp` turns on its `spectrum` feature. Enabling `dsp` adds the analyzer, which
-takes its FFT, band energies and downmix from `kithara-dsp` and re-enters a
-stopped pass from its resume record exactly where it left off.
-
-Frame-range coverage belongs to `kithara-signal` and the versioned blob
-framing to `kithara-blob`; scheduling, persistence, and the artifact envelope
-belong to `kithara-analysis`.
+The three-band waveform: its value type, byte format, parameters, and the
+streaming analyzer that computes it. Without the `dsp` feature only the model
+and codec are built, for apps that display or transfer a waveform without
+analyzing audio. With `dsp`, the analyzer runs on `kithara-dsp` and can resume
+a stopped pass exactly where it left off.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-waveform) for the ownership contract.

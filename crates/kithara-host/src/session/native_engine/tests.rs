@@ -10,7 +10,10 @@ use kithara_play::{DeckPass, HostedDeck, Outbox};
 use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
 #[cfg(feature = "offline")]
-use kithara_test_utils::{bufpool::TestPools, wait_until_blocking};
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    wait_until_blocking,
+};
 #[cfg(feature = "offline")]
 use kithara_warp::BeatGridState;
 
@@ -93,6 +96,7 @@ impl HostOwner<TestPools> for RigOwner {
 
     delegate::delegate! {
         to self.0 {
+            fn poll_output(&mut self) -> std::task::Poll<Result<(), PlayError>>;
             fn register(&mut self, id: DeckId, deck: Box<Self::Deck>) -> Result<(), PlayError>;
             fn each_deck(
                 &mut self,
@@ -151,13 +155,11 @@ fn deck_session() -> (Arc<SessionClient<Command>>, JoinHandle<()>, RootView) {
             root,
             view.clone(),
             SessionBufferConfig::default(),
-            SessionOutput::new(LimiterConfig::default()),
+            SessionOutput::new(LimiterConfig::default(), pools()),
             Live::new(HostSettings::builder().sample_rate(sample_rate).build())
                 .expect("fixture settings"),
-            crate::HostConfig::<TestPools>::builder()
-                .build()
-                .channel_config(),
-            crate::session::offline::mock::start,
+            crate::HostConfig::builder(pools()).build().channel_config(),
+            |ctx, rate, decks, _previous| crate::session::offline::mock::start(ctx, rate, decks),
         );
         ready.send(view).expect("owner thread publishes its view");
         engine_thread(&cmd_rx, mailbox, RigOwner(HostCore::new(state, inbox)));

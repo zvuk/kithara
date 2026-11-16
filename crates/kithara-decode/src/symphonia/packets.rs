@@ -367,13 +367,38 @@ fn run(
     completed: &mpsc::Sender<Reply>,
     control: &ReaderControl,
 ) {
+    #[cfg(feature = "symphonia")]
+    let mut exhausted_isomp4 = false;
     while let Ok(request) = requests.recv() {
         if control.is_cancelled() || matches!(request, Request::Retire) {
             break;
         }
         let reply = match request {
-            Request::Read => Reply::Read(read_packet(reader.as_mut(), geometry)),
-            Request::Seek { mode, to } => Reply::Seek(reader.seek(mode, to)),
+            Request::Read => {
+                let read = read_packet(reader.as_mut(), geometry);
+                #[cfg(feature = "symphonia")]
+                {
+                    exhausted_isomp4 = matches!(read, Ok(None))
+                        && reader.format_info().format
+                            == symphonia_core::formats::well_known::FORMAT_ID_ISOMP4;
+                }
+                Reply::Read(read)
+            }
+            Request::Seek { mode, to } => {
+                #[cfg(feature = "symphonia")]
+                if std::mem::take(&mut exhausted_isomp4) {
+                    match rewind_isomp4(reader) {
+                        Ok(rewound) => reader = rewound,
+                        Err(error) => {
+                            drop(completed.send(Reply::Seek(Err(error))));
+                            drop(completed.send(Reply::Retired));
+                            control.wake_worker();
+                            return;
+                        }
+                    }
+                }
+                Reply::Seek(reader.seek(mode, to))
+            }
             Request::Retire => break,
         };
         if control.is_cancelled() {
@@ -395,6 +420,22 @@ fn run(
     drop(reader);
     drop(completed.send(Reply::Retired));
     control.wake_worker();
+}
+
+/// The isomp4 reader drops its atom cursor once it reads past the last atom,
+/// after which no packet read can resynchronize it, even behind a seek. An
+/// exhausted isomp4 reader is rebuilt over the same stream before it seeks.
+#[cfg(feature = "symphonia")]
+fn rewind_isomp4(reader: Box<dyn FormatReader>) -> Result<Box<dyn FormatReader>> {
+    use std::io::{Seek, SeekFrom};
+
+    let mut stream = reader.into_inner();
+    stream.seek(SeekFrom::Start(0))?;
+    let reader = symphonia::default::formats::IsoMp4Reader::try_new(
+        stream,
+        symphonia_core::formats::FormatOptions::default(),
+    )?;
+    Ok(Box::new(reader))
 }
 
 fn read_packet(

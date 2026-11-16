@@ -48,7 +48,7 @@ pub async fn run(shutdown: CancelToken) -> Result<(), FrontendError> {
     palette.apply(app.palette);
     let pools = pools::build(&document.pools())?;
     let host = pools::host(
-        HostConfig::builder()
+        HostConfig::builder(pools.clone())
             .settings(
                 HostSettings::builder()
                     .maybe_sample_rate(app.sample_rate)

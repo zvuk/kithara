@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_play::CrossfadeSettings;
+use kithara_worker::Worker;
 
 use super::*;
 use crate::{QueueSettings, QueueSettingsChange, Transition, mock::fixture_uri};
@@ -22,7 +23,7 @@ struct DurationRig {
 }
 
 impl DurationRig {
-    fn new() -> Self {
+    fn new(worker: &Worker) -> Self {
         let rate = NonZeroU32::new(SAMPLE_RATE).expect("nonzero sample rate");
         let config = DeckMixerConfig::builder().sample_rate(rate).build();
         let shape = kithara_render::rt::StreamShape::new(
@@ -30,7 +31,11 @@ impl DurationRig {
             rate,
         );
         let prep = ResourcePrep::builder()
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools())
+                    .worker(worker.clone())
+                    .build(),
+            ))
             .block_on_underrun(true)
             .build();
         let settings = QueueSettings::builder()
@@ -252,8 +257,8 @@ fn max_step_across(before: &[f32], after: &[f32]) -> f32 {
         .fold(0.0_f32, |worst, pair| worst.max((pair[1] - pair[0]).abs()))
 }
 
-async fn fading_in() -> (DurationRig, Vec<f32>) {
-    let mut rig = DurationRig::new();
+async fn fading_in(worker: &Worker) -> (DurationRig, Vec<f32>) {
+    let mut rig = DurationRig::new(worker);
     rig.select(
         kithara_test_fixtures::assets::fixed_constant_wav_render_half_2880000().bytes(),
         "first.wav",
@@ -269,8 +274,10 @@ async fn fading_in() -> (DurationRig, Vec<f32>) {
 }
 
 #[kithara::test(tokio)]
-async fn resending_the_crossfade_duration_does_not_snap_the_mix() {
-    let (mut rig, fading) = fading_in().await;
+async fn resending_the_crossfade_duration_does_not_snap_the_mix(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut rig, fading) = fading_in(&worker_owner.0).await;
     rig.configure_duration(FADE_SECONDS);
     let (_, resent) = rig.pump(WARMUP_BLOCKS).await;
     let step = max_step_across(&fading, &resent);
@@ -281,8 +288,10 @@ async fn resending_the_crossfade_duration_does_not_snap_the_mix() {
 }
 
 #[kithara::test(tokio)]
-async fn changing_the_crossfade_duration_mid_fade_keeps_the_running_fade() {
-    let (mut rig, fading) = fading_in().await;
+async fn changing_the_crossfade_duration_mid_fade_keeps_the_running_fade(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut rig, fading) = fading_in(&worker_owner.0).await;
     rig.configure_duration(FADE_SECONDS / 10.0);
     let (_, changed) = rig.pump(WARMUP_BLOCKS).await;
     let step = max_step_across(&fading, &changed);
@@ -298,8 +307,10 @@ async fn changing_the_crossfade_duration_mid_fade_keeps_the_running_fade() {
 }
 
 #[kithara::test(tokio)]
-async fn a_changed_crossfade_duration_applies_to_the_next_fade() {
-    let (rig, _) = fading_in().await;
+async fn a_changed_crossfade_duration_applies_to_the_next_fade(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (rig, _) = fading_in(&worker_owner.0).await;
     let (mut rig, settled) = rig.pump(SETTLE_BLOCKS * 20).await;
     assert!(
         (last(&settled) - 0.5).abs() < EXACT,

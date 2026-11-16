@@ -217,6 +217,9 @@ pub(super) fn section(
 
 /// What an archive carries, by the role the release configuration gives it.
 fn contents(cfg: &ReleaseConfig, name: &str) -> String {
+    if name == consts::MACOS_APP_ARCHIVE {
+        return "macOS application (Apple Silicon and Intel)".into();
+    }
     if name == cfg.core_asset {
         return "Swift Package binary target".into();
     }

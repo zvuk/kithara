@@ -1,11 +1,17 @@
-use firewheel::FirewheelContext;
 use kithara_command::{Mailbox, PostError, Postbox, Refused, Ticket};
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 use kithara_play::PlayError;
 pub(crate) use kithara_play::{SessionError, SessionSampleRate};
 
+use crate::session::context::SessionGraph;
+
 pub(crate) type StartStreamFn<T> = Box<
-    dyn FnMut(&mut FirewheelContext, u32) -> Result<super::state::SessionStream<T>, String>
+    dyn FnMut(
+            &mut SessionGraph,
+            u32,
+            &mut [super::state::DeckNode],
+            Option<super::state::SessionStream<T>>,
+        ) -> Result<super::state::SessionStream<T>, String>
         + Send
         + 'static,
 >;

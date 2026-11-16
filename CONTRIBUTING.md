@@ -1,132 +1,80 @@
 # Contributing to kithara
 
-Bug reports, feature requests, and code contributions are welcome.
+Bug reports, feature requests, and pull requests are welcome. For a large
+change, open an issue first so the design can be agreed before the code.
 
-## Quick Start
+## Setup
+
+System packages: `libasound2-dev` on Linux, Xcode Command Line Tools on macOS.
 
 ```bash
-git clone https://github.com/<your-fork>/kithara.git
-cd kithara
+git clone https://github.com/zvuk/kithara.git && cd kithara
 cargo install just --locked
-cargo build --workspace
-just test all          # nextest + doctests
-just lint fast         # fast policy checks
-just lint full         # full lint / policy checks
-```
-
-Complete the environment setup below before relying on the `just` workflow. The
-canonical local workflow for both humans and AI agents lives in
-[docs/workflows/rust-ai.md](docs/workflows/rust-ai.md).
-
-## Environment Setup
-
-### Host dependencies
-
-- Linux: install `libasound2-dev`
-- macOS: install Xcode Command Line Tools
-
-### Required tooling
-
-- `just` 1.43 or newer for domain modules and module defaults
-- `cargo-nextest` for `just test` and `just test run`
-- `ast-grep` for `just lint fast` and `just lint full`
-- nightly `rustfmt` for `just fmt` and `just fmt check`
-- `prek` for the configured pre-commit and pre-push hooks
-
-```bash
-cargo install cargo-nextest --locked
-cargo install ast-grep --locked
+just tooling install                       # nextest, ast-grep, typos, formatters, audits
+cargo install cargo-hakari --locked
 rustup toolchain install nightly --component rustfmt
 ```
 
-Install `prek` with your preferred Python toolchain manager, for example:
+Optional: `prek install -f` (`pip install prek`) runs `just lint fast` before
+each commit.
+
+## Everyday commands
+
+| Command | What it does |
+| --- | --- |
+| `just test` | Product test suite (nextest, virtual clock) |
+| `just test run seek` | Tests whose name contains `seek` |
+| `just test run -E 'package(kithara-hls)'` | Any nextest filter expression |
+| `just test all` | Suite plus doc-tests |
+| `just fmt` | Format Rust, TOML, JSON, Markdown |
+| `just check clippy` | Clippy over the workspace |
+| `just lint fast` | Formatting, Clippy, ast-grep, typos, architecture and style rules |
+| `cargo run -p kithara-app` | Desktop demo app |
+
+Recipes live in `.config/just/`. [TESTING.md](TESTING.md) covers the test
+harness and the virtual clock.
+
+## Pull requests
+
+Before opening a PR:
 
 ```bash
-python3 -m pip install --user prek
-prek install -f
+just fmt check
+just lint fast
+just test
 ```
 
-### Recommended tooling
+- One change per PR, with a test that fails without it.
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
+  `fix(hls): ...`, `feat(play): ...`.
+- New warnings and lint suppressions are not accepted; fix the code instead.
 
-- `cargo-deny` (dependency audits), `cargo-machete` (unused deps),
-  `cargo-hack` (feature-powerset), `cargo-semver-checks` (public API compat)
+[AGENTS.md](AGENTS.md) holds the full code rules (shared by human and AI
+contributors). Crate contracts are on the [wiki](https://github.com/zvuk/kithara/wiki/kithara).
 
-```bash
-cargo install cargo-deny cargo-machete cargo-hack cargo-semver-checks --locked
-```
+## Mobile builds
 
-### Optional tooling
-
-- `worktrunk` — convenience wrapper over `git worktree`
-- `wasm-slim` — wasm size checks
-- `critcmp` — benchmark comparison
-- `chromedriver` (or another WebDriver binary) — browser-based flows
-
-## Building Mobile Libraries
-
-Two verified mobile build flows ship in the repo.
-
-### Android AARs
-
-Prerequisites: Android NDK installed with `ANDROID_NDK_HOME` exported,
-`cargo-ndk` (`cargo install cargo-ndk`), and the Android targets:
+**Android AAR.** Needs the NDK (`ANDROID_NDK_HOME`), `cargo-ndk`, and the
+targets `aarch64-linux-android` and `x86_64-linux-android`.
 
 ```bash
-rustup target add aarch64-linux-android x86_64-linux-android
 just platform android aar
 ```
 
-This builds the Rust JNI libraries in release, generates Kotlin UniFFI
-bindings, packages the Android library, and exports the release AARs to
-`android/lib/build/outputs/aar/`: `kithara.aar` and `kithara-okhttp.aar`, the
-HTTP transport over OkHttp. When consuming the AARs directly, add the
-app-level dependencies your integration needs.
+Output: `android/lib/build/outputs/aar/kithara.aar` and `kithara-okhttp.aar`
+(HTTP over OkHttp). See [android/README.md](android/README.md).
 
-### Apple XCFramework
-
-Prerequisites: Xcode + Command Line Tools and the Apple targets:
+**Apple XCFramework.** Needs Xcode and the targets `aarch64-apple-ios`,
+`aarch64-apple-ios-sim`, `aarch64-apple-darwin`, `x86_64-apple-darwin`.
 
 ```bash
-rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin x86_64-apple-darwin
-just platform apple xcframework                 # release
-just platform apple xcframework --profile debug # faster local iteration
+just platform apple xcframework                   # release
+just platform apple xcframework --profile debug   # faster local builds
 ```
 
-Output: `apple/KitharaFFIInternal.xcframework`, with slices
-`macos-arm64_x86_64`, `ios-arm64`, and `ios-arm64-simulator`.
-
-The verified local-development path is to build the XCFramework first, then
-point the consumer Swift package or Xcode project at this repo via
-`KITHARA_DIR` + `KITHARA_LOCAL_DEV=1`:
-
-```bash
-KITHARA_DIR=/absolute/path/to/kithara KITHARA_LOCAL_DEV=1 swift build
-
-KITHARA_DIR=/absolute/path/to/kithara KITHARA_LOCAL_DEV=1 \
-xcodebuild -project /absolute/path/to/App.xcodeproj \
-  -scheme MyApp -destination "generic/platform=iOS Simulator" build
-```
-
-## Before Submitting a PR
-
-```bash
-just lint full
-just test all
-```
-
-Run extra checks when the change affects multiple crates, public APIs, wasm,
-perf-sensitive code, or workflow tooling. Use the validation scope from your
-task packet or plan together with the touched crate `README.md` files to choose
-the right local commands.
-
-See [`AGENTS.md`](AGENTS.md) for the full coding rules and
-[docs/plans/_template.md](docs/plans/_template.md) for the required task-plan
-format on non-trivial changes.
-
-## Architecture
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the workspace layout and dependency
-graph. Each crate has its own `README.md`.
+Output: `apple/KitharaFFIInternal.xcframework`. To build an app against the
+local checkout, set `KITHARA_DIR=/path/to/kithara KITHARA_LOCAL_DEV=1`; see
+[apple/README.md](apple/README.md).
 
 ## License
 

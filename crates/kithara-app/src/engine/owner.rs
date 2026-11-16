@@ -178,6 +178,10 @@ impl Engine {
         }
 
         self.session.close();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(error) = self.config.worker.shutdown_and_join() {
+            error!(%error, "playback worker shutdown failed");
+        }
         self.has_shut_down = true;
     }
 
@@ -264,9 +268,11 @@ mod tests {
     };
     use kithara_test_utils::{kithara, off_thread::OffThread};
 
-    #[cfg(not(feature = "broadcast"))]
-    use crate::engine::{Command, DeckCmd, Envelope};
-    use crate::{analysis::fixtures::tone_mp3, gui::rig::Rig};
+    use crate::{
+        analysis::fixtures::tone_mp3,
+        engine::{Command, DeckCmd, Envelope},
+        gui::rig::Rig,
+    };
 
     fn close(rig: &mut Rig) {
         rig.close_window();
@@ -292,7 +298,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "broadcast"))]
     #[kithara::test(native, tokio, flash(false))]
     async fn the_shutdown_command_takes_the_decks_off_the_host_and_cancels_their_tasks() {
         let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
@@ -309,7 +314,7 @@ mod tests {
     ) {
         use ::kithara::ui::render::ControlAction;
 
-        let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::on_air()))
+        let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::playback()))
             .await
             .expect("rig fixture is infallible");
         rig.call(move |rig| {
@@ -340,7 +345,6 @@ mod tests {
         rig.close().await;
     }
 
-    #[cfg(not(feature = "broadcast"))]
     #[kithara::test(native, tokio, flash(false))]
     async fn a_seek_lands_on_the_duration_the_queue_knows_before_the_next_tick(tone_mp3: String) {
         let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
@@ -396,7 +400,6 @@ mod tests {
         rig.close().await;
     }
 
-    #[cfg(not(feature = "broadcast"))]
     #[kithara::test(native, flash(false))]
     fn a_rung_picked_on_a_deck_without_a_ladder_publishes_the_ladder_mode() {
         let mut rig = Rig::offline();

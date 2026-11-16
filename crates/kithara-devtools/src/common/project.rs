@@ -618,9 +618,19 @@ pub struct TestCommandConfig {
     /// a visible act in the diff with an owner attached — not a list a lane
     /// grows to stay green.
     pub known_flakes: Vec<KnownFlake>,
-    /// Paths that belong to no single lane: a change to one of them runs every
-    /// lane of a `--touched` scope whole, because the routing itself moved.
-    pub shared_paths: Vec<String>,
+    /// The tests a draft runs whatever it names.
+    #[config(nested)]
+    pub required: TestRequiredConfig,
+}
+
+/// The test packages most likely to fail, chosen from CI failure history and
+/// reviewed by hand. A draft runs them beside the tests its pull request names.
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
+#[serde(default, deny_unknown_fields)]
+#[config(builder(none))]
+pub struct TestRequiredConfig {
+    #[config(value)]
+    pub packages: Vec<String>,
 }
 
 /// One test allowed to reach a pass through a retry, and the issue it waits on.
@@ -689,13 +699,6 @@ pub struct TestLaneConfig {
     /// What runs the built tests: nextest unless the lane names `cargo`.
     pub runner: TestRunner,
     pub default_features: Vec<String>,
-    /// Source prefixes this lane is the test for. `just test run --touched`
-    /// tests the lane when the branch changed a path under one of them: a
-    /// scope that names the lane runs it whole, and the default lane, the
-    /// scope of a run that names none, runs narrowed to this lane's packages
-    /// when it builds them all. A lane that owns nothing is never selected
-    /// that way.
-    pub owns: Vec<String>,
     /// Toggles whose feature none of this lane's packages declares.
     ///
     /// `default_flash`/`default_no_block`/`default_load` say what a lane runs with by
@@ -1490,6 +1493,20 @@ unknown = true
         .expect_err("unknown field");
 
         assert!(error.to_string().contains("parse project config"));
+    }
+
+    /// Owned-path selection is gone: a catalog that still routes by path is
+    /// refused rather than read as if it did.
+    #[test]
+    fn owned_path_keys_are_unknown() {
+        for text in [
+            "[test]\nshared_paths = [\".config/xtask.toml\"]\n",
+            "[test.lanes.tooling]\nowns = [\"xtask/\"]\n",
+        ] {
+            let error = load(text).expect_err("an owned-path key");
+
+            assert!(format!("{error:#}").contains("unknown field"), "{error:#}");
+        }
     }
 
     #[test]

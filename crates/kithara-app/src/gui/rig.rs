@@ -64,7 +64,6 @@ pub(crate) struct Rig {
     /// The device the output plays on; without one the rig renders as fast
     /// as it is asked to.
     pub(crate) device: Option<Device>,
-    #[cfg(not(feature = "broadcast"))]
     states: Vec<(
         kithara::host::DeckId,
         Arc<kithara::platform::sync::Mutex<crate::state::UiState>>,
@@ -155,7 +154,6 @@ impl Rig {
             commands,
             queues,
             deck_tokens,
-            #[cfg(not(feature = "broadcast"))]
             states: Vec::new(),
             shutdown: config.shutdown.clone(),
             rendered_frames: if config.eq_bands > 3 { 128 } else { 0 },
@@ -170,7 +168,6 @@ impl Rig {
     }
 
     /// The host id of the deck the engine published under `letter`.
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn deck(&self, letter: &str) -> kithara::host::DeckId {
         self.snapshots
             .load()
@@ -200,13 +197,6 @@ impl Rig {
 
     pub(crate) fn message(&mut self, message: Message) {
         assert_eq!(update(&mut self.ui, message).units(), 0);
-    }
-
-    /// Uses an offline host because broadcast/window tests need a measured stream,
-    /// without depending on a device.
-    #[cfg(feature = "broadcast")]
-    pub(crate) fn on_air() -> Self {
-        Self::playback()
     }
 
     /// Applies the commands the UI sent and returns their sequence numbers.
@@ -289,7 +279,6 @@ impl Rig {
         )
     }
 
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn scalar(&self, key: &str) -> f64 {
         let root = ReadRoot::new(&self.ui);
         match Walk::new(&root).get(key) {
@@ -305,7 +294,6 @@ impl Rig {
         }));
     }
 
-    #[cfg(not(feature = "broadcast"))]
     pub(crate) fn shows(&mut self, letter: &str, change: impl FnOnce(&mut crate::state::UiState)) {
         let id = self.deck(letter);
         let (_, state) = self
@@ -386,10 +374,7 @@ impl Rig {
             thread::paced_backoff(__hang_detector.remaining().min(Duration::from_millis(5)));
         }
     }
-}
 
-#[cfg(not(feature = "broadcast"))]
-impl Rig {
     pub(crate) fn offline() -> Self {
         Self::offline_with(|_| {})
     }
@@ -405,7 +390,7 @@ impl Rig {
             runtime,
             &config,
             host,
-            Broadcaster::new(AppBroadcastConfig::default()),
+            Broadcaster::new(idle_broadcast(&config)),
             AnalysisHandle::channel(watch::channel(Arc::default()).1).0,
             |queue, cancel, _grids| {
                 let state = Arc::new(kithara::platform::sync::Mutex::new(

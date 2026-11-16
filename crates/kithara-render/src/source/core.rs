@@ -117,7 +117,8 @@ where
         self.lane.declick_frames(self.spec.sample_rate)
     }
 
-    /// Executes commands at the output cursor before producing more samples.
+    /// Executes commands at the output cursor before producing more samples,
+    /// then shows the renderer the speed law the next timed batch brings.
     /// Returns whether a command reset the decoded source.
     ///
     /// # Errors
@@ -126,12 +127,13 @@ where
         let changed = self
             .lane
             .execute_due(&mut self.source, &mut self.warp, self.spec)?;
+        let ahead = self.lane.anticipate_speed(&mut self.warp)?;
         if changed == LaneChange::Source {
             self.discard_staged_input();
             self.drain_state = DrainState::Open;
             self.discontinuity = self.source.discontinuity();
             self.spec = self.discontinuity.map_or(self.spec, |stamp| *stamp.spec());
-        } else if changed == LaneChange::Controls {
+        } else if changed == LaneChange::Controls || ahead {
             self.prepared_frames = None;
         }
         self.prepare_renderers(self.spec);

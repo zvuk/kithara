@@ -17,7 +17,7 @@ use super::{
     sender::{Doorbell, Sent},
     sink::Sink,
 };
-use crate::{ChannelConfig, Protocol, Receipt, Seq};
+use crate::{ChannelConfig, Protocol, Receipt, Seq, When};
 
 /// Receiving half of a one-level channel, owned by its executor.
 pub struct Inbox<P: Protocol> {
@@ -27,6 +27,18 @@ pub struct Inbox<P: Protocol> {
     answered: Doorbell,
     gate: Arc<Gate>,
     docket: Docket<P>,
+}
+
+/// A batch waiting in an [`Inbox`] for a frame of the clock.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(get)]
+pub struct Timed<'inbox, P: Protocol> {
+    /// Commands in the order the executor applies them.
+    #[field(get(copy))]
+    commands: &'inbox [P::Command],
+    /// Frame the batch applies on.
+    #[field(get(copy))]
+    at: P::Clock,
 }
 
 /// One stretch of a block an executor renders through [`Inbox::run_block`].
@@ -100,6 +112,20 @@ impl<P: Protocol> Inbox<P> {
             pub fn is_parked(&self, seq: Seq) -> bool;
             /// Edits a committed batch in place while the inbox retains it and its credit.
             pub fn committed_mut(&mut self, seq: Seq) -> Option<&mut [P::Command]>;
+        }
+    }
+
+    /// The batch that runs next when it waits for a frame of the clock, without
+    /// judging or taking it.
+    #[must_use]
+    pub fn next_timed(&self) -> Option<Timed<'_, P>> {
+        let sent = self.docket.schedule.earliest()?;
+        match sent.when {
+            When::At(at) => Some(Timed {
+                at,
+                commands: &sent.batch.commands,
+            }),
+            When::Next | When::Deferred => None,
         }
     }
 

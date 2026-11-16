@@ -3,7 +3,6 @@ use kithara_test_utils::kithara;
 use kithara_worker::{
     DispatcherConfig, Event, Observer, Task, TaskConfig, TickResult, Wake, Worker, WorkerConfig,
 };
-use ringbuf::traits::{Consumer, Producer};
 
 use super::transport_tests::receive_notice;
 use crate::{
@@ -23,7 +22,7 @@ impl Task for ProducerTask {
         if !std::mem::replace(&mut self.started, true) {
             return TickResult::Backpressured;
         }
-        if let Some(packet) = self.producer.reverse.try_pop() {
+        if let Some(packet) = self.producer.reclaim() {
             drop(packet);
         }
         if self.next == 32 {
@@ -32,8 +31,7 @@ impl Task for ProducerTask {
         let samples = vec![f32::from(u16::try_from(self.next).expect("packet index")); 480];
         if self
             .producer
-            .forward
-            .try_push(PcmPacket::Chunk(Box::new(chunk(
+            .push(PcmPacket::Chunk(Box::new(chunk(
                 kithara_signal::SegmentId::FIRST,
                 &samples,
             ))))

@@ -15,6 +15,9 @@ impl<P: Protocol> Schedule<P> {
             #[expr($.map(|sent| sent.when))]
             #[call(last)]
             pub(super) fn peek(&self) -> Option<When<P::Clock>>;
+            /// The batch that runs next, without taking it.
+            #[call(last)]
+            pub(super) fn earliest(&self) -> Option<&Sent<P>>;
             pub(super) fn pop(&mut self) -> Option<Sent<P>>;
             pub(super) fn iter(&self) -> impl Iterator<Item = &Sent<P>>;
         }

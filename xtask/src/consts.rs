@@ -7,6 +7,8 @@ pub(crate) use xtask::ci::cache_report::INPUT_LIMIT as CACHE_EVIDENCE_INPUT_LIMI
 
 pub(crate) const INPUT_BYTES: usize = 32 * 1024 * 1024;
 
+pub(crate) const DRAFT_FLAG: &str = "--draft";
+
 pub(crate) const WINDOWS_DIAGNOSTIC_REPORTS: usize = 64;
 pub(crate) const WINDOWS_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const WINDOWS_DIAGNOSTIC_OUTPUT_BYTES: usize = 64 * 1024;
@@ -212,6 +214,10 @@ pub(crate) const SLICE_TARGETS: &[(&str, &[&str])] = &[
 /// Nightly enables the `[unstable] build-std` section of
 /// `crates/kithara-ffi/.cargo/config.toml` for every release slice.
 pub(crate) const RELEASE_CARGO_ARGS: &[&str] = &["+nightly"];
+
+pub(crate) const MACOS_APP_ARCHIVE: &str = "Kithara-macos-universal.zip";
+pub(crate) const MACOS_APP_MINIMUM_OS: &str = "13.0";
+pub(crate) const MACOS_APP_TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
 
 /// Slice subdirectories inside the `*.xcframework` we expect to find.
 pub(crate) const XCFRAMEWORK_SLICES: &[&str] =
@@ -793,7 +799,8 @@ pub(crate) const REPORT_DIR: &str = ".ci-artifacts/junit";
 /// catalog already validates by name for the same reason: the executor's enum
 /// lives in `ci::run`, and a lane is refused at configuration load, before any
 /// executor is consulted. `lane_config.rs` pins the two lists together.
-pub(crate) const PIPELINE_KINDS: [&str; 8] = [
+pub(crate) const PIPELINE_KINDS: [&str; 9] = [
+    "bench",
     "branch",
     "platforms",
     "merge-request",

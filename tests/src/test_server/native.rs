@@ -50,6 +50,15 @@ impl TestServerHelper {
         )
     }
 
+    /// Serve the process-global server's routes in memory through the normal
+    /// HTTP client policies, for callers that hold no helper.
+    #[must_use]
+    pub fn shared_client(options: NetOptions, cancel: CancelToken) -> HttpClient {
+        let shared = crate::test_server::shared();
+        Self::for_server(Arc::clone(&shared.state), shared.base_url.clone())
+            .modeled_client(options, cancel)
+    }
+
     /// Download fixture media through the modeled router with the default HTTP policy.
     #[must_use]
     pub fn modeled_downloader(&self) -> Downloader {

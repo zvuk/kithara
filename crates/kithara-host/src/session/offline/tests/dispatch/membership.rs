@@ -158,7 +158,7 @@ fn a_sample_rate_set_while_idle_is_the_rate_play_starts_the_stream_at() {
     let started = state
         .ctx
         .as_ref()
-        .and_then(FirewheelContext::stream_info)
+        .and_then(|ctx| ctx.stream_info())
         .expect("play starts the stream")
         .sample_rate;
     assert_eq!(

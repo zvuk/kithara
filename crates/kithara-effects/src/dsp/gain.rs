@@ -86,6 +86,17 @@ impl GainBank {
         }
     }
 
+    pub(crate) fn set_explicit(&mut self, band: usize, gain_db: GainDb) -> bool {
+        let Some(gain) = self.gains.get_mut(band) else {
+            return false;
+        };
+        if gain.target == gain_db && gain.current() == gain.target_linear {
+            return false;
+        }
+        *gain = SmoothedGain::new(gain_db);
+        true
+    }
+
     pub(crate) fn update_sample_rate(&mut self, sample_rate: f32) {
         self.coeff = smoothing_coeff(sample_rate, self.smoothing);
     }
@@ -131,5 +142,33 @@ mod tests {
         }
 
         assert_eq!(bank.linear(0), GainDb::MAX.linear());
+    }
+
+    #[kithara::test]
+    fn explicit_values_do_not_restart_an_unrelated_manual_smoother() {
+        let mut bank = GainBank::new(
+            [GainDb::DEFAULT; 2].into_iter(),
+            44_100.0,
+            SmootherConfig::default(),
+        );
+        let mut reference = GainBank::new(
+            [GainDb::DEFAULT; 2].into_iter(),
+            44_100.0,
+            SmootherConfig::default(),
+        );
+        bank.set(1, GainDb::MAX);
+        reference.set(1, GainDb::MAX);
+        for value in [GainDb::MIN, GainDb::DEFAULT, GainDb::MAX]
+            .into_iter()
+            .cycle()
+            .take(64)
+        {
+            bank.set_explicit(0, value);
+            bank.tick();
+            reference.tick();
+            assert_eq!(bank.linear(0).to_bits(), value.linear().to_bits());
+            assert_eq!(bank.linear(1).to_bits(), reference.linear(1).to_bits());
+            assert_eq!(bank.target(1), reference.target(1));
+        }
     }
 }

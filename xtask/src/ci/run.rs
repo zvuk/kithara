@@ -154,6 +154,7 @@ impl Lane {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum PipelineKind {
+    Bench,
     Branch,
     Platforms,
     MergeRequest,
@@ -171,6 +172,7 @@ impl PipelineKind {
     /// against `PIPELINE_KINDS`.
     pub(crate) const fn name(self) -> &'static str {
         match self {
+            Self::Bench => "bench",
             Self::Branch => "branch",
             Self::Platforms => "platforms",
             Self::MergeRequest => "merge-request",
@@ -924,9 +926,10 @@ mod tests {
     }
 
     /// A branch push and a draft pull request are not judged in full: the one
-    /// Mac host ran the whole Apple suite for every one of them.
+    /// Mac host ran the whole Apple suite for every one of them. A draft runs
+    /// the gate's own command over the draft scope.
     #[test]
-    fn a_branch_runs_the_apple_gate_over_what_it_touched() {
+    fn a_branch_runs_the_apple_gate_over_the_draft_scope() {
         let (args, _) = gate("apple-test", PipelineKind::Branch);
 
         assert_eq!(
@@ -934,7 +937,7 @@ mod tests {
             [
                 "test",
                 "run",
-                "--touched",
+                "--draft",
                 "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
                 "--flash=on",
                 "--no-block=on",

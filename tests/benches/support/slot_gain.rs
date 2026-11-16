@@ -18,7 +18,7 @@ use kithara_test_fixtures::integration_fixtures::benchmark_half;
 const RATE: u32 = 44_100;
 const WARM_FRAMES: usize = 4096;
 
-async fn loaded_player() -> OfflinePlayer {
+pub(super) async fn loaded_player() -> OfflinePlayer {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)

@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 use masonry::{
     core::{CursorIcon, Ime, TextEvent},
     dpi::PhysicalPosition,
@@ -7,12 +9,18 @@ use masonry::{
             Code, Key as MasonryKey, KeyState, KeyboardEvent, Modifiers as MasonryModifiers,
             NamedKey,
         },
-        pointer::{PointerButton as MasonryPointerButton, PointerEvent},
+        pointer::{
+            PointerButton as MasonryPointerButton, PointerButtonEvent, PointerEvent,
+            PointerGestureEvent, PointerId as MasonryPointerId, PointerInfo, PointerScrollEvent,
+            PointerUpdate,
+        },
     },
 };
 use num_traits::cast::AsPrimitive;
 
-use super::{CursorShape, Input, InputMethod, Key, Modifiers, PointerButton, Scroll};
+use super::{
+    CursorShape, Input, InputMethod, Key, MOUSE, Modifiers, PointerButton, PointerId, Scroll,
+};
 
 mod consts {
     use super::*;
@@ -223,6 +231,66 @@ pub fn portable_scroll(delta: ScrollDelta, scale: f64) -> Option<Scroll> {
             y: AsPrimitive::<f32>::as_(delta.y / scale),
         }),
         ScrollDelta::PageDelta(_, _) => None,
+    }
+}
+
+/// The neutral identity of the pointer that produced `event`.
+///
+/// Masonry numbers pointers from one, its primary pointer being one; the
+/// neutral model numbers them from zero, [`MOUSE`] being zero. An event that
+/// names no pointer is the mouse's.
+#[must_use]
+pub fn portable_pointer_id(event: &PointerEvent) -> PointerId {
+    let PointerInfo {
+        pointer_id: Some(id),
+        ..
+    } = pointer_info(event)
+    else {
+        return MOUSE;
+    };
+    let mut number = PointerNumber(0);
+    id.hash(&mut number);
+    PointerId(number.0.saturating_sub(1))
+}
+
+/// The pointer that produced `event`, whatever the event says it did.
+#[must_use]
+pub const fn pointer_info(event: &PointerEvent) -> &PointerInfo {
+    let (PointerEvent::Down(PointerButtonEvent { pointer, .. })
+    | PointerEvent::Up(PointerButtonEvent { pointer, .. })
+    | PointerEvent::Move(PointerUpdate { pointer, .. })
+    | PointerEvent::Cancel(pointer)
+    | PointerEvent::Enter(pointer)
+    | PointerEvent::Leave(pointer)
+    | PointerEvent::Scroll(PointerScrollEvent { pointer, .. })
+    | PointerEvent::Gesture(PointerGestureEvent { pointer, .. })) = event;
+    pointer
+}
+
+/// The masonry identity of a neutral pointer, inverse to
+/// [`portable_pointer_id`]; `None` only for the one neutral number masonry
+/// cannot spell.
+#[must_use]
+pub fn masonry_pointer_id(id: PointerId) -> Option<MasonryPointerId> {
+    MasonryPointerId::new(id.0.checked_add(1)?)
+}
+
+/// Reads the number a masonry pointer id carries.
+///
+/// ui-events 0.2 keeps that number private and offers no accessor, but the
+/// id's derived `Hash` writes exactly it, once, as a `u64`; this hasher keeps
+/// what it is handed instead of mixing it.
+struct PointerNumber(u64);
+
+impl Hasher for PointerNumber {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, _bytes: &[u8]) {}
+
+    fn write_u64(&mut self, number: u64) {
+        self.0 = number;
     }
 }
 

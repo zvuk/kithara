@@ -1,11 +1,11 @@
 use firewheel::node::{ProcInfo, ProcStore};
-use kithara_warp::RenderContext;
+use kithara_signal::OutputContext;
 
 #[derive(Debug, Default)]
 enum RenderContextSlot {
     #[default]
     Unwritten,
-    Ready(RenderContext),
+    Ready(OutputContext),
     Invalid,
 }
 
@@ -30,7 +30,7 @@ pub fn install_render_context(store: &mut ProcStore) -> Result<(), &'static str>
 #[doc(hidden)]
 pub fn publish_render_context(
     store: &mut ProcStore,
-    context: RenderContext,
+    context: OutputContext,
 ) -> Result<(), &'static str> {
     replace(store, RenderContextSlot::Ready(context))
 }
@@ -64,7 +64,7 @@ fn replace(store: &mut ProcStore, next: RenderContextSlot) -> Result<(), &'stati
 pub fn read_render_context<'a>(
     store: &'a ProcStore,
     info: &ProcInfo,
-) -> Result<&'a RenderContext, &'static str> {
+) -> Result<&'a OutputContext, &'static str> {
     let slot = store
         .try_get::<RenderContextSlot>()
         .ok_or("render context store slot is missing")?;
@@ -82,8 +82,8 @@ pub fn read_render_context<'a>(
         .0
         .checked_add(frames)
         .ok_or("render context does not match the player process block")?;
-    let output_frames = context.output().output_frames();
-    if context.output().sample_rate() != info.sample_rate
+    let output_frames = context.output_frames();
+    if context.sample_rate() != info.sample_rate
         || i64::from(output_frames.start) != info.clock_samples.0
         || i64::from(output_frames.end) != end
     {

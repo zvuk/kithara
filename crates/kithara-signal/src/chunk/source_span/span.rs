@@ -273,6 +273,12 @@ impl SourceSpan {
         .ok()
     }
 
+    /// Each output frame's source coordinate in order, from output frame 0.
+    #[must_use]
+    pub fn source_steps(self) -> Option<super::SourceSteps> {
+        super::SourceSteps::new(self.mapping)
+    }
+
     /// Reduced source coordinate, exact for rational maps and Q32 for approaches.
     #[must_use]
     pub fn source_ratio_at(self, output_frame: u64) -> Option<(u128, NonZeroU128)> {

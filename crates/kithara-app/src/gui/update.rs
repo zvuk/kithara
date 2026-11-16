@@ -180,7 +180,7 @@ fn handle_tick(state: &mut Kithara) {
     ));
 }
 
-#[cfg(all(test, not(feature = "broadcast")))]
+#[cfg(test)]
 mod tests {
     use std::{convert::Infallible, mem};
 

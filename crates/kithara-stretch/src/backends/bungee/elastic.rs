@@ -51,7 +51,12 @@ impl BungeeElastic {
     where
         S: HasPool<f32>,
     {
-        let probe_frames = config.max_source_frames().min(config.max_output_frames());
+        // One grain hop per probe fills the pipeline grain by grain; a longer
+        // probe only renders more grains of silence to the same latency.
+        let probe_frames = config
+            .max_source_frames()
+            .min(config.max_output_frames())
+            .min(core.unit_hop_frames()?);
         let request = ElasticRequest::new(probe_frames, probe_frames)?;
         for _ in 0..StreamCore::PIPELINE_GRAINS {
             core.probe_silence(request)?;
@@ -284,7 +289,57 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::pools;
+    use crate::{BungeeConfig, ElasticBackendConfig, test_pools::pools};
+
+    /// A probe of one grain hop measures the latency a probe of a whole
+    /// quantum measures, at every rate, layout and grain size.
+    #[kithara::test]
+    fn a_one_hop_latency_probe_measures_the_whole_quantum_latency() {
+        const QUANTUM: usize = 8192;
+        for rate in [8_000, 22_050, 44_100, 48_000, 96_000, 192_000] {
+            for channels in [1, 2, 6] {
+                for adjust in [-1, 0, 1] {
+                    let config = || {
+                        ElasticConfig::builder()
+                            .backends(
+                                ElasticBackendConfig::builder()
+                                    .bungee(
+                                        BungeeConfig::builder()
+                                            .log2_synthesis_hop_adjust(adjust)
+                                            .build(),
+                                    )
+                                    .build(),
+                            )
+                            .pools(pools())
+                            .sample_rate(rate)
+                            .channels(channels)
+                            .max_source_frames(QUANTUM)
+                            .max_output_frames(QUANTUM)
+                            .build()
+                            .expect("valid preparation")
+                    };
+                    let engine = BungeeElastic::prepare(config()).expect("prepared Bungee");
+                    let config = config();
+                    let mut core = StreamCore::new(&config, QUANTUM).expect("probe core");
+                    let request = ElasticRequest::new(QUANTUM, QUANTUM).expect("whole quantum");
+                    for _ in 0..StreamCore::PIPELINE_GRAINS {
+                        core.probe_silence(request).expect("the probe renders");
+                    }
+                    let source = core.source_latency_frames().expect("source latency");
+                    let total = (f64::from(core.source_end())
+                        - core.output_position().expect("timed output"))
+                    .ceil()
+                    .to_usize()
+                    .expect("total latency");
+                    assert_eq!(
+                        engine.capabilities().latency(),
+                        ElasticLatency::new(source, total - source),
+                        "rate {rate}, channels {channels}, hop adjust {adjust}"
+                    );
+                }
+            }
+        }
+    }
 
     #[kithara::test]
     fn unprimed_bungee_rejects_distinct_audible_span_before_rendering() {

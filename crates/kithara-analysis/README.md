@@ -18,8 +18,8 @@ Progressive per-track waveform and beat analysis over decoded source audio.
 It accepts both a dedicated `AudioReader` and already-decoded chunks through
 `AudioObserver`, so playback warms the same analysis pass without decoding its
 source twice. It owns analysis state, scheduling, DSP, and pure versioned bytes;
-the source reader remains in `kithara-audio` and cache I/O/policy remains in the
-consumer (currently `kithara-app`).
+the source reader remains in `kithara-audio` and caching results is the
+application's job.
 
 ## Key Types
 
@@ -34,45 +34,24 @@ consumer (currently `kithara-app`).
 
 ## Features
 
-<table>
-
-<tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
-
-<tr><td><code>default</code></td><td>yes</td><td><code>symphonia</code> + <code>client-reqwest</code> + <code>tls-rustls</code> for the supplied decoded-reader dependency closure</td></tr>
-
-<tr><td><code>analysis-waveform</code></td><td>no</td><td>Waveform analyzer on <code>kithara-dsp</code>'s FFT</td></tr>
-
-<tr><td><code>analysis-beat</code></td><td>no</td><td>Beat-analysis pipeline with a caller-selected mono resampler backend</td></tr>
-
-<tr><td><code>beat-nn</code></td><td>no</td><td>NN beat/downbeat detector backend through <code>kithara-beat</code></td></tr>
-
-<tr><td><code>beat-cuda</code></td><td>no</td><td>CUDA NN construction with a caller-owned native ONNX Runtime environment</td></tr>
-
-<tr><td><code>apple</code> / <code>android</code> / <code>webcodecs</code></td><td>no</td><td>Forward an alternate decoder backend to the supplied <code>kithara-audio</code> reader contract</td></tr>
-
-<tr><td><code>client-wreq</code> / <code>tls-native</code></td><td>no</td><td>Forward alternate network and TLS selections through the reader and watchdog dependencies</td></tr>
-
-</table>
+- `analysis-waveform` — three-band waveform analyzer.
+- `analysis-beat` — beat-analysis pass; pick a detector with `beat-dsp`
+  (no model) or `beat-nn` (neural network). `beat-nn-small`, `beat-nn-full`,
+  `beat-nn-full-int8` embed a model; `beat-cuda` runs it on CUDA.
+- `symphonia` (default), `apple`, `android`, `webcodecs`, `fdk-aac` — decoder
+  for the reader this crate opens.
+- `client-reqwest` (default), `client-wreq`, `tls-rustls` (default),
+  `tls-native` — HTTP and TLS.
+- `mock`, `usdt` — test mocks and USDT probes.
 
 ## Integration
 
-`kithara-analysis` consumes `kithara-audio`'s `AudioReader`, `AudioObserver`,
-and decoded-signal values. It does not own decoder lifecycle, source readiness,
-or playback scheduling. `AnalyzerBuilder<B, S>` receives the caller's typed
-`PoolRegion<S>`; the schema must implement `HasPool<f32>`, so a missing sample
-pool is rejected at compile time. Analysis scratch and
-`kithara-resampler::MonoStream` buffers therefore compete under the same hard
-region budget as the rest of the application instead of receiving a separate
-pool. Persisting a `TrackAnalysis` through `AssetStore`, choosing cache keys,
-and eviction policy remain application responsibilities. `write_to` appends to
-caller-owned `Vec<u8>` output.
-
-With `beat-cuda`, `BeatAnalysisConfig::builder().cuda_environment(environment.clone())`
-passes the caller's SDK environment to NN detector construction. Load it once
-from the retained `BeatConfig` library path and keep the caller handle alive
-across detector replacement. The native handle is a construction resource;
-configuration documents cannot set it and analysis fingerprints exclude it.
-CPU defaults require no native environment.
+Reads decoded audio through `kithara-audio`'s `AudioReader` or observes the
+chunks playback already decodes (`AudioObserver`). Scratch buffers come from
+the caller's `PoolRegion`, so analysis shares the application's memory budget.
+Storing a `TrackAnalysis`, its cache key, and eviction are up to the
+application; `write_to` serializes it. With `beat-cuda`, pass the caller-owned
+ONNX Runtime environment through `BeatAnalysisConfig::builder().cuda_environment(...)`.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-analysis) for the scheduling, ingest, waveform, and codec
 contracts.

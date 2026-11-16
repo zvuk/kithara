@@ -7,29 +7,12 @@ use super::{
     core::{PreparedQuantum, WarpRenderer},
     mapping::source_demand,
 };
+use crate::Semitones;
 
 impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
-    /// Select source demand up to the next output quantum's mapped endpoint.
-    /// Filter and engine lookahead remain in the separately prepared source window.
-    ///
-    /// # Errors
-    /// Returns pending activation or the geometry/engine admission error.
-    pub fn prepare_quantum(
-        &mut self,
-        meta: AudioChunkInfo,
-        remaining: usize,
-        output_limit: usize,
-    ) -> Result<FrameCount, crate::WarpRenderError> {
-        self.prepare_source_window(meta, remaining, output_limit)?;
-        let prepared = self
-            .prepared_quantum
-            .ok_or(crate::WarpRenderError::OutstandingQuantum)?;
-        Ok(FrameCount::new(prepared.active_frames))
-    }
-
     /// Prepare the decoded-source window, including filter and engine lookahead.
     /// Supply this physical extent to `render_quantum`; only its mapped span is emitted.
     ///
@@ -54,12 +37,8 @@ where
         if let Some(frames) = self.prepared_source_window(meta, output_limit)? {
             return Ok(frames);
         }
-        self.rebase_source(meta);
-        if self.transition_pending() || self.engine_outdated() {
+        if self.rebase_source(meta) || self.transition_pending() || self.engine_outdated() {
             return Err(crate::WarpRenderError::NeedsService);
-        }
-        if !self.requires_staging() && self.plan.is_some() {
-            return Err(crate::WarpRenderError::UnsupportedRegionPlan);
         }
         self.terminal_source_end = None;
         let prepared = self.prepare_active_quantum(meta, remaining, output_limit)?;
@@ -93,9 +72,9 @@ where
         output_limit: usize,
     ) -> Result<PreparedQuantum, ElasticError> {
         if !self.requires_staging()
-            || (self.plan.is_none()
+            || (self.pitch_controls().shift() == Semitones::DEFAULT
                 && (self.trajectory.constant_unity()
-                    || (!self.current_keylock && self.trajectory.unity_interval())))
+                    || (!self.current_pitch_engine && self.trajectory.unity_interval())))
         {
             return self.prepare_unity_quantum(meta, remaining, output_limit);
         }
@@ -178,7 +157,8 @@ where
             .and_then(|offset| u64::try_from(offset).ok())
             .ok_or(ElasticError::SampleCountOverflow)?;
         let (numerator, denominator) =
-            self.mapped_position(meta.frame_offset, meta.spec.sample_rate, offset)?;
+            self.trajectory
+                .at_offset(meta.frame_offset, meta.spec.sample_rate, offset)?;
         let reach = self.source_reach()?;
         let end = u64::try_from(numerator.div_ceil(denominator.get()))
             .ok()
@@ -200,12 +180,7 @@ where
 
     /// Source frames past a position that a read at it reaches.
     pub(super) fn source_reach(&self) -> Result<u64, ElasticError> {
-        let correction = self.plan.as_ref().map_or(1.0, |plan| {
-            plan.segments().iter().fold(1.0_f64, |minimum, segment| {
-                minimum.min(segment.ratio_correction())
-            })
-        });
-        let radius = if f64::from(self.trajectory.speed_bounds()?.1) <= correction {
+        let radius = if self.trajectory.speed_bounds()?.1 <= 1.0 {
             0
         } else {
             crate::consts::SOURCE_RADIUS

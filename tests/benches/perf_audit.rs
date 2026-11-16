@@ -34,7 +34,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
     stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine},
     sync::SpeedCurve,
-    warp::{Warp, WarpConfig, WarpRenderer},
+    warp::{Pitch, Warp, WarpConfig, WarpRenderer},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
@@ -489,6 +489,55 @@ fn bench_stretch_backends(c: &mut Criterion) {
     group.finish();
 }
 
+/// Renders every source window `pcm` covers through prepared quanta, the way
+/// the render lane does, and returns the source frame after the last window.
+fn render_windows(
+    renderer: &mut WarpRenderer<TestPools>,
+    pools: &Pools,
+    spec: AudioSpec,
+    pcm: &[f32],
+) -> u64 {
+    let total = pcm.len() / consts::CHANNELS;
+    let mut source = 0;
+    loop {
+        let start = usize::try_from(source).expect("source frame fits usize");
+        if start == total {
+            return source;
+        }
+        renderer.prepare(spec);
+        renderer
+            .prepare_engine_latency(spec)
+            .expect("renderer service");
+        let meta = AudioChunkInfo {
+            spec,
+            frame_offset: source,
+            ..AudioChunkInfo::default()
+        };
+        let frames = renderer
+            .prepare_source_window(meta, total - start, usize::MAX)
+            .expect("source window")
+            .get();
+        if start + frames > total {
+            return source;
+        }
+        let mut input = make_chunk(
+            pools,
+            &pcm[start * consts::CHANNELS..(start + frames) * consts::CHANNELS],
+        );
+        input.meta = AudioChunkInfo {
+            frames: u32::try_from(frames).expect("window size"),
+            ..meta
+        };
+        black_box(
+            renderer
+                .render_quantum(input)
+                .continue_value()
+                .expect("prepared quantum"),
+        );
+        source += u64::try_from(frames).expect("source advance");
+    }
+}
+
 fn bench_stretch_process(c: &mut Criterion) {
     let pcm = make_pcm(consts::STRETCH_FRAMES);
     let pools = pools();
@@ -506,7 +555,7 @@ fn bench_stretch_process(c: &mut Criterion) {
         let config = WarpConfig::builder()
             .speed(0.8)
             .backend(backend)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .build();
         let backend_label = backend.to_string().to_ascii_lowercase();
         group.bench_function(format!("{backend_label}_ratio_1_25"), |b| {
@@ -518,7 +567,25 @@ fn bench_stretch_process(c: &mut Criterion) {
                     (renderer, chunk)
                 },
                 |(mut renderer, chunk): (WarpRenderer<TestPools>, AudioChunk)| {
-                    black_box(renderer.render(chunk))
+                    let source = render_windows(&mut renderer, &pools, spec, &chunk.samples);
+                    let start = usize::try_from(source).expect("source frame fits usize");
+                    let held = chunk.frames() - start;
+                    if held > 0 {
+                        let frames = renderer
+                            .prepare_terminal_quantum(held)
+                            .expect("terminal quantum")
+                            .get();
+                        let mut input =
+                            make_chunk(&pools, &chunk.samples[start * consts::CHANNELS..]);
+                        input.meta.frame_offset = source;
+                        input.meta.frames = u32::try_from(frames).expect("window size");
+                        black_box(
+                            renderer
+                                .render_quantum(input)
+                                .continue_value()
+                                .expect("terminal input"),
+                        );
+                    }
                 },
                 BatchSize::SmallInput,
             );
@@ -658,7 +725,7 @@ fn bench_warp_transition(c: &mut Criterion) {
                     (),
                     &WarpConfig::builder()
                         .speed(0.5)
-                        .keylock(true)
+                        .pitch(Pitch::HELD)
                         .backend(StretchKind::Signalsmith)
                         .build(),
                 )
@@ -669,10 +736,10 @@ fn bench_warp_transition(c: &mut Criterion) {
                 let mut produced = 0;
                 for block in 0..12 {
                     if block == 4 {
-                        renderer.set_keylock(false);
+                        renderer.set_pitch(Pitch::default());
                     }
                     if block == 8 {
-                        renderer.set_keylock(true);
+                        renderer.set_pitch(Pitch::HELD);
                     }
                     renderer.prepare(spec);
                     renderer
@@ -706,29 +773,40 @@ fn bench_warp_transition(c: &mut Criterion) {
                     (),
                     &WarpConfig::builder()
                         .speed(0.5)
-                        .keylock(true)
+                        .pitch(Pitch::HELD)
                         .backend(StretchKind::Signalsmith)
                         .build(),
                 )
                 .renderer(spec, pools.clone());
-                black_box(
-                    replacement
-                        .render(make_chunk(&pools, &pcm[..8192]))
-                        .continue_value()
-                        .expect("unprepared source"),
-                );
+                let resumed = render_windows(&mut replacement, &pools, spec, &pcm[..16_384]);
                 replacement.prepare(spec);
-                replacement.set_keylock(false);
+                replacement.set_pitch(Pitch::default());
                 replacement
                     .set_speed(SpeedCurve::Constant(1.0), 1)
                     .expect("unity replacement rate");
                 replacement
                     .prepare_engine_latency(spec)
                     .expect("replacement service");
-                let mut input = make_chunk(&pools, &pcm[8192..8320]);
-                input.meta.frame_offset = 4096;
+                let meta = AudioChunkInfo {
+                    spec,
+                    frame_offset: resumed,
+                    ..AudioChunkInfo::default()
+                };
+                let frames = replacement
+                    .prepare_source_window(meta, 128, 128)
+                    .expect("replacement window")
+                    .get();
+                let start = usize::try_from(resumed).expect("source frame fits usize");
+                let mut input = make_chunk(
+                    &pools,
+                    &pcm[start * consts::CHANNELS..(start + frames) * consts::CHANNELS],
+                );
+                input.meta = AudioChunkInfo {
+                    frames: u32::try_from(frames).expect("window size"),
+                    ..meta
+                };
                 let output = replacement
-                    .render(input)
+                    .render_quantum(input)
                     .continue_value()
                     .expect("replacement input")
                     .expect("replacement output");
@@ -745,6 +823,7 @@ fn bench_limiter_detector(c: &mut Criterion) {
     group.sample_size(20);
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(3));
+    let pools = pools();
     for (frames, tail) in [
         (1, 0),
         (7, 0),
@@ -765,14 +844,21 @@ fn bench_limiter_detector(c: &mut Criterion) {
                     .map(|sample| sample * amplitude)
                     .collect()
             });
-            let mut limiter = PeakLimiter::new(
-                NonZeroU32::new(48_000).expect("bench rate"),
-                NonZeroUsize::new(2).expect("stereo"),
-                LimiterConfig::default(),
-            )
-            .expect("stereo detector");
-            let [mut left, mut right] = input.clone();
-            limiter.process_planar(&mut [&mut left, &mut right]);
+            let primed = || {
+                let rate = NonZeroU32::new(48_000).expect("bench rate");
+                let mut limiter = PeakLimiter::new(
+                    rate,
+                    rate,
+                    NonZeroUsize::new(2).expect("stereo"),
+                    LimiterConfig::default(),
+                    &pools,
+                )
+                .expect("stereo detector");
+                let [mut left, mut right] = input.clone();
+                limiter.process_planar(&mut [&mut left, &mut right]);
+                (limiter, [left, right])
+            };
+            let (_, [left, right]) = primed();
             let reduced = [&left, &right]
                 .into_iter()
                 .zip(&input)
@@ -799,7 +885,7 @@ fn bench_limiter_detector(c: &mut Criterion) {
             };
             group.bench_function(BenchmarkId::new(label, shape), |b| {
                 b.iter_batched_ref(
-                    || (limiter.clone(), input.clone()),
+                    || (primed().0, input.clone()),
                     |(limiter, [left, right])| {
                         limiter.process_planar(&mut [
                             black_box(left.as_mut_slice()),
@@ -828,7 +914,6 @@ fn sampler_fixture(
     );
     let config = WarpConfig::builder()
         .backend(StretchKind::Signalsmith)
-        .keylock(false)
         .speed(speed)
         .render_quantum_frames(NonZeroUsize::new(output_frames).expect("output quantum"))
         .build();

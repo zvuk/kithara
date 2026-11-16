@@ -43,7 +43,7 @@ mod standalone {
     use crate::factory::build::finish;
 
     pub(super) fn create<B, S>(
-        mut source: BoxedSource,
+        source: BoxedSource,
         codec: AudioCodec,
         container: Option<ContainerFormat>,
         config: DecoderConfig<B, S>,
@@ -52,12 +52,7 @@ mod standalone {
         B: ResamplerBackend,
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
-        use crate::{
-            demuxer::Demuxer,
-            gapless::scoped_probe,
-            symphonia::{FileOpen, SymphoniaDemuxer},
-            webcodecs::codec::WebCodecsCodec,
-        };
+        use crate::{demuxer::Demuxer, webcodecs::codec::WebCodecsCodec};
 
         if !crate::webcodecs::codec::supports(codec) {
             return super::super::software::create(source, codec, container, config);
@@ -68,27 +63,8 @@ mod standalone {
             ?container,
             "file-symphonia: dispatching to ComposedDecoder<SymphoniaDemuxer, WebCodecsCodec>"
         );
-        let probed_gapless = if config.gapless {
-            scoped_probe(&mut *source, codec, &config.pools)?
-        } else {
-            None
-        };
-        let (mut demuxer, _byte_len) = SymphoniaDemuxer::open_file(
-            source,
-            FileOpen {
-                container,
-                hint: config.hint.clone(),
-                byte_len_handle: config.byte_len_handle.clone(),
-                byte_map: config.byte_map.clone(),
-                control: config
-                    .reader_control
-                    .clone()
-                    .unwrap_or_else(|| kithara_stream::ReaderControl::new(None)),
-            },
-        )?;
-        if probed_gapless.is_some() {
-            demuxer.set_gapless(probed_gapless);
-        }
+        let demuxer =
+            crate::factory::software::open_file_demuxer(source, codec, container, &config)?;
         let codec_impl =
             WebCodecsCodec::open(demuxer.track_info(), config.gapless, config.pools.clone())?;
         finish(demuxer, codec_impl, config)

@@ -132,6 +132,15 @@ where
     backend::spawn_named_uncounted(name, counted(f))
 }
 
+/// Spawn a reusable pool thread; individual jobs use [`wrap_pool_task`].
+pub fn spawn_pool_thread<F, T, N: Into<String>>(name: N, f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    backend::spawn_named_uncounted(name, f)
+}
+
 #[track_caller]
 pub fn sleep(duration: Duration) {
     backend::sleep(duration);

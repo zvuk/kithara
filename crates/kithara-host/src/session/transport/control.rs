@@ -1,4 +1,3 @@
-use firewheel::FirewheelContext;
 use kithara_config::ConfigOwner;
 use kithara_warp::{BeatGridState, MapAxis};
 
@@ -7,7 +6,7 @@ use super::{
     event::TransportEvent,
     process::converge_transport_restart,
 };
-use crate::session::{SessionError, state::SessionState};
+use crate::session::{SessionError, context::SessionGraph, state::SessionState};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RouteRestartStatus {
@@ -79,12 +78,13 @@ pub(crate) fn prepare_route_restart<T, S>(
     // its stream stops now or already stopped on its own.
     state.publish_staged();
     if was_running {
+        state.stream = None;
+        #[cfg(target_arch = "wasm32")]
         state
             .ctx
             .as_mut()
             .ok_or(SessionError::NoContext)?
             .request_deactivate();
-        state.stream = None;
     }
     state.publish_root();
     finish_route_restart(state, target)
@@ -107,11 +107,7 @@ fn finish_route_restart<T, S>(
     }
     crate::session::queue::settle_root_receipts(state);
     let settings = *state.settings.config();
-    let Some(store) = state
-        .ctx
-        .as_mut()
-        .and_then(FirewheelContext::proc_store_mut)
-    else {
+    let Some(store) = state.ctx.as_mut().and_then(SessionGraph::proc_store_mut) else {
         return Ok(RouteRestartStatus::Pending);
     };
     let actual = converge_transport_restart(store, settings, target)

@@ -1,12 +1,10 @@
-use std::num::NonZeroUsize;
-
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::time::{Duration, ThreadTime, WallInstant};
 use kithara_signal::{AudioSpec, SampleCount};
 use kithara_stretch::{
-    BackendCapabilities, ElasticBackendConfig, ElasticConfig, ElasticEngine, ElasticError,
-    StretchKind, build_engine, build_varispeed_engine,
+    BackendCapabilities, ElasticConfig, ElasticEngine, ElasticError, StretchKind, build_engine,
+    build_varispeed_engine,
 };
 use num_traits::ToPrimitive;
 use tracing::warn;
@@ -29,20 +27,38 @@ where
 {
     pub(in crate::render) fn config_for(
         backend: StretchKind,
-        backends: ElasticBackendConfig,
-        source_block_frames: NonZeroUsize,
+        config: &crate::WarpConfig,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
     ) -> Result<ElasticConfig<S>, ElasticError> {
-        ElasticConfig::builder()
-            .backend(backend)
-            .backends(backends)
-            .sample_rate(spec.sample_rate.get())
-            .channels(usize::from(spec.channels.max(1)))
-            .pools(pools.clone())
-            .max_source_frames(source_block_frames.get())
-            .max_output_frames(Self::MAX_OUTPUT_FRAMES)
-            .build()
+        let build = |max_output_frames| {
+            ElasticConfig::builder()
+                .backend(backend)
+                .backends(config.backends())
+                .sample_rate(spec.sample_rate.get())
+                .channels(usize::from(spec.channels.max(1)))
+                .pools(pools.clone())
+                .max_source_frames(config.source_block_frames().get())
+                .max_output_frames(max_output_frames)
+                .build()
+        };
+        let prepared = build(Self::MAX_OUTPUT_FRAMES)?;
+        // Native priming can exceed the live render quantum.
+        let Some(quantum) = config.render_quantum_frames().filter(|_| {
+            !backend
+                .capabilities()
+                .contains(BackendCapabilities::KEYLOCK)
+        }) else {
+            return Ok(prepared);
+        };
+        let minimum = prepared
+            .rate_envelope()
+            .min_source_frames_per_output()
+            .recip()
+            .ceil()
+            .to_usize()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        build(quantum.get().max(minimum).min(Self::MAX_OUTPUT_FRAMES))
     }
 
     pub(in crate::render) fn prepare_target(
@@ -52,14 +68,8 @@ where
         reusable: PreparedTarget,
         measure_capabilities: bool,
     ) -> Result<PreparedTarget, ElasticError> {
-        let (kind, keylock) = Self::stretch_for(config.backend(), config.keylock());
-        let backends = config.backends();
+        let (kind, pitch_engine) = Self::stretch_for(config.backend(), config.pitch());
         let source_block_frames = config.source_block_frames();
-        if keylock && !kind.capabilities().contains(BackendCapabilities::KEYLOCK) {
-            return Err(ElasticError::EnginePreparation(
-                "selected backend does not support keylock",
-            ));
-        }
         let PreparedTarget {
             projection: reusable_projection,
             residency: reusable_residency,
@@ -71,11 +81,6 @@ where
         drop(reusable_projection);
         drop(reusable_engine);
         let channels = usize::from(spec.channels.max(1));
-        let expansion = config.region_plan().as_deref().map_or(1.0, |plan| {
-            plan.segments().iter().fold(1.0_f64, |expansion, segment| {
-                expansion.max(segment.ratio_correction().recip())
-            })
-        });
         let mut history_frames = reusable_residency
             .as_ref()
             .map_or(0, |resident| resident.history_frames)
@@ -91,10 +96,9 @@ where
             for backend in
                 StretchKind::supporting(BackendCapabilities::RATE).filter(|_| measure_capabilities)
             {
-                let capabilities =
-                    Self::config_for(backend, backends, source_block_frames, spec, pools)
-                        .and_then(build_engine)
-                        .map(|engine| engine.capabilities())?;
+                let capabilities = Self::config_for(backend, config, spec, pools)
+                    .and_then(build_engine)
+                    .map(|engine| engine.capabilities())?;
                 {
                     let latency = capabilities.latency();
                     history_frames = history_frames.max(latency.first().saturating_mul(12));
@@ -116,7 +120,6 @@ where
                             .get()
                             .checked_mul(4)
                             .ok_or(ElasticError::SampleCountOverflow)?,
-                        expansion,
                     )?;
                     resident_frames = resident_frames.max(source_frames);
                 }
@@ -124,9 +127,9 @@ where
             Ok(())
         })();
         measured
-            .and_then(|()| Self::config_for(kind, backends, source_block_frames, spec, pools))
+            .and_then(|()| Self::config_for(kind, config, spec, pools))
             .and_then(|config| {
-                if keylock || !kind.capabilities().contains(BackendCapabilities::RATE) {
+                if pitch_engine || !kind.capabilities().contains(BackendCapabilities::RATE) {
                     build_engine(config)
                 } else {
                     build_varispeed_engine(config)
@@ -142,7 +145,6 @@ where
                         .get()
                         .checked_mul(2)
                         .ok_or(ElasticError::SampleCountOverflow)?,
-                    expansion,
                 )?;
                 resident_frames = resident_frames.max(source_frames);
                 let projection_frames = latency
@@ -181,17 +183,8 @@ where
                     replacement_frames,
                     channels,
                 )?;
-                let projection = keylock
-                    .then(|| {
-                        Self::prepare_projection(
-                            kind,
-                            backends,
-                            source_block_frames,
-                            spec,
-                            pools,
-                            projection_frames,
-                        )
-                    })
+                let projection = pitch_engine
+                    .then(|| Self::prepare_projection(kind, config, spec, pools, projection_frames))
                     .transpose()?;
                 Ok(PreparedTarget {
                     projection,
@@ -236,18 +229,15 @@ where
 
     fn prepare_projection(
         kind: StretchKind,
-        backends: ElasticBackendConfig,
-        source_block_frames: NonZeroUsize,
+        config: &crate::WarpConfig,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
         projection_frames: usize,
     ) -> Result<super::projected::Projection, ElasticError> {
-        let first = Self::config_for(kind, backends, source_block_frames, spec, pools)
-            .and_then(build_engine)?;
-        let second = Self::config_for(kind, backends, source_block_frames, spec, pools)
-            .and_then(build_engine)?;
+        let first = Self::config_for(kind, config, spec, pools).and_then(build_engine)?;
+        let second = Self::config_for(kind, config, spec, pools).and_then(build_engine)?;
         let samples = projection_frames
-            .max(source_block_frames.get())
+            .max(config.source_block_frames().get())
             .checked_mul(usize::from(spec.channels.max(1)))
             .ok_or(ElasticError::SampleCountOverflow)?;
         let mut first_buffer = Self::prepare_buffer(pools, None, samples)?;
@@ -282,10 +272,6 @@ where
     }
 
     fn service_scratch(&mut self) {
-        if !self.requires_staging() && self.plan.is_some() {
-            drop(self.deferred_scratch.take());
-            return;
-        }
         if self.scratch.is_some() {
             drop(self.deferred_scratch.take());
             return;
@@ -324,23 +310,22 @@ where
             self.service_scratch();
             return;
         }
-        let channels = usize::from(self.spec.channels.max(1));
-
-        let (kind, keylock) = self.stretch_target();
+        let (kind, pitch_engine) = self.stretch_target();
         let entering_unity =
-            self.holds_stream_at(spec, channels) && self.unity_passthrough(self.rate.speed());
+            self.holds_stream_at(spec) && self.unity_passthrough(self.rate.speed());
         if entering_unity {
             self.service_scratch();
             return;
         }
-        let backend_changed = kind != self.current_kind || keylock != self.current_keylock;
-        if backend_changed && self.holds_stream_at(spec, channels) {
+        let backend_changed =
+            kind != self.current_kind || pitch_engine != self.current_pitch_engine;
+        if backend_changed && self.holds_stream_at(spec) {
             self.backend_transition_pending = true;
             self.service_scratch();
             return;
         }
         if backend_changed || spec != self.spec || self.rebuild_pending {
-            self.rebuild_target(spec, kind, keylock);
+            self.rebuild_target(spec, kind, pitch_engine);
             return;
         }
 
@@ -367,11 +352,11 @@ where
         }
     }
 
-    fn holds_stream_at(&self, spec: AudioSpec, channels: usize) -> bool {
-        spec == self.spec && (self.active || self.pending_frames(channels) > 0)
+    fn holds_stream_at(&self, spec: AudioSpec) -> bool {
+        spec == self.spec && self.active
     }
 
-    fn rebuild_target(&mut self, spec: AudioSpec, kind: StretchKind, keylock: bool) {
+    fn rebuild_target(&mut self, spec: AudioSpec, kind: StretchKind, pitch_engine: bool) {
         #[cfg(not(target_arch = "wasm32"))]
         let started = {
             let started = tracing::enabled!(target: "warp_target_cost", tracing::Level::DEBUG)
@@ -381,7 +366,7 @@ where
                 phase = "begin",
                 rate = spec.sample_rate.get(),
                 backend = %kind,
-                keylock,
+                pitch_engine,
             );
             started
         };
@@ -403,10 +388,10 @@ where
         }
         let config = crate::WarpConfig::builder()
             .backend(kind)
-            .keylock(keylock)
+            .pitch(self.requested_pitch)
             .backends(self.backends)
             .source_block_frames(self.source_block_frames)
-            .maybe_region_plan(self.plan.clone())
+            .maybe_render_quantum_frames(self.render_quantum_frames)
             .build();
         let target = Self::prepare_target(&config, spec, &self.pools, reusable, spec != self.spec)
             .unwrap_or_else(|error| {
@@ -420,7 +405,7 @@ where
         self.pending_source = target.pending_source;
         self.scratch = target.scratch;
         self.current_kind = kind;
-        self.current_keylock = keylock;
+        self.current_pitch_engine = pitch_engine;
         self.applied_pitch = f64::NAN;
         self.spec = spec;
         self.reset_pending = false;
@@ -432,7 +417,7 @@ where
                 phase = "end",
                 rate = spec.sample_rate.get(),
                 backend = %kind,
-                keylock,
+                pitch_engine,
                 wall_us = wall.elapsed().as_micros(),
                 cpu_us = cpu.as_ref().ok().map(Duration::as_micros),
                 cpu_error = ?cpu.err(),

@@ -1,4 +1,3 @@
-mod core;
 #[cfg(all(test, any(feature = "stretch-signalsmith", feature = "stretch-bungee")))]
 mod latency_tests;
 mod mapping_tests;
@@ -8,6 +7,8 @@ mod native_curves;
 mod native_tests;
 mod quantum_tests;
 mod residency_tests;
+#[cfg(feature = "stretch-signalsmith")]
+mod source_gap_tests;
 
 use std::num::NonZeroU32;
 

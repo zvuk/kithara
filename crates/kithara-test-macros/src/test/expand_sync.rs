@@ -1,10 +1,11 @@
+use kithara_test_args::{TestArgs, TestFlags};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Attribute, Ident};
 
 use super::{
     expand_async::{emit_async_runtime_test, emit_async_timeout_test},
-    parse::TestArgs,
+    fixture_args::Preamble,
     shared::{
         finalize_body, make_ambient_stmt, make_serial_attr, make_test_setup,
         make_wasm_serial_guard, wrap_with_model, wrap_with_sync_participation, wrap_with_timeout,
@@ -19,7 +20,7 @@ pub(crate) fn emit_one_test(
     remaining_attrs: &[&Attribute],
     test_attrs: &TokenStream2,
     is_async: bool,
-    preamble: &TokenStream2,
+    preamble: &Preamble,
     body_stmts: &[syn::Stmt],
     args: &TestArgs,
 ) -> TokenStream2 {
@@ -27,18 +28,20 @@ pub(crate) fn emit_one_test(
     let ambient = make_ambient_stmt(args);
     // Async-native emissions install mode per poll; wasm and sync emissions
     // hold both ambient and active scopes in the body.
-    let full_plain = quote! { #preamble #(#body_stmts)* };
+    let full_plain = preamble.with_body(body_stmts);
+    let scoped = preamble.scoped(false);
+    let preamble = &preamble.body;
     let body = quote! { #(#body_stmts)* };
     let held_body = if is_async {
         body
     } else {
         wrap_with_sync_participation(&body, args)
     };
-    let full_held = quote! { #test_setup #preamble #ambient #held_body };
+    let full_held = quote! { #test_setup #scoped #preamble #ambient #held_body };
     let serial_attr = make_serial_attr(args);
     let wasm_serial_guard = make_wasm_serial_guard(args);
 
-    if is_async && args.timeout.is_some() {
+    if is_async && args.timeout().is_some() {
         let mut output = emit_async_timeout_test(
             fn_name,
             vis,
@@ -48,7 +51,7 @@ pub(crate) fn emit_one_test(
             args,
             &serial_attr,
         );
-        let wasm_timeout = wrap_with_timeout(&full_held, &args.timeout, true, fn_name);
+        let wasm_timeout = wrap_with_timeout(&full_held, args.timeout(), true, fn_name);
         let wasm_wrapped = finalize_body(&wasm_timeout, args, fn_name, true);
         output.extend(quote! {
             #(#remaining_attrs)*
@@ -87,10 +90,10 @@ pub(crate) fn emit_one_test(
     }
 
     let modeled = wrap_with_model(&full_held, args, fn_name);
-    let with_timeout = wrap_with_timeout(&modeled, &args.timeout, false, fn_name);
+    let with_timeout = wrap_with_timeout(&modeled, args.timeout(), false, fn_name);
     let wrapped = finalize_body(&with_timeout, args, fn_name, false);
 
-    if args.is_serial {
+    if args.flags().contains(TestFlags::SERIAL) {
         return quote! {
             #(#remaining_attrs)*
             #[cfg(not(target_arch = "wasm32"))]
@@ -122,7 +125,7 @@ pub(crate) fn emit_one_test(
 pub(crate) fn emit_native_only_one(
     ctx: &super::entry::GenCtx<'_>,
     name: &Ident,
-    full_plain: &TokenStream2,
+    full_plain: &Preamble,
     full_held: &TokenStream2,
     serial_attr: &TokenStream2,
     native_is_async: bool,
@@ -132,7 +135,7 @@ pub(crate) fn emit_native_only_one(
     let ret_type = ctx.ret_type;
     let args = ctx.args;
 
-    if native_is_async && args.timeout.is_some() {
+    if native_is_async && args.timeout().is_some() {
         return emit_async_timeout_test(
             name,
             vis,
@@ -155,7 +158,7 @@ pub(crate) fn emit_native_only_one(
         );
     }
     let modeled = wrap_with_model(full_held, args, name);
-    let with_timeout = wrap_with_timeout(&modeled, &args.timeout, false, name);
+    let with_timeout = wrap_with_timeout(&modeled, args.timeout(), false, name);
     let wrapped = finalize_body(&with_timeout, args, name, false);
     quote! {
         #(#remaining_attrs)*

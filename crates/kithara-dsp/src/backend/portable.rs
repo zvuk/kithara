@@ -4,14 +4,23 @@ use fearless_simd::{Level, dispatch, prelude::*};
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use super::cascade::Cascade;
-pub(crate) use super::interpolate::interpolate;
 use super::simd::{padded, update};
 #[cfg(all(feature = "spectrum", not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) use super::spectrum::{Dft, Work, correlate};
+pub(crate) use super::{
+    delay::{blend as delay_blend, diffuse as delay_diffuse},
+    interpolate::interpolate,
+};
 
 mod consts {
     /// Scale that turns the sum of a pair into its mean.
     pub(super) const PAIR_MEAN: f32 = 0.5;
+}
+
+pub(crate) fn svf_gains<S: Simd>(simd: S, cutoffs: &[f64], rate: f64, gains: &mut [f64]) {
+    for gain in super::svf::cutoff_angles(simd, cutoffs, rate, gains) {
+        *gain = gain.tan();
+    }
 }
 
 pub(crate) fn multiply_in_place(samples: &mut [f32], gains: &[f32]) -> usize {
@@ -141,21 +150,6 @@ pub(super) fn downmix_pair_kernel<S: Simd>(simd: S, input: &[f32], mono: &mut [f
         *slot = *value;
     }
     frames
-}
-
-pub(crate) fn peak(samples: &[f32]) -> f32 {
-    dispatch!(Level::new(), simd => peak_kernel(simd, samples))
-}
-
-#[inline(always)]
-pub(super) fn peak_kernel<S: Simd>(simd: S, samples: &[f32]) -> f32 {
-    let mut blocks = samples.chunks_exact(S::f32s::LEN);
-    let mut peak = S::f32s::splat(simd, 0.0);
-    for block in &mut blocks {
-        peak = peak.max(S::f32s::from_slice(simd, block).abs());
-    }
-    peak.max(padded(simd, blocks.remainder()).abs())
-        .reduce_max()
 }
 
 #[cfg(feature = "spectrum")]

@@ -21,7 +21,7 @@ pub mod wasm;
 pub mod mock;
 
 pub use api::{
-    BpmInfo, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemRole, ItemStatus, MediaTime,
+    BpmInfo, DjEvent, EngineEvent, InterruptionKind, ItemRole, ItemStatus, MediaTime,
     PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
     RouteDescription, SessionBeat, SessionDuckingMode, SessionEvent, SessionTransportSnapshot,
     SlotId, StretchBackendKind, SyncUnavailable, Tempo, TempoError, TimeControlStatus, TimeRange,
@@ -30,7 +30,11 @@ pub use api::{
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
-pub use kithara_effects::{GainDb, eq::EqBandConfig};
+pub use kithara_effects::{
+    GainDb,
+    eq::EqBandConfig,
+    filter::{Cutoff, FilterKnob, FilterSettings, Q},
+};
 pub use kithara_net::Headers;
 pub use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError,
@@ -39,9 +43,10 @@ pub use kithara_render::{
     bridge::{
         CrossfaderGain, CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckFxChange,
         DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot,
-        EqSnapshot, FadeDir, FxMix, MixTapWriter, ParameterCurveError, ParameterKnot,
-        PlaybackFault, Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot,
-        SlotSnapshot, TrackClock, Trim,
+        EqBinding, EqGainProgram, EqSnapshot, FadeDir, FilterBinding, FilterProgram,
+        FilterSnapshot, FxMix, MixTapWriter, ParameterCurveError, ParameterKnot, PlaybackFault,
+        Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
+        TrackClock, Trim,
     },
     dispatch,
     rt::{
@@ -50,7 +55,9 @@ pub use kithara_render::{
     },
 };
 pub use kithara_sync::MIN_SPEED;
-pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, StretchKind};
+pub use kithara_warp::{
+    BeatGrid, BeatGridId, BeatGridSnapshot, Pitch, PitchStep, Semitones, StretchKind,
+};
 pub use player::{
     Bound, DeckControl, DeckPass, HostedDeck, Outbox, Player, PlayerConfig, PlayerFactory,
     PlayerImpl, Position, SeekBatch, Settled, Track, TrackCommand, TrackFactory, TrackReceipt,
