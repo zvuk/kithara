@@ -10,7 +10,7 @@ use num_traits::ToPrimitive;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::accelerate;
-use super::{cascade, delay, fade, platform, portable, simd, strided};
+use super::{cascade, delay, fade, platform, portable, route, simd, strided};
 use crate::{
     fade::FadeCurve,
     filter::{Coefficients, Hertz, Type},
@@ -841,28 +841,17 @@ fn vectors() -> Vec<Vectors> {
     ])
 }
 
-/// The `ramp` kernel at the native and the fallback level: one kernel on
-/// every platform.
-fn ramps() -> [(&'static str, WithScalars); 2] {
-    [
-        ("native", simd::ramp),
-        (
-            "fallback",
-            |output, start, step| dispatch!(Level::fallback(), simd => simd::ramp_kernel(simd, output, start, step)),
-        ),
-    ]
+/// Measured ramp forms and the fallback parity reference.
+fn ramps() -> impl Iterator<Item = (&'static str, WithScalars)> {
+    let fallback: WithScalars = |output, start, step| dispatch!(Level::fallback(), simd => simd::ramp_kernel(simd, output, start, step));
+    route::table::ramp::routes().chain([("fallback", fallback)])
 }
 
-/// The `mul_add` kernel at the native and the fallback level: one kernel on
-/// every platform.
-fn mul_adds() -> [(&'static str, MulAdd); 2] {
-    [
-        ("native", simd::mul_add),
-        (
-            "fallback",
-            |x, y, acc| dispatch!(Level::fallback(), simd => simd::mul_add_kernel(simd, x, y, acc)),
-        ),
-    ]
+/// Measured multiply-add forms and the fallback parity reference.
+fn mul_adds() -> impl Iterator<Item = (&'static str, MulAdd)> {
+    let fallback: MulAdd =
+        |x, y, acc| dispatch!(Level::fallback(), simd => simd::mul_add_kernel(simd, x, y, acc));
+    route::table::mul_add::routes().chain([("fallback", fallback)])
 }
 
 /// Equal bits, or both `NaN`: a `NaN` payload is the backend's to choose.
@@ -1149,10 +1138,9 @@ fn ramp_counts_exactly_at_every_level() {
 #[kithara::test]
 fn div_matches_ieee_division_at_every_level() {
     let fallback = |samples: &mut [f32], divisor: f32| dispatch!(Level::fallback(), simd => simd::div_kernel(simd, samples, divisor));
-    for (name, div) in [
-        ("native", simd::div as fn(&mut [f32], f32) -> usize),
-        ("fallback", fallback),
-    ] {
+    for (name, div) in
+        route::table::div::routes().chain([("fallback", fallback as fn(&mut [f32], f32) -> usize)])
+    {
         for divisor in [3.0, -0.7].into_iter().chain(SPECIALS) {
             for size in SIZES {
                 for offset in OFFSETS {
@@ -1170,6 +1158,56 @@ fn div_matches_ieee_division_at_every_level() {
                     );
                 }
             }
+        }
+    }
+}
+
+#[kithara::test]
+fn routed_vector_forms_keep_bits_and_untouched_tails() {
+    for frames in [0_usize, 1, 3, 7, 31, 128, 129, 512, 513] {
+        let input: Vec<_> = SPECIALS.into_iter().cycle().take(frames).collect();
+        let seed: Vec<_> = input.iter().copied().chain([UNWRITTEN; 3]).collect();
+        let mut expected = seed.clone();
+        simd::ramp(expected.split_at_mut(frames).0, -0.0, 0.125);
+        for (name, kernel) in route::table::ramp::routes() {
+            let mut actual = seed.clone();
+            assert_eq!(kernel(actual.split_at_mut(frames).0, -0.0, 0.125), frames);
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "ramp {name}"
+            );
+        }
+
+        let mut expected = seed.clone();
+        simd::div(expected.split_at_mut(frames).0, 3.0);
+        for (name, kernel) in route::table::div::routes() {
+            let mut actual = seed.clone();
+            assert_eq!(kernel(actual.split_at_mut(frames).0, 3.0), frames);
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "div {name}"
+            );
+        }
+
+        let short = input.split_at(frames.saturating_sub(1)).0;
+        let mut expected = seed.clone();
+        let count = simd::mul_add(&input, short, &mut expected);
+        for (name, kernel) in route::table::mul_add::routes() {
+            let mut actual = seed.clone();
+            assert_eq!(kernel(&input, short, &mut actual), count);
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "mul_add {name}"
+            );
         }
     }
 }
