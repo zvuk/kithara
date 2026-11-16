@@ -15,4 +15,3 @@ pub(crate) use svf::svf_gains;
 #[cfg(feature = "spectrum")]
 pub(crate) use self::spectrum::{Dft, Work, correlate, multiply};
 pub(crate) use self::{cascade::Cascade, interpolate::interpolate};
-pub(crate) use super::delay::{blend as delay_blend, diffuse as delay_diffuse};

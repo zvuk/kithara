@@ -1,6 +1,6 @@
 use fearless_simd::{Level, dispatch};
 
-use super::{super::platform, blend_kernel, diffuse_kernel};
+use super::{blend_kernel, diffuse_kernel};
 
 pub(crate) fn diffuse(
     samples: &mut [f32],
@@ -11,7 +11,7 @@ pub(crate) fn diffuse(
     dispatch!(Level::new(), simd => diffuse_kernel(simd, samples, history, gain, writes))
 }
 
-pub(crate) fn blend(newer: &[f32], older: &[f32], fraction: f32, output: &mut [f32]) -> usize {
+fn blend(newer: &[f32], older: &[f32], fraction: f32, output: &mut [f32]) -> usize {
     dispatch!(Level::new(), simd => blend_kernel(simd, newer, older, fraction, output))
 }
 
@@ -34,7 +34,7 @@ pub(crate) fn read(
             .min(plane.len().wrapping_sub(newer))
             .min(plane.len().wrapping_sub(older));
         let next = written.wrapping_add(len);
-        platform::delay_blend(
+        blend(
             plane
                 .get(newer..newer.wrapping_add(len))
                 .unwrap_or_default(),

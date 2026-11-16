@@ -4,7 +4,7 @@ pub(crate) mod accelerate;
 mod bins;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 mod cascade;
-mod delay;
+pub(crate) mod delay;
 mod envelope;
 mod fade;
 mod fir;

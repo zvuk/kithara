@@ -79,16 +79,15 @@ fn scalar_gain_matches_ieee_multiplication_at_every_level() {
 type Diffuse = fn(&mut [f32], &[f32], f32, &mut [f32]) -> usize;
 type DelayBlend = fn(&[f32], &[f32], f32, &mut [f32]) -> usize;
 
-fn delay_kernels() -> [(&'static str, Diffuse, DelayBlend); 3] {
+fn delay_kernels() -> [(&'static str, Diffuse, DelayBlend); 2] {
     [
-        ("platform", platform::delay_diffuse, platform::delay_blend),
         (
-            "portable-native",
-            portable::delay_diffuse,
-            portable::delay_blend,
+            "native",
+            delay::diffuse,
+            |x, d, f, y| dispatch!(Level::new(), simd => delay::blend_kernel(simd, x, d, f, y)),
         ),
         (
-            "portable-fallback",
+            "fallback",
             |x, d, g, w| dispatch!(Level::fallback(), simd => delay::diffuse_kernel(simd, x, d, g, w)),
             |x, d, f, y| dispatch!(Level::fallback(), simd => delay::blend_kernel(simd, x, d, f, y)),
         ),

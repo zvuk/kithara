@@ -3,7 +3,7 @@ use std::ops::{DerefMut, Range};
 use num_traits::ToPrimitive;
 
 use super::{DelayError, DelayLine, DiffuserError, Tap};
-use crate::{backend::platform, consts};
+use crate::{backend, consts};
 
 /// Delay diffusion with `d = read; y = d - x; write = x + g * d`.
 ///
@@ -80,7 +80,7 @@ impl<const CHANNELS: usize> DelayDiffuser<CHANNELS> {
                 self.line.read(channel, self.tap, history)?;
                 let samples = plane.get_mut(start..end).ok_or(DelayError::Shape)?;
                 let writes = writes.get_mut(..len).ok_or(DelayError::Shape)?;
-                platform::delay_diffuse(samples, history, self.feedback, writes);
+                backend::delay::diffuse(samples, history, self.feedback, writes);
             }
             self.line.write(
                 &writes
