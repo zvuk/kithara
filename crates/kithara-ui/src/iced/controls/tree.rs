@@ -12,7 +12,7 @@ use num_traits::ToPrimitive;
 use super::{RetainedCanvas, RetainedCanvasState, snapped};
 use crate::{
     atoms::tree::Tree,
-    backends::replay_ordered,
+    backends::{finish, replay_ordered},
     draw::Rect,
     engine::{
         ScrollConfig,
@@ -220,7 +220,7 @@ fn geometry(
     );
     let list = picture.row_commands(text, viewport, state.scroll.offset, hovered);
     replay_ordered(&list, &mut frame, picture.skin().text_resources.as_ref());
-    vec![frame.into_geometry()]
+    vec![finish(frame.into_geometry())]
 }
 
 #[derive(Default)]

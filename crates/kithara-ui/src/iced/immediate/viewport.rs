@@ -16,7 +16,7 @@ use iced::{
 };
 
 use crate::{
-    backends::replay_ordered,
+    backends::{finish, replay_ordered},
     draw::{DrawListBuilder, Rect},
     hosts::scroll::{Bar, Window},
     interact::iced as iced_interact,
@@ -106,7 +106,7 @@ impl IcedWidget<Published, Theme, Renderer> for Viewport<'_> {
             renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
                 let mut frame = Frame::new(renderer, bounds.size());
                 replay_ordered(&list, &mut frame, self.skin.text_resources.as_ref());
-                renderer.draw_geometry(frame.into_geometry());
+                renderer.draw_geometry(finish(frame.into_geometry()));
             });
         });
     }
