@@ -9,7 +9,7 @@ use kithara_test_utils::{bufpool::TestPools, kithara};
 use super::fixtures::{
     Command, answer, grid, horizon, load, loaded, position, sounding, source_grid, trajectory,
 };
-use crate::{GridAnswer, LinkConfig, LinkedPlayer, SyncStatus};
+use crate::{GridAnswer, LinkedPlayer, SyncStatus};
 
 fn served_grid() -> BeatGridModel {
     use kithara_beat::{GridBeat, RawBeatGrid, SCHEMA_VERSION};
@@ -272,30 +272,23 @@ fn repeating_the_same_grid_does_not_restart_a_correction() {
     let (media, from) = kithara_play::Track::<TestPools>::planned(&deck, at, host.sample_rate())
         .expect("planned source");
     let uncovered = grid(32_000, 0, Some((4, 0)), 960_000);
-    assert_eq!(
+    assert!(matches!(
         slew(
             &host,
             &source_grid(&uncovered),
             media,
             at,
             0.001,
-            SlewCause::Drift {
-                from,
-                limit: LinkConfig::default().slew_limit(),
-            },
+            SlewCause::Drift { from },
             horizon(),
         ),
-        Some(Slew::Relocate),
-        "the served grid puts the deck past the slew limit"
-    );
+        Some(Slew::Corrects { .. })
+    ));
     let unchanged = deck.snapshot();
     answer(&mut deck, &mut rig, uncovered);
     assert!(
-        control
-            .commands()
-            .iter()
-            .any(|(_, command)| matches!(command, Command::Jump(..))),
-        "a correction that cannot finish relocates the deck"
+        matches!(control.commands().as_slice(), [(_, Command::Speed(..))]),
+        "a revised grid corrects speed and preserves the sounding position"
     );
     control.clear();
     let actual = deck.snapshot();

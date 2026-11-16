@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroU128};
 
 use kithara_command::{Seq, When};
-use kithara_config::LiveConfig;
+use kithara_config::{ConfigOwner, LiveConfig};
 use kithara_render::{
     LaneCommand, LaneFrame,
     bridge::{DeckPart, SlotMark},
@@ -41,15 +41,7 @@ impl<S> Track<S> for PlayerImpl<S> {
     }
 
     fn projected(&self) -> TrackSettings {
-        let mut settings = self.settings.projected();
-        if let Some((_, target)) = self
-            .loading
-            .as_ref()
-            .and_then(|loading| loading.speed.as_ref())
-        {
-            settings.apply_change(TrackSettingsChange::Speed(*target));
-        }
-        settings
+        self.projected_settings()
     }
 
     fn prepared_speed(&self) -> Option<&SpeedCurve> {
@@ -62,9 +54,6 @@ impl<S> Track<S> for PlayerImpl<S> {
             .is_some_and(|mark| mark.lane.segment == self.segment.id && mark.lane.frame > 0);
         let mut prepared = None;
         for operation in self.lane_history.commands.iter().rev() {
-            if operation.applied() == Some(false) {
-                continue;
-            }
             match &operation.command {
                 LaneCommand::Segment { id, speed, .. } if *id == self.segment.id => {
                     prepared = Some(speed);
@@ -257,38 +246,31 @@ impl<S> Track<S> for PlayerImpl<S> {
         self.planned_session_end(mark, end)
     }
 
-    fn speed_receipt(&mut self) -> Option<Settled> {
-        self.settle_lane();
-        let (index, settled) = self
-            .lane_history
-            .speed_answers
-            .iter()
-            .enumerate()
-            .find_map(|(index, (seq, outcome))| {
-                let settled = match outcome {
-                    Ok((lane, session)) => {
-                        let at = (*session)
-                            .or_else(|| self.mark.and_then(|mark| session_at(mark, *lane)))?;
-                        Settled::Applied { seq: *seq, at }
-                    }
-                    Err(reason) => Settled::Rejected {
-                        seq: *seq,
-                        reason: reason.clone(),
-                    },
-                };
-                Some((index, settled))
-            })?;
-        self.lane_history.speed_answers.remove(index);
-        Some(settled)
+    fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>> {
+        if self.lane_history.receipts.is_empty() {
+            self.settle_lane();
+        }
+        self.lane_history.receipts.pop_front()
     }
 
-    fn speed_applied(&mut self, seq: Seq) -> Option<bool> {
+    fn seek_applied(&mut self, seq: Seq) -> Option<bool> {
         self.settle_lane();
         self.lane_history
             .commands
             .iter()
             .find(|operation| operation.seq == seq)
-            .and_then(LaneOperation::applied)
+            .map_or(Some(false), |operation| operation.applied.then_some(true))
+    }
+
+    fn source_request(&self) -> Option<Seq> {
+        match &self.lane {
+            Lane::Opening(_) | Lane::RetiringOpen(_) => self.loading.as_ref().map(|load| load.seq),
+            _ => self.lane.release_seq(),
+        }
+    }
+
+    fn source_closed(&self) -> bool {
+        matches!(self.lane, Lane::None)
     }
 
     fn attached(&self) -> bool {
@@ -305,15 +287,35 @@ impl<S> Track<S> for PlayerImpl<S> {
         self.settle_lane();
         let position = self.raw_position(position)?;
         self.segment_with(position, None, speed, out)?;
-        Ok(self
-            .lane_history
-            .commands
-            .last()
-            .map(|operation| operation.seq))
+        Ok(self.segment.request_seq())
     }
 }
 
 impl<S> PlayerImpl<S> {
+    pub(super) fn projected_settings(&self) -> TrackSettings {
+        let mut operations = self.lane_history.projected(self.lane.sender());
+        operations.sort_unstable_by_key(|operation| operation.seq);
+        let mut pending: Vec<_> = self.settings.pending().collect();
+        pending.sort_by_key(|&(seq, when, _)| (when, seq));
+        let mut settings = *self.settings.config();
+        for (seq, _, change) in pending {
+            if operations
+                .binary_search_by_key(&seq, |operation| operation.seq)
+                .is_ok()
+            {
+                settings.apply_change(change);
+            }
+        }
+        if let Some((_, target)) = self
+            .loading
+            .as_ref()
+            .and_then(|loading| loading.speed.as_ref())
+        {
+            settings.apply_change(TrackSettingsChange::Speed(*target));
+        }
+        settings
+    }
+
     pub(super) fn consumed_speed(&self) -> Result<f32, PlayError> {
         let frame = match self
             .resume
@@ -391,10 +393,8 @@ impl<S> PlayerImpl<S> {
     ) -> Result<Vec<(u64, Seq, PlannedChange<'_>)>, PlayError> {
         let mut commands: Vec<(u64, Seq, PlannedChange<'_>)> =
             Vec::with_capacity(self.lane_history.commands.len());
-        for operation in &self.lane_history.commands {
-            if operation.applied() == Some(false) {
-                continue;
-            }
+        let operations = self.lane_history.projected(self.lane.sender());
+        for operation in &operations {
             let frame = match &operation.command {
                 LaneCommand::Segment { id, .. } if *id == segment => 0,
                 _ => match operation.when {
@@ -422,7 +422,7 @@ impl<S> PlayerImpl<S> {
                     let landing = frame
                         .checked_add(self.geometry.declick.get() as u64)
                         .ok_or(PlayError::Untimed)?;
-                    let superseded = self.lane_history.commands.iter().any(|next| next.seq != operation.seq && next.applied() != Some(false)
+                    let superseded = operations.iter().any(|next| next.seq != operation.seq
                         && matches!(next.command, LaneCommand::Jump { .. })
                         && matches!(next.when, When::At(at) if at.segment == segment && (at.frame > frame || at.frame == frame && next.seq > operation.seq) && at.frame < landing));
                     if !superseded {
@@ -540,13 +540,10 @@ impl<S> PlayerImpl<S> {
         mark: SlotMark,
         end: u64,
     ) -> Result<Option<SessionFrame>, PlayError> {
-        session_at(
-            mark,
-            LaneFrame {
-                segment: self.segment.id,
-                frame: end,
-            },
-        )
+        mark.session_at(LaneFrame {
+            segment: self.segment.id,
+            frame: end,
+        })
         .map(Some)
         .ok_or(PlayError::Untimed)
     }

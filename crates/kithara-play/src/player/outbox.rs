@@ -2,8 +2,8 @@ use kithara_command::{
     Batch, Live, LiveError, Outcome, Port, Receipt, Rejection, SendError, Sender, Seq, When,
 };
 use kithara_render::{
-    DispatcherCommand, DispatcherProtocol, LaneCommand, LaneFrame, LaneId, LaneProtocol,
-    LoadRequest, ServiceClass,
+    DispatcherCommand, DispatcherProtocol, LaneFrame, LaneId, LaneProtocol, LoadRequest,
+    ServiceClass,
     bridge::{DeckEvent, DeckPart, DeckProtocol, Slot},
 };
 pub use kithara_signal::Bound;
@@ -78,20 +78,21 @@ impl<'a, S> Outbox<'a, S> {
     pub(crate) fn lane(
         sender: &mut Sender<LaneProtocol>,
         at: When<LaneFrame>,
-        commands: Vec<LaneCommand>,
-    ) -> Result<Seq, PlayError> {
-        sender
+        batch: Batch<LaneProtocol>,
+    ) -> Result<(Seq, Batch<LaneProtocol>), PlayError> {
+        let seq = sender
             .send(
                 at,
                 Batch {
-                    basis: Vec::new(),
-                    commands,
+                    basis: batch.basis.clone(),
+                    commands: batch.commands.clone(),
                 },
             )
             .map_err(|error| match error {
                 SendError::Full(_) => PlayError::Full("lane"),
                 SendError::Target(_) | SendError::Closed(_) => PlayError::Closed,
-            })
+            })?;
+        Ok((seq, batch))
     }
 
     #[must_use]
@@ -547,12 +548,12 @@ fn deck_sent_owned(
 
 /// What became of a batch, as a player reports it up.
 #[derive(Clone, Debug)]
-pub enum Settled {
+pub enum Settled<At = SessionFrame> {
     /// The receipt is not about this player, or its outcome has not come yet.
     Pending,
     Applied {
         seq: Seq,
-        at: SessionFrame,
+        at: At,
     },
     Rejected {
         seq: Seq,

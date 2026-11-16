@@ -11,6 +11,7 @@ use iced::{
 
 use crate::{
     compile::{CompiledNode, CompiledUi},
+    iced::immediate::cache::Cache,
     layout::Axis,
     render::{Skin, theme::RenderPalette},
     skin::LayoutPreviewSkin,
@@ -47,7 +48,7 @@ struct Preview {
 /// What the preview keeps between frames: the tessellated picture and the
 /// layout it was built from, so it is rebuilt only when the layout moves.
 struct PreviewState {
-    cache: canvas::Cache,
+    cache: Cache,
     painted: RefCell<Option<(Vec<PreviewArea>, Rectangle)>>,
 }
 

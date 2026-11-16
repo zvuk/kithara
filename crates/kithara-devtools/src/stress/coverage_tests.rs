@@ -52,16 +52,16 @@ const ENGINE_DOMAINS: &[&str] = &[
     "usdt-queue",
 ];
 
-/// The packages and features cargo resolves for a lane's build, read from
-/// `cargo tree` over the lane's own selection and features. The output is
-/// parsed, so it never inherits a forced colour: a runner that sets
+/// The frozen Cargo query for a lane's selected package and feature graph.
+/// Parsed output never inherits forced colour: a runner that sets
 /// `CARGO_TERM_COLOR=always` wraps the duplicate marker in escapes, and the
 /// marker then reads as a feature name.
-fn build_of(lane: &ResolvedLane) -> Build {
+fn tree_command(lane: &ResolvedLane) -> Command {
     let cargo = std::env::var_os("CARGO").expect("the test runner names the cargo it uses");
     let mut command = Command::new(cargo);
     command.current_dir(root()).args([
         "tree",
+        "--frozen",
         "--color",
         "never",
         "--prefix",
@@ -83,6 +83,10 @@ fn build_of(lane: &ResolvedLane) -> Build {
     if !lane.features.is_empty() {
         command.args(["--features", &lane.features.join(",")]);
     }
+    command
+}
+
+fn build_of(lane: &ResolvedLane, command: &mut Command) -> Build {
     let output = command.output().expect("run cargo tree");
     assert!(
         output.status.success(),
@@ -225,20 +229,48 @@ fn only_cores_known_pcm_fixture_package_is_outside_engine_coverage() {
     ));
 }
 
-/// The builds of `lanes`, resolved side by side: each `cargo tree` waits on
-/// the resolver for seconds, and the rule reads dozens.
+/// Resolve each distinct Cargo graph once, preserving the lanes' order.
 fn builds_of(lanes: &[ResolvedLane]) -> Vec<Build> {
+    let mut commands = Vec::new();
+    let mut by_args = BTreeMap::new();
+    let indices = lanes
+        .iter()
+        .map(|lane| {
+            let command = tree_command(lane);
+            let args = command
+                .get_args()
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            *by_args.entry(args).or_insert_with(|| {
+                let index = commands.len();
+                commands.push((lane, command));
+                index
+            })
+        })
+        .collect::<Vec<_>>();
     let workers = std::thread::available_parallelism().map_or(1, usize::from);
-    std::thread::scope(|scope| {
-        let handles = lanes
-            .chunks(lanes.len().div_ceil(workers).max(1))
-            .map(|chunk| scope.spawn(move || chunk.iter().map(build_of).collect::<Vec<_>>()))
+    let builds = std::thread::scope(|scope| {
+        let size = commands.len().div_ceil(workers).max(1);
+        let handles = commands
+            .chunks_mut(size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter_mut()
+                        .map(|(lane, command)| build_of(lane, command))
+                        .collect::<Vec<_>>()
+                })
+            })
             .collect::<Vec<_>>();
         handles
             .into_iter()
             .flat_map(|handle| handle.join().expect("a cargo tree worker finishes"))
-            .collect()
-    })
+            .collect::<Vec<_>>()
+    });
+    indices
+        .into_iter()
+        .map(|index| builds[index].clone())
+        .collect()
 }
 
 /// Each of `candidates` that no lane of `stressed` repeats with at least its
