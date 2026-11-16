@@ -7,7 +7,7 @@ use kithara::{
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::AudioCodec,
 };
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "macos"))]
@@ -203,9 +203,12 @@ async fn run_case_paced(
         )
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, audio_config)
-        .await
-        .expect("create Audio<Stream<Hls>>");
+    let mut audio = kithara_integration_tests::mock::load_audio(
+        &worker,
+        (audio_config, TrackConfig::default()),
+    )
+    .await
+    .expect("create Audio<Stream<Hls>>");
     audio.preload().expect("preload HLS phase scanner");
 
     let total_secs = audio

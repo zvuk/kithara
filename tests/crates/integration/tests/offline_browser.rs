@@ -52,7 +52,6 @@ async fn playing_worker() -> OfflineWorker {
                     .expect("the fixture URL parses as a resource source"),
             )
             .downloader(create_test_downloader())
-            .worker(player.worker().clone())
             .store(
                 AssetStore::builder(region)
                     .backend(StorageBackend::Memory)

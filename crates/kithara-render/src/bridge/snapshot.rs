@@ -121,8 +121,6 @@ pub struct SlotSnapshot {
     pub source: Option<AudioChunkInfo>,
     /// Decoded-ahead frontier in seconds, never behind `position`.
     pub frontier: f64,
-    /// How much of the source is on disk, in seconds.
-    pub cached: f64,
     /// The slot's envelope gain on its last mixed frame.
     pub gain: f32,
 }

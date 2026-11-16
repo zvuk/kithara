@@ -21,7 +21,7 @@ use crate::{
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(super) fn insert_entry(
         &mut self,
@@ -49,7 +49,7 @@ where
     pub(super) fn arm_initial_load(
         &mut self,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) {
         if self.clock.is_none()
             || output.is_none()
@@ -78,7 +78,7 @@ where
         &mut self,
         id: TrackId,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         let index = self
             .tracks
@@ -148,7 +148,7 @@ where
         id: TrackId,
         replacement: Option<TrackId>,
         pending: Option<PendingHandover>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(Option<Seq>, Option<Seq>), PlayError> {
         let mut sent = None;
         let mut removal_seq = None;
@@ -179,7 +179,7 @@ where
 
     pub(super) fn clear_entries(
         &mut self,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         let sent = self.release_all(out)?;
         self.target = None;
@@ -204,7 +204,7 @@ where
         id: TrackId,
         role: Role,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         let reusable_current = self.pending_handover.is_some()
             && self.current == Some(id)
@@ -303,7 +303,7 @@ where
         slot: Option<Slot>,
         held_position: Option<Position>,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(F::Track, Option<Seq>), QueueError> {
         if out.dispatcher_available() == 0 {
             return Err(PlayError::Full("dispatcher").into());
@@ -348,7 +348,7 @@ where
         role: Role,
         taken: Option<Parked<F::Track>>,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         let staging = (|| {
             if let Some(index) = self.active.replacement_index() {
@@ -417,12 +417,12 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(super) fn release_track(
         &mut self,
         index: usize,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let replacement = self.active.is_replacement(index);
         let active = self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?;
@@ -435,10 +435,7 @@ where
         Ok(sent)
     }
 
-    pub(super) fn release_all(
-        &mut self,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError> {
+    pub(super) fn release_all(&mut self, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         let detach = self.active.iter().any(|active| active.track.attached());
         let dispatcher = self
             .active
@@ -453,7 +450,7 @@ where
         if out.dispatcher_available() < dispatcher {
             return Err(PlayError::Full("dispatcher"));
         }
-        let mut release = |out: &mut Outbox<'_, S>| {
+        let mut release = |out: &mut Outbox<'_>| {
             for active in self.active.iter_mut() {
                 active.track.apply(TrackCommand::Release, out)?;
             }
@@ -474,10 +471,7 @@ where
         Ok(sent)
     }
 
-    pub(super) fn close_tracks(
-        &mut self,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError> {
+    pub(super) fn close_tracks(&mut self, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         let sent = self.release_all(out)?;
         self.target = None;
         self.shutdown.cancel();
@@ -527,7 +521,7 @@ where
     }
 
     #[kithara_test_utils::kithara::hang_watchdog]
-    pub(super) fn pump_loads(&mut self, output: Option<&OutputSnapshot>, out: &mut Outbox<'_, S>) {
+    pub(super) fn pump_loads(&mut self, output: Option<&OutputSnapshot>, out: &mut Outbox<'_>) {
         if self.shutdown.is_cancelled() || output.is_none() {
             return;
         }
@@ -568,7 +562,7 @@ where
         &mut self,
         index: usize,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), QueueError> {
         let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
         let id = active.item;
@@ -1167,13 +1161,12 @@ mod tests {
         }
         queue.publish();
         let output = kithara_play::mock::output(None).get();
-        let Err(expected) =
-            queue
-                .loader
-                .as_ref()
-                .expect("loader")
-                .build_config(TrackId(42), source, &output)
-        else {
+        let Err(expected) = queue.loader.as_ref().expect("loader").prepare_source(
+            TrackId(42),
+            source,
+            &output,
+            Box::new(kithara_audio::AudioObserverSlot::default().relay()),
+        ) else {
             panic!("fixture source must be rejected");
         };
         assert!(matches!(expected, QueueError::InvalidUrl(_)));

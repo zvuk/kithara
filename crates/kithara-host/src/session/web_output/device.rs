@@ -158,7 +158,7 @@ impl WebOutput {
             .iter()
             .filter(|deck| graph.node_info(deck.node).is_some())
         {
-            kithara_render::rt::PlayerNode::<S, TransportState>::prepare_if_initial(
+            kithara_render::PlayerNode::<S, TransportState>::prepare_if_initial(
                 graph, deck.node, shape,
             )
             .map_err(|error| error.to_string())?;

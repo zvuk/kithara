@@ -17,12 +17,12 @@ use crate::{AdvanceReason, QueueError, RepeatMode, TrackStatus};
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     /// Step 6: outgoing tracks keep their original tails until RT stops them.
     pub(in crate::queue) fn release_tails(
         &mut self,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
         let ended = self.active.indices(|active| {
             active.role == Role::Outgoing
@@ -39,7 +39,7 @@ where
 
     pub(in crate::queue) fn cancel_target(
         &mut self,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), QueueError> {
         let Some(target) = self.target else {
             return Ok(());
@@ -89,10 +89,7 @@ where
         Ok(())
     }
 
-    pub(in crate::queue) fn cancel_auto(
-        &mut self,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<(), QueueError> {
+    pub(in crate::queue) fn cancel_auto(&mut self, out: &mut Outbox<'_>) -> Result<(), QueueError> {
         if self.target.is_some_and(|target| target.auto) {
             self.cancel_target(out)?;
         }
@@ -107,7 +104,7 @@ where
 
     pub(in crate::queue) fn withdraw_auto(
         &mut self,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), QueueError> {
         if self.target.is_some_and(|target| target.auto) {
             self.withdraw_transition(out)?;
@@ -118,7 +115,7 @@ where
     /// A Stop supersedes B's slot basis; only Stale allows the new entry.
     pub(in crate::queue) fn withdraw_transition(
         &mut self,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), QueueError> {
         let Some(target) = self.target.filter(|target| target.stale.is_none()) else {
             return Ok(());
@@ -170,7 +167,7 @@ where
     pub(in crate::queue) fn repeat_one(
         &mut self,
         end: SessionFrame,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
         if out.deck_available() == 0 {
             return Err(PlayError::Full("deck"));
@@ -195,7 +192,7 @@ where
 
     pub(in crate::queue) fn repeat_segment(
         &mut self,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Seq, PlayError> {
         let index = self.active_current_index().ok_or(PlayError::NoActiveSlot)?;
         let active = self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?;
@@ -212,7 +209,7 @@ where
 
     pub(in crate::queue) fn cancel_repeat(
         &mut self,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
         let index = self.active_current_index().ok_or(PlayError::NoActiveSlot)?;
         self.active
@@ -225,7 +222,7 @@ where
 
     pub(in crate::queue) fn loaded_tracks(
         &mut self,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
         let ready = self.active.indices(|active| {
             matches!(active.load, Some(LoadState::Attaching(_)))

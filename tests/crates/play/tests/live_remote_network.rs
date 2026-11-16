@@ -180,7 +180,6 @@ async fn live_remote_resource_decodes_with_duration(
     );
     let config: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid URL"))
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools).build()))
             .store(store)
             .downloader(downloader)
             .decoder(
@@ -190,9 +189,13 @@ async fn live_remote_resource_decodes_with_duration(
             )
             .build();
 
-    let mut resource = kithara_integration_tests::mock::open_resource(&config)
-        .await
-        .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
+    let mut resource = kithara_integration_tests::mock::open_resource(
+        &config,
+        &PlayWorker::new(PlayWorkerConfig::builder(pools).build()),
+        kithara::play::TrackConfig::default(),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 
     let duration = resource.duration();
     assert!(
@@ -304,7 +307,6 @@ async fn player_mp3_duration_matches_app_flow(
     let config: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(url).unwrap())
             .downloader(create_test_downloader())
-            .worker(harness.worker().clone())
             .store(store)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
