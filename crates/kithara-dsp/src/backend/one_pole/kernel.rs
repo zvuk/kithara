@@ -3,28 +3,41 @@ use std::ops::Mul;
 use fearless_simd::{f32x4, prelude::*, u64x2};
 
 #[inline(always)]
-pub(crate) fn low_pass_kernel<S: Simd, const CHANNELS: usize>(
+pub(crate) fn low_pass_kernel<S: Simd>(
     simd: S,
     coefficient: f32,
-    state: &mut [f32; CHANNELS],
-    planes: &mut [&mut [f32]; CHANNELS],
+    state: &mut [f32],
+    planes: &mut [&mut [f32]],
     frames: usize,
 ) -> usize {
-    let mut planes = planes.each_mut().map(|plane| plane.split_at_mut(frames).0);
     let (groups, remainder) = planes.as_chunks_mut::<4>();
     let (memories, last) = state.as_chunks_mut::<4>();
     for (planes, memory) in groups.iter_mut().zip(memories) {
         group(
             simd,
             coefficient,
-            planes.each_mut().map(|plane| &mut **plane),
+            planes.each_mut().map(|plane| plane.split_at_mut(frames).0),
             memory,
         );
     }
     match remainder {
-        [a, b, c] => group(simd, coefficient, [a, b, c], last),
-        [a, b] => group(simd, coefficient, [a, b], last),
-        [a] => group(simd, coefficient, [a], last),
+        [a, b, c] => group(
+            simd,
+            coefficient,
+            [
+                a.split_at_mut(frames).0,
+                b.split_at_mut(frames).0,
+                c.split_at_mut(frames).0,
+            ],
+            last,
+        ),
+        [a, b] => group(
+            simd,
+            coefficient,
+            [a.split_at_mut(frames).0, b.split_at_mut(frames).0],
+            last,
+        ),
+        [a] => group(simd, coefficient, [a.split_at_mut(frames).0], last),
         _ => {}
     }
     frames

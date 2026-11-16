@@ -53,7 +53,12 @@ fn kithara_ownership_policy_keeps_its_declared_subjects() {
         (
             "smoothing_primitive_sites",
             "patterns",
-            vec!["SmoothingFilter", "one_pole", "OnePole", "smoothing_coeff"],
+            vec!["SmoothingFilter", "smoothing_coeff"],
+        ),
+        (
+            "smoothing_primitive_sites",
+            "recurrence_patterns",
+            vec!["one_pole", "OnePole"],
         ),
         (
             "firewheel_dsp_facade",
