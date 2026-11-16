@@ -872,10 +872,15 @@ cargo.packages = ["kithara-abr"]
 cargo.profile = "test-release"
 
 [test.lanes.analysis]
-default_features = ["kithara-beat/dsp", "kithara-waveform/dsp"]
+default_features = [
+  "kithara-beat/dsp",
+  "kithara-key/dsp",
+  "kithara-waveform/dsp",
+]
 cargo.packages = [
   "kithara-analysis",
   "kithara-beat",
+  "kithara-key",
   "kithara-waveform",
   "kithara-analysis-tests",
 ]

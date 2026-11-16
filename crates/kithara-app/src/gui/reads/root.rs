@@ -62,7 +62,7 @@ impl<'a> ReadRoot<'a> {
             clock: ClockNode::new(&cache.master_bpm, f64::from(snapshot.tempo)),
             engine,
             library: LibraryNode::new(&state.library, !Kithara::PICKS_FOLDERS),
-            source: SourcesNode::new(&state.library, &snapshot.track_bpms),
+            source: SourcesNode::new(&state.library, &snapshot.track_facts),
             broadcast: BroadcastNode::new(
                 snapshot.broadcast.is_on_air,
                 &snapshot.broadcast.url,
@@ -110,6 +110,7 @@ mod tests {
 
     use ::kithara::{
         abr::AbrMode,
+        analysis::{Mode, MusicalKey, PitchClass},
         effects::GainDb,
         platform::tokio::runtime::Handle,
         play::Pitch,
@@ -122,7 +123,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        analysis::fixtures::{self, short_wav},
+        analysis::{
+            TrackFacts,
+            fixtures::{self, short_wav},
+        },
         deck::{DeckSet, EqMode, TempoPercent},
         engine::{DeckSnapshot, EngineSnapshot},
         gui::{
@@ -144,7 +148,7 @@ mod tests {
     struct Fixture {
         eq_mode: EqMode,
         library: Library,
-        bpms: std::collections::BTreeMap<String, f64>,
+        facts: std::collections::BTreeMap<String, TrackFacts>,
         mix: MixState,
         modules: Modules,
         stage: StageView,
@@ -162,7 +166,7 @@ mod tests {
                 )
                 .map(|(_, library)| library)
                 .expect("the shipped package mounts the startup source"),
-                bpms: std::collections::BTreeMap::new(),
+                facts: std::collections::BTreeMap::new(),
                 modules: Modules::default(),
                 window: WindowState::default(),
                 broadcast_available: false,
@@ -198,7 +202,7 @@ mod tests {
                 decks,
                 clock: ClockNode::new("124.00", 124.0),
                 library: LibraryNode::new(&self.library, true),
-                source: SourcesNode::new(&self.library, &self.bpms),
+                source: SourcesNode::new(&self.library, &self.facts),
                 engine,
                 broadcast: BroadcastNode::new(false, "", self.broadcast_available),
                 mix: MixNode::new(&self.mix),
@@ -680,7 +684,13 @@ mod tests {
         let mut fixture = Fixture::new(["0", "0"]);
         let known = fixtures::grid().artifact().bpm();
         assert_eq!(known, 128.0);
-        fixture.bpms.insert("dropped.mp3".to_owned(), known);
+        fixture.facts.insert(
+            "dropped.mp3".to_owned(),
+            TrackFacts {
+                bpm: Some(known),
+                key: None,
+            },
+        );
 
         let shown = EngineSnapshot::unpublished();
         let root = fixture.root(&shown);
@@ -697,6 +707,38 @@ mod tests {
                 .find(|cell| cell.id() == "bpm")
                 .map(TableCell::value),
             Some(&::kithara::ui::render::TableValue::Text("128.00".into()))
+        );
+    }
+
+    #[kithara::test]
+    fn library_known_key_is_an_open_key_row_cell() {
+        let mut fixture = Fixture::new(["0", "0"]);
+        fixture.facts.insert(
+            "dropped.mp3".to_owned(),
+            TrackFacts {
+                bpm: None,
+                key: Some(MusicalKey {
+                    tonic: PitchClass::A,
+                    mode: Mode::Minor,
+                }),
+            },
+        );
+
+        let shown = EngineSnapshot::unpublished();
+        let root = fixture.root(&shown);
+        let walk = Walk::new(&root);
+
+        let Some(ReadValue::Table(rows)) = walk.get("source.rows@source=startup") else {
+            panic!("startup rows are readable");
+        };
+
+        assert_eq!(
+            rows[0]
+                .cells()
+                .iter()
+                .find(|cell| cell.id() == "key")
+                .map(TableCell::value),
+            Some(&::kithara::ui::render::TableValue::Text("1m".into()))
         );
     }
 }

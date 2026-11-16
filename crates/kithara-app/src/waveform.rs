@@ -71,7 +71,7 @@ impl TrackAnalysisRunner {
         pools: Pools,
     ) -> Self {
         let builder = AnalyzerBuilder::new(pools.clone()).with_beat_config(beat_config);
-        let builder = with_waveform(builder, buckets).with_beat();
+        let builder = with_waveform(builder, buckets).with_beat().with_key();
         let worker = Arc::new(AnalysisWorker::new(
             AnalysisWorkerConfig::for_builder(builder)
                 .cancel(master.clone())

@@ -49,6 +49,7 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for AnalysisProgress {
 mod tests {
     use std::num::NonZeroU64;
 
+    use kithara_key::KeyEstimator;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use rangemap::RangeSet;
@@ -72,7 +73,7 @@ mod tests {
     fn resumable() -> AnalysisProgress {
         AnalysisProgress::new(
             analysis(false),
-            Some(AnalysisResume::capture(NonZeroU64::MIN, None, None)),
+            Some(AnalysisResume::capture(NonZeroU64::MIN, None, None, None)),
         )
     }
 
@@ -143,7 +144,12 @@ mod tests {
 
             let progress = AnalysisProgress::new(
                 analysis(false),
-                Some(AnalysisResume::capture(NonZeroU64::MIN, None, Some(&beat))),
+                Some(AnalysisResume::capture(
+                    NonZeroU64::MIN,
+                    None,
+                    Some(&beat),
+                    None,
+                )),
             );
             let mut bytes = Vec::new();
             progress.write_to(&mut bytes).expect("encodes");
@@ -154,6 +160,39 @@ mod tests {
             } else {
                 assert!(matches!(decoded, Err(BlobError::Corrupt)), "{name}");
             }
+        }
+    }
+
+    #[kithara::test]
+    fn a_damaged_key_resume_section_is_a_miss() {
+        let pools = crate::test_pools::pools();
+        let estimator = KeyEstimator::new(44_100, &pools).expect("the estimator fits");
+        let mut state = Vec::new();
+        estimator.write_state(&mut state);
+        let mut nan_sum = state.clone();
+        nan_sum[4..12].copy_from_slice(&f64::NAN.to_le_bytes());
+        let mut foreign = state;
+        let version = u32::from_le_bytes([foreign[0], foreign[1], foreign[2], foreign[3]]);
+        foreign[..4].copy_from_slice(&(version + 1).to_le_bytes());
+
+        for (name, key) in [("a non-finite sum", nan_sum), ("another version", foreign)] {
+            let progress = AnalysisProgress::new(
+                analysis(false),
+                Some(AnalysisResume::capture(
+                    NonZeroU64::MIN,
+                    None,
+                    None,
+                    Some(&key),
+                )),
+            );
+            let mut bytes = Vec::new();
+            progress.write_to(&mut bytes).expect("encodes");
+            let decoded =
+                AnalysisProgress::try_from((bytes.as_slice(), &AnalysisFingerprint::default()));
+            assert!(
+                matches!(decoded, Err(BlobError::Corrupt | BlobError::Version { .. })),
+                "{name}: a checkpoint whose key state is unreadable is a miss, got {decoded:?}"
+            );
         }
     }
 }
