@@ -45,7 +45,10 @@ where
         };
         self.pending_handover = None;
         let id = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.item;
-        if self.target.is_none_or(|target| target.to != id) {
+        let withdrawn = self
+            .target
+            .is_some_and(|target| target.to == id && !target.auto && target.stale == Some(seq));
+        if self.target.is_none_or(|target| target.to != id) || withdrawn {
             if let Some(current) = self.active_current_index() {
                 self.active
                     .get_mut(current)
@@ -63,6 +66,9 @@ where
                     .commit(self.current, id, pending.reason, &self.track_ids());
             }
             self.current = Some(id);
+            if withdrawn {
+                self.target.as_mut().ok_or(PlayError::NotReady)?.stale = None;
+            }
             self.tracks.set_status(id, TrackStatus::Consumed);
             if !source_changed {
                 self.announce(QueueEvent::CurrentTrackChanged { id: self.current });

@@ -100,12 +100,18 @@ where
         let ids = self.selectable_ids();
         let wrap = self.navigation.repeat_mode() == RepeatMode::All;
         let cursor = self.navigation_cursor();
-        let Some(id) = self.navigation.next(
-            &ids,
-            cursor,
-            auto && reason != AdvanceReason::TrackFailed,
-            wrap,
-        ) else {
+        let next = match self.target {
+            Some(target) if !auto && target.auto && self.current != Some(target.to) => {
+                Some(target.to)
+            }
+            _ => self.navigation.next(
+                &ids,
+                cursor,
+                auto && reason != AdvanceReason::TrackFailed,
+                wrap,
+            ),
+        };
+        let Some(id) = next else {
             if auto {
                 self.announce(QueueEvent::QueueEnded);
             }
@@ -150,12 +156,7 @@ where
                 .transport(TrackCommand::Play { at: When::Next }, out)
                 .map_err(Into::into);
         }
-        if !auto
-            && !failed
-            && self
-                .target
-                .is_some_and(|target| target.to == id && !target.auto)
-        {
+        if !auto && !failed && self.target.is_some_and(|target| target.to == id) {
             return self.retarget_request(request, settings, out);
         }
         let bound = match self.clock {
@@ -193,7 +194,16 @@ where
             playing,
             ..
         } = request;
+        if self.target.is_some_and(|target| target.auto) {
+            self.withdraw_transition(out)?;
+        }
         let target = self.target.as_mut().ok_or(PlayError::NotReady)?;
+        if target.auto {
+            target.auto = false;
+            target.bound = self
+                .clock
+                .map(|(now, delivery)| Bound::AtOrAfter(now + delivery));
+        }
         target.set_playing(playing);
         target.settings = settings;
         target.transition = transition;

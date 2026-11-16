@@ -1,11 +1,11 @@
 use kithara_command::{Batch, Port, Receipt};
-use kithara_play::{DeckEvent, DeckMixSettingsChange, Position, TrackCommand};
+use kithara_play::{Bound, DeckEvent, DeckMixSettingsChange, Position, TrackCommand};
 use kithara_render::bridge::{DeckProtocol, PlaybackFault, Slot, SlotState};
 use kithara_worker::Worker;
 
 use super::*;
 use crate::{
-    AdvanceReason, QueueSettingsChange, Transition,
+    AdvanceReason, CrossfadeSettings, QueueSettingsChange, Transition,
     mock::{fixture_uri, seed_fixture},
 };
 
@@ -2263,6 +2263,201 @@ async fn a_chain_enters_on_its_native_receipt_instead_of_a_player_observation(
         kithara_play::Settled::Applied { seq: answered, at }
         if answered == seq && at == SessionFrame::new(128)));
     assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    rig.finish().await;
+}
+
+#[kithara::test(tokio)]
+#[case::two_tracks(false, false)]
+#[case::three_tracks(true, false)]
+#[case::two_tracks_chained(false, true)]
+#[case::three_tracks_chained(true, true)]
+async fn manual_next_enters_the_prepared_automatic_successor_before_eof(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] third: bool,
+    #[case] gapless: bool,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
+    if third {
+        rig.queue.insert_entry(
+            rig.ids[2],
+            TrackSource::Uri(fixture_uri(rig.dir.path(), "item-3.wav")),
+            Position::ZERO,
+            crate::queue::types::Placement::Append,
+        );
+    }
+    rig.apply(QueueCommand::ConfigureQueue(
+        QueueSettingsChange::Crossfade(CrossfadeSettings {
+            duration: 0.05,
+            ..Default::default()
+        }),
+        When::Next,
+    ))
+    .expect("short crossfade");
+    if gapless {
+        rig.apply(QueueCommand::ConfigureQueue(
+            QueueSettingsChange::Gapless(true),
+            When::Next,
+        ))
+        .expect("automatic chain policy");
+    }
+    rig.arm(1).await;
+    with_outbox(&mut rig.queue, &mut rig.deck, |queue, out| {
+        queue.tick_deadlines(SessionFrame::new(0), Some(&mock::output(None).get()), out)
+    })
+    .expect("automatic successor");
+    let automatic = rig.queue.target.expect("prepared automatic target");
+    assert_eq!(automatic.to, rig.ids[1]);
+    assert!(automatic.auto);
+    assert_eq!(automatic.reason, AdvanceReason::NaturalEof);
+    assert!(matches!(automatic.bound, Some(Bound::AtOrBefore(at)) if at > SessionFrame::new(256)));
+    let pending = rig.queue.pending_handover.expect("future native entry");
+    let slot = rig.slot(1);
+    let mut receiver = rig.queue.control().subscribe::<QueueEvent>();
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    assert_eq!(rig.queue.navigation_cursor(), Some(rig.ids[1]));
+    assert_eq!(rig.queue.navigation.prev(&rig.ids), None);
+
+    rig.apply(QueueCommand::Next(Transition::Crossfade))
+        .expect("manual next");
+    let manual = rig.queue.target.expect("manual successor");
+    assert_eq!(
+        (manual.to, manual.auto, manual.reason),
+        (rig.ids[1], false, AdvanceReason::UserNext),
+        "Next accelerates B instead of ending the queue or skipping to C"
+    );
+    assert_eq!(rig.slot(1), slot);
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    assert_eq!(rig.queue.navigation.prev(&rig.ids), None);
+    assert!(
+        rig.queue
+            .active
+            .get(rig.queue.incoming_index(rig.ids[1]).expect("prepared B"))
+            .expect("incoming B")
+            .load
+            .is_none(),
+        "Next reuses B's prepared resource"
+    );
+
+    let withdrawn = rig
+        .deck
+        .block(SessionFrame::new(128), 0.0)
+        .expect("withdraw future native entry");
+    assert!(withdrawn.iter().any(|receipt| receipt.seq() == pending.seq
+        && matches!(receipt.outcome(), Outcome::Rejected(Rejection::Stale))));
+    rig.on_pass(SessionFrame::new(128), |_, _| ());
+    rig.settle(withdrawn);
+    let immediate = rig.queue.pending_handover.expect("manual native entry");
+    assert_eq!(immediate.item, rig.ids[1]);
+    assert_eq!(immediate.reason, AdvanceReason::UserNext);
+    let entered = rig
+        .deck
+        .block(SessionFrame::new(256), 0.0)
+        .expect("manual handover without EOF");
+    assert!(entered.iter().any(|receipt| receipt.seq() == immediate.seq
+        && matches!(receipt.outcome(), Outcome::Applied { at, .. } if *at == SessionFrame::new(256))));
+    rig.settle(entered);
+    assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    assert_eq!(rig.slot(1), slot);
+    assert_eq!(rig.queue.navigation.prev(&rig.ids), Some(rig.ids[0]));
+    assert_eq!(
+        events(&mut receiver)
+            .iter()
+            .filter(|event| matches!(event,
+                QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::UserNext }
+                if *id == rig.ids[1]
+            ))
+            .count(),
+        1
+    );
+    rig.finish().await;
+}
+
+#[kithara::test(tokio)]
+async fn manual_next_uses_an_accepted_manual_target_as_its_cursor(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
+    rig.queue.insert_entry(
+        rig.ids[2],
+        TrackSource::Uri(fixture_uri(rig.dir.path(), "item-3.wav")),
+        Position::ZERO,
+        crate::queue::types::Placement::Append,
+    );
+    rig.select(1, Transition::Crossfade)
+        .expect("accepted manual B selection");
+    assert!(
+        rig.queue
+            .target
+            .is_some_and(|target| !target.auto && target.to == rig.ids[1])
+    );
+    assert_eq!(rig.queue.navigation_cursor(), Some(rig.ids[1]));
+    rig.apply(QueueCommand::Next(Transition::Crossfade))
+        .expect("next after accepted manual B");
+    assert!(
+        rig.queue
+            .target
+            .is_some_and(|target| !target.auto && target.to == rig.ids[2])
+    );
+    assert_eq!(rig.queue.navigation_cursor(), Some(rig.ids[2]));
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    assert_eq!(rig.queue.navigation.prev(&rig.ids), None);
+    rig.finish().await;
+}
+
+#[kithara::test(tokio)]
+async fn manual_next_preserves_an_already_applied_automatic_successor(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
+    rig.arm(1).await;
+    rig.chain();
+    let pending = rig.queue.pending_handover.expect("automatic native entry");
+    let applied = rig.stitch();
+    assert!(applied.iter().any(|receipt| receipt.seq() == pending.seq
+        && matches!(receipt.outcome(), Outcome::Applied { .. })));
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    let slot = rig.slot(1);
+    let mut receiver = rig.queue.control().subscribe::<QueueEvent>();
+
+    rig.apply(QueueCommand::Next(Transition::Crossfade))
+        .expect("manual next while the automatic receipt is held");
+    rig.settle(applied);
+    crate::mock::finish(&mut rig.queue, &mut rig.deck);
+
+    assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    assert_eq!(rig.slot(1), slot);
+    assert!(matches!(
+        rig.queue
+            .active
+            .get(rig.queue.active_current_index().expect("current B"))
+            .expect("current resource")
+            .track
+            .snapshot()
+            .as_ref()
+            .status,
+        PlayingStatus::Playing { .. }
+    ));
+    assert_eq!(rig.queue.navigation.prev(&rig.ids), Some(rig.ids[0]));
+    let observed = events(&mut receiver);
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|event| matches!(event,
+                QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == rig.ids[1]
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|event| matches!(event,
+                QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::NaturalEof }
+                if *id == rig.ids[1]
+            ))
+            .count(),
+        1
+    );
     rig.finish().await;
 }
 
