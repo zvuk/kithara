@@ -588,7 +588,14 @@ async fn offline_callback_geometry_does_not_pace_the_audio_clock(
     );
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    tracing("kithara_test_utils::test::usdt=debug"),
+    timeout(Duration::from_secs(300))
+)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn running_sync_command_changes_audible_pcm_within_one_block(
     #[future(awt)] synthetic_sources: PreparedSources,

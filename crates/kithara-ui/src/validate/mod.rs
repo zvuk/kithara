@@ -8,6 +8,9 @@ mod path;
 mod placed;
 mod slots;
 
+#[cfg(feature = "render")]
+pub(crate) use control::check_artworks;
+
 pub(crate) use self::{
     control::{check_controls, shader_uniform_kind},
     fill::check_fill_set,

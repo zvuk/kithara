@@ -18,7 +18,7 @@ use iced::{
 
 use crate::{
     atoms::chrome::{ChromeChevron, ChromeLabel, footer_role},
-    backends::replay_ordered,
+    backends::{finish, replay_ordered},
     draw::{DrawListBuilder, Rect},
     iced::{controls::snapped, paint::text::Text, tree::activate},
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
@@ -132,7 +132,7 @@ impl IcedWidget<Published, Theme, Renderer> for LeafPaint<'_, '_> {
                 &mut frame,
                 self.skin.text_resources.as_ref(),
             );
-            renderer.draw_geometry(frame.into_geometry());
+            renderer.draw_geometry(finish(frame.into_geometry()));
         });
     }
 
@@ -251,7 +251,7 @@ impl ChevronPaint<'_> {
             &mut frame,
             self.skin.text_resources.as_ref(),
         );
-        vec![frame.into_geometry()]
+        vec![finish(frame.into_geometry())]
     }
 }
 
