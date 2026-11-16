@@ -231,7 +231,7 @@ mod tests {
     use std::{num::NonZeroU32, sync::OnceLock};
 
     use ::kithara::{
-        platform::{sync::Mutex, tokio::sync::oneshot::error::TryRecvError},
+        platform::{sync::Mutex, thread, tokio::sync::oneshot::error::TryRecvError},
         play::{
             DeckMixSettings, DeckPass, DeckProtocol, DeckSnapshot, DispatcherProtocol, HostedDeck,
             Outbox, PlayError, PlayWorker, PlayWorkerConfig, ResourceLoad, ResourcePrep,
@@ -250,6 +250,7 @@ mod tests {
     };
 
     fn queue() -> FfiQueue {
+        thread::set_wasm_shim_name("wasm-bindgen-test");
         let worker = PlayWorker::new(
             PlayWorkerConfig::builder(crate::pools::build().expect("queue pools")).build(),
         );
