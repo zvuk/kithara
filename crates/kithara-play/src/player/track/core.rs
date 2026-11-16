@@ -1,11 +1,11 @@
 use std::{cell::RefCell, marker::PhantomData};
 
 use kithara_abr::AbrHandle;
-use kithara_command::{Live, Seq, Target, When};
+use kithara_command::{Batch, Live, Seq, Target, When};
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_render::{
-    LaneCommand, LaneFrame, LaneProtocol, ServiceClass,
+    LaneCommand, LaneFrame, LaneProtocol, LaneTarget, ServiceClass,
     bridge::{DeckPart, Fade, Slot, SlotMark, TrackClock},
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
@@ -266,11 +266,35 @@ impl<S> PlayerImpl<S> {
         commands: Vec<LaneCommand>,
         when: When<LaneFrame>,
     ) -> Result<Seq, PlayError> {
+        self.submit_lane_batch(
+            Batch {
+                basis: Vec::new(),
+                commands,
+            },
+            when,
+        )
+    }
+
+    pub(super) fn send_speed_programme(
+        &mut self,
+        commands: Vec<LaneCommand>,
+        when: When<LaneFrame>,
+    ) -> Result<Seq, PlayError> {
+        let lane = self.lane.sender().ok_or(PlayError::NotReady)?;
+        let basis = vec![(LaneTarget::Speed, lane.basis(LaneTarget::Speed, when))];
+        self.submit_lane_batch(Batch { basis, commands }, when)
+    }
+
+    fn submit_lane_batch(
+        &mut self,
+        batch: Batch<LaneProtocol>,
+        when: When<LaneFrame>,
+    ) -> Result<Seq, PlayError> {
         if self.adoptions.cancelling() {
             return Err(PlayError::NotReady);
         }
         let lane = self.lane.sender_mut().ok_or(PlayError::NotReady)?;
-        let seq = Outbox::<S>::lane(lane, when, commands.clone())?;
+        let (seq, Batch { basis, commands }) = Outbox::<S>::lane(lane, when, batch)?;
         self.lane_history
             .submit(commands.into_iter().map(|command| {
                 tracing::debug!(
@@ -307,6 +331,7 @@ impl<S> PlayerImpl<S> {
                 }
                 LaneOperation {
                     seq,
+                    basis: basis.clone(),
                     when,
                     segment: self.segment.id,
                     command,

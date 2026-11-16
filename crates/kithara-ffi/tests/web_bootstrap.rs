@@ -16,6 +16,7 @@ async fn worklet_import_waits_for_worker_bootstrap_admission() {
     let mut admission = Admission::hold()
         .await
         .expect("hold bootstrap admission before host construction");
+    let held_locks = timeout(Duration::from_millis(100), admission.bootstrap_locks()).await;
     let setup = bindings::setup();
     let player = AudioPlayer::new_js();
     let command = player.set_volume_js(0.25);
@@ -51,15 +52,26 @@ async fn worklet_import_waits_for_worker_bootstrap_admission() {
     let mixer_blocks = player.rt_process_calls_js();
     let started_within_lease = admission.processor_started_within_lease();
     let contexts = admission.audio_contexts();
+    let bootstrap = admission.bootstrap_events();
     // A stuck snapshot query must not hold up reporting a readiness failure.
     let locks = timeout(Duration::from_millis(100), admission.bootstrap_locks()).await;
     wasm_bindgen_test::console_log!(
-        "BOOTSTRAP_READY volume={} mixer_blocks={} audio_contexts={} bootstrap_locks={locks:?}",
+        "BOOTSTRAP_READY volume={} mixer_blocks={} worklet_imports={} audio_contexts={} bootstrap={bootstrap:?} bootstrap_locks={locks:?} held_bootstrap_locks={held_locks:?}",
         volume,
         mixer_blocks,
+        admission.worklet_imports(),
         contexts,
     );
     ready.expect("the real mixer and owner run after admission is released");
+    assert_eq!(
+        admission.worklet_imports(),
+        1,
+        "the module counter observes the one admitted worklet import"
+    );
+    assert!(
+        admission.context_count() > 0,
+        "the acquired audio context remains observed after admission release"
+    );
     // A wasm thread start that contends with another one waits on shared
     // memory, which traps in an AudioWorklet, so the processor starts its
     // thread before the worklet gives the bootstrap admission back.
@@ -75,7 +87,7 @@ mod admission {
         rc::Rc,
     };
 
-    use js_sys::{Array, Function, Object, Promise, Proxy, Reflect, futures::JsFuture};
+    use js_sys::{Array, Function, Object, Promise, Proxy, Reflect, WeakRef, futures::JsFuture};
     use wasm_bindgen::prelude::*;
 
     const KEY: &str = "wasm_safe_thread:bootstrap";
@@ -86,14 +98,8 @@ mod admission {
         imports: Cell<u32>,
         requests: Cell<u32>,
         bootstrap: Events,
-        contexts: RefCell<Vec<Context>>,
+        contexts: RefCell<Vec<WeakRef<JsValue>>>,
         hooks: RefCell<Vec<Property>>,
-    }
-
-    struct Context {
-        worklet: JsValue,
-        context: JsValue,
-        transitions: Events,
     }
 
     pub(super) struct Admission {
@@ -217,8 +223,11 @@ mod admission {
             )?;
             let replacement = Object::assign(&Object::new(), descriptor.unchecked_ref::<Object>());
             Reflect::set(&replacement, &"get".into(), &getter)?;
-            self.release_hooks
-                .push(Property::install(&prototype, "audioWorklet", &replacement)?);
+            self.observation.hooks.borrow_mut().push(Property::install(
+                &prototype,
+                "audioWorklet",
+                &replacement,
+            )?);
             Ok(())
         }
 
@@ -246,28 +255,30 @@ mod admission {
             matches!((started, released), (Some(started), Some(released)) if started < released)
         }
 
+        pub(super) fn bootstrap_events(&self) -> Vec<String> {
+            self.observation.bootstrap.borrow().clone()
+        }
+
+        pub(super) fn context_count(&self) -> usize {
+            self.observation.contexts.borrow().len()
+        }
+
         pub(super) fn audio_contexts(&self) -> String {
             let contexts = Array::new();
-            for entry in self.observation.contexts.borrow().iter() {
+            for reference in self.observation.contexts.borrow().iter() {
                 let snapshot = Object::new();
-                for name in ["state", "currentTime", "sampleRate"] {
-                    Reflect::set(
-                        &snapshot,
-                        &name.into(),
-                        &get(&entry.context, name).expect("audio context property"),
-                    )
-                    .expect("snapshot property");
-                }
-                for (name, events) in [
-                    ("bootstrap", &self.observation.bootstrap),
-                    ("transitions", &entry.transitions),
-                ] {
-                    let values: Array = events
-                        .borrow()
-                        .iter()
-                        .map(|event| JsValue::from_str(event))
-                        .collect();
-                    Reflect::set(&snapshot, &name.into(), &values).expect("snapshot events");
+                if let Some(context) = reference.deref() {
+                    for name in ["state", "currentTime", "sampleRate"] {
+                        Reflect::set(
+                            &snapshot,
+                            &name.into(),
+                            &get(&context, name).expect("audio context property"),
+                        )
+                        .expect("snapshot property");
+                    }
+                } else {
+                    Reflect::set(&snapshot, &"collected".into(), &JsValue::TRUE)
+                        .expect("snapshot collected context");
                 }
                 contexts.push(&snapshot);
             }
@@ -325,45 +336,36 @@ mod admission {
             worklet: &JsValue,
             context: &JsValue,
         ) -> Result<(), JsValue> {
-            if self
+            if !self
                 .contexts
                 .borrow()
                 .iter()
-                .any(|entry| entry.worklet == *worklet)
+                .any(|reference| reference.deref().as_ref() == Some(context))
             {
+                self.contexts.borrow_mut().push(WeakRef::new(context));
+            }
+            let prototype = Object::get_prototype_of(worklet);
+            if self.hooks.borrow().iter().any(|hook| {
+                hook.object == prototype && hook.name.as_string().as_deref() == Some("addModule")
+            }) {
                 return Ok(());
             }
-            let events: Events = Rc::default();
-            for (receiver, name) in [(worklet, "addModule"), (context, "resume")] {
-                let state = Rc::clone(self);
-                let events = Rc::clone(&events);
-                let method = proxy(
-                    &function(receiver, name)?.into(),
-                    "apply",
-                    move |target, receiver, args| {
-                        if name == "addModule" {
-                            state.imports.set(state.imports.get() + 1);
-                        }
-                        events.borrow_mut().push(format!("{name}-called"));
-                        let result = apply(&target, &receiver, &args);
-                        match &result {
-                            Ok(promise) => observe(&events, name, promise)?,
-                            Err(error) => {
-                                events.borrow_mut().push(format!("{name}-threw: {error:?}"))
-                            }
-                        }
-                        result
-                    },
-                )?;
-                self.hooks
-                    .borrow_mut()
-                    .push(Property::value(receiver, name, &method)?);
-            }
-            self.contexts.borrow_mut().push(Context {
-                worklet: worklet.clone(),
-                context: context.clone(),
-                transitions: events,
-            });
+            let state = Rc::clone(self);
+            let method = proxy(
+                &function(prototype.as_ref(), "addModule")?.into(),
+                "apply",
+                move |target, receiver, args| {
+                    state.imports.set(state.imports.get() + 1);
+                    let promise = apply(&target, &receiver, &args)?;
+                    observe(&state.bootstrap, "module", &promise)?;
+                    Ok(promise)
+                },
+            )?;
+            self.hooks.borrow_mut().push(Property::value(
+                prototype.as_ref(),
+                "addModule",
+                &method,
+            )?);
             Ok(())
         }
     }
