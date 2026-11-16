@@ -20,7 +20,6 @@ use super::{
 use crate::{
     analysis::AnalysisHandle,
     broadcast::Broadcaster,
-    catalog,
     config::AppConfig,
     deck::{DeckRecord, DeckSet, EqMode},
 };
@@ -88,7 +87,7 @@ impl Engine {
     }
 
     fn apply_deck(&mut self, id: DeckId, cmd: DeckCmd) {
-        self.session.apply(id, cmd, self.eq_mode);
+        self.session.apply(id, cmd, self.eq_mode, &self.config);
     }
 
     fn apply_mix(&mut self, cmd: MixCmd) {
@@ -135,13 +134,13 @@ impl Engine {
         self.complete_stop(elapsed);
     }
 
-    fn load(&self, id: DeckId, track: &Playable) {
-        let Some(record) = self.session.record(id) else {
+    fn load(&mut self, id: DeckId, track: &Playable) {
+        let Some(record) = self.session.record_mut(id) else {
             return;
         };
 
-        if let Err(e) = catalog::load_onto(record.queue(), track, &self.config) {
-            error!(source = %track.source, deck = %id, error = %e, "load onto deck failed");
+        if let Err(e) = record.load(track, &self.config) {
+            error!(deck = %id, error = %e, "load onto deck failed");
         }
     }
 
@@ -408,7 +407,10 @@ mod tests {
         rig.engine.apply(Envelope {
             command: Command::Deck {
                 deck,
-                cmd: DeckCmd::SetQuality(Some(1)),
+                cmd: DeckCmd::SetQuality {
+                    track: ::kithara::events::TrackId::allocate(),
+                    variant: Some(1),
+                },
             },
             seq: 1,
         });

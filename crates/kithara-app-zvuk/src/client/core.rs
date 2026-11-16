@@ -162,7 +162,7 @@ impl<N: Net> Client<N> {
         let encoded_ids = encode(ids)?;
         let media_fields = consts::MEDIA_FIELDS;
         let operation = format!(
-            "query KitharaStreams {{ mediaContents(ids: {encoded_ids}) {{ {media_fields} }} }}"
+            "query KitharaStreams {{ mediaContents(ids: {encoded_ids}, quality: \"auto\", encodeType: \"fp\") {{ {media_fields} }} }}"
         );
         let envelope = self
             .request(&self.net, token, &operation, json!({}))
@@ -180,13 +180,12 @@ impl<N: Net> Client<N> {
         if returned != requested || returned.len() != rows.len() {
             return Err(Error::Protocol("stream identities do not match request"));
         }
-        if rows
-            .iter()
-            .filter_map(|row| row.stream_v3.as_ref())
-            .filter_map(|stream| stream.hls.as_ref())
-            .any(|url| !matches!(url.scheme(), "http" | "https"))
-        {
-            return Err(Error::Protocol("stream URL is not HTTP"));
+        if !rows.iter().all(|row| {
+            let mut urls = HashSet::new();
+            row.urls()
+                .all(|url| matches!(url.scheme(), "http" | "https") && urls.insert(url))
+        }) {
+            return Err(Error::Protocol("stream URLs are invalid or repeated"));
         }
         Ok(rows)
     }
@@ -276,17 +275,31 @@ fn decode_errors(envelope: &Value) -> Result<Vec<GraphQlError>, Error> {
 }
 
 fn unavailable_stream(error: &GraphQlError, envelope: &Value) -> bool {
-    let [field, index, property] = error.path.as_slice() else {
+    let [field, index, property, rest @ ..] = error.path.as_slice() else {
         return false;
     };
-    if field != "mediaContents" || property != "streamV3" {
+    let Some(property) = property.as_str() else {
+        return false;
+    };
+    let known = match (property, rest) {
+        ("streamV3" | "stream", []) => true,
+        ("streamV3", [leaf]) => leaf == "hls",
+        ("stream", [leaf]) => matches!(leaf.as_str(), Some("mid" | "high" | "flac")),
+        _ => false,
+    };
+    if field != "mediaContents" || !known {
         return false;
     }
     index
         .as_u64()
         .and_then(|index| usize::try_from(index).ok())
         .and_then(|index| envelope.pointer("/data/mediaContents")?.get(index))
-        .and_then(|row| row.get("streamV3"))
+        .and_then(|row| row.get(property))
+        .and_then(|stream| match rest {
+            [] => Some(stream),
+            [leaf] => stream.get(leaf.as_str()?),
+            _ => None,
+        })
         .is_some_and(Value::is_null)
 }
 

@@ -557,7 +557,7 @@ where
         wanted: bool,
         outcome: &Outcome<DispatcherProtocol<ResourceLoad>>,
     ) -> bool {
-        if leaving {
+        if leaving || self.tracks.is_changing_source(id) {
             return false;
         }
         let rejected = match outcome {
