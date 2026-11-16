@@ -369,9 +369,11 @@ mod tests {
         let (loader, _mailbox) = fixture(&worker_owner.0);
         let src = ResourceSrc::parse("https://example.com/a.mp3").expect("valid url");
         let grid = ResourceSrc::parse("https://example.com/a.grid").expect("valid artifact url");
+        let key = ResourceSrc::parse("https://example.com/a.key").expect("valid artifact url");
         let given = ResourceConfig::for_src(src)
             .store(AssetStore::builder(pools()).build())
             .beat_grid(ArtifactSource::from(grid.clone()))
+            .key(ArtifactSource::from(key.clone()))
             .waveform(ArtifactSource::Value(Arc::default()))
             .build();
         let (returned, _load) = loader
@@ -389,6 +391,10 @@ mod tests {
         assert!(
             matches!(returned.waveform(), Some(ArtifactSource::Value(_))),
             "a caller-held waveform must reach the resource untouched"
+        );
+        assert!(
+            matches!(returned.key(), Some(ArtifactSource::Source(src)) if *src == key),
+            "a key source must reach the resource untouched"
         );
     }
 

@@ -33,7 +33,9 @@ pub fn analysed_grid(track: &str) -> BeatGridModel {
     let asset = by_name(&name).unwrap_or_else(|| panic!("analysis `{name}` is not registered"));
     let file = AnalysisFile::parse(
         asset.bytes(),
-        &AnalysisFingerprint::new(Some(ANALYSIS_FINGERPRINT), None),
+        &AnalysisFingerprint::builder()
+            .beat(ANALYSIS_FINGERPRINT)
+            .build(),
     )
     .unwrap_or_else(|error| panic!("decode `{name}`: {error:?}"));
     BeatGridModel::try_from(file.latest().analysis())

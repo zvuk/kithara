@@ -11,6 +11,7 @@ use kithara_download::Downloader;
 use kithara_events::EventBus;
 use kithara_file::FileConfigPatch;
 use kithara_hls::{HlsConfigPatch, KeyOptions};
+use kithara_key::MusicalKey;
 use kithara_net::Headers;
 use kithara_platform::CancelToken;
 use kithara_waveform::Waveform;
@@ -107,6 +108,10 @@ where
     /// Base URL for resolving relative HLS playlist/segment URLs.
     #[config(skip = "transferred to HLS URL resolution")]
     pub(crate) hls_base_url: Option<Url>,
+    /// A musical key this track already has, on the same terms as
+    /// [`Self::beat_grid`].
+    #[config(skip = "transferred to the resource artifact source")]
+    pub(crate) key: Option<ArtifactSource<MusicalKey>>,
     /// Desired decoded sample rate. Playback preparation binds it to the
     /// session's output rate; direct readers can request it independently.
     #[config(skip = "transferred to the audio host-rate owner")]
