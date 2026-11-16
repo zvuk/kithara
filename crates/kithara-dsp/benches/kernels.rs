@@ -13,7 +13,7 @@ use kithara_dsp::{
     spectrum::{Autocorrelation, Fft, FftLen, prediction_difference},
 };
 use kithara_test_utils::bufpool::pools;
-use num_traits::ToPrimitive;
+use num_traits::{AsPrimitive, ToPrimitive};
 use realfft::{RealToComplex, RealToComplexEven};
 
 fn loud_scalar(samples: &[f32], limit: f32) -> Option<usize> {
@@ -45,6 +45,32 @@ fn last_loud(c: &mut Criterion) {
         }
     }
     group.finish();
+}
+
+fn scalar_svf_fixed(
+    planes: &mut [Vec<f32>; 2],
+    state: &mut [[f64; 2]; 2],
+    coefficients: &[f64; 4],
+    response: Response,
+) {
+    let [a1, a2, a3, damping] = *coefficients;
+    for (plane, memory) in planes.iter_mut().zip(state.iter_mut()) {
+        let [mut s1, mut s2] = *memory;
+        for sample in plane {
+            let x = f64::from(*sample);
+            let v3 = x - s2;
+            let v1 = a1 * s1 + a2 * v3;
+            let v2 = (s2 + a2 * s1) + a3 * v3;
+            s1 = 2.0 * v1 - s1;
+            s2 = 2.0 * v2 - s2;
+            *sample = match response {
+                Response::LowPass => v2,
+                Response::HighPass => (x - damping * v1) - v2,
+            }
+            .as_();
+        }
+        *memory = [s1, s2];
+    }
 }
 
 fn svf_fixed(c: &mut Criterion) {
@@ -122,6 +148,37 @@ fn svf_fixed(c: &mut Criterion) {
                     },
                 );
             }
+
+            let gain = (std::f64::consts::PI * 4000.0 / f64::from(rate.get())).tan();
+            let damping = FRAC_1_SQRT_2.recip();
+            let a1 = (1.0 + gain * (gain + damping)).recip();
+            let a2 = gain * a1;
+            let coefficients = [a1, a2, gain * a2, damping];
+            let mut scalar = template.clone();
+            scalar_svf_fixed(&mut scalar, &mut [[0.0; 2]; 2], &coefficients, response);
+            assert!(fixed.iter().flatten().zip(scalar.iter().flatten()).all(
+                |(actual, expected)| actual.is_finite()
+                    && expected.is_finite()
+                    && (actual - expected).abs() <= 1e-6
+            ));
+            group.bench_function(
+                BenchmarkId::new(format!("2ch_{response:?}/scalar"), frames),
+                |b| {
+                    b.iter_batched_ref(
+                        || (template.clone(), [[0.0_f64; 2]; 2]),
+                        |(planes, state)| {
+                            scalar_svf_fixed(
+                                black_box(planes),
+                                black_box(state),
+                                black_box(&coefficients),
+                                response,
+                            );
+                            black_box(planes);
+                        },
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
         }
     }
     group.finish();
