@@ -374,6 +374,28 @@ impl Block {
     }
 }
 
+fn input_forms(frames: usize) -> [(&'static str, [Vec<f32>; 2]); 3] {
+    let stereo = |left: Vec<f32>| {
+        let right = left.iter().map(|sample| -0.75 * sample).collect();
+        [left, right]
+    };
+    let mut state = 0x9e37_79b9_u32;
+    let noise = std::iter::repeat_with(|| {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        let value = f32::from(u16::try_from(state >> 16).expect("upper noise bits"));
+        ((value + 0.5) / 65_536.0 - 0.5) * (TPT_SILENT_PEAK * 0.125)
+    })
+    .take(frames)
+    .collect();
+    [
+        ("signal", stereo(portable::eq_sine_440()[..frames].to_vec())),
+        ("silence", std::array::from_fn(|_| vec![0.0; frames])),
+        ("quiet_noise", stereo(noise)),
+    ]
+}
+
 fn gains(bands: usize, frames: usize, moving: bool) -> Vec<Vec<f32>> {
     let coeff = SmoothingFilterCoeff::new(
         NonZeroU32::new(48_000).expect("benchmark rate"),
@@ -551,6 +573,41 @@ fn diagnose<K: Diagnostic>(frequencies: &[f32], frames: usize, label: &str, make
     }
 }
 
+fn assert_scalar_tpt_block(
+    scalar: &mut ScalarFrame<TptSection>,
+    native: &mut Svf,
+    input: &[Vec<f32>; 2],
+    quiet: bool,
+) {
+    let frames = input[0].len();
+    let planes = input.each_ref().map(Vec::as_slice);
+    assert_eq!(native.filter.split(&planes, &mut native.bands), frames);
+    for (channel, (filter, input)) in scalar.0.iter_mut().zip(input).enumerate() {
+        for (frame, input) in input.iter().enumerate() {
+            filter.filter_sample(*input);
+            for (expected, band) in filter.frame.iter().zip(&native.bands) {
+                assert_eq!(
+                    expected.to_bits(),
+                    band[channel][frame].to_bits(),
+                    "scalar-TPT/native bands={} frame={frame} channel={channel}",
+                    filter.frame.len()
+                );
+            }
+            if quiet {
+                for split in &filter.splits {
+                    for section in split.low.iter().chain(&split.high).chain(&split.allpass) {
+                        assert_ne!(section.quiet, 0, "every section frame is below threshold");
+                        if frame > 0 {
+                            assert_eq!(section.quiet, TPT_SECTION_MEMORY);
+                            assert_eq!(section.state.map(f64::to_bits), [0; 2]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn verify_scalar_tpt(frequencies: &[f32], frames: usize) {
     let mut scalar = ScalarFrame::<TptSection>::new(frequencies);
     let mut native = Svf::new(frequencies, frames);
@@ -566,21 +623,13 @@ fn verify_scalar_tpt(frequencies: &[f32], frames: usize) {
                 })
                 .collect()
         });
-        let planes = input.each_ref().map(Vec::as_slice);
-        assert_eq!(native.filter.split(&planes, &mut native.bands), frames);
-        for (channel, (filter, input)) in scalar.0.iter_mut().zip(&input).enumerate() {
-            for (frame, input) in input.iter().enumerate() {
-                filter.filter_sample(*input);
-                for (expected, band) in filter.frame.iter().zip(&native.bands) {
-                    assert_eq!(
-                        expected.to_bits(),
-                        band[channel][frame].to_bits(),
-                        "scalar-TPT/native bands={} frame={} channel={channel}",
-                        frequencies.len() + 1,
-                        start + frame
-                    );
-                }
-            }
+        assert_scalar_tpt_block(&mut scalar, &mut native, &input, false);
+    }
+    for (shape, input) in input_forms(frames) {
+        let mut scalar = ScalarFrame::<TptSection>::new(frequencies);
+        let mut native = Svf::new(frequencies, frames);
+        for _ in 0..2 {
+            assert_scalar_tpt_block(&mut scalar, &mut native, &input, shape != "signal");
         }
     }
 }
@@ -603,52 +652,56 @@ pub(crate) fn bench(c: &mut Criterion) {
             group.throughput(Throughput::Elements(
                 u64::try_from(frames).expect("stereo frames"),
             ));
-            let left = portable::eq_sine_440()[..frames].to_vec();
-            let input = [
-                left.clone(),
-                left.iter().map(|sample| -0.75 * sample).collect(),
-            ];
+            let forms = input_forms(frames);
             let gains = gains(bands, frames, true);
             verify_scalar_tpt(&frequencies, frames);
-            let mut scalar_tpt = ScalarFrame::<TptSection>::new(&frequencies);
-            group.bench_function(
-                BenchmarkId::new(format!("tpt_scalar_{bands}band"), frames),
-                |b| {
+            diagnose(&frequencies, frames, "svf", || {
+                Svf::new(&frequencies, frames)
+            });
+            for (shape, input) in &forms {
+                let variant = if *shape == "signal" {
+                    format!("{bands}band")
+                } else {
+                    format!("{shape}_{bands}band")
+                };
+                let mut scalar_tpt = ScalarFrame::<TptSection>::new(&frequencies);
+                group.bench_function(
+                    BenchmarkId::new(format!("tpt_scalar_{variant}"), frames),
+                    |b| {
+                        b.iter_batched_ref(
+                            || (*input).clone(),
+                            |io| {
+                                scalar_tpt.sum(black_box(&mut *io), black_box(&gains), frames);
+                                black_box(&*io);
+                            },
+                            BatchSize::SmallInput,
+                        );
+                    },
+                );
+                let mut baseline = Frame::new(&frequencies);
+                group.bench_function(BenchmarkId::new(format!("df1_{variant}"), frames), |b| {
                     b.iter_batched_ref(
-                        || input.clone(),
+                        || (*input).clone(),
                         |io| {
-                            scalar_tpt.sum(black_box(&mut *io), black_box(&gains), frames);
+                            baseline.sum(black_box(&mut *io), black_box(&gains), frames);
                             black_box(&*io);
                         },
                         BatchSize::SmallInput,
                     );
-                },
-            );
-            let mut baseline = Frame::new(&frequencies);
-            group.bench_function(BenchmarkId::new(format!("df1_{bands}band"), frames), |b| {
-                b.iter_batched_ref(
-                    || input.clone(),
-                    |io| {
-                        baseline.sum(black_box(&mut *io), black_box(&gains), frames);
-                        black_box(&*io);
-                    },
-                    BatchSize::SmallInput,
-                );
-            });
-            diagnose(&frequencies, frames, "svf", || {
-                Svf::new(&frequencies, frames)
-            });
-            let mut svf = Svf::new(&frequencies, frames);
-            group.bench_function(BenchmarkId::new(format!("svf_{bands}band"), frames), |b| {
-                b.iter_batched_ref(
-                    || input.clone(),
-                    |io| {
-                        svf.sum(black_box(&mut *io), black_box(&gains), frames);
-                        black_box(&*io);
-                    },
-                    BatchSize::SmallInput,
-                );
-            });
+                });
+                let mut svf = Svf::new(&frequencies, frames);
+                group.bench_function(BenchmarkId::new(format!("svf_{variant}"), frames), |b| {
+                    b.iter_batched_ref(
+                        || (*input).clone(),
+                        |io| {
+                            svf.sum(black_box(&mut *io), black_box(&gains), frames);
+                            black_box(&*io);
+                        },
+                        BatchSize::SmallInput,
+                    );
+                });
+            }
+            let input = &forms[0].1;
             for design in [Design::WidenedF32, Design::NativeF64] {
                 diagnose(&frequencies, frames, &format!("biquad_{design:?}"), || {
                     Block::new(&frequencies, frames, design)
@@ -658,7 +711,7 @@ pub(crate) fn bench(c: &mut Criterion) {
                     BenchmarkId::new(format!("biquad_{design:?}_{bands}band"), frames),
                     |b| {
                         b.iter_batched_ref(
-                            || input.clone(),
+                            || (*input).clone(),
                             |io| {
                                 candidate.sum(black_box(&mut *io), black_box(&gains), frames);
                                 black_box(&*io);

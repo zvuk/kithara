@@ -104,7 +104,7 @@ fn run_chunks<'a, S: Simd, const LANES: usize>(
             input
         });
         let snapshot = (state, count);
-        let (candidate, candidate_count, retired) = run_span::<S, false>(
+        let (candidate, candidate_count, replay) = run_span::<S, false>(
             simd,
             &mut chunk,
             state,
@@ -113,7 +113,7 @@ fn run_chunks<'a, S: Simd, const LANES: usize>(
             damping,
             response,
         );
-        if (retired & active).any_true() {
+        if (replay & active).any_true() {
             for (plane, input) in chunk.iter_mut().zip(&original) {
                 let len = plane.len();
                 plane.copy_from_slice(input.get(..len).expect("saved span input"));
@@ -191,7 +191,7 @@ fn run_frames<'a, S: Simd, const LANES: usize, const EXACT: bool>(
 ) -> ([f64x2<S>; 2], u64x2<S>, mask64x2<S>) {
     let zero = f64x2::splat(simd, 0.0);
     let no_quiet = u64x2::splat(simd, 0);
-    let mut retired_any = no_quiet.simd_ne(no_quiet);
+    let mut replay = no_quiet.simd_ne(no_quiet);
     let one = u64x2::splat(simd, 1);
     let limit = u64x2::splat(
         simd,
@@ -216,7 +216,8 @@ fn run_frames<'a, S: Simd, const LANES: usize, const EXACT: bool>(
             .0;
         count = silent.select(count.saturating_add(one).min(limit), no_quiet);
         let retired = count.simd_eq(limit);
-        retired_any |= retired;
+        let changed = (next1.bitcast::<u64x2<S>>() | next2.bitcast::<u64x2<S>>()).simd_ne(no_quiet);
+        replay |= retired & changed;
         if EXACT {
             s1 = retired.select(zero, next1);
             s2 = retired.select(zero, next2);
@@ -228,7 +229,7 @@ fn run_frames<'a, S: Simd, const LANES: usize, const EXACT: bool>(
             *sample = *output;
         }
     }
-    ([s1, s2], count, retired_any)
+    ([s1, s2], count, replay)
 }
 
 pub(crate) struct Split<const CHANNELS: usize> {
@@ -384,6 +385,52 @@ mod tests {
                         }
                     }
                     assert_eq!(section.quiet.as_slice(), expected_count.as_slice());
+                }
+            });
+        }
+    }
+
+    #[kithara::test]
+    #[case(Response::LowPass)]
+    #[case(Response::HighPass)]
+    #[case(Response::AllPass)]
+    fn settled_zero_spans_need_no_replay_and_keep_signed_zero_bits(#[case] response: Response) {
+        for level in [Level::new(), Level::fallback()] {
+            dispatch!(level, simd => {
+                for state in [
+                    [[0.0; 2]; 2],
+                    [[-0.0; 2]; 2],
+                    [[0.0, -0.0], [-0.0, 0.0]],
+                ] {
+                    for frames in [1, 2, 31, 32, 33, 65] {
+                        let state = state.map(|pair| f64x2::from_slice(simd, &pair));
+                        let count = u64x2::splat(simd, 2);
+                        let coefficients = svf::coefficients(0.01, consts::CROSSOVER_DAMPING)
+                            .map(|value| f64x2::splat(simd, value));
+                        let damping = f64x2::splat(simd, consts::CROSSOVER_DAMPING);
+                        let mut actual = [vec![0.0; frames], vec![-0.0; frames]];
+                        let mut expected = actual.clone();
+                        let [left, right] = &mut actual;
+                        let (actual_state, actual_count, replay) = run_span::<_, false>(
+                            simd, &mut [left.as_mut_slice(), right.as_mut_slice()],
+                            state, count, coefficients, damping, response,
+                        );
+                        assert!(replay.all_false(), "settled zeros must not replay");
+                        let [left, right] = &mut expected;
+                        let (expected_state, expected_count, _) = run_span::<_, true>(
+                            simd, &mut [left.as_mut_slice(), right.as_mut_slice()],
+                            state, count, coefficients, damping, response,
+                        );
+                        for (actual, expected) in actual.iter().flatten().zip(expected.iter().flatten()) {
+                            assert_eq!(actual.to_bits(), expected.to_bits());
+                        }
+                        for (actual, expected) in actual_state.iter().zip(&expected_state) {
+                            for (actual, expected) in actual.as_slice().iter().zip(expected.as_slice()) {
+                                assert_eq!(actual.to_bits(), expected.to_bits());
+                            }
+                        }
+                        assert_eq!(actual_count.as_slice(), expected_count.as_slice());
+                    }
                 }
             });
         }
