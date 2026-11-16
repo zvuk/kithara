@@ -6,6 +6,10 @@
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum LottieError {
+    #[error("the requested artwork frame must be finite")]
+    InvalidFrame,
+    #[error("the frame produces non-finite drawing data")]
+    Numeric,
     /// A shape that changes contours already collected rather than adding one.
     ///
     /// Velato reads the trim of these and drops the repeater on the floor, so
@@ -38,4 +42,25 @@ pub enum LottieError {
     MiteredStroke { layer: String },
     #[error("layer {layer:?} blends with what is under it, which this list draws over instead")]
     Blend { layer: String },
+}
+/// Why caller-owned artwork could not be admitted before rendering.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ArtworkError {
+    #[error("artwork cannot emit a valid frame: {source}")]
+    Emit {
+        #[from]
+        source: LottieError,
+    },
+    #[error("invalid Lottie JSON: {source}")]
+    Parse {
+        #[from]
+        source: velato::Error,
+    },
+    #[error("artwork exceeds the {kind} limit of {max}")]
+    Limit { kind: &'static str, max: usize },
+    #[error("{path}: unsupported {feature}")]
+    Unsupported { path: String, feature: &'static str },
+    #[error("{path}: {reason}")]
+    Invalid { path: String, reason: &'static str },
 }

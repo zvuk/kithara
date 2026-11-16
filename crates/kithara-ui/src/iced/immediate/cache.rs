@@ -13,7 +13,61 @@
 
 use std::sync::OnceLock;
 
-use iced::widget::canvas::{Cache, Group};
+use iced::{
+    Rectangle, Renderer, Size,
+    advanced::graphics::cache::{Cache as ValueCache, Cached, State},
+    widget::canvas::{Frame, Geometry, Group},
+};
+
+use crate::backends::finish;
+
+#[derive(Debug, Clone)]
+struct Prepared {
+    bounds: Rectangle,
+    geometry: <Geometry as Cached>::Cache,
+}
+
+/// Geometry is linearized once before entering the shared renderer cache.
+#[derive(Debug)]
+pub(crate) struct Cache {
+    inner: ValueCache<Prepared>,
+}
+
+impl Cache {
+    pub(crate) fn clear(&self) {
+        self.inner.clear();
+    }
+
+    pub(crate) fn draw(
+        &self,
+        renderer: &Renderer,
+        size: Size,
+        draw: impl FnOnce(&mut Frame),
+    ) -> Geometry {
+        self.draw_with_bounds(renderer, Rectangle::with_size(size), draw)
+    }
+
+    pub(crate) fn draw_with_bounds(
+        &self,
+        renderer: &Renderer,
+        bounds: Rectangle,
+        draw: impl FnOnce(&mut Frame),
+    ) -> Geometry {
+        let previous = match &*self.inner.state().borrow() {
+            State::Filled { current } if current.bounds == bounds => {
+                return <Geometry as Cached>::load(&current.geometry);
+            }
+            State::Filled { current } => Some(current.geometry.clone()),
+            State::Empty { previous } => previous.as_ref().map(|value| value.geometry.clone()),
+        };
+        let mut frame = Frame::with_bounds(renderer, bounds);
+        draw(&mut frame);
+        let geometry = finish(frame.into_geometry()).cache(self.inner.group(), previous);
+        let result = <Geometry as Cached>::load(&geometry);
+        self.inner.put(Prepared { bounds, geometry });
+        result
+    }
+}
 
 /// The group shared by every canvas cache this toolkit builds.
 fn group() -> Group {
@@ -23,5 +77,37 @@ fn group() -> Group {
 
 /// An empty canvas cache in the shared group.
 pub(crate) fn canvas() -> Cache {
-    Cache::with_group(group())
+    Cache {
+        inner: ValueCache::with_group(group()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use iced::{Color, Font, Pixels, Point, Renderer, Size, widget::canvas::Frame};
+    use kithara_test_utils::kithara;
+
+    use super::canvas;
+
+    #[kithara::test]
+    fn geometry_is_prepared_only_after_invalidation_or_bounds_change() {
+        let renderer =
+            Renderer::Secondary(iced_tiny_skia::Renderer::new(Font::DEFAULT, Pixels(16.0)));
+        let cache = canvas();
+        let count = Cell::new(0);
+        let draw = |frame: &mut Frame| {
+            count.set(count.get() + 1);
+            frame.fill_rectangle(Point::ORIGIN, Size::new(8.0, 8.0), Color::WHITE);
+        };
+        cache.draw(&renderer, Size::new(32.0, 32.0), draw);
+        cache.draw(&renderer, Size::new(32.0, 32.0), |_| {
+            panic!("a cache hit must not prepare geometry")
+        });
+        cache.clear();
+        cache.draw(&renderer, Size::new(32.0, 32.0), draw);
+        cache.draw(&renderer, Size::new(64.0, 32.0), draw);
+        assert_eq!(count.get(), 3);
+    }
 }

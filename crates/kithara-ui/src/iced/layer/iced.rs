@@ -16,7 +16,7 @@ use iced::{
 };
 
 use crate::{
-    backends::replay_ordered,
+    backends::{finish, replay_ordered},
     draw::Pt,
     hosts::layer::HostLayer,
     iced::tree::window as window_event,
@@ -37,7 +37,7 @@ pub(crate) fn draw_host_layer<A>(
     renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
         let mut frame = Frame::new(renderer, Size::new(bounds.w, bounds.h));
         replay_ordered(layer.draw(), &mut frame, resources);
-        renderer.draw_geometry(frame.into_geometry());
+        renderer.draw_geometry(finish(frame.into_geometry()));
     });
 }
 
