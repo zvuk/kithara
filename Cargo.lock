@@ -4736,6 +4736,7 @@ dependencies = [
  "clap",
  "delegate",
  "derive_more",
+ "dirs-next",
  "fieldwork",
  "futures",
  "getrandom 0.4.3",
@@ -4787,6 +4788,7 @@ dependencies = [
  "apple-native-keyring-store",
  "dbus-secret-service-keyring-store",
  "derive_more",
+ "fieldwork",
  "keyring-core",
  "kithara-net",
  "kithara-platform",
@@ -4794,6 +4796,7 @@ dependencies = [
  "kithara-ui",
  "kithara-workspace-hack",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "url",
@@ -4806,8 +4809,10 @@ dependencies = [
 name = "kithara-app-tests"
 version = "0.0.1-alpha5"
 dependencies = [
+ "axum",
  "kithara",
  "kithara-app",
+ "kithara-app-library",
  "kithara-integration-tests",
  "kithara-render",
  "kithara-test-dylib",
@@ -4838,6 +4843,7 @@ dependencies = [
  "rand 0.10.3",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "unimock",
  "url",

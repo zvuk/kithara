@@ -7,7 +7,7 @@ use kithara::{
     decode::DecoderBackend,
     file::{File, FileConfig},
     platform::{sync::Arc, thread, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
@@ -180,9 +180,10 @@ async fn audio_file_mp3_decodes_with_duration(
         )
         .maybe_hint(hint.map(str::to_owned))
         .build();
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap_or_else(|e| panic!("probe failed for url={url} hint={hint:?}: {e}"));
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap_or_else(|e| panic!("probe failed for url={url} hint={hint:?}: {e}"));
 
     let duration = audio.duration();
     assert!(
@@ -269,9 +270,10 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
                 .build(),
         )
         .build();
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .expect("open the streamed track");
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .expect("open the streamed track");
 
     let position = read_to_end(audio).await;
 
@@ -339,9 +341,10 @@ async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
                 .build(),
         )
         .build();
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .expect("open the headerless track");
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .expect("open the headerless track");
 
     let duration = audio.duration();
     assert!(
@@ -395,9 +398,10 @@ async fn mp3_duration_correct_before_decode(tone_mp3: &'static [u8], #[case] hin
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .maybe_hint(hint.map(String::from))
         .build();
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap_or_else(|e| panic!("creation failed for url={url} hint={hint:?}: {e}"));
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap_or_else(|e| panic!("creation failed for url={url} hint={hint:?}: {e}"));
 
     let duration = audio.duration();
     assert!(
@@ -434,9 +438,10 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe(tone_mp3: &
         )
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config).build();
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap();
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap();
 
     let (samples_read, position, eof) = read_prefix(audio).await;
 

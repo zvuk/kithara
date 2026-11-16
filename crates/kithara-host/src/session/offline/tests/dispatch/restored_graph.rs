@@ -180,7 +180,7 @@ async fn unexpected_stream_stop_restarts_stream_without_dropping_player_graph_or
     owner
         .call(move |(state, _)| {
             assert_eq!(occupied_slots(state, id).len(), 2);
-            assert!(!state.stream_needs_restart);
+            assert_eq!(state.output_phase, OutputPhase::Running);
         })
         .await;
     owner.close().await;

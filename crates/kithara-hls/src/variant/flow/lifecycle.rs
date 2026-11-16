@@ -66,7 +66,11 @@ where
     /// deadlocks before activation can drain it). Runs inside the
     /// [`Layout`] write lock, so the freeze decision cannot race a seek
     /// re-minting the space.
-    fn defer_prefix_settle(&self, planned: PlannedFetch, final_len: u64) -> bool {
+    pub(in crate::variant) fn defer_prefix_settle(
+        &self,
+        planned: PlannedFetch,
+        final_len: u64,
+    ) -> bool {
         let tail = self.seek.segment_aware_tail.load(Ordering::Acquire);
         if tail == Self::NO_SEEK_TAIL {
             return false;

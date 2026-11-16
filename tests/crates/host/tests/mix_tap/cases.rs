@@ -69,12 +69,15 @@ async fn deck_eq_processes_the_crossfade_sum() {
 /// Bands of the deck's default equalizer layout.
 const DECK_EQ_BANDS: usize = 10;
 
-/// Plays one constant, crossfades to a second, and captures everything the
+/// Plays one constant, manually crossfades to a second, and captures everything the
 /// deck sounded from its first block, with `cut` on the deck's lowest band.
 async fn crossfade_take(cut: Option<kithara::effects::GainDb>) -> Vec<f32> {
     use std::num::{NonZeroU32, NonZeroUsize};
 
-    use kithara::warp::WarpConfig;
+    use kithara::{
+        queue::{ActionAtItemEnd, Transition},
+        warp::WarpConfig,
+    };
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -90,6 +93,9 @@ async fn crossfade_take(cut: Option<kithara::effects::GainDb>) -> Vec<f32> {
         SAMPLE_RATE,
     )
     .await;
+    harness
+        .with_queue(|queue| queue.set_action_at_item_end(ActionAtItemEnd::None))
+        .await;
     if let Some(gain) = cut {
         harness
             .with_queue(move |queue| queue.set_eq_gain(0, f32::from(gain)))
@@ -101,6 +107,11 @@ async fn crossfade_take(cut: Option<kithara::effects::GainDb>) -> Vec<f32> {
         asset_source(&assets::fixed_constant_wav_cd_half_44100()).into(),
     )
     .await;
+    assert_eq!(
+        harness.player().action_at_item_end(),
+        ActionAtItemEnd::None,
+        "the take uses a manual crossfade"
+    );
     let next = harness
         .with_queue(|queue| {
             queue
@@ -111,10 +122,6 @@ async fn crossfade_take(cut: Option<kithara::effects::GainDb>) -> Vec<f32> {
         })
         .await;
     let mut take = render_effect_window(&harness, 2048).await;
-    harness
-        .with_queue(|queue| queue.next(kithara::queue::Transition::Crossfade))
-        .await
-        .expect("the queue crossfades to the next track");
     kithara_integration_tests::waits::wait_for_loader_done(
         harness.player(),
         next,
@@ -122,6 +129,10 @@ async fn crossfade_take(cut: Option<kithara::effects::GainDb>) -> Vec<f32> {
     )
     .await
     .expect("the incoming track loads");
+    harness
+        .with_queue(|queue| queue.next(Transition::Crossfade))
+        .await
+        .expect("the queue crossfades to the next track");
     take.extend_from_slice(&render_effect_window(&harness, 44_100).await);
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;

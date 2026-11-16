@@ -1,7 +1,10 @@
-use std::num::{NonZeroU32, NonZeroU128};
+use std::{
+    collections::HashSet,
+    num::{NonZeroU32, NonZeroU128},
+};
 
-use kithara_command::{Seq, When};
-use kithara_config::LiveConfig;
+use kithara_command::{Sender, Seq, When};
+use kithara_config::{ConfigOwner, LiveConfig};
 use kithara_render::{
     LaneCommand, LaneFrame,
     bridge::{DeckPart, SlotMark},
@@ -25,12 +28,12 @@ use super::{
 };
 use crate::{Bound, PlayError, Player};
 
-impl<S> Track<S> for PlayerImpl<S> {
+impl Track for PlayerImpl {
     fn admit(
         &mut self,
         change: TrackSettingsChange,
         at: When<SessionFrame>,
-        out: &Outbox<'_, S>,
+        out: &Outbox<'_>,
     ) -> Result<Option<usize>, PlayError> {
         self.observe(out);
         self.settle_lane();
@@ -41,15 +44,7 @@ impl<S> Track<S> for PlayerImpl<S> {
     }
 
     fn projected(&self) -> TrackSettings {
-        let mut settings = self.settings.projected();
-        if let Some((_, target)) = self
-            .loading
-            .as_ref()
-            .and_then(|loading| loading.speed.as_ref())
-        {
-            settings.apply_change(TrackSettingsChange::Speed(*target));
-        }
-        settings
+        self.projected_settings()
     }
 
     fn prepared_speed(&self) -> Option<&SpeedCurve> {
@@ -60,25 +55,24 @@ impl<S> Track<S> for PlayerImpl<S> {
             .resume
             .or(self.mark)
             .is_some_and(|mark| mark.lane.segment == self.segment.id && mark.lane.frame > 0);
-        let mut prepared = None;
-        for operation in self.lane_history.commands.iter().rev() {
-            match &operation.command {
-                LaneCommand::Segment { id, speed, .. } if *id == self.segment.id => {
-                    prepared = Some(speed);
-                    break;
-                }
-                LaneCommand::SetSpeed(speed) if operation.segment == self.segment.id => {
-                    prepared = match operation.when {
-                        When::At(frame) if frame.segment == self.segment.id && frame.frame == 0 => {
-                            Some(speed)
-                        }
-                        _ => None,
-                    };
-                    break;
-                }
-                _ => {}
-            }
-        }
+        let operation = self
+            .lane_commands
+            .operations()
+            .iter()
+            .filter(|operation| match operation.command {
+                LaneCommand::Segment { id, .. } => id == self.segment.id,
+                LaneCommand::SetSpeed(_) => operation.segment == self.segment.id,
+                _ => false,
+            })
+            .max_by_key(|operation| (operation.seq, operation.ordinal))?;
+        let prepared = match &operation.command {
+            LaneCommand::Segment { speed, .. } => Some(speed),
+            LaneCommand::SetSpeed(speed) => match operation.when {
+                When::At(at) if at.segment == self.segment.id && at.frame == 0 => Some(speed),
+                _ => None,
+            },
+            _ => None,
+        };
         prepared.filter(|curve| {
             !consumed
                 || match curve {
@@ -91,11 +85,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         })
     }
 
-    fn prepare_entry(
-        &mut self,
-        at: SessionFrame,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<bool, PlayError> {
+    fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_>) -> Result<bool, PlayError> {
         self.observe(out);
         self.settle_lane();
         if let Some(failure) = self.preparation_failure() {
@@ -163,17 +153,14 @@ impl<S> Track<S> for PlayerImpl<S> {
     ) -> Result<(Position, f64), PlayError> {
         let media_origin = self.extent.media_origin.ok_or(PlayError::Untimed)?;
         let (mark, target) = self.planned_target(at)?;
-        let commands = self.planned_changes(mark.lane.segment, true)?;
+        let commands = self.lane_changes(true)?;
         let base = SpeedCurve::Constant(self.segment.speed);
         let mut curve = &base;
         let mut origin = f64::from(self.segment.speed);
         let mut start = 0;
         let mut cursor = mark.lane.frame;
         let mut position = mark.position.as_secs_f64();
-        for (frame, _, change) in commands
-            .into_iter()
-            .filter(|(frame, _, _)| *frame <= target)
-        {
+        for (frame, _, change) in commands.iter().filter(|(frame, _, _)| *frame <= target) {
             if frame > cursor {
                 position += curve_area(
                     curve,
@@ -225,7 +212,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         let (mark, span, offset) = self.planned_span()?;
         let basis = self.source_basis.ok_or(PlayError::Untimed)?;
         let endpoint = source_endpoint(basis, endpoint, sample_rate)?;
-        let commands = self.planned_changes(mark.lane.segment, true)?;
+        let commands = self.lane_changes(true)?;
         let plan = EndPlan {
             source: (
                 self.observed_source.map(|source| source.source_revision),
@@ -236,35 +223,27 @@ impl<S> Track<S> for PlayerImpl<S> {
             endpoint,
             speed: self.segment.speed.to_bits(),
             sample_rate,
-            commands: commands.iter().map(|(at, seq, _)| (*at, *seq)).collect(),
+            declick: self.geometry.declick,
         };
-        let known = self
-            .projected_end
-            .borrow()
-            .as_ref()
-            .filter(|projected| projected.plan == plan && projected.frame >= mark.lane.frame)
-            .map(|projected| projected.frame);
+        let known = self.lane_commands.cached_end(&plan, mark.lane.frame);
         let end = if let Some(end) = known {
             end
         } else {
             let end = self.project_end(mark, span, offset, &plan, &commands)?;
-            *self.projected_end.borrow_mut() = Some(ProjectedEnd { plan, frame: end });
+            self.lane_commands.cache_end(plan, end);
             end
         };
         self.planned_session_end(mark, end)
     }
 
     fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>> {
-        if self.lane_history.receipts.is_empty() {
-            self.settle_lane();
-        }
-        self.lane_history.receipts.pop_front()
+        self.lane_commands.receipts.pop_front()
     }
 
     fn seek_applied(&mut self, seq: Seq) -> Option<bool> {
         self.settle_lane();
-        self.lane_history
-            .commands
+        self.lane_commands
+            .operations()
             .iter()
             .find(|operation| operation.seq == seq)
             .map_or(Some(false), |operation| operation.applied.then_some(true))
@@ -289,7 +268,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         &mut self,
         position: Position,
         speed: SpeedCurve,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         self.observe(out);
         self.settle_lane();
@@ -299,7 +278,42 @@ impl<S> Track<S> for PlayerImpl<S> {
     }
 }
 
-impl<S> PlayerImpl<S> {
+impl PlayerImpl {
+    pub(super) fn projected_settings(&self) -> TrackSettings {
+        let operations = self.lane_commands.operations();
+        let mut current = HashSet::new();
+        if operations
+            .iter()
+            .any(|operation| !operation.is_projected(&current))
+        {
+            current.extend(
+                self.lane
+                    .sender()
+                    .into_iter()
+                    .flat_map(Sender::current_pending),
+            );
+        }
+        let mut pending: Vec<_> = self.settings.pending().collect();
+        pending.sort_by_key(|&(seq, when, _)| (when, seq));
+        let mut settings = *self.settings.config();
+        for (seq, _, change) in pending {
+            if operations
+                .iter()
+                .any(|operation| operation.seq == seq && operation.is_projected(&current))
+            {
+                settings.apply_change(change);
+            }
+        }
+        if let Some((_, target)) = self
+            .loading
+            .as_ref()
+            .and_then(|loading| loading.speed.as_ref())
+        {
+            settings.apply_change(TrackSettingsChange::Speed(*target));
+        }
+        settings
+    }
+
     pub(super) fn consumed_speed(&self) -> Result<f32, PlayError> {
         let frame = match self
             .resume
@@ -316,107 +330,100 @@ impl<S> PlayerImpl<S> {
             }
             None => return Err(PlayError::Untimed),
         };
-        let at = LaneFrame {
-            segment: self.segment.id,
-            frame,
-        };
-        let initial_bits = self.segment.speed.to_bits();
-        if let Some(projection) = self.lane_history.speed_projection.get()
-            && projection.at == at
-            && projection.initial_bits == initial_bits
-            && projection.declick == self.geometry.declick
-        {
-            return Ok(projection.speed);
-        }
-        let commands = self.planned_changes(self.segment.id, false)?;
-        let commands = &commands[..commands.partition_point(|(at, _, _)| *at <= frame)];
-
-        let first = commands
-            .iter()
-            .rposition(|(_, _, change)| match change {
-                PlannedChange::Speed(
-                    SpeedCurve::Constant(_)
-                    | SpeedCurve::Approach(_)
-                    | SpeedCurve::ApproachSteps(_),
-                ) => true,
-                PlannedChange::Speed(SpeedCurve::Steps(steps)) => {
-                    steps.first().is_some_and(|(at, _)| *at == 0)
-                }
-                PlannedChange::Speed(SpeedCurve::Ramp { .. }) | PlannedChange::Jump(_) => false,
+        let mut commands = self.lane_changes(false)?;
+        let through = commands.operations.partition_point(|operation| {
+            operation
+                .frame_for(commands.segment)
+                .is_some_and(|at| at <= frame)
+        });
+        commands.operations = &commands.operations[..through];
+        let speeds = commands
+            .indexed()
+            .filter_map(|(at, seq, ordinal, change)| match change {
+                PlannedChange::Speed(curve) => Some((at, seq, ordinal, curve)),
+                PlannedChange::Jump(_) => None,
+            });
+        let anchor = speeds
+            .clone()
+            .rev()
+            .find(|(_, _, _, curve)| match curve {
+                SpeedCurve::Constant(_)
+                | SpeedCurve::Approach(_)
+                | SpeedCurve::ApproachSteps(_) => true,
+                SpeedCurve::Steps(steps) => steps.first().is_some_and(|(at, _)| *at == 0),
+                SpeedCurve::Ramp { .. } => false,
             })
-            .unwrap_or(0);
+            .map(|(at, seq, ordinal, _)| (at, seq, ordinal));
         let base = SpeedCurve::Constant(self.segment.speed);
         let mut curve = &base;
         let mut origin = f64::from(self.segment.speed);
         let mut start = 0;
-        for (at, _, change) in &commands[first..] {
-            if let PlannedChange::Speed(next) = change {
-                origin = curve_speed(curve, origin, at.saturating_sub(start))?;
-                curve = next;
-                start = *at;
-            }
+        for (at, _, _, next) in speeds.skip_while(|(at, seq, ordinal, _)| {
+            anchor.is_some_and(|anchor| (*at, *seq, *ordinal) < anchor)
+        }) {
+            origin = curve_speed(curve, origin, at.saturating_sub(start))?;
+            curve = next;
+            start = at;
         }
-        let speed = curve_speed(curve, origin, frame.saturating_sub(start))?
+        curve_speed(curve, origin, frame.saturating_sub(start))?
             .to_f32()
-            .ok_or(PlayError::Untimed)?;
-        self.lane_history
-            .speed_projection
-            .set(Some(SpeedProjection {
-                at,
-                initial_bits,
-                declick: self.geometry.declick,
-                speed,
-            }));
-        Ok(speed)
+            .ok_or(PlayError::Untimed)
     }
 
-    pub(super) fn planned_changes(
-        &self,
-        segment: SegmentId,
-        future: bool,
-    ) -> Result<Vec<(u64, Seq, PlannedChange<'_>)>, PlayError> {
-        let mut commands: Vec<(u64, Seq, PlannedChange<'_>)> =
-            Vec::with_capacity(self.lane_history.commands.len());
-        for operation in &self.lane_history.commands {
-            let frame = match &operation.command {
-                LaneCommand::Segment { id, .. } if *id == segment => 0,
-                _ => match operation.when {
-                    When::At(frame) if frame.segment == segment => frame.frame,
-                    When::Next | When::Deferred
-                        if operation.segment == segment
-                            && matches!(
-                                operation.command,
-                                LaneCommand::SetSpeed(_) | LaneCommand::Jump { .. }
-                            ) =>
-                    {
-                        if future {
-                            return Err(PlayError::NotReady);
-                        }
-                        continue;
-                    }
-                    When::At(_) | When::Next | When::Deferred => continue,
-                },
-            };
-            match &operation.command {
-                LaneCommand::SetSpeed(curve) | LaneCommand::Segment { speed: curve, .. } => {
-                    commands.push((frame, operation.seq, PlannedChange::Speed(curve)));
-                }
-                LaneCommand::Jump { to } => {
-                    let landing = frame
-                        .checked_add(self.geometry.declick.get() as u64)
-                        .ok_or(PlayError::Untimed)?;
-                    let superseded = self.lane_history.commands.iter().any(|next| next.seq != operation.seq
-                        && matches!(next.command, LaneCommand::Jump { .. })
-                        && matches!(next.when, When::At(at) if at.segment == segment && (at.frame > frame || at.frame == frame && next.seq > operation.seq) && at.frame < landing));
-                    if !superseded {
-                        commands.push((landing, operation.seq, PlannedChange::Jump(*to)));
-                    }
-                }
-                _ => {}
-            }
+    fn lane_changes(&self, future: bool) -> Result<LaneChanges<'_>, PlayError> {
+        let segment = self.segment.id;
+        let declick = self
+            .geometry
+            .declick
+            .get()
+            .to_u64()
+            .ok_or(PlayError::Untimed)?;
+        let operations = self.lane_commands.operations();
+        let mut current = HashSet::new();
+        if operations
+            .iter()
+            .any(|operation| !operation.is_projected(&current))
+        {
+            current.extend(
+                self.lane
+                    .sender()
+                    .into_iter()
+                    .flat_map(Sender::current_pending),
+            );
         }
-        commands.sort_by_key(|&(frame, seq, _)| (frame, seq));
-        Ok(commands)
+        let first = operations.partition_point(|operation| operation.frame_for(segment).is_none());
+        let known = &operations[first..];
+        let maximum = u64::MAX - declick;
+        let overflow = known.partition_point(|operation| {
+            operation.frame_for(segment).is_some_and(|at| at <= maximum)
+        });
+        let unresolved = operations[..first]
+            .iter()
+            .take(if future { first } else { 0 })
+            .filter(|operation| operation.is_projected(&current))
+            .filter(|operation| {
+                operation.segment == segment
+                    && matches!(operation.when, When::Next | When::Deferred)
+                    && matches!(
+                        operation.command,
+                        LaneCommand::SetSpeed(_) | LaneCommand::Jump { .. }
+                    )
+            })
+            .map(|operation| ((operation.seq, operation.ordinal), PlayError::NotReady));
+        let oversized = known[overflow..]
+            .iter()
+            .filter(|operation| operation.is_projected(&current))
+            .filter(|operation| matches!(operation.command, LaneCommand::Jump { .. }))
+            .map(|operation| ((operation.seq, operation.ordinal), PlayError::Untimed));
+        if let Some((_, error)) = unresolved.chain(oversized).min_by_key(|(order, _)| *order) {
+            return Err(error);
+        }
+        Ok(LaneChanges {
+            operations: known,
+            current,
+            segment,
+            declick,
+        })
     }
 
     fn planned_target(&self, at: SessionFrame) -> Result<(SlotMark, u64), PlayError> {
@@ -467,7 +474,7 @@ impl<S> PlayerImpl<S> {
         span: SourceSpan,
         offset: u64,
         plan: &EndPlan,
-        commands: &[(u64, Seq, PlannedChange<'_>)],
+        commands: &LaneChanges<'_>,
     ) -> Result<u64, PlayError> {
         let sample_rate = plan.sample_rate;
         let mut trajectory = self.trajectory_at(mark, span, offset, sample_rate, commands)?;
@@ -482,8 +489,8 @@ impl<S> PlayerImpl<S> {
             trajectory
                 .advance_by(0, sample_rate, at - cursor)
                 .map_err(|error| PlayError::Internal(error.to_string()))?;
-            cursor = *at;
-            project_change(&mut trajectory, change, sample_rate)?;
+            cursor = at;
+            project_change(&mut trajectory, &change, sample_rate)?;
         }
         let offset = trajectory
             .first_at_or_after(0, sample_rate, plan.endpoint, None)
@@ -498,7 +505,7 @@ impl<S> PlayerImpl<S> {
         span: SourceSpan,
         offset: u64,
         sample_rate: NonZeroU32,
-        commands: &[(u64, Seq, PlannedChange<'_>)],
+        commands: &LaneChanges<'_>,
     ) -> Result<SourceTrajectory, PlayError> {
         let mut trajectory = SourceTrajectory::new(self.segment.speed);
         let mut cursor = 0;
@@ -506,8 +513,8 @@ impl<S> PlayerImpl<S> {
             trajectory
                 .advance_by(0, sample_rate, at - cursor)
                 .map_err(|error| PlayError::Internal(error.to_string()))?;
-            cursor = *at;
-            project_change(&mut trajectory, change, sample_rate)?;
+            cursor = at;
+            project_change(&mut trajectory, &change, sample_rate)?;
         }
         trajectory
             .advance_by(0, sample_rate, mark.lane.frame - cursor)
@@ -529,6 +536,82 @@ impl<S> PlayerImpl<S> {
         })
         .map(Some)
         .ok_or(PlayError::Untimed)
+    }
+}
+
+struct LaneChanges<'a> {
+    operations: &'a [LaneOperation],
+    current: HashSet<Seq>,
+    segment: SegmentId,
+    declick: u64,
+}
+
+impl<'a> LaneChanges<'a> {
+    fn indexed(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (u64, Seq, usize, PlannedChange<'a>)> + Clone + '_ {
+        let segment = self.segment;
+        let declick = self.declick;
+        self.operations.iter().filter_map(move |operation| {
+            if !operation.is_projected(&self.current) {
+                return None;
+            }
+            let frame = operation.frame_for(segment)?;
+            let (at, change) = match &operation.command {
+                LaneCommand::SetSpeed(curve) | LaneCommand::Segment { speed: curve, .. } => {
+                    (frame, PlannedChange::Speed(curve))
+                }
+                LaneCommand::Jump { to } => (frame + declick, PlannedChange::Jump(*to)),
+                _ => return None,
+            };
+            Some((at, operation.seq, operation.ordinal, change))
+        })
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (u64, Seq, PlannedChange<'a>)> + '_ {
+        let mut speeds = self
+            .indexed()
+            .filter(|(_, _, _, change)| matches!(change, PlannedChange::Speed(_)))
+            .peekable();
+        let mut pending = self
+            .indexed()
+            .filter(|(_, _, _, change)| matches!(change, PlannedChange::Jump(_)));
+        let mut following = pending.clone().peekable();
+        let declick = self.declick;
+        let mut jumps = std::iter::from_fn(move || {
+            loop {
+                let current = pending.next()?;
+                while following
+                    .peek()
+                    .is_some_and(|next| (next.0, next.1) <= (current.0, current.1))
+                {
+                    following.next();
+                }
+                if following
+                    .peek()
+                    .is_none_or(|next| next.0 - declick >= current.0)
+                {
+                    return Some(current);
+                }
+            }
+        })
+        .peekable();
+        std::iter::from_fn(move || {
+            let speed_first = match (speeds.peek(), jumps.peek()) {
+                (Some(speed), Some(jump)) => {
+                    (speed.0, speed.1, speed.2) <= (jump.0, jump.1, jump.2)
+                }
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (None, None) => return None,
+            };
+            let (at, seq, _, change) = if speed_first {
+                speeds.next()?
+            } else {
+                jumps.next()?
+            };
+            Some((at, seq, change))
+        })
     }
 }
 

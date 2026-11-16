@@ -30,13 +30,13 @@ struct DeckSettlement {
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(super) fn apply_with_output(
         &mut self,
         command: QueueCommand<S>,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let result = self.apply_command(command, output, out).map_err(play_error);
         self.pump_loads(output, out);
@@ -46,9 +46,9 @@ where
 
     pub(super) fn settle_with_output(
         &mut self,
-        receipt: TrackReceipt<'_, S>,
+        receipt: TrackReceipt<'_>,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Settled {
         let mut outcomes: Vec<(usize, Settled)> = Vec::new();
         let mut handover = None;
@@ -65,7 +65,7 @@ where
                 removal_result = settled.removal_result;
             }
             TrackReceipt::Event(event) => {
-                let named: TrackReceipt<'_, S> = TrackReceipt::Event(event);
+                let named: TrackReceipt<'_> = TrackReceipt::Event(event);
                 for index in self.active.indices(|active| named.names(active.slot)) {
                     if let Some(active) = self.active.get_mut(index) {
                         outcomes
@@ -114,9 +114,9 @@ where
 
     fn settle_source_receipt(
         &mut self,
-        receipt: Receipt<DispatcherProtocol<ResourceLoad<S>>>,
+        receipt: Receipt<DispatcherProtocol<ResourceLoad>>,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Option<Vec<(usize, Settled)>> {
         let mut outcomes: Vec<(usize, Settled)> = Vec::new();
         let seq = receipt.seq();
@@ -172,8 +172,8 @@ where
 
     fn settle_source(
         track: &mut F::Track,
-        receipt: Receipt<DispatcherProtocol<ResourceLoad<S>>>,
-        out: &mut Outbox<'_, S>,
+        receipt: Receipt<DispatcherProtocol<ResourceLoad>>,
+        out: &mut Outbox<'_>,
     ) -> Settled {
         let settled = track.settle(TrackReceipt::Loaded(receipt), out);
         while track.lane_receipt().is_some() {}
@@ -185,7 +185,7 @@ where
         seq: Seq,
         outcome: &Outcome<DeckProtocol>,
         batch: &mut Batch<DeckProtocol>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> DeckSettlement {
         let mut removal_result = None;
         let removal = self.target.and_then(|target| match target.continued {
@@ -226,7 +226,7 @@ where
         &mut self,
         seq: Seq,
         reason: Rejection<DeckRefusal>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Settled {
         if self
             .target
@@ -254,7 +254,7 @@ where
         seq: Seq,
         outcome: &Outcome<DeckProtocol>,
         batch: &mut Batch<DeckProtocol>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Vec<(usize, Settled)> {
         let mut outcomes: Vec<(usize, Settled)> = Vec::new();
         for index in self
@@ -304,7 +304,7 @@ where
     fn settle_transitions(
         &mut self,
         outcomes: Vec<(usize, Settled)>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Settled {
         let mut result = Settled::Pending;
         for (index, settled) in outcomes {
@@ -354,8 +354,8 @@ where
     fn settle_parked(
         &mut self,
         index: usize,
-        receipt: Receipt<DispatcherProtocol<ResourceLoad<S>>>,
-        out: &mut Outbox<'_, S>,
+        receipt: Receipt<DispatcherProtocol<ResourceLoad>>,
+        out: &mut Outbox<'_>,
     ) {
         let Some(parked) = self.active.parked_get_mut(index) else {
             return;
@@ -383,7 +383,7 @@ where
         &mut self,
         now: SessionFrame,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) {
         let parked = self.active.parked_len();
         if let Some((_, delivery)) = self.clock {
@@ -415,7 +415,7 @@ where
 impl<S, F> HostedDeck<S> for Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S> + Send + 'static,
+    F: TrackFactory + Send + 'static,
     F::Track: Send + 'static,
 {
     fn mixer_config(&self) -> DeckMixerConfig {
@@ -437,7 +437,7 @@ where
     }
 
     #[kithara_test_utils::kithara::hang_watchdog]
-    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         self.accept_host_pass(pass, out);
         for post in self.mailbox.drain() {
             hang_tick!();
@@ -458,22 +458,17 @@ where
         }
     }
 
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, S>,
-        pass: DeckPass<'_>,
-        out: &mut Outbox<'_, S>,
-    ) {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         self.accept_host_pass(pass, out);
         self.settle_with_output(receipt, Some(pass.output), out);
     }
 
-    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         self.accept_host_pass(pass, out);
         self.tick_with_output(pass.now, Some(pass.output), out);
     }
 
-    fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
+    fn close(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError> {
         self.close_tracks(out)?;
         self.publish();
         Ok(())
@@ -483,9 +478,9 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
-    fn accept_host_pass(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+    fn accept_host_pass(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         let had_clock = self.clock.is_some();
         self.clock = out.pass().map(|pass| (pass.now, pass.delivery));
         let rate = pass.output.sample_rate.output();
@@ -518,11 +513,7 @@ where
         }
     }
 
-    fn set_host_rate(
-        &mut self,
-        rate: NonZeroU32,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<(), PlayError> {
+    fn set_host_rate(&mut self, rate: NonZeroU32, out: &mut Outbox<'_>) -> Result<(), PlayError> {
         let loaded = self.active.tracks().filter(|track| {
             matches!(
                 track.snapshot().as_ref().status,
@@ -564,9 +555,9 @@ where
         id: TrackId,
         leaving: bool,
         wanted: bool,
-        outcome: &Outcome<DispatcherProtocol<ResourceLoad<S>>>,
+        outcome: &Outcome<DispatcherProtocol<ResourceLoad>>,
     ) -> bool {
-        if leaving {
+        if leaving || self.tracks.is_changing_source(id) {
             return false;
         }
         let rejected = match outcome {
@@ -605,7 +596,7 @@ where
         &mut self,
         event: DeckEvent,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) {
         match event {
             DeckEvent::UnderrunStarted {
@@ -671,7 +662,7 @@ where
         slot: kithara_play::Slot,
         at: SessionFrame,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) {
         let Some(active) = self.active.iter().find(|active| active.slot == slot) else {
             return;
@@ -726,7 +717,7 @@ where
         id: TrackId,
         fault: PlaybackFault,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) {
         if self.current != Some(id)
             || self

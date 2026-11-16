@@ -1,7 +1,7 @@
 use std::fmt;
 
 use kithara::{
-    audio::{Audio, ResamplerBackend},
+    audio::{Audio, AudioConfig, ResamplerBackend},
     bufpool::HasPool,
     events::EventBus,
     platform::{
@@ -14,7 +14,7 @@ use kithara::{
 use kithara_command::{ChannelConfig, Inbox, Sender, channel};
 use kithara_render::{
     DecoderNode, DispatcherProtocol, LaneProtocol, LaneStart, LoadRefusal, Open, OpenResult,
-    PcmReceiver,
+    OpenedPcm,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -67,7 +67,7 @@ where
 
 pub(super) struct LaneOpen<T: StreamType, B: ResamplerBackend, S> {
     pub(super) worker: PlayWorker<S>,
-    pub(super) config: TrackConfig<T, B>,
+    pub(super) config: (AudioConfig<T, B>, TrackConfig),
 }
 
 impl<T: StreamType, B: ResamplerBackend, S> fmt::Debug for LaneOpen<T, B, S> {
@@ -82,7 +82,7 @@ where
     B: Default + ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    type Opened = PcmReceiver;
+    type Opened = OpenedPcm;
     type Lane = DecoderNode<Audio<Stream<T>>, S>;
 
     async fn open(
@@ -91,6 +91,8 @@ where
         start: LaneStart,
         inbox: Inbox<LaneProtocol>,
     ) -> OpenResult<Self::Opened, Self::Lane> {
-        self.worker.load(self.config, position, start, inbox).await
+        self.worker
+            .load(self.config.0, self.config.1, position, start, inbox)
+            .await
     }
 }

@@ -9,8 +9,8 @@ use kithara_test_utils::kithara;
 use num_traits::cast::AsPrimitive;
 
 use super::fixtures::{
-    A_THIRD_OF_A_BEAT_BEHIND, Command, Control, Deck, NEAR_THE_COVERED_END, Rig, answer, grid,
-    jumps, position, provisional, sound, synced, trajectory,
+    A_THIRD_OF_A_BEAT_BEHIND, Command, Deck, NEAR_THE_COVERED_END, Rig, answer, grid, jumps,
+    position, provisional, sound, synced, trajectory,
 };
 use crate::{GridAnswer, GridRefusal, LinkedPlayer, SyncStatus};
 
@@ -31,32 +31,6 @@ fn tick(deck: &mut Deck, rig: &mut Rig) {
 /// A grid in 4/4 with a beat every `beat` frames from `first`.
 fn bars(beat: u32, first: u32) -> BeatGridModel {
     grid(beat, first, Some((4, 0)), consts::COVERED)
-}
-
-fn first_beat(model: &BeatGridModel) -> u32 {
-    (model.as_raw().beats[0].at * 48_000.0).round().as_()
-}
-
-/// The deck's one jump lands on the host's bar on `model`, or on its beat when
-/// `model` holds no meter. The host plays 120 BPM in 4/4 from frame 0.
-fn assert_jumps_in_phase(control: &Control, model: &BeatGridModel) {
-    let landings = jumps(control);
-    let [(to, at)] = landings.as_slice() else {
-        panic!("one jump: {:?}", control.commands());
-    };
-    let raw = model.as_raw();
-    let first = raw.beats[0].at;
-    let track = (to.as_secs_f64() - first) / (raw.beats[1].at - first);
-    let host = AsPrimitive::<f64>::as_(i64::from(*at)) / f64::from(consts::BEAT);
-    let (bar, origin) = raw.meter.map_or((1.0, 0.0), |meter| {
-        let origin: f64 = meter.origin_beat_ordinal.as_();
-        (f64::from(meter.beats_per_bar.get()), origin)
-    });
-    let error = (track - origin - host).rem_euclid(bar);
-    assert!(
-        error.min(bar - error) < 1e-3,
-        "{to:?} on {at:?} is {error} beats off"
-    );
 }
 
 fn recover_from_an_underrun(deck: &mut Deck, rig: &mut Rig) {
@@ -84,69 +58,69 @@ fn real_revisions(shifts: &[f64]) -> Vec<BeatGridModel> {
     shifts.iter().map(&mut revised).collect()
 }
 
-/// Each revision a sounding deck answers with one slew when a slew closes it
-/// (`false`), else with one jump onto the host's phase (`true`), whatever came
-/// before it. A deck that `follows` sounds in phase with each revision a
-/// second later; the real rows replay a real analysis pass.
 #[kithara::test]
-#[case::a_quarter_beat(bars(24_000, 0), vec![bars(24_000, 6_000)], false, &[true])]
+fn the_first_analysis_answer_corrects_a_waiting_sounding_deck_without_a_jump() {
+    let (mut deck, control) = super::fixtures::deck(trajectory(120.0, 4));
+    let mut rig = Rig::new(0);
+    let loading = super::fixtures::load(&mut deck, &mut rig, 0);
+    rig.apply(&mut deck, loading, 0);
+    sound(&control, &mut rig, consts::ON_BEAT_TWO, consts::ON_BEAT_TWO);
+    control.clear();
+    assert_eq!(
+        rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
+            .expect("sync waits"),
+        None
+    );
+    assert!(control.commands().is_empty());
+    answer(&mut deck, &mut rig, bars(consts::BEAT, 6_000));
+    assert!(matches!(
+        control.commands().as_slice(),
+        [(_, Command::Speed(..))]
+    ));
+    assert!(jumps(&control).is_empty());
+}
+
+#[kithara::test]
+#[case::a_quarter_beat(bars(24_000, 0), vec![bars(24_000, 6_000)])]
 #[case::a_meter_arriving_off_the_bar(
     grid(24_000, 0, None, consts::COVERED),
-    vec![grid(24_000, 0, Some((4, 2)), consts::COVERED)],
-    false,
-    &[true]
+    vec![grid(24_000, 0, Some((4, 2)), consts::COVERED)]
 )]
-#[case::a_three_percent_tempo_with_no_error_yet(
-    bars(24_000, 0),
-    vec![bars(23_280, 1_440)],
-    false,
-    &[true]
-)]
+#[case::a_three_percent_tempo(bars(24_000, 0), vec![bars(23_280, 1_440)])]
 #[case::small_revisions(
     bars(24_000, 0),
-    vec![bars(24_000, 240), bars(24_000, 480), bars(24_000, 720)],
-    false,
-    &[false; 3]
+    vec![bars(24_000, 240), bars(24_000, 480), bars(24_000, 720)]
 )]
 #[case::ryabina_at_nine_seconds(
     grid(24_000, 24_000, None, consts::COVERED),
-    real_revisions(&[0.071, 0.055, -0.057, 0.003]),
-    true,
-    &[true, true, true, false]
+    real_revisions(&[0.071, 0.055, -0.057, 0.003])
 )]
 #[case::song2_at_ten_seconds(
     grid(24_000, 24_000, None, consts::COVERED),
-    real_revisions(&[-0.011, -0.139, 0.028]),
-    true,
-    &[false, true, false]
+    real_revisions(&[-0.011, -0.139, 0.028])
 )]
-fn a_revision_moves_a_sounding_deck_once_only_past_what_a_slew_closes(
+fn analysis_revisions_correct_speed_without_relocating_audio(
     #[case] entered: BeatGridModel,
     #[case] revisions: Vec<BeatGridModel>,
-    #[case] follows: bool,
-    #[case] expected: &[bool],
 ) {
-    let (mut deck, control, mut rig, _) = synced(entered.clone());
-    let mut now = consts::ON_BEAT_TWO;
-    sound(&control, &mut rig, now, now);
-    let mut jumped = Vec::new();
+    let (mut deck, control, mut rig, _) = synced(entered);
+    sound(&control, &mut rig, consts::ON_BEAT_TWO, consts::ON_BEAT_TWO);
     for revised in revisions {
         answer(&mut deck, &mut rig, revised.clone());
         tick(&mut deck, &mut rig);
-        let commands = control.commands();
-        let slew = matches!(commands.as_slice(), [(_, Command::Speed(..))]);
-        if !slew {
-            assert_jumps_in_phase(&control, &revised);
-        }
-        jumped.push(!slew);
+        assert!(
+            matches!(control.commands().as_slice(), [(_, Command::Speed(..))]),
+            "{:?}",
+            control.commands()
+        );
+        assert!(jumps(&control).is_empty());
         control.clear();
-        if follows {
-            now += consts::ON_BEAT_TWO;
-            let at = now + first_beat(&revised) - first_beat(&entered);
-            sound(&control, &mut rig, now, at);
-        }
+        answer(&mut deck, &mut rig, revised);
+        assert!(
+            control.commands().is_empty(),
+            "the same analysis is idempotent"
+        );
     }
-    assert_eq!(jumped, expected);
 }
 
 /// The RT keeps a synced track on session time through a dropout, so a
@@ -278,7 +252,11 @@ fn a_revision_corrects_a_silent_entry_only_once_it_sounds(
     sound(&control, &mut rig, consts::ON_BEAT_TWO, consts::ON_BEAT_TWO);
     tick(&mut deck, &mut rig);
     if fades_in_before {
-        assert_jumps_in_phase(&control, &revised);
+        assert!(matches!(
+            control.commands().as_slice(),
+            [(_, Command::Speed(..))]
+        ));
+        assert!(jumps(&control).is_empty());
     } else {
         assert!(control.commands().is_empty(), "{:?}", control.commands());
     }

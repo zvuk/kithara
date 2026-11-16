@@ -6,7 +6,7 @@ use kithara::{
         CancelToken,
         time::{Duration, sleep},
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
 };
 use kithara_integration_tests::{
     TestServerHelper,
@@ -55,9 +55,10 @@ async fn nonuniform_gapless_hls_is_continuous_at_every_boundary(
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls).build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap_or_else(|error| panic!("open {path}: {error}"));
+    let mut audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap_or_else(|error| panic!("open {path}: {error}"));
     audio
         .preload()
         .unwrap_or_else(|error| panic!("preload {path}: {error}"));

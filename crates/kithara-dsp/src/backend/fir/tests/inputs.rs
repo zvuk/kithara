@@ -9,19 +9,21 @@ fn indexed_process<const TAPS: usize, const HISTORY: usize>(
     output: &mut [f32],
 ) -> usize {
     let count = raw.len().min(current.len()).min(output.len());
+    let taps: [[f32; TAPS]; 2] = std::array::from_fn(|phase| {
+        std::array::from_fn(|tap| *detector.taps.get(tap).unwrap().get(phase).unwrap())
+    });
     let history = detector.history.first_mut().unwrap();
     let shared = detector.shared_peak.first_mut().unwrap();
     let valid = detector.shared_valid.first_mut().unwrap();
-    let taps = &detector.taps;
     for (frame, (&sample, peak)) in current.iter().zip(output).take(count).enumerate() {
         *peak = sample.abs().max(0.0);
         if detector.reconstruct {
-            let ahead = indexed_interval(taps, history, raw, sample, frame, frame as isize);
+            let ahead = indexed_interval(&taps, history, raw, sample, frame, frame as isize);
             let behind = if *valid {
                 *shared
             } else {
                 let base = (frame as isize).checked_sub(1).unwrap();
-                indexed_interval(taps, history, raw, sample, frame, base)
+                indexed_interval(&taps, history, raw, sample, frame, base)
             };
             *shared = ahead;
             *peak = peak.max(0.0_f32.max(ahead).max(behind));

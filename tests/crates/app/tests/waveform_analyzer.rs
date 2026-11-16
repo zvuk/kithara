@@ -9,10 +9,10 @@ use kithara::{
     analysis::{AnalysisDemand, BeatAnalysisConfig, Bucket},
     assets::StorageBackend,
     platform::CancelToken,
-    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
 };
 use kithara_app::{
-    pools::{AppPools, AppResourceConfig, AppStore, AppWorker, Pools, PoolsSection, build},
+    pools::{AppPools, AppResourceConfig, AppStore, Pools, PoolsSection, build},
     waveform::{TrackAnalysis, TrackAnalysisRunner},
 };
 use kithara_integration_tests::{
@@ -22,10 +22,6 @@ use url::Url;
 
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
-
-fn worker(pools: Pools) -> AppWorker {
-    PlayWorker::new(PlayWorkerConfig::builder(pools).build())
-}
 
 fn memory_store(pools: Pools) -> AppStore {
     AppStore::builder(pools)
@@ -81,7 +77,6 @@ async fn runner_silent_wav_yields_all_zero_envelope(
     )
     .downloader(create_test_downloader())
     .store(memory_store(pools.clone()))
-    .worker(worker(pools.clone()))
     .build();
 
     // A silent 1s WAV must decode end to end and finalise to a native-resolution
@@ -122,7 +117,6 @@ async fn runner_returns_nothing_when_cancelled_upfront(
     )
     .downloader(create_test_downloader())
     .store(memory_store(pools.clone()))
-    .worker(worker(pools.clone()))
     .build();
 
     let master = CancelToken::never();

@@ -1,23 +1,20 @@
 use std::fmt;
 
-use kithara_abr::AbrHandle;
-use kithara_audio::{Audio, AudioEvent, AudioSession};
-use kithara_decode::TrackMetadata;
+use kithara_audio::AudioEvent;
 use kithara_events::EventBus;
 use kithara_platform::{
-    sync::{Arc, ThreadGate, WaitGate},
+    sync::{Arc, ThreadGate, WaitGate, Weak},
     time::Duration,
 };
 use kithara_signal::AudioSpec;
-use kithara_stream::{PlayheadRead, WorkerWake};
-use kithara_test_utils::kithara;
+use kithara_worker::Wake;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Consumer, Observer, Producer, Split},
 };
 use triple_buffer::{Input, Output, triple_buffer};
 
-use super::{super::scheduler::StreamWake, lead::PcmLead, packet::PcmPacket};
+use super::{lead::PcmLead, packet::PcmPacket};
 
 pub(in crate::worker) struct PcmProducer {
     pub(in crate::worker) forward: HeapProd<PcmPacket>,
@@ -40,6 +37,43 @@ impl Drop for FinalWake {
 }
 
 impl PcmProducer {
+    /// The reverse ring fits the forward slots, the reader-held packet, and one
+    /// worker push between recycles, so returning an in-flight packet never fails.
+    pub(in crate::worker) fn new(
+        lead: PcmLead,
+        block_on_underrun: bool,
+        wake: Wake,
+        spec: AudioSpec,
+        position: Duration,
+        events: EventBus,
+    ) -> (PcmReceiver, Self) {
+        let (forward_tx, forward_rx) = HeapRb::new(lead.slots()).split();
+        let (reverse_tx, reverse_rx) = HeapRb::new(lead.slots() + 2).split();
+        let (playing_tx, playing_rx) = triple_buffer(&false);
+        let ready = block_on_underrun.then(|| Arc::new(ThreadGate::default()));
+        (
+            PcmReceiver {
+                forward: forward_rx,
+                reverse: reverse_tx,
+                playing: playing_tx,
+                ready: ready.as_ref().map(Arc::downgrade),
+                wake,
+                spec,
+                position,
+                frontier: position,
+            },
+            Self {
+                forward: forward_tx,
+                reverse: reverse_rx,
+                lead,
+                playing: playing_rx,
+                ready: FinalWake(ready),
+                events,
+                output_pending: false,
+            },
+        )
+    }
+
     /// Admit one packet into the lead, or hand it back while the lead or the
     /// ring is full.
     pub(in crate::worker) fn push(&mut self, packet: PcmPacket) -> Result<(), PcmPacket> {
@@ -84,69 +118,21 @@ pub struct PcmReceiver {
     pub(super) forward: HeapCons<PcmPacket>,
     pub(super) reverse: HeapProd<PcmPacket>,
     pub(super) playing: Input<bool>,
-    pub(super) ready: Option<Arc<ThreadGate>>,
-    pub(super) wake: StreamWake,
+    // The producer and active off-RT waiters own the signal.
+    pub(super) ready: Option<Weak<ThreadGate>>,
+    pub(super) wake: Wake,
     pub(super) spec: AudioSpec,
-    pub(super) playhead: Arc<dyn PlayheadRead>,
     pub(super) position: Duration,
     pub(super) frontier: Duration,
-    pub(super) metadata: TrackMetadata,
-    pub(super) abr: Option<AbrHandle>,
 }
 
 impl PcmReceiver {
-    /// The reverse ring fits the forward slots, the reader-held packet, and one
-    /// worker push between recycles, so returning an in-flight packet never fails.
-    pub(in crate::worker) fn new<T>(
-        lead: PcmLead,
-        block_on_underrun: bool,
-        wake: StreamWake,
-        audio: &Audio<T>,
-        position: Duration,
-    ) -> (Self, PcmProducer) {
-        let (forward_tx, forward_rx) = HeapRb::new(lead.slots()).split();
-        let (reverse_tx, reverse_rx) = HeapRb::new(lead.slots() + 2).split();
-        let (playing_tx, playing_rx) = triple_buffer(&false);
-        let ready = block_on_underrun.then(|| Arc::new(ThreadGate::default()));
-        (
-            Self {
-                forward: forward_rx,
-                reverse: reverse_tx,
-                playing: playing_tx,
-                ready: ready.clone(),
-                wake,
-                spec: audio.spec(),
-                playhead: audio.playhead_read(),
-                position,
-                frontier: position,
-                metadata: audio.metadata().clone(),
-                abr: audio.abr_handle(),
-            },
-            PcmProducer {
-                forward: forward_tx,
-                reverse: reverse_rx,
-                lead,
-                playing: playing_rx,
-                ready: FinalWake(ready),
-                events: AudioSession::event_bus(audio).clone(),
-                output_pending: false,
-            },
-        )
-    }
-
     #[must_use]
     pub const fn spec(&self) -> AudioSpec {
         self.spec
     }
 
     delegate::delegate! {
-        to self.playhead {
-            #[must_use]
-            pub fn duration(&self) -> Option<Duration>;
-            #[must_use]
-            #[call(cached)]
-            pub fn cached_span(&self) -> Duration;
-        }
         to self {
             /// Raw coordinate of track-media zero from the next immutable PCM packet.
             #[must_use]
@@ -182,20 +168,6 @@ impl PcmReceiver {
         self.position
     }
 
-    pub(crate) fn frames_until_eof(&self, lane: crate::LaneFrame) -> Option<usize> {
-        let PcmPacket::Chunk(chunk) = self.forward.last()? else {
-            return None;
-        };
-        if !chunk.meta.end_of_track || chunk.meta.segment != lane.segment {
-            return None;
-        }
-        let end = chunk
-            .meta
-            .lane_frame
-            .checked_add(u64::try_from(chunk.frames()).ok()?)?;
-        usize::try_from(end.checked_sub(lane.frame)?).ok()
-    }
-
     #[must_use]
     pub fn decoded_frontier(&self) -> Duration {
         match self.forward.last() {
@@ -206,17 +178,6 @@ impl PcmReceiver {
                 .unwrap_or(self.frontier),
             _ => self.frontier,
         }
-    }
-
-    #[must_use]
-    pub const fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-
-    /// Adaptive bitrate control retained from the one source open.
-    #[must_use]
-    pub fn abr_handle(&self) -> Option<AbrHandle> {
-        self.abr.clone()
     }
 
     /// Publish transport activity through the ring's deferred wake path.
@@ -241,33 +202,6 @@ impl PcmReceiver {
 
     pub(crate) fn waits_offline(&self) -> bool {
         self.ready.is_some()
-    }
-
-    /// Wait for a packet or producer closure only when offline blocking is enabled.
-    #[kithara::flash(true)]
-    #[kithara::measure(label = "render.pcm.wait")]
-    #[kithara::hang_watchdog]
-    pub(crate) fn wait_for_packet(&self) {
-        let Some(ready) = &self.ready else {
-            return;
-        };
-        loop {
-            let since = ready.current();
-            let expired = __hang_detector.remaining().is_zero();
-            if self.forward.try_peek().is_some() || !self.forward.write_is_held() {
-                hang_reset!();
-                return;
-            }
-            if expired {
-                hang_tick!();
-            }
-            self.wake.wake();
-            let _real_io = kithara_platform::flash::real_io();
-            let remaining = __hang_detector.remaining();
-            kithara::probe_event!(pcm_wait_started);
-            ready.wait_timeout(since, remaining);
-            kithara::probe_event!(pcm_wait_finished);
-        }
     }
 
     /// Try to take one packet without waiting, regardless of blocking policy.
@@ -317,7 +251,6 @@ impl fmt::Debug for PcmReceiver {
         formatter
             .debug_struct("PcmReceiver")
             .field("spec", &self.spec)
-            .field("duration", &self.duration())
             .field("position", &self.position)
             .finish_non_exhaustive()
     }

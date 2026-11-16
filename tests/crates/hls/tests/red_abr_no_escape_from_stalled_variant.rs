@@ -46,7 +46,7 @@ use kithara::{
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
@@ -99,7 +99,7 @@ async fn abr_escapes_stalled_initial_variant(
         .pools(pools)
         .initial_abr_mode(auto(0))
         .build();
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
@@ -107,9 +107,8 @@ async fn abr_escapes_stalled_initial_variant(
                     .build(),
             )
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("audio creation");

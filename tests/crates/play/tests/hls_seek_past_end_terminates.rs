@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use kithara::{
     host::{HostConfig, HostSettings},
     platform::time::{Duration, sleep},
-    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     TestServerHelper,
@@ -67,7 +67,6 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
 
     let cfg: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .downloader(downloader.clone())
             .discriminator("t0")
             .store(store)

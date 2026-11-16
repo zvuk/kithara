@@ -11,7 +11,7 @@ use kithara::{
         time::{Duration, sleep},
         tokio::task::{JoinHandle, spawn, spawn_blocking},
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -120,7 +120,7 @@ async fn create_hls_audio(
         .build();
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    kithara_integration_tests::mock::load_audio(&worker, config)
+    kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
         .await
         .expect("create Audio<Stream<Hls>>")
 }

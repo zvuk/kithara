@@ -15,7 +15,7 @@ use kithara::{
         time::{Duration, Instant},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
@@ -202,7 +202,6 @@ async fn build_resource(
         ResourceSrc::parse(url.as_str())
             .unwrap_or_else(|e| panic!("ResourceSrc::parse({url}): {e}")),
     )
-    .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
     .downloader(downloader.clone())
     .discriminator(format!("{iter_label}|{url}"))
     .store(store)

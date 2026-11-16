@@ -1,32 +1,18 @@
 use std::num::NonZeroUsize;
 
-use kithara_audio::{AudioConfig, ResamplerBackend};
 use kithara_config::{Config, Patch};
 use kithara_dsp::param::SmootherConfig;
 use kithara_platform::sync::Arc;
-use kithara_stream::StreamType;
 use kithara_warp::WarpConfig;
 
 use super::EngineLoad;
 
-/// Play-owned configuration for one resident Warp/audio producer lane.
-#[derive(Config, Patch, fieldwork::Fieldwork)]
-#[config(construction, builder(start_fn = for_audio))]
+/// Producer geometry, buffering and Warp settings for one playback lane.
+#[derive(Config, Patch, fieldwork::Fieldwork, kithara_derive::BuiltDefault)]
+#[config(construction)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
-pub struct TrackConfig<T, B>
-where
-    T: StreamType,
-    B: ResamplerBackend,
-{
-    /// Source-only decoder configuration.
-    #[config(
-        skip = "transferred to the play-owned audio producer",
-        builder(start_fn),
-        patch(skip)
-    )]
-    #[field(get)]
-    pub(crate) audio: AudioConfig<T, B>,
+pub struct TrackConfig {
     /// Final rendered chunks required before initial or segment readiness.
     #[config(value, builder(default = crate::consts::PRELOAD_CHUNKS))]
     #[field(get, copy)]
@@ -59,7 +45,7 @@ where
     pub(crate) warp: WarpConfig,
 }
 
-impl<T: StreamType, B: ResamplerBackend> TrackConfig<T, B> {
+impl TrackConfig {
     /// Output frames to subtract from a Jump's intended landing frame.
     #[must_use]
     pub fn declick_frames(&self, rate: std::num::NonZeroU32) -> kithara_signal::FrameCount {
@@ -74,14 +60,4 @@ pub fn pcm_quantum(warp: &WarpConfig) -> NonZeroUsize {
     let source_block = warp.source_block_frames();
     warp.render_quantum_frames()
         .map_or(source_block, |quantum| quantum.min(source_block))
-}
-
-impl<T, B> From<AudioConfig<T, B>> for TrackConfig<T, B>
-where
-    T: StreamType,
-    B: ResamplerBackend,
-{
-    fn from(audio: AudioConfig<T, B>) -> Self {
-        Self::for_audio(audio).build()
-    }
 }

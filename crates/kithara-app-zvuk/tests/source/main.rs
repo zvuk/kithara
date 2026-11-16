@@ -108,3 +108,54 @@ async fn playlist_navigation_is_loaded_once_by_the_source() {
     assert_eq!(net.events(), ["start:node", "end:node"]);
     release(source, &net).await;
 }
+
+#[kithara::test]
+async fn adaptive_streaming_starts_enabled_and_accepts_a_session_choice() {
+    let net = DelayedNet::new(Unimock::new(()));
+    let mut source = source(net.clone()).await;
+    assert_eq!(
+        source.read("adaptive_streaming"),
+        Some(ReadValue::Bool(true))
+    );
+    source.write("adaptive_streaming", &WriteValue::Trigger);
+    source.tick();
+    assert_eq!(
+        source.read("adaptive_streaming"),
+        Some(ReadValue::Bool(false))
+    );
+    release(source, &net).await;
+}
+
+#[kithara::test]
+async fn the_accepted_default_updates_new_drags_without_changing_prior_snapshots() {
+    let net = DelayedNet::new(Unimock::new((
+        NetMock::post_bytes
+            .next_call(matching!(_, _, _))
+            .returns(Ok(search_reply())),
+        NetMock::post_bytes
+            .next_call(matching!(_, _, _))
+            .returns(Ok(stream_reply())),
+    )));
+    let mut source = loaded_search(net.clone()).await;
+    let previous = source.rows(None)[0].drag().unwrap().clone();
+    assert_eq!(
+        previous["source"],
+        "https://media.example.invalid/1000/master.m3u8"
+    );
+    source.write("adaptive_streaming", &WriteValue::Trigger);
+    assert_eq!(
+        source.rows(None)[0].drag().unwrap()["source"],
+        "https://media.example.invalid/1000/high.mp3"
+    );
+    assert_eq!(
+        previous["source"],
+        "https://media.example.invalid/1000/master.m3u8"
+    );
+    assert_eq!(
+        previous["choices"],
+        source.rows(None)[0].drag().unwrap()["choices"]
+    );
+    assert_eq!(previous["identity"], "zvuk:track:1000");
+    assert_eq!(source.rows(None).len(), 5);
+    release(source, &net).await;
+}

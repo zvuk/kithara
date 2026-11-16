@@ -1,5 +1,6 @@
 //! Offline render through the product graph, measured the same way on the
 //! browser and on native.
+use futures::channel::oneshot;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     host::{HostConfig, HostSettings, Tap},
@@ -31,6 +32,40 @@ const SILENCE_THRESHOLD: f32 = 0.001;
 const MIN_RMS: f32 = 0.55;
 const MAX_RMS: f32 = 0.75;
 
+#[kithara::test(
+    tokio,
+    browser,
+    serial,
+    timeout(Duration::from_secs(10)),
+    hang_timeout_secs(1)
+)]
+async fn offline_worker_construction_waits_for_its_player() {
+    let (release, gate) = oneshot::channel();
+    let (built, mut completion) = oneshot::channel();
+    let host = HostConfig::offline(pools()).build();
+    let mut construction = std::pin::pin!(OfflineWorker::new(async move || {
+        gate.await.expect("release player construction");
+        let player = OfflinePlayer::new(host).await;
+        built
+            .send(())
+            .expect("report completed player construction");
+        player
+    }));
+    let first = futures::poll!(construction.as_mut());
+    release.send(()).expect("open construction gate");
+    assert!(
+        first.is_pending(),
+        "construction waits for its gated player"
+    );
+    let worker = construction.await;
+    assert_eq!(
+        completion.try_recv().expect("construction completion"),
+        Some(()),
+        "the player is built before its owner returns"
+    );
+    assert_eq!(worker.call(async |player| player.position()).await, 0.0);
+}
+
 /// One offline player on the fixture sine, playing with no fade. Everything
 /// that waits on the fixture bytes is opened on the harness thread.
 async fn playing_worker() -> OfflineWorker {
@@ -52,7 +87,6 @@ async fn playing_worker() -> OfflineWorker {
                     .expect("the fixture URL parses as a resource source"),
             )
             .downloader(create_test_downloader())
-            .worker(player.worker().clone())
             .store(
                 AssetStore::builder(region)
                     .backend(StorageBackend::Memory)

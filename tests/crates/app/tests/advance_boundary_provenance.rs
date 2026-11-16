@@ -1878,7 +1878,7 @@ fn drain_variant_applied_events(
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn render_seek_near_end_until_b_with_postroll(
     queue: &QueueControl<TestPools>,
-    harness: &OfflinePlayer<ObservedFactory<TestPools>>,
+    harness: &OfflinePlayer<ObservedFactory>,
     render_sample_rate: u32,
 ) -> SeekCapture {
     let session_start = harness.host().position();

@@ -14,13 +14,13 @@ use super::super::{
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(in crate::queue) fn send_transition(
         &mut self,
         incoming: usize,
         frame: SessionFrame,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         if self.pending_handover.is_some() {
             return Ok(None);
@@ -80,7 +80,7 @@ where
         &mut self,
         incoming: usize,
         frame: SessionFrame,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<bool, PlayError> {
         if out.deck_available() == 0 {
             return Err(PlayError::Full("deck"));
@@ -135,7 +135,7 @@ where
         outgoing: Option<usize>,
         at: When<SessionFrame>,
         settings: CrossfadeSettings,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let slot = self
             .active

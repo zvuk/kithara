@@ -10,11 +10,11 @@ categories = ["development-tools::testing"]
 
 [package.metadata.kithara.wasm-lib-tests]
 default-features = false
-features = ["subscriber", "test"]
+features = ["test", "subscriber"]
 
 [features]
 default = ["hang", "test"]
-test = ["kithara-test-macros/test", "dep:js-sys", "dep:wasm-bindgen"]
+test = ["kithara-test-macros/test"]
 flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
 # Local axum HTTP server for tests (native only).
@@ -64,20 +64,20 @@ pin-project-lite = { workspace = true }
 rtsan-standalone = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-js-sys = { workspace = true, optional = true }
+js-sys = { workspace = true }
 tracing-subscriber = { workspace = true, optional = true, features = ["env-filter"] }
 tracing-wasm = { workspace = true, optional = true }
-wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 usdt = { workspace = true, optional = true }
 
 [dev-dependencies]
-kithara-test-utils = { features = ["test"], path = ".", default-features = false }
 serde_json = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-test-utils = { features = ["test"], path = ".", default-features = false }
 tempfile = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

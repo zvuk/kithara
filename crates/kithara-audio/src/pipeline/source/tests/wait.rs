@@ -109,6 +109,48 @@ fn retain_result(
 }
 
 #[kithara::test(tokio)]
+async fn decoder_operation_pending_keeps_its_wait_reason(route_pcm: RoutePcm) {
+    use kithara_decode::mock::DecoderMock;
+    use kithara_stream::{NotReadyCause, PendingReason};
+    use unimock::{MockFn, Unimock};
+
+    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    let spec = fixture.source.decode.output_spec();
+    let decoder = Unimock::new((
+        DecoderMock::spec
+            .each_call(unimock::matching!())
+            .returns(spec)
+            .at_least_times(0),
+        DecoderMock::duration
+            .each_call(unimock::matching!())
+            .returns(None)
+            .at_least_times(0),
+        DecoderMock::next_chunk
+            .some_call(unimock::matching!())
+            .answers(&|_| {
+                Ok(DecoderChunkOutcome::Pending(PendingReason::NotReady(
+                    NotReadyCause::OperationPending,
+                )))
+            })
+            .once(),
+    ));
+    drop(fixture.source.decode.replace_active(DecoderGeneration::new(
+        Box::new(decoder),
+        Some(media_info(0)),
+        0,
+        None,
+        None,
+        GaplessMode::Disabled,
+    )));
+    assert_eq!(*fixture.phase.lock(), SourcePhase::Ready);
+
+    assert!(matches!(
+        fixture.source.step_track(),
+        TrackStep::Blocked(WaitingReason::OperationPending)
+    ));
+}
+
+#[kithara::test(tokio)]
 #[case::decoding_pcm(RetainedKind::Chunk, false)]
 #[case::decoding_error(RetainedKind::Error, false)]
 #[case::decoding_eof(RetainedKind::Eof, false)]

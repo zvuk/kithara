@@ -10,6 +10,7 @@ use kithara::{
         WriteSide,
     },
     platform::CancelToken,
+    play::TrackConfig,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
@@ -166,9 +167,10 @@ async fn ephemeral_pipeline_no_disk_writes(#[future(awt)] audio_server: CreatedH
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .expect("create Audio<Stream<Hls>> pipeline");
+    let mut audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .expect("create Audio<Stream<Hls>> pipeline");
 
     let temp_path = temp_dir.path().to_path_buf();
     let result = spawn_blocking(move || {

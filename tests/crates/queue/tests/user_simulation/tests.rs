@@ -370,7 +370,6 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
     let cfg = kithara::play::ResourceConfig::for_src(
         kithara::play::ResourceSrc::parse(spec.url.as_str()).expect("valid track URL"),
     )
-    .worker(worker.clone())
     .downloader(downloader.clone())
     .store(store)
     .decoder(

@@ -7,7 +7,6 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     host::{HostConfig, HostSettings},
     platform::sync::Arc,
-    play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, hls_fixture::create_test_downloader,
@@ -82,7 +81,6 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
         .build();
     let hls_url = hls_server.master_url();
 
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools.clone())
             .settings(
@@ -97,25 +95,23 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
     let media_dir = temp_dir();
     let local_mp3 = media_dir.write("track.mp3", tone_mp3);
 
-    let make_mp3 = |w: PlayWorker<TestPools>| {
+    let make_mp3 = || {
         let p = local_mp3.clone();
         let store = store.clone();
         async move {
             kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Path(p))
                 .store(store)
-                .worker(w)
                 .hint("mp3".to_string())
                 .build()
         }
     };
 
-    let make_hls = |w: PlayWorker<TestPools>, s: AssetStore<TestPools>| {
+    let make_hls = |s: AssetStore<TestPools>| {
         let u = hls_url.clone();
         async move {
             kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Url(u))
                 .downloader(create_test_downloader())
                 .store(s)
-                .worker(w)
                 .hint("wav")
                 .build()
         }
@@ -125,7 +121,7 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
     let mut worst_label = String::new();
 
     for iter in 0..10 {
-        let hls = make_hls(worker.clone(), store.clone()).await;
+        let hls = make_hls(store.clone()).await;
         player.load_config(hls).await;
         let _hls_warmup = render_offline_window(
             &mut player,
@@ -136,7 +132,7 @@ async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
         )
         .await;
 
-        let mp3 = make_mp3(worker.clone()).await;
+        let mp3 = make_mp3().await;
         player.load_config(mp3).await;
         let fade_stats = render_offline_window(
             &mut player,

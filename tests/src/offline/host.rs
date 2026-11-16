@@ -58,17 +58,12 @@ where
     P: DeckControl + HostedDeck<S>,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         *self.snapshot.lock() = pass.deck.clone();
         self.inner.drain(pass, out);
     }
 
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, S>,
-        pass: DeckPass<'_>,
-        out: &mut Outbox<'_, S>,
-    ) {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         *self.snapshot.lock() = pass.deck.clone();
         if let Some(underruns) = &self.underruns
             && let TrackReceipt::Event(event) = &receipt
@@ -83,7 +78,7 @@ where
         self.inner.settle(receipt, pass, out);
     }
 
-    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         *self.snapshot.lock() = pass.deck.clone();
         self.inner.tick(pass, out);
     }
@@ -92,7 +87,7 @@ where
         to self.inner {
             fn worker(&self) -> Option<&PlayWorker<S>>;
             fn mixer_config(&self) -> DeckMixerConfig;
-            fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError>;
+            fn close(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError>;
             fn hold(&mut self, waker: std::task::Waker);
             fn release(&mut self);
         }

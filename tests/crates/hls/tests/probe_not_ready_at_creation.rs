@@ -24,7 +24,7 @@ use kithara::{
         time::{Duration, Instant, WallInstant},
         tokio,
     },
-    play::{LoadRefusal, PlayWorker, PlayWorkerConfig},
+    play::{LoadRefusal, PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
@@ -123,7 +123,10 @@ async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsFix
     let started = WallInstant::now();
     let result = kithara_integration_tests::mock::load_audio(
         &worker,
-        audio_config(&server, &pools, &cancel),
+        (
+            audio_config(&server, &pools, &cancel),
+            TrackConfig::default(),
+        ),
     )
     .await;
     let elapsed = started.elapsed();
@@ -189,7 +192,10 @@ async fn audio_new_succeeds_when_first_segment_released_during_probe(
 
     let result = kithara_integration_tests::mock::load_audio(
         &worker,
-        audio_config(&server, &pools, &cancel),
+        (
+            audio_config(&server, &pools, &cancel),
+            TrackConfig::default(),
+        ),
     )
     .await;
     releaser.await.expect("releaser joins");

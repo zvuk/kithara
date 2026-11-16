@@ -81,7 +81,7 @@ mod tests {
     use super::*;
     use crate::HostCommand;
 
-    type BaseCommand = HostCommand<TestPools, dyn kithara_play::HostedDeck<TestPools>>;
+    type BaseCommand = HostCommand<dyn kithara_play::HostedDeck<TestPools>>;
 
     /// A session that drains each post as it lands and answers it with what
     /// `outcome` gives, or drops it unanswered for `None`.

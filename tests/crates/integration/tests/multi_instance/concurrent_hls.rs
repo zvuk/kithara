@@ -5,7 +5,7 @@ use kithara::{
     audio::AudioConfig,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -79,13 +79,12 @@ async fn create_hls_audio(
         .build();
     // Park on ring underrun instead of surfacing Pending, so the blocking
     // readers never spin against the virtual clock.
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .media_info(wav_info)
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     kithara_integration_tests::mock::load_audio(&worker, config)

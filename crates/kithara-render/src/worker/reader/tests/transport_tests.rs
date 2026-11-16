@@ -3,14 +3,14 @@ use kithara_signal::SegmentId;
 use kithara_test_utils::kithara;
 use ringbuf::traits::Observer;
 
-use super::super::core::PcmReceiver;
+use super::super::{core::PcmReceiver, wait_for_packet};
 use crate::{
     mock::pcm_fixture::{PcmFixture, chunk},
     worker::PcmPacket,
 };
 
 fn pop_blocking(reader: &mut PcmReceiver) -> Option<PcmPacket> {
-    reader.wait_for_packet();
+    wait_for_packet(reader);
     reader.pop()
 }
 
@@ -35,12 +35,7 @@ async fn callback_consumption_defers_every_wake_even_when_offline_blocking_is_en
     #[case] end_of_track: bool,
 ) {
     let wake = kithara_worker::Wake::default();
-    let mut fixture = PcmFixture::with_wake(
-        4,
-        blocking,
-        crate::worker::scheduler::StreamWake::new(wake.clone()),
-    )
-    .await;
+    let mut fixture = PcmFixture::with_wake(4, blocking, wake.clone()).await;
     assert!(
         fixture
             .receiver
@@ -97,12 +92,7 @@ pub(super) fn receive_notice(receiver: &std::sync::mpsc::Receiver<()>) {
 #[case::offline(true)]
 async fn playback_publication_is_deferred_even_for_an_offline_receiver(#[case] blocking: bool) {
     let wake = kithara_worker::Wake::default();
-    let mut fixture = PcmFixture::with_wake(
-        4,
-        blocking,
-        crate::worker::scheduler::StreamWake::new(wake.clone()),
-    )
-    .await;
+    let mut fixture = PcmFixture::with_wake(4, blocking, wake.clone()).await;
     let receiver = fixture.receiver.as_mut().expect("receiver");
     receiver.set_playing(true);
     assert_eq!(kithara_worker::mock::wake_state(&wake), (0, true));
@@ -137,7 +127,7 @@ fn blocking_recv_without_preload_panics_when_no_chunk_arrives(#[case] fixture_wa
     if fixture_wait {
         crate::mock::wait_for_packet(receiver);
     } else {
-        receiver.wait_for_packet();
+        wait_for_packet(receiver);
     }
 }
 
@@ -154,11 +144,7 @@ fn ready_packet_is_checked_after_a_timed_park(#[case] fixture_wait: bool) {
         .build()
         .expect("fixture runtime");
     let wake = kithara_worker::Wake::default();
-    let mut fixture = runtime.block_on(PcmFixture::with_wake(
-        4,
-        true,
-        crate::worker::scheduler::StreamWake::new(wake.clone()),
-    ));
+    let mut fixture = runtime.block_on(PcmFixture::with_wake(4, true, wake.clone()));
     let baseline = kithara_worker::mock::wake_state(&wake).0;
     let mut producer = fixture.producer.take().expect("producer");
     let packet = PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[1.0])));
@@ -172,7 +158,7 @@ fn ready_packet_is_checked_after_a_timed_park(#[case] fixture_wait: bool) {
     if fixture_wait {
         crate::mock::wait_for_packet(receiver);
     } else {
-        receiver.wait_for_packet();
+        wait_for_packet(receiver);
     }
     fixture.producer = Some(
         publish
@@ -241,12 +227,7 @@ async fn an_empty_poll_schedules_exactly_one_producer_pass() {
     let _task = dispatcher
         .register(TaskConfig::new(), move |_| DemandTask(counter))
         .expect("register demand probe");
-    let mut fixture = PcmFixture::with_wake(
-        4,
-        false,
-        crate::worker::scheduler::StreamWake::new(dispatcher.wake_handle()),
-    )
-    .await;
+    let mut fixture = PcmFixture::with_wake(4, false, dispatcher.wake_handle()).await;
     receive_notice(&observed);
     dispatcher.wake_handle().wake();
     resume.send(()).expect("consume the registration wake");
@@ -269,12 +250,7 @@ async fn an_empty_poll_schedules_exactly_one_producer_pass() {
 #[kithara::test(tokio)]
 async fn a_nonblocking_poll_of_an_empty_ring_states_its_demand() {
     let wake = kithara_worker::Wake::default();
-    let mut fixture = PcmFixture::with_wake(
-        4,
-        false,
-        crate::worker::scheduler::StreamWake::new(wake.clone()),
-    )
-    .await;
+    let mut fixture = PcmFixture::with_wake(4, false, wake.clone()).await;
     assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
     assert!(fixture.receiver.as_ref().expect("receiver").ready.is_none());
     assert_eq!(
@@ -287,12 +263,7 @@ async fn a_nonblocking_poll_of_an_empty_ring_states_its_demand() {
 #[kithara::test(tokio)]
 async fn block_on_underrun_forces_immediate_off_rt_wakes() {
     let wake = kithara_worker::Wake::default();
-    let mut fixture = PcmFixture::with_wake(
-        4,
-        true,
-        crate::worker::scheduler::StreamWake::new(wake.clone()),
-    )
-    .await;
+    let mut fixture = PcmFixture::with_wake(4, true, wake.clone()).await;
     assert!(fixture.receiver.as_ref().expect("receiver").ready.is_some());
     assert_eq!(kithara_worker::mock::wake_state(&wake), (0, false));
     assert!(pop_off_rt(&mut fixture, &wake).is_none());
@@ -327,12 +298,7 @@ async fn recycling_pcm_never_wakes_the_producer_inside_the_render_pass(#[case] b
     }
 
     let wake = kithara_worker::Wake::default();
-    let mut fixture = PcmFixture::with_wake(
-        4,
-        blocking,
-        crate::worker::scheduler::StreamWake::new(wake.clone()),
-    )
-    .await;
+    let mut fixture = PcmFixture::with_wake(4, blocking, wake.clone()).await;
     let receiver = fixture.receiver.as_mut().expect("receiver");
     assert_eq!(receiver.ready.is_some(), blocking);
     assert_eq!(kithara_worker::mock::wake_state(&wake), (0, false));
@@ -350,12 +316,7 @@ async fn recycling_pcm_never_wakes_the_producer_inside_the_render_pass(#[case] b
 #[kithara::test(tokio)]
 async fn an_adopted_mode_still_yields_to_blocking_reads() {
     let wake = kithara_worker::Wake::default();
-    let mut fixture = PcmFixture::with_wake(
-        4,
-        true,
-        crate::worker::scheduler::StreamWake::new(wake.clone()),
-    )
-    .await;
+    let mut fixture = PcmFixture::with_wake(4, true, wake.clone()).await;
     assert!(fixture.receiver.as_ref().expect("receiver").ready.is_some());
     assert!(
         fixture
@@ -369,12 +330,7 @@ async fn an_adopted_mode_still_yields_to_blocking_reads() {
     assert!(pop_off_rt(&mut fixture, &wake).is_none());
     assert_eq!(kithara_worker::mock::wake_state(&wake), (1, false));
     let deferred = kithara_worker::Wake::default();
-    let mut nonblocking = PcmFixture::with_wake(
-        4,
-        false,
-        crate::worker::scheduler::StreamWake::new(deferred.clone()),
-    )
-    .await;
+    let mut nonblocking = PcmFixture::with_wake(4, false, deferred.clone()).await;
     assert!(
         nonblocking
             .receiver
@@ -439,12 +395,7 @@ async fn every_in_flight_packet_fits_the_reverse_ring_without_recycling() {
 #[kithara::test(tokio)]
 async fn explicit_off_rt_mode_is_immediate_without_blocking_reads() {
     let wake = kithara_worker::Wake::default();
-    let mut fixture = PcmFixture::with_wake(
-        4,
-        false,
-        crate::worker::scheduler::StreamWake::new(wake.clone()),
-    )
-    .await;
+    let mut fixture = PcmFixture::with_wake(4, false, wake.clone()).await;
     assert!(fixture.receiver.as_ref().expect("receiver").ready.is_none());
     assert!(pop_off_rt(&mut fixture, &wake).is_none());
     assert_eq!(kithara_worker::mock::wake_state(&wake), (1, false));
@@ -516,7 +467,8 @@ async fn wake_signal() {
         .ready
         .as_ref()
         .expect("blocking readiness")
-        .clone();
+        .upgrade()
+        .expect("producer signal");
     let since = ready.current();
     assert_eq!(ready.current(), since);
     fixture
@@ -534,7 +486,8 @@ async fn wake_skipped_when_parking_in_overflow() {
         .ready
         .as_ref()
         .expect("blocking readiness")
-        .clone();
+        .upgrade()
+        .expect("producer signal");
     let since = ready.current();
     fixture
         .push(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[1.0]))))
@@ -560,7 +513,8 @@ async fn wake_fires_every_ring_push() {
         .ready
         .as_ref()
         .expect("blocking readiness")
-        .clone();
+        .upgrade()
+        .expect("producer signal");
     let since = ready.current();
     fixture
         .push(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[1.0]))))
@@ -585,12 +539,7 @@ async fn wake_fires_every_ring_push() {
 #[kithara::test(tokio)]
 async fn output_wake_is_deferred_until_the_scheduler_shell_flushes() {
     let wake = kithara_worker::Wake::default();
-    let mut fixture = PcmFixture::with_wake(
-        2,
-        false,
-        crate::worker::scheduler::StreamWake::new(wake.clone()),
-    )
-    .await;
+    let mut fixture = PcmFixture::with_wake(2, false, wake.clone()).await;
     assert_eq!(kithara_worker::mock::wake_state(&wake), (0, false));
     assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
     assert_eq!(kithara_worker::mock::wake_state(&wake), (0, true));
@@ -602,12 +551,7 @@ async fn output_wake_is_deferred_until_the_scheduler_shell_flushes() {
 #[kithara::test(tokio)]
 async fn reader_output_wake_is_deferred_and_coalesced() {
     let wake = kithara_worker::Wake::default();
-    let mut fixture = PcmFixture::with_wake(
-        2,
-        false,
-        crate::worker::scheduler::StreamWake::new(wake.clone()),
-    )
-    .await;
+    let mut fixture = PcmFixture::with_wake(2, false, wake.clone()).await;
     assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
     assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
     assert_eq!(

@@ -15,7 +15,7 @@ use kithara::{
     events::EventBus,
     file::{File, FileConfig},
     platform::time::{self, Duration},
-    play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend},
+    play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, TrackConfig},
     signal::{AudioChunk, AudioChunkInfo},
     stream::Stream,
 };
@@ -68,7 +68,8 @@ async fn open_test_audio(
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     kithara_integration_tests::fixtures::assert_fixture_open(
         asset,
-        kithara_integration_tests::mock::load_audio(&worker, config).await,
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await,
     )
 }
 
@@ -1298,7 +1299,7 @@ async fn decoder_file_seek_multiple(
     }
 }
 
-/// A Symphonia seek after EOF lands and decodes.
+/// A seek after the decoder ran to the end of the file lands and decodes.
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 #[kithara::test(tokio, timeout(Short), hang_timeout_secs(1))]
 #[case(
@@ -1676,7 +1677,8 @@ async fn a_seek_onto_a_decoded_chunk_start_never_reuses_its_identity_for_other_p
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let Some(mut audio) = kithara_integration_tests::fixtures::assert_fixture_open(
         asset,
-        kithara_integration_tests::mock::load_audio(&worker, config).await,
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await,
     ) else {
         return;
     };

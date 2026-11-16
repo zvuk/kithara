@@ -26,6 +26,10 @@ async fn smoke() {
 }
 ```
 
+With `test` enabled, browser suites can install `test::OutputStartupProbe` before
+constructing an output and await `snapshot()` before checking startup readiness. Collection is
+bounded to 100ms and restores the observed browser hooks, including on timeout.
+
 For trait mocks:
 
 ```rust

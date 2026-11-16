@@ -2486,12 +2486,9 @@ impl QueueLaw {
         let cause = if commanded {
             SlewCause::Commanded
         } else {
-            SlewCause::Drift {
-                from: planned.1,
-                limit: LinkConfig::default().slew_limit(),
-            }
+            SlewCause::Drift { from: planned.1 }
         };
-        let Some(Slew::Closes {
+        let Some(Slew::Corrects {
             curve,
             frames: deadline,
             ..
@@ -4611,6 +4608,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
             speed: 1.0,
             position: Duration::ZERO,
             duration: Some(Duration::from_secs(12)),
+            cached: Duration::ZERO,
             abr: None,
             metadata: kithara::decode::TrackMetadata::default(),
             mark: consumed.mark,
@@ -4751,6 +4749,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
         speed: 1.0,
         position: Duration::from_millis(2),
         duration: Some(Duration::from_secs(1)),
+        cached: Duration::ZERO,
         abr: None,
         metadata: kithara::decode::TrackMetadata::default(),
         mark: Some(mark),
@@ -4972,7 +4971,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     );
     let start = SessionFrame::new(23_998);
     let media = Duration::from_nanos(499_958_333);
-    let Some(Slew::Closes {
+    let Some(Slew::Corrects {
         curve, frames: end, ..
     }) = slew(
         &host,

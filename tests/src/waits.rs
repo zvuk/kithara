@@ -445,7 +445,7 @@ mod tests {
             assets::{AssetStore, StorageBackend},
             host::{HostConfig, HostSettings},
             platform::time::Instant,
-            play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+            play::{ResourceConfig, ResourceSrc},
         };
         use kithara_test_utils::bufpool::pools;
 
@@ -479,9 +479,6 @@ mod tests {
                     .build(),
             )
             .downloader(server.modeled_downloader())
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(region.clone()).build(),
-            ))
             .preload_chunks(NonZeroUsize::MIN)
             .build();
         let mut player = OfflinePlayer::with_options(
