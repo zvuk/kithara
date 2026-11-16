@@ -58,7 +58,7 @@ fn registration_projects_the_canonical_member_grid() {
     host.begin_pass();
     let root = host.transport().expect("canonical Host transport");
     let model = grid(24_000, 0, Some((4, 0)), 960_000);
-    let (deck, control, _, _) = loaded(model.clone());
+    let (deck, control, mut rig, _) = loaded(model.clone());
     let (id, probe) = register(&mut host, deck, &control);
     let synced = host
         .apply(LinkedHostCommand::Sync { deck: id, on: true })
@@ -154,6 +154,7 @@ fn registration_projects_the_canonical_member_grid() {
     assert_eq!(members, vec![id]);
     assert_eq!(host.transport(), Some(root));
     assert!(control.commands().is_empty());
+    sound(&control, &mut rig, 96_000, 0);
     clock.at(96_000);
     host.begin_pass();
     let enabled = host
