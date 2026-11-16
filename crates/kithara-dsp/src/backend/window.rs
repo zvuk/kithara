@@ -19,6 +19,8 @@ pub(super) fn all_finite_kernel<S: Simd>(simd: S, samples: &[f32]) -> bool {
     largest.reduce_max() < 0x7f80_0000 && chunks.remainder().iter().all(|sample| sample.is_finite())
 }
 
+// Keep the kernel in the DSP crate's speed-optimized codegen unit.
+#[inline(never)]
 pub(crate) fn biquad_window<F>(
     samples: &mut [f32],
     channels: usize,
@@ -50,10 +52,7 @@ pub(in crate::backend) fn window_kernel<S: Simd, F: Fn(usize, usize) -> [f32; 5]
                 },
             ]
         };
-        let repeated = (0..channels).all(|plane| {
-            let [a, b] = pair(plane);
-            a == b
-        });
+        let repeated = (0..channels).all(|plane| matches!(pair(plane), [a, b] if a == b));
         if repeated {
             pair_kernel::<_, _, true>(simd, samples, channels, pair);
         } else {
