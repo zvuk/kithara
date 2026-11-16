@@ -4,6 +4,8 @@
 //! API.
 
 #[cfg(all(feature = "masonry", feature = "capture"))]
+mod artwork;
+#[cfg(all(feature = "masonry", feature = "capture"))]
 mod census;
 #[cfg(all(feature = "masonry", feature = "capture"))]
 mod immediate;

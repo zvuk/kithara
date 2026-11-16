@@ -1,6 +1,8 @@
 //! Documents, their compilation and the built-in presets, driven through the
 //! public API.
 
+#[cfg(feature = "render")]
+mod artwork;
 mod builtin_presets;
 mod compile;
 mod document_group;
