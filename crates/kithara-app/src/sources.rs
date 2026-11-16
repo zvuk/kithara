@@ -63,7 +63,6 @@ pub(crate) fn build_resource_config(url: &str, config: &AppConfig) -> Option<App
     Some(
         builder
             .downloader(config.downloader.clone())
-            .worker(config.worker.clone())
             .store(config.store.clone())
             .keys(keys)
             .maybe_headers(headers)

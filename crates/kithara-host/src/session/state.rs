@@ -226,7 +226,7 @@ pub(crate) struct DeckNode {
     pub(crate) node: NodeID,
     pub(crate) bus: Option<EventBus>,
     #[cfg(feature = "offline")]
-    pub(crate) offline: Option<kithara_render::rt::OfflineDeck<super::transport::TransportState>>,
+    pub(crate) offline: Option<kithara_render::OfflineDeck<super::transport::TransportState>>,
 }
 
 pub(crate) struct RetiredDeck {

@@ -40,8 +40,8 @@ impl HostOwner<TestPools> for PreparingOwner {
         to self.inner.owner {
             fn apply(&mut self, command: Self::Command) -> Result<Option<Seq>, PlayError>;
             fn register(&mut self, id: BeatGridId, deck: Box<Self::Deck>) -> Result<(), PlayError>;
-            fn each_deck(&mut self, visit: &mut dyn FnMut(BeatGridId, &mut Self::Deck, &mut Outbox<'_, TestPools>, DeckPass<'_>));
-            fn with_deck(&mut self, id: BeatGridId, visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_, TestPools>, DeckPass<'_>)) -> Result<(), PlayError>;
+            fn each_deck(&mut self, visit: &mut dyn FnMut(BeatGridId, &mut Self::Deck, &mut Outbox<'_>, DeckPass<'_>));
+            fn with_deck(&mut self, id: BeatGridId, visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_>, DeckPass<'_>)) -> Result<(), PlayError>;
             fn clock(&self) -> Option<crate::PassClock>;
             fn prepare_offline(&mut self) -> Result<(), PlayError>;
             fn render_offline(&mut self, position: u64, frames: usize, output: &mut [f32]) -> Result<(), PlayError>;

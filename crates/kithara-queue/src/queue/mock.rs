@@ -99,7 +99,7 @@ pub(crate) fn with_outbox<Value, Run>(
     run: Run,
 ) -> Value
 where
-    Run: FnOnce(&mut Queue<TestPools>, &mut Outbox<'_, TestPools>) -> Value,
+    Run: FnOnce(&mut Queue<TestPools>, &mut Outbox<'_>) -> Value,
 {
     let output = mock::output(None).get();
     let deck = queue.deck.mixer.clone();
@@ -253,14 +253,18 @@ async fn decoded_fixture(
         &source,
         kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
     );
-    let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
-        .downloader(downloader())
-        .store(store)
-        .build();
-    let prepared = prep
-        .prepare(config, &mock::output(None).get())
+    let config =
+        ResourceConfig::<TestPools>::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
+            .downloader(downloader())
+            .store(store)
+            .build();
+    let (_, item) = prep
+        .prepare(
+            config,
+            &mock::output(None).get(),
+            Box::new(AudioObserverSlot::default().relay()),
+        )
         .expect("prepared fixture");
-    let item = ResourceLoad::new(prepared, Box::new(AudioObserverSlot::default().relay()));
     let mut opening = std::pin::pin!(rig.load_fixture(worker, item, Duration::ZERO));
     loop {
         hang_tick!();
@@ -284,11 +288,7 @@ pub(crate) fn synthetic_loaded(
     kithara_render::Loaded<kithara_play::OpenedTrack>,
     kithara_render::mock::PacketRing,
 ) {
-    use kithara_render::{
-        PcmPacket,
-        mock::PacketRing,
-        rt::track::{PcmConsumer, PlayerResource},
-    };
+    use kithara_render::{PcmPacket, mock::PacketRing};
     use kithara_signal::AudioChunk;
     use kithara_test_utils::bufpool::sample_buffer;
 
@@ -301,12 +301,11 @@ pub(crate) fn synthetic_loaded(
         sample_buffer(&region, &samples),
     ))));
     let receiver = packets.receiver.take().expect("fixture receiver");
-    let pcm = Box::new(
-        PlayerResource::new(PcmConsumer::new(receiver), src.into(), &region)
-            .expect("fixture playback resource"),
-    );
+    let pcm = Box::new(receiver);
     let opened = kithara_play::OpenedTrack {
         pcm,
+        src: src.into(),
+        playhead: packets.playhead(),
         abr: None,
         metadata: kithara_decode::TrackMetadata::default(),
     };
@@ -374,7 +373,7 @@ pub(crate) fn load_seq(queue: &Queue<TestPools>, id: TrackId) -> Seq {
 pub(crate) fn requested_load(
     rig: &mut DeckRig<TestPools>,
     seq: Seq,
-) -> kithara_render::LoadRequest<ResourceLoad<TestPools>> {
+) -> kithara_render::LoadRequest<ResourceLoad> {
     use kithara_render::DispatcherCommand;
 
     rig.opens.drain();

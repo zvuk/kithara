@@ -12,10 +12,12 @@ use firewheel::{
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::{Arc, Mutex};
 
-use super::processor::{
-    DeckMixer, OfflineDeck, OfflineProcessor, PlayerProcessor, PreparedDeck, StreamShape,
+use super::processor::PlayerProcessor;
+use crate::{
+    OfflineDeck,
+    bridge::{MixerInputs, SessionInbox},
+    rt::{DeckMixer, OfflineProcessor, PreparedDeck, StreamShape},
 };
-use crate::bridge::{MixerInputs, SessionInbox};
 
 /// A deck node whose processor borrows its commands from the Host's session store.
 #[derive(Diff)]

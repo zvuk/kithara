@@ -37,7 +37,7 @@ use crate::{
 pub(super) struct Observation {
     pub snapshot: LinkedSnapshot<TrackSnapshot>,
     pub trajectories: Vec<(SessionFrame, TempoTrajectory)>,
-    commands: Vec<TrackCommand<TestPools>>,
+    commands: Vec<TrackCommand>,
 }
 
 #[derive(Clone)]
@@ -63,7 +63,7 @@ impl Probe {
         self.read(|observation| observation.trajectories.clear());
     }
 
-    pub(super) fn send(&self, command: TrackCommand<TestPools>) {
+    pub(super) fn send(&self, command: TrackCommand) {
         self.read(|observation| observation.commands.push(command));
     }
 }
@@ -85,13 +85,13 @@ impl HostedDeck<TestPools> for ObservedDeck {
         to self.inner {
             fn worker(&self) -> Option<&PlayWorker<TestPools>>;
             fn mixer_config(&self) -> DeckMixerConfig;
-            fn close(&mut self, out: &mut Outbox<'_, TestPools>) -> Result<(), PlayError>;
+            fn close(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError>;
             fn hold(&mut self, waker: Waker);
             fn release(&mut self);
         }
     }
 
-    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, TestPools>) {
+    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         for command in self
             .probe
             .read(|observation| std::mem::take(&mut observation.commands))
@@ -101,27 +101,18 @@ impl HostedDeck<TestPools> for ObservedDeck {
         self.inner.drain(pass, out);
         self.publish();
     }
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, TestPools>,
-        pass: DeckPass<'_>,
-        out: &mut Outbox<'_, TestPools>,
-    ) {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         HostedDeck::settle(&mut self.inner, receipt, pass, out);
         self.publish();
     }
-    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, TestPools>) {
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         HostedDeck::tick(&mut self.inner, pass, out);
         self.publish();
     }
 }
 
 impl LinkedDeck<TestPools> for ObservedDeck {
-    fn sync(
-        &mut self,
-        on: bool,
-        out: &mut Outbox<'_, TestPools>,
-    ) -> Result<Option<Seq>, PlayError> {
+    fn sync(&mut self, on: bool, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         let sent = LinkedPlayer::sync(&mut self.inner, on, out);
         self.publish();
         sent
@@ -130,7 +121,7 @@ impl LinkedDeck<TestPools> for ObservedDeck {
         &mut self,
         trajectory: &TempoTrajectory,
         frames: &[SessionFrame],
-        out: &mut Outbox<'_, TestPools>,
+        out: &mut Outbox<'_>,
     ) {
         self.probe.read(|observation| {
             observation
@@ -140,7 +131,7 @@ impl LinkedDeck<TestPools> for ObservedDeck {
         LinkedPlayer::retime(&mut self.inner, trajectory, frames, out);
         self.publish();
     }
-    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, TestPools>) {
+    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_>) {
         LinkedPlayer::grid(&mut self.inner, answer, out);
         self.publish();
     }
@@ -156,12 +147,7 @@ impl LinkedDeck<TestPools> for ObservedDeck {
     fn scope_parts(&self) -> usize {
         LinkedPlayer::scope_parts(&self.inner)
     }
-    fn realign(
-        &mut self,
-        trajectory: &TempoTrajectory,
-        at: SessionFrame,
-        out: &mut Outbox<'_, TestPools>,
-    ) {
+    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_>) {
         self.probe
             .read(|observation| observation.trajectories.push((at, trajectory.clone())));
         LinkedPlayer::realign(&mut self.inner, trajectory, at, out);
@@ -303,7 +289,7 @@ impl HostSettingsExec<()> for ScriptedHost {
 }
 
 impl HostOwner<TestPools> for ScriptedHost {
-    type Command = HostCommand<TestPools, LinkedHostDeck<TestPools>>;
+    type Command = HostCommand<LinkedHostDeck<TestPools>>;
     type Deck = LinkedHostDeck<TestPools>;
     fn poll_output(&mut self) -> std::task::Poll<Result<(), PlayError>> {
         std::task::Poll::Ready(Ok(()))
@@ -325,7 +311,7 @@ impl HostOwner<TestPools> for ScriptedHost {
     }
     fn each_deck(
         &mut self,
-        visit: &mut dyn FnMut(DeckId, &mut Self::Deck, &mut Outbox<'_, TestPools>, DeckPass<'_>),
+        visit: &mut dyn FnMut(DeckId, &mut Self::Deck, &mut Outbox<'_>, DeckPass<'_>),
     ) {
         let PassClock { now, delivery, .. } = self.clock().unwrap_or_else(|| fixture_clock(0));
         let planned = self.control.edit(|script| script.planned.clone());
@@ -341,7 +327,7 @@ impl HostOwner<TestPools> for ScriptedHost {
     fn with_deck(
         &mut self,
         id: DeckId,
-        visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_, TestPools>, DeckPass<'_>),
+        visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_>, DeckPass<'_>),
     ) -> Result<(), PlayError> {
         let PassClock { now, delivery, .. } = self.clock().unwrap_or_else(|| fixture_clock(0));
         let record = self

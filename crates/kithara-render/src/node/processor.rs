@@ -3,10 +3,12 @@ use firewheel::{
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
 
-use super::{DeckMixer, offline::OfflineProcessor};
-use crate::bridge::SessionInbox;
+use crate::{
+    bridge::SessionInbox,
+    rt::{DeckMixer, OfflineProcessor},
+};
 
-pub(in crate::rt) enum PlayerProcessor<E: SessionInbox> {
+pub(super) enum PlayerProcessor<E: SessionInbox> {
     Native(Box<DeckMixer<E>>),
     Offline(OfflineProcessor<E>),
 }

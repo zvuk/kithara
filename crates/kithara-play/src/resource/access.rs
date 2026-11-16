@@ -101,12 +101,6 @@ where
         self.discriminator.as_deref()
     }
 
-    /// Preferred peak bitrate cap for normal networks.
-    #[must_use]
-    pub const fn preferred_peak_bitrate(&self) -> f64 {
-        self.preferred_peak_bitrate
-    }
-
     /// Replace the event bus attached to this resource.
     pub fn set_bus(&mut self, bus: EventBus) {
         self.bus = Some(bus);

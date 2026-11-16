@@ -7,7 +7,7 @@ use kithara::{
     decode::DecoderBackend,
     host::{HostConfig, HostSettings},
     platform::time::{Duration, WallInstant, sleep},
-    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -128,7 +128,6 @@ async fn run_case(
     };
     let cfg: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .downloader(downloader)
             .discriminator("t0")
             .store(store)

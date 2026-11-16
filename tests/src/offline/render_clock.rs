@@ -58,12 +58,12 @@ impl<S, O: HostOwner<S>> HostOwner<S> for RenderClock<O> {
             fn register(&mut self, id: DeckId, deck: Box<Self::Deck>) -> Result<(), PlayError>;
             fn each_deck(
                 &mut self,
-                visit: &mut dyn FnMut(DeckId, &mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
+                visit: &mut dyn FnMut(DeckId, &mut Self::Deck, &mut Outbox<'_>, DeckPass<'_>),
             );
             fn with_deck(
                 &mut self,
                 id: DeckId,
-                visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
+                visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_>, DeckPass<'_>),
             ) -> Result<(), PlayError>;
             fn clock(&self) -> Option<PassClock>;
             fn prepare_offline(&mut self) -> Result<(), PlayError>;

@@ -101,7 +101,7 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(super) fn validate_command(&self, command: &QueueCommand<S>) -> Result<(), QueueError> {
         self.ensure_open()?;
@@ -132,7 +132,7 @@ where
         &mut self,
         command: QueueCommand<S>,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         self.validate_command(&command)?;
         match command {
@@ -233,13 +233,13 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     fn apply_items(
         &mut self,
         command: QueueCommand<S>,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         match command {
             QueueCommand::Append {
@@ -286,7 +286,7 @@ where
         source: TrackSource<S>,
         after: Option<TrackId>,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         let index = match after {
             Some(after) => {
@@ -310,7 +310,7 @@ where
     fn apply_queue_settings(
         &mut self,
         command: QueueCommand<S>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         match command {
             QueueCommand::SetActionAtItemEnd(action) => {
@@ -368,7 +368,7 @@ where
     fn set_repeat_mode(
         &mut self,
         mode: RepeatMode,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         self.navigation.set_repeat(mode);
         let mode = match mode {
@@ -385,12 +385,12 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     fn pause_at(
         &mut self,
         at: When<SessionFrame>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         if self
             .current
@@ -418,7 +418,7 @@ where
         &mut self,
         at: When<SessionFrame>,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         let requested = self
             .target
@@ -475,7 +475,7 @@ where
         &mut self,
         change: QueueSettingsChange,
         at: When<SessionFrame>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         if matches!(at, When::At(_)) {
             return Err(PlayError::Untimed.into());
@@ -496,8 +496,8 @@ where
 
     pub(super) fn transport(
         &mut self,
-        command: TrackCommand<S>,
-        out: &mut Outbox<'_, S>,
+        command: TrackCommand,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let index = self.active_current_index().ok_or(PlayError::NoActiveSlot)?;
         self.active
@@ -510,7 +510,7 @@ where
     fn step_pitch(
         &mut self,
         step: PitchStep,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         let Some(pitch) = self.config.pitch() else {
             return Ok(None);
@@ -526,7 +526,7 @@ where
         &mut self,
         change: TrackSettingsChange,
         at: When<SessionFrame>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         let change = TrackSettings::check(change)?;
         let receivers: Vec<_> = self
@@ -579,7 +579,7 @@ where
         change: TrackSettingsChange,
         receivers: &[(usize, When<SessionFrame>)],
         current: Option<usize>,
-        out: &Outbox<'_, S>,
+        out: &Outbox<'_>,
     ) -> Result<(usize, bool), PlayError> {
         let mut deck_cost = 0;
         let mut moves_current = false;
@@ -608,7 +608,7 @@ where
         change: TrackSettingsChange,
         receivers: Vec<(usize, When<SessionFrame>)>,
         current: Option<usize>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<bool, PlayError> {
         let mut moved = false;
         for (index, when) in receivers {
@@ -636,7 +636,7 @@ where
         &self,
         band: usize,
         gain_db: f32,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let bands = self.deck.mixer.eq.bands();
         if band >= bands {
@@ -651,7 +651,7 @@ where
     fn set_eq_layout(
         &self,
         bands: &[EqBandConfig],
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         if bands.len() > self.config.mixer.eq_bands() {
             return Err(PlayError::InvalidConfiguration {
@@ -666,12 +666,12 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(super) fn seek_to(
         &mut self,
         to: Position,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         if let Some(id) = self
             .current

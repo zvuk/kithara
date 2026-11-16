@@ -12,7 +12,7 @@ use crate::{AdvanceReason, QueueEvent, TrackStatus};
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(in crate::queue) fn abandon_removal_entry(&mut self) -> Result<(), PlayError> {
         if let Some(target) = self.target.take()
@@ -138,7 +138,7 @@ where
         &mut self,
         index: Option<usize>,
         settled: &Settled,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
         let seq = match settled {
             Settled::Applied { seq, .. } | Settled::Rejected { seq, .. } => *seq,
@@ -215,7 +215,7 @@ where
         index: usize,
         seq: Seq,
         reason: &Rejection<PlayError>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
         if matches!(reason, Rejection::Stale)
             && self.target.is_some_and(|target| target.stale == Some(seq))
@@ -318,13 +318,13 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(in crate::queue) fn transition_settled(
         &mut self,
         index: usize,
         settled: &Settled,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
         let (seq, applied) = match settled {
             Settled::Pending => return Ok(()),
@@ -358,7 +358,7 @@ where
         &mut self,
         seq: Seq,
         settled: &Settled,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
         match settled {
             Settled::Applied { .. } => {
@@ -388,7 +388,7 @@ where
         seq: Seq,
         applied: bool,
         settled: &Settled,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
         let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
         let continued_pause = active.role == Role::Incoming

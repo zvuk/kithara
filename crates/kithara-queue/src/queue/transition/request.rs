@@ -28,14 +28,14 @@ pub(in crate::queue) struct TransitionRequest {
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(in crate::queue) fn replace_current_source(
         &mut self,
         id: TrackId,
         source: TrackSource<S>,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         if self.current != Some(id)
             || self.pending_handover.is_some()
@@ -95,7 +95,7 @@ where
         auto: bool,
         playing: bool,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         let ids = self.selectable_ids();
         let wrap = self.navigation.repeat_mode() == RepeatMode::All;
@@ -134,7 +134,7 @@ where
         &mut self,
         request: TransitionRequest,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         let TransitionRequest {
             id,
@@ -185,7 +185,7 @@ where
         &mut self,
         request: TransitionRequest,
         settings: CrossfadeSettings,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         let TransitionRequest {
             id,
@@ -224,7 +224,7 @@ where
         settings: CrossfadeSettings,
         bound: Option<Bound>,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
         let TransitionRequest {
             id,
@@ -301,11 +301,11 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(in crate::queue) fn transition_loaded(
         &mut self,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let Some((now, delivery)) = self.clock else {
             return Ok(None);
@@ -374,7 +374,7 @@ where
         &mut self,
         index: usize,
         playing: bool,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let command = if playing {
             TrackCommand::Play { at: When::Next }
@@ -395,7 +395,7 @@ where
         &mut self,
         index: usize,
         target: Target,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<bool, PlayError> {
         let Some(active) = self.active.get(index) else {
             return Ok(false);
@@ -437,7 +437,7 @@ where
         &mut self,
         index: usize,
         target: Target,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         if self
             .target
@@ -504,7 +504,7 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(in crate::queue) fn accept_load(&mut self, index: usize, seq: Seq) {
         let Some(active) = self.active.get_mut(index) else {
@@ -549,7 +549,7 @@ where
         &mut self,
         index: usize,
         settled: &Settled,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
         let _ = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
         let wanted = self
@@ -570,7 +570,7 @@ where
         index: usize,
         settled: &Settled,
         wanted: bool,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
         let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
         let id = active.item;
