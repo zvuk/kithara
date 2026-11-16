@@ -46,6 +46,7 @@ fn with_waveform(builder: AppAnalyzerBuilder, _buckets: usize) -> AppAnalyzerBui
 pub struct TrackAnalysisRunner {
     fingerprint: AnalysisFingerprint,
     worker: Arc<AnalysisWorker>,
+    pools: Pools,
     current: Option<RunHandle>,
     #[field(get = is_active)]
     active: bool,
@@ -69,7 +70,7 @@ impl TrackAnalysisRunner {
         beat_config: AppBeatAnalysisConfig,
         pools: Pools,
     ) -> Self {
-        let builder = AnalyzerBuilder::new(pools).with_beat_config(beat_config);
+        let builder = AnalyzerBuilder::new(pools.clone()).with_beat_config(beat_config);
         let builder = with_waveform(builder, buckets).with_beat();
         let worker = Arc::new(AnalysisWorker::new(
             AnalysisWorkerConfig::for_builder(builder)
@@ -83,6 +84,7 @@ impl TrackAnalysisRunner {
         Self {
             fingerprint,
             worker,
+            pools,
             active,
             current: None,
         }
@@ -121,6 +123,7 @@ impl TrackAnalysisRunner {
             run.clone(),
             rate,
             pass,
+            self.pools.clone(),
         ));
         self.current = Some(RunHandle { task, cancel: run });
         Ok(rx)
@@ -168,6 +171,7 @@ impl TrackAnalysisRunner {
             run.clone(),
             rate,
             pass,
+            self.pools.clone(),
         ));
         self.current = Some(RunHandle { task, cancel: run });
         Ok(rx)
@@ -186,8 +190,9 @@ async fn run_analysis(
     cancel: CancelToken,
     rate: NonZeroU32,
     pass: AnalysisPass,
+    pools: Pools,
 ) {
-    let Some(reader) = open_reader(config, &cancel, rate, worker.wake_handle()).await else {
+    let Some(reader) = open_reader(config, &cancel, rate, worker.wake_handle(), pools).await else {
         return;
     };
     worker.start(pass, reader);
@@ -198,13 +203,14 @@ async fn open_reader(
     cancel: &CancelToken,
     rate: NonZeroU32,
     wake: Wake,
+    pools: Pools,
 ) -> Option<Box<dyn AudioReader>> {
     if cancel.is_cancelled() {
         return None;
     }
     config.set_cancel(cancel.child());
     config.set_host_sample_rate(rate);
-    let mut resource = match Resource::open(config, wake).await {
+    let mut resource = match Resource::open(config, wake, pools).await {
         Ok(resource) => resource,
         Err(error) => {
             warn!(?error, "analysis: resource open failed");

@@ -1,17 +1,17 @@
 //! The audio-thread side of a deck, driven by a test in place of a `DeckMixer`.
 
 use kithara_command::{LevelInbox, Seq, Target};
+use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_signal::{SegmentId, SessionFrame};
 use num_traits::ToPrimitive;
 use ringbuf::traits::Producer;
 
 use crate::{
-    LaneFrame,
+    LaneFrame, PcmReceiver,
     bridge::{
         DeckEvent, DeckPart, DeckProtocol, DeckRefusal, MixerInputs, Returned, Slot, SlotMark,
     },
-    rt::track::PlayerResource,
 };
 pub use crate::{
     rt::processor_fixture::{
@@ -60,11 +60,13 @@ pub fn report(inputs: &mut MixerInputs, event: DeckEvent) -> Result<(), DeckEven
     inputs.events.try_push(event)
 }
 
+type HeldTrack = (TrackId, Box<PcmReceiver>, SegmentId);
+
 /// A deck's mixer with no audio: it holds the consumers attached to its slots and answers every
 /// batch the way the mixer does, its parts back as they applied.
 pub struct MockDeck {
     inputs: MixerInputs,
-    held: Vec<Option<(Box<PlayerResource>, SegmentId)>>,
+    held: Vec<Option<HeldTrack>>,
     armed: Vec<Option<Seq>>,
     metrics: crate::bridge::RtMetrics,
 }
@@ -156,38 +158,61 @@ impl MockDeck {
         self.metrics.snapshot()
     }
 
-    /// The source of the consumer `slot` holds.
+    /// The PCM endpoint held in `slot`.
     #[must_use]
-    pub fn held(&self, slot: Slot) -> Option<&str> {
+    pub fn receiver(&self, slot: Slot) -> Option<&PcmReceiver> {
         self.held
             .get(usize::from(slot.get()))
             .and_then(Option::as_ref)
-            .map(|(pcm, _)| &**pcm.src())
+            .map(|(_, pcm, _)| pcm.as_ref())
+    }
+
+    /// The track whose consumer is held in `slot`.
+    #[must_use]
+    pub fn held(&self, slot: Slot) -> Option<TrackId> {
+        self.held
+            .get(usize::from(slot.get()))
+            .and_then(Option::as_ref)
+            .map(|(item, _, _)| *item)
     }
 }
 
 /// What `part` leaves in the receipt once `held` applied it.
 fn hold(
-    held: &mut [Option<(Box<PlayerResource>, SegmentId)>],
+    held: &mut [Option<HeldTrack>],
     part: DeckPart,
     at: SessionFrame,
     stopped_at: f64,
 ) -> Option<DeckPart> {
-    let entry = |held: &mut [Option<(Box<PlayerResource>, SegmentId)>], slot: Slot| {
+    let entry = |held: &mut [Option<HeldTrack>], slot: Slot| {
         held.get_mut(usize::from(slot.get()))
             .and_then(Option::take)
-            .map(|(pcm, _)| DeckPart::Returned(Returned::Pcm { slot, pcm }))
+            .map(|(_, pcm, _)| {
+                DeckPart::Returned(Returned::Pcm {
+                    slot,
+                    pcm,
+                    packet: None,
+                })
+            })
     };
     match part {
         DeckPart::Attach {
-            slot, pcm, segment, ..
+            slot,
+            item_id,
+            pcm,
+            segment,
+            ..
         }
         | DeckPart::Replace {
-            slot, pcm, segment, ..
+            slot,
+            item_id,
+            pcm,
+            segment,
+            ..
         } => {
             let left = entry(held, slot);
             if let Some(entry) = held.get_mut(usize::from(slot.get())) {
-                *entry = Some((pcm, segment));
+                *entry = Some((item_id, pcm, segment));
             }
             left
         }
@@ -195,7 +220,7 @@ fn hold(
         DeckPart::Stop { slot, .. } => held
             .get(usize::from(slot.get()))
             .and_then(Option::as_ref)
-            .map(|(pcm, segment)| {
+            .map(|(_, pcm, segment)| {
                 let position = Duration::try_from_secs_f64(stopped_at).unwrap_or_default();
                 let seconds = position.as_secs_f64();
                 DeckPart::Returned(Returned::Stopped {
@@ -214,7 +239,7 @@ fn hold(
                 })
             }),
         DeckPart::Adopt { slot, segment } => {
-            if let Some(Some((_, current))) = held.get_mut(usize::from(slot.get())) {
+            if let Some(Some((_, _, current))) = held.get_mut(usize::from(slot.get())) {
                 *current = segment;
             }
             Some(DeckPart::Adopt { slot, segment })
@@ -229,11 +254,7 @@ pub(crate) use crate::worker::{mock as pcm_fixture, node_fixture};
 
 /// Keep a test receiver parkable while its reader applies the underrun policy.
 #[must_use]
-pub fn with_blocking_reads<T, B>(mut config: crate::TrackConfig<T, B>) -> crate::TrackConfig<T, B>
-where
-    T: kithara_stream::StreamType,
-    B: kithara_audio::ResamplerBackend,
-{
+pub fn with_blocking_reads(mut config: crate::TrackConfig) -> crate::TrackConfig {
     config.block_on_underrun = true;
     config
 }
@@ -245,15 +266,13 @@ mod tests {
     use kithara_command::{
         Batch, ChannelConfig, Outcome, Port, ScopedConfig, ScopedReceipt, When, scoped_channel,
     };
-    use kithara_platform::sync::Arc;
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
         bridge::{Fade, scope_channels},
-        rt::{DeckMixerConfig, track::PcmConsumer},
-        test_pools::pools,
+        rt::DeckMixerConfig,
         worker::packet_tests::PacketRing,
     };
 
@@ -311,17 +330,10 @@ mod tests {
         assert!(sender.receipt().is_none(), "exactly one terminal receipt");
     }
 
-    fn pcm(src: &str) -> Box<PlayerResource> {
+    fn pcm() -> Box<PcmReceiver> {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
         let mut packets = PacketRing::new(spec, Duration::from_secs(1), 1);
-        Box::new(
-            PlayerResource::new(
-                PcmConsumer::new(packets.receiver.take().expect("receiver")),
-                Arc::from(src),
-                &pools(),
-            )
-            .expect("resource"),
-        )
+        Box::new(packets.receiver.take().expect("receiver"))
     }
 
     #[kithara::test]
@@ -350,13 +362,19 @@ mod tests {
         let mut deck = MockDeck::new(inputs);
         let slot = Slot::new(0);
         let segment = SegmentId::FIRST.next();
+        let first_pcm = pcm();
+        let second_pcm = pcm();
+        let first_ptr = std::ptr::from_ref(first_pcm.as_ref());
+        let second_ptr = std::ptr::from_ref(second_pcm.as_ref());
+        let first_item = TrackId::allocate();
+        let second_item = TrackId::allocate();
         for (frame, commands) in [
             (
                 0,
                 vec![DeckPart::Attach {
-                    item_id: kithara_events::TrackId::allocate(),
+                    item_id: first_item,
                     slot,
-                    pcm: pcm("first"),
+                    pcm: first_pcm,
                     segment: SegmentId::FIRST,
                 }],
             ),
@@ -373,9 +391,9 @@ mod tests {
             (
                 2,
                 vec![DeckPart::Replace {
-                    item_id: kithara_events::TrackId::allocate(),
+                    item_id: second_item,
                     slot,
-                    pcm: pcm("second"),
+                    pcm: second_pcm,
                     segment,
                 }],
             ),
@@ -410,7 +428,7 @@ mod tests {
             );
             let (_, batch): (Outcome<DeckProtocol>, Batch<DeckProtocol>) = receipt.into();
             match frame {
-                0 => assert_eq!(deck.held(slot), Some("first")),
+                0 => assert_eq!(deck.held(slot), Some(first_item)),
                 1 => {
                     assert!(
                         matches!(batch.commands.as_slice(), [DeckPart::Adopt { .. }, DeckPart::Returned(Returned::Stopped { slot: stopped, resume })]
@@ -420,19 +438,19 @@ mod tests {
                             position,
                         }))
                     );
-                    assert_eq!(deck.held(slot), Some("first"));
+                    assert_eq!(deck.held(slot), Some(first_item));
                 }
                 2 => {
                     assert!(
-                        matches!(batch.commands.as_slice(), [DeckPart::Returned(Returned::Pcm { slot: returned, pcm })]
-                        if *returned == slot && &**pcm.src() == "first")
+                        matches!(batch.commands.as_slice(), [DeckPart::Returned(Returned::Pcm { slot: returned, pcm, packet: None })]
+                        if *returned == slot && std::ptr::eq(pcm.as_ref(), first_ptr))
                     );
-                    assert_eq!(deck.held(slot), Some("second"));
+                    assert_eq!(deck.held(slot), Some(second_item));
                 }
                 3 => {
                     assert!(
-                        matches!(batch.commands.as_slice(), [DeckPart::Returned(Returned::Pcm { slot: returned, pcm })]
-                        if *returned == slot && &**pcm.src() == "second")
+                        matches!(batch.commands.as_slice(), [DeckPart::Returned(Returned::Pcm { slot: returned, pcm, packet: None })]
+                        if *returned == slot && std::ptr::eq(pcm.as_ref(), second_ptr))
                     );
                     assert_eq!(deck.held(slot), None);
                 }

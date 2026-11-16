@@ -6,8 +6,8 @@ use kithara_command::{Batch, Inbox, Outcome, Receipt, Rejection, Seq, When};
 use kithara_host::HostOwner;
 use kithara_play::{
     Bound, DeckPass, Outbox, PlayWorker, PlayWorkerConfig, Player, PlayerConfig, PlayerImpl,
-    ResourceConfig, ResourceLoad, ResourceSrc, Track, TrackClock, TrackCommand, TrackReceipt,
-    TrackSettings, TrackStatus,
+    ResourceConfig, ResourceSrc, Track, TrackClock, TrackCommand, TrackReceipt, TrackSettings,
+    TrackStatus,
     mock::{self, DeckRig},
 };
 use kithara_render::{
@@ -33,7 +33,7 @@ use crate::{
 };
 
 fn settle(
-    deck: &mut Linked<PlayerImpl<TestPools>>,
+    deck: &mut Linked<PlayerImpl>,
     rig: &mut DeckRig<TestPools>,
     receipt: Receipt<DeckProtocol>,
 ) {
@@ -61,23 +61,22 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
-        .worker(worker.clone())
         .host_sample_rate(mock::SAMPLE_RATE)
         .build();
-    let (_, source) = mock::resource_tracks(&config).expect("local source");
+    let source = mock::resource_audio(&config, worker.pools()).expect("local source");
     let futures::future::Either::Left(source) = source else {
         panic!("WAV is a local source")
     };
     let fixture = mock::track_load(
-        source,
+        (source, kithara_play::TrackConfig::default()),
         Arc::from("resident"),
         worker.clone(),
         mock::SAMPLE_RATE,
-        |worker, config, position, start, inbox| {
-            Box::pin(async move { worker.load(config, position, start, inbox).await })
+        |worker, audio, config, position, start, inbox| {
+            Box::pin(async move { worker.load(audio, config, position, start, inbox).await })
         },
     );
-    let track: PlayerImpl<TestPools> = PlayerImpl::new(PlayerConfig {
+    let track: PlayerImpl = PlayerImpl::new(PlayerConfig {
         item: kithara_events::TrackId::allocate(),
         slot: Some(Slot::new(0)),
         settings: TrackSettings::default(),
@@ -94,7 +93,16 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     rig.with_outbox(|out| {
         deck.apply(
             TrackCommand::Load {
-                item: ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay())),
+                item: kithara_play::ResourcePrep::builder()
+                    .worker(worker.clone())
+                    .build()
+                    .prepare(
+                        config,
+                        &mock::output(None).get(),
+                        Box::new(AudioObserverSlot::default().relay()),
+                    )
+                    .expect("prepared source load")
+                    .1,
                 position: position(0),
             },
             out,
@@ -328,7 +336,7 @@ fn a_receipt_reaches_the_nested_group_that_issued_it() {
 async fn native_linked(
     directory: &TestTempDir,
 ) -> (
-    Linked<PlayerImpl<TestPools>>,
+    Linked<PlayerImpl>,
     DeckRig<TestPools>,
     Inbox<LaneProtocol>,
     Seq,
@@ -338,10 +346,9 @@ async fn native_linked(
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
-        .worker(worker.clone())
         .host_sample_rate(mock::SAMPLE_RATE)
         .build();
-    let track: PlayerImpl<TestPools> = PlayerImpl::new(PlayerConfig {
+    let track: PlayerImpl = PlayerImpl::new(PlayerConfig {
         item: kithara_events::TrackId::allocate(),
         slot: Some(Slot::new(0)),
         settings: TrackSettings::default(),
@@ -358,7 +365,16 @@ async fn native_linked(
     let loading = native_marked(&mut rig, SegmentId::FIRST, |out| {
         deck.apply(
             TrackCommand::Load {
-                item: ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay())),
+                item: kithara_play::ResourcePrep::builder()
+                    .worker(worker.clone())
+                    .build()
+                    .prepare(
+                        config,
+                        &mock::output(None).get(),
+                        Box::new(AudioObserverSlot::default().relay()),
+                    )
+                    .expect("prepared source load")
+                    .1,
                 position: position(0),
             },
             out,
@@ -460,7 +476,7 @@ fn native_ready(inbox: &mut Inbox<LaneProtocol>, clock: SegmentId) -> SegmentId 
 fn native_marked<R>(
     rig: &mut DeckRig<TestPools>,
     segment: SegmentId,
-    run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R,
+    run: impl FnOnce(&mut Outbox<'_>) -> R,
 ) -> R {
     native_marked_at(
         rig,
@@ -476,7 +492,7 @@ fn native_marked<R>(
 fn native_marked_at<R>(
     rig: &mut DeckRig<TestPools>,
     mark: SlotMark,
-    run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R,
+    run: impl FnOnce(&mut Outbox<'_>) -> R,
 ) -> R {
     let output = mock::output(None).get();
     let spec = AudioSpec::new(2, mock::SAMPLE_RATE);
@@ -509,7 +525,7 @@ fn native_marked_at<R>(
 }
 
 fn native_settle(
-    deck: &mut Linked<PlayerImpl<TestPools>>,
+    deck: &mut Linked<PlayerImpl>,
     rig: &mut DeckRig<TestPools>,
     current: SegmentId,
     receipt: Receipt<DeckProtocol>,
@@ -536,7 +552,7 @@ fn native_settle(
 }
 
 fn native_settle_at(
-    deck: &mut Linked<PlayerImpl<TestPools>>,
+    deck: &mut Linked<PlayerImpl>,
     rig: &mut DeckRig<TestPools>,
     mark: SlotMark,
     receipt: Receipt<DeckProtocol>,
@@ -558,7 +574,7 @@ fn native_settle_at(
 async fn native_synced(
     directory: &TestTempDir,
 ) -> (
-    Linked<PlayerImpl<TestPools>>,
+    Linked<PlayerImpl>,
     DeckRig<TestPools>,
     Inbox<LaneProtocol>,
     SegmentId,
@@ -792,7 +808,7 @@ async fn paused_future_command(
     directory: &TestTempDir,
     jump: bool,
 ) -> (
-    Linked<PlayerImpl<TestPools>>,
+    Linked<PlayerImpl>,
     DeckRig<TestPools>,
     Inbox<LaneProtocol>,
     SegmentId,
@@ -828,7 +844,7 @@ async fn paused_future_command(
     })
     .expect("future command")
     .expect("future sequence");
-    assert_eq!(deck.speed_applied(pending), None);
+    assert_eq!(deck.seek_applied(pending), None);
     native_marked(&mut rig, segment, |out| {
         deck.apply(TrackCommand::Pause { at: When::Next }, out)
     })

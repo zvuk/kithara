@@ -10,6 +10,7 @@ use crate::{
         search::{input_bounds, paint::paint_shaped},
         text_input::TextInputPaint,
     },
+    backends::finish,
     draw::{DrawListBuilder, Rect},
     engine::TextInputSnapshot,
     interact::TextInputLayout,
@@ -74,6 +75,6 @@ impl<'a> SearchPaint<'a> {
             &mut frame,
             self.skin.text_resources.as_ref(),
         );
-        vec![frame.into_geometry()]
+        vec![finish(frame.into_geometry())]
     }
 }

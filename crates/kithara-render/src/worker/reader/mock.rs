@@ -1,12 +1,11 @@
 use std::num::NonZeroUsize;
 
-use kithara_decode::TrackMetadata;
 use kithara_platform::{
-    sync::{Arc, ThreadGate, WaitGate},
+    sync::{Arc, ThreadGate, WaitGate, Weak},
     time::Duration,
 };
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
-use kithara_stream::{PlayheadRead, PlayheadState, PlayheadWrite, WorkerWake};
+use kithara_stream::{PlayheadRead, PlayheadState, PlayheadWrite};
 use kithara_test_utils::{
     bufpool::{pools, sample_buffer},
     kithara,
@@ -23,7 +22,6 @@ use super::{
     core::{FinalWake, PcmProducer},
     lead::PcmLead,
 };
-use crate::worker::scheduler::StreamWake;
 
 pub struct PacketRing {
     pub receiver: Option<PcmReceiver>,
@@ -35,14 +33,7 @@ pub struct PacketRing {
 impl PacketRing {
     #[must_use]
     pub fn new(spec: AudioSpec, duration: Duration, capacity: usize) -> Self {
-        Self::with_wake(
-            spec,
-            duration,
-            capacity,
-            capacity,
-            false,
-            StreamWake::new(Wake::default()),
-        )
+        Self::with_wake(spec, duration, capacity, capacity, false, Wake::default())
     }
 
     pub(crate) fn with_wake(
@@ -51,7 +42,7 @@ impl PacketRing {
         capacity: usize,
         reverse_capacity: usize,
         blocking: bool,
-        wake: StreamWake,
+        wake: Wake,
     ) -> Self {
         Self::with_wake_and_origin(
             spec,
@@ -77,7 +68,7 @@ impl PacketRing {
             capacity,
             capacity,
             false,
-            StreamWake::new(Wake::default()),
+            Wake::default(),
             origin,
         )
     }
@@ -91,7 +82,7 @@ impl PacketRing {
             capacity,
             capacity,
             false,
-            StreamWake::new(Wake::default()),
+            Wake::default(),
             Duration::ZERO,
         )
     }
@@ -102,7 +93,7 @@ impl PacketRing {
         capacity: usize,
         reverse_capacity: usize,
         blocking: bool,
-        wake: StreamWake,
+        wake: Wake,
         origin: Duration,
     ) -> Self {
         Self::with_lead(
@@ -116,28 +107,13 @@ impl PacketRing {
         )
     }
 
-    /// A ring whose producer bounds its lead in frames, sized like a loaded lane.
-    #[cfg(test)]
-    pub(in crate::worker) fn framed(spec: AudioSpec, lead: PcmLead, wake: StreamWake) -> Self {
-        let slots = lead.slots();
-        Self::with_lead(
-            spec,
-            Some(Duration::from_secs(1)),
-            (slots, slots + 2),
-            lead,
-            false,
-            wake,
-            Duration::ZERO,
-        )
-    }
-
     fn with_lead(
         spec: AudioSpec,
         duration: Option<Duration>,
         (capacity, reverse_capacity): (usize, usize),
         lead: PcmLead,
         blocking: bool,
-        wake: StreamWake,
+        wake: Wake,
         origin: Duration,
     ) -> Self {
         let (forward_tx, forward_rx) = HeapRb::new(capacity).split();
@@ -153,13 +129,10 @@ impl PacketRing {
                 forward: forward_rx,
                 reverse: reverse_tx,
                 playing: playing_tx,
-                ready: ready.clone(),
+                ready: ready.as_ref().map(Arc::downgrade),
                 wake,
-                playhead: playhead.clone(),
                 position: Duration::ZERO,
                 frontier: Duration::ZERO,
-                metadata: TrackMetadata::default(),
-                abr: None,
             }),
             producer: PcmProducer {
                 forward: forward_tx,
@@ -177,6 +150,11 @@ impl PacketRing {
 
     pub(in crate::worker) fn into_ends(mut self) -> (PcmReceiver, PcmProducer) {
         (self.receiver.take().expect("receiver"), self.producer)
+    }
+
+    #[must_use]
+    pub fn playhead(&self) -> Arc<PlayheadState> {
+        self.playhead.clone()
     }
 
     pub fn playing(&mut self) -> bool {
@@ -291,13 +269,10 @@ pub(in crate::worker) fn packet_fixture(
             spec,
             forward: received,
             reverse: returned,
-            ready: ready.clone(),
-            wake: StreamWake::new(dispatcher.wake_handle()),
-            playhead: Arc::new(PlayheadState::new()),
+            ready: ready.as_ref().map(Arc::downgrade),
+            wake: dispatcher.wake_handle(),
             position: Duration::ZERO,
             frontier: Duration::ZERO,
-            metadata: TrackMetadata::default(),
-            abr: None,
         },
         PcmProducer {
             forward,
@@ -323,7 +298,7 @@ fn unframed(capacity: usize) -> PcmLead {
 /// Waits for fixture PCM or producer closure under the test liveness policy.
 #[kithara::hang_watchdog(ctx = String)]
 pub fn wait_for_packet(receiver: &PcmReceiver) {
-    let Some(ready) = &receiver.ready else {
+    let Some(ready) = receiver.ready.as_ref().and_then(Weak::upgrade) else {
         return;
     };
     let context = |stage: &str, waited: Option<(u64, bool)>| {
@@ -335,20 +310,8 @@ pub fn wait_for_packet(receiver: &PcmReceiver) {
         format!(
             "{stage}: waited={waited:?}, gate_before={gate_before}, gate_after={gate_after}, \
              packet_ready={packet_ready}, producer_held={producer_held}, \
-             next_chunk={next_chunk:?}, position={:?}, frontier={:?}, spec={:?}, \
-             playhead_position={:?}, decoded_frontier={:?}, cached={:?}, duration={:?}, \
-             abr_variant={:?}",
-            receiver.position,
-            receiver.frontier,
-            receiver.spec,
-            receiver.playhead.position(),
-            receiver.playhead.decoded_frontier(),
-            receiver.playhead.cached(),
-            receiver.playhead.duration(),
-            receiver
-                .abr
-                .as_ref()
-                .and_then(kithara_abr::AbrHandle::current_variant_index),
+             next_chunk={next_chunk:?}, position={:?}, frontier={:?}, spec={:?}",
+            receiver.position, receiver.frontier, receiver.spec,
         )
     };
     let mut waited = None;

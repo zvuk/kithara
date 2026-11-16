@@ -41,7 +41,7 @@ pub struct QueueSettings {
 pub struct QueueConfig<S, F = PlayerFactory>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     /// Builds every track this queue plays.
     #[config(
@@ -130,7 +130,7 @@ where
 impl<S, F> QueueConfig<S, F>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     /// The deck's pitch, `None` when its backend has no keylock to move it.
     pub(crate) fn pitch(&self) -> Option<Pitch> {

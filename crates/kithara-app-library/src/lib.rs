@@ -15,6 +15,6 @@ pub use context::{
     Cause, Context, Environment, Factory, OpenUrlError, RegisterError, SectionError,
 };
 pub use page::{Document, Endpoint, Registration, SourcePage};
-pub use playable::{NoSource, Playable};
+pub use playable::{InvalidPlayable, Playable, PlaybackChoice};
 pub use secrets::{SecretError, Secrets};
 pub use source::{BranchNode, LibrarySource, PAGES, PageStatus, SECTIONS, worded};

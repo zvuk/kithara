@@ -15,7 +15,7 @@ use ringbuf::{
     traits::{Consumer, Split},
 };
 
-use super::super::{PcmConsumer, PlayerResource, PlayerTrack, ReadOutcome, RtSink};
+use super::super::{PlayerResource, PlayerTrack, ReadOutcome, RtSink};
 use crate::{
     bridge::{DeckEvent, Fade, PlaybackFault, RtMetrics, Slot},
     test_pools::{TestPools, pools, sample_buffer},
@@ -27,16 +27,11 @@ fn spec() -> AudioSpec {
 }
 
 fn resource(receiver: PcmReceiver) -> PlayerResource {
-    PlayerResource::new(
-        PcmConsumer::new(receiver),
-        Arc::from("repeated.wav"),
-        &pools(),
-    )
-    .expect("packet resource")
+    PlayerResource::new(Box::new(receiver))
 }
 
 fn observe(reader: &mut PlayerResource) -> Option<ReadOutcome> {
-    reader.poll_end(&mut 8, false)
+    reader.poll_end(&mut 8)
 }
 
 fn failed_packet(failure: TrackFailureKind) -> PcmPacket {
@@ -479,10 +474,11 @@ async fn a_real_source_failure_keeps_its_cause_in_the_single_stop_notification()
         terminal_node(real_audio(cancel.clone()).await, spec(), false);
     cancel.cancel();
     assert_eq!(node.tick(), TickResult::Progress);
+    let item = kithara_events::TrackId::allocate();
     let mut track = PlayerTrack::builder()
-        .item_id(kithara_events::TrackId::allocate())
+        .item_id(item)
         .sample_rate(spec().sample_rate)
-        .build(Box::new(resource(receiver)));
+        .build(Box::new(receiver));
     track.start(Fade::Declick);
     let (mut events, mut received) = HeapRb::<DeckEvent>::new(8).split();
     let metrics = RtMetrics::default();
@@ -490,7 +486,7 @@ async fn a_real_source_failure_keeps_its_cause_in_the_single_stop_notification()
     let slot = Slot::new(0);
     let mut sink = RtSink::new(&mut events, &metrics, slot, SessionFrame::new(7));
     assert!(track.poll_end(0, &mut 8, &mut sink));
-    assert_eq!(track.src().as_ref(), "repeated.wav");
+    assert_eq!(track.item_id, item);
     assert_eq!(
         received.try_pop(),
         Some(DeckEvent::Failed {
@@ -527,26 +523,22 @@ fn decoder_node_distinguishes_failed_from_eof_on_the_wire() {
 
 #[kithara::test]
 fn consumer_phase_terminal() {
-    use super::super::TrackReadOutcome;
+    assert_eq!(ReadOutcome::Full { frames: 1 }.ended_at(&(3..4)), None);
     assert_eq!(
-        TrackReadOutcome::Full {
-            position: 0.0,
-            frames: 1,
-            duration: 1.0,
-            frames_until_eof: None
-        }
-        .ended_at(&(3..4)),
-        None
+        ReadOutcome::Partial { frames: 2 }.ended_at(&(3..7)),
+        Some(5)
     );
     let (receiver, _producer) = terminal_ring(false, spec());
     let mut reader = resource(receiver);
     assert_eq!(observe(&mut reader), None);
     reader.select_segment(SegmentId::FIRST.next());
     assert_eq!(observe(&mut reader), None);
-    assert_eq!(TrackReadOutcome::Eof.ended_at(&(3..4)), Some(3));
+    assert_eq!(ReadOutcome::Eof.ended_at(&(3..4)), Some(3));
     assert_eq!(
-        TrackReadOutcome::Failed(PlaybackFault::Source(TrackFailureKind::SourceCancelled))
-            .ended_at(&(3..4)),
+        ReadOutcome::Failed(FailureSource::Producer {
+            failure: TrackFailureKind::SourceCancelled
+        })
+        .ended_at(&(3..4)),
         Some(3)
     );
 }
@@ -596,7 +588,7 @@ fn failed_seek_commits_its_epoch_for_the_terminal_marker() {
         kind: DecodeErrorKind::Interrupted,
     };
     assert!(
-        matches!(reader.consumer.get().receiver.peek(), Some(PcmPacket::Failed { segment, failure: actual }) if *segment == selected && *actual == failure)
+        matches!(reader.receiver.as_ref().peek(), Some(PcmPacket::Failed { segment, failure: actual }) if *segment == selected && *actual == failure)
     );
     assert_eq!(
         observe(&mut reader),
@@ -633,8 +625,5 @@ fn read_returns_failed_not_eof_on_decoder_error() {
             panic!("decoder Err must surface as Failed, not Full silence: {result:?}")
         }
     }
-    assert!(
-        !reader.eof,
-        "frames_until_eof must NOT report an EOF after a decode failure"
-    );
+    assert!(!reader.eof, "a decode failure must not become EOF");
 }

@@ -4,7 +4,6 @@ use cochlea_features::{Audio as ProbeAudio, SegmentOpts, count_silent_segments};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     platform::{time::SystemTime, tokio::join},
-    play::{PlayWorker, PlayWorkerConfig},
     queue::ItemEvent,
 };
 use kithara_integration_tests::{
@@ -306,13 +305,11 @@ async fn prepare_paced_player(
                 .expect("fixture resources"),
         )
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let downloader = TestServerHelper::new().await.modeled_downloader();
     let config =
         kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Url(master_url.clone()))
             .store(store)
             .downloader(downloader)
-            .worker(worker)
             .initial_abr_mode(AbrMode::manual(initial_variant))
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
@@ -523,6 +520,10 @@ async fn capture_paced(prepared: &mut PreparedPlayer) -> PacedCapture {
         "device continuity capture must not wait for PCM before or inside the graph"
     );
     let admissions = kithara_test_utils::test::usdt::events_of("chunk_admitted");
+    assert!(
+        !admissions.is_empty(),
+        "paced capture must observe the lane packet admissions"
+    );
     let mut through = 0;
     let mut ends = Vec::new();
     let blocks = blocks
@@ -796,7 +797,7 @@ async fn target_rebuild_keeps_player_output_continuous(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(3),
     tracing(
-        "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug,kithara_audio::pipeline::decode::transition=trace,kithara_audio::pipeline::source::variant=trace,render_refill=trace"
+        "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug,kithara_audio::pipeline::decode::transition=trace,kithara_audio::pipeline::source::variant=trace"
     )
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
@@ -978,11 +979,11 @@ fn shipped_ring_chunks() -> u64 {
                     .build(),
             )
             .build();
-    let track = kithara_render::TrackConfig::for_audio(
+    let track = (
         kithara::audio::AudioConfig::<kithara::file::File<_>>::for_stream(stream).build(),
-    )
-    .build();
-    u64::try_from(track.audio_buffer_chunks().get()).expect("ring depth fits u64")
+        kithara_render::TrackConfig::default(),
+    );
+    u64::try_from(track.1.audio_buffer_chunks().get()).expect("ring depth fits u64")
 }
 
 #[kithara::fixture]
