@@ -234,7 +234,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(wasm, flash(false), timeout(bootstrap::TIMEOUT * 4))]
+    #[kithara::test(wasm, flash(false), timeout(Duration::from_secs(40)))]
     async fn a_deck_wake_on_a_worker_runs_the_task_on_its_owner() {
         let worker = Worker::new(WorkerConfig::new());
         let dispatcher = worker.dispatcher(

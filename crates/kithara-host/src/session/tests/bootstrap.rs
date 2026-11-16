@@ -16,7 +16,7 @@ extern "C" {
     fn closed_output_contract(timeout_millis: u32) -> Promise;
 }
 
-#[kithara::test(wasm, flash(false), timeout(TIMEOUT * 3))]
+#[kithara::test(wasm, flash(false), timeout(Duration::from_secs(30)))]
 async fn a_closed_queued_output_leaves_bootstrap_admission_available() {
     let millis = TIMEOUT
         .as_millis()
