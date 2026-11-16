@@ -78,25 +78,20 @@ impl Pictures {
             });
         }
         for (name, source) in declared_artworks {
-            let loaded = resolver.bytes(None, source)?;
+            let loaded = resolver.bytes(None, source).map_err(|error| match error {
+                UiDocError::NotFound { rel, .. } => UiDocError::NotFound {
+                    origin: origin.clone(),
+                    rel,
+                },
+                other => other,
+            })?;
             let invalid = |reason: String| UiDocError::Artwork {
                 origin: loaded.uri.clone(),
                 name: name.clone(),
                 reason,
             };
-            if loaded.bytes.len() > 128 * 1024 {
-                return Err(invalid("artwork exceeds 128 KiB".into()));
-            }
             let artwork =
                 Artwork::parse(&loaded.bytes).map_err(|error| invalid(error.to_string()))?;
-            for phase in [0.0, 0.5, 0.999] {
-                crate::lottie::emit(
-                    artwork.composition(),
-                    artwork.frame_at(phase, 1.0),
-                    &mut crate::draw::DrawListBuilder::default(),
-                )
-                .map_err(|error| invalid(error.to_string()))?;
-            }
             artworks.insert(name.clone(), Arc::new(artwork));
         }
         Ok(Self { sheets, artworks })
