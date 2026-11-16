@@ -57,7 +57,7 @@ impl<const CHANNELS: usize> OnePoleLowPass<CHANNELS> {
             let tail = plane.split_at_mut(range.start).1;
             tail.split_at_mut(range.len()).0
         });
-        backend::one_pole_low_pass(self.coefficient, &mut self.state, &mut ranges, range.len());
+        backend::one_pole_low_pass(self.coefficient, &mut self.state, &mut ranges);
         Ok(())
     }
 

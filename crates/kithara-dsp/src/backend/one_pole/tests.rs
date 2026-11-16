@@ -19,12 +19,12 @@ fn parity<const CHANNELS: usize>() {
         let mut native_planes = native.each_mut().map(Vec::as_mut_slice);
         let mut fallback_planes = fallback.each_mut().map(Vec::as_mut_slice);
         assert_eq!(
-            low_pass(0.875, &mut native_state, &mut native_planes, frames),
+            low_pass(0.875, &mut native_state, &mut native_planes),
             frames
         );
         assert_eq!(
             dispatch!(Level::fallback(), simd => low_pass_kernel(simd,
-            0.875, &mut fallback_state, &mut fallback_planes, frames)),
+            0.875, &mut fallback_state, &mut fallback_planes)),
             frames
         );
         for (native, fallback) in native.iter().flatten().zip(fallback.iter().flatten()) {

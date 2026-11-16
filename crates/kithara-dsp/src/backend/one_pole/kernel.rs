@@ -8,36 +8,17 @@ pub(crate) fn low_pass_kernel<S: Simd>(
     coefficient: f32,
     state: &mut [f32],
     planes: &mut [&mut [f32]],
-    frames: usize,
 ) -> usize {
+    let frames = planes.first().map_or(0, |plane| plane.len());
     let (groups, remainder) = planes.as_chunks_mut::<4>();
     let (memories, last) = state.as_chunks_mut::<4>();
     for (planes, memory) in groups.iter_mut().zip(memories) {
-        group(
-            simd,
-            coefficient,
-            planes.each_mut().map(|plane| plane.split_at_mut(frames).0),
-            memory,
-        );
+        group(simd, coefficient, planes, memory);
     }
     match remainder {
-        [a, b, c] => group(
-            simd,
-            coefficient,
-            [
-                a.split_at_mut(frames).0,
-                b.split_at_mut(frames).0,
-                c.split_at_mut(frames).0,
-            ],
-            last,
-        ),
-        [a, b] => group(
-            simd,
-            coefficient,
-            [a.split_at_mut(frames).0, b.split_at_mut(frames).0],
-            last,
-        ),
-        [a] => group(simd, coefficient, [a.split_at_mut(frames).0], last),
+        [a, b, c] => group(simd, coefficient, &mut [a, b, c], last),
+        [a, b] => group(simd, coefficient, &mut [a, b], last),
+        [a] => group(simd, coefficient, &mut [a], last),
         _ => {}
     }
     frames
@@ -47,13 +28,13 @@ pub(crate) fn low_pass_kernel<S: Simd>(
 fn group<S: Simd, const CHANNELS: usize>(
     simd: S,
     coefficient: f32,
-    planes: [&mut [f32]; CHANNELS],
+    planes: &mut [&mut [f32]; CHANNELS],
     state: &mut [f32],
 ) {
     let feedback = f32x4::splat(simd, coefficient);
     let feedforward = f32x4::splat(simd, 1.0 - coefficient);
     let mut previous = f32x4::from_fn(simd, |lane| state.get(lane).copied().unwrap_or(0.0));
-    let mut rows = planes.map(<[f32]>::as_chunks_mut::<4>);
+    let mut rows = planes.each_mut().map(|plane| plane.as_chunks_mut::<4>());
     match rows.as_mut_slice() {
         [(a, _), (b, _), (c, _), (d, _)] => tiles(
             simd,
