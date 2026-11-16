@@ -57,6 +57,7 @@ use kithara_render::{
     },
 };
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
+use kithara_test_utils::wait_until_blocking;
 
 mod consts {
     pub(super) const BLOCK_FRAMES: u32 = 128;
@@ -304,13 +305,55 @@ async fn processor(sources: &[PcmDeck], lane: Lane, limiter: LimiterConfig) -> B
     }
 }
 
-fn render_block(mixer: &mut BenchMixer, out_l: &mut [f32], out_r: &mut [f32]) -> Duration {
-    let mut context = Context::from_waker(Waker::noop());
-    for lane in &mut mixer.lanes {
-        let _ = lane.poll_commands(&mut context);
-        lane.recycle();
-        let _ = lane.tick();
+fn prepare_sources(mixer: &mut BenchMixer) {
+    if mixer.frame == 0 {
+        for lane in &mut mixer.lanes {
+            lane.warm_up();
+        }
     }
+    let required = f64::from(consts::BLOCK_FRAMES) / f64::from(consts::SAMPLE_RATE);
+    let _real_io = kithara::platform::flash::real_io();
+    wait_until_blocking(Duration::from_secs(5), "bench source not ready", || {
+        let mut context = Context::from_waker(Waker::noop());
+        for lane in &mut mixer.lanes {
+            let _ = lane.poll_commands(&mut context);
+            lane.recycle();
+            let _ = lane.tick();
+        }
+        if mixer.frame == 0 {
+            mixer.lanes.iter_mut().all(|lane| {
+                lane.preload_status()
+                    .unwrap_or_else(|error| panic!("source not ready: {error:?}"))
+            })
+        } else {
+            (0..mixer.lanes.len()).all(|index| {
+                let slot = Slot::new(u16::try_from(index).expect("bench slot"));
+                mixer.processor.track(slot).is_some_and(|track| {
+                    track.state() == SlotState::Playing
+                        && track.decoded_frontier() - track.position() >= required
+                })
+            })
+        }
+    })
+    .unwrap_or_else(|error| {
+        let sources: Vec<_> = (0..mixer.lanes.len())
+            .map(|index| {
+                let slot = Slot::new(u16::try_from(index).expect("bench slot"));
+                mixer
+                    .processor
+                    .track(slot)
+                    .map(|track| (track.position(), track.decoded_frontier()))
+            })
+            .collect();
+        panic!(
+            "source not ready for {} frames: {error}; (position, frontier)={sources:?}",
+            consts::BLOCK_FRAMES
+        );
+    });
+}
+
+fn render_block(mixer: &mut BenchMixer, out_l: &mut [f32], out_r: &mut [f32]) -> Duration {
+    prepare_sources(mixer);
     mixer
         .extra
         .store
@@ -483,13 +526,7 @@ fn every_slot_fading(mixer: &mut BenchMixer) -> bool {
         .all(|slot| slot.gain > 0.0 && slot.gain < 1.0)
 }
 
-fn measure(
-    tracks: usize,
-    sources: &[PcmDeck],
-    lane: Lane,
-    limiter: LimiterConfig,
-    blocks: usize,
-) -> Duration {
+fn measure(sources: &[PcmDeck], lane: Lane, limiter: LimiterConfig, blocks: usize) -> Duration {
     assert!((1..=consts::MEASURED_BLOCKS).contains(&blocks));
     let runtime = tokio::runtime::Runtime::new().expect("bench runtime");
     let mut processor = runtime.block_on(processor(sources, lane, limiter));
@@ -531,6 +568,7 @@ fn measure(
         .iter()
         .filter(|slot| slot.state != SlotState::Empty)
         .count();
+    let tracks = sources.len();
     assert_eq!(
         live, tracks,
         "bench measured {live} track(s), not the {tracks} it loaded"
@@ -597,7 +635,6 @@ fn bench_blocks(c: &mut Criterion) {
                     while blocks > 0 {
                         let batch = blocks.min(limit);
                         elapsed += measure(
-                            count,
                             &sources,
                             lane,
                             limiter,
