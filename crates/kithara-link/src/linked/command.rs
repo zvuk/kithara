@@ -5,14 +5,14 @@ use kithara_play::{
     Bound, CrossfadeSettings, FadeDir, Outbox, PlayError, Position, SeekBatch, Track, TrackCommand,
     TrackSettingsChange, TrackStatus,
 };
-use kithara_signal::SessionFrame;
-use kithara_sync::{SourceGrid, SpeedCurve};
+use kithara_signal::{FrameCount, SessionFrame};
+use kithara_sync::SourceGrid;
 use tracing::warn;
 
 use super::{
     Linked, LinkedPlayer, Waiting,
     geometry::{PastEnd, Placement, cue_position, place},
-    state::{Cue, SpeedOperation},
+    state::{CorrectionState, Cue, RunningCorrection, SpeedOperation},
 };
 use crate::{covers, entry, jump_target};
 
@@ -154,7 +154,7 @@ impl<P: Track> Linked<P> {
         Ok(sent.map(SeekBatch::Lane))
     }
 
-    /// Jumps to the in-phase position nearest `to`; a speed change rides an Align.
+    /// Jumps to the nearest in-phase position and replaces any phase correction.
     fn jump_to(
         &mut self,
         source: &SourceGrid,
@@ -162,15 +162,16 @@ impl<P: Track> Linked<P> {
         at: SessionFrame,
         out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
+        let mark = self
+            .inner
+            .snapshot()
+            .as_ref()
+            .mark
+            .ok_or(PlayError::NotReady)?;
         let target = jump_target(&self.host, source, to, at).ok_or(PlayError::NotReady)?;
         let start = at - self.inner.snapshot().as_ref().declick;
         let (position, _) = self.planned(start)?;
         let (speed, coverage) = self.curve(source, position, start, Some((target, at)))?;
-        if matches!(&speed, SpeedCurve::Constant(value) if self.inner.projected().speed() == *value)
-        {
-            return self.inner.apply(TrackCommand::Jump { to: target, at }, out);
-        }
-
         let sent = self.inner.apply(
             TrackCommand::Align {
                 to: target,
@@ -180,8 +181,17 @@ impl<P: Track> Linked<P> {
             out,
         )?;
         if let Some(seq) = sent {
-            self.speeds.push((seq, SpeedOperation::Relocation { to }));
-            self.plan_sent(start, coverage);
+            let state = Some(CorrectionState::Pending(
+                RunningCorrection {
+                    at,
+                    frames: FrameCount::new(0),
+                    segment: mark.lane.segment,
+                },
+                mark,
+            ));
+            self.speeds
+                .push((seq, SpeedOperation::Relocation { state, coverage }));
+            self.alignment = None;
         }
         Ok(sent)
     }

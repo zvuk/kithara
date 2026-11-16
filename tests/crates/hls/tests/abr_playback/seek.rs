@@ -432,8 +432,26 @@ pub(crate) async fn mp3_stream_continues_after_seek(
     .expect("read phase join");
 }
 
-/// Collect the ABR events that carry a decision, dropping the measurement
-/// stream that reports throughput, estimates and buffer depth.
+fn abr_seek_evidence() -> Vec<String> {
+    let tail = kithara_test_utils::flight::tail();
+    [
+        "ABR: tick",
+        "ThroughputSample",
+        "BandwidthEstimate",
+        "RequestEnqueued",
+        "RequestCompleted",
+    ]
+    .into_iter()
+    .flat_map(|marker| {
+        tail.iter()
+            .rev()
+            .filter(move |line| line.contains(marker))
+            .take(4)
+            .cloned()
+    })
+    .collect()
+}
+
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn drain_abr_decisions(events: &mut EventReceiver<TestEvent>, sink: &mut Vec<AbrEvent>) {
     loop {
@@ -441,6 +459,18 @@ fn drain_abr_decisions(events: &mut EventReceiver<TestEvent>, sink: &mut Vec<Abr
         match events.try_recv() {
             Ok(envelope) => {
                 hang_reset!();
+                if matches!(
+                    &envelope.event,
+                    TestEvent::Abr(_) | TestEvent::Downloader(_)
+                ) {
+                    tracing::debug!(
+                        target: "kithara_abr_seek",
+                        seq = envelope.meta.seq,
+                        published_us = envelope.meta.ts_micros,
+                        event = ?envelope.event,
+                        "post-seek event"
+                    );
+                }
                 if let TestEvent::Abr(event) = envelope.event
                     && !matches!(
                         event,
@@ -452,7 +482,10 @@ fn drain_abr_decisions(events: &mut EventReceiver<TestEvent>, sink: &mut Vec<Abr
                     sink.push(event);
                 }
             }
-            Err(TryRecvError::Lagged(_)) => {}
+            Err(TryRecvError::Lagged(lost)) => panic!(
+                "ABR seek events lost: {lost}; recent_abr_newest_first={:?}",
+                abr_seek_evidence()
+            ),
             Err(TryRecvError::Empty | TryRecvError::Closed) => return,
         }
     }
@@ -502,7 +535,7 @@ impl SeekPressure {
                         _ => {}
                     }
                 }
-                Err(TryRecvError::Lagged(lost)) => panic!("lost {lost} ABR seek events"),
+                Err(TryRecvError::Lagged(lost)) => panic!("ABR seek events lost: {lost}"),
                 Err(TryRecvError::Closed) => panic!("ABR seek event bus closed"),
                 Err(TryRecvError::Empty) => return progressed,
             }
@@ -752,11 +785,15 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
     }
     seek_segment.release();
 
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     fn read_after_seek(
         audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
         mut events: EventReceiver<TestEvent>,
     ) -> Vec<AbrEvent> {
+        hang_tick!(format!(
+            "seek landing; recent_abr_newest_first={:?}",
+            abr_seek_evidence()
+        ));
         let landing = match AudioRead::next_chunk(audio).expect("read the seek landing") {
             ChunkOutcome::Chunk(chunk) => Some(*chunk),
             ChunkOutcome::Eof { .. } => None,
@@ -781,8 +818,16 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
                 .expect("seek landing has a valid duration"),
         );
         let mut decisions = Vec::new();
+        let mut chunks = 1u64;
+        let mut frames = u64::from(landing.meta.frames);
+        let mut last_chunk = landing.meta;
         loop {
-            hang_tick!();
+            drain_abr_decisions(&mut events, &mut decisions);
+            hang_tick!(format!(
+                "post-seek chunks={chunks} frames={frames} last_chunk={last_chunk:?}; \
+                 recent_abr_newest_first={:?}",
+                abr_seek_evidence()
+            ));
             let chunk = match AudioRead::next_chunk(audio).expect("read after the seek landing") {
                 ChunkOutcome::Chunk(chunk) => Some(*chunk),
                 ChunkOutcome::Eof { .. } => None,
@@ -791,10 +836,16 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
             .unwrap_or_else(|| {
                 drain_abr_decisions(&mut events, &mut decisions);
                 panic!(
-                    "ABR must move off the top variant before the track ends; decisions={decisions:?}"
+                    "ABR must move off the top variant before the track ends; decisions={decisions:?}; \
+                     chunks={chunks} frames={frames} last_chunk={last_chunk:?}; \
+                     recent_abr_newest_first={:?}",
+                    abr_seek_evidence()
                 );
             });
             hang_reset!();
+            chunks += 1;
+            frames += u64::from(chunk.meta.frames);
+            last_chunk = chunk.meta;
             let variant = chunk.meta.variant_index.expect("HLS chunk has a variant");
             drain_abr_decisions(&mut events, &mut decisions);
             if variant != TOP_VARIANT {
@@ -836,6 +887,16 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
         ),
         "the first ABR decision after the seek lock ended must leave the top variant, got {decided:?}"
     );
+}
+
+#[kithara_test_utils::kithara::test]
+#[should_panic(expected = "ABR seek events lost")]
+fn abr_seek_rejects_lost_events() {
+    let bus = EventBus::new(1);
+    let mut events = bus.subscribe();
+    bus.publish(AbrEvent::Locked);
+    bus.publish(AbrEvent::Unlocked);
+    drain_abr_decisions(&mut events, &mut Vec::new());
 }
 
 #[kithara_test_utils::kithara::test]

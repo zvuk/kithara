@@ -2,13 +2,13 @@ mod admission;
 mod core;
 mod deck;
 mod geometry;
-mod lane;
 mod load;
 mod player;
 mod seat;
 mod segment;
 mod settle;
 mod state;
+mod transport;
 
 pub use core::PlayerImpl;
 

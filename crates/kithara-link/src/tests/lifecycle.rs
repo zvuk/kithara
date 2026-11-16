@@ -1,5 +1,7 @@
 use kithara_command::{Outcome, Rejection, Seq, When};
-use kithara_play::{HostedDeck, Player, Settled, Track, TrackCommand, TrackSnapshot, TrackStatus};
+use kithara_play::{
+    HostedDeck, PlayError, Player, Settled, Track, TrackCommand, TrackSnapshot, TrackStatus,
+};
 use kithara_signal::{FrameCount, SessionFrame};
 use kithara_sync::{Slew, SlewCause, SpeedCurve, slew};
 use kithara_test_utils::kithara;
@@ -8,7 +10,7 @@ use super::fixtures::{
     Command, Control, Deck, Rig, answer, consume, grid, horizon, load, loaded, position, sounding,
     source_grid, trajectory,
 };
-use crate::{LinkConfig, LinkedPlayer, SyncStatus};
+use crate::{LinkedPlayer, SyncStatus};
 
 fn silent() -> (Deck, Control, Rig, Seq) {
     let (mut deck, control, mut rig, loading) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
@@ -576,10 +578,24 @@ fn a_pending_refinement_preserves_the_current_correction() {
 }
 
 #[kithara::test]
-#[case::owner_tick(false)]
-#[case::outer_drain(true)]
-fn a_correction_follows_its_actual_applied_receipt_frame(#[case] outer_drain: bool) {
+#[case::owner_tick(false, 0)]
+#[case::outer_drain(true, 0)]
+#[case::shifted_lane_owner_tick(false, 96_000)]
+#[case::shifted_lane_outer_drain(true, 96_000)]
+fn a_correction_follows_its_actual_applied_receipt_frame(
+    #[case] outer_drain: bool,
+    #[case] lane_origin: u64,
+) {
     let (mut deck, control, mut rig, _) = sounding();
+    control.edit(|script| {
+        script
+            .snapshot
+            .mark
+            .as_mut()
+            .expect("consumed mark")
+            .lane
+            .frame = lane_origin;
+    });
     answer(&mut deck, &mut rig, grid(24_000, 12, Some((4, 0)), 960_000));
     let sent = control.commands();
     let Command::Speed(_, When::At(requested)) = &sent[0].1 else {
@@ -587,12 +603,28 @@ fn a_correction_follows_its_actual_applied_receipt_frame(#[case] outer_drain: bo
     };
     let requested = *requested;
     let actual = requested + FrameCount::new(7);
+    control.edit(|script| {
+        script
+            .snapshot
+            .mark
+            .as_mut()
+            .expect("consumed mark")
+            .lane
+            .frame += 48_000;
+    });
     rig.apply(&mut deck, sent[0].0, i64::from(actual));
     if outer_drain {
         let receipt = std::iter::from_fn(|| deck.lane_receipt()).find(|receipt| {
             matches!(receipt, Settled::Applied { seq, .. } | Settled::Rejected { seq, .. } if *seq == sent[0].0)
         });
-        assert!(matches!(receipt, Some(Settled::Applied { .. })));
+        let Some(Settled::Applied { at, .. }) = receipt else {
+            panic!("accepted lane correction");
+        };
+        assert_eq!(
+            at.frame,
+            lane_origin + u64::try_from(i64::from(actual)).expect("positive actual frame")
+        );
+        assert_eq!(at.segment, kithara_signal::SegmentId::FIRST);
     }
     consume(
         &control,
@@ -623,6 +655,57 @@ fn a_correction_follows_its_actual_applied_receipt_frame(#[case] outer_drain: bo
         matches!(&control.commands()[0].1, Command::Speed(_, When::At(at)) if *at == requested),
         "command target remains independently observable"
     );
+}
+
+#[kithara::test]
+#[case::sync(false)]
+#[case::seek(true)]
+fn a_timed_alignment_without_a_consumed_mark_can_be_retried(#[case] seek: bool) {
+    let (mut deck, control, mut rig, _) = sounding();
+    if !seek {
+        rig.run(|out| deck.sync(false, out)).expect("sync off");
+    }
+    let mark = deck.snapshot().as_ref().mark;
+    control.edit(|script| script.snapshot.mark = None);
+    let before = deck.snapshot();
+    let refused = rig.run(|out| {
+        if seek {
+            deck.apply(
+                TrackCommand::Seek {
+                    to: position(36_000),
+                },
+                out,
+            )
+        } else {
+            deck.sync(true, out)
+        }
+    });
+    assert!(matches!(refused, Err(PlayError::NotReady)));
+    assert!(control.commands().is_empty());
+    assert_track_unchanged(deck.snapshot().as_ref(), before.as_ref());
+    assert_eq!(deck.snapshot().sync, before.sync);
+    control.edit(|script| script.snapshot.mark = mark);
+    let sent = rig
+        .run(|out| {
+            if seek {
+                deck.apply(
+                    TrackCommand::Seek {
+                        to: position(36_000),
+                    },
+                    out,
+                )
+            } else {
+                deck.sync(true, out)
+            }
+        })
+        .expect("the consumed mark permits retry")
+        .expect("alignment batch");
+    assert!(matches!(
+        control.commands().as_slice(),
+        [(speed, Command::Speed(_, When::At(at))), (jump, Command::Jump(_, landing))]
+            if *speed == sent && *jump == sent && at == landing
+    ));
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
 }
 
 #[kithara::test]
@@ -884,12 +967,9 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     let armed_snapshot = deck.snapshot();
     let start = rig.now + LinkedPlayer::lead(&deck, rig.delivery).expect("lane lead");
     let (media, from) = Track::planned(&deck, start, host.sample_rate()).expect("planned source");
-    let drift = SlewCause::Drift {
-        from,
-        limit: LinkConfig::default().slew_limit(),
-    };
+    let drift = SlewCause::Drift { from };
     let uncovered = grid(24_000, 12_000, Some((4, 0)), 960_000);
-    assert_eq!(
+    assert!(matches!(
         slew(
             &host,
             &source_grid(&uncovered),
@@ -899,16 +979,12 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
             drift,
             horizon()
         ),
-        Some(Slew::Relocate),
-        "a half-beat drift is past the slew limit"
-    );
+        Some(Slew::Corrects { .. })
+    ));
     answer(&mut deck, &mut rig, uncovered);
     assert!(
-        control
-            .commands()
-            .iter()
-            .any(|(_, command)| matches!(command, Command::Jump(..))),
-        "a correction that cannot finish relocates the deck"
+        matches!(control.commands().as_slice(), [(_, Command::Speed(..))]),
+        "a revised grid corrects speed and preserves the sounding position"
     );
     control.clear();
     assert_track_unchanged(deck.snapshot().as_ref(), armed_snapshot.as_ref());
@@ -943,7 +1019,7 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
         applied.sync,
         "grid refinement remains pending"
     );
-    let Some(Slew::Closes {
+    let Some(Slew::Corrects {
         curve: expected_curve,
         frames: frame_count,
         ..

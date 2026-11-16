@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    future::Future,
     num::NonZeroUsize,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -15,7 +16,7 @@ use kithara_events::EventBus;
 use kithara_platform::{
     sync::Arc, thread::ThreadClass, time::Duration, tokio::task::spawn_blocking,
 };
-use kithara_signal::{AudioChunkInfo, FrameCount};
+use kithara_signal::AudioChunkInfo;
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::Warp;
 use kithara_worker::{
@@ -30,7 +31,7 @@ use super::{
 };
 use crate::{
     LaneProtocol, ServiceClass, WarpSource,
-    dispatcher::{DispatcherProtocol, DispatcherTask, LaneStart, LaneTask, Open},
+    dispatcher::{DispatcherProtocol, DispatcherTask, LaneStart, LaneTask, Open, OpenResult},
 };
 
 static WORKER_ID: AtomicU64 = AtomicU64::new(1);
@@ -123,7 +124,10 @@ impl<S> PlayWorker<S> {
             .build();
         let dispatcher = base.dispatcher(dispatcher_config);
         Self(Arc::new(WorkerOwner {
-            lane: ChannelConfig::builder().capacity(lane_capacity).build(),
+            lane: ChannelConfig::builder()
+                .capacity(lane_capacity)
+                .targets(1)
+                .build(),
             capacity,
             dispatcher,
             pools,
@@ -194,122 +198,133 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     /// Open once, accept initial positioning, and assemble the worker-owned lane.
+    /// The returned future keeps cold preparation on the heap.
     ///
     /// # Errors
     /// Returns cancellation, source/decoder, invalid ring geometry, or pool failures.
-    pub async fn load<T, B>(
+    pub fn load<T, B>(
         &self,
         audio: AudioConfig<T, B>,
         config: TrackConfig,
         position: Duration,
         start: LaneStart,
         inbox: Inbox<LaneProtocol>,
-    ) -> Result<(OpenedPcm, DecoderNode<Audio<Stream<T>>, S>, FrameCount), LoadRefusal>
+    ) -> impl Future<Output = OpenResult<OpenedPcm, DecoderNode<Audio<Stream<T>>, S>>>
     where
         T: StreamType<Events = EventBus>,
         B: Default + ResamplerBackend,
     {
-        let TrackConfig {
-            engine_load,
-            warp,
-            preload_chunks,
-            declick,
-            audio_buffer_chunks,
-            block_on_underrun,
-        } = config;
-        let cancel = audio.cancel().cloned();
-        self.check_load_cancelled(cancel.as_ref())?;
-        if preload_chunks > audio_buffer_chunks {
-            return Err(LoadRefusal::Open(DecodeError::InvalidData {
-                detail: "lane preload quota exceeds PCM ring capacity",
-            }));
-        }
-        let (opened, lane) = {
-            let wake = self.0.dispatcher.wake_handle();
-            // Keep cold source preparation out of the callers' inline future state.
-            let prepared = Box::pin(Audio::<Stream<T>>::prepare(
-                audio,
-                Arc::new(StreamWake::new(wake.clone())),
-                self.pools().clone(),
-            ))
-            .await;
-            self.check_load_cancelled(cancel.as_ref())?;
-            let mut audio = prepared.map_err(decode_refusal)?;
-            let position = initial_position(&mut audio, position)?;
-            let spec = audio.spec();
-            let initial = AudioChunkInfo {
-                spec,
-                media_origin: audio.media_origin(),
-                visible_origin: audio.visible_origin(),
-                media_end: audio.media_end(),
-                timestamp: position,
-                end_timestamp: position,
-                ..AudioChunkInfo::default()
-            };
-            let (receiver, port) = PcmProducer::new(
-                PcmLead::new(audio_buffer_chunks, pcm_quantum(&warp)),
-                block_on_underrun,
-                wake,
-                spec,
-                position,
-                AudioSession::event_bus(&audio).clone(),
-            );
-            let opened = OpenedPcm {
-                receiver,
-                playhead: audio.playhead_read(),
-                metadata: audio.metadata().clone(),
-                abr: audio.abr_handle(),
-            };
-            let activity = audio.take_activity_writer();
-            let warp = Warp::new((), &warp.starting_at(warp.speed(), start.pitch));
-            let pools = self.pools().clone();
-            let dispatch = tracing::dispatcher::get_default(Clone::clone);
-            let span = tracing::Span::current();
-            // Cold engine allocation must not stop service of resident lanes.
-            let prepared = spawn_blocking(move || {
-                tracing::dispatcher::with_default(&dispatch, || {
-                    let _entered = span.enter();
-                    let mut renderer = warp.renderer(spec, pools);
-                    renderer.set_speed(start.speed, 0).map_err(|error| {
-                        DecodeError::audio_stream("initial lane speed curve", error)
-                    })?;
-                    renderer.prepare_engine_latency(spec).map_err(|error| {
-                        DecodeError::audio_stream("lane engine preparation", error)
-                    })?;
-                    Ok::<_, DecodeError>(renderer)
-                })
-            })
-            .await;
-            self.check_load_cancelled(cancel.as_ref())?;
-            let renderer = prepared
-                .map_err(|error| DecodeError::audio_stream("lane renderer preparation task", error))
-                .map_err(decode_refusal)?
-                .map_err(decode_refusal)?;
-            let source = WarpSource::new(
-                audio,
-                renderer,
-                spec,
-                self.pools().clone(),
-                crate::LaneSetup {
-                    inbox,
-                    preload_chunks,
-                    declick,
-                },
-            );
-            let lane = Box::new(DecoderNode::new(
-                source,
-                port,
-                activity,
-                initial,
+        Box::pin(async move {
+            let TrackConfig {
                 engine_load,
-                self.pools().clone(),
-                cancel.clone(),
-            ));
-            (opened, lane)
-        };
-        self.check_load_cancelled(cancel.as_ref())?;
-        let latency = lane.engine_latency();
-        Ok((opened, *lane, latency))
+                warp,
+                preload_chunks,
+                declick,
+                audio_buffer_chunks,
+                block_on_underrun,
+            } = config;
+            let cancel = audio.cancel().cloned();
+            self.check_load_cancelled(cancel.as_ref())?;
+            if preload_chunks > audio_buffer_chunks {
+                return Err(LoadRefusal::Open(DecodeError::InvalidData {
+                    detail: "lane preload quota exceeds PCM ring capacity",
+                }));
+            }
+            let (opened, lane) = {
+                let wake = self.0.dispatcher.wake_handle();
+                let prepared = Audio::<Stream<T>>::prepare(
+                    audio,
+                    Arc::new(StreamWake::new(wake.clone())),
+                    self.pools().clone(),
+                )
+                .await;
+                tracing::debug!(phase = "audio_prepared", succeeded = prepared.is_ok());
+                self.check_load_cancelled(cancel.as_ref())?;
+                let mut audio = prepared.map_err(decode_refusal)?;
+                let position = initial_position(&mut audio, position)?;
+                let spec = audio.spec();
+                let initial = AudioChunkInfo {
+                    spec,
+                    media_origin: audio.media_origin(),
+                    visible_origin: audio.visible_origin(),
+                    media_end: audio.media_end(),
+                    timestamp: position,
+                    end_timestamp: position,
+                    ..AudioChunkInfo::default()
+                };
+                let (receiver, port) = PcmProducer::new(
+                    PcmLead::new(audio_buffer_chunks, pcm_quantum(&warp)),
+                    block_on_underrun,
+                    wake,
+                    spec,
+                    position,
+                    AudioSession::event_bus(&audio).clone(),
+                );
+                let opened = OpenedPcm {
+                    receiver,
+                    playhead: audio.playhead_read(),
+                    metadata: audio.metadata().clone(),
+                    abr: audio.abr_handle(),
+                };
+                let activity = audio.take_activity_writer();
+                let warp = Warp::new((), &warp.starting_at(warp.speed(), start.pitch));
+                let pools = self.pools().clone();
+                let dispatch = tracing::dispatcher::get_default(Clone::clone);
+                let span = tracing::Span::current();
+                // Cold engine allocation must not stop service of resident lanes.
+                tracing::debug!(phase = "renderer_queued");
+                let prepared = spawn_blocking(move || {
+                    tracing::dispatcher::with_default(&dispatch, || {
+                        let _entered = span.enter();
+                        tracing::debug!(phase = "renderer_entered");
+                        let mut renderer = warp.renderer(spec, pools);
+                        tracing::debug!(phase = "renderer_created");
+                        renderer.set_speed(start.speed, 0).map_err(|error| {
+                            DecodeError::audio_stream("initial lane speed curve", error)
+                        })?;
+                        tracing::debug!(phase = "renderer_speed_set");
+                        renderer.prepare_engine_latency(spec).map_err(|error| {
+                            DecodeError::audio_stream("lane engine preparation", error)
+                        })?;
+                        tracing::debug!(phase = "renderer_returned");
+                        Ok::<_, DecodeError>(renderer)
+                    })
+                })
+                .await;
+                tracing::debug!(phase = "renderer_joined", succeeded = prepared.is_ok());
+                self.check_load_cancelled(cancel.as_ref())?;
+                let renderer = prepared
+                    .map_err(|error| {
+                        DecodeError::audio_stream("lane renderer preparation task", error)
+                    })
+                    .map_err(decode_refusal)?
+                    .map_err(decode_refusal)?;
+                let source = WarpSource::new(
+                    audio,
+                    renderer,
+                    spec,
+                    self.pools().clone(),
+                    crate::LaneSetup {
+                        inbox,
+                        preload_chunks,
+                        declick,
+                    },
+                );
+                let lane = Box::new(DecoderNode::new(
+                    source,
+                    port,
+                    activity,
+                    initial,
+                    engine_load,
+                    self.pools().clone(),
+                    cancel.clone(),
+                ));
+                (opened, lane)
+            };
+            self.check_load_cancelled(cancel.as_ref())?;
+            let latency = lane.engine_latency();
+            Ok((opened, *lane, latency))
+        })
     }
 
     fn check_load_cancelled(

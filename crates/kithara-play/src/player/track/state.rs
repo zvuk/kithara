@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     num::{NonZeroU32, NonZeroU64, NonZeroU128},
 };
 
@@ -10,7 +10,7 @@ use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
-    CrossfadeSettings, LaneCommand, LaneFrame, LaneId, LaneProtocol, PcmReceiver,
+    CrossfadeSettings, LaneCommand, LaneFrame, LaneId, LaneProtocol, LaneTarget, PcmReceiver,
     bridge::{FadeDir, PlaybackFault, Slot, SlotMark, TrackClock},
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
@@ -50,6 +50,7 @@ pub enum TrackCommand {
         at: SessionFrame,
     },
     Configure(TrackSettingsChange, When<SessionFrame>),
+    /// Replaces the speed programme and retires older dependent future programmes.
     SetSpeed {
         speed: SpeedCurve,
         at: When<SessionFrame>,
@@ -302,6 +303,7 @@ pub(super) struct Loading {
 
 pub(super) struct LaneOperation {
     pub(super) seq: Seq,
+    pub(super) basis: Vec<(LaneTarget, Option<Seq>)>,
     /// Position inside the native batch.
     pub(super) ordinal: usize,
     pub(super) when: When<LaneFrame>,
@@ -311,6 +313,10 @@ pub(super) struct LaneOperation {
 }
 
 impl LaneOperation {
+    pub(super) fn is_projected(&self, current: &HashSet<Seq>) -> bool {
+        self.applied || self.basis.is_empty() || current.contains(&self.seq)
+    }
+
     pub(super) fn frame_for(&self, segment: SegmentId) -> Option<u64> {
         match self.command {
             LaneCommand::Segment { id, .. } if id == segment => Some(0),

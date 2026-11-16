@@ -276,7 +276,10 @@ async fn run_case_paced(
     native,
     serial,
     timeout(Duration::from_secs(25)),
-    hang_timeout_secs(1)
+    hang_timeout_secs(1),
+    tracing(
+        "info,kithara_render::lane=debug,render_refill=trace,kithara_hls=debug,kithara_decode=debug"
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

@@ -1,7 +1,9 @@
 use kithara_audio::TrackFailureKind;
-use kithara_command::{Outcome, Rejection, Seq, When};
+use kithara_command::{Batch, Outcome, Rejection, Seq, When};
 use kithara_config::{ConfigOwner, LiveConfig};
-use kithara_render::{LaneApplied, LaneCommand, LaneFrame, bridge::PlaybackFault};
+use kithara_render::{
+    LaneApplied, LaneCommand, LaneFrame, LaneProtocol, LaneTarget, bridge::PlaybackFault,
+};
 use kithara_signal::SessionFrame;
 use kithara_sync::SpeedCurve;
 use tracing::warn;
@@ -31,11 +33,35 @@ impl PlayerImpl {
         commands: Vec<LaneCommand>,
         when: When<LaneFrame>,
     ) -> Result<Seq, PlayError> {
+        self.submit_lane_batch(
+            Batch {
+                basis: Vec::new(),
+                commands,
+            },
+            when,
+        )
+    }
+
+    pub(super) fn send_speed_programme(
+        &mut self,
+        commands: Vec<LaneCommand>,
+        when: When<LaneFrame>,
+    ) -> Result<Seq, PlayError> {
+        let lane = self.lane.sender().ok_or(PlayError::NotReady)?;
+        let basis = vec![(LaneTarget::Speed, lane.basis(LaneTarget::Speed, when))];
+        self.submit_lane_batch(Batch { basis, commands }, when)
+    }
+
+    fn submit_lane_batch(
+        &mut self,
+        batch: Batch<LaneProtocol>,
+        when: When<LaneFrame>,
+    ) -> Result<Seq, PlayError> {
         if self.adoptions.cancelling() {
             return Err(PlayError::NotReady);
         }
         let lane = self.lane.sender_mut().ok_or(PlayError::NotReady)?;
-        let seq = Outbox::lane(lane, when, commands.clone())?;
+        let (seq, Batch { basis, commands }) = Outbox::lane(lane, when, batch)?;
         self.lane_commands.submit(
             self.segment.id,
             commands.into_iter().enumerate().map(|(ordinal, command)| {
@@ -73,6 +99,7 @@ impl PlayerImpl {
                 }
                 LaneOperation {
                     seq,
+                    basis: basis.clone(),
                     ordinal,
                     when,
                     segment: self.segment.id,
@@ -333,7 +360,7 @@ impl PlayerImpl {
             }
             return self.segment_with(self.speed_position()?, None, speed, out);
         }
-        let seq = self.send_lane(LaneCommand::SetSpeed(speed), when)?;
+        let seq = self.send_speed_programme(vec![LaneCommand::SetSpeed(speed)], when)?;
         self.settings
             .track(seq, when, TrackSettingsChange::Speed(target));
         Ok(Some(seq))

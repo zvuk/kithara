@@ -1,4 +1,8 @@
-use std::num::NonZeroU32;
+use std::{
+    future::{Future, poll_fn},
+    num::NonZeroU32,
+    task::Poll,
+};
 
 use ::kithara::{
     analysis::{AnalysisFile, AnalysisProgress, FrameCoverage, FrameSpan, TrackAnalysis, Waveform},
@@ -9,7 +13,6 @@ use ::kithara::{
     file::File,
     platform::{
         CancelToken,
-        flash::real_io,
         sync::Arc,
         time::{self, Duration},
         tokio::sync::watch,
@@ -24,8 +27,9 @@ use super::{
     fixtures::{
         analysis, app_config, axis, beats_only, document, fingerprint, grid, long_wav,
         memory_store, other_axis, persistence, progress, queue_off, queue_off_named, revision_held,
-        revision_of, rhythm_a_mp3, rhythm_b_mp3, served_grid, served_waveform, short_wav, snapshot,
-        test_pools, tone_mp3, track, track_prepared, track_sourced,
+        revision_of, rhythm_a_mp3, rhythm_a_short_mp3, rhythm_b_mp3, served_grid, served_waveform,
+        short_wav, snapshot, test_pools, tone_mp3, tone_short_mp3, track, track_prepared,
+        track_sourced,
     },
     run::{Activity, Run},
     service::{Owner, resource_config_from_source},
@@ -248,6 +252,21 @@ async fn every_revision_reaches_the_deck_that_holds_the_track(
     );
     let rx = owner.subscribe(queue, held, source, axis());
     let tx = take_over_run(&mut owner, None);
+
+    {
+        let mut waiting = std::pin::pin!(owner.drive());
+        assert!(
+            poll_fn(|cx| Poll::Ready(waiting.as_mut().poll(cx)))
+                .await
+                .is_pending(),
+            "a held pass waits for a publication"
+        );
+    }
+    assert_eq!(
+        running_track(&owner),
+        Some(held),
+        "cancelling the wait does not claim that the pass completed"
+    );
 
     tx.send(Some(progress(revision_of(1))))
         .expect("run publishes");
@@ -934,24 +953,43 @@ async fn settle(owner: &mut Owner) {
     }
 }
 
-#[kithara::hang_watchdog(timeout = Duration::from_secs(2), ctx = String)]
-async fn drive_once(owner: &mut Owner) {
-    let _real_io = real_io();
-    let result = {
-        let progress = time::timeout(
-            Duration::from_secs(2).min(__hang_detector.remaining()),
-            owner.drive(),
+#[kithara::test(native, tokio)]
+async fn a_stalled_analysis_pass_uses_the_virtual_progress_budget() {
+    let (_publisher, mut publications) = watch::channel(None::<AnalysisProgress>);
+    let virtual_mode = ::kithara::platform::flash::ambient_snapshot();
+    let started = time::Instant::now();
+    let real_started = time::WallInstant::now();
+
+    let result = try_drive_once(async { publications.changed().await.is_ok() }).await;
+    let elapsed = started.elapsed();
+    let real_elapsed = real_started.elapsed();
+    assert!(
+        result.is_err(),
+        "a pass with no publication must time out: {result:?}"
+    );
+    assert!(
+        publications.borrow().is_none(),
+        "timeout must leave the pass unpublished"
+    );
+    assert!(
+        !publications.has_changed().expect("the publisher is held"),
+        "timeout must not invent a publication"
+    );
+    if virtual_mode {
+        assert_eq!(
+            elapsed,
+            Duration::from_secs(2),
+            "retain the progress budget"
         );
-        ::kithara::platform::tokio::pin!(progress);
-        loop {
-            hang_tick!("analysis pass awaits executor progress".to_owned());
-            ::kithara::platform::tokio::select! {
-                result = &mut progress => break result,
-                () = time::sleep(Duration::from_millis(100).min(__hang_detector.remaining())) => {}
-            }
-        }
-    };
-    if let Err(error) = result {
+        assert!(
+            real_elapsed < Duration::from_secs(1),
+            "a virtual progress budget must not park the host: {real_elapsed:?}"
+        );
+    }
+}
+
+async fn drive_once(owner: &mut Owner) {
+    if let Err(error) = try_drive_once(owner.drive()).await {
         match owner.active.as_ref() {
             Some(Activity::Running(run)) => {
                 let changed = run.rx.has_changed();
@@ -975,7 +1013,18 @@ async fn drive_once(owner: &mut Owner) {
             None => panic!("the pass progresses: {error:?}; phase=idle"),
         }
     }
+}
+
+#[kithara::hang_watchdog(timeout = Duration::from_secs(2), ctx = String)]
+async fn try_drive_once(progress: impl Future<Output = bool>) -> Result<bool, time::TimeoutError> {
+    hang_tick!("analysis pass awaits executor progress".to_owned());
+    let result = time::timeout(
+        Duration::from_secs(2).min(__hang_detector.remaining()),
+        progress,
+    )
+    .await;
     hang_reset!();
+    result
 }
 
 #[kithara::test(native, tokio, flash(false))]
@@ -1049,25 +1098,24 @@ async fn an_invalid_layout_yields_no_analysis(tone_mp3: String) {
 #[kithara::test(
     native,
     tokio,
-    flash(false),
     tracing(
         "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
     )
 )]
-async fn a_track_shorter_than_its_header_claims_is_done(tone_mp3: String) {
-    the_source_gave_everything_it_can(&tone_mp3).await;
+async fn a_track_shorter_than_its_header_claims_is_done(tone_short_mp3: String) {
+    the_source_gave_everything_it_can(&tone_short_mp3).await;
 }
 
 #[kithara::test(
     native,
     tokio,
-    flash(false),
     tracing(
         "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
     )
 )]
-async fn a_resampled_track_is_covered_from_its_first_frame(rhythm_a_mp3: String) {
-    the_source_gave_everything_it_can(&rhythm_a_mp3).await;
+async fn a_resampled_track_is_covered_from_its_first_frame(rhythm_a_short_mp3: String) {
+    // Keep the rate-conversion geometry while bounding unrelated NN work.
+    the_source_gave_everything_it_can(&rhythm_a_short_mp3).await;
 }
 
 async fn the_source_gave_everything_it_can(url: &str) {

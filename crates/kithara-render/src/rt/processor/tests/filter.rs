@@ -17,21 +17,7 @@ fn stereo_frames(mixer: &mut TestMixer, start: usize, frames: usize) -> [Vec<f32
         outputs: &mut outputs,
     };
     mixer.inbox.0.drain();
-    let level = mixer.inbox.scope(mixer.mixer.scope).expect("live scope");
-    let context = OutputContext::new(
-        frame_at(start)..frame_at(start + frames),
-        shape().sample_rate,
-        SessionEpoch::new(0),
-        None,
-    )
-    .expect("output range");
-    mixer.mixer.render_block(
-        Some(level),
-        Some(&context),
-        frame_at(start),
-        &mut buffers,
-        frames,
-    );
+    render_realtime(mixer, start, frames, &mut buffers);
     pcm
 }
 

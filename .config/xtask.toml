@@ -2175,6 +2175,10 @@ os = "linux"
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
+  { program = "cargo", args = [
+    "fetch",
+    "--locked",
+  ], label = "prepare tooling dependency graphs" },
   { args = [
     "test",
     "run",

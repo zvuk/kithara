@@ -30,7 +30,7 @@ impl PlayerImpl {
         self.segment_with(
             from,
             rate,
-            SpeedCurve::Constant(self.settings.projected().speed()),
+            SpeedCurve::Constant(self.projected_settings().speed()),
             out,
         )
     }
@@ -202,7 +202,7 @@ impl PlayerImpl {
                     LaneCommand::Segment {
                         id: segment,
                         from: position,
-                        speed: SpeedCurve::Constant(self.settings.projected().speed()),
+                        speed: SpeedCurve::Constant(self.projected_settings().speed()),
                     },
                     When::Next,
                 ) {

@@ -1,7 +1,10 @@
-use std::num::{NonZeroU32, NonZeroU128};
+use std::{
+    collections::HashSet,
+    num::{NonZeroU32, NonZeroU128},
+};
 
-use kithara_command::{Seq, When};
-use kithara_config::LiveConfig;
+use kithara_command::{Sender, Seq, When};
+use kithara_config::{ConfigOwner, LiveConfig};
 use kithara_render::{
     LaneCommand, LaneFrame,
     bridge::{DeckPart, SlotMark},
@@ -41,15 +44,7 @@ impl Track for PlayerImpl {
     }
 
     fn projected(&self) -> TrackSettings {
-        let mut settings = self.settings.projected();
-        if let Some((_, target)) = self
-            .loading
-            .as_ref()
-            .and_then(|loading| loading.speed.as_ref())
-        {
-            settings.apply_change(TrackSettingsChange::Speed(*target));
-        }
-        settings
+        self.projected_settings()
     }
 
     fn prepared_speed(&self) -> Option<&SpeedCurve> {
@@ -284,6 +279,41 @@ impl Track for PlayerImpl {
 }
 
 impl PlayerImpl {
+    pub(super) fn projected_settings(&self) -> TrackSettings {
+        let operations = self.lane_commands.operations();
+        let mut current = HashSet::new();
+        if operations
+            .iter()
+            .any(|operation| !operation.is_projected(&current))
+        {
+            current.extend(
+                self.lane
+                    .sender()
+                    .into_iter()
+                    .flat_map(Sender::current_pending),
+            );
+        }
+        let mut pending: Vec<_> = self.settings.pending().collect();
+        pending.sort_by_key(|&(seq, when, _)| (when, seq));
+        let mut settings = *self.settings.config();
+        for (seq, _, change) in pending {
+            if operations
+                .iter()
+                .any(|operation| operation.seq == seq && operation.is_projected(&current))
+            {
+                settings.apply_change(change);
+            }
+        }
+        if let Some((_, target)) = self
+            .loading
+            .as_ref()
+            .and_then(|loading| loading.speed.as_ref())
+        {
+            settings.apply_change(TrackSettingsChange::Speed(*target));
+        }
+        settings
+    }
+
     pub(super) fn consumed_speed(&self) -> Result<f32, PlayError> {
         let frame = match self
             .resume
@@ -349,6 +379,18 @@ impl PlayerImpl {
             .to_u64()
             .ok_or(PlayError::Untimed)?;
         let operations = self.lane_commands.operations();
+        let mut current = HashSet::new();
+        if operations
+            .iter()
+            .any(|operation| !operation.is_projected(&current))
+        {
+            current.extend(
+                self.lane
+                    .sender()
+                    .into_iter()
+                    .flat_map(Sender::current_pending),
+            );
+        }
         let first = operations.partition_point(|operation| operation.frame_for(segment).is_none());
         let known = &operations[first..];
         let maximum = u64::MAX - declick;
@@ -358,6 +400,7 @@ impl PlayerImpl {
         let unresolved = operations[..first]
             .iter()
             .take(if future { first } else { 0 })
+            .filter(|operation| operation.is_projected(&current))
             .filter(|operation| {
                 operation.segment == segment
                     && matches!(operation.when, When::Next | When::Deferred)
@@ -369,6 +412,7 @@ impl PlayerImpl {
             .map(|operation| ((operation.seq, operation.ordinal), PlayError::NotReady));
         let oversized = known[overflow..]
             .iter()
+            .filter(|operation| operation.is_projected(&current))
             .filter(|operation| matches!(operation.command, LaneCommand::Jump { .. }))
             .map(|operation| ((operation.seq, operation.ordinal), PlayError::Untimed));
         if let Some((_, error)) = unresolved.chain(oversized).min_by_key(|(order, _)| *order) {
@@ -376,6 +420,7 @@ impl PlayerImpl {
         }
         Ok(LaneChanges {
             operations: known,
+            current,
             segment,
             declick,
         })
@@ -496,6 +541,7 @@ impl PlayerImpl {
 
 struct LaneChanges<'a> {
     operations: &'a [LaneOperation],
+    current: HashSet<Seq>,
     segment: SegmentId,
     declick: u64,
 }
@@ -507,6 +553,9 @@ impl<'a> LaneChanges<'a> {
         let segment = self.segment;
         let declick = self.declick;
         self.operations.iter().filter_map(move |operation| {
+            if !operation.is_projected(&self.current) {
+                return None;
+            }
             let frame = operation.frame_for(segment)?;
             let (at, change) = match &operation.command {
                 LaneCommand::SetSpeed(curve) | LaneCommand::Segment { speed: curve, .. } => {
