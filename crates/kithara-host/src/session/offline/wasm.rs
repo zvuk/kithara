@@ -128,7 +128,7 @@ mod tests {
     use kithara_platform::{
         sync::mpsc,
         thread,
-        time::{Duration, timeout},
+        time::{Duration, Instant, timeout},
     };
     use kithara_play::PlayError;
     use kithara_test_utils::{cancel::cancel_token, kithara};
@@ -234,7 +234,7 @@ mod tests {
         }
     }
 
-    #[wasm_bindgen_test::wasm_bindgen_test]
+    #[kithara::test(wasm, flash(false), timeout(bootstrap::TIMEOUT * 4))]
     async fn a_deck_wake_on_a_worker_runs_the_task_on_its_owner() {
         let worker = Worker::new(WorkerConfig::new());
         let dispatcher = worker.dispatcher(
@@ -265,18 +265,37 @@ mod tests {
         let wake_progress = progress.clone();
         let (kickoff, begin) = mpsc::channel();
 
-        drop(thread::spawn(move || {
-            wake_progress.store(1, Ordering::Release);
-            begin
-                .recv()
-                .expect("owner requests the prepared foreign wake");
-            waker.wake();
-            wake_progress.store(2, Ordering::Release);
-        }));
-        while progress.load(Ordering::Acquire) == 0 {
-            sleep(SESSION_PUMP_INTERVAL).await;
-        }
-        let lease = JsFuture::from(bootstrap::hold())
+        let started = Instant::now();
+        timeout(bootstrap::TIMEOUT, async {
+            drop(thread::spawn(move || {
+                wake_progress.store(1, Ordering::Release);
+                begin
+                    .recv()
+                    .expect("owner requests the prepared foreign wake");
+                waker.wake();
+                wake_progress.store(2, Ordering::Release);
+            }));
+            while progress.load(Ordering::Acquire) == 0 {
+                sleep(SESSION_PUMP_INTERVAL).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "foreign worker bootstrap did not complete: stage={}",
+                progress.load(Ordering::Acquire)
+            );
+        });
+        assert!(
+            started.elapsed() <= bootstrap::TIMEOUT,
+            "foreign worker bootstrap exceeded its budget: stage={}",
+            progress.load(Ordering::Acquire)
+        );
+        let millis = bootstrap::TIMEOUT
+            .as_millis()
+            .try_into()
+            .expect("bootstrap timer fits u32");
+        let lease = JsFuture::from(bootstrap::hold(millis))
             .await
             .expect("hold admission for unrelated worker startup");
         let before = ticks.get();
@@ -288,7 +307,7 @@ mod tests {
             sent
         })
         .await;
-        JsFuture::from(bootstrap::release(&lease))
+        JsFuture::from(bootstrap::release(&lease, millis))
             .await
             .expect("release bootstrap admission before checking delivery");
         delivered
