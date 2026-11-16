@@ -45,6 +45,10 @@ emits the same probe records through `tracing`.
 Tests default to `Quick`; `timeout(<Duration>)` is a manual override outside Miri
 and uses `Long` under Miri. With defaults disabled, enable `test` for these APIs.
 
+Set `KITHARA_TEST_CLOCK_MEASUREMENT=1` to emit per-body clock receipts. Native
+tests read it at invocation time; Wasm tests read it at build time and report
+through the browser console without an OS process ID.
+
 ## Key Types
 
 <table>

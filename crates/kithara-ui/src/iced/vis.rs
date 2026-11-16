@@ -203,23 +203,16 @@ mod tests {
     use super::*;
     use crate::hosts::vis::fixture;
 
-    fn render(uniforms: Uniforms) -> Vec<u8> {
+    fn render(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pipeline: &Pipeline,
+        uniforms: Uniforms,
+    ) -> Vec<u8> {
         const SIDE: u32 = 64;
         const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
         const ROW_BYTES: u32 = SIDE * 4;
 
-        let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-        }))
-        .expect("this lane runs where a graphics device exists");
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .expect("the adapter must give up a device");
-
-        let pipeline = <Pipeline as shader::Pipeline>::new(&device, &queue, FORMAT);
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("kithara_ui.vis.test.uniforms"),
             contents: &uniforms.bytes(),
@@ -315,6 +308,19 @@ mod tests {
 
     #[kithara::test]
     fn the_visualiser_draws_what_the_uniform_block_says() {
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("this lane runs where a graphics device exists");
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .expect("the adapter must give up a device");
+        let pipeline =
+            <Pipeline as shader::Pipeline>::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let render = |uniforms| render(&device, &queue, &pipeline, uniforms);
         let silent = render(uniforms(0.0, 0));
         let loud = render(uniforms(1.0, 0));
         let other_preset = render(uniforms(1.0, 1));

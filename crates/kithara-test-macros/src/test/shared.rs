@@ -108,7 +108,6 @@ pub(crate) fn make_clock_measurement_stmt(args: &TestArgs, fn_name: &Ident) -> T
     let name = fn_name.unraw().to_string();
     let flash = args.flash().unwrap_or(true);
     quote! {
-        #[cfg(not(target_arch = "wasm32"))]
         let __kithara_clock_measurement =
             ::kithara_test_utils::test::ClockMeasurement::start(
                 concat!(module_path!(), "::", #name),
@@ -431,7 +430,7 @@ pub(crate) fn wrap_with_soft_fail(
     }
 }
 
-/// Combine native clock measurement, hang budget and optional soft-fail wrapping.
+/// Combine clock measurement, hang budget and optional soft-fail wrapping.
 pub(crate) fn finalize_body(
     inner: &TokenStream2,
     args: &TestArgs,
@@ -456,9 +455,21 @@ pub(crate) fn finalize_body(
 mod tests {
     use kithara_test_args::TestArgs;
     use quote::quote;
-    use syn::{Ident, parse_quote};
+    use syn::{Ident, Stmt, parse_quote};
 
-    use super::wrap_with_timeout;
+    use super::{make_clock_measurement_stmt, wrap_with_timeout};
+
+    #[test]
+    fn clock_measurement_is_emitted_for_every_target() -> syn::Result<()> {
+        let name: Ident = parse_quote!(clock_control);
+        let statement: Stmt =
+            syn::parse2(make_clock_measurement_stmt(&TestArgs::default(), &name))?;
+        let Stmt::Local(binding) = statement else {
+            panic!("measurement guard must live in the test body scope");
+        };
+        assert!(binding.attrs.is_empty(), "every target records its body");
+        Ok(())
+    }
 
     #[test]
     fn default_timeout_native_body_installs_prekill_guard() {

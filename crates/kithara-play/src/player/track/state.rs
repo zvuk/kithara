@@ -5,13 +5,12 @@ use std::{
 };
 
 use kithara_abr::AbrHandle;
-use kithara_audio::TrackFailureKind;
-use kithara_command::{Rejection, Seq, When};
+use kithara_command::{Receipt, Sender, Seq, When};
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
-    CrossfadeSettings, LaneCommand, LaneFrame, LaneId,
+    CrossfadeSettings, LaneCommand, LaneFrame, LaneId, LaneProtocol,
     bridge::{FadeDir, PlaybackFault, Slot, SlotMark, TrackClock},
     rt::track::PlayerResource,
 };
@@ -19,7 +18,7 @@ use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
 
 use super::super::settings::TrackSettingsChange;
-use crate::{PlayError, ResourceLoad};
+use crate::{ResourceLoad, Settled};
 
 /// A position in a track's media.
 pub type Position = Duration;
@@ -187,24 +186,107 @@ impl Extent {
     }
 }
 
-/// The track's lane as the dispatcher knows it.
-#[derive(Clone, Copy)]
-pub(super) enum Registration {
-    /// The dispatcher holds no lane of this track.
+/// Admission and dispatcher retirement of one source channel.
+#[derive(Default)]
+pub(super) enum Lane {
+    #[default]
     None,
-    Registered(LaneId),
-    /// The release `seq` is in flight; a refusal leaves the lane registered.
-    Releasing {
-        lane: LaneId,
-        seq: Seq,
+    Opening(Sender<LaneProtocol>),
+    Registered {
+        id: LaneId,
+        sender: Sender<LaneProtocol>,
+    },
+    RetiringOpen(Sender<LaneProtocol>),
+    Retiring {
+        id: LaneId,
+        sender: Sender<LaneProtocol>,
+        release: Option<Seq>,
     },
 }
 
-impl Registration {
-    pub(super) fn lane(self) -> Option<LaneId> {
+impl Lane {
+    pub(super) fn sender(&self) -> Option<&Sender<LaneProtocol>> {
+        match self {
+            Self::Opening(sender) | Self::Registered { sender, .. } => Some(sender),
+            _ => None,
+        }
+    }
+
+    pub(super) fn sender_mut(&mut self) -> Option<&mut Sender<LaneProtocol>> {
+        match self {
+            Self::Opening(sender) | Self::Registered { sender, .. } => Some(sender),
+            _ => None,
+        }
+    }
+
+    pub(super) fn available(&self) -> usize {
+        self.sender().map_or(0, Sender::available)
+    }
+
+    pub(super) fn receipt(&mut self) -> Option<Receipt<LaneProtocol>> {
         match self {
             Self::None => None,
-            Self::Registered(lane) | Self::Releasing { lane, .. } => Some(lane),
+            Self::Opening(sender)
+            | Self::Registered { sender, .. }
+            | Self::RetiringOpen(sender)
+            | Self::Retiring { sender, .. } => sender.receipts().next(),
+        }
+    }
+
+    pub(super) fn resident(&self) -> Option<LaneId> {
+        match self {
+            Self::Registered { id, .. } => Some(*id),
+            _ => None,
+        }
+    }
+
+    pub(super) fn loaded(&mut self, id: LaneId) {
+        *self = match std::mem::take(self) {
+            Self::Opening(sender) => Self::Registered { id, sender },
+            Self::RetiringOpen(sender) => Self::Retiring {
+                id,
+                sender,
+                release: None,
+            },
+            state => state,
+        };
+    }
+
+    pub(super) fn retire(&mut self) {
+        *self = match std::mem::take(self) {
+            Self::Opening(sender) => Self::RetiringOpen(sender),
+            Self::Registered { id, sender } => Self::Retiring {
+                id,
+                sender,
+                release: None,
+            },
+            state => state,
+        };
+    }
+
+    pub(super) fn retiring(&self) -> bool {
+        matches!(self, Self::RetiringOpen(_) | Self::Retiring { .. })
+    }
+
+    pub(super) fn release_needed(&self) -> Option<LaneId> {
+        match self {
+            Self::Retiring {
+                id, release: None, ..
+            } => Some(*id),
+            _ => None,
+        }
+    }
+
+    pub(super) fn release_seq(&self) -> Option<Seq> {
+        match self {
+            Self::Retiring { release, .. } => *release,
+            _ => None,
+        }
+    }
+
+    pub(super) fn releasing(&mut self, seq: Option<Seq>) {
+        if let Self::Retiring { release, .. } = self {
+            *release = seq;
         }
     }
 }
@@ -220,15 +302,8 @@ pub(super) struct LaneOperation {
     pub(super) seq: Seq,
     pub(super) when: When<LaneFrame>,
     pub(super) segment: SegmentId,
-    pub(super) session: Option<SessionFrame>,
     pub(super) command: LaneCommand,
-    pub(super) verdict: Option<Result<(), Rejection<TrackFailureKind>>>,
-}
-
-impl LaneOperation {
-    pub(super) fn applied(&self) -> Option<bool> {
-        self.verdict.map(|verdict| verdict.is_ok())
-    }
+    pub(super) applied: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -254,11 +329,6 @@ pub(super) struct PlaybackOperation {
     /// The newest applied envelope descendant of this pending transport.
     pub(super) transparent: Option<Seq>,
 }
-
-pub(super) type SpeedAnswer = (
-    Seq,
-    Result<(LaneFrame, Option<SessionFrame>), Rejection<PlayError>>,
-);
 
 pub(super) enum Configuring {
     Apply(TrackSettingsChange),
@@ -293,15 +363,15 @@ pub(super) struct SpeedProjection {
     pub(super) speed: f32,
 }
 
-/// Every lane command a track has sent, with the lane's verdicts.
+/// Unanswered commands and effects still needed by live segments.
 ///
 /// `speed_projection` is derived from `commands`, so the history changes only
-/// through `submit` and `answered`, which both drop it. `speed_answers` holds
-/// the settled speed commands until their callers collect them.
+/// through intake and submission, which invalidate it. Producer feedback is
+/// taken once by the driver, independently of retained planning effects.
 #[derive(Default)]
 pub(super) struct LaneHistory {
     pub(super) commands: Vec<LaneOperation>,
-    pub(super) speed_answers: VecDeque<SpeedAnswer>,
+    pub(super) receipts: VecDeque<Settled<LaneFrame>>,
     /// Entries name every projection input other than `commands`.
     pub(super) speed_projection: Cell<Option<SpeedProjection>>,
 }
@@ -312,7 +382,15 @@ impl LaneHistory {
         self.commands.extend(operations);
     }
 
-    /// The operations one lane receipt answers, for their verdict.
+    pub(super) fn retain(&mut self, keep: impl FnMut(&LaneOperation) -> bool) {
+        let before = self.commands.len();
+        self.commands.retain(keep);
+        if self.commands.len() != before {
+            self.speed_projection.set(None);
+        }
+    }
+
+    /// The operations one lane receipt answers.
     pub(super) fn answered(&mut self, seq: Seq) -> impl Iterator<Item = &mut LaneOperation> {
         self.speed_projection.set(None);
         self.commands

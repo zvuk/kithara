@@ -6454,6 +6454,7 @@ dependencies = [
  "arrayvec",
  "axum",
  "fieldwork",
+ "js-sys",
  "kithara-bufpool",
  "kithara-platform",
  "kithara-test-macros",
@@ -6471,6 +6472,8 @@ dependencies = [
  "unimock",
  "url",
  "usdt",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -6479,12 +6482,14 @@ version = "0.0.1-alpha5"
 dependencies = [
  "bitflags 2.13.2",
  "bon",
+ "bytemuck",
  "criterion",
  "delegate",
  "derive-where",
  "derive_more",
  "fieldwork",
  "futures-lite",
+ "half",
  "hotpath",
  "iced",
  "iced_renderer",
@@ -6610,6 +6615,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-ui-draw",
  "num-traits",
+ "serde_json",
  "thiserror 2.0.21",
  "tracing",
  "velato",

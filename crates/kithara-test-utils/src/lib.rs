@@ -2,6 +2,9 @@
 
 extern crate self as kithara_test_utils;
 
+#[cfg(all(test, target_arch = "wasm32"))]
+wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
 /// Re-export of `kithara-platform` so the `#[kithara::test]` macro can reach the
 /// flash control surface through a path present in EVERY crate that uses the
 /// macro. They all depend on `kithara-test-utils`, but not all depend on

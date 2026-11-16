@@ -294,11 +294,11 @@ pub(crate) fn lead_cell(photo: &[u8], row: u8) -> Vec<u8> {
             h: HEIGHT,
         },
         TableMetrics {
-            skin,
+            skin: &skin.table,
             frame: TableFrame::new(0.0, 0.0, true),
         },
     );
-    let top = f32::from(row).mul_add(table_row_pitch(skin), body.y);
+    let top = f32::from(row).mul_add(table_row_pitch(&skin.table), body.y);
     let stride: usize = WIDTH.as_();
     let lead: usize = LEAD_WIDTH.as_();
     let rows: std::ops::Range<usize> = top.as_()..(top + skin.table.row_height).as_();
@@ -583,7 +583,7 @@ pub(crate) fn table_icon_actions_capture_ids_before_the_rows_change<H: DropHost>
             value: WriteValue::Text("urn:item:two".to_owned()),
         }]
     );
-    let no_action = (14.0, y + table_row_pitch(skin) * 2.0);
+    let no_action = (14.0, y + table_row_pitch(&skin.table) * 2.0);
     host.pick_up(&ui, &reads, no_action);
     let third = writes(&ui, &host.let_go(&ui, &reads, no_action), &reads);
     assert_eq!(third, [index(SELECT, 2)]);

@@ -1,11 +1,11 @@
 use num_traits::ToPrimitive;
 
 use super::{ColumnLayout, minimum_table_width};
-use crate::{draw::Rect, module::TableFrame, render::Skin};
+use crate::{draw::Rect, module::TableFrame, skin::TableSkin};
 
 #[derive(Clone, Copy)]
 pub(crate) struct TableMetrics<'a> {
-    pub(crate) skin: &'a Skin,
+    pub(crate) skin: &'a TableSkin,
     pub(crate) frame: TableFrame,
 }
 
@@ -16,7 +16,7 @@ impl TableMetrics<'_> {
 
     pub(crate) fn footer_height(self) -> f32 {
         if self.frame.footer {
-            self.skin.table.footer_height
+            self.skin.footer_height
         } else {
             0.0
         }
@@ -73,20 +73,18 @@ pub(crate) fn column_cells<'a>(
     })
 }
 
-pub(crate) fn table_content_height(row_count: usize, skin: &Skin) -> f32 {
+pub(crate) fn table_content_height(row_count: usize, skin: &TableSkin) -> f32 {
     let rows = row_count.to_f32().unwrap_or(f32::MAX);
     let gaps = row_count.saturating_sub(1).to_f32().unwrap_or(f32::MAX);
-    skin.table
-        .row_height
-        .mul_add(rows, skin.table.grid_gap * gaps)
+    skin.row_height.mul_add(rows, skin.grid_gap * gaps)
 }
 
-pub(crate) fn table_row_pitch(skin: &Skin) -> f32 {
-    skin.table.row_height + skin.table.grid_gap
+pub(crate) fn table_row_pitch(skin: &TableSkin) -> f32 {
+    skin.row_height + skin.grid_gap
 }
 
 pub(crate) fn table_body(bounds: Rect, table: TableMetrics<'_>) -> Rect {
-    let skin = &table.skin.table;
+    let skin = table.skin;
     let gap = skin.grid_gap;
     Rect {
         h: (bounds.h - skin.header_height - table.footer_height() - gap * 2.0).max(0.0),
@@ -108,10 +106,10 @@ pub(crate) fn table_vertical_scrollbar_rect(
     (table_content_height(row_count, skin) > body.h).then_some(())?;
     let rail = Rect {
         h: body.h,
-        w: skin.table.scrollbar_width,
+        w: skin.scrollbar_width,
         x: bounds.x - horizontal_offset + table_content_width(columns, bounds.w, table)
-            - skin.table.scrollbar_margin
-            - skin.table.scrollbar_width,
+            - skin.scrollbar_margin
+            - skin.scrollbar_width,
         y: body.y,
     };
     intersect(rail, body)
@@ -164,7 +162,7 @@ mod tests {
 
     #[kithara::test]
     fn overflow_changes_at_the_exact_minimum_width_boundary() {
-        let skin = crate::builtin::skin();
+        let skin = &crate::builtin::skin_doc().table;
         let columns = column_layouts(
             (
                 &[

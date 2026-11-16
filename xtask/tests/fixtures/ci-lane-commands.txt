@@ -2950,46 +2950,55 @@
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_TEST_CLOCK_MEASUREMENT=1
 # web-chromium / branch
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_TEST_CLOCK_MEASUREMENT=1
 # web-chromium / platforms
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_TEST_CLOCK_MEASUREMENT=1
 # web-chromium / merge-request
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_TEST_CLOCK_MEASUREMENT=1
 # web-chromium / quarantine
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_TEST_CLOCK_MEASUREMENT=1
 # web-chromium / main
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_TEST_CLOCK_MEASUREMENT=1
 # web-chromium / nightly
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_TEST_CLOCK_MEASUREMENT=1
 # web-chromium / weekly
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_TEST_CLOCK_MEASUREMENT=1
 # web-chromium / release
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
     CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
+    KITHARA_TEST_CLOCK_MEASUREMENT=1
 # web-firefox / bench
   <require os> linux
   <require tools> firefox geckodriver just

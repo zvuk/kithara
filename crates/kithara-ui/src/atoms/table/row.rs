@@ -83,7 +83,7 @@ pub(crate) fn table_row_rect(
     });
     Rect {
         y,
-        h: table.skin.table.row_height,
+        h: table.skin.row_height,
         w: table_content_width(columns, bounds.w, table),
         x: bounds.x - horizontal_offset,
     }
@@ -181,7 +181,7 @@ mod tests {
 
     #[kithara::test]
     fn row_geometry_keeps_grid_gaps_outside_row_hits() {
-        let skin = crate::builtin::skin();
+        let skin = &crate::builtin::skin_doc().table;
         let table = TableMetrics {
             skin,
             frame: TableFrame::new(0.0, 0.0, true),
@@ -202,12 +202,12 @@ mod tests {
         let second = table_row_rect(bounds, &columns, 1, 0.0, 0.0, table);
 
         assert_eq!(second.y - first.y, table_row_pitch(skin));
-        assert_eq!(second.y - (first.y + first.h), skin.table.grid_gap);
+        assert_eq!(second.y - (first.y + first.h), skin.grid_gap);
     }
 
     #[kithara::test]
     fn visible_row_hits_are_clipped_to_the_body() {
-        let skin = crate::builtin::skin();
+        let skin = &crate::builtin::skin_doc().table;
         let table = TableMetrics {
             skin,
             frame: TableFrame::new(0.0, 0.0, true),
@@ -224,24 +224,17 @@ mod tests {
             x: 0.0,
             y: 0.0,
         };
-        let clipped = table_visible_row_rect(
-            bounds,
-            &columns,
-            3,
-            0,
-            0.0,
-            skin.table.row_height / 2.0,
-            table,
-        )
-        .expect("the partially visible first row must retain a hit rect");
+        let clipped =
+            table_visible_row_rect(bounds, &columns, 3, 0, 0.0, skin.row_height / 2.0, table)
+                .expect("the partially visible first row must retain a hit rect");
 
         assert_eq!(clipped.y, table_body(bounds, table).y);
-        assert_eq!(clipped.h, skin.table.row_height / 2.0);
+        assert_eq!(clipped.h, skin.row_height / 2.0);
     }
 
     #[kithara::test]
     fn row_hits_yield_to_the_visible_scrollbar_lane_at_each_horizontal_edge() {
-        let skin = crate::builtin::skin();
+        let skin = &crate::builtin::skin_doc().table;
         let table = TableMetrics {
             skin,
             frame: TableFrame::new(0.0, 0.0, true),
@@ -278,7 +271,7 @@ mod tests {
         );
         assert_eq!(row(0.0).w, bounds.w);
 
-        let partial = maximum - skin.table.scrollbar_margin;
+        let partial = maximum - skin.scrollbar_margin;
         let partial_scrollbar =
             table_vertical_scrollbar_rect(bounds, &columns, row_count, partial, table)
                 .unwrap_or_else(|| {

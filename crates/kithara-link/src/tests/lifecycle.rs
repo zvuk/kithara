@@ -1,5 +1,5 @@
 use kithara_command::{Outcome, Rejection, Seq, When};
-use kithara_play::{HostedDeck, Player, Settled, TrackCommand, TrackSnapshot, TrackStatus};
+use kithara_play::{HostedDeck, Player, Settled, Track, TrackCommand, TrackSnapshot, TrackStatus};
 use kithara_signal::{FrameCount, SessionFrame};
 use kithara_sync::{Slew, SlewCause, SpeedCurve, slew};
 use kithara_test_utils::{bufpool::TestPools, kithara};
@@ -30,6 +30,32 @@ fn assert_track_unchanged(actual: &TrackSnapshot, expected: &TrackSnapshot) {
     assert_eq!(actual.speed, expected.speed);
     assert_eq!(actual.mark, expected.mark);
     assert_eq!(actual.pending_lane, expected.pending_lane);
+}
+
+#[kithara::test]
+fn an_unsynced_track_drains_lane_feedback_without_corrections() {
+    let (mut deck, control, mut rig, _) = loaded(grid(24_000, 0, None, 960_000));
+    assert!(!deck.synced());
+    for _ in 0..64 {
+        let seq = rig
+            .run(|out| {
+                deck.apply(
+                    TrackCommand::SetSpeed {
+                        speed: SpeedCurve::Constant(1.25),
+                        at: When::Next,
+                    },
+                    out,
+                )
+            })
+            .expect("speed")
+            .expect("lane sequence");
+        rig.apply(&mut deck, seq, 0);
+        rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+        assert!(
+            control.edit(|script| script.speeds.is_empty()),
+            "an idle correction owner must still collect producer feedback"
+        );
+    }
 }
 
 #[kithara::test]
@@ -550,7 +576,9 @@ fn a_pending_refinement_preserves_the_current_correction() {
 }
 
 #[kithara::test]
-fn a_correction_follows_its_actual_applied_receipt_frame() {
+#[case::owner_tick(false)]
+#[case::outer_drain(true)]
+fn a_correction_follows_its_actual_applied_receipt_frame(#[case] outer_drain: bool) {
     let (mut deck, control, mut rig, _) = sounding();
     answer(&mut deck, &mut rig, grid(24_000, 12, Some((4, 0)), 960_000));
     let sent = control.commands();
@@ -560,6 +588,12 @@ fn a_correction_follows_its_actual_applied_receipt_frame() {
     let requested = *requested;
     let actual = requested + FrameCount::new(7);
     rig.apply(&mut deck, sent[0].0, i64::from(actual));
+    if outer_drain {
+        let receipt = std::iter::from_fn(|| deck.lane_receipt()).find(|receipt| {
+            matches!(receipt, Settled::Applied { seq, .. } | Settled::Rejected { seq, .. } if *seq == sent[0].0)
+        });
+        assert!(matches!(receipt, Some(Settled::Applied { .. })));
+    }
     consume(
         &control,
         u32::try_from(i64::from(requested)).expect("requested correction frame"),
@@ -849,8 +883,8 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     control.clear();
     let armed_snapshot = deck.snapshot();
     let start = rig.now + LinkedPlayer::<TestPools>::lead(&deck, rig.delivery).expect("lane lead");
-    let (media, from) = kithara_play::Track::<TestPools>::planned(&deck, start, host.sample_rate())
-        .expect("planned source");
+    let (media, from) =
+        Track::<TestPools>::planned(&deck, start, host.sample_rate()).expect("planned source");
     let drift = SlewCause::Drift {
         from,
         limit: LinkConfig::default().slew_limit(),

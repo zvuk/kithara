@@ -101,7 +101,6 @@ impl<P> Linked<P> {
         self.start = None;
         self.start_caller = None;
         self.withdrawn.clear();
-        self.retimes.clear();
         self.cue = self.synced().then_some(Cue::Beat(position));
         self.waiting = self
             .synced()

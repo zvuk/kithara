@@ -7,6 +7,7 @@ use iced::{
 use kithara_platform::time::Instant;
 
 use crate::{
+    backends::finish,
     draw::{DrawListBuilder, Rect},
     hosts::surface::{Entry, SteppingSurface},
     iced::tree::{Widget, step},
@@ -64,7 +65,7 @@ impl canvas::Program<Published> for WheelCanvas<'_> {
             skin,
         );
         crate::backends::replay_ordered(&list.finish(), &mut frame, skin.text_resources.as_ref());
-        vec![frame.into_geometry()]
+        vec![finish(frame.into_geometry())]
     }
 
     fn mouse_interaction(
