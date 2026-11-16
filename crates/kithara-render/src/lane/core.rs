@@ -12,7 +12,7 @@ use kithara_dsp::param::SmootherConfig;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SegmentId, SourceSpan};
 use kithara_sync::SpeedCurve;
-use kithara_warp::{Pitch, WarpRenderError, WarpRenderer};
+use kithara_warp::{WarpControlsChange, WarpRenderError, WarpRenderer};
 use num_traits::ToPrimitive;
 
 #[path = "commands.rs"]
@@ -42,8 +42,8 @@ pub enum LaneCommand {
         from: Duration,
         speed: SpeedCurve,
     },
-    /// The pitch from here on.
-    SetPitch(Pitch),
+    /// Renderer controls from here on.
+    Warp(WarpControlsChange),
     SetHostRate {
         id: SegmentId,
         rate: NonZeroU32,

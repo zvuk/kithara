@@ -11,6 +11,7 @@ pub(super) use kithara_signal::{AudioChunkInfo, AudioSpec};
 pub(super) use kithara_sync::SpeedCurve;
 pub(super) use kithara_test_utils::{TestTempDir, kithara};
 pub(super) use kithara_warp::{Pitch, StretchKind};
+use kithara_warp::{WarpControls, WarpControlsChange};
 
 use super::*;
 pub(super) use crate::{
@@ -2249,14 +2250,20 @@ fn a_refused_open_leaves_the_track_idle() {
 fn a_pitch_change_that_moves_nothing_never_reaches_the_lane() {
     let mut rig = rig();
     let (mut track, mut inbox) = prepared_track();
-    track.settings =
-        kithara_command::Live::new(TrackSettings::builder().pitch(Pitch::HELD).build())
-            .expect("unity speed is a valid track speed");
+    track.settings = kithara_command::Live::new(
+        TrackSettings::builder()
+            .controls(WarpControls::builder().pitch(Pitch::HELD).build())
+            .build(),
+    )
+    .expect("unity speed is a valid track speed");
 
     let sent = rig
         .with_outbox(|out| {
             track.apply(
-                TrackCommand::Configure(TrackSettingsChange::Pitch(Pitch::HELD), When::Next),
+                TrackCommand::Configure(
+                    TrackSettingsChange::Controls(WarpControlsChange::Pitch(Pitch::HELD)),
+                    When::Next,
+                ),
                 out,
             )
         })
@@ -2265,7 +2272,7 @@ fn a_pitch_change_that_moves_nothing_never_reaches_the_lane() {
 
     assert!(sent.is_none(), "nothing went to the lane");
     assert!(lane_commands(&mut inbox).is_empty());
-    assert_eq!(track.projected().pitch(), Pitch::HELD);
+    assert_eq!(track.projected().controls().pitch(), Pitch::HELD);
 }
 
 #[kithara::test]
@@ -3802,7 +3809,7 @@ fn a_change_at_a_frame_is_refused_as_untimed(#[case] attached: bool) {
         .with_outbox(|out| {
             track.apply(
                 TrackCommand::Configure(
-                    TrackSettingsChange::Pitch(Pitch::HELD),
+                    TrackSettingsChange::Controls(WarpControlsChange::Pitch(Pitch::HELD)),
                     When::At(frame(4_096)),
                 ),
                 out,

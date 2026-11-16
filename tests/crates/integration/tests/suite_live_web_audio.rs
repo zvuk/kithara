@@ -32,10 +32,12 @@ use kithara::{
         tokio::task,
     },
     play::{
-        CrossfaderGain, MixTapWriter, PlayWorker, PlayWorkerConfig, PlayerFactory, ResourcePrep,
+        CrossfaderGain, DeckMixSettingsChange, MixTapWriter, PlayWorker, PlayWorkerConfig,
+        PlayerFactory, ResourcePrep,
     },
     queue::{Queue, QueueConfig, Transition},
 };
+use kithara_command::When;
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
@@ -413,7 +415,7 @@ async fn run_deck_pair_worker(sender: wasm::HostSender<TestPools>, pair: Arc<Dec
             for (deck, level) in decks.iter().zip(levels) {
                 let level = CrossfaderGain::checked(level).expect("a crossfader gain");
                 deck.control()
-                    .set_crossfader(level)
+                    .mix(When::Next, DeckMixSettingsChange::Crossfader(level))
                     .expect("set the crossfader level");
             }
             if applied == DeckPair::UNAPPLIED {

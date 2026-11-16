@@ -108,7 +108,7 @@ where
             &navigation,
             config.settings,
             config.track,
-            config.pitch(),
+            config.warp_controls(),
             config.action_at_item_end,
             deck.clone(),
         );

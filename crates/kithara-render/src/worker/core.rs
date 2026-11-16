@@ -252,7 +252,7 @@ where
                 position,
             );
             let activity = audio.take_activity_writer();
-            let warp = Warp::new((), &warp.starting_at(warp.speed(), start.pitch));
+            let warp = Warp::new((), &warp.starting_at(warp.speed(), start.controls));
             let pools = self.pools().clone();
             let dispatch = tracing::dispatcher::get_default(Clone::clone);
             let span = tracing::Span::current();

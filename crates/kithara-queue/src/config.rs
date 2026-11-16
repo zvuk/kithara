@@ -8,8 +8,8 @@ use kithara_download::Downloader;
 use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle as RuntimeHandle};
 use kithara_play::{
     CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError, DeckMixerConfig,
-    DeckMixerConfigPatch, DeckMixerConfigPatchError, Pitch, PlayerFactory, ResourcePrep,
-    TrackFactory, TrackSettings, TrackSettingsPatch, TrackSettingsPatchError,
+    DeckMixerConfigPatch, DeckMixerConfigPatchError, PlayerFactory, ResourcePrep, TrackFactory,
+    TrackSettings, TrackSettingsPatch, TrackSettingsPatchError, WarpControls,
 };
 
 use crate::{ActionAtItemEnd, PlaybackOrder, consts};
@@ -132,10 +132,10 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
-    /// The deck's pitch, `None` when its backend has no keylock to move it.
-    pub(crate) fn pitch(&self) -> Option<Pitch> {
+    /// The deck's renderer controls, absent on a backend without keylock.
+    pub(crate) fn warp_controls(&self) -> Option<WarpControls> {
         let prep = self.prep.as_ref()?;
-        prep.warp.pitch_control(self.track.pitch())
+        prep.warp.available_controls(self.track.controls())
     }
 }
 

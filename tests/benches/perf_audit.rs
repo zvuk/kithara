@@ -29,7 +29,9 @@ use kithara::{
             task::spawn,
         },
     },
-    play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, WarpControls, WarpControlsChange,
+    },
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
     stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine},
@@ -555,7 +557,7 @@ fn bench_stretch_process(c: &mut Criterion) {
         let config = WarpConfig::builder()
             .speed(0.8)
             .backend(backend)
-            .pitch(Pitch::HELD)
+            .controls(WarpControls::builder().pitch(Pitch::HELD).build())
             .build();
         let backend_label = backend.to_string().to_ascii_lowercase();
         group.bench_function(format!("{backend_label}_ratio_1_25"), |b| {
@@ -725,7 +727,7 @@ fn bench_warp_transition(c: &mut Criterion) {
                     (),
                     &WarpConfig::builder()
                         .speed(0.5)
-                        .pitch(Pitch::HELD)
+                        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
                         .backend(StretchKind::Signalsmith)
                         .build(),
                 )
@@ -736,10 +738,10 @@ fn bench_warp_transition(c: &mut Criterion) {
                 let mut produced = 0;
                 for block in 0..12 {
                     if block == 4 {
-                        renderer.set_pitch(Pitch::default());
+                        renderer.apply(WarpControlsChange::Pitch(Pitch::default()));
                     }
                     if block == 8 {
-                        renderer.set_pitch(Pitch::HELD);
+                        renderer.apply(WarpControlsChange::Pitch(Pitch::HELD));
                     }
                     renderer.prepare(spec);
                     renderer
@@ -773,14 +775,14 @@ fn bench_warp_transition(c: &mut Criterion) {
                     (),
                     &WarpConfig::builder()
                         .speed(0.5)
-                        .pitch(Pitch::HELD)
+                        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
                         .backend(StretchKind::Signalsmith)
                         .build(),
                 )
                 .renderer(spec, pools.clone());
                 let resumed = render_windows(&mut replacement, &pools, spec, &pcm[..16_384]);
                 replacement.prepare(spec);
-                replacement.set_pitch(Pitch::default());
+                replacement.apply(WarpControlsChange::Pitch(Pitch::default()));
                 replacement
                     .set_speed(SpeedCurve::Constant(1.0), 1)
                     .expect("unity replacement rate");

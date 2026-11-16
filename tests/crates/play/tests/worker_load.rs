@@ -115,7 +115,7 @@ fn load(worker: &PlayWorker<TestPools>, dir: &TestTempDir, name: &str) -> Batch<
         })
         .build();
     let warp = WarpConfig::builder().build();
-    let start = LaneStart::new(warp.speed(), warp.pitch());
+    let start = LaneStart::new(warp.speed(), warp.controls());
     let config = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(store)
         .worker(worker.clone())
@@ -566,7 +566,7 @@ async fn a_nonzero_initial_hls_load_returns_while_its_segment_is_pending_and_adm
                     class: ServiceClass::Warm,
                     item: initial_hls::ObservedLoad { item, returned },
                     position: target,
-                    start: LaneStart::new(warp.speed(), warp.pitch()),
+                    start: LaneStart::new(warp.speed(), warp.controls()),
                     inbox: lane_inbox,
                 }))],
             },

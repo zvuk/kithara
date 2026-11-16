@@ -16,7 +16,7 @@ use kithara::{
         },
         time::{self, Duration, Instant},
     },
-    play::TrackConfig,
+    play::{TrackConfig, WarpControls},
     queue::{Queue, QueueConfig, QueueEvent, TrackStatus, Transition},
     storage::WaitOutcome,
     stream::{
@@ -286,7 +286,7 @@ fn warp_config(stretch: Option<(StretchKind, f32)>) -> WarpConfig {
             WarpConfig::builder()
                 .speed(speed)
                 .backend(backend)
-                .pitch(Pitch::HELD)
+                .controls(WarpControls::builder().pitch(Pitch::HELD).build())
                 .build()
         },
     )

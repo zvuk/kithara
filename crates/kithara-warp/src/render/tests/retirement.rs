@@ -10,7 +10,7 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{exact::mapped_signal, renderer, spec};
-use crate::{Pitch, PitchStep, WarpConfig};
+use crate::{Pitch, PitchStep, WarpConfig, WarpControls, WarpControlsChange};
 
 /// Output frames at which a script presses.
 const PRESSES: [usize; 2] = [22_050, 66_150];
@@ -62,7 +62,10 @@ impl Scenario {
 fn config(backend: StretchKind, keylock: bool, speed: f32) -> WarpConfig {
     WarpConfig::builder()
         .backend(backend)
-        .maybe_pitch(keylock.then_some(Pitch::HELD))
+        .maybe_controls(
+            (keylock.then_some(Pitch::HELD))
+                .map(|pitch| WarpControls::builder().pitch(pitch).build()),
+        )
         .speed(speed)
         .build()
 }
@@ -82,7 +85,9 @@ fn render(config: &WarpConfig, presses: &[Press], frames: usize, tone: &[f32]) -
             for control in &press.batch {
                 match *control {
                     ToggleKeylock => {
-                        fx.set_pitch(fx.requested_pitch.step(PitchStep::ToggleKeylock));
+                        fx.apply(WarpControlsChange::Pitch(
+                            fx.requested_pitch.step(PitchStep::ToggleKeylock),
+                        ));
                     }
                     Speed(speed) => fx
                         .set_speed(SpeedCurve::Constant(speed), fx.render_revision() + 1)
@@ -147,7 +152,7 @@ fn assert_continuous(tone: &[f32], scenario: &Scenario) {
         .fold(0.0, f32::max);
     let fade = sides
         .iter()
-        .filter(|side| side.pitch().keylock())
+        .filter(|side| side.controls().pitch().keylock())
         .map(|side| {
             renderer(side)
                 .prepare_engine_latency(spec())

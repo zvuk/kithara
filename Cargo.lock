@@ -4748,6 +4748,7 @@ dependencies = [
  "kithara-app-library",
  "kithara-app-zvuk",
  "kithara-assets",
+ "kithara-command",
  "kithara-config",
  "kithara-derive",
  "kithara-encode",
@@ -4808,6 +4809,7 @@ version = "0.0.1-alpha5"
 dependencies = [
  "kithara",
  "kithara-app",
+ "kithara-command",
  "kithara-integration-tests",
  "kithara-render",
  "kithara-test-dylib",
@@ -6087,6 +6089,7 @@ version = "0.0.1-alpha5"
 dependencies = [
  "kithara",
  "kithara-app",
+ "kithara-command",
  "kithara-integration-tests",
  "kithara-render",
  "kithara-test-dylib",

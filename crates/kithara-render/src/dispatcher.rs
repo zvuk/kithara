@@ -13,7 +13,7 @@ use kithara_command::{Inbox, Protocol, Seq};
 use kithara_platform::{time::Duration, tokio::runtime::Handle};
 use kithara_signal::FrameCount;
 use kithara_sync::SpeedCurve;
-use kithara_warp::Pitch;
+use kithara_warp::WarpControls;
 use kithara_worker::{Priority, Task, TickResult};
 use tracing::Instrument as _;
 
@@ -61,23 +61,23 @@ impl<I: Debug> Debug for LoadRequest<I> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LaneStart {
     pub speed: SpeedCurve,
-    pub pitch: Pitch,
+    pub controls: WarpControls,
 }
 
 impl LaneStart {
-    /// A lane that opens at the constant `speed` and at `pitch`.
+    /// A lane that opens at the constant `speed` and at `controls`.
     #[must_use]
-    pub const fn new(speed: f32, pitch: Pitch) -> Self {
+    pub const fn new(speed: f32, controls: WarpControls) -> Self {
         Self {
             speed: SpeedCurve::Constant(speed),
-            pitch,
+            controls,
         }
     }
 }
 
 impl Default for LaneStart {
     fn default() -> Self {
-        Self::new(1.0, Pitch::default())
+        Self::new(1.0, WarpControls::default())
     }
 }
 

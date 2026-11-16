@@ -293,7 +293,12 @@ impl<S> PlayerImpl<S> {
             TrackSettingsChange::Speed(speed) => {
                 matches!(when, When::Next) && self.unchanged_speed(speed)
             }
-            TrackSettingsChange::Pitch(pitch) => self.settings.projected().pitch() == pitch,
+            TrackSettingsChange::Controls(_) => {
+                let projected = self.settings.projected();
+                let mut changed = projected;
+                changed.apply_change(change);
+                changed == projected
+            }
         }
     }
 

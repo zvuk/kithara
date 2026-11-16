@@ -18,6 +18,7 @@ use ::kithara::{
             task::{self, JoinHandle},
         },
     },
+    play::TrackSettingsChange,
     queue::{TrackId, TrackStatus, Transition},
     signal::SessionFrame,
     ui::render::ControlAction,
@@ -604,7 +605,9 @@ async fn a_refused_sync_leaves_a_later_track_free(rhythm_a_wav: String, rhythm_b
         );
         let _ = capture(rig, consts::SETTLE);
         assert!(
-            rig.queues[0].set_rate(1.0).is_ok(),
+            rig.queues[0]
+                .configure_track(TrackSettingsChange::Speed(1.0))
+                .is_ok(),
             "the later track inherits the SYNC the host refused"
         );
     })
@@ -1327,7 +1330,7 @@ async fn the_keylock_chip_holds_the_pitch_of_a_playing_deck(long_wav: String) {
             rig.queues[0].is_playing()
         });
         rig.queues[0]
-            .set_rate(consts::KEYLOCK_SPEED)
+            .configure_track(TrackSettingsChange::Speed(consts::KEYLOCK_SPEED))
             .expect("deck A takes +8%");
         rig.pump();
         let _ = capture(rig, consts::SETTLE);
@@ -1513,7 +1516,7 @@ fn tone_at(rig: &mut Rig, url: &str, speed: f32) {
         rig.queues[0].is_playing()
     });
     rig.queues[0]
-        .set_rate(speed)
+        .configure_track(TrackSettingsChange::Speed(speed))
         .expect("deck A takes the speed");
     rig.pump();
     let _ = capture(rig, consts::SETTLE);

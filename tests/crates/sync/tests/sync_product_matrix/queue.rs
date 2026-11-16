@@ -7,7 +7,7 @@ use kithara::{
     link::LinkedSnapshot,
     play::{
         CrossfadeCurve, CrossfadeSettings, DeckMixSettings, DeckMixerConfig, Position,
-        TrackSettings, TrackSnapshot,
+        TrackSettings, TrackSnapshot, WarpControls,
     },
     queue::{QueueSettings, Transition},
     signal::{AudioChunkInfo, SegmentId, SourceSpan},
@@ -909,7 +909,7 @@ impl QueueMusic {
         track: TrackSettings,
         backend: kithara::stretch::StretchKind,
     ) -> Self {
-        let forward_oracle = !track.pitch().keylock();
+        let forward_oracle = !track.controls().pitch().keylock();
         let sample_rate = NonZeroU32::new(RATE).expect("source rate");
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
@@ -3052,7 +3052,10 @@ async fn capture_music(
     tracing::info!(target: "kithara_test::sync::queue321", phase = "setup_begin");
     let backend = kithara::stretch::StretchKind::Signalsmith;
     let track = TrackSettings::builder()
-        .maybe_pitch(key_lock.then_some(Pitch::HELD))
+        .maybe_controls(
+            (key_lock.then_some(Pitch::HELD))
+                .map(|pitch| WarpControls::builder().pitch(pitch).build()),
+        )
         .build();
     assert!(
         backend.capabilities().contains(if key_lock {

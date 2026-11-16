@@ -112,7 +112,7 @@ mod tests {
         abr::AbrMode,
         effects::GainDb,
         platform::{time::Duration, tokio::runtime::Handle},
-        play::Pitch,
+        play::TrackSettings,
         prelude::TrackMetadata,
         ui::render::{ReadValue, Reads, TableCell, Walk},
     };
@@ -226,7 +226,8 @@ mod tests {
                         .eq_bands(eq_bands.clone())
                         .tempo(TempoPercent::DEFAULT)
                         .synced(false)
-                        .pitch(Pitch::default())
+                        .settings(TrackSettings::default())
+                        .warp_controls_available(true)
                         .state(ui)
                         .build()
                 })
@@ -505,7 +506,7 @@ mod tests {
     fn the_key_lock_hides_on_a_deck_that_cannot_hold_the_pitch() {
         let fixture = Fixture::new(["+0.0%", "+0.0%"]);
         let mut shown = fixture.shown();
-        shown.decks[0].pitch = None;
+        shown.decks[0].warp_controls_available = false;
         let root = fixture.root(&shown);
         let walk = Walk::new(&root);
 

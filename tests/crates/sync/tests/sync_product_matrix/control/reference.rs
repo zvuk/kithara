@@ -3,7 +3,7 @@ use kithara::{
     bufpool::{PoolError, SampleBuffer},
     download::Downloader,
     effects::LimiterConfig,
-    play::{DeckMixSettings, Position, Settled},
+    play::{DeckMixSettings, Position, Settled, TrackSettingsChange},
     signal::{AudioChunk, AudioChunkInfo, SourceInverse, SourceSpan},
 };
 use kithara_integration_tests::{
@@ -774,7 +774,7 @@ pub(in super::super) async fn capture(
     let _ = harness.render(BLOCK_FRAMES).await;
     let rate: f32 = (target_bpm / native_bpm).as_();
     harness
-        .with_queue(move |control| control.set_default_rate(rate))
+        .with_queue(move |control| control.configure_track(TrackSettingsChange::Speed(rate)))
         .await
         .expect("control rate");
     let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("control source"))

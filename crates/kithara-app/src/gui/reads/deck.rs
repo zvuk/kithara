@@ -1,6 +1,5 @@
 use kithara::{
     effects::GainDb,
-    play::Pitch,
     ui::render::{Node, ReadValue, Scope, WaveformView},
 };
 use num_traits::cast::AsPrimitive;
@@ -180,8 +179,11 @@ struct KeyNode<'a> {
 impl<'a> Node<'a> for KeyNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
-            "locked" => ReadValue::Bool(self.shown.pitch.is_some_and(Pitch::keylock)),
-            "lock_hidden" => ReadValue::Bool(self.shown.pitch.is_none()),
+            "locked" => ReadValue::Bool(
+                self.shown.warp_controls_available
+                    && self.shown.settings.controls().pitch().keylock(),
+            ),
+            "lock_hidden" => ReadValue::Bool(!self.shown.warp_controls_available),
             "transpose" => ReadValue::Text(&self.cache.transpose),
             _ => return None,
         };

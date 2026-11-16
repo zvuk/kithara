@@ -6,7 +6,7 @@ use kithara_test_utils::kithara;
 
 use super::*;
 use crate::{
-    Pitch, Warp, WarpConfig,
+    Pitch, Warp, WarpConfig, WarpControls,
     render::renderer::residency::SourceResidency,
     test_pools::{TestPools, pools},
 };
@@ -15,7 +15,7 @@ fn renderer() -> WarpRenderer<TestPools> {
     let spec = AudioSpec::new(2, NonZeroU32::new(8_000).expect("sample rate"));
     let config = WarpConfig::builder()
         .backend(StretchKind::Signalsmith)
-        .pitch(Pitch::HELD)
+        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
         .speed(0.5)
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools());

@@ -1,8 +1,8 @@
-use kithara_command::Port;
+use kithara_command::{Port, When};
 use kithara_config::ConfigOwner;
 use kithara_events::EventReceiver;
 use kithara_platform::{CancelToken, time::Duration};
-use kithara_play::TrackSettingsChange;
+use kithara_play::{DeckMixSettingsChange, TrackSettingsChange};
 use kithara_test_utils::cancel_token;
 
 use super::*;
@@ -691,8 +691,20 @@ fn player_config_values_follow_live_controls(#[by_ref] worker_owner: &WorkerOwne
         DeckMixSettings::default(),
     )
     .expect("deck mix owner");
-    apply_mix(&mut queue, &mut rig, &mut mix, QueueCommand::SetVolume(0.4)).expect("volume");
-    apply_mix(&mut queue, &mut rig, &mut mix, QueueCommand::SetMuted(true)).expect("mute");
+    apply_mix(
+        &mut queue,
+        &mut rig,
+        &mut mix,
+        QueueCommand::Mix(DeckMixSettingsChange::Volume(0.4.into()), When::Next),
+    )
+    .expect("volume");
+    apply_mix(
+        &mut queue,
+        &mut rig,
+        &mut mix,
+        QueueCommand::Mix(DeckMixSettingsChange::Muted(true), When::Next),
+    )
+    .expect("mute");
     let receipts = rig
         .block(SessionFrame::new(256), 0.0)
         .expect("applied live controls");
@@ -703,8 +715,8 @@ fn player_config_values_follow_live_controls(#[by_ref] worker_owner: &WorkerOwne
     apply_mix(&mut queue, &mut rig, &mut mix, QueueCommand::Tick).expect("publish applied mix");
     assert_eq!(f32::from(mix.config().volume()), 0.4);
     assert!(mix.config().muted());
-    assert_eq!(queue.control().volume(), 0.4);
-    assert!(queue.control().is_muted());
+    assert_eq!(f32::from(queue.control().mix_settings().volume()), 0.4);
+    assert!(queue.control().mix_settings().muted());
 }
 
 #[kithara::test(miri, tokio)]
@@ -899,11 +911,9 @@ async fn player_lifecycle_admits_only_one_concurrent_close(#[by_ref] worker_owne
                 When::Next,
                 kithara_command::Batch {
                     basis: Vec::new(),
-                    commands: vec![DeckPart::Mix(
-                        kithara_play::DeckMixSettingsChange::Crossfader(
-                            kithara_play::CrossfaderGain::MAX,
-                        ),
-                    )],
+                    commands: vec![DeckPart::Mix(DeckMixSettingsChange::Crossfader(
+                        kithara_play::CrossfaderGain::MAX,
+                    ))],
                 },
             )
             .expect("fill deck ring");
