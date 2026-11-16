@@ -224,7 +224,7 @@ pub(super) fn item() -> ResourceLoad<TestPools> {
 }
 
 pub(super) fn lane() -> (Sender<LaneProtocol>, Inbox<LaneProtocol>) {
-    channel(ChannelConfig::builder().build())
+    channel(ChannelConfig::builder().targets(1).build())
 }
 
 pub(super) fn replace_lane_sender(lane: &mut Lane, sender: Sender<LaneProtocol>) {
@@ -3594,6 +3594,7 @@ fn full_notification_ring_retries_latest_effective_rate_once() {
     let (sender, mut inbox) = channel(
         ChannelConfig::builder()
             .capacity(std::num::NonZeroUsize::new(2).expect("two outstanding rates"))
+            .targets(1)
             .build(),
     );
     replace_lane_sender(&mut track.lane, sender);

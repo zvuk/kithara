@@ -125,8 +125,8 @@ impl<P> Linked<P> {
     /// The configured plan horizon in Host frames, saturating at the largest
     /// frame count.
     pub(super) fn horizon(&self) -> u64 {
-        let frames = self.config.horizon().as_nanos() * u128::from(self.host.sample_rate().get())
-            / 1_000_000_000;
+        let frames = (self.config.horizon().as_nanos() * u128::from(self.host.sample_rate().get()))
+            .div_ceil(1_000_000_000);
         u64::try_from(frames).unwrap_or(u64::MAX)
     }
 
@@ -155,5 +155,40 @@ impl<P> Linked<P> {
                 "no host speed law: track at {track:?} BPM, host at {host} BPM, position {position:?}"
             ))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::{NonZeroU16, NonZeroU32};
+
+    use kithara_platform::time::Duration;
+    use kithara_signal::SessionFrame;
+    use kithara_test_utils::kithara;
+
+    use crate::{LinkConfig, Linked, LinkedConfig, TempoStep, TempoTrajectory};
+
+    #[kithara::test]
+    fn a_positive_subframe_horizon_plans_one_output_frame() {
+        let deck = Linked::new(
+            LinkedConfig::builder()
+                .inner(())
+                .trajectory(TempoTrajectory::new(
+                    TempoStep {
+                        frame: SessionFrame::new(0),
+                        beat: kithara_sync::SessionBeat::default(),
+                        tempo: kithara_sync::Tempo::DEFAULT,
+                    },
+                    NonZeroU16::new(4).expect("meter"),
+                    NonZeroU32::new(48_000).expect("sample rate"),
+                ))
+                .settings(
+                    LinkConfig::builder()
+                        .horizon(Duration::from_nanos(1))
+                        .build(),
+                )
+                .build(),
+        );
+        assert_eq!(deck.horizon(), 1);
     }
 }

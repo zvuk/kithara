@@ -348,7 +348,7 @@ impl<S> PlayerImpl<S> {
             LaneCommand::Segment {
                 id: segment,
                 from: Position::ZERO,
-                speed: SpeedCurve::Constant(self.settings.projected().speed()),
+                speed: SpeedCurve::Constant(self.projected_settings().speed()),
             },
             When::Deferred,
         )?;
@@ -357,7 +357,7 @@ impl<S> PlayerImpl<S> {
         self.segment = Segment::issued(
             segment,
             Some(Position::ZERO),
-            self.settings.projected().speed(),
+            self.projected_settings().speed(),
         )
         .with_request(lane_seq);
         self.playback_commands.clear();

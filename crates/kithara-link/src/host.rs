@@ -386,7 +386,8 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for Lin
                 })
             }
             LinkedHostCommand::Grid { deck, answer } => {
-                self.with_linked(deck, "grid", 0.0, &mut |deck, out, _| {
+                self.with_linked(deck, "grid", 0.0, &mut |deck, out, pass| {
+                    deck.retime(pass.planned_tempo, &[], out);
                     deck.grid(answer.clone(), out);
                     Ok(None)
                 })

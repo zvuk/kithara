@@ -26,7 +26,7 @@ pub use dispatcher::{
 use humantime_serde as _;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
-pub use lane::{LaneApplied, LaneCommand, LaneFrame, LaneProtocol, LaneSetup};
+pub use lane::{LaneApplied, LaneCommand, LaneFrame, LaneProtocol, LaneSetup, LaneTarget};
 pub use priority::ServiceClass;
 pub use source::WarpSource;
 pub use worker::{

@@ -2,7 +2,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{num::NonZeroU32, ops::Range};
+use std::{future::Future, num::NonZeroU32, ops::Range};
 
 use kithara::{
     audio::{AudioConfig, NoResamplerBackend},
@@ -367,6 +367,16 @@ async fn passthrough_player(
     player
 }
 
+#[kithara::flash(true)]
+async fn render_paced(
+    render: impl Future<Output = (Instant, Vec<f32>)>,
+    block_period: Duration,
+) -> Vec<f32> {
+    let (started, samples) = render.await;
+    time::sleep(block_period.saturating_sub(started.elapsed())).await;
+    samples
+}
+
 /// Render the source at the real device cadence and capture the result.
 ///
 /// The guard puts the pacing sleep on the same clock as the decode worker's
@@ -399,22 +409,27 @@ pub(super) async fn render_passthrough(
     let metrics_before_warmup = target.metrics();
     for block in 0..WARMUP_BLOCKS {
         hang_tick!();
-        let started = Instant::now();
-        if let Some(player) = load.as_mut() {
-            let _ = player.render(BLOCK_FRAMES).await;
-        }
-        let _ = target.render(BLOCK_FRAMES).await;
-        let metrics = target.metrics();
-        assert_eq!(
-            metrics.underruns(),
-            metrics_before_warmup.underruns(),
-            "no-SYNC warmup underrun: stretch={stretch:?}, with_load={with_load}, \
-             block={block}, output_frames={}..{}, before={metrics_before_warmup:?}, \
-             now={metrics:?}",
-            block * BLOCK_FRAMES,
-            (block + 1) * BLOCK_FRAMES,
-        );
-        time::sleep(block_period.saturating_sub(started.elapsed())).await;
+        let _ = render_paced(
+            async {
+                if let Some(player) = load.as_mut() {
+                    let _ = player.render(BLOCK_FRAMES).await;
+                }
+                let output = target.render_timed(BLOCK_FRAMES).await;
+                let metrics = target.metrics();
+                assert_eq!(
+                    metrics.underruns(),
+                    metrics_before_warmup.underruns(),
+                    "no-SYNC warmup underrun: stretch={stretch:?}, with_load={with_load}, \
+                     block={block}, output_frames={}..{}, before={metrics_before_warmup:?}, \
+                     now={metrics:?}",
+                    block * BLOCK_FRAMES,
+                    (block + 1) * BLOCK_FRAMES,
+                );
+                output
+            },
+            block_period,
+        )
+        .await;
         hang_reset!();
     }
     let metrics_before_capture = target.metrics();
@@ -428,22 +443,29 @@ pub(super) async fn render_passthrough(
     load_probe.start_capture();
     for block in 0..CAPTURE_BLOCKS {
         hang_tick!();
-        let started = Instant::now();
-        if let Some(player) = load.as_mut() {
-            let _ = player.render(BLOCK_FRAMES).await;
-        }
-        pcm.extend(target.render(BLOCK_FRAMES).await);
-        let metrics = target.metrics();
-        assert_eq!(
-            metrics.underruns(),
-            metrics_before_capture.underruns(),
-            "no-SYNC capture underrun: stretch={stretch:?}, with_load={with_load}, \
-             block={block}, output_frames={}..{}, before={metrics_before_capture:?}, \
-             now={metrics:?}",
-            (WARMUP_BLOCKS + block) * BLOCK_FRAMES,
-            (WARMUP_BLOCKS + block + 1) * BLOCK_FRAMES,
+        pcm.extend(
+            render_paced(
+                async {
+                    if let Some(player) = load.as_mut() {
+                        let _ = player.render(BLOCK_FRAMES).await;
+                    }
+                    let output = target.render_timed(BLOCK_FRAMES).await;
+                    let metrics = target.metrics();
+                    assert_eq!(
+                        metrics.underruns(),
+                        metrics_before_capture.underruns(),
+                        "no-SYNC capture underrun: stretch={stretch:?}, with_load={with_load}, \
+                         block={block}, output_frames={}..{}, before={metrics_before_capture:?}, \
+                         now={metrics:?}",
+                        (WARMUP_BLOCKS + block) * BLOCK_FRAMES,
+                        (WARMUP_BLOCKS + block + 1) * BLOCK_FRAMES,
+                    );
+                    output
+                },
+                block_period,
+            )
+            .await,
         );
-        time::sleep(block_period.saturating_sub(started.elapsed())).await;
         hang_reset!();
     }
     let load_observed_during_capture = load_probe.finish_capture();
@@ -557,26 +579,36 @@ async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f3
     );
     for _ in 0..WARMUP_BLOCKS {
         hang_tick!();
-        let started = Instant::now();
-        harness
-            .run(&queue, kithara::queue::QueueControl::tick)
-            .await
-            .expect("tick queue during warmup");
-        let _ = harness.render(BLOCK_FRAMES).await;
-        time::sleep(block_period.saturating_sub(started.elapsed())).await;
+        let _ = render_paced(
+            async {
+                harness
+                    .run(&queue, kithara::queue::QueueControl::tick)
+                    .await
+                    .expect("tick queue during warmup");
+                harness.render_timed(BLOCK_FRAMES).await
+            },
+            block_period,
+        )
+        .await;
         hang_reset!();
     }
 
     let mut pcm = Vec::with_capacity(CAPTURE_BLOCKS * BLOCK_FRAMES * usize::from(CHANNELS));
     for _ in 0..CAPTURE_BLOCKS {
         hang_tick!();
-        let started = Instant::now();
-        harness
-            .run(&queue, kithara::queue::QueueControl::tick)
-            .await
-            .expect("tick queue during capture");
-        pcm.extend(harness.render(BLOCK_FRAMES).await);
-        time::sleep(block_period.saturating_sub(started.elapsed())).await;
+        pcm.extend(
+            render_paced(
+                async {
+                    harness
+                        .run(&queue, kithara::queue::QueueControl::tick)
+                        .await
+                        .expect("tick queue during capture");
+                    harness.render_timed(BLOCK_FRAMES).await
+                },
+                block_period,
+            )
+            .await,
+        );
         hang_reset!();
     }
     drop(queue);
@@ -977,4 +1009,38 @@ pub async fn run_no_sync_passthrough(
         "no-SYNC playback was not transparent: {}\nbaseline={baseline_report:?}\nunity={unity_report:?}\nunity+load={loaded_report:?}",
         failures.join("; "),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[kithara::test(tokio, native)]
+    async fn delayed_render_dispatch_preserves_a_full_callback_period() {
+        let period = Duration::from_secs_f64(
+            f64::from(u32::try_from(BLOCK_FRAMES).expect("block size fits u32"))
+                / f64::from(SAMPLE_RATE),
+        );
+        let requested = Instant::now();
+        let mut callback_started = None;
+        let samples = render_paced(
+            async {
+                time::sleep(period * 2).await;
+                let started = Instant::now();
+                callback_started = Some(started);
+                (started, vec![0.25; BLOCK_FRAMES * usize::from(CHANNELS)])
+            },
+            period,
+        )
+        .await;
+        let completed = Instant::now();
+        let callback_started = callback_started.expect("render callback ran");
+        assert!(callback_started >= requested + period * 2);
+        assert_eq!(samples, vec![0.25; BLOCK_FRAMES * usize::from(CHANNELS)]);
+        assert!(
+            completed >= callback_started + period,
+            "dispatch latency must not consume the following callback period: \
+             callback={callback_started:?}, completed={completed:?}, period={period:?}"
+        );
+    }
 }

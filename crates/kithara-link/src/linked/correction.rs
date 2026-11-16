@@ -1,6 +1,6 @@
 use kithara_command::{Rejection, Seq, When};
 use kithara_play::{Outbox, PlayError, Position, Track, TrackCommand, TrackStatus};
-use kithara_render::LaneFrame;
+use kithara_render::{LaneFrame, bridge::SlotMark};
 use kithara_signal::{FrameCount, SessionFrame};
 use kithara_sync::{Slew, SlewCause, slew};
 
@@ -8,17 +8,9 @@ use super::{
     Linked, LinkedPlayer, Waiting,
     core::Refusal,
     geometry::cue_position,
-    state::{Cause, CorrectionState, Cue, Reissued, Relocation, RunningCorrection, SpeedOperation},
+    state::{Cause, CorrectionState, Cue, Reissued, RunningCorrection, SpeedOperation},
 };
 use crate::{covers, jump_target};
-
-/// How a correction closes the phase of a sounding deck.
-pub(super) enum Corrected {
-    /// By bounded speed steps.
-    Slew,
-    /// By relocating the deck, which holds the whole trajectory from there on.
-    Move,
-}
 
 impl<P> Linked<P> {
     pub(super) fn drain_lane_receipts<S>(&mut self)
@@ -28,12 +20,12 @@ impl<P> Linked<P> {
         while self.lane_receipt().is_some() {}
     }
 
-    /// An applied correction runs from `at`; any other applied speed is done.
+    /// Native success activates the new plan and retires the speed law it replaced.
     pub(super) fn correction_applied(&mut self, seq: Seq, lane: LaneFrame) {
         let Some(index) = self.speeds.iter().position(|(pending, _)| *pending == seq) else {
             return;
         };
-        match &mut self.speeds[index].1 {
+        let (coverage, at) = match &mut self.speeds[index].1 {
             SpeedOperation::Correction { state, .. } => {
                 if let CorrectionState::Pending(correction, mark) = state {
                     if let Some(at) = mark.session_at(lane) {
@@ -42,11 +34,27 @@ impl<P> Linked<P> {
                         self.speeds.remove(index);
                     }
                 }
+                return;
             }
-            SpeedOperation::Alignment | SpeedOperation::Relocation { .. } => {
-                self.speeds.remove(index);
+            SpeedOperation::Relocation { state, coverage }
+            | SpeedOperation::Alignment { state, coverage } => {
+                let Some(CorrectionState::Pending(correction, mark)) = state else {
+                    self.speeds.remove(index);
+                    return;
+                };
+                let Some(at) = mark.session_at(lane) else {
+                    self.speeds.remove(index);
+                    return;
+                };
+                let applied = *correction;
+                *state = Some(CorrectionState::Applied(applied));
+                (*coverage, at)
             }
-        }
+        };
+        self.speeds.retain(|(pending, operation)| {
+            !(*pending < seq && matches!(operation, SpeedOperation::Correction { .. }))
+        });
+        self.plan_sent(at, coverage);
     }
 
     /// A synchronized track owes a refused speed's step again.
@@ -58,24 +66,35 @@ impl<P> Linked<P> {
             return;
         };
         let (_, operation) = self.speeds.remove(index);
-        if !self.synced() || !matches!(reason, Rejection::Late | Rejection::Refused(_)) {
+        if !self.synced() {
             return;
         }
-
-        match operation {
-            SpeedOperation::Correction { cause, .. } => self.alignment = Some(cause),
-            SpeedOperation::Alignment => {
+        let newer_seek = self.speeds.iter().any(|(pending, operation)| {
+            *pending > seq && matches!(operation, SpeedOperation::Relocation { .. })
+        });
+        match (operation, reason) {
+            (SpeedOperation::Correction { cause, .. }, Rejection::Late | Rejection::Refused(_))
+                if !newer_seek =>
+            {
+                self.alignment = Some(cause);
+            }
+            (SpeedOperation::Alignment { .. }, Rejection::Late | Rejection::Refused(_)) => {
                 let required = self.inner.snapshot().as_ref().position;
-                self.waiting.get_or_insert(Waiting::Sync { required });
+                self.waiting.get_or_insert(Waiting::Align { required });
             }
-            SpeedOperation::Relocation { to } => {
-                self.waiting = Some(Waiting::Seek { required: to });
-                let caller = self
+            (SpeedOperation::Relocation { .. }, Rejection::Late | Rejection::Stale) => {
+                if let Some(relocation) = self
                     .relocation
+                    .as_mut()
                     .filter(|relocation| relocation.sent == Some(Reissued::Lane(seq)))
-                    .map_or(seq, |relocation| relocation.caller);
-                self.relocation = Some(Relocation { caller, sent: None });
+                {
+                    self.waiting = Some(Waiting::Seek {
+                        required: relocation.required,
+                    });
+                    relocation.sent = None;
+                }
             }
+            _ => {}
         }
     }
 
@@ -84,14 +103,25 @@ impl<P> Linked<P> {
         at: SessionFrame,
         cause: Cause,
         out: &mut Outbox<'_, S>,
-    ) -> Result<Corrected, PlayError>
+    ) -> Result<Option<Seq>, PlayError>
     where
         P: Track<S>,
     {
         let Some(grid) = self.grid.as_ref() else {
             return Err(PlayError::NotReady);
         };
-        if self.inner.snapshot().as_ref().mark.is_none() {
+        let snapshot = self.inner.snapshot();
+        let track = snapshot.as_ref();
+        let mark = track.mark.ok_or(PlayError::NotReady)?;
+        let segment = mark.lane.segment;
+        if self.speeds.iter().any(|(_, operation)| {
+            matches!(operation, SpeedOperation::Relocation {
+                state: Some(CorrectionState::Pending(landing, _) | CorrectionState::Applied(landing)), ..
+            } | SpeedOperation::Alignment {
+                state: Some(CorrectionState::Pending(landing, _) | CorrectionState::Applied(landing)), ..
+            } if landing.segment == segment
+                && at >= landing.at - track.declick && at < landing.at)
+        }) {
             return Err(PlayError::NotReady);
         }
         let (position, from) = self.planned::<S>(at)?;
@@ -105,10 +135,7 @@ impl<P> Linked<P> {
         let source = self.source(grid)?;
         let law = match cause {
             Cause::Commanded => SlewCause::Commanded,
-            Cause::Drift => SlewCause::Drift {
-                from,
-                limit: self.config.slew_limit(),
-            },
+            Cause::Drift => SlewCause::Drift { from },
         };
         let planned = slew(
             &self.host,
@@ -119,30 +146,30 @@ impl<P> Linked<P> {
             law,
             self.horizon(),
         );
-        self.close_phase(planned, cause, at, out)
+        self.close_phase(planned, cause, at, mark, out)
     }
 
-    /// Sends what closes the phase: the speed law of a slew, or a relocation.
+    /// Sends a bounded correction without relocating the sounding track.
     fn close_phase<S>(
         &mut self,
         planned: Option<Slew>,
         cause: Cause,
         at: SessionFrame,
+        mark: SlotMark,
         out: &mut Outbox<'_, S>,
-    ) -> Result<Corrected, PlayError>
+    ) -> Result<Option<Seq>, PlayError>
     where
         P: Track<S>,
     {
         let (curve, frames, coverage) = match planned {
-            Some(Slew::Closes {
+            Some(Slew::Corrects {
                 curve,
                 frames,
                 coverage,
             }) => (curve, frames, coverage),
-            Some(Slew::Relocate) | None if self.waiting.is_some() => {
+            Some(Slew::Uncovered) => {
                 return Err(PlayError::NotReady);
             }
-            Some(Slew::Relocate) => return self.align(out).map(|_| Corrected::Move),
             None => {
                 return Err(PlayError::Internal(
                     "source phase correction has no playable grid law".into(),
@@ -159,12 +186,6 @@ impl<P> Linked<P> {
         };
         let sent = self.inner.apply(speed, out)?;
         if let Some(seq) = sent {
-            let mark = self
-                .inner
-                .snapshot()
-                .as_ref()
-                .mark
-                .ok_or(PlayError::Untimed)?;
             let state = CorrectionState::Pending(
                 RunningCorrection {
                     at,
@@ -177,7 +198,7 @@ impl<P> Linked<P> {
                 .push((seq, SpeedOperation::Correction { cause, state }));
             self.plan_sent(at, coverage);
         }
-        Ok(Corrected::Slew)
+        Ok(sent)
     }
 
     /// A sounding deck owes a drift correction once the earliest frame it can
@@ -209,55 +230,45 @@ impl<P> Linked<P> {
         }
     }
 
-    /// Whether the owed correction moved the deck.
-    pub(super) fn realign<S>(&mut self, out: &mut Outbox<'_, S>) -> bool
+    pub(super) fn realign<S>(&mut self, out: &mut Outbox<'_, S>)
     where
         P: Track<S>,
     {
         let Some(cause) = self.alignment else {
-            return false;
+            return;
         };
         if !matches!(
             self.inner.snapshot().as_ref().status,
             TrackStatus::Playing { .. }
         ) {
-            return false;
+            return;
         }
         let result = self
             .earliest(out)
             .and_then(|at| self.correct(at, cause, out));
         match result {
-            Ok(corrected) => {
-                self.alignment = None;
-                matches!(corrected, Corrected::Move)
-            }
+            Ok(_) => self.alignment = None,
             Err(error) => {
                 if let Refusal::Drop = self.triage(&error, out) {
                     self.alignment = None;
                 }
-                false
             }
         }
     }
 
-    /// A sounding deck follows each of `frames` until one of them moves it; the
-    /// landing already follows the rest of the trajectory.
+    /// A sounding deck follows each commanded frame without changing its position.
     pub(super) fn retime_sounding<S>(&mut self, frames: &[SessionFrame], out: &mut Outbox<'_, S>)
     where
         P: Track<S>,
     {
         for &at in frames {
             match self.correct(at, Cause::Commanded, out) {
-                Ok(Corrected::Slew) => {}
-                Ok(Corrected::Move) => {
-                    self.alignment = None;
-                    return;
-                }
+                Ok(_) => {}
                 Err(error) => {
                     if let Refusal::Retry = self.triage(&error, out) {
                         self.alignment = Some(Cause::Commanded);
-                        if matches!(error, PlayError::Late) && self.realign(out) {
-                            return;
+                        if matches!(error, PlayError::Late) {
+                            self.realign(out);
                         }
                     } else if !self.synced() {
                         return;
@@ -296,6 +307,12 @@ impl<P> Linked<P> {
         if out.deck_available() == 0 {
             return Err(PlayError::Full("deck"));
         }
+        let mark = self
+            .inner
+            .snapshot()
+            .as_ref()
+            .mark
+            .ok_or(PlayError::NotReady)?;
         let to = jump_target(&self.host, source, position, at).ok_or(PlayError::NotReady)?;
         let start = at - self.inner.snapshot().as_ref().declick;
         let (before, _) = self.planned::<S>(start)?;
@@ -304,10 +321,17 @@ impl<P> Linked<P> {
             .inner
             .apply(TrackCommand::Align { to, speed, at }, out)?;
         if let Some(seq) = sent {
-            self.speeds.push((seq, SpeedOperation::Alignment));
-            self.plan_sent(start, coverage);
+            let state = Some(CorrectionState::Pending(
+                RunningCorrection {
+                    at,
+                    frames: FrameCount::new(0),
+                    segment: mark.lane.segment,
+                },
+                mark,
+            ));
+            self.speeds
+                .push((seq, SpeedOperation::Alignment { state, coverage }));
         }
-        self.correction = None;
         self.waiting = None;
         Ok(sent)
     }
@@ -337,7 +361,7 @@ impl<P> Linked<P> {
         let at = self.jump_frame(out)?;
         let (position, _speed) = self.planned::<S>(at)?;
         if !covers(grid.geometry(), position) {
-            self.waiting = Some(Waiting::Sync { required: position });
+            self.waiting = Some(Waiting::Align { required: position });
             return Ok(None);
         }
         self.align_playing(&source, position, at, out)
