@@ -1,132 +1,153 @@
-use std::ops::{DerefMut, Range};
+use std::ops::Mul;
 
 use fearless_simd::{Level, dispatch, f32x8, prelude::*};
 
-pub(crate) fn pair<P, F>(planes: &mut [P], range: Range<usize>, coefficients: F)
-where
-    P: DerefMut<Target = [f32]>,
-    F: Fn(usize) -> [[f32; 5]; 2],
-{
-    let repeated = (0..planes.len()).all(|plane| {
-        let [first, second] = coefficients(plane);
-        first == second
-    });
-    dispatch!(Level::new(), simd => if repeated {
-        kernel::<_, _, _, true>(simd, planes, range, coefficients);
-    } else {
-        kernel::<_, _, _, false>(simd, planes, range, coefficients);
-    });
+use crate::consts::BIQUAD_IDENTITY;
+
+pub(crate) fn all_finite(samples: &[f32]) -> bool {
+    dispatch!(Level::new(), simd => all_finite_kernel(simd, samples))
 }
 
 #[inline(always)]
-fn kernel<S, P, F, const REPEATED: bool>(
-    simd: S,
-    planes: &mut [P],
-    range: Range<usize>,
+pub(super) fn all_finite_kernel<S: Simd>(simd: S, samples: &[f32]) -> bool {
+    let mut largest = S::u32s::splat(simd, 0);
+    let mut chunks = samples.chunks_exact(S::f32s::LEN);
+    for chunk in &mut chunks {
+        let bits: S::u32s = S::f32s::from_slice(simd, chunk).bitcast();
+        largest = largest.max(bits & 0x7f80_0000);
+    }
+    largest.reduce_max() < 0x7f80_0000 && chunks.remainder().iter().all(|sample| sample.is_finite())
+}
+
+pub(crate) fn biquad_window<F>(
+    samples: &mut [f32],
+    channels: usize,
+    sections: usize,
     coefficients: F,
 ) where
-    S: Simd,
-    P: DerefMut<Target = [f32]>,
-    F: Fn(usize) -> [[f32; 5]; 2],
+    F: Fn(usize, usize) -> [f32; 5],
 {
-    let offset = (planes.len() / 4).saturating_mul(4);
-    let quads_offset = (planes.len() / 8).saturating_mul(8);
-    let (groups, rest) = planes.as_chunks_mut::<8>();
-    for (index, group) in groups.iter_mut().enumerate() {
-        run::<_, _, _, _, REPEATED>(
-            simd,
-            group,
-            range.clone(),
-            &coefficients,
-            index.saturating_mul(8),
-        );
-    }
-    let (groups, tail) = rest.as_chunks_mut::<4>();
-    for (index, group) in groups.iter_mut().enumerate() {
-        run::<_, _, _, _, REPEATED>(
-            simd,
-            group,
-            range.clone(),
-            &coefficients,
-            quads_offset.saturating_add(index.saturating_mul(4)),
-        );
-    }
-    match tail.len() {
-        0 => {}
-        1 => run::<_, _, _, _, REPEATED>(
-            simd,
-            <&mut [P; 1]>::try_from(tail).expect("one-plane remainder"),
-            range,
-            &coefficients,
-            offset,
-        ),
-        2 => run::<_, _, _, _, REPEATED>(
-            simd,
-            <&mut [P; 2]>::try_from(tail).expect("two-plane remainder"),
-            range,
-            &coefficients,
-            offset,
-        ),
-        _ => run::<_, _, _, _, REPEATED>(
-            simd,
-            <&mut [P; 3]>::try_from(tail).expect("three-plane remainder"),
-            range,
-            &coefficients,
-            offset,
-        ),
+    dispatch!(Level::new(), simd => window_kernel(simd, samples, channels, sections, coefficients));
+}
+
+#[inline(always)]
+pub(in crate::backend) fn window_kernel<S: Simd, F: Fn(usize, usize) -> [f32; 5]>(
+    simd: S,
+    samples: &mut [f32],
+    channels: usize,
+    sections: usize,
+    coefficients: F,
+) {
+    for section in (0..sections).step_by(2) {
+        let next = section.saturating_add(1);
+        let pair = |plane| {
+            [
+                coefficients(plane, section),
+                if next < sections {
+                    coefficients(plane, next)
+                } else {
+                    BIQUAD_IDENTITY
+                },
+            ]
+        };
+        let repeated = (0..channels).all(|plane| {
+            let [a, b] = pair(plane);
+            a == b
+        });
+        if repeated {
+            pair_kernel::<_, _, true>(simd, samples, channels, pair);
+        } else {
+            pair_kernel::<_, _, false>(simd, samples, channels, pair);
+        }
     }
 }
 
 #[inline(always)]
-fn run<S, P, F, const N: usize, const REPEATED: bool>(
+fn pair_kernel<S: Simd, F: Fn(usize) -> [[f32; 5]; 2], const REPEATED: bool>(
     simd: S,
-    group: &mut [P; N],
-    range: Range<usize>,
+    samples: &mut [f32],
+    channels: usize,
+    coefficients: F,
+) {
+    match channels {
+        8 if (0..4).all(|lane| coefficients(lane) == [BIQUAD_IDENTITY; 2]) => {
+            let frames = samples
+                .as_chunks_mut::<8>()
+                .0
+                .iter_mut()
+                .map(|frame| &mut frame[4..]);
+            run::<_, _, _, REPEATED>(simd, frames, &coefficients, 4, 4);
+        }
+        8 => run::<_, _, _, REPEATED>(
+            simd,
+            samples.as_chunks_mut::<8>().0.iter_mut(),
+            &coefficients,
+            0,
+            8,
+        ),
+        4 => run::<_, _, _, REPEATED>(
+            simd,
+            samples.as_chunks_mut::<4>().0.iter_mut(),
+            &coefficients,
+            0,
+            4,
+        ),
+        _ => {
+            for offset in (0..channels).step_by(8) {
+                let width = channels.saturating_sub(offset).min(8);
+                let frames = samples.chunks_exact_mut(channels).map(|frame| {
+                    frame
+                        .get_mut(offset..offset.saturating_add(width))
+                        .expect("validated lane group")
+                });
+                run::<_, _, _, REPEATED>(simd, frames, &coefficients, offset, width);
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn run<S, F, I, const REPEATED: bool>(
+    simd: S,
+    frames: I,
     coefficients: &F,
     offset: usize,
+    width: usize,
 ) where
     S: Simd,
-    P: DerefMut<Target = [f32]>,
     F: Fn(usize) -> [[f32; 5]; 2],
+    I: Iterator,
+    I::Item: AsMut<[f32]>,
 {
-    let frames = range.len();
-    let mut planes = group.each_mut().map(|plane| {
-        plane
-            .get_mut(range.clone())
-            .expect("validated window range")
-    });
     let zero = f32x8::splat(simd, 0.0);
     let mut designs = [[zero; 5]; 2];
-    for lane in 0..N {
+    for lane in 0..width {
         for (section, values) in designs
             .iter_mut()
             .zip(coefficients(offset.saturating_add(lane)))
         {
             let [b0, b1, b2, a1, a2] = values;
             for (vector, value) in section.iter_mut().zip([b0, b1, b2, -a1, -a2]) {
-                *vector
-                    .as_mut_slice()
-                    .get_mut(lane)
-                    .expect("eight-lane vector") = value;
+                *vector.get_mut(lane).expect("window lane") = value;
             }
         }
     }
     let [first, second] = designs;
     let second = if REPEATED { first } else { second };
     let [mut az1, mut az2, mut bz1, mut bz2] = [zero; 4];
-    for frame in 0..frames {
+    for mut frame in frames {
+        let frame = frame.as_mut();
         let mut input = zero;
-        for (sample, plane) in input.as_mut_slice().iter_mut().zip(planes.iter()) {
-            *sample = *plane.get(frame).expect("validated window frame");
-        }
+        input
+            .get_mut(..width)
+            .expect("lane width")
+            .copy_from_slice(frame);
         let a = first[0].mul_add(input, az1);
-        az1 = first[1].mul_add(input, first[3].mul_add(a, az2));
-        az2 = first[2].mul_add(input, first[4].mul_add(a, zero));
+        az1 = first[3].mul_add(a, first[1].mul_add(input, az2));
+        az2 = first[4].mul_add(a, first[2].mul(input));
         let b = second[0].mul_add(a, bz1);
-        bz1 = second[1].mul_add(a, second[3].mul_add(b, bz2));
-        bz2 = second[2].mul_add(a, second[4].mul_add(b, zero));
-        for (plane, sample) in planes.iter_mut().zip(b.as_slice()) {
-            *plane.get_mut(frame).expect("validated window frame") = *sample;
-        }
+        bz1 = second[3].mul_add(b, second[1].mul_add(a, bz2));
+        bz2 = second[4].mul_add(b, second[2].mul(a));
+        frame.copy_from_slice(b.get(..width).expect("lane width"));
     }
 }

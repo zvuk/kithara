@@ -257,6 +257,7 @@ mod tests {
 
     use ::kithara::{
         abr::AbrMode,
+        analysis::Bucket,
         platform::{
             CancelToken,
             sync::{Arc, Mutex},
@@ -312,10 +313,7 @@ mod tests {
     }
 
     fn wave_of(height: u8) -> Waveform {
-        let blob = [
-            1, 0, 0, 0, 0, 0, 0, height, 0, 0, 0, height, 0, 0, 0, height,
-        ];
-        Waveform::try_from(blob.as_slice()).expect("hand-built blob is valid")
+        Waveform::try_from(vec![Bucket::from([height; 8])]).expect("valid heights")
     }
 
     fn revision(revision: u64, wave: Waveform) -> TrackArtifacts {

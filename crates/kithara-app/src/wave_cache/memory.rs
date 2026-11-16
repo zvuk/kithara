@@ -207,7 +207,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{AnalysisTarget, TrackAnalysisCache, consts};
-    use crate::pools::{self, AppPools, AppResourceConfig, AppStore, Pools};
+    use crate::{
+        analysis::fixtures::one_bucket_wave as wave,
+        pools::{self, AppPools, AppResourceConfig, AppStore, Pools},
+    };
 
     fn fingerprint(wave: &str, beat: &str) -> AnalysisFingerprint {
         AnalysisFingerprint::new(Some(beat), Some(wave))
@@ -216,7 +219,7 @@ mod tests {
     fn fp() -> AnalysisFingerprint {
         const BEAT_TAG: &str = "beat:test:v1";
 
-        fingerprint("wave:native:max1500:v1", BEAT_TAG)
+        fingerprint("wave:native:max1500:v2", BEAT_TAG)
     }
 
     fn rate() -> NonZeroU32 {
@@ -245,12 +248,6 @@ mod tests {
 
     fn progress(analysis: TrackAnalysis) -> AnalysisProgress {
         AnalysisProgress::try_from(analysis).expect("settled fixture is valid progress")
-    }
-
-    fn wave() -> Waveform {
-        // version 1 + one bucket of three 0.5 band heights (0.5 = 0x3F000000).
-        Waveform::try_from([1, 0, 0, 0, 0, 0, 0, 63, 0, 0, 0, 63, 0, 0, 0, 63].as_slice())
-            .expect("hand-built blob is valid")
     }
 
     fn grid() -> BeatArtifact {

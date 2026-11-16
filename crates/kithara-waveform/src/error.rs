@@ -7,6 +7,6 @@ use kithara_dsp::filter::FilterError;
 pub enum AnalyzerError {
     #[error("waveform filter failed: {0}")]
     Filter(#[from] FilterError),
-    #[error("waveform buffer allocation failed: {0}")]
+    #[error("waveform analysis buffer allocation failed: {0}")]
     Pool(#[from] PoolError),
 }

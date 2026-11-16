@@ -25,3 +25,5 @@ pub(crate) const SETTLE_FLOOR_LOG2: f64 = -24.0;
 pub(crate) const SILENT_PEAK: f32 = 1.0e-9;
 /// Consecutive stream frames required to retire a quiet biquad state.
 pub(crate) const SECTION_MEMORY: usize = 2;
+
+pub(crate) const BIQUAD_IDENTITY: [f32; 5] = [1.0, 0.0, 0.0, 0.0, 0.0];

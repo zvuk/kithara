@@ -12,7 +12,6 @@ use kithara_waveform::{AnalysisParams, Waveform, WaveformAnalyzer};
 mod consts {
     pub(super) const BUCKETS: usize = 512;
     pub(super) const RATE: u32 = 44_100;
-    pub(super) const TOLERANCE: f32 = 1e-4;
     pub(super) const UPDATE_REFERENCE: &str = "KITHARA_WAVEFORM_UPDATE_REFERENCE";
 }
 
@@ -48,16 +47,7 @@ fn matches_reference(actual: &Waveform, name: &str) {
         expected.len(),
         "column count differs from {name}"
     );
-    for (index, (actual, expected)) in actual.buckets().zip(expected.buckets()).enumerate() {
-        let actual = actual.left().into_iter().chain(actual.right());
-        let expected = expected.left().into_iter().chain(expected.right());
-        for (height, recorded) in actual.zip(expected) {
-            assert!(
-                (height - recorded).abs() <= consts::TOLERANCE,
-                "column {index} reads {height}, the reference {recorded}, in {name}"
-            );
-        }
-    }
+    assert_eq!(actual, &expected, "quantized columns differ from {name}");
 }
 
 #[kithara::test(native)]

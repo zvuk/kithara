@@ -10,7 +10,7 @@ use num_traits::ToPrimitive;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::accelerate;
-use super::{cascade, delay, fade, platform, portable, simd, strided};
+use super::{cascade, delay, fade, platform, portable, simd, strided, window};
 use crate::{
     fade::FadeCurve,
     filter::{Coefficients, Hertz, Type},
@@ -37,6 +37,18 @@ const SPECIALS: [f32; 9] = [
     f32::NAN,
     f32::from_bits(SIGNALING_NAN),
 ];
+
+#[kithara::test]
+fn finite_admission_matches_scalar_at_every_level() {
+    for size in SIZES {
+        for value in SPECIALS {
+            let samples = vec![value; size];
+            let expected = samples.iter().all(|sample| sample.is_finite());
+            assert_eq!(super::all_finite(&samples), expected);
+            dispatch!(Level::fallback(), simd => assert_eq!(window::all_finite_kernel(simd, &samples), expected));
+        }
+    }
+}
 
 #[kithara::test]
 fn scalar_gain_matches_ieee_multiplication_at_every_level() {

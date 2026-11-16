@@ -107,14 +107,10 @@ fn biquad_never_allocates_after_construction() {
     let mut planes = vec![vec![0.25_f32; FRAMES]; TWO.get()];
     let mut window =
         Biquad::new(NonZeroUsize::MIN.saturating_add(7), TWO).expect("eight window lanes");
-    let mut window_planes = vec![vec![0.25_f32; FRAMES]; 8];
+    let mut window_samples = vec![0.25_f32; FRAMES * 8];
     assert_no_alloc(|| {
-        let lanes: &mut [Vec<f32>; 8] = window_planes
-            .as_mut_slice()
-            .try_into()
-            .expect("eight prepared lanes");
         window
-            .process_window(&mut lanes.each_mut().map(Vec::as_mut_slice), 0..FRAMES)
+            .process_window(&mut window_samples, 0..FRAMES)
             .expect("finite window");
         for section in 0..four.get() {
             filter.retune(section, low_pass).expect("section in range");

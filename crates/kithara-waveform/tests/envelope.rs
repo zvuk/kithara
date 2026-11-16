@@ -73,22 +73,25 @@ fn burst_and_held_tone_have_equal_peaks(waveform_peak_tones: [Vec<f32>; 5]) {
 
 #[kithara::test]
 fn heights_are_absolute(waveform_mix: Vec<f32>) {
-    let quiet: Vec<_> = waveform_mix[..9_216]
-        .iter()
-        .map(|sample| sample * 0.25)
-        .collect();
-    let mut extended = quiet.clone();
-    extended.extend(vec![1.0; 9_216]);
-    let alone = analyse(&quiet, 1, MAX_BUCKETS);
-    let later = analyse(&extended, 1, MAX_BUCKETS);
-    assert!(alone.buckets().eq(later.buckets().take(alone.len())));
-    let loud = analyse(&waveform_mix[..9_216], 1, MAX_BUCKETS);
-    assert!(
-        alone
-            .buckets()
-            .zip(loud.buckets())
-            .all(|(quiet, loud)| height(quiet) < height(loud))
-    );
+    let attenuation = 10.0_f32.powf(-12.0 / 20.0);
+    for level in [1.0, 0.0001, 32.0] {
+        let (music, quiet): (Vec<_>, Vec<_>) = waveform_mix[..9_216]
+            .iter()
+            .map(|sample| (sample * level, sample * level * attenuation))
+            .unzip();
+        let mut extended = quiet.clone();
+        extended.extend(vec![level; 9_216]);
+        let alone = analyse(&quiet, 1, MAX_BUCKETS);
+        let later = analyse(&extended, 1, MAX_BUCKETS);
+        assert!(alone.buckets().eq(later.buckets().take(alone.len())));
+        let loud = analyse(&music, 1, MAX_BUCKETS);
+        let bands = |bucket: Bucket| bucket.left().into_iter().chain(bucket.right());
+        let quiet = alone.buckets().flat_map(bands);
+        let loud = loud.buckets().flat_map(bands);
+        assert!(quiet.zip(loud).all(|(quiet, loud)| {
+            quiet <= loud && (loud <= 1.0 / 255.0 || loud >= 1.0 || quiet < loud)
+        }));
+    }
 }
 
 #[kithara::test]

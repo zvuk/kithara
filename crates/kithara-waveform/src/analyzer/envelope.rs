@@ -2,16 +2,13 @@ use std::num::NonZeroUsize;
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_dsp::filter::{Biquad, Coefficients, FilterError, Hertz, Type};
-use num_traits::ToPrimitive;
 
 use super::waveform::Columns;
-use crate::{AnalysisParams, AnalyzerError, consts};
+use crate::{AnalysisParams, AnalyzerError, bucket::quantize, consts};
 
 pub(super) struct Envelope {
-    first: Biquad,
-    second: Biquad,
-    first_planes: Vec<SampleBuffer>,
-    second_planes: Vec<SampleBuffer>,
+    filter: Biquad,
+    samples: SampleBuffer,
     gain: [f32; 4],
     column_frames: usize,
 }
@@ -34,38 +31,31 @@ impl Envelope {
         {
             return Err(FilterError::Parameters.into());
         }
-        let two = NonZeroUsize::MIN.saturating_add(1);
-        let mut first = Biquad::new(NonZeroUsize::MIN.saturating_add(7), two)?;
-        let mut second = Biquad::new(NonZeroUsize::MIN.saturating_add(3), two)?;
-        for (plane, (kind, cutoff)) in [
-            (Type::LowPass, edges[0]),
-            (Type::HighPass, edges[0]),
-            (Type::HighPass, edges[1]),
-            (Type::HighPass, edges[2]),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        let mut filter = Biquad::new(
+            NonZeroUsize::MIN.saturating_add(7),
+            NonZeroUsize::MIN.saturating_add(3),
+        )?;
+        for (planes, kind, cutoff) in [
+            ([0, 2], Type::LowPass, edges[0]),
+            ([1, 3], Type::HighPass, edges[2]),
+            ([4, 6], Type::HighPass, edges[0]),
+            ([5, 7], Type::HighPass, edges[1]),
+        ] {
             let coefficients = design(kind, cutoff, rate)?;
-            lr4(&mut first, plane, coefficients)?;
-            lr4(&mut first, plane + 4, coefficients)?;
+            for plane in planes {
+                lr4(&mut filter, plane, 0, coefficients)?;
+            }
         }
-        for plane in 0..4 {
-            let coefficients = design(Type::LowPass, edges[plane % 2 + 1], rate)?;
-            lr4(&mut second, plane, coefficients)?;
+        for (planes, cutoff) in [([4, 6], edges[1]), ([5, 7], edges[2])] {
+            let coefficients = design(Type::LowPass, cutoff, rate)?;
+            for plane in planes {
+                lr4(&mut filter, plane, 2, coefficients)?;
+            }
         }
-
         let frames = column_frames * consts::WINDOW_COLUMNS;
-        let planes = |count| {
-            (0..count)
-                .map(|_| pools.get_with_len::<f32>(frames))
-                .collect::<Result<Vec<_>, _>>()
-        };
         Ok(Self {
-            first,
-            second,
-            first_planes: planes(8)?,
-            second_planes: planes(4)?,
+            filter,
+            samples: pools.get_with_len::<f32>(frames * 8)?,
             gain,
             column_frames,
         })
@@ -78,65 +68,52 @@ impl Envelope {
         valid_frames: usize,
     ) -> Result<Columns, AnalyzerError> {
         let frames = self.column_frames * consts::WINDOW_COLUMNS;
-        for (plane, target) in self.first_planes.iter_mut().enumerate() {
-            for (sample, frame) in target
-                .iter_mut()
-                .zip(samples.as_chunks::<2>().0)
-                .take(valid_frames)
-            {
-                *sample = frame[plane / 4];
-            }
-            target[valid_frames..].fill(0.0);
+        let lanes = self.samples.as_chunks_mut::<8>().0;
+        for (target, frame) in lanes
+            .iter_mut()
+            .zip(samples.as_chunks::<2>().0)
+            .take(valid_frames)
+        {
+            let [left, right] = *frame;
+            *target = [left, left, right, right, left, left, right, right];
         }
-        let first_planes: &mut [SampleBuffer; 8] = self
-            .first_planes
-            .as_mut_slice()
-            .try_into()
-            .expect("eight prepared planes");
-        self.first.process_window(
-            &mut first_planes.each_mut().map(|plane| &mut plane[..]),
-            0..frames,
-        )?;
-        for (target, source) in self.second_planes.iter_mut().zip([1, 2, 5, 6]) {
-            target.copy_from_slice(&self.first_planes[source]);
-        }
-        let second: &mut [SampleBuffer; 4] = self
-            .second_planes
-            .as_mut_slice()
-            .try_into()
-            .expect("four prepared planes");
-        self.second.process_window(
-            &mut second.each_mut().map(|plane| &mut plane[..]),
-            0..frames,
-        )?;
+        lanes[valid_frames..].fill([0.0; 8]);
+        self.filter.process_window(&mut self.samples, 0..frames)?;
         let mut columns = [[0; 8]; consts::COLUMNS];
         let offset = if first { 0 } else { frames / 4 };
-        for (lane, output) in [0, 1, 2, 3, 4, 5, 6, 7].into_iter().enumerate() {
-            let band = lane % 4;
-            let source = match band {
-                1 | 2 => &self.second_planes[lane / 4 * 2 + band - 1],
-                _ => &self.first_planes[lane],
-            };
-            for (column, chunk) in columns
-                .iter_mut()
-                .zip(source[offset.min(valid_frames)..valid_frames].chunks(self.column_frames))
-            {
-                let peak = chunk
-                    .iter()
-                    .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
-                column[output] = (255.0 * (self.gain[band] * peak).min(1.0).sqrt())
-                    .round()
-                    .to_u8()
-                    .unwrap_or(255);
+        let lanes = self.samples.as_chunks::<8>().0;
+        let body = &lanes[offset.min(valid_frames)..valid_frames];
+        for (column, chunk) in columns.iter_mut().zip(body.chunks(self.column_frames)) {
+            let mut peaks = [0.0_f32; 8];
+            for frame in chunk {
+                peaks = [
+                    peaks[0].max(frame[0].abs()),
+                    peaks[1].max(frame[1].abs()),
+                    peaks[2].max(frame[2].abs()),
+                    peaks[3].max(frame[3].abs()),
+                    peaks[4].max(frame[4].abs()),
+                    peaks[5].max(frame[5].abs()),
+                    peaks[6].max(frame[6].abs()),
+                    peaks[7].max(frame[7].abs()),
+                ];
+            }
+            let peaks = [0, 4, 5, 1, 2, 6, 7, 3].map(|lane| peaks[lane]);
+            for (lane, (height, peak)) in column.iter_mut().zip(peaks).enumerate() {
+                *height = quantize((self.gain[lane % 4] * peak).min(1.0).sqrt());
             }
         }
         Ok(columns)
     }
 }
 
-fn lr4(filter: &mut Biquad, plane: usize, design: Coefficients<f64>) -> Result<(), FilterError> {
-    filter.retune_plane(plane, 0, design)?;
-    filter.retune_plane(plane, 1, design)
+fn lr4(
+    filter: &mut Biquad,
+    plane: usize,
+    section: usize,
+    design: Coefficients<f64>,
+) -> Result<(), FilterError> {
+    filter.retune_plane(plane, section, design)?;
+    filter.retune_plane(plane, section + 1, design)
 }
 
 fn design(kind: Type<f64>, cutoff: f64, rate: u32) -> Result<Coefficients<f64>, FilterError> {

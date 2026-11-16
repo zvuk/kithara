@@ -99,19 +99,22 @@ fn biquad_windows_are_independent_and_refuse_nonfinite_before_mutation(#[case] n
             .retune(section, coefficients(1_000.0))
             .expect("valid section");
     }
-    let input = [sine_440().to_vec(), sine_440().to_vec()];
-    let frames = input[0].len();
+    let input: Vec<_> = sine_440()
+        .iter()
+        .flat_map(|sample| [*sample, -*sample])
+        .collect();
+    let frames = input.len() / 2;
     let mut expected = input.clone();
     filter
-        .process_window(&mut expected.each_mut().map(Vec::as_mut_slice), 0..frames)
+        .process_window(&mut expected, 0..frames)
         .expect("finite window");
-    let mut unrelated = [vec![0.25; frames], vec![-0.5; frames]];
+    let mut unrelated = [0.25, -0.5].repeat(frames);
     filter
-        .process_window(&mut unrelated.each_mut().map(Vec::as_mut_slice), 0..frames)
+        .process_window(&mut unrelated, 0..frames)
         .expect("finite window");
     let mut actual = input.clone();
     filter
-        .process_window(&mut actual.each_mut().map(Vec::as_mut_slice), 0..frames)
+        .process_window(&mut actual, 0..frames)
         .expect("finite window");
     assert_eq!(actual, expected);
     filter.settle(&[0.25, -0.5]).expect("matching levels");
@@ -122,23 +125,28 @@ fn biquad_windows_are_independent_and_refuse_nonfinite_before_mutation(#[case] n
             .expect("valid section");
     }
     control.copy_state(&filter).expect("matching filters");
-    let mut invalid = [vec![1.0, 0.0, nonfinite], vec![0.0; 3]];
-    let before = invalid
-        .clone()
-        .map(|plane| plane.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
+    for at in [0, 3, 4, 7, 8, 37] {
+        let mut invalid = [0.0; 38];
+        *invalid.get_mut(at).expect("fixture sample") = nonfinite;
+        let before = invalid.map(f32::to_bits);
+        assert_eq!(
+            filter.process_window(&mut invalid, 0..19),
+            Err(FilterError::Parameters)
+        );
+        assert_eq!(invalid.map(f32::to_bits), before);
+    }
     assert_eq!(
-        filter.process_window(&mut invalid.each_mut().map(Vec::as_mut_slice), 0..3),
-        Err(FilterError::Parameters)
+        filter.process_window(&mut actual, 0..frames.saturating_add(1)),
+        Err(FilterError::Shape)
     );
+    let mut incomplete = [1.0; 3];
     assert_eq!(
-        invalid.map(|plane| plane.iter().map(|x| x.to_bits()).collect::<Vec<_>>()),
-        before
+        filter.process_window(&mut incomplete, 0..1),
+        Err(FilterError::Shape)
     );
+    assert_eq!(incomplete, [1.0; 3]);
     assert_eq!(
-        filter.process_window(
-            &mut actual.each_mut().map(Vec::as_mut_slice),
-            0..frames.saturating_add(1)
-        ),
+        filter.process_window(&mut actual, usize::MAX..usize::MAX),
         Err(FilterError::Shape)
     );
     let mut tail = [vec![0.0; 128], vec![0.0; 128]];

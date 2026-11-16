@@ -1,7 +1,10 @@
 use std::num::NonZeroU32;
 
 use ::kithara::{
-    analysis::{AnalysisFile, AnalysisProgress, FrameCoverage, FrameSpan, TrackAnalysis},
+    analysis::{
+        AnalysisFile, AnalysisFingerprint, AnalysisProgress, FrameCoverage, FrameSpan,
+        TrackAnalysis,
+    },
     assets::{
         AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, ReadSide, StorageBackend,
     },
@@ -35,7 +38,7 @@ use crate::{
     pools::{
         self, AppHost, AppPools, AppQueueControl, AppStore, AppTrackSource, AppWorker, PoolsSection,
     },
-    wave_cache::{AnalysisTarget, token_for},
+    wave_cache::{AnalysisTarget, TrackAnalysisCache, token_for},
 };
 
 fn owner_in(cancel: &CancelToken, store: AppStore) -> Owner {
@@ -154,6 +157,39 @@ async fn a_settled_hit_with_a_gap_is_served_without_a_pass(tone_mp3: String) {
             .get(&crate::catalog::canonical_source(&tone_mp3)),
         Some(&128.0)
     );
+    cancel.cancel();
+    host.close().await;
+}
+
+#[kithara::test(native, tokio)]
+async fn a_v1_waveform_cache_miss_starts_a_full_detail_pass(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    assert_eq!(
+        owner.config.waveform_max_buckets,
+        ::kithara::analysis::MAX_BUCKETS
+    );
+    let fingerprint = owner.runner.fingerprint();
+    assert_eq!(fingerprint.waveform(), Some("wave:native:max524288:v2"));
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
+    let target = target_of(&owner, &source);
+    let old = AnalysisFingerprint::new(fingerprint.beat(), Some("wave:native:max524288:v1"));
+    let cached = snapshot("test-track".into(), 7, 1_000, old.clone(), Some(grid()));
+    owner
+        .persistence
+        .store(target.clone(), progress(cached))
+        .await
+        .expect("v1 tag committed");
+    let mut old_cache =
+        TrackAnalysisCache::new(old, &test_pools(), owner.config.analysis_chunk_seconds);
+    assert!(
+        old_cache.get(&target, axis()).is_some(),
+        "v1 entry is readable under its tag"
+    );
+    let rx = owner.subscribe(queue, track_id, source, axis());
+    assert!(rx.borrow().is_none(), "v1 is not served as a v2 hit");
+    assert_eq!(running_track(&owner), Some(track_id));
     cancel.cancel();
     host.close().await;
 }

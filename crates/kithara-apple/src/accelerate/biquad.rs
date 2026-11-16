@@ -173,34 +173,31 @@ impl MultichannelBiquad {
             .chunks_exact(self.channels.get())
     }
 
-    /// Filters a complete window in one native call; history carries over.
-    ///
-    /// Unlike `process`, rounding and nonfinite propagation may depend on the
-    /// window length. Callers own input admission and history reset.
+    /// Filters interleaved frames in one call, carrying history; callers own admission/reset.
+    /// Rounding and nonfinite propagation may differ from `process`.
     ///
     /// # Errors
-    /// [`BiquadError::Shape`] for mismatched planes or range.
-    pub fn process_window<P: DerefMut<Target = [f32]>>(
-        &mut self,
-        planes: &mut [P],
-        range: Range<usize>,
-    ) -> Result<(), BiquadError> {
-        self.prepare(planes, range.clone())?;
-        if range.is_empty() {
+    /// [`BiquadError::Shape`] when samples do not contain whole channel frames.
+    pub fn process_window(&mut self, samples: &mut [f32]) -> Result<(), BiquadError> {
+        let channels = self.channels.get();
+        if !samples.len().is_multiple_of(channels) {
+            return Err(BiquadError::Shape);
+        }
+        if samples.is_empty() {
             return Ok(());
         }
+        let stride = isize::try_from(channels).map_err(|_| BiquadError::Shape)?;
+        let frames = samples.len() / channels;
+        for (slot, sample) in self.planes.iter_mut().zip(samples.iter_mut()) {
+            *slot = ptr::from_mut(sample);
+        }
         let table = self.planes.as_mut_ptr();
-        // SAFETY: each checked plane covers range and the live setup's channel count.
-        // SAFETY: X and Y share the pointer table, the supported in-place form.
+        let setup = self.setup.as_ptr();
+        let input = table.cast::<*const f32>();
+        // SAFETY: each channel pointer covers frames samples with the checked stride.
+        // SAFETY: X and Y share the table, the supported in-place form.
         unsafe {
-            vDSP_biquadm(
-                self.setup.as_ptr(),
-                table.cast::<*const f32>(),
-                1,
-                table,
-                1,
-                range.len(),
-            );
+            vDSP_biquadm(setup, input, stride, table, stride, frames);
         }
         Ok(())
     }

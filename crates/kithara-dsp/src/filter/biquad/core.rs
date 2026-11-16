@@ -132,36 +132,32 @@ impl Biquad {
         Ok(())
     }
 
-    /// Filters a finite window from zero history and leaves the filter reset.
-    ///
-    /// Window arithmetic can differ from streaming arithmetic.
+    /// Filters interleaved lane frames from zero history, then resets;
+    /// arithmetic can differ from streaming.
     ///
     /// # Errors
-    /// [`FilterError::Shape`] for mismatched planes or range, and
-    /// [`FilterError::Parameters`] for nonfinite input, before any mutation.
+    /// [`FilterError::Shape`] for frame shape/range or [`FilterError::Parameters`]
+    /// for nonfinite input, before any mutation.
     pub fn process_window(
         &mut self,
-        planes: &mut [&mut [f32]],
+        samples: &mut [f32],
         range: Range<usize>,
     ) -> Result<(), FilterError> {
-        if planes.len() != self.scratch.len()
-            || planes
-                .iter()
-                .any(|plane| plane.get(range.clone()).is_none())
-        {
+        let channels = self.scratch.len();
+        if !samples.len().is_multiple_of(channels) {
             return Err(FilterError::Shape);
         }
-        if planes.iter().any(|plane| {
-            plane.get(range.clone()).is_some_and(|samples| {
-                !samples
-                    .iter()
-                    .fold(true, |finite, sample| finite & sample.is_finite())
-            })
-        }) {
+        let start = range
+            .start
+            .checked_mul(channels)
+            .ok_or(FilterError::Shape)?;
+        let end = range.end.checked_mul(channels).ok_or(FilterError::Shape)?;
+        let samples = samples.get_mut(start..end).ok_or(FilterError::Shape)?;
+        if !backend::all_finite(samples) {
             return Err(FilterError::Parameters);
         }
         self.reset();
-        let result = self.cascade.process_window(planes, range);
+        let result = self.cascade.process_window(samples);
         self.reset();
         result
     }

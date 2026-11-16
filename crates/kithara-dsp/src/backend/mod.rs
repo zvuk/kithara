@@ -38,3 +38,4 @@ pub use simd::sanitize;
 pub(crate) use simd::{crossfade_linear, div, first_quiet, mul_add, ramp, scale_in_place};
 pub(crate) use strided::{gather, scatter};
 pub(crate) use svf::step as svf_step;
+pub(crate) use window::{all_finite, biquad_window};

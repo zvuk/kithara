@@ -2,23 +2,39 @@ use kithara_blob::{Blob, BlobError, Reader, Writer};
 use kithara_platform::sync::Arc;
 use num_traits::ToPrimitive;
 
-/// Wire/disk version of the stereo peak envelope.
+/// Wire/disk format version for the [`Waveform`] blob. Bump when the encoding,
+/// the analysis parameters, or the caller's bucket resolution changes.
 pub const WAVEFORM_BYTES_VERSION: u32 = 2;
-/// Maximum number of full-detail columns in one waveform.
+
+/// Most buckets a waveform may carry. A waveform is a display column per
+/// bucket, so a track needs thousands; anything past this is a caller or a
+/// stored artifact that disagrees with this format, not a longer track.
 pub const MAX_BUCKETS: usize = 1 << 19;
 
-/// Why caller-supplied heights cannot be admitted.
+/// Why a caller-supplied waveform is not one this crate will hold.
 #[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum WaveformError {
-    #[error("bucket {index} carries band height {value}, outside [0, 1]")]
-    Band { index: usize, value: f32 },
-    #[error("waveform carries {buckets} buckets, more than {MAX_BUCKETS}")]
-    TooLarge { buckets: usize },
+    /// A band height is not finite, or lies outside the normalized `[0, 1]`
+    /// range every consumer paints against.
+    #[error("bucket {index} carries band height {value}, which is not inside [0, 1]")]
+    Band {
+        /// Position of the offending bucket.
+        index: usize,
+        /// The height as supplied.
+        value: f32,
+    },
+    /// More buckets than [`MAX_BUCKETS`].
+    #[error("waveform carries {buckets} buckets, more than the {MAX_BUCKETS} this format holds")]
+    TooLarge {
+        /// The bucket count as supplied.
+        buckets: usize,
+    },
 }
 
 /// Four absolute companded band heights per side, in frequency order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, fieldwork::Fieldwork)]
+#[non_exhaustive]
 #[fieldwork(get)]
 pub struct Bucket {
     #[field(get, copy)]
@@ -41,7 +57,8 @@ impl From<[u8; 8]> for Bucket {
     }
 }
 
-/// A track's quantized stereo peak columns, indexed by normalized position.
+/// A track's analysed waveform: per-bucket band heights in `[0, 1]`, indexed by
+/// normalized track position.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Waveform(Arc<[[u8; 8]]>);
 
@@ -55,6 +72,7 @@ impl Waveform {
         self.0.iter().copied().map(Bucket::from)
     }
 
+    /// Append the versioned waveform encoding to caller-owned storage.
     pub fn write_to(&self, out: &mut Vec<u8>) {
         kithara_blob::write_to(self, out);
     }
@@ -69,6 +87,10 @@ impl Waveform {
     }
 }
 
+/// The checked way in for a waveform a caller already holds: one served by a
+/// backend, or one restored from a store outside this crate. It admits exactly
+/// what the byte codec admits, so a structure and a blob cannot disagree about
+/// what a valid waveform is.
 impl TryFrom<Vec<Bucket>> for Waveform {
     type Error = WaveformError;
 
@@ -88,7 +110,7 @@ impl TryFrom<Vec<Bucket>> for Waveform {
                 if !(0.0..=1.0).contains(&value) {
                     return Err(WaveformError::Band { index, value });
                 }
-                *byte = (255.0 * value).round().to_u8().unwrap_or(255);
+                *byte = quantize(value);
             }
             quantized.push(bytes);
         }
@@ -96,6 +118,13 @@ impl TryFrom<Vec<Bucket>> for Waveform {
     }
 }
 
+/// Parses the versioned bytes written by [`Waveform::write_to`]. A version mismatch, a
+/// body that is not a whole number of buckets, or too many columns
+/// is a typed error the caller treats as a cache miss.
+///
+/// Returns [`BlobError::Version`] when the header version does not match
+/// [`WAVEFORM_BYTES_VERSION`], and [`BlobError::Corrupt`] when the body is
+/// truncated, mis-sized, or exceeds the column limit.
 impl TryFrom<&[u8]> for Waveform {
     type Error = BlobError;
 
@@ -125,49 +154,130 @@ impl Blob for Waveform {
     }
 }
 
+pub(crate) fn quantize(height: f32) -> u8 {
+    (255.0 * height).round().to_u8().unwrap_or(255)
+}
+
 #[cfg(test)]
-mod tests {
-    use kithara_blob::to_bytes;
+mod value_tests {
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{Bucket, MAX_BUCKETS, Waveform, WaveformError};
+
     #[kithara::test]
-    fn codec_holds_eight_bytes_and_admits_the_same_quantized_heights() {
+    #[case(f32::NAN)]
+    #[case(f32::INFINITY)]
+    #[case(-0.1)]
+    #[case(1.1)]
+    fn a_band_outside_the_painted_range_is_refused(#[case] height: f32) {
+        let buckets = vec![
+            Bucket::new([0.5; 4], [0.5; 4]),
+            Bucket::new([0.0, height, 0.0, 0.0], [0.0; 4]),
+        ];
+        let refused = Waveform::try_from(buckets).expect_err("the band is out of range");
+        match refused {
+            WaveformError::Band { index, value } => {
+                assert_eq!(index, 1);
+                assert_eq!(value.is_nan(), height.is_nan());
+                assert!(value.is_nan() || value == height);
+            }
+            other => panic!("expected a band error, got {other}"),
+        }
+    }
+
+    #[kithara::test]
+    fn more_buckets_than_the_format_holds_are_refused() {
+        let buckets = vec![Bucket::default(); MAX_BUCKETS + 1];
+        assert_eq!(
+            Waveform::try_from(buckets).expect_err("the waveform is too long"),
+            WaveformError::TooLarge {
+                buckets: MAX_BUCKETS + 1
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn buckets_inside_the_range_are_kept_in_order() {
+        let buckets = vec![
+            Bucket::from([0, 128, 192, 255, 1, 64, 100, 254]),
+            Bucket::from([255, 0, 64, 128, 200, 100, 50, 25]),
+        ];
+        let wave = Waveform::try_from(buckets.clone()).expect("every band is inside [0, 1]");
+        assert!(wave.buckets().eq(buckets));
+    }
+}
+
+#[cfg(test)]
+mod bytes_tests {
+    use kithara_blob::{BlobError, to_bytes};
+    use kithara_test_utils::kithara;
+
+    use super::{Bucket, WAVEFORM_BYTES_VERSION, Waveform};
+
+    fn sample() -> Waveform {
+        Waveform::try_from(vec![
+            Bucket::new([0.1, 0.2, 0.3, 0.4], [0.8, 0.7, 0.6, 0.5]),
+            Bucket::new([0.0, 1.0, 0.5, 0.25], [0.25, 0.5, 1.0, 0.0]),
+        ])
+        .expect("hand-built buckets are in range")
+    }
+
+    #[kithara::test]
+    fn round_trips() {
+        let wave = sample();
+        let bytes = to_bytes(&wave);
+        let back = Waveform::try_from(bytes.as_slice()).expect("valid blob round-trips");
+        assert_eq!(back, wave);
+    }
+
+    #[kithara::test]
+    fn empty_round_trips() {
+        let wave = Waveform::try_from(Vec::new()).expect("no buckets is a valid waveform");
+        let bytes = to_bytes(&wave);
+        let back = Waveform::try_from(bytes.as_slice()).expect("empty blob round-trips");
+        assert!(back.is_empty());
+    }
+
+    #[kithara::test]
+    fn heights_are_quantized_to_eight_bytes() {
         let input = Bucket::new([0.0, 0.25, 0.5, 1.0], [1.0, 0.5, 0.25, 0.0]);
         let wave = Waveform::try_from(vec![input]).expect("valid heights");
         let bytes = to_bytes(&wave);
-        assert_eq!(bytes.len(), 4 + 8);
+        assert_eq!(bytes.len(), 12);
         assert_eq!(&bytes[4..], &[0, 64, 128, 255, 255, 128, 64, 0]);
-        assert_eq!(
-            Waveform::try_from(bytes.as_slice()).expect("valid blob"),
-            wave
-        );
         let admitted = wave.buckets().next().expect("one bucket");
         assert!((admitted.left()[1] - 0.25).abs() <= 0.5 / 255.0);
-        for value in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
-            assert!(Waveform::try_from(vec![Bucket::new([value; 4], [0.0; 4])]).is_err());
-        }
-        let mut old = bytes;
-        old[..4].copy_from_slice(&(WAVEFORM_BYTES_VERSION - 1).to_le_bytes());
+    }
+
+    #[kithara::test]
+    #[case(WAVEFORM_BYTES_VERSION - 1)]
+    #[case(WAVEFORM_BYTES_VERSION + 1)]
+    fn rejects_wrong_version(#[case] version: u32) {
+        let mut bytes = to_bytes(&sample());
+        bytes[..4].copy_from_slice(&version.to_le_bytes());
         assert!(matches!(
-            Waveform::try_from(old.as_slice()),
-            Err(BlobError::Version { .. })
+            Waveform::try_from(bytes.as_slice()),
+            Err(BlobError::Version { expected, .. }) if expected == WAVEFORM_BYTES_VERSION
         ));
     }
 
     #[kithara::test]
-    fn empty_and_oversized_waveforms_are_bounded() {
-        assert!(Waveform::try_from(vec![Bucket::default(); MAX_BUCKETS + 1]).is_err());
-        let empty = Waveform::try_from(Vec::new()).expect("empty valid");
-        assert_eq!(
-            Waveform::try_from(to_bytes(&empty).as_slice()).expect("empty blob"),
-            empty
-        );
-        let mut bytes = to_bytes(&Waveform::try_from(vec![Bucket::default()]).expect("valid"));
-        bytes.pop();
-        assert!(matches!(
-            Waveform::try_from(bytes.as_slice()),
-            Err(BlobError::Corrupt)
-        ));
+    fn rejects_corrupt_blobs() {
+        let corrupt = |bytes: Vec<u8>| {
+            matches!(
+                Waveform::try_from(bytes.as_slice()),
+                Err(BlobError::Corrupt)
+            )
+        };
+
+        assert!(corrupt(vec![0, 0]), "shorter than the version header");
+
+        let mut truncated = to_bytes(&sample());
+        truncated.pop();
+        assert!(corrupt(truncated), "body not a whole number of buckets");
+
+        let mut oversized = vec![0; 4 + 8 * (super::MAX_BUCKETS + 1)];
+        oversized[..4].copy_from_slice(&WAVEFORM_BYTES_VERSION.to_le_bytes());
+        assert!(corrupt(oversized), "body exceeds the column limit");
     }
 }

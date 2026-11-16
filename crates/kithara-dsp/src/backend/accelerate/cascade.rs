@@ -37,29 +37,27 @@ impl Cascade {
         self.0.process(planes, range).map_err(filter_error)
     }
 
-    pub(crate) fn process_window<P: DerefMut<Target = [f32]>>(
-        &mut self,
-        planes: &mut [P],
-        range: Range<usize>,
-    ) -> Result<(), FilterError> {
-        if planes.len() >= 4 && self.0.coefficients().len() == 2 {
-            let mut sections = self.0.coefficients();
-            let first = sections.next().expect("two-section window");
-            let second = sections.next().expect("two-section window");
-            super::super::window::pair(planes, range, |plane| {
-                [
-                    *first.get(plane).expect("validated plane count"),
-                    *second.get(plane).expect("validated plane count"),
-                ]
-                .map(|section| {
-                    section.map(|coefficient| {
-                        coefficient.to_f32().expect("coefficients admitted as f32")
-                    })
-                })
+    pub(crate) fn process_window(&mut self, samples: &mut [f32]) -> Result<(), FilterError> {
+        let channels = self
+            .0
+            .coefficients()
+            .next()
+            .expect("nonempty sections")
+            .len();
+        if channels > 1 {
+            let sections = self.0.coefficients().len();
+            crate::backend::biquad_window(samples, channels, sections, |plane, section| {
+                self.0
+                    .coefficients()
+                    .nth(section)
+                    .expect("validated section")
+                    .get(plane)
+                    .expect("validated plane")
+                    .map(|coefficient| coefficient.to_f32().expect("coefficients admitted as f32"))
             });
             Ok(())
         } else {
-            self.0.process_window(planes, range).map_err(filter_error)
+            self.0.process_window(samples).map_err(filter_error)
         }
     }
 

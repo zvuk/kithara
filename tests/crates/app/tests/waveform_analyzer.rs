@@ -67,7 +67,10 @@ async fn run_analysis(
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
+#[case(100)]
+#[case(kithara::analysis::MAX_BUCKETS)]
 async fn runner_silent_wav_yields_all_zero_envelope(
+    #[case] buckets: usize,
     #[future(awt)] served_silence: (TestServerHelper, Url),
 ) {
     let (_server, url) = served_silence;
@@ -83,7 +86,7 @@ async fn runner_silent_wav_yields_all_zero_envelope(
     // A silent 1s WAV must decode end to end and finalise to a native-resolution
     // envelope capped by the requested maximum. No frames are loud, so nothing
     // normalises up to 1.0.
-    let analysis = run_analysis(&CancelToken::never(), config, pools, 100)
+    let analysis = run_analysis(&CancelToken::never(), config, pools, buckets)
         .await
         .expect("silent WAV must decode to a finalised analysis");
     let waveform = analysis
@@ -91,11 +94,7 @@ async fn runner_silent_wav_yields_all_zero_envelope(
         .cloned()
         .expect("the registered waveform analyzer must fill its slot");
 
-    assert!(
-        (1..=100).contains(&waveform.len()),
-        "requested buckets are an upper bound, got {}",
-        waveform.len()
-    );
+    assert_eq!(waveform.len(), 44_100_usize.div_ceil(64).min(buckets));
     assert!(
         waveform.buckets().all(|b| b == Bucket::default()),
         "a silent source must yield all-zero buckets: {:?}",

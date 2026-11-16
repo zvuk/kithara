@@ -488,7 +488,7 @@ mod tests {
         let wave = Pass::new(AnalysisParams::default()).whole(&waveform_tiny, 1, 5);
         assert!(!wave.is_empty() && wave.len() <= 5, "len {}", wave.len());
         for b in &wave {
-            for v in [b.left()[0], b.left()[1].max(b.left()[2]), b.left()[3]] {
+            for v in b.left().into_iter().chain(b.right()) {
                 assert!(
                     v.is_finite() && (0.0..=1.0).contains(&v),
                     "band must stay finite in [0,1]: {b:?}"
@@ -678,23 +678,15 @@ mod tests {
         );
     }
 
+    fn peak(bucket: &Bucket) -> f32 {
+        bucket.left().into_iter().fold(0.0, f32::max)
+    }
+
     fn dominant(pcm: &[f32]) -> Bucket {
-        let params = AnalysisParams::builder()
-            .band_gain(flat!().band_gain())
-            .build();
-        Pass::new(params)
+        Pass::new(flat!())
             .whole(pcm, 1, 4)
             .into_iter()
-            .max_by(|a, b| {
-                a.left()[0]
-                    .max(a.left()[1].max(a.left()[2]))
-                    .max(a.left()[3])
-                    .total_cmp(
-                        &b.left()[0]
-                            .max(b.left()[1].max(b.left()[2]))
-                            .max(b.left()[3]),
-                    )
-            })
+            .max_by(|a, b| peak(a).total_cmp(&peak(b)))
             .unwrap_or_default()
     }
 
@@ -732,15 +724,7 @@ mod tests {
         // columns with no bar. Every column of a full-spectrum track must carry
         let pcm = waveform_mix;
         let wave = Pass::new(AnalysisParams::default()).whole(&pcm, 1, 1500);
-        let gaps = wave
-            .iter()
-            .filter(|b| {
-                b.left()[0]
-                    .max(b.left()[1].max(b.left()[2]))
-                    .max(b.left()[3])
-                    <= 0.0
-            })
-            .count();
+        let gaps = wave.iter().filter(|bucket| peak(bucket) <= 0.0).count();
         assert_eq!(gaps, 0, "every column must carry a bar");
     }
 
