@@ -445,6 +445,7 @@ firewheel-web-audio = { version = "0.6.0", default-features = false }
 flate2 = "1.1.10"
 foldhash = { version = "0.2", default-features = false }
 fs4 = "1.1.0"
+fundu-core = { version = "=0.4.1", default-features = false }
 futures = "0.3.34"
 
 # proc macros
@@ -462,8 +463,6 @@ hls_m3u8 = "0.7.0"
 # 0.23.2 introduced an Android thread-profiler compilation regression.
 hotpath = "=0.23.1"
 http = "1.5.0"
-humantime = "2.4.0"
-humantime-serde = "1.1.1"
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
 
 # UI frameworks
@@ -567,6 +566,7 @@ tempfile = "3.27.0"
 thirtyfour = { version = "0.37.10", default-features = false, features = ["bidi", "cdp", "component", "reqwest", "rustls"] }
 thiserror = "2.0.21"
 thunderdome = { version = "0.6.1", default-features = false }
+time = { version = "0.3.55", default-features = false, features = ["parsing"] }
 tiny_http = "0.12.0"
 tokio = { version = "1.53.3", default-features = false }
 tokio_with_wasm = { version = "0.9.2", features = ["full"] }

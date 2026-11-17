@@ -26,7 +26,6 @@ pub use dispatcher::{
     Dispatched, DispatcherCommand, DispatcherProtocol, LaneId, LaneStart, LaneTask, LoadRequest,
     Loaded, Open, OpenResult, dispatch,
 };
-use humantime_serde as _;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 pub use lane::{LaneApplied, LaneCommand, LaneFrame, LaneProtocol, LaneSetup, LaneTarget};
