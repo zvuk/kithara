@@ -87,6 +87,23 @@ impl Picture {
             _ => panic!("one host answers in one kind of picture"),
         }
     }
+
+    fn save(&self, host: Host, page: Shot, draw: usize) {
+        let rgba = match self {
+            Self::Pixels(rgba) => rgba,
+            #[cfg(feature = "masonry")]
+            Self::Scene(_) => return,
+        };
+        let Some(dir) = std::env::var_os("KITHARA_UI_SCENARIO_CAPTURE") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).expect("create steady capture directory");
+        let path = dir.join(format!("steady-{}-{page}-{draw}.png", host.name()));
+        let (width, height) = physical();
+        kithara_ui::capture::write_png(&path, width, height, std::iter::once(rgba.as_slice()))
+            .unwrap_or_else(|error| panic!("save {}: {error}", path.display()));
+    }
 }
 
 /// How many pixels two readbacks disagree on, and where the first of them is.
@@ -386,18 +403,30 @@ fn a_page_held_at_one_moment_rasterises_the_same_twice() {
     let unsteady: Vec<String> = hosts()
         .iter()
         .flat_map(|host| {
-            Shot::all().into_iter().filter_map(move |page| {
+            Shot::all().into_iter().flat_map(move |page| {
                 let shots = host.pictures(page, DRAWS, Between::Held);
-                (1..DRAWS).find_map(|draw| {
-                    shots[draw - 1].against(&shots[draw]).map(|difference| {
-                        format!(
-                            "{}: {}: draw {draw} differs from draw {} by {difference}",
-                            host.name(),
-                            page,
-                            draw + 1,
-                        )
+                let differences: Vec<String> = shots
+                    .windows(2)
+                    .enumerate()
+                    .filter_map(|(draw, pair)| {
+                        pair[0].against(&pair[1]).map(|difference| {
+                            format!(
+                                "{}: {}: draw {} differs from draw {} by {difference}",
+                                host.name(),
+                                page,
+                                draw + 1,
+                                draw + 2,
+                            )
+                        })
                     })
-                })
+                    .collect();
+                if !differences.is_empty() {
+                    eprintln!("steady comparison failed: {differences:#?}");
+                    for (draw, shot) in shots.iter().enumerate() {
+                        shot.save(*host, page, draw + 1);
+                    }
+                }
+                differences
             })
         })
         .collect();

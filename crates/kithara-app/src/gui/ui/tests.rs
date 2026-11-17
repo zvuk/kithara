@@ -15,7 +15,13 @@ use ::kithara::ui::{
     source::{FillDocument, SourceResolver, UiConfig},
     view::{self, ViewState},
 };
+#[cfg(feature = "zvuk")]
+use keyring_core::mock::Store;
+#[cfg(feature = "zvuk")]
+use kithara_app_library::{Context, Environment, Secrets};
 use kithara_app_library::{Document, Endpoint, PAGES, Registration, SourcePage};
+#[cfg(feature = "zvuk")]
+use kithara_app_zvuk::Source;
 use kithara_test_utils::kithara;
 
 use super::{
@@ -1027,17 +1033,39 @@ fn the_app_hides_controls_outside_the_supported_playback_contract() {
     }
 }
 
-/// Each deck's key lock chip presses, lights and hides from its own deck.
+/// Each deck's key lock chip presses, lights, resets and hides from its own
+/// deck, and its transpose steps beside it hide with it.
 #[kithara::test]
 fn every_keylock_chip_binds_to_its_deck() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
         for letter in layout.letters() {
-            let path = format!("deck-{letter}/keylock/toggle");
-            let toggle = format!("deck.key.toggle_lock@deck={letter}");
-            assert!(
-                pressables(&ui).contains(&(path.as_str(), toggle.as_str())),
-                "{layout:?}: `{path}` writes {toggle}"
+            let keylock = format!("deck-{letter}/keylock");
+            let path = format!("{keylock}/chip/toggle");
+            for (at, id) in [
+                (path.clone(), "toggle_lock"),
+                (format!("{keylock}/up"), "transpose_up"),
+                (format!("{keylock}/down"), "transpose_down"),
+            ] {
+                let key = format!("deck.key.{id}@deck={letter}");
+                assert!(
+                    pressables(&ui).contains(&(at.as_str(), key.as_str())),
+                    "{layout:?}: `{at}` writes {key}"
+                );
+            }
+            let reset = settle(
+                &ui,
+                &mut ViewState::default(),
+                &path,
+                ControlAction::DoubleActivate,
+            );
+            assert_eq!(
+                reset,
+                Some(UiEvent::Write {
+                    key: format!("deck.key.transpose_reset@deck={letter}"),
+                    value: WriteValue::Trigger,
+                }),
+                "{layout:?}: a double click on `{path}` resets its deck's transpose"
             );
             let mut lights = Vec::new();
             each_node(&ui, &mut |node| {
@@ -1064,11 +1092,20 @@ fn every_keylock_chip_binds_to_its_deck() {
                 "{layout:?}: `{path}` lights from its deck"
             );
             let hidden = format!("deck.key.lock_hidden@deck={letter}");
-            let icon = format!("deck-{letter}/keylock/icon");
+            let guarded = [
+                "down",
+                "down-icon",
+                "chip/toggle",
+                "chip/icon",
+                "chip/readout",
+                "up",
+                "up-icon",
+            ]
+            .map(|at| format!("{keylock}/{at}"));
             assert_eq!(
                 guarded_by(&ui, &hidden),
-                [path.as_str(), icon.as_str()],
-                "{layout:?}: `{hidden}` hides the chip alone"
+                guarded,
+                "{layout:?}: `{hidden}` hides the key lock alone"
             );
         }
     }
@@ -1993,6 +2030,7 @@ mod answered {
 
     use ::kithara::{
         host::api::Tempo,
+        play::PitchStep,
         ui::{
             expand::{Binding, BindingKind},
             geom::Pt,
@@ -2036,6 +2074,7 @@ mod answered {
         let actions = [
             ControlAction::Activate,
             ControlAction::SecondaryActivate,
+            ControlAction::DoubleActivate,
             ControlAction::SetScalar(0.5),
             ControlAction::StepScalar(1.0),
             ControlAction::SelectIndex(0),
@@ -2210,7 +2249,12 @@ mod answered {
                     && match id {
                         "deck.transport.toggle_play" => matches!(msg, DeckMsg::TogglePlayPause),
                         "deck.transport.toggle_sync" => matches!(msg, DeckMsg::ToggleSync),
-                        "deck.key.toggle_lock" => matches!(msg, DeckMsg::ToggleKeylock),
+                        "deck.key.toggle_lock" => {
+                            matches!(msg, DeckMsg::Pitch(PitchStep::ToggleKeylock))
+                        }
+                        "deck.key.transpose_up"
+                        | "deck.key.transpose_down"
+                        | "deck.key.transpose_reset" => matches!(msg, DeckMsg::Pitch(_)),
                         "deck.transport.prev" => matches!(msg, DeckMsg::Prev),
                         "deck.transport.next" => matches!(msg, DeckMsg::Next),
                         "deck.transport.seek_normalized" => matches!(msg, DeckMsg::SeekTo(_)),
@@ -2348,4 +2392,38 @@ fn a_source_page_gesture_reaches_its_source_through_the_app_dispatch() {
         Walk::new(&ReadRoot::new(&state)).get("source.query@source=probe"),
         Some(ReadValue::Text("needle"))
     );
+}
+
+#[cfg(feature = "zvuk")]
+#[kithara::test(native, flash(false))]
+fn zvuk_settings_bind_the_streaming_toggle_to_its_source() {
+    let runtime = test_fixture::runtime();
+    let config = test_fixture::config(runtime.handle());
+    let environment = Environment::new(
+        runtime.handle().clone(),
+        config.net.clone(),
+        Secrets::new(Store::new()),
+    );
+    let entry = serde_yaml_ng::from_str("{user_agent: synthetic-agent}").unwrap();
+    let context = Context::new(config.shutdown.child(), entry);
+    let registration = (Source::FACTORY.register)(&environment, context).unwrap();
+    let (package, _library) = test_fixture::mount(None, vec![registration]).unwrap();
+    for layout in LAYOUTS {
+        let ui = compile_package(&package, layout).unwrap();
+        let controls = controls(&ui);
+        let toggles = controls
+            .iter()
+            .filter(|(path, _)| path.ends_with("streaming-toggle"))
+            .collect::<Vec<_>>();
+        assert!(!toggles.is_empty());
+        for (_, bindings) in toggles {
+            assert_eq!(
+                bindings,
+                &[
+                    "source.adaptive_streaming@source=zvuk",
+                    "source.adaptive_streaming@source=zvuk"
+                ]
+            );
+        }
+    }
 }

@@ -109,6 +109,10 @@ assert_eq!(sender.receipts().next().map(|receipt| receipt.seq()), Some(seq));
 
 ## Integration
 
+`Ticket::wait_until` blocks for a mailbox owner's reply. On WASM, await
+`wait_until_async` on the browser executor. Both return the pending ticket at
+the deadline and distinguish an owner refusal from an unanswered post.
+
 The executor owns an `Inbox` (or a `LevelInbox` of a `ScopedInbox`) and the
 owner that computes commands holds the `Port`. `Live` keeps a configuration on
 the owner side that changes only when the executor confirms it, so getters read

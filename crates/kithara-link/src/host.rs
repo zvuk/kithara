@@ -63,11 +63,7 @@ impl TempoOperation {
 }
 
 /// A command run on one linked member in the Host pass.
-type LinkedVisit<'a, S> = dyn FnMut(
-        &mut dyn LinkedDeck<S>,
-        &mut Outbox<'_, S>,
-        DeckPass<'_>,
-    ) -> Result<Option<Seq>, PlayError>
+type LinkedVisit<'a, S> = dyn FnMut(&mut dyn LinkedDeck<S>, &mut Outbox<'_>, DeckPass<'_>) -> Result<Option<Seq>, PlayError>
     + 'a;
 
 fn superseded() -> Result<SessionFrame, Rejection<PlayError>> {
@@ -78,7 +74,7 @@ fn superseded() -> Result<SessionFrame, Rejection<PlayError>> {
 pub enum LinkedHostCommand<S> {
     /// A Host command: registration and tempo go through the decorator,
     /// the rest to the owner it wraps.
-    Host(HostCommand<S, LinkedHostDeck<S>>),
+    Host(HostCommand<LinkedHostDeck<S>>),
     Sync {
         deck: DeckId,
         on: bool,
@@ -89,8 +85,8 @@ pub enum LinkedHostCommand<S> {
     },
 }
 
-impl<S> From<HostCommand<S, LinkedHostDeck<S>>> for LinkedHostCommand<S> {
-    fn from(command: HostCommand<S, LinkedHostDeck<S>>) -> Self {
+impl<S> From<HostCommand<LinkedHostDeck<S>>> for LinkedHostCommand<S> {
+    fn from(command: HostCommand<LinkedHostDeck<S>>) -> Self {
         Self::Host(command)
     }
 }
@@ -386,7 +382,8 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for Lin
                 })
             }
             LinkedHostCommand::Grid { deck, answer } => {
-                self.with_linked(deck, "grid", 0.0, &mut |deck, out, _| {
+                self.with_linked(deck, "grid", 0.0, &mut |deck, out, pass| {
+                    deck.retime(pass.planned_tempo, &[], out);
                     deck.grid(answer.clone(), out);
                     Ok(None)
                 })
@@ -412,12 +409,12 @@ impl<S: 'static, H: HostOwner<S, Deck = LinkedHostDeck<S>>> HostOwner<S> for Lin
             fn poll_output(&mut self) -> std::task::Poll<Result<(), PlayError>>;
             fn each_deck(
                 &mut self,
-                visit: &mut dyn FnMut(DeckId, &mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
+                visit: &mut dyn FnMut(DeckId, &mut Self::Deck, &mut Outbox<'_>, DeckPass<'_>),
             );
             fn with_deck(
                 &mut self,
                 id: DeckId,
-                visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
+                visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_>, DeckPass<'_>),
             ) -> Result<(), PlayError>;
             fn clock(&self) -> Option<PassClock>;
             fn prepare_offline(&mut self) -> Result<(), PlayError>;

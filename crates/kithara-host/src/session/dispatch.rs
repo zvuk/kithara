@@ -10,7 +10,7 @@ use tracing::{debug, trace, warn};
 use super::{
     context::GraphError,
     protocol::{HostMailbox, SessionError, SessionSampleRate, StartStreamFn},
-    state::{DeckNode, SessionState, SessionStream},
+    state::{DeckNode, OutputPhase, SessionState, SessionStream},
     transport::{self, RouteRestartStatus},
 };
 use crate::{DeckId, HostOwner, HostSettled, consts, session::context::SessionGraph};
@@ -94,7 +94,7 @@ impl OwnerPosts {
     }
 }
 fn measured_stream_shape<T, S>(state: &SessionState<T, S>) -> Option<StreamShape> {
-    if state.stream_needs_restart {
+    if state.output_phase == OutputPhase::Starting {
         return None;
     }
     state
@@ -122,7 +122,7 @@ pub(super) fn stream_shape<T, S>(state: &SessionState<T, S>) -> Option<StreamSha
 /// restarts, the graph updates, and the transport's commits and receipts
 /// settle.
 pub(crate) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
-    if state.stream_needs_restart {
+    if state.output_phase == OutputPhase::Starting {
         if let Err(err) = restart_stream(state) {
             warn!(?err, "[KITHARA-ROUTE] deferred stream restart failed");
             return Err(SessionError::RestartFailed {
@@ -130,7 +130,7 @@ pub(crate) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Result<(), S
                 r#source: err.to_string(),
             });
         }
-        if state.stream_needs_restart {
+        if state.output_phase == OutputPhase::Starting {
             return Ok(());
         }
     }
@@ -152,7 +152,7 @@ fn update_failed(err: &GraphError) -> SessionError {
     SessionError::Graph(format!("{err:?}"))
 }
 
-/// A returned stream is lost once transport reaches or passes its reserved generation.
+/// Only an output the owner expects to be running can be lost.
 /// A planned pending restart is handled before this observation.
 pub(super) fn stream_died<T, S>(state: &SessionState<T, S>) -> bool {
     state.reserved_session_grid.is_none_or(|reserved| {
@@ -163,13 +163,13 @@ pub(super) fn stream_died<T, S>(state: &SessionState<T, S>) -> bool {
                 let observed = observation.output_buffer().session_grid();
                 observed == reserved || observed.epoch() > reserved.epoch()
             })
-    }) && !state.stream_needs_restart
+    }) && state.output_phase == OutputPhase::Running
         && state.ctx.as_ref().is_some_and(|ctx| !ctx.is_active())
 }
 
 fn restart_dead_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     state.reserved_session_grid = None;
-    state.stream_needs_restart = true;
+    state.output_phase = OutputPhase::Starting;
     state.publish_root();
     warn!("session stream stopped unexpectedly; restarting audio stream");
     trace!(
@@ -189,13 +189,13 @@ pub(crate) fn invalidate_audio_route<T, S>(
     debug!(
         reason,
         ctx_ready = state.ctx.is_some(),
-        stream_needs_restart = state.stream_needs_restart,
+        output_phase = ?state.output_phase,
         "[KITHARA-ROUTE] audio route invalidated"
     );
     if state.ctx.is_none() {
         return Ok(());
     }
-    state.stream_needs_restart = true;
+    state.output_phase = OutputPhase::Starting;
     #[cfg(target_arch = "wasm32")]
     if state
         .ctx
@@ -248,15 +248,18 @@ pub(super) fn restart_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(),
             .output_ready()
             .map_err(|error| SessionError::StreamStart(error.to_string()))?
         {
+            state.output_phase = OutputPhase::Starting;
             return Ok(());
         }
         ctx.acknowledge_output();
-        state.stream_needs_restart = false;
+        state.output_phase = OutputPhase::Running;
         state.publish_root();
         return Ok(());
     }
     debug!(sample_rate, "[KITHARA-ROUTE] restarting firewheel stream");
     if transport::prepare_route_restart(state)? == RouteRestartStatus::Pending {
+        state.output_phase = OutputPhase::Starting;
+        state.publish_root();
         trace!("[KITHARA-ROUTE] waiting for the previous stream processor to stop");
         return Ok(());
     }
@@ -276,7 +279,11 @@ pub(super) fn restart_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(),
     if !starting {
         state.reserved_session_grid = None;
     }
-    state.stream_needs_restart = starting;
+    state.output_phase = if starting {
+        OutputPhase::Starting
+    } else {
+        OutputPhase::Running
+    };
     state.publish_root();
     trace_stream_info(state, "restart-stream");
     debug!(
@@ -318,7 +325,7 @@ pub(super) fn trace_stream_info<T, S>(state: &SessionState<T, S>, context: &'sta
             prev_sample_rate = info.prev_sample_rate.get(),
             max_block_frames = info.max_block_frames.get(),
             out_channels = info.num_stream_out_channels,
-            stream_needs_restart = state.stream_needs_restart,
+            output_phase = ?state.output_phase,
             "[KITHARA-ROUTE] session stream-info"
         );
     } else {
@@ -326,7 +333,7 @@ pub(super) fn trace_stream_info<T, S>(state: &SessionState<T, S>, context: &'sta
             context,
             sample_rate = state.settings.config().sample_rate().get(),
             requested_max_block_frames = state.requested_max_block_frames.map(NonZeroU32::get),
-            stream_needs_restart = state.stream_needs_restart,
+            output_phase = ?state.output_phase,
             "[KITHARA-ROUTE] session stream-info unavailable"
         );
     }

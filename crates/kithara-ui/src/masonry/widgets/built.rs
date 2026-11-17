@@ -638,12 +638,8 @@ impl<Action> MasonryNode<Action> {
 
     delegate::delegate! {
         to self.widget.widget {
-            /// What this node runs when pressed, and with the other button.
-            pub(crate) fn set_actions(
-                &mut self,
-                primary: Option<Box<dyn Fn() -> HostAction>>,
-                secondary: Option<Box<dyn Fn() -> HostAction>>,
-            );
+            /// What this node runs when it is pressed.
+            pub(crate) fn set_primary(&mut self, primary: Box<dyn Fn() -> HostAction>);
             /// The stepping surface this flow carries over itself.
             pub(crate) fn set_detent(&mut self, detent: Detent);
             /// Where this placement of a stage stands, and what carries it.

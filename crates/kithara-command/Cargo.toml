@@ -27,7 +27,7 @@ thiserror = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true, features = ["subscriber", "hang"] }
+kithara-test-utils = { workspace = true, features = ["test", "subscriber", "hang"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 assert_no_alloc = { workspace = true }

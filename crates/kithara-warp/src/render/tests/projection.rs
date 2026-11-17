@@ -13,7 +13,7 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::*;
-use crate::{Warp, consts, test_pools::pools};
+use crate::{Pitch, Warp, consts, test_pools::pools};
 
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -266,7 +266,7 @@ fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_fr
 ))]
 #[kithara::test]
 fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
-    let mut renderer = planned_renderer(&WarpConfig::builder().speed(1.0).keylock(false).build());
+    let mut renderer = planned_renderer(&WarpConfig::builder().build());
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
     let samples = vec![0.25; 128 * usize::from(consts::CH)];
@@ -490,13 +490,7 @@ fn entering_a_unity_grid_preserves_the_next_source_samples(
     #[case] backend: kithara_stretch::StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let mut renderer = planned_renderer(
-        &WarpConfig::builder()
-            .speed(1.0)
-            .keylock(false)
-            .backend(backend)
-            .build(),
-    );
+    let mut renderer = planned_renderer(&WarpConfig::builder().backend(backend).build());
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
     let first_frames = 32;
@@ -553,13 +547,7 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(
     #[case] backend: kithara_stretch::StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let mut renderer = planned_renderer(
-        &WarpConfig::builder()
-            .speed(1.0)
-            .keylock(false)
-            .backend(backend)
-            .build(),
-    );
+    let mut renderer = planned_renderer(&WarpConfig::builder().backend(backend).build());
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
     let initial_frames = 4_096;
@@ -613,7 +601,7 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
     let mut renderer = planned_renderer(
         &WarpConfig::builder()
             .speed(1.0)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .backend(kithara_stretch::StretchKind::Signalsmith)
             .build(),
     );
@@ -645,7 +633,7 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
     }
     let output_frontier = renderer.rendered_source_end();
     assert!(output_frontier.is_some(), "mapped output frontier");
-    renderer.set_keylock(false);
+    renderer.set_pitch(Pitch::default());
     renderer.prepare(spec());
     renderer
         .prepare_engine_latency(spec())
@@ -692,7 +680,7 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
 ))]
 #[kithara::test]
 fn projected_activation_refuses_uncommitted_manual_source_before_consumption() {
-    let mut renderer = planned_renderer(&WarpConfig::builder().speed(4.0).keylock(false).build());
+    let mut renderer = planned_renderer(&WarpConfig::builder().speed(4.0).build());
     let input = chunk(&renderer.pools, &[0.25, 0.25]);
     assert!(LaneFeed::default().feed(&mut renderer, input).is_empty());
     let held = renderer
@@ -776,7 +764,7 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
     for quantum in [17, 64] {
         let config = WarpConfig::builder()
             .speed(1.0)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .backend(backend)
             .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
             .build();
@@ -928,7 +916,7 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
 ) {
     let config = WarpConfig::builder()
         .speed(1.0)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(backend)
         .render_quantum_frames(NonZero::new(128).expect("quantum"))
         .build();
@@ -1025,7 +1013,7 @@ fn partial_manual_history_after_seek_keeps_the_reset_prime_contract(
     for origin in [0_u64, 10_000] {
         let config = WarpConfig::builder()
             .speed(1.0)
-            .keylock(true)
+            .pitch(Pitch::HELD)
             .backend(backend)
             .render_quantum_frames(NonZero::new(32).expect("quantum"))
             .build();
@@ -1138,7 +1126,7 @@ fn a_one_frame_decoder_chunk_keeps_the_slowed_projection_presenting(
     let config = WarpConfig::builder()
         .speed(1.0)
         .backend(backend)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
     renderer

@@ -45,6 +45,7 @@ fn insert_deck_endpoints(registry: &mut MapEndpoints) {
         ("deck.key.transpose_down", ValueKind::Trigger),
         ("deck.key.toggle_lock", ValueKind::Trigger),
         ("deck.key.transpose_up", ValueKind::Trigger),
+        ("deck.key.transpose_reset", ValueKind::Trigger),
         ("deck.view.zoom_in", ValueKind::Trigger),
         ("deck.view.zoom_out", ValueKind::Trigger),
     ] {
@@ -66,6 +67,7 @@ fn insert_deck_endpoints(registry: &mut MapEndpoints) {
         ("deck.playback.reverse", ValueKind::Bool),
         ("deck.playback.synced", ValueKind::Bool),
         ("deck.key.locked", ValueKind::Bool),
+        ("deck.key.transpose", ValueKind::Text),
         ("deck.playback.tempo", ValueKind::Text),
         ("deck.playback.waveform", ValueKind::Waveform),
         ("deck.track.title", ValueKind::Text),
@@ -234,11 +236,18 @@ fn insert_quality_endpoints(registry: &mut MapEndpoints) {
         "deck.stream.quality",
         EndpointDesc::new(ValueKind::Text).with_scope("deck"),
     );
-    registry.insert(
-        EndpointCategory::Telemetry,
+    for id in [
         "deck.stream.quality_hidden",
-        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
-    );
+        "deck.stream.quality_ready",
+        "deck.stream.error_hidden",
+        "deck.stream.auto_hidden",
+    ] {
+        registry.insert(
+            EndpointCategory::Telemetry,
+            id,
+            EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
+        );
+    }
     registry.insert(
         EndpointCategory::Model,
         "deck.stream.variant_active",

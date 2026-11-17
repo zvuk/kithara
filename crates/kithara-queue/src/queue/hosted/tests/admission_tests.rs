@@ -103,7 +103,7 @@ async fn a_synthetic_load_opens_the_decoded_fixture_facts(#[by_ref] worker_owner
         let loaded = crate::mock::loaded_request(&queue, &mut rig, seq, source).await;
         let pcm = &loaded.opened.pcm;
         assert_eq!(
-            **pcm.src(),
+            *loaded.opened.src,
             *fixture_uri(dir.path(), "entry.wav"),
             "{source:?} opens the requested source"
         );
@@ -151,7 +151,7 @@ async fn a_synthetic_load_reads_no_source_bytes(#[by_ref] worker_owner: &WorkerO
     });
     let seq = crate::mock::selected_load_seq(&queue);
     let loaded = crate::mock::loaded_request(&queue, &mut rig, seq, FixtureSource::Synthetic).await;
-    assert_eq!(**loaded.opened.pcm.src(), *unseeded);
+    assert_eq!(*loaded.opened.src, *unseeded);
     assert_eq!(
         loaded.opened.pcm.next_chunk_info(),
         Some(crate::mock::fixture_chunk()),

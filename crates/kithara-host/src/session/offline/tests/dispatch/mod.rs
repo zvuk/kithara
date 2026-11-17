@@ -42,7 +42,7 @@ use crate::{
         applied_spans,
         dispatch::{OwnerPosts, tick_session},
         protocol::{SessionError, SessionSampleRate},
-        state::{DeckNode, SessionStream, TapSlot, add_graph_node},
+        state::{DeckNode, OutputPhase, SessionStream, TapSlot, add_graph_node},
     },
 };
 

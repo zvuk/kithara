@@ -747,6 +747,7 @@ cargo.packages = [
   "kithara-host",
   "kithara-host-tests",
   "kithara-integration-tests",
+  "kithara-key",
   "kithara-link",
   "kithara-mp4",
   "kithara-mpa",
@@ -876,10 +877,15 @@ cargo.packages = ["kithara-abr"]
 cargo.profile = "test-release"
 
 [test.lanes.analysis]
-default_features = ["kithara-beat/dsp", "kithara-waveform/dsp"]
+default_features = [
+  "kithara-beat/dsp",
+  "kithara-key/dsp",
+  "kithara-waveform/dsp",
+]
 cargo.packages = [
   "kithara-analysis",
   "kithara-beat",
+  "kithara-key",
   "kithara-waveform",
   "kithara-analysis-tests",
 ]
@@ -1636,12 +1642,37 @@ program = "just"
 steps = [
   { args = [
     "deps",
-    "hack-invariants",
-  ], label = "invariant and product feature checks" },
+    "hack-invariants-part",
+    "--partition",
+    "1/2",
+  ], label = "first invariant feature partition" },
+  { args = [
+    "deps",
+    "_hack-context",
+  ], label = "product feature checks" },
 ]
 role = "gate"
 kinds = []
-# The same schedule as the workspace part: together they are the whole plan.
+# Native partitions retain every combination within the per-job budget.
+kinds_github = ["main", "nightly"]
+timeout_minutes = 60
+
+[ext.ci.lanes.deps-features-invariants-rest]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "deps",
+    "hack-invariants-part",
+    "--partition",
+    "2/2",
+  ], label = "second invariant feature partition" },
+]
+role = "gate"
+kinds = []
 kinds_github = ["main", "nightly"]
 timeout_minutes = 60
 
@@ -1836,15 +1867,17 @@ kinds = ["nightly"]
 timeout_minutes = 90
 
 [ext.ci.lanes.deep-bench]
-cache_group = "macos"
-label = "deep Apple"
-os = "macos"
+cache_group = "host"
+label = "benchmarks"
+os = ["linux", "macos"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["perf", "bench", "ci"], label = "benchmark suite" }]
 role = "deep"
-kinds = ["nightly"]
+kinds = ["nightly", "bench", "branch", "merge-request", "quarantine"]
+kinds_github = ["nightly", "bench"]
 timeout_minutes = 120
+artifact = { name = "bench-results", path = "bench-results.txt\nbench-results/", when = "always" }
 
 # A shader that stopped reading what Rust writes it looks identical from the
 # outside until a frame is rendered and read back, so this is the one suite
@@ -2179,6 +2212,10 @@ os = "linux"
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
+  { program = "cargo", args = [
+    "fetch",
+    "--locked",
+  ], label = "prepare tooling dependency graphs" },
   { args = [
     "test",
     "run",

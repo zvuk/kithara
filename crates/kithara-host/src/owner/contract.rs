@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, task::Poll};
+use std::task::Poll;
 
 use kithara_command::{Rejection, Seq, When};
 use kithara_platform::maybe_send::MaybeSend;
@@ -11,10 +11,9 @@ use crate::{HostSettingsChange, HostSettingsExec};
 pub type DeckId = kithara_warp::BeatGridId;
 
 /// A visit to one held deck during its owner's current pass.
-type DeckVisit<'a, S, D> = &'a mut (dyn FnMut(&mut D, &mut Outbox<'_, S>, DeckPass<'_>) + 'a);
+type DeckVisit<'a, D> = &'a mut (dyn FnMut(&mut D, &mut Outbox<'_>, DeckPass<'_>) + 'a);
 /// A visit that also receives the held deck's identity.
-type EachDeckVisit<'a, S, D> =
-    &'a mut (dyn FnMut(DeckId, &mut D, &mut Outbox<'_, S>, DeckPass<'_>) + 'a);
+type EachDeckVisit<'a, D> = &'a mut (dyn FnMut(DeckId, &mut D, &mut Outbox<'_>, DeckPass<'_>) + 'a);
 
 /// The clock one owner pass reads once: its frame and delivery leads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -32,7 +31,7 @@ pub trait HostOwner<S>:
     HostSettingsExec<(), At = When<SessionFrame>, Output = Result<Option<Seq>, PlayError>> + 'static
 {
     /// Commands posted by the Host handle.
-    type Command: From<HostCommand<S, Self::Deck>> + MaybeSend;
+    type Command: From<HostCommand<Self::Deck>> + MaybeSend;
     /// The deck objects held by this owner.
     type Deck: ?Sized + HostedDeck<S>;
 
@@ -49,8 +48,8 @@ pub trait HostOwner<S>:
     /// [`PlayError::Session`] for graph, tap, backend, or
     /// [`SessionError::HostQueueFull`](crate::session::SessionError::HostQueueFull)
     /// admission failures.
-    /// Returns [`PlayError::Internal`] for an invalid marker command or owner
-    /// setup failure, and [`PlayError::Closed`] for a retired command channel.
+    /// Returns [`PlayError::Internal`] for owner setup failure, and
+    /// [`PlayError::Closed`] for a retired command channel.
     fn apply(&mut self, command: Self::Command) -> Result<Option<Seq>, PlayError>;
     /// Builds and holds a deck's mixer and owner record.
     ///
@@ -62,18 +61,14 @@ pub trait HostOwner<S>:
     /// [`PlayError::Closed`] for a retired channel or deck scope.
     fn register(&mut self, id: DeckId, deck: Box<Self::Deck>) -> Result<(), PlayError>;
     /// Lends each deck its outbox and current pass.
-    fn each_deck(&mut self, visit: EachDeckVisit<'_, S, Self::Deck>);
+    fn each_deck(&mut self, visit: EachDeckVisit<'_, Self::Deck>);
     /// Lends the named deck its outbox and current pass.
     ///
     /// # Errors
     /// Returns [`PlayError::Session`] with
     /// [`SessionError::DeckNotFound`](crate::session::SessionError::DeckNotFound) if the
     /// deck is absent, or [`PlayError::Closed`] if its channel or scope is retired.
-    fn with_deck(
-        &mut self,
-        id: DeckId,
-        visit: DeckVisit<'_, S, Self::Deck>,
-    ) -> Result<(), PlayError>;
+    fn with_deck(&mut self, id: DeckId, visit: DeckVisit<'_, Self::Deck>) -> Result<(), PlayError>;
     /// The current pass's clock, absent before a render graph exists.
     fn clock(&self) -> Option<PassClock>;
     /// Prepares the offline stream before the block's owner publication.
@@ -113,7 +108,7 @@ pub trait HostRegistration<S, D: DeckControl, Face: ?Sized>: HostOwner<S> {
 }
 
 /// One operation on the canonical owner, answered after checks and sending.
-pub enum HostCommand<S, D: ?Sized> {
+pub enum HostCommand<D: ?Sized> {
     Register {
         id: DeckId,
         deck: Box<D>,
@@ -129,8 +124,6 @@ pub enum HostCommand<S, D: ?Sized> {
         tap: crate::api::Tap,
     },
     Restart,
-    #[doc(hidden)]
-    _Marker(PhantomData<fn() -> S>),
 }
 
 /// The final outcome of a host-settings batch.

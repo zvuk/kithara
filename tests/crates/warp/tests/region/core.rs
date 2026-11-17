@@ -1,3 +1,5 @@
+use ::kithara::warp::Pitch;
+
 use super::*;
 
 pub(super) const SR: u32 = 44_100;
@@ -132,7 +134,7 @@ pub(super) fn render_on_grid(
 ) -> Vec<f32> {
     let config = WarpConfig::builder()
         .speed(speed)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(backend)
         .build();
     render_configured_grid(config, plan, source, swap)
@@ -245,7 +247,7 @@ pub(crate) fn render_configured_grid_with_updates(
                     "source quantum at {} with {remaining} remaining, backend {:?}, keylock={}: {error:?}",
                     meta.frame_offset,
                     config.backend(),
-                    config.keylock()
+                    config.pitch().keylock()
                 ),
             };
             let start = usize::try_from(meta.frame_offset).expect("fixture source frame");

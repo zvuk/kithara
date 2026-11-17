@@ -7,7 +7,7 @@ use kithara_platform::{
 };
 use kithara_resampler::ResamplerBackend;
 use kithara_worker::{ComputeSubmitError, Task, TaskContext, TickResult};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::AnalysisTask;
 pub(crate) use super::task::Job;
@@ -194,12 +194,15 @@ where
             let output = if cancel.is_cancelled() {
                 None
             } else {
+                debug!("analysis: beat compute started");
                 let output = detect(job.request, &detector);
+                debug!("analysis: beat compute finished");
                 (!cancel.is_cancelled()).then_some(output)
             };
             completion.send(DetectDone { output }).ok();
         }) {
             Ok(()) => {
+                debug!("analysis: beat compute submitted");
                 self.detector_state = DetectorState::Running;
                 TickResult::Progress
             }

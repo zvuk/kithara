@@ -113,7 +113,7 @@ fn explicit_audio_route_invalidation_restarts_stream_without_backend_error() {
         "route invalidation must keep the deck's slot node in the graph"
     );
     assert_eq!(deck(&state, 0).node, slot_node);
-    assert!(!state.stream_needs_restart);
+    assert_eq!(state.output_phase, OutputPhase::Running);
 }
 
 #[kithara::test]
@@ -170,7 +170,7 @@ fn unexpected_stream_stop_restarts_stream_without_dropping_the_deck_slot() {
         "the deck's slot node must stay in the graph across stream restart"
     );
     assert_eq!(Some(deck(&state, 0).node), Some(slot_node));
-    assert!(!state.stream_needs_restart);
+    assert_eq!(state.output_phase, OutputPhase::Running);
 }
 
 #[kithara::test]
@@ -197,7 +197,7 @@ fn stream_loss_seen_while_draining_host_commands_restarts_the_stream() {
         2,
         "a stream drop observed during a host command drain must restart the stream"
     );
-    assert!(!state.stream_needs_restart);
+    assert_eq!(state.output_phase, OutputPhase::Running);
 }
 
 #[kithara::test]
@@ -274,7 +274,7 @@ fn failed_stream_restart_is_retried_on_next_tick() {
     }
 
     assert!(
-        state.stream_needs_restart,
+        state.output_phase == OutputPhase::Starting,
         "a failed restart must leave retry state armed"
     );
     assert_eq!(
@@ -293,7 +293,7 @@ fn failed_stream_restart_is_retried_on_next_tick() {
     let retried = host_grid(&state);
     assert_eq!(retried.stamp(), boundary.stamp());
     assert_eq!(retried.axis(), boundary.axis());
-    assert!(!state.stream_needs_restart);
+    assert_eq!(state.output_phase, OutputPhase::Running);
     assert!(
         state
             .ctx

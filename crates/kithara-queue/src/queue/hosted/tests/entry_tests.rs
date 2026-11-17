@@ -44,7 +44,7 @@ fn rejected_live_commands_leave_requested_values_unchanged(#[by_ref] worker_owne
         })
         .build();
     let mut queue = Queue::new(QueueConfig::builder().prep(prep).settings(settings).build());
-    let mut rig = mock::DeckRig::new(DeckMixerConfig::default()).expect("deck rig");
+    let mut rig = mock::DeckRig::<TestPools>::new(DeckMixerConfig::default()).expect("deck rig");
     let change = QueueSettingsChange::Crossfade(CrossfadeSettings {
         duration: 2.0,
         ..CrossfadeSettings::default()
@@ -119,7 +119,7 @@ fn rejected_slot_volume_leaves_live_values_unchanged(#[by_ref] worker_owner: &Wo
     let mut events = queue.subscribe::<PlayerEvent>();
     let mut mix = Live::<DeckMixSettings, DeckProtocol>::new(DeckMixSettings::default())
         .expect("default mix");
-    let mut rig = mock::DeckRig::new(DeckMixerConfig::default()).expect("deck rig");
+    let mut rig = mock::DeckRig::<TestPools>::new(DeckMixerConfig::default()).expect("deck rig");
     {
         let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
         let capacity = scope.available();
@@ -170,7 +170,8 @@ fn rejected_slot_volume_leaves_live_values_unchanged(#[by_ref] worker_owner: &Wo
     assert!(!control.is_muted());
     assert!(events.try_recv().is_err());
 
-    let mut idle = mock::DeckRig::new(DeckMixerConfig::default()).expect("idle deck rig");
+    let mut idle =
+        mock::DeckRig::<TestPools>::new(DeckMixerConfig::default()).expect("idle deck rig");
     let seq = mix_command(
         &mut queue,
         &mut idle,
@@ -795,7 +796,7 @@ fn a_host_pass_publishes_the_deck_mixer_counters(#[by_ref] worker_owner: &Worker
         deck: &deck,
         planned_tempo: &mock::planned_tempo(),
     };
-    let mut rig = mock::DeckRig::new(DeckMixerConfig::default()).expect("deck rig");
+    let mut rig = mock::DeckRig::<TestPools>::new(DeckMixerConfig::default()).expect("deck rig");
     let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
     let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
     HostedDeck::tick(&mut queue, pass, &mut out);

@@ -17,7 +17,7 @@ use super::*;
 use crate::{
     PcmPacket, PcmReceiver,
     bridge::{DeckEvent, Fade, PlaybackFault, RtMetrics, Slot},
-    rt::track::{PcmConsumer, PlayerResource, PlayerTrack, RtSink},
+    rt::track::{PlayerTrack, RtSink},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,11 +131,7 @@ fn load(sender: &mut Sender<Loads>, source: Source) -> Seq {
                     item: source,
                     class: ServiceClass::Warm,
                     position: Duration::ZERO,
-                    start: LaneStart {
-                        speed: SpeedCurve::Constant(1.0),
-                        keylock: false,
-                        backend: StretchKind::default(),
-                    },
+                    start: LaneStart::default(),
                     inbox: channel(ChannelConfig::builder().build()).1,
                 }))],
             },
@@ -160,16 +156,11 @@ fn consume_pcm(receiver: &mut PcmReceiver) -> (u64, u64) {
 fn assert_failed(receiver: PcmReceiver) {
     assert!(receiver.is_closed(), "failed producer closes its PCM ring");
     let spec = receiver.spec();
-    let resource = PlayerResource::new(
-        PcmConsumer::new(receiver),
-        Arc::from("panic.wav"),
-        &crate::test_pools::pools(),
-    )
-    .expect("failed lane resource");
+    let resource = Box::new(receiver);
     let mut track = PlayerTrack::builder()
         .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec.sample_rate)
-        .build(Box::new(resource));
+        .build(resource);
     track.start(Fade::Declick);
     let (mut events, mut received) = HeapRb::<DeckEvent>::new(4).split();
     let metrics = RtMetrics::default();

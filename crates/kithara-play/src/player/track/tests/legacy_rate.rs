@@ -123,11 +123,11 @@ fn speed_projection_tracks_frame_segment_and_initial_rate() {
         position: Duration::from_micros(20),
     });
     assert_consumed_speed_twice(&track, 1.625);
-    track.segment = Segment::issued(
+    track.select_segment(Segment::issued(
         track.segment.id.next(),
         track.segment.origin,
         track.segment.speed,
-    );
+    ));
     track.mark.as_mut().expect("consumed mark").lane.segment = track.segment.id;
     assert_consumed_speed_twice(&track, 1.25);
     track.segment.speed = 1.5;
@@ -199,12 +199,8 @@ fn consumed_speed_preserves_the_origin_needed_by_each_curve(
         )
         .expect("accepted before rejection");
     track
-        .lane_history
-        .commands
-        .iter_mut()
-        .find(|operation| operation.seq == rejected)
-        .expect("recorded rejected curve")
-        .verdict = Some(Err(Rejection::Stale));
+        .lane_commands
+        .retain(|operation| operation.seq != rejected);
     track.status = TrackStatus::Playing { since: frame(0) };
     track.mark = Some(SlotMark {
         session: frame(20),
@@ -239,23 +235,23 @@ async fn load_track_propagates_host_sample_rate() {
         ))
         .build();
     let output = crate::SessionOutputView::new(rate);
-    let config = ResourceConfig::for_src(ResourceSrc::Path(path))
+    let config = ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
         .store(
             AssetStore::builder(pools)
                 .backend(kithara_assets::StorageBackend::Memory)
                 .build(),
         )
         .build();
-    let prepared = prep
-        .prepare(config, &output.get())
+    let (_, load) = prep
+        .prepare(
+            config,
+            &output.get(),
+            Box::new(AudioObserverSlot::default().relay()),
+        )
         .expect("prepared source");
     let mut rig = DeckRig::new(DeckMixerConfig::default()).expect("deck scope");
     let loaded = rig
-        .load_fixture(
-            &prep.worker,
-            ResourceLoad::new(prepared, Box::new(AudioObserverSlot::default().relay())),
-            Duration::ZERO,
-        )
+        .load_fixture(&prep.worker, load, Duration::ZERO)
         .await
         .expect("worker opened source");
     assert_eq!(loaded.opened.pcm.spec().sample_rate.get(), host_rate);
@@ -292,12 +288,7 @@ fn consumed_speed_matches_the_full_piecewise_schedule() {
                 )
                 .expect("scheduled curve");
             if index % 5 == 0 {
-                track
-                    .lane_history
-                    .commands
-                    .last_mut()
-                    .expect("recorded curve")
-                    .verdict = Some(Err(Rejection::Stale));
+                track.lane_commands.retain(|operation| operation.seq != seq);
             } else {
                 schedule.push((at, seq, curve));
             }

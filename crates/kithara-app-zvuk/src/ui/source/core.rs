@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::PathBuf,
+};
 
 use kithara_app_library::{
     BranchNode, Cause, Context, Environment, Factory, KeyAccess, LibrarySource, PAGES, PageStatus,
@@ -22,6 +25,7 @@ use url::Url;
 use crate::{
     Account, Client, Config, Error, Opener, Playlist, TrackId,
     job::Job,
+    streaming::Streaming,
     ui::{
         catalogue::Catalogue,
         consts, page,
@@ -84,6 +88,7 @@ pub struct Source<N> {
     /// The account the catalogue reads its token from once per operation.
     pub(super) account: Account,
     section: Section,
+    pub(super) streaming: Streaming,
     /// Whether the account held a token at the last tick.
     pub(super) has_token: bool,
     /// What the page states while the account holds no token.
@@ -150,6 +155,7 @@ impl<N: Net + Clone + 'static> Source<N> {
         cancel: CancelToken,
         mut account: Account,
         text: &TextDoc,
+        streaming: Streaming,
     ) -> Result<Self, UiDocError> {
         let mut branch = BranchNode::new(
             consts::ID,
@@ -190,6 +196,7 @@ impl<N: Net + Clone + 'static> Source<N> {
             faults: Faults::default(),
             account,
             section,
+            streaming,
             has_token,
             not_connected,
         })
@@ -209,6 +216,7 @@ impl<N: Net + Clone + 'static> Source<N> {
         open: Arc<dyn Opener>,
         runtime: &Handle,
         cancel: CancelToken,
+        settings_path: Option<PathBuf>,
     ) -> Result<Registration, UiDocError> {
         let catalogue = page::document()?;
         let settings = page::section()?;
@@ -219,8 +227,11 @@ impl<N: Net + Clone + 'static> Source<N> {
             account.token.clone(),
         );
         let runtime = runtime.clone();
+        let streaming = Streaming::new(&runtime, &cancel, settings_path);
         Ok(Registration::new(page::page(), move |text| {
-            Ok(Box::new(Self::new(client, runtime, cancel, account, text)?))
+            Ok(Box::new(Self::new(
+                client, runtime, cancel, account, text, streaming,
+            )?))
         })
         .fill(PAGES, catalogue)
         .fill(SECTIONS, settings)
@@ -238,11 +249,13 @@ impl Source<HttpClient> {
     fn register(environment: &Environment, context: Context) -> Result<Registration, Cause> {
         let config: Config = context.section()?;
         let browser = environment.clone();
+        let settings_path = context.settings_path().map(PathBuf::from);
         Ok(Self::registered()
             .client(Client::new(environment.net().clone(), &config))
             .secrets(environment.secrets().clone())
             .open(Arc::new(move |url: &Url| browser.open_url(url)))
             .runtime(environment.runtime())
+            .maybe_settings_path(settings_path)
             .cancel(context.cancel())
             .call()?)
     }
@@ -254,8 +267,9 @@ impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
             "fault_hidden" => Some(ReadValue::Bool(self.faults.each.is_empty())),
             "fault" => Some(ReadValue::Text(&self.faults.text)),
             _ => self
-                .section
+                .streaming
                 .read(endpoint)
+                .or_else(|| self.section.read(endpoint))
                 .or_else(|| self.catalogue.read(endpoint)),
         }
     }
@@ -263,6 +277,11 @@ impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
     /// Row reactions carry their own stable track identity.
     fn write(&mut self, endpoint: &str, value: &WriteValue) {
         match (endpoint, value) {
+            ("adaptive_streaming", WriteValue::Trigger) => {
+                self.streaming
+                    .set(!self.streaming.adaptive, &self.runtime, &self.cancel);
+                self.catalogue.set_adaptive(self.streaming.adaptive);
+            }
             ("query", WriteValue::Text(query)) => {
                 if self.catalogue.search(query) {
                     self.queue(Instant::now() + Duration::from_millis(consts::DEBOUNCE_MS));
@@ -319,7 +338,7 @@ impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
     fn status(&self) -> PageStatus<'_> {
         if !self.has_token {
             PageStatus::Unreadable(Some(&self.not_connected))
-        } else if !matches!(self.load, Load::Idle) {
+        } else if !self.streaming.loaded() || !matches!(self.load, Load::Idle) {
             PageStatus::Loading
         } else if !self.catalogue.is_empty() {
             PageStatus::Ready
@@ -333,6 +352,11 @@ impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
     /// Follows the account and takes the results of finished jobs, then
     /// starts due catalogue work.
     fn tick(&mut self) {
+        let previous = self.streaming.adaptive;
+        self.streaming.tick();
+        if self.streaming.adaptive != previous {
+            self.catalogue.set_adaptive(self.streaming.adaptive);
+        }
         if matches!(self.account.row.has_changed(), Ok(true)) {
             self.section.row = self.account.row.borrow_and_update().clone();
         }

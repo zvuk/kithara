@@ -5,8 +5,8 @@ use kithara_command::{Live, Outcome, ScopedReceipt, Seq};
 use kithara_events::TrackId;
 use kithara_play::{
     CrossfadeCurve, CrossfadeSettings, DeckMixerConfig, DeckPass, HostedDeck, Outbox, Player,
-    PlayerConfig, PlayerImpl, ResourceConfig, ResourceLoad, ResourceSrc, Settled, Track,
-    TrackCommand, TrackReceipt, TrackSettings, TrackStatus,
+    PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, Settled, Track, TrackCommand,
+    TrackReceipt, TrackSettings, TrackStatus,
 };
 use kithara_render::{
     Dispatched,
@@ -22,7 +22,7 @@ use super::*;
 use crate::{HostSettings, MetronomeConfig, session::queue::HostPart};
 
 struct ManualDeck {
-    tracks: [PlayerImpl<TestPools>; 2],
+    tracks: [PlayerImpl; 2],
     loads: [Option<Seq>; 2],
     prep: ResourcePrep<TestPools>,
     mixer: DeckMixerConfig,
@@ -64,14 +64,9 @@ impl HostedDeck<TestPools> for ManualDeck {
         self.mixer
     }
 
-    fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {}
+    fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_>) {}
 
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, TestPools>,
-        _pass: DeckPass<'_>,
-        out: &mut Outbox<'_, TestPools>,
-    ) {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, _pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         match receipt {
             TrackReceipt::Loaded(receipt) => {
                 if let Some(index) = self
@@ -145,13 +140,13 @@ impl HostedDeck<TestPools> for ManualDeck {
         }
     }
 
-    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, TestPools>) {
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         for track in &mut self.tracks {
             track.tick(pass.now, out);
         }
     }
 
-    fn close(&mut self, out: &mut Outbox<'_, TestPools>) -> Result<(), PlayError> {
+    fn close(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError> {
         for track in &mut self.tracks {
             track.apply(TrackCommand::Release, out)?;
         }
@@ -331,24 +326,26 @@ impl ManualHosts {
                     .into_iter()
                     .enumerate()
                 {
-                    let config = ResourceConfig::for_src(ResourceSrc::Path(path.to_owned()))
-                        .store(
-                            kithara_assets::AssetStore::builder(pools())
-                                .backend(kithara_assets::StorageBackend::Memory)
-                                .build(),
-                        )
-                        .build();
-                    let prepared = deck
+                    let config =
+                        ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path.to_owned()))
+                            .store(
+                                kithara_assets::AssetStore::builder(pools())
+                                    .backend(kithara_assets::StorageBackend::Memory)
+                                    .build(),
+                            )
+                            .build();
+                    let (_, item) = deck
                         .prep
-                        .prepare(config, pass.output)
+                        .prepare(
+                            config,
+                            pass.output,
+                            Box::new(AudioObserverSlot::default().relay()),
+                        )
                         .expect("prepared real source");
                     let seq = deck.tracks[index]
                         .apply(
                             TrackCommand::Load {
-                                item: ResourceLoad::new(
-                                    prepared,
-                                    Box::new(AudioObserverSlot::default().relay()),
-                                ),
+                                item,
                                 position: Duration::ZERO,
                             },
                             out,

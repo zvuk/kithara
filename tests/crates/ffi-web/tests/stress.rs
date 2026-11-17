@@ -11,7 +11,7 @@ use kithara::{
     events::EventBus,
     hls::{Hls, HlsConfig},
     platform::time::{Duration, Instant},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     signal::SourceSpan,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
@@ -108,9 +108,10 @@ fn stress_pipeline_config(url: Url) -> (PlayWorker<TestPools>, AudioConfig<Hls<T
 
 async fn create_pipeline_with_url(url: Url) -> LaneAudio<Stream<Hls<TestPools>>, TestPools> {
     let (worker, config) = stress_pipeline_config(url);
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap();
+    let mut audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap();
     audio
         .preload()
         .expect("start preloading the stress fixture");

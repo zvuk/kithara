@@ -128,7 +128,7 @@ Field attributes:
 - `#[patch(nested)]` — the field's own type has a patch; the document names it
   under a key of the same name and the merge recurses.
 - `#[patch(attribute(...))]` — one attribute added to the generated patch field
-  alone, for example `serde(with = "humantime_serde::option")` on a `Duration`.
+  alone, for example `serde(with = "kithara_config::duration::option")` on a `Duration`.
 
 ## Integration
 

@@ -35,9 +35,9 @@ quote = { workspace = true }
 syn = { workspace = true, features = ["extra-traits", "visit"] }
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true }
+kithara-config = { workspace = true }
+kithara-test-utils = { features = ["test"], workspace = true }
 
-humantime-serde = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_yaml_ng = { workspace = true }
 

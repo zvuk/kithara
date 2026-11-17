@@ -5,7 +5,7 @@ use num_traits::ToPrimitive;
 
 use super::*;
 use crate::{
-    Warp,
+    Pitch, Warp,
     test_pools::{pools, sample_buffer},
 };
 
@@ -25,7 +25,7 @@ fn native_keylock_preserves_the_physical_source_frequency(#[case] quantum: usize
     let config = WarpConfig::builder()
         .backend(StretchKind::Signalsmith)
         .speed(0.8)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .render_quantum_frames(NonZeroUsize::new(128).expect("quantum"))
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools());

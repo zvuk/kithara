@@ -1,5 +1,6 @@
 use kithara::{
     effects::GainDb,
+    play::Pitch,
     ui::render::{Node, ReadValue, Scope, WaveformView},
 };
 use num_traits::cast::AsPrimitive;
@@ -79,7 +80,10 @@ impl_child_node!(DeckNode<'a>, |this, segment, _scope| {
             shown: this.shown,
             mode: this.eq_mode,
         }),
-        "key" => Box::new(KeyNode { shown: this.shown }),
+        "key" => Box::new(KeyNode {
+            shown: this.shown,
+            cache: this.cache,
+        }),
         "stream" => Box::new(StreamNode {
             shown: this.shown,
             cache: this.cache,
@@ -169,17 +173,19 @@ impl<'a> Node<'a> for TempoNode {
 
 #[derive(Clone, Copy)]
 struct KeyNode<'a> {
+    cache: &'a DeckCache,
     shown: &'a DeckSnapshot,
 }
 
 impl<'a> Node<'a> for KeyNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
-            "locked" => self.shown.keylock,
-            "lock_hidden" => !self.shown.holds_pitch,
+            "locked" => ReadValue::Bool(self.shown.pitch.is_some_and(Pitch::keylock)),
+            "lock_hidden" => ReadValue::Bool(self.shown.pitch.is_none()),
+            "transpose" => ReadValue::Text(&self.cache.transpose),
             _ => return None,
         };
-        Some(Box::new(Value(ReadValue::Bool(value))))
+        Some(Box::new(Value(value)))
     }
 }
 
@@ -213,8 +219,16 @@ impl_child_node!(StreamNode<'a>, |this, segment, scope| {
     let value = match segment {
         "quality" => ReadValue::Text(&stream.cache.quality),
         "quality_hidden" => ReadValue::Bool(stream.shown.stream.variants.is_empty()),
+        "quality_ready" => ReadValue::Bool(!stream.shown.stream.busy),
+        "error_hidden" => ReadValue::Bool(!stream.shown.stream.failed),
+        "auto_hidden" => {
+            ReadValue::Bool(stream.shown.stream.busy || !stream.shown.stream.auto_available)
+        }
         "variant_active" => ReadValue::Bool(stream.active(scope.get("variant")?)),
-        "variant_hidden" => ReadValue::Bool(stream.rung(scope.get("variant")?).is_none()),
+        "variant_hidden" => {
+            let variant = scope.get("variant")?;
+            ReadValue::Bool(stream.shown.stream.busy || stream.rung(variant).is_none())
+        }
         "variant_label" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.label),
         "variant_sub" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.detail),
         _ => return None,

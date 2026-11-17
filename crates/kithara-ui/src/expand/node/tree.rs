@@ -110,6 +110,8 @@ pub enum ExpandedNode {
     Pressable {
         path: InternId,
         press: Binding,
+        secondary: Option<Binding>,
+        double: Option<Binding>,
         child: Box<Self>,
     },
     /// Puts its child at a point in the stage that holds it.
@@ -598,6 +600,8 @@ pub struct SurfaceSpec {
 #[derive(Clone, Copy)]
 pub(crate) struct ControlSite<'a> {
     pub(crate) control: &'a ControlNode,
+    #[cfg(feature = "render")]
+    pub(crate) artworks: [Option<&'a str>; 2],
     /// Already resolved, so a parameterised list is validated like a literal one.
     pub(crate) columns: &'a [TableColumn],
     pub(crate) path: &'a str,
@@ -621,6 +625,8 @@ impl<'a> ControlSite<'a> {
     pub(crate) fn new(control: &'a ControlNode, path: &'a str) -> Self {
         Self {
             control,
+            #[cfg(feature = "render")]
+            artworks: [None, None],
             path,
             columns: &[],
             active: None,
@@ -641,6 +647,7 @@ impl<'a> ControlSite<'a> {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct SlotWrites<'a> {
     pub(crate) secondary: Option<&'a BindingRef>,
+    pub(crate) double: Option<&'a BindingRef>,
     pub(crate) reset: Option<&'a BindingRef>,
     pub(crate) zoom: Option<&'a BindingRef>,
     pub(crate) loop_start: Option<&'a BindingRef>,

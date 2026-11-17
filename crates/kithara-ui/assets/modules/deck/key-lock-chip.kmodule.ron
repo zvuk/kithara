@@ -7,6 +7,7 @@
     root: Pressable(
         id: "toggle",
         press: Command(id: "deck.key.toggle_lock", with: { "deck": "$deck" }),
+        double: Command(id: "deck.key.transpose_reset", with: { "deck": "$deck" }),
         child: Row(
             id: "chip",
             size: (w: Shrink, h: Fill),
@@ -18,6 +19,14 @@
                     id: "icon",
                     icon: Music2,
                     style: MenuSmall,
+                    color: Accent,
+                    active_color: Bg,
+                    active: Telemetry(id: "deck.key.locked", with: { "deck": "$deck" }),
+                ),
+                Text(
+                    id: "readout",
+                    read: Telemetry(id: "deck.key.transpose", with: { "deck": "$deck" }),
+                    style: MicroLabel,
                     color: Accent,
                     active_color: Bg,
                     active: Telemetry(id: "deck.key.locked", with: { "deck": "$deck" }),

@@ -18,7 +18,7 @@ browser = [
 ]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-kithara = { workspace = true, optional = true, features = ["platform"] }
+kithara = { workspace = true, optional = true, features = ["test", "platform"] }
 kithara-ffi = { workspace = true, default-features = false, optional = true, features = ["wasm", "analysis"] }
 
 js-sys = { workspace = true, optional = true }

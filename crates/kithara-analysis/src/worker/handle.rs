@@ -19,10 +19,11 @@ use crate::{
     AnalysisFileError, AnalysisProgress,
     analyzer::{AnalysisDemand, AnalysisFingerprint, AnalysisToken},
     producer::{AnalysisProducer, ring},
+    progress::ResumeShape,
 };
 
 pub struct AnalysisWorker {
-    resume_shape: (bool, bool),
+    resume_shape: ResumeShape,
     fingerprint: AnalysisFingerprint,
     scope: CancelScope,
     dispatcher: Dispatcher,
