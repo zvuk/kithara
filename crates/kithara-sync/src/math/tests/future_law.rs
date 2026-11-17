@@ -29,7 +29,7 @@ fn analytic_laws(curve: &SpeedCurve) -> Vec<(u64, ExponentialApproach)> {
     }
 }
 
-fn rate_at(curve: &SpeedCurve, frame: u64) -> f64 {
+pub(super) fn rate_at(curve: &SpeedCurve, frame: u64) -> f64 {
     let laws = analytic_laws(curve);
     let (start, law) = laws
         .iter()
@@ -222,7 +222,7 @@ fn zero_correction_preserves_the_complete_future_law() {
             .beats,
         0.0,
     );
-    let Some(Slew::Closes {
+    let Some(Slew::Corrects {
         curve: actual,
         frames: end,
         ..
@@ -232,10 +232,7 @@ fn zero_correction_preserves_the_complete_future_law() {
         position(480),
         at,
         0.001,
-        SlewCause::Drift {
-            from: 1.0,
-            limit: f32::INFINITY,
-        },
+        SlewCause::Drift { from: 1.0 },
         u64::MAX,
     )
     else {
@@ -362,7 +359,7 @@ fn correction_restores_an_approach_between_two_host_commands() {
         None,
     )
     .expect("local source law");
-    let Some(Slew::Closes {
+    let Some(Slew::Corrects {
         curve: corrected,
         frames: end,
         ..
@@ -372,10 +369,7 @@ fn correction_restores_an_approach_between_two_host_commands() {
         cue,
         SessionFrame::new(0),
         0.001,
-        SlewCause::Drift {
-            from: 0.8,
-            limit: f32::INFINITY,
-        },
+        SlewCause::Drift { from: 0.8 },
         u64::MAX,
     )
     else {
