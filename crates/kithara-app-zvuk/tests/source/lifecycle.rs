@@ -7,7 +7,7 @@ use kithara_ui::{error::UiDocError, ids::SourceUri, text::parse_text};
 use serde_yaml_ng::Value as Section;
 
 use super::{
-    support::{memory, queue_completed, refusing},
+    support::{memory, queue_catalogue, refusing},
     *,
 };
 
@@ -123,7 +123,12 @@ async fn reselecting_the_current_node_keeps_its_request_rows_and_query() {
     wait_until(
         Duration::from_secs(2),
         "the collection result awaits a tick",
-        || net.events().len() == 4,
+        || {
+            if net.events().len() < 4 {
+                source.tick();
+            }
+            net.events().len() == 4
+        },
     )
     .await
     .expect("the original collection request must complete before repeated selection");
@@ -257,11 +262,10 @@ async fn a_side_operation_fault_keeps_the_page_fault_and_its_retry() {
 async fn leaving_search_discards_its_queued_result_and_clears_the_query() {
     let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes.next_call(matching!(_, _, _)).returns(Ok(search_reply())),
-        NetMock::post_bytes.next_call(matching!(_, _, _)).returns(Ok(stream_reply())),
         NetMock::post_bytes.next_call(matching!((_, body, _) if String::from_utf8_lossy(body).contains("KitharaPlaylist"))).returns(Ok(Bytes::from_static(br#"{"data":{"playlists":[{"id":"empty","tracks":[]}]}}"#))),
     )));
     let mut source = source(net.clone()).await;
-    queue_completed(&mut *source, &net, "old", 4).await;
+    queue_catalogue(&mut *source, &net, "old", 2).await;
     source.select("playlist:empty");
     source.tick();
     assert_eq!(source.read("query"), Some(ReadValue::Text("")));
@@ -362,17 +366,14 @@ async fn dropping_the_source_cancels_its_request_without_cancelling_the_parent()
 
 #[kithara::test]
 async fn shutdown_discards_a_completion_already_waiting_for_tick() {
-    let net = DelayedNet::new(Unimock::new((
+    let net = DelayedNet::new(Unimock::new(
         NetMock::post_bytes
             .next_call(matching!(_, _, _))
             .returns(Ok(search_reply())),
-        NetMock::post_bytes
-            .next_call(matching!(_, _, _))
-            .returns(Ok(stream_reply())),
-    )));
+    ));
     let parent = kithara_test_utils::cancel_token();
     let mut source = registered(net.clone(), &parent).await;
-    queue_completed(&mut *source, &net, "needle", 4).await;
+    queue_catalogue(&mut *source, &net, "needle", 2).await;
     parent.cancel();
     source.tick();
     assert!(source.rows(None).is_empty());

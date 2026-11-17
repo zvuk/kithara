@@ -201,9 +201,8 @@ pub(super) async fn loaded_search(net: DelayedNet) -> Box<dyn LibrarySource> {
     source
 }
 
-/// Starts a search for `query` and waits until its transport has finished,
-/// leaving the completion queued for the next tick.
-pub(super) async fn queue_completed(
+/// Starts a search and leaves its catalogue completion queued for the next tick.
+pub(super) async fn queue_catalogue(
     source: &mut dyn LibrarySource,
     net: &DelayedNet,
     query: &str,
@@ -213,6 +212,26 @@ pub(super) async fn queue_completed(
     time::sleep(Duration::from_millis(300)).await;
     source.tick();
     net.reaches_events(events).await;
+}
+
+/// Drives the catalogue-to-stream handoff, leaving the last completion queued.
+pub(super) async fn queue_completed(
+    source: &mut dyn LibrarySource,
+    net: &DelayedNet,
+    query: &str,
+    events: usize,
+) {
+    source.write("query", &WriteValue::Text(query.into()));
+    time::sleep(Duration::from_millis(300)).await;
+    source.tick();
+    wait_until(Duration::from_secs(2), "the stream completes", || {
+        if net.events().len() < events {
+            source.tick();
+        }
+        net.events().len() == events
+    })
+    .await
+    .expect("the catalogue and stream must complete");
 }
 
 /// Waits until the source's tasks released their clones of `log`, so the
@@ -274,7 +293,12 @@ pub(super) struct DelayedNet {
     requests: Arc<Mutex<Vec<Request>>>,
     sessions: Arc<Mutex<VecDeque<Result<Bytes, u16>>>>,
     polls: Arc<Mutex<VecDeque<Bytes>>>,
+    autocomplete: Arc<Mutex<VecDeque<Result<Bytes, u16>>>>,
     holding: Arc<AtomicBool>,
+    hold_streams: Arc<AtomicBool>,
+    stream_waiting: Arc<AtomicBool>,
+    hold_reactions: Arc<AtomicBool>,
+    reaction_waiting: Arc<AtomicBool>,
     parked: Arc<AtomicBool>,
     logout_held: Arc<AtomicBool>,
 }
@@ -287,7 +311,12 @@ impl DelayedNet {
             requests: Arc::default(),
             sessions: Arc::default(),
             polls: Arc::default(),
+            autocomplete: Arc::default(),
             holding: Arc::default(),
+            hold_streams: Arc::default(),
+            stream_waiting: Arc::default(),
+            hold_reactions: Arc::default(),
+            reaction_waiting: Arc::default(),
             parked: Arc::default(),
             logout_held: Arc::default(),
         }
@@ -309,8 +338,31 @@ impl DelayedNet {
             .extend(replies);
     }
 
+    pub(super) fn autocomplete(&self, replies: impl IntoIterator<Item = Result<Bytes, u16>>) {
+        self.autocomplete
+            .lock()
+            .expect("the autocomplete script is intact")
+            .extend(replies);
+    }
+
     pub(super) fn hold(&self, on: bool) {
         self.holding.store(on, Ordering::SeqCst);
+    }
+
+    pub(super) fn hold_streams(&self, on: bool) {
+        self.hold_streams.store(on, Ordering::SeqCst);
+    }
+
+    pub(super) fn stream_waiting(&self) -> bool {
+        self.stream_waiting.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn hold_reactions(&self, on: bool) {
+        self.hold_reactions.store(on, Ordering::SeqCst);
+    }
+
+    pub(super) fn reaction_waiting(&self) -> bool {
+        self.reaction_waiting.load(Ordering::SeqCst)
     }
 
     /// While on, every catalogue request but a playlist listing waits,
@@ -463,6 +515,20 @@ impl Net for DelayedNet {
         }
         let value: Value =
             serde_json::from_slice(&body).expect("the client must encode a JSON GraphQL request");
+        let autocomplete = value["query"]
+            .as_str()
+            .is_some_and(|query| query.contains("KitharaAutocomplete"));
+        let scripted = autocomplete
+            .then(|| {
+                self.autocomplete
+                    .lock()
+                    .expect("the autocomplete script is intact")
+                    .pop_front()
+            })
+            .flatten();
+        if autocomplete && scripted.is_none() {
+            return Ok(Bytes::from_static(br#"{"data":{"searchAutocomplete":[]}}"#));
+        }
         let query = value["variables"]["query"]
             .as_str()
             .unwrap_or("node")
@@ -478,7 +544,28 @@ impl Net for DelayedNet {
         if query == "blocked" || self.holding.load(Ordering::SeqCst) {
             std::future::pending::<()>().await;
         }
-        self.net.post_bytes(url, body, headers).await
+        while self.hold_streams.load(Ordering::SeqCst)
+            && value["query"]
+                .as_str()
+                .is_some_and(|query| query.contains("KitharaStreams"))
+        {
+            self.stream_waiting.store(true, Ordering::SeqCst);
+            time::sleep(Duration::from_millis(10)).await;
+        }
+        let result = if let Some(result) = scripted {
+            result.map_err(status)
+        } else {
+            self.net.post_bytes(url, body, headers).await
+        };
+        while self.hold_reactions.load(Ordering::SeqCst)
+            && value["query"]
+                .as_str()
+                .is_some_and(|query| query.contains("KitharaReaction"))
+        {
+            self.reaction_waiting.store(true, Ordering::SeqCst);
+            time::sleep(Duration::from_millis(10)).await;
+        }
+        result
     }
 }
 

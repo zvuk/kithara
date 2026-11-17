@@ -18,7 +18,9 @@ use serde_json::Value;
 use unimock::{MockFn, Unimock, matching};
 use url::Url;
 
-use crate::{Client, Config, Error, PlaylistId, TrackId};
+use crate::{
+    ArtistId, Client, Config, Error, PlaylistId, ReleaseId, SearchResults, SearchScope, TrackId,
+};
 
 fn identity() -> Config {
     Config {
@@ -72,11 +74,14 @@ async fn search_is_typed_and_carries_the_identity_and_the_callers_token() {
                 "../../tests/fixtures/search.json"
             )))),
     );
-    let tracks = mock_client(net)
-        .search(&token(), "Mozart")
+    let SearchResults::Tracks(page) = mock_client(net)
+        .search(&token(), "Mozart", SearchScope::Tracks, None)
         .await
         .unwrap()
-        .tracks;
+    else {
+        panic!("track scope returned another result type");
+    };
+    let tracks = page.items;
     assert_eq!(tracks[0].title, "Amber Field");
     assert_eq!(tracks[0].duration, 128);
     assert_eq!(
@@ -108,11 +113,143 @@ async fn search_is_typed_and_carries_the_identity_and_the_callers_token() {
     );
 }
 
+#[kithara::test]
+async fn scoped_search_carries_an_opaque_cursor_and_returns_typed_pages() {
+    macro_rules! scoped_net {
+        ($field:literal, $body:expr) => {
+            Unimock::new(
+                NetMock::post_bytes
+                    .next_call(matching!((_, body, _) if {
+                        let body: Value = serde_json::from_slice(body).unwrap();
+                        let operation = body["query"].as_str().unwrap();
+                        operation.contains(concat!($field, "(limit: $limit, cursor: $cursor)"))
+                            && body["variables"] == serde_json::json!({
+                                "query": "Mozart", "limit": 100, "cursor": "opaque-in"
+                            })
+                    }))
+                    .returns(Ok(Bytes::from($body))),
+            )
+        };
+    }
+    let track = r#"{"id":"1000","title":"Amber Field","duration":128,"artists":[],"release":null,"collectionItemData":null}"#;
+    for (scope, field, items) in [
+        (SearchScope::Tracks, "tracks", format!("[{track}]")),
+        (
+            SearchScope::Artists,
+            "artists",
+            r#"[{"id":"20","title":"Ana Vale"}]"#.to_owned(),
+        ),
+        (
+            SearchScope::Albums,
+            "releases",
+            r#"[{"id":"30","title":"First Light","artists":[{"title":"Ana Vale"}]}]"#.to_owned(),
+        ),
+    ] {
+        let body = r#"{"data":{"search":{"FIELD":{"items":ITEMS,"page":{"total":7,"cursor":"opaque-out"}}}}}"#
+            .replace("FIELD", field)
+            .replace("ITEMS", &items);
+        let net = match field {
+            "tracks" => scoped_net!("tracks", body),
+            "artists" => scoped_net!("artists", body),
+            "releases" => scoped_net!("releases", body),
+            _ => unreachable!(),
+        };
+        let page = mock_client(net)
+            .search(&token(), "Mozart", scope, Some("opaque-in"))
+            .await
+            .unwrap();
+        let (total, cursor) = match &page {
+            SearchResults::Tracks(page) => {
+                assert_eq!(page.items[0].id, TrackId("1000".into()));
+                (page.total, page.cursor.as_deref())
+            }
+            SearchResults::Artists(page) => {
+                assert_eq!(page.items[0].id, ArtistId("20".into()));
+                (page.total, page.cursor.as_deref())
+            }
+            SearchResults::Albums(page) => {
+                assert_eq!(page.items[0].id, ReleaseId("30".into()));
+                (page.total, page.cursor.as_deref())
+            }
+        };
+        assert_eq!((total, cursor), (Some(7), Some("opaque-out")));
+    }
+
+    let malformed =
+        reply(r#"{"data":{"search":{"tracks":{"items":[],"page":{"total":0,"cursor":42}}}}}"#);
+    assert!(matches!(
+        mock_client(malformed)
+            .search(&token(), "Mozart", SearchScope::Tracks, None)
+            .await,
+        Err(Error::Protocol("invalid operation result"))
+    ));
+}
+
+#[kithara::test]
+async fn autocomplete_and_entity_track_reads_validate_the_service_contract() {
+    let suggestions = Unimock::new(
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if {
+                let body: Value = serde_json::from_slice(body).unwrap();
+                body["query"].as_str().unwrap().contains("searchAutocomplete(query: $query, limit: 3)")
+                    && body["variables"]["query"] == "Moz"
+            }))
+            .returns(Ok(Bytes::from_static(br#"{"data":{"searchAutocomplete":[{"content":"Mozart"},{"content":"Mozart Requiem"},{"content":"Mozart Symphony"}]}}"#))),
+    );
+    assert_eq!(
+        mock_client(suggestions)
+            .autocomplete(&token(), "Moz")
+            .await
+            .unwrap(),
+        ["Mozart", "Mozart Requiem", "Mozart Symphony"]
+    );
+
+    let track = r#"{"id":"1000","title":"Amber Field","duration":128,"artists":[],"release":null,"collectionItemData":null}"#;
+    let artist = reply(format!(
+        r#"{{"data":{{"getArtists":[{{"id":"20","popularTracks":[{track}]}}]}}}}"#
+    ));
+    let artist_page = mock_client(artist)
+        .artist_tracks(&token(), &ArtistId("20".into()))
+        .await
+        .unwrap();
+    assert_eq!(artist_page.total, Some(1));
+    assert_eq!(artist_page.tracks[0].id, TrackId("1000".into()));
+
+    let release = reply(format!(
+        r#"{{"data":{{"getReleases":[{{"id":"30","tracks":[{track}]}}]}}}}"#
+    ));
+    let release_page = mock_client(release)
+        .release_tracks(&token(), &ReleaseId("30".into()))
+        .await
+        .unwrap();
+    assert_eq!(release_page.total, Some(1));
+    assert_eq!(release_page.tracks[0].id, TrackId("1000".into()));
+
+    let wrong_artist = reply(format!(
+        r#"{{"data":{{"getArtists":[{{"id":"21","popularTracks":[{track}]}}]}}}}"#
+    ));
+    assert!(matches!(
+        mock_client(wrong_artist)
+            .artist_tracks(&token(), &ArtistId("20".into()))
+            .await,
+        Err(Error::Protocol("artist identity does not match request"))
+    ));
+    let wrong_release = reply(format!(
+        r#"{{"data":{{"getReleases":[{{"id":"31","tracks":[{track}]}}]}}}}"#
+    ));
+    assert!(matches!(
+        mock_client(wrong_release)
+            .release_tracks(&token(), &ReleaseId("30".into()))
+            .await,
+        Err(Error::Protocol("release identity does not match request"))
+    ));
+}
+
 /// Whether a catalogue request asks for every field its page total comes from.
 fn asks_for_its_total(request: &[u8]) -> bool {
     let request = String::from_utf8_lossy(request);
     let fields: &[&str] = if request.contains("KitharaSearch") {
-        &["page { total }"]
+        &["page { total cursor }"]
     } else if request.contains("KitharaLiked") {
         &["collectionCount { tracks }", "page { hasNextPage }"]
     } else {
@@ -162,16 +299,22 @@ async fn each_page_reports_the_total_the_service_establishes() {
                 .returns(Ok(Bytes::from(body.clone()))),
         ));
         let page = match operation {
-            "search" => client.search(&token(), "query").await,
-            "liked" => client.liked_tracks(&token()).await,
-            _ => {
-                client
-                    .playlist_tracks(&token(), &PlaylistId("1023".into()))
-                    .await
-            }
+            "search" => client
+                .search(&token(), "query", SearchScope::Tracks, None)
+                .await
+                .map(|page| match page {
+                    SearchResults::Tracks(page) => page.total,
+                    SearchResults::Artists(page) => page.total,
+                    SearchResults::Albums(page) => page.total,
+                }),
+            "liked" => client.liked_tracks(&token()).await.map(|page| page.total),
+            _ => client
+                .playlist_tracks(&token(), &PlaylistId("1023".into()))
+                .await
+                .map(|page| page.total),
         };
         let total = match page {
-            Ok(page) => Ok(page.total),
+            Ok(total) => Ok(total),
             Err(Error::Protocol(reason)) => Err(reason),
             Err(other) => panic!("{body}: {other:?}"),
         };
@@ -436,7 +579,7 @@ async fn a_failure_is_worded_by_its_cause() {
         ),
     ] {
         let error = mock_client(net)
-            .search(&token(), "query")
+            .search(&token(), "query", SearchScope::Tracks, None)
             .await
             .unwrap_err();
         let causes = iter::successors(Some(&error as &dyn std::error::Error), |cause| {
@@ -467,10 +610,14 @@ async fn reads_and_reactions_use_their_own_transports_and_a_reaction_needs_its_c
         Unimock::new(()),
         &identity(),
     );
-    assert_eq!(
-        reads.search(&token(), "needle").await.unwrap().tracks.len(),
-        5
-    );
+    let SearchResults::Tracks(page) = reads
+        .search(&token(), "needle", SearchScope::Tracks, None)
+        .await
+        .unwrap()
+    else {
+        panic!("track scope returned another result type");
+    };
+    assert_eq!(page.items.len(), 5);
     let like = Unimock::new(
         NetMock::post_bytes
             .next_call(matching!((_, request, _) if String::from_utf8_lossy(request).contains(r#"addItem(id: \"1000\""#)))
@@ -521,6 +668,11 @@ async fn a_lost_reaction_is_sent_once_and_a_lost_read_is_resent() {
             .is_err()
     );
     assert_eq!(requests.swap(0, Ordering::SeqCst), 1);
-    assert!(client.search(&token(), "query").await.is_err());
+    assert!(
+        client
+            .search(&token(), "query", SearchScope::Tracks, None)
+            .await
+            .is_err()
+    );
     assert!(requests.load(Ordering::SeqCst) > 1);
 }
