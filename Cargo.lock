@@ -4675,6 +4675,7 @@ dependencies = [
  "kithara-derive",
  "kithara-dsp",
  "kithara-events",
+ "kithara-key",
  "kithara-platform",
  "kithara-resampler",
  "kithara-signal",
@@ -5823,6 +5824,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-key"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara-blob",
+ "kithara-bufpool",
+ "kithara-dsp",
+ "kithara-signal",
+ "kithara-test-dylib",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "num-traits",
+ "rangemap",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "kithara-link"
 version = "0.0.1-alpha5"
 dependencies = [
@@ -5997,6 +6017,7 @@ dependencies = [
  "kithara-events",
  "kithara-file",
  "kithara-hls",
+ "kithara-key",
  "kithara-net",
  "kithara-platform",
  "kithara-play",

@@ -7,6 +7,7 @@ use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_file::File;
 use kithara_hls::Hls;
+use kithara_key::MusicalKey;
 use kithara_platform::CancelToken;
 use kithara_waveform::Waveform;
 
@@ -99,6 +100,12 @@ where
     #[must_use]
     pub fn discriminator(&self) -> Option<&str> {
         self.discriminator.as_deref()
+    }
+
+    /// The prepared musical key this track was opened with, when it has one.
+    #[must_use]
+    pub const fn key(&self) -> Option<&ArtifactSource<MusicalKey>> {
+        self.key.as_ref()
     }
 
     /// Replace the event bus attached to this resource.

@@ -1,0 +1,61 @@
+[package]
+name = "kithara-key"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Global musical key estimation from decoded PCM for Kithara."
+keywords = ["audio", "key", "chroma", "dsp", "analysis"]
+categories = ["multimedia::audio"]
+exclude = ["tests/**"]
+
+[package.metadata.kithara.wasm-lib-tests]
+default-features = true
+features = ["dsp"]
+
+[features]
+default = []
+# The estimator. The key model and its document are available without it.
+dsp = [
+    "dep:kithara-blob",
+    "dep:kithara-bufpool",
+    "dep:kithara-dsp",
+    "kithara-dsp/spectrum",
+    "dep:kithara-signal",
+    "dep:num-traits",
+    "dep:rangemap",
+]
+
+[dependencies]
+kithara-blob = { workspace = true, optional = true }
+kithara-bufpool = { workspace = true, optional = true }
+kithara-dsp = { workspace = true, optional = true }
+kithara-signal = { workspace = true, optional = true }
+
+num-traits = { workspace = true, optional = true }
+rangemap = { workspace = true, optional = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true, features = ["test", "subscriber"] }
+
+serde_json = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+kithara-test-dylib = { workspace = true }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "key"
+path = "tests/key/main.rs"
+required-features = ["dsp"]
