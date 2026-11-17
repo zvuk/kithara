@@ -16,6 +16,7 @@ pub use kithara_derive::Config;
 pub use kithara_derive::{ConfigOwner, Patch};
 
 mod config;
+pub mod duration;
 mod env;
 mod live;
 pub use config::{Config, ConfigOwner};

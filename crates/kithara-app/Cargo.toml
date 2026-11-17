@@ -175,7 +175,7 @@ kithara-test-utils = { workspace = true, features = ["test", "usdt", "mock", "ha
 
 async-trait = { workspace = true }
 futures = { workspace = true }
-keyring-core = { workspace = true, features = ["sample"] }
+keyring-core = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 
