@@ -12,7 +12,7 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use keyring_core::{Entry, Error, api::CredentialStoreApi, sample};
+use keyring_core::{Entry, Error, api::CredentialStoreApi, mock};
 use kithara_app_library::{KeyAccess, LibrarySource, OpenUrlError, PageStatus, Secrets};
 use kithara_app_zvuk::{Client, Config, Source};
 use kithara_net::{ByteStream, Headers, Net, NetError, RangeSpec};
@@ -125,12 +125,12 @@ pub(super) fn status(code: u16) -> NetError {
 }
 
 pub(super) fn memory() -> Secrets {
-    Secrets::new(sample::Store::new())
+    Secrets::new(mock::Store::new())
 }
 
 /// A store that failed to open.
 pub(super) fn refusing() -> Secrets {
-    Secrets::new(Err::<Arc<sample::Store>, _>(Error::NoStorageAccess(
+    Secrets::new(Err::<Arc<mock::Store>, _>(Error::NoStorageAccess(
         Box::new(io::Error::other("synthetic store refusal")),
     )))
 }
@@ -637,7 +637,7 @@ pub(super) async fn linked(net: DelayedNet, stored: Option<&str>) -> Linked {
 struct Blocking {
     entered: Mutex<mpsc::Sender<()>>,
     gate: Mutex<mpsc::Receiver<()>>,
-    inner: Arc<sample::Store>,
+    inner: Arc<mock::Store>,
 }
 
 /// `entered` signals a store access; dropping `release` fails it.
@@ -659,7 +659,7 @@ impl Gate {
 
 /// A blocking store holding `token`, if any.
 pub(super) fn blocking(token: Option<&str>) -> (Secrets, Gate) {
-    let inner = sample::Store::new().expect("the sample store opens");
+    let inner = mock::Store::new().expect("the mock store opens");
     if let Some(token) = token {
         Secrets::new(Ok(Arc::clone(&inner)))
             .set("zvuk", token)
