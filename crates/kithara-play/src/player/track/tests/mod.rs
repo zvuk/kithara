@@ -3,6 +3,7 @@ mod clock;
 mod core;
 mod fade_events;
 mod gain;
+mod lane_retirement;
 mod legacy_lifecycle;
 mod legacy_metrics;
 mod legacy_rate;

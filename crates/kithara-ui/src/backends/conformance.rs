@@ -31,6 +31,7 @@ use vello::{
 
 use super::{VelloBackend, read_back, replay_ordered};
 use crate::{
+    backends::finish,
     builtin,
     draw::{
         DrawList, DrawListBuilder, FillRule, LineCap, LineJoin, Paint, Path, Pen, Pt, Rect, Rgba,
@@ -428,6 +429,75 @@ fn iced_runs_a_ramp_across_the_shape_it_fills() {
 }
 
 #[kithara::test]
+fn iced_linear_gradient_quarters_preserve_the_authored_fraction() {
+    let rgba = through_iced(&ramped());
+    let middle = consts::OUTER.y + consts::OUTER.h / 2.0;
+    for fraction in [0.25, 0.75] {
+        let x = consts::OUTER.x + consts::OUTER.w * fraction;
+        let expected: u8 = cast(((x + 0.5 - consts::OUTER.x) / consts::OUTER.w * 255.0).round())
+            .expect("the reference fraction is inside RGBA8");
+        let actual = sample(&rgba, x, middle);
+        assert!(
+            actual.abs_diff(expected) <= 1,
+            "{actual}, expected {expected}"
+        );
+    }
+}
+
+#[kithara::test]
+#[case::opaque([0.0, 0.25, 0.75, 1.0], [1.0; 4], [[128,128,0], [0,191,64], [0,64,191], [128,128,255]])]
+#[case::alpha([0.0, 0.25, 0.75, 1.0], [1.0, 0.5, 1.0, 0.25], [[128,64,0], [0,96,64], [0,32,191], [32,32,159]])]
+#[case::coincident([0.0, 0.5, 0.5, 1.0], [1.0; 4], [[191,64,0], [64,191,0], [64,64,255], [191,191,255]])]
+fn iced_linear_gradients_preserve_stop_intervals_and_premultiplied_alpha(
+    #[case] offsets: [f32; 4],
+    #[case] alpha: [f32; 4],
+    #[case] expected: [[u8; 3]; 4],
+) {
+    let colors = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0; 3]];
+    let stops: Vec<_> = colors
+        .into_iter()
+        .enumerate()
+        .map(|(i, [r, g, b])| Stop {
+            offset: offsets[i],
+            color: Rgba {
+                r,
+                g,
+                b,
+                a: alpha[i],
+            },
+        })
+        .collect();
+    let mut list = DrawListBuilder::default();
+    list.fill_rect(
+        consts::OUTER,
+        Paint::Linear {
+            from: Pt {
+                x: consts::OUTER.x + 0.5,
+                y: consts::OUTER.y,
+            },
+            to: Pt {
+                x: consts::OUTER.x + consts::OUTER.w + 0.5,
+                y: consts::OUTER.y,
+            },
+            stops: Stops::new(&stops).unwrap(),
+        },
+    );
+    let rgba = through_iced(&list.finish());
+    for (fraction, expected) in [0.125, 0.375, 0.625, 0.875].into_iter().zip(expected) {
+        let x = pixel_index(consts::ORIGIN.0 + consts::OUTER.x + consts::OUTER.w * fraction);
+        let y = pixel_index(consts::ORIGIN.1 + consts::OUTER.y + consts::OUTER.h / 2.0);
+        let at = (y * usize::from(consts::SURFACE.0) + x) * 4;
+        for (channel, expected) in expected.into_iter().enumerate() {
+            assert!(
+                rgba[at + channel].abs_diff(expected) <= 1,
+                "fraction {fraction}: {:?}, expected channel {channel}={expected}",
+                &rgba[at..at + 4]
+            );
+        }
+    }
+}
+
+#[kithara::test]
 fn iced_leaves_the_hole_an_outline_asked_for() {
     assert!(
         ring_has_a_hole(&through_iced(&ring())),
@@ -470,7 +540,7 @@ fn through_iced(list: &DrawList) -> Vec<u8> {
         Size::new(f32::from(consts::SURFACE.0), f32::from(consts::SURFACE.1)),
     );
     replay_ordered(list, &mut frame, skin.text_resources.as_ref());
-    let geometry = frame.into_geometry();
+    let geometry = finish(frame.into_geometry());
     renderer.with_translation(
         Vector::new(consts::ORIGIN.0, consts::ORIGIN.1),
         |renderer| {

@@ -217,7 +217,7 @@ async fn seek_and_require_read(queue: &OfflineQueue<TestPools>, stage: &str, tar
                         && mark.position > first.position
                 });
             let sink_progress = trace.events()[output_index..].iter().any(|event| {
-                event.target() == "kithara_stream_probe" && event.probe == "write_playhead"
+                event.target == "kithara_stream_probe" && event.probe == "write_playhead"
             });
             if progressed && sink_progress {
                 break;

@@ -16,7 +16,7 @@ pub fn write(path: &Path, records: impl IntoIterator<Item = Value>, probes: &Sco
     }
     for (index, event) in probes.events().into_iter().enumerate() {
         let sequence = 10_000 + index as u64;
-        let source = match (event.file(), event.line()) {
+        let source = match (event.file, event.line) {
             (Some(path), Some(line)) => {
                 json!({ "path": workspace_relative(path), "line": line, "column": 0 })
             }

@@ -105,22 +105,22 @@ fn assert_events(actual: &[ProbeEvent], expected: &[ProbeEvent]) {
         assert_eq!(
             (
                 actual.probe,
-                actual.target(),
-                actual.file(),
-                actual.line(),
+                actual.target,
+                actual.file,
+                actual.line,
                 actual.thread,
                 actual.wall_time
             ),
             (
                 expected.probe,
-                expected.target(),
-                expected.file(),
-                expected.line(),
+                expected.target,
+                expected.file,
+                expected.line,
                 expected.thread,
                 expected.wall_time
             )
         );
-        assert!(actual.fields().eq(expected.fields()));
+        assert_eq!(actual.fields, expected.fields);
         assert_eq!(actual.len, expected.len);
     }
 }

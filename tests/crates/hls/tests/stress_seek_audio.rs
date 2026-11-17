@@ -139,7 +139,7 @@ impl AssetOpenStats {
 fn asset_open_stats(events: &[ProbeEvent]) -> AssetOpenStats {
     let mut stats = AssetOpenStats::default();
     for event in events {
-        if event.target() != "kithara_assets_probe" {
+        if event.target != "kithara_assets_probe" {
             continue;
         }
         match event.probe {
@@ -224,7 +224,7 @@ fn snapshot_hls_churn() -> ChurnSnapshot {
         .into_iter()
         .flat_map(usdt_trace::events_of)
     {
-        if event.target() != "kithara_hls_probe" {
+        if event.target != "kithara_hls_probe" {
             continue;
         }
         match event.probe {

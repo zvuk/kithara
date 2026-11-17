@@ -16,7 +16,7 @@ use kithara::{
 use kithara_command::{Seq, When};
 use kithara_integration_tests::{
     audio_artifact::{AudioArtifactTap, artifact_label},
-    offline::linked::{LinkCapture, LinkObservation, LinkReceiptOrigin, LinkVerdict},
+    offline::linked::{LinkCapture, LinkReceiptOrigin, LinkVerdict},
 };
 use kithara_render::bridge::{Fade, FadeDir, Slot, SlotSnapshot, SlotState};
 use kithara_test_utils::tracing;
@@ -325,160 +325,6 @@ fn native_end(
         .map(|(_, _, at)| frame(*at))
         .min()
         .expect("native terminal frame")
-}
-
-fn lane_outcomes_settled(
-    observation: &LinkObservation,
-    now: SessionFrame,
-    bound_segment: impl Fn(TrackId) -> Option<SegmentId>,
-) -> bool {
-    let received = |item, seq| {
-        observation
-            .placement_receipts
-            .iter()
-            .any(|(owner, origin, receipt)| {
-                *owner == item
-                    && *origin == LinkReceiptOrigin::Lane
-                    && matches!(receipt,
-                        kithara::play::Settled::Applied { seq: answered, .. }
-                        | kithara::play::Settled::Rejected { seq: answered, .. }
-                        if *answered == seq)
-            })
-    };
-    observation.cue_curves.iter().all(|cue| {
-        let adopted = cue
-            .before_segment
-            .zip(bound_segment(cue.item))
-            .is_some_and(|(before, segment)| segment > before);
-        !adopted || observation.ready_cues.contains(&(cue.item, cue.seq))
-    }) && observation.speeds.iter().all(|speed| {
-        !matches!(
-            speed.before.status,
-            kithara::play::TrackStatus::Playing { .. }
-        ) || matches!(speed.at, When::At(at) if at > now)
-            || received(speed.item, speed.seq)
-            || native_end_precludes_speed(observation.capture.as_ref(), speed.item, speed.at)
-    })
-}
-
-#[kithara::test(native)]
-fn silent_cues_hold_the_manual_clock_until_their_lane_outcomes() {
-    use kithara::play::Settled;
-    use kithara_command::mailbox;
-
-    let (postbox, _owner) = mailbox::<(), ()>();
-    let first = postbox.post(()).expect("first numbered cue").seq();
-    let second = postbox.post(()).expect("second numbered cue").seq();
-    let other = postbox.post(()).expect("another numbered cue").seq();
-    let item = TrackId::allocate();
-    let unrelated = TrackId::allocate();
-    let now = SessionFrame::new(0);
-    let mut observation = LinkObservation::default();
-    let old = SegmentId::FIRST;
-    let mark = kithara_render::bridge::SlotMark {
-        session: now,
-        lane: kithara_render::LaneFrame {
-            segment: old,
-            frame: 0,
-        },
-        position: Duration::ZERO,
-    };
-    let before = TrackSnapshot {
-        output: kithara::play::SlotOutputSnapshot::default(),
-        item,
-        slot: Some(Slot::new(0)),
-        status: kithara::play::TrackStatus::Loaded,
-        speed: 1.0,
-        position: Duration::ZERO,
-        duration: Some(Duration::from_secs(12)),
-        abr: None,
-        metadata: kithara::decode::TrackMetadata::default(),
-        mark: Some(mark),
-        engine_latency: kithara::signal::FrameCount::new(0),
-        ring_depth: kithara::signal::FrameCount::new(0),
-        lane_room: 2,
-        pending_lane: false,
-        attached: true,
-        declick: kithara::signal::FrameCount::new(0),
-    };
-    observation
-        .cue_curves
-        .push(kithara_integration_tests::offline::linked::LinkCue {
-            item,
-            seq: first,
-            position: Duration::ZERO,
-            curve: kithara::sync::SpeedCurve::Constant(1.0),
-            before,
-            before_segment: Some(old),
-            consumed: None,
-            host_input: None,
-            native: None,
-            segment: None,
-        });
-    let settled = |observation: &LinkObservation, segment| {
-        lane_outcomes_settled(observation, now, |owner| (owner == item).then_some(segment))
-    };
-    assert!(observation.speeds.is_empty());
-    assert!(
-        settled(&observation, old),
-        "the next callback must apply Adopt before it can free old PCM"
-    );
-    assert!(
-        !settled(&observation, old.next()),
-        "an admitted silent cue must settle before the manual clock advances"
-    );
-    observation.cue_curves[0].before.mark = None;
-    assert!(
-        settled(&observation, old),
-        "a silent binding still needs its Adopt callback without a PCM mark"
-    );
-    assert!(
-        !settled(&observation, old.next()),
-        "an adopted cue without a prior PCM mark must hold the manual clock"
-    );
-    observation.cue_curves[0].before.mark = Some(mark);
-    observation.placement_receipts.push((
-        item,
-        LinkReceiptOrigin::Deck,
-        Settled::Applied {
-            seq: first,
-            at: now,
-        },
-    ));
-    assert!(!settled(&observation, old.next()));
-    for cue in [(unrelated, first), (item, other)] {
-        observation.ready_cues.push(cue);
-        assert!(!settled(&observation, old.next()));
-    }
-    observation.ready_cues.push((item, first));
-    assert!(settled(&observation, old.next()));
-
-    let mut next = kithara_integration_tests::offline::linked::LinkCue {
-        item,
-        seq: second,
-        position: Duration::ZERO,
-        curve: kithara::sync::SpeedCurve::Constant(1.0),
-        before: observation.cue_curves[0].before.clone(),
-        before_segment: Some(old.next()),
-        consumed: None,
-        host_input: None,
-        native: None,
-        segment: None,
-    };
-    next.before
-        .mark
-        .as_mut()
-        .expect("prepared source mark")
-        .lane
-        .segment = old.next();
-    observation.cue_curves.push(next);
-    assert!(
-        settled(&observation, old.next()),
-        "another cue also requires its own Adopt callback"
-    );
-    assert!(!settled(&observation, old.next().next()));
-    observation.ready_cues.push((item, second));
-    assert!(settled(&observation, old.next().next()));
 }
 
 fn native_end_precludes_speed(
@@ -902,6 +748,158 @@ struct CapturedMusic {
     boundary_copies: Vec<BoundaryCopy>,
     output_delta: f32,
     supplied_grid_shift_rejected: bool,
+}
+
+fn cue_preparations_settled(observation: &LinkObservation) -> bool {
+    observation
+        .cue_curves
+        .iter()
+        .filter(|cue| {
+            cue.before.attached
+                && cue.native.is_none()
+                && observation
+                    .ready_cues
+                    .iter()
+                    .any(|(item, seq)| *item == cue.item && seq.get() < cue.seq.get())
+        })
+        .all(|cue| {
+            if observation.ready_cues.contains(&(cue.item, cue.seq))
+                || observation
+                    .placement_receipts
+                    .iter()
+                    .any(|(owner, origin, receipt)| {
+                        *owner == cue.item
+                            && *origin == LinkReceiptOrigin::Lane
+                            && matches!(receipt,
+                                kithara::play::Settled::Rejected { seq, .. }
+                                if *seq == cue.seq)
+                    })
+            {
+                return true;
+            }
+            let bases = usdt_trace::events_of("lane_source_ready");
+            let previous = bases
+                .iter()
+                .rev()
+                .find(|event| {
+                    event.field("item") == Some(u64::from(cue.item))
+                        && event
+                            .field("lane_seq")
+                            .is_some_and(|seq| seq < cue.seq.get())
+                })
+                .and_then(|event| event.field("segment"))
+                .expect("an acknowledged cue retains its actual Lane source basis");
+            let adopted = observation
+                .capture
+                .as_ref()
+                .expect("native capture")
+                .segments
+                .iter()
+                .rev()
+                .find(|(item, ..)| *item == cue.item)
+                .map(|(_, _, _, segment, _)| *segment);
+            // The consumer must retire the old FIFO before its producer can finish preparing.
+            adopted.is_none_or(|segment| segment <= previous)
+        })
+}
+
+#[kithara::test(native, serial)]
+fn a_pending_cue_allows_the_consumer_turn_that_releases_its_producer() {
+    use kithara::signal::FrameCount;
+    use kithara_integration_tests::offline::linked::LinkCue;
+
+    let _trace = usdt_trace::scope();
+    let item = TrackId::allocate();
+    let other = TrackId::allocate();
+    let (posts, _mailbox) = kithara_command::mailbox::<(), ()>();
+    let initial = posts.post(()).expect("initial cue").seq();
+    let replacement = posts.post(()).expect("replacement cue").seq();
+    let old_segment = SegmentId::FIRST;
+    let new_segment = old_segment.next();
+    tracing::event!(target: "kithara_play_probe", tracing::Level::TRACE,
+        probe = "lane_source_ready", item = u64::from(item),
+        lane_seq = initial.get(), segment = old_segment.get());
+    let before = TrackSnapshot {
+        output: kithara::play::SlotOutputSnapshot::default(),
+        item,
+        slot: Some(Slot::new(0)),
+        status: kithara::play::TrackStatus::Loaded,
+        speed: 1.0,
+        position: Duration::ZERO,
+        duration: Some(Duration::from_secs(12)),
+        abr: None,
+        metadata: kithara::decode::TrackMetadata::default(),
+        mark: None,
+        engine_latency: FrameCount::new(0),
+        ring_depth: FrameCount::new(5631),
+        lane_room: 128,
+        pending_lane: false,
+        attached: true,
+        declick: FrameCount::new(240),
+    };
+    let mut observation = LinkObservation {
+        capture: Some(LinkCapture::default()),
+        cues: vec![(item, initial), (item, replacement)],
+        cue_curves: vec![LinkCue {
+            item,
+            seq: replacement,
+            position: Duration::ZERO,
+            curve: kithara::sync::SpeedCurve::Constant(1.2),
+            before,
+            consumed: None,
+            host_input: None,
+            native: None,
+            segment: None,
+        }],
+        ready_cues: vec![(item, initial)],
+        ..LinkObservation::default()
+    };
+    let adoption = |owner, segment: SegmentId| {
+        (
+            owner,
+            Slot::new(0),
+            SessionFrame::new(0),
+            segment.get(),
+            replacement.get(),
+        )
+    };
+    observation
+        .capture
+        .as_mut()
+        .expect("native capture")
+        .segments
+        .push(adoption(item, old_segment));
+    assert!(
+        cue_preparations_settled(&observation),
+        "the full old FIFO needs its consumer's native turn before its producer can become ready"
+    );
+    observation
+        .capture
+        .as_mut()
+        .expect("native capture")
+        .segments
+        .push(adoption(other, new_segment));
+    assert!(
+        cue_preparations_settled(&observation),
+        "another item's adoption does not move this cue's native phase"
+    );
+    observation
+        .capture
+        .as_mut()
+        .expect("native capture")
+        .segments
+        .push(adoption(item, new_segment));
+    assert!(
+        !cue_preparations_settled(&observation),
+        "after native adoption this cue must acknowledge its prepared PCM"
+    );
+    observation.ready_cues.push((other, replacement));
+    assert!(
+        !cue_preparations_settled(&observation),
+        "another item's receipt cannot settle this cue"
+    );
+    observation.ready_cues.push((item, replacement));
+    assert!(cue_preparations_settled(&observation));
 }
 
 impl QueueMusic {
@@ -1609,17 +1607,23 @@ impl QueueMusic {
         let now = SessionFrame::new(i64::try_from(position).expect("Host frame"));
         self.deck.read_snapshot().await;
         kithara_test_utils::wait_until(Duration::from_secs(5), "Queue Lane outcomes", || {
-            let settled = self
-                .deck
-                .observe(|o| {
-                    lane_outcomes_settled(o, now, |item| {
-                        o.consumed.iter().find_map(|(owner, slot)| {
-                            slot.binding
-                                .filter(|binding| *owner == item && binding.item() == item)
-                                .map(|binding| binding.segment())
+            let settled = self.deck.observe(|o| {
+                cue_preparations_settled(o) && o.speeds.iter().all(|speed| {
+                    !matches!(
+                        speed.before.status,
+                        kithara::play::TrackStatus::Playing { .. }
+                    ) || matches!(speed.at, When::At(at) if at > now)
+                        || o.placement_receipts.iter().any(|(item, origin, receipt)| {
+                            *item == speed.item
+                                && *origin == LinkReceiptOrigin::Lane
+                                && matches!(receipt,
+                                    kithara::play::Settled::Applied { seq, .. }
+                                    | kithara::play::Settled::Rejected { seq, .. }
+                                    if *seq == speed.seq)
                         })
-                    })
-                });
+                        || native_end_precludes_speed(o.capture.as_ref(), speed.item, speed.at)
+                })
+            });
             if !settled {
                 drop(
                     self.deck
@@ -1651,8 +1655,8 @@ impl QueueMusic {
                     .as_ref()
                     .map(|capture| (&capture.fades, &capture.faded, &capture.ended));
                 format!(
-                    "frame={now:?}; receipts={:?}; cues={:?}; ready_cues={:?}; speeds={speeds:?}; fades={fades:?}; consumed={:?}",
-                    observation.placement_receipts, observation.cues, observation.ready_cues, observation.consumed,
+                    "frame={now:?}; receipts={:?}; speeds={speeds:?}; fades={fades:?}; consumed={:?}; cues={:?}; ready={:?}",
+                    observation.placement_receipts, observation.consumed, observation.cues, observation.ready_cues,
                 )
             });
             panic!(
@@ -1664,7 +1668,16 @@ impl QueueMusic {
             position,
             "Lane settlement renders no PCM"
         );
-        self.deck.read_snapshot().await
+        let snapshot = self.deck.read_snapshot().await;
+        self.deck.observe(|observation| {
+            assert!(
+                cue_preparations_settled(observation),
+                "adopted cue preparation must settle before offline PCM advances: cues={:?}; ready={:?}",
+                observation.cues,
+                observation.ready_cues,
+            );
+        });
+        snapshot
     }
 
     fn inspect_bindings(
@@ -1860,14 +1873,12 @@ impl QueueMusic {
         let events = usdt_trace::events();
         let consumed_slices = events
             .iter()
-            .filter(|event| {
-                event.target() == "kithara_render_probe" && event.probe == "pcm_consumed"
-            })
+            .filter(|event| event.target == "kithara_render_probe" && event.probe == "pcm_consumed")
             .count();
         let geometry_events = events
             .iter()
             .filter(|event| {
-                event.target() == "kithara_render_probe" && event.probe == "pcm_consumed_geometry"
+                event.target == "kithara_render_probe" && event.probe == "pcm_consumed_geometry"
             })
             .count();
         let mut negative_controls = vec![
@@ -2267,17 +2278,7 @@ fn assert_transport(
         "nonblocking source playback has no underrun/fault: {:?}",
         capture.faults
     );
-    assert_eq!(
-        capture.faded.len(),
-        4,
-        "four real outgoing crossfades; cues={:?}; ready={:?}; cue_inputs={:?}",
-        o.cue_curves,
-        o.ready_cues,
-        o.timeline
-            .iter()
-            .filter(|entry| entry["event"] == "cue")
-            .collect::<Vec<_>>(),
-    );
+    assert_eq!(capture.faded.len(), 4, "four real outgoing crossfades");
     match kind {
         MusicCase::Natural => {
             assert_eq!(capture.ended.len(), 1, "last source reaches natural end");
@@ -2531,7 +2532,7 @@ fn native_segments(o: &LinkObservation, voices: &[Voice]) -> Vec<NativeSegment> 
     let events: Vec<_> = usdt_trace::events()
         .into_iter()
         .filter(|event| {
-            event.target() == "kithara_render_probe"
+            event.target == "kithara_render_probe"
                 && matches!(event.probe, "deck_attached" | "deck_adopted")
         })
         .collect();
