@@ -7,7 +7,7 @@ use super::{
 use crate::{
     compile::{Address, CompiledNode, CompiledUi, SplitCell},
     draw::{Pt, Transform},
-    expand::{Binding, ExpandedNode, MagnetSpec, MeasureSpec, SurfaceSpec},
+    expand::{Binding, ColorSpec, ExpandedNode, MagnetSpec, MeasureSpec, SurfaceSpec},
     ids::InternId,
     layout::{Axis, FrameCorners, FrameSides},
     module::{ChromeStyle, MeasureAxis, Motion, PopoverAlign, PopoverAt, Pose, TextAlign},
@@ -218,7 +218,7 @@ struct PopoverNode<'a> {
 #[derive(Clone, Copy)]
 struct RowNode<'a> {
     active: Option<&'a Binding>,
-    active_background: Option<ColorRole>,
+    active_background: Option<&'a ColorSpec>,
     active_frame_color: Option<ColorRole>,
     background: Option<ColorRole>,
     background_alpha: Option<f32>,
@@ -239,7 +239,8 @@ fn row_group<'a>(node: RowNode<'a>, round: FrameCorners, ctx: Ctx<'_, '_>) -> Gr
     let frame_color = node.frame_color.unwrap_or(ctx.skin.divider.color);
     let lit = node.active.map(|flag| Lit {
         flag,
-        background: node.active_background.or(node.background),
+        background: ctx.color_role(node.active_background).or(node.background),
+        background_source: node.active_background,
         frame_color: node.active_frame_color.unwrap_or(frame_color),
     });
     Group {
@@ -393,7 +394,7 @@ where
                     background: *background,
                     background_alpha: *background_alpha,
                     active: active.as_ref(),
-                    active_background: *active_background,
+                    active_background: active_background.as_ref(),
                     frame_color: *frame_color,
                     active_frame_color: *active_frame_color,
                     surface: surface.as_ref(),

@@ -4,11 +4,11 @@ use num_traits::cast::AsPrimitive;
 use crate::{
     compile::CompiledUi,
     draw::Pt,
-    expand::{Binding, BindingKind, BlockSpec},
+    expand::{Binding, BindingKind, BlockSpec, ColorSpec},
     registry::SECONDS,
     render::{DEFAULT_ZOOM, ReadValue, Reads, custom::CustomKinds},
     size::Snapshot,
-    skin::SkinDoc,
+    skin::{ColorRole, SkinDoc},
     view::ViewState,
 };
 
@@ -95,6 +95,18 @@ impl<'a, 'r> Ctx<'a, 'r> {
             view,
             reads,
             kinds: None,
+        }
+    }
+
+    /// Resolves a colour source for this frame.
+    #[must_use]
+    pub fn color_role(self, color: Option<&ColorSpec>) -> Option<ColorRole> {
+        match color? {
+            ColorSpec::Role(role) => Some(*role),
+            ColorSpec::FromRead { read, base } => Some(match self.read(read) {
+                Some(ReadValue::Color(role)) => role,
+                _ => *base,
+            }),
         }
     }
 

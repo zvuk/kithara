@@ -69,7 +69,7 @@ impl ViewControl for mount::label::text::host::Text<'_> {
                 .style(self.style)
                 .maybe_value(cx.value)
                 .maybe_label(self.label.map(|id| cx.ctx.ui.resolve(id)))
-                .maybe_color(self.color)
+                .maybe_color(cx.ctx.color_role(self.color))
                 .maybe_active_color(self.active_color)
                 .active(cx.ctx.flag(self.active))
                 .maybe_font(self.font)
@@ -79,6 +79,12 @@ impl ViewControl for mount::label::text::host::Text<'_> {
                 .view(),
             horizontal(self.align),
         )
+    }
+}
+
+impl ViewControl for mount::label::glyph::host::Glyph<'_> {
+    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
+        painted(self, cx)
     }
 }
 

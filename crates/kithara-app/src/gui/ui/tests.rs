@@ -1097,6 +1097,7 @@ fn every_keylock_chip_binds_to_its_deck() {
                 "down-icon",
                 "chip/toggle",
                 "chip/icon",
+                "chip/key",
                 "chip/readout",
                 "up",
                 "up-icon",

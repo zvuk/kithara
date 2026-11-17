@@ -546,11 +546,7 @@ impl Retained for StatusDot {}
 
 impl Retained for Swatch {}
 
-impl Retained for Glyph {
-    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
-        set_bool(&mut data.active, value)
-    }
-}
+impl Retained for Glyph {}
 
 impl Retained for Knob {
     fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {

@@ -6605,6 +6605,7 @@ dependencies = [
  "iced_runtime",
  "iced_tiny_skia",
  "iced_wgpu",
+ "kithara-key",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-ui",

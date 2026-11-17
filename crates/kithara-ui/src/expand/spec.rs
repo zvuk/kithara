@@ -1,5 +1,5 @@
 use super::{
-    Binding, ControlSpec,
+    Binding, ColorSpec, ControlSpec,
     binding_subst::{
         intern_binding, intern_optional_binding, intern_optional_text, intern_text, intern_texts,
         resolve_text_key,
@@ -9,8 +9,8 @@ use super::{
 };
 use crate::{
     error::UiDocError,
-    ids::{InternId, Interner},
-    module::{BindingRef, ControlNode, TableColumn, TableFrame, Tone, WaveStyle},
+    ids::{InternId, Interner, SourceUri},
+    module::{BindingRef, ColorSource, ControlNode, TableColumn, TableFrame, Tone, WaveStyle},
     shader::{self, ShaderUniform},
     skin::ColorRole,
     validate,
@@ -193,7 +193,6 @@ fn glyph_spec(
         icon,
         active_icon,
         style,
-        color,
         active_color,
         ..
     } = control
@@ -204,7 +203,7 @@ fn glyph_spec(
         icon: context.param(icon, path)?,
         active_icon: context.optional_param(active_icon.as_ref(), path)?,
         style: *style,
-        color: context.optional_param(color.as_ref(), path)?,
+        color: intern_optional_color(machine.interner, extra.color.as_ref(), &context.origin)?,
         active_color: context.optional_param(active_color.as_ref(), path)?,
         active: optional_binding(context, machine, extra.active.as_ref())?,
     })
@@ -244,7 +243,6 @@ fn text_spec(
         style,
         label,
         align,
-        color,
         active_color,
         font,
         weight,
@@ -256,7 +254,7 @@ fn text_spec(
     Ok(ControlSpec::Text {
         style: *style,
         label: optional_text(context, machine, label.as_deref(), path)?,
-        color: *color,
+        color: intern_optional_color(machine.interner, extra.color.as_ref(), &context.origin)?,
         active_color: *active_color,
         active: optional_binding(context, machine, extra.active.as_ref())?,
         align: *align,
@@ -496,6 +494,16 @@ fn optional_binding(
     binding: Option<&BindingRef>,
 ) -> Result<Option<Binding>, UiDocError> {
     intern_optional_binding(machine.interner, binding, &context.origin)
+}
+
+pub(in crate::expand) fn intern_optional_color(
+    interner: &mut Interner,
+    source: Option<&ColorSource>,
+    origin: &SourceUri,
+) -> Result<Option<ColorSpec>, UiDocError> {
+    source
+        .map(|source| source.try_map(|read| intern_binding(interner, read, origin)))
+        .transpose()
 }
 
 fn wave_spec(

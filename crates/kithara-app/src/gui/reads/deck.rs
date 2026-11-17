@@ -1,7 +1,12 @@
 use kithara::{
+    analysis::{Mode, MusicalKey},
     effects::GainDb,
     play::Pitch,
-    ui::render::{Node, ReadValue, Scope, WaveformView},
+    ui::{
+        builtin::{MAJOR_KEY_COLORS, MINOR_KEY_COLORS},
+        render::{Node, ReadValue, Scope, WaveformView},
+        skin::ColorRole,
+    },
 };
 use num_traits::cast::AsPrimitive;
 
@@ -9,7 +14,10 @@ use super::value::{Value, impl_child_node};
 use crate::{
     deck::{EqMode, TempoPercent},
     engine::DeckSnapshot,
-    gui::{deck::consts::TEMPO_RANGE, ui::cache::DeckCache},
+    gui::{
+        deck::consts::TEMPO_RANGE,
+        ui::cache::{DeckCache, pitch_shift},
+    },
     state::AbrVariant,
 };
 
@@ -143,11 +151,21 @@ struct TrackNode<'a> {
     shown: &'a DeckSnapshot,
 }
 
+fn key_color(key: MusicalKey) -> ColorRole {
+    let roles = match key.mode {
+        Mode::Major => &MAJOR_KEY_COLORS,
+        Mode::Minor => &MINOR_KEY_COLORS,
+    };
+    roles[key.open_key_index()]
+}
+
 impl<'a> Node<'a> for TrackNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
             "title" => ReadValue::Text(title(self.shown)?),
             "source_kind" => ReadValue::Text(&self.cache.subtitle),
+            "key" => ReadValue::Text(self.shown.analysis.key.map_or("", MusicalKey::open_key)),
+            "key_color" => ReadValue::Color(key_color(self.shown.analysis.key?)),
             "artwork" => ReadValue::Image(self.cache.artwork.image()?),
             _ => return None,
         };
@@ -177,11 +195,24 @@ struct KeyNode<'a> {
     shown: &'a DeckSnapshot,
 }
 
+impl KeyNode<'_> {
+    fn sounding(&self) -> Option<MusicalKey> {
+        self.shown
+            .analysis
+            .key
+            .map(|key| key.transposed(pitch_shift(self.shown.pitch)))
+    }
+}
+
 impl<'a> Node<'a> for KeyNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
             "locked" => ReadValue::Bool(self.shown.pitch.is_some_and(Pitch::keylock)),
             "lock_hidden" => ReadValue::Bool(self.shown.pitch.is_none()),
+            "sounding" => ReadValue::Text(self.sounding().map_or("", MusicalKey::open_key)),
+            "color" => ReadValue::Color(key_color(self.sounding()?)),
+            "sounding_hidden" => ReadValue::Bool(self.shown.analysis.key.is_none()),
+            "transpose_hidden" => ReadValue::Bool(self.cache.transpose.is_empty()),
             "transpose" => ReadValue::Text(&self.cache.transpose),
             _ => return None,
         };

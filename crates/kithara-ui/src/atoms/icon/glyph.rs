@@ -16,31 +16,19 @@ use crate::{
     draw = self.paint(list, text, data, bounds)
 )]
 pub(crate) struct Glyph {
-    active_color: Rgba,
-    color: Rgba,
     size: f32,
 }
 
-/// What a glyph is handed each frame: the art for each of its states, and which
-/// state it is in.
-///
-/// Both marks travel together because a document may name a different icon for
-/// the active state, and reading authored art can fail — so the choice is made
-/// once, where it can still answer "nothing to draw".
+/// What a glyph is handed each frame: the art and colour it draws right now.
 #[derive(Clone, PartialEq)]
 pub(crate) struct GlyphData {
     pub(crate) mark: Mark,
-    pub(crate) active_mark: Option<Mark>,
-    pub(crate) active: bool,
+    pub(crate) color: Rgba,
 }
 
 impl Glyph {
-    pub(crate) const fn new(color: Rgba, active_color: Rgba, size: f32) -> Self {
-        Self {
-            active_color,
-            color,
-            size,
-        }
+    pub(crate) const fn new(size: f32) -> Self {
+        Self { size }
     }
 
     pub(crate) fn paint(
@@ -50,11 +38,6 @@ impl Glyph {
         data: &GlyphData,
         bounds: Rect,
     ) {
-        let (mark, color) = if data.active {
-            (data.active_mark.unwrap_or(data.mark), self.active_color)
-        } else {
-            (data.mark, self.color)
-        };
-        Marked::new(mark, self.size).centred(list, text, bounds, color);
+        Marked::new(data.mark, self.size).centred(list, text, bounds, data.color);
     }
 }
