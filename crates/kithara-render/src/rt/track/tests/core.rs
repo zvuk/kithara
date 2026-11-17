@@ -1,6 +1,7 @@
 pub(super) use std::num::NonZeroU32;
 
 pub(super) use kithara_signal::{AudioSpec, FrameCount, SampleCount, SourceSpan};
+use kithara_stream::PlayheadRead;
 pub(super) use kithara_test_utils::kithara;
 
 use super::*;
@@ -26,10 +27,7 @@ pub(in super::super) fn stop_seq() -> kithara_command::Seq {
 #[case::samples(false)]
 #[case::mark(true)]
 fn an_adopted_segment_never_uses_a_held_obsolete_packet(#[case] check_mark: bool) {
-    use crate::{
-        test_pools::pools,
-        worker::packet_tests::{PacketRing, chunk},
-    };
+    use crate::worker::packet_tests::{PacketRing, chunk};
 
     let spec = AudioSpec::new(1, NonZeroU32::new(44_100).expect("rate"));
     let old = SegmentId::FIRST;
@@ -50,9 +48,7 @@ fn an_adopted_segment_never_uses_a_held_obsolete_packet(#[case] check_mark: bool
         18,
         &[1.0; 8],
     ))));
-    let mut resource =
-        PlayerResource::new(PcmConsumer::new(receiver), Arc::from("segments"), &pools())
-            .expect("resource");
+    let mut resource = PlayerResource::new(Box::new(receiver));
     resource.select_segment(intermediate);
     let mut budget = 1;
     resource.refresh_mark(&mut budget);
@@ -78,9 +74,8 @@ fn an_adopted_segment_never_uses_a_held_obsolete_packet(#[case] check_mark: bool
     ))));
     assert!(
         resource
-            .consumer
-            .get_mut()
             .receiver
+            .as_mut()
             .recycle(PcmPacket::Chunk(Box::new(chunk(spec, old, 0, 0, &[1.0]))))
             .is_err(),
         "the reverse ring is full"
@@ -238,7 +233,7 @@ fn producer_ahead_geometry_does_not_replace_a_historical_buffered_mark(
     #[case] old_origin: u64,
     #[case] new_origin: u64,
 ) {
-    use crate::{test_pools::pools, worker::packet_tests::PacketRing};
+    use crate::worker::packet_tests::PacketRing;
     let spec = AudioSpec::new(2, NonZeroU32::new(1_000).expect("millisecond clock"));
     let mut ring = PacketRing::new(spec, Duration::from_millis(952), 4);
     let mut old = chunk(spec, SegmentId::FIRST, 0, old_origin + 500, &[0.25; 8]);
@@ -249,12 +244,7 @@ fn producer_ahead_geometry_does_not_replace_a_historical_buffered_mark(
     next.meta.source_revision = 8;
     ring.push(PcmPacket::Chunk(Box::new(old)));
     ring.push(PcmPacket::Chunk(Box::new(next)));
-    let mut resource = PlayerResource::new(
-        PcmConsumer::new(ring.receiver.take().expect("receiver")),
-        Arc::from("promoted"),
-        &pools(),
-    )
-    .expect("resource");
+    let mut resource = PlayerResource::new(Box::new(ring.receiver.take().expect("receiver")));
     let mut budget = 8;
     resource.refresh_mark(&mut budget);
     assert_eq!(
@@ -267,7 +257,7 @@ fn producer_ahead_geometry_does_not_replace_a_historical_buffered_mark(
     assert_eq!(left, [0.25]);
     assert_eq!(right, left);
     assert_eq!(
-        resource.consumer.get().receiver.visible_origin(),
+        resource.receiver.as_ref().visible_origin(),
         Some(Duration::from_millis(new_origin))
     );
     assert_eq!(
@@ -281,7 +271,13 @@ fn producer_ahead_geometry_does_not_replace_a_historical_buffered_mark(
             .position,
         Duration::from_millis(old_origin + 501)
     );
-    assert_eq!(resource.duration(), 0.952);
+    assert_eq!(
+        ring.playhead()
+            .duration()
+            .expect("visible source duration")
+            .as_secs_f64(),
+        0.952
+    );
     let mut left = [0.0; 4];
     let mut right = [0.0; 4];
     resource.read(None, &mut [&mut left, &mut right], 0..4, &mut budget);
@@ -298,5 +294,11 @@ fn producer_ahead_geometry_does_not_replace_a_historical_buffered_mark(
         resource.visible_origin(),
         Some(Duration::from_millis(new_origin))
     );
-    assert_eq!(resource.duration(), 0.952);
+    assert_eq!(
+        ring.playhead()
+            .duration()
+            .expect("visible source duration")
+            .as_secs_f64(),
+        0.952
+    );
 }

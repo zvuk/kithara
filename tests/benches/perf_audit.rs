@@ -30,7 +30,8 @@ use kithara::{
         },
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, WarpControls, WarpControlsChange,
+        PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, TrackConfig, WarpControls,
+        WarpControlsChange,
     },
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
@@ -204,9 +205,12 @@ fn bench_gapless_trim(c: &mut Criterion) {
                     .hint("mp3".to_string())
                     .build();
                 let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-                let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-                    .await
-                    .unwrap_or_else(|e| panic!("audio init failed: {e}"));
+                let mut audio = kithara_integration_tests::mock::load_audio(
+                    &worker,
+                    (config, TrackConfig::default()),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("audio init failed: {e}"));
                 let mut buf = [0.0_f32; 8_192];
                 let mut total = 0_usize;
                 let mut reached_eof = false;
@@ -243,9 +247,10 @@ async fn analyze_track(
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint("mp3".to_owned())
         .build();
-    let reader = kithara_integration_tests::mock::load_audio(play_worker, config)
-        .await
-        .unwrap_or_else(|error| panic!("analysis benchmark reader failed to open: {error}"));
+    let reader =
+        kithara_integration_tests::mock::load_audio(play_worker, (config, TrackConfig::default()))
+            .await
+            .unwrap_or_else(|error| panic!("analysis benchmark reader failed to open: {error}"));
     let rate = reader.spec().sample_rate;
     let (mut results, _producer) = analysis_worker
         .analyze(
@@ -624,9 +629,10 @@ async fn quality_switch(helper: &TestServerHelper, server: &CreatedHls) -> usize
         )
         .events(bus)
         .build();
-    let config = kithara::play::TrackConfig::for_audio(config)
-        .block_on_underrun(true)
-        .build();
+    let config = (
+        config,
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await

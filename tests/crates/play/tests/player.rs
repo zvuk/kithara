@@ -481,8 +481,12 @@ fn select_item_without_runtime_errors_without_bookkeeping() {
         .store(AssetStore::builder(pools()).build())
         .build();
     let prep = prep();
-    let prepared = prep
-        .prepare(source.clone(), &mock::output(None).get())
+    let (prepared, _load) = prep
+        .prepare(
+            source.clone(),
+            &mock::output(None).get(),
+            Box::new(kithara::audio::AudioObserverSlot::default().relay()),
+        )
         .expect("the source config is valid before runtime admission");
     assert!(
         prepared.cancel().is_some(),

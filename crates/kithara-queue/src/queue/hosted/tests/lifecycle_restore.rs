@@ -959,7 +959,7 @@ async fn prepare_config_per_track_cancel_is_child_of_player_master(
     #[by_ref] worker_owner: &WorkerOwner,
 ) {
     let (queue, _, dir) = empty_queue(&worker_owner.0);
-    let prepared = queue
+    let (prepared, _load) = queue
         .config
         .prep
         .as_ref()
@@ -973,6 +973,7 @@ async fn prepare_config_per_track_cancel_is_child_of_player_master(
                 )
                 .build(),
             &mock::output(None).get(),
+            Box::new(kithara_audio::AudioObserverSlot::default().relay()),
         )
         .expect("session shape");
     let observer = mock::prepared_resource_context(&prepared)
@@ -1006,7 +1007,7 @@ fn prepare_config_preserves_caller_supplied_master(
             .cancel(cancel_token.clone())
             .build(),
     );
-    let prepared = queue
+    let (prepared, _load) = queue
         .config
         .prep
         .as_ref()
@@ -1020,6 +1021,7 @@ fn prepare_config_preserves_caller_supplied_master(
                 )
                 .build(),
             &mock::output(None).get(),
+            Box::new(kithara_audio::AudioObserverSlot::default().relay()),
         )
         .expect("session shape");
     let observer = mock::prepared_resource_context(&prepared)
@@ -1038,7 +1040,7 @@ async fn prebound_session_rejects_a_player_built_for_another_sample_rate(
     let (queue, _, dir) = empty_queue(&worker_owner.0);
     let output =
         kithara_play::SessionOutputView::new(NonZeroU32::new(48_000).expect("session rate"));
-    let prepared = queue
+    let (prepared, _load) = queue
         .config
         .prep
         .as_ref()
@@ -1053,6 +1055,7 @@ async fn prebound_session_rejects_a_player_built_for_another_sample_rate(
                 .host_sample_rate(mock::SAMPLE_RATE)
                 .build(),
             &output.get(),
+            Box::new(kithara_audio::AudioObserverSlot::default().relay()),
         )
         .expect("the session owns the sole output rate");
     assert_eq!(mock::SAMPLE_RATE.get(), 44_100);

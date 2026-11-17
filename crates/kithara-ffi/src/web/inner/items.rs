@@ -274,7 +274,7 @@ mod tests {
         );
         let scope = ring.open(config.slots().get()).expect("open deck scope");
         let (mut dispatcher, _opens) =
-            channel::<DispatcherProtocol<ResourceLoad<FfiPools>>>(ChannelConfig::builder().build());
+            channel::<DispatcherProtocol<ResourceLoad>>(ChannelConfig::builder().build());
         let rate = NonZeroU32::new(48_000).expect("sample rate");
         let output = SessionOutputView::new(rate).get();
         let mut deck = DeckSnapshot::new(config);

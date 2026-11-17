@@ -34,7 +34,7 @@ fn send_to_slot_without_a_slot_is_an_error() {
 #[kithara::test]
 fn player_default_rate_getter_setter() {
     let mut player = track(A);
-    let mut deck = DeckRig::new(DeckMixerConfig::default()).expect("deck rig");
+    let mut deck = DeckRig::<TestPools>::new(DeckMixerConfig::default()).expect("deck rig");
     assert!((player.projected().speed() - 1.0).abs() < f32::EPSILON);
     deck.with_outbox(|out| {
         player.apply(
@@ -55,7 +55,7 @@ fn player_default_rate_getter_setter() {
 #[kithara::test]
 fn set_rate_without_active_slot_updates_only_the_requested_target() {
     let mut player = track(A);
-    let mut deck = DeckRig::new(DeckMixerConfig::default()).expect("deck rig");
+    let mut deck = DeckRig::<TestPools>::new(DeckMixerConfig::default()).expect("deck rig");
     deck.with_outbox(|out| {
         player.apply(
             TrackCommand::Configure(TrackSettingsChange::Speed(2.0), When::Next),

@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_signal::{AudioSpec, SegmentId, SessionFrame};
 use kithara_test_utils::kithara;
 
@@ -8,8 +8,7 @@ use super::stop_seq;
 use crate::{
     CrossfadeSettings,
     bridge::{Fade, SlotMark, SlotState},
-    rt::track::{PcmConsumer, PlayerResource, core::*},
-    test_pools::pools,
+    rt::track::core::*,
     worker::{
         PcmPacket,
         packet_tests::{PacketRing, chunk},
@@ -20,14 +19,7 @@ use crate::{
 fn track_state_is_playing() {
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
     let mut ring = PacketRing::new(spec, Duration::from_secs(1), 2);
-    let resource = Box::new(
-        PlayerResource::new(
-            PcmConsumer::new(ring.receiver.take().expect("receiver")),
-            Arc::from("activity"),
-            &pools(),
-        )
-        .expect("resource"),
-    );
+    let resource = Box::new(ring.receiver.take().expect("receiver"));
     let mut track = PlayerTrack::builder()
         .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec.sample_rate)
@@ -72,14 +64,7 @@ fn seek_targets_reject_unrepresentable_durations() {
     assert_eq!(Duration::try_from_secs_f64(0.0), Ok(Duration::ZERO));
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
     let mut ring = PacketRing::new(spec, Duration::from_secs(10), 1);
-    let resource = Box::new(
-        PlayerResource::new(
-            PcmConsumer::new(ring.receiver.take().expect("receiver")),
-            Arc::from("typed target"),
-            &pools(),
-        )
-        .expect("resource"),
-    );
+    let resource = Box::new(ring.receiver.take().expect("receiver"));
     let mut track = PlayerTrack::builder()
         .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec.sample_rate)
@@ -118,14 +103,7 @@ fn seek_targets_reject_unrepresentable_durations() {
 fn slot_state_controls_receiver_activity(#[case] state: SlotState, #[case] expected: bool) {
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
     let mut ring = PacketRing::new(spec, Duration::from_secs(1), 2);
-    let resource = Box::new(
-        PlayerResource::new(
-            PcmConsumer::new(ring.receiver.take().expect("receiver")),
-            Arc::from("activity"),
-            &pools(),
-        )
-        .expect("resource"),
-    );
+    let resource = Box::new(ring.receiver.take().expect("receiver"));
     let mut track = PlayerTrack::builder()
         .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec.sample_rate)

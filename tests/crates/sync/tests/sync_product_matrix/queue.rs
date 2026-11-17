@@ -855,6 +855,7 @@ fn a_pending_cue_allows_the_consumer_turn_that_releases_its_producer() {
         status: kithara::play::TrackStatus::Loaded,
         speed: 1.0,
         position: Duration::ZERO,
+        cached: Duration::ZERO,
         duration: Some(Duration::from_secs(12)),
         abr: None,
         metadata: kithara::decode::TrackMetadata::default(),

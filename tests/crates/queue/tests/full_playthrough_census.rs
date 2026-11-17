@@ -307,7 +307,7 @@ impl Census {
     }
 }
 
-fn census_queue<F: TrackFactory<TestPools>>(
+fn census_queue<F: TrackFactory>(
     harness: &OfflinePlayer,
     seam: Seam,
     factory: F,

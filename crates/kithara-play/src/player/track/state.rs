@@ -1,5 +1,5 @@
 use std::{
-    cell::Cell,
+    cell::RefCell,
     collections::{HashSet, VecDeque},
     num::{NonZeroU32, NonZeroU64, NonZeroU128},
 };
@@ -10,9 +10,8 @@ use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
-    CrossfadeSettings, LaneCommand, LaneFrame, LaneId, LaneProtocol, LaneTarget,
+    CrossfadeSettings, LaneCommand, LaneFrame, LaneId, LaneProtocol, LaneTarget, PcmReceiver,
     bridge::{FadeDir, PlaybackFault, Slot, SlotMark, TrackClock},
-    rt::track::PlayerResource,
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
 use kithara_sync::SpeedCurve;
@@ -24,10 +23,10 @@ use crate::{ResourceLoad, Settled};
 pub type Position = Duration;
 
 /// What a track is told to do.
-pub enum TrackCommand<S> {
+pub enum TrackCommand {
     GainProgram(kithara_render::bridge::SlotGainProgram),
     Load {
-        item: ResourceLoad<S>,
+        item: ResourceLoad,
         position: Position,
     },
     Play {
@@ -128,6 +127,8 @@ pub struct TrackSnapshot {
     pub position: Position,
     /// End of the track on the same media clock as its grid and cues.
     pub duration: Option<Duration>,
+    /// Source-cached coverage, independent of the rendered PCM frontier.
+    pub cached: Duration,
     pub abr: Option<AbrHandle>,
     pub metadata: TrackMetadata,
     pub mark: Option<SlotMark>,
@@ -150,6 +151,7 @@ impl std::fmt::Debug for TrackSnapshot {
             .field("speed", &self.speed)
             .field("position", &self.position)
             .field("duration", &self.duration)
+            .field("cached", &self.cached)
             .field("abr", &self.abr.is_some())
             .field("metadata", &self.metadata)
             .field("mark", &self.mark)
@@ -295,17 +297,35 @@ impl Lane {
 pub(super) struct Loading {
     pub(super) seq: Seq,
     /// The opened source's consumer, until a deck batch takes it.
-    pub(super) opened: Option<Box<PlayerResource>>,
+    pub(super) opened: Option<Box<PcmReceiver>>,
     pub(super) speed: Option<(SpeedCurve, f32)>,
 }
 
 pub(super) struct LaneOperation {
     pub(super) seq: Seq,
     pub(super) basis: Vec<(LaneTarget, Option<Seq>)>,
+    /// Position inside the native batch.
+    pub(super) ordinal: usize,
     pub(super) when: When<LaneFrame>,
     pub(super) segment: SegmentId,
     pub(super) command: LaneCommand,
     pub(super) applied: bool,
+}
+
+impl LaneOperation {
+    pub(super) fn is_projected(&self, current: &HashSet<Seq>) -> bool {
+        self.applied || self.basis.is_empty() || current.contains(&self.seq)
+    }
+
+    pub(super) fn frame_for(&self, segment: SegmentId) -> Option<u64> {
+        match self.command {
+            LaneCommand::Segment { id, .. } if id == segment => Some(0),
+            _ => match self.when {
+                When::At(at) if at.segment == segment => Some(at.frame),
+                _ => None,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -348,7 +368,7 @@ pub(super) struct EndPlan {
     pub(super) endpoint: (u128, NonZeroU128),
     pub(super) speed: u32,
     pub(super) sample_rate: NonZeroU32,
-    pub(super) commands: Vec<(u64, Seq)>,
+    pub(super) declick: FrameCount,
 }
 
 /// The lane frame where the source reaches its endpoint under one plan.
@@ -357,57 +377,85 @@ pub(super) struct ProjectedEnd {
     pub(super) frame: u64,
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct SpeedProjection {
-    pub(super) at: LaneFrame,
-    pub(super) initial_bits: u32,
-    pub(super) declick: FrameCount,
-    pub(super) speed: f32,
-}
-
-/// Unanswered commands and effects still needed by live segments.
-///
-/// `speed_projection` is derived from `commands`, so the history changes only
-/// through intake and submission, which invalidate it. Producer feedback is
-/// taken once by the driver, independently of retained planning effects.
+/// Live operations ordered for the selected segment, with one-shot feedback.
 #[derive(Default)]
-pub(super) struct LaneHistory {
-    pub(super) commands: Vec<LaneOperation>,
+pub(super) struct LaneCommands {
+    commands: Vec<LaneOperation>,
     pub(super) receipts: VecDeque<Settled<LaneFrame>>,
-    /// Entries name every projection input other than `commands`.
-    pub(super) speed_projection: Cell<Option<SpeedProjection>>,
+    projected_end: RefCell<Option<ProjectedEnd>>,
 }
 
-impl LaneHistory {
-    pub(super) fn submit(&mut self, operations: impl IntoIterator<Item = LaneOperation>) {
-        self.speed_projection.set(None);
+impl LaneCommands {
+    pub(super) fn operations(&self) -> &[LaneOperation] {
+        self.commands.as_slice()
+    }
+
+    pub(super) fn cached_end(&self, plan: &EndPlan, after: u64) -> Option<u64> {
+        self.projected_end
+            .borrow()
+            .as_ref()
+            .filter(|projected| &projected.plan == plan && projected.frame >= after)
+            .map(|projected| projected.frame)
+    }
+
+    pub(super) fn cache_end(&self, plan: EndPlan, frame: u64) {
+        *self.projected_end.borrow_mut() = Some(ProjectedEnd { plan, frame });
+    }
+
+    pub(super) fn select(&mut self, segment: SegmentId) {
+        self.commands.sort_unstable_by_key(|operation| {
+            (
+                operation.frame_for(segment),
+                operation.seq,
+                operation.ordinal,
+            )
+        });
+        *self.projected_end.get_mut() = None;
+    }
+
+    pub(super) fn submit(
+        &mut self,
+        segment: SegmentId,
+        operations: impl IntoIterator<Item = LaneOperation>,
+    ) {
         self.commands.extend(operations);
+        self.select(segment);
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.commands.clear();
+        *self.projected_end.get_mut() = None;
     }
 
     pub(super) fn retain(&mut self, keep: impl FnMut(&LaneOperation) -> bool) {
         let before = self.commands.len();
         self.commands.retain(keep);
         if self.commands.len() != before {
-            self.speed_projection.set(None);
+            *self.projected_end.get_mut() = None;
         }
     }
 
-    /// The operations one lane receipt answers.
-    pub(super) fn answered(&mut self, seq: Seq) -> impl Iterator<Item = &mut LaneOperation> {
-        self.speed_projection.set(None);
-        self.commands
+    pub(super) fn applied(
+        &mut self,
+        seq: Seq,
+        at: LaneFrame,
+        segment: SegmentId,
+    ) -> impl Iterator<Item = (When<LaneFrame>, &LaneOperation)> {
+        // One Seq names one batch, so its commands share the request clock.
+        let mut requested = None;
+        for operation in self
+            .commands
             .iter_mut()
-            .filter(move |operation| operation.seq == seq)
-    }
-
-    pub(super) fn projected(&self, lane: Option<&Sender<LaneProtocol>>) -> Vec<&LaneOperation> {
-        let current: HashSet<_> = lane.into_iter().flat_map(Sender::current_pending).collect();
+            .filter(|operation| operation.seq == seq)
+        {
+            requested = Some(std::mem::replace(&mut operation.when, When::At(at)));
+            operation.applied = true;
+        }
+        self.select(segment);
         self.commands
             .iter()
-            .filter(|operation| {
-                operation.applied || operation.basis.is_empty() || current.contains(&operation.seq)
-            })
-            .collect()
+            .filter(move |operation| operation.seq == seq)
+            .filter_map(move |operation| requested.map(|when| (when, operation)))
     }
 }
 

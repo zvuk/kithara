@@ -1,4 +1,5 @@
 use kithara_config::ConfigOwner;
+use kithara_stream::PlayheadRead;
 use kithara_warp::WarpControlsChange;
 
 use super::*;
@@ -207,7 +208,7 @@ fn assert_quiet_curve_projection(
             if seq == predecessor && at == (LaneFrame { segment: consumed.lane.segment, frame: 0 }))
     );
     assert!(track.lane_receipt().is_none());
-    assert!(track.lane_history.receipts.is_empty());
+    assert!(track.lane_commands.receipts.is_empty());
     track.status = TrackStatus::Paused {
         at: consumed.position,
     };
@@ -225,8 +226,8 @@ fn assert_quiet_curve_projection(
     );
     let segment = track.segment.id;
     let seq = track
-        .lane_history
-        .commands
+        .lane_commands
+        .operations()
         .last()
         .expect("native Segment")
         .seq;
@@ -236,8 +237,8 @@ fn assert_quiet_curve_projection(
     );
     assert!(
         track
-            .lane_history
-            .commands
+            .lane_commands
+            .operations()
             .iter()
             .rev()
             .take_while(|operation| operation.seq == seq)
@@ -272,8 +273,8 @@ fn assert_quiet_curve_projection(
     assert_eq!(track.segment.id, segment);
     assert!(
         track
-            .lane_history
-            .commands
+            .lane_commands
+            .operations()
             .iter()
             .filter(|operation| operation.seq == seq)
             .all(|operation| operation.applied)
@@ -654,8 +655,8 @@ fn independent_lane_speeds_keep_their_time_order_after_an_earlier_insertion() {
     track.settle_lane();
     assert!(
         track
-            .lane_history
-            .commands
+            .lane_commands
+            .operations()
             .iter()
             .all(|operation| operation.applied)
     );
@@ -789,7 +790,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
     pcm.meta.media_origin = Some(Duration::from_millis(576));
     packets.push(kithara_render::PcmPacket::Chunk(Box::new(pcm)));
     let receiver = packets.receiver.take().expect("prepared source receiver");
-    assert_eq!(receiver.duration(), Some(Duration::from_secs(2)));
+    assert_eq!(packets.playhead().duration(), Some(Duration::from_secs(2)));
     let source = receiver.next_chunk_info().expect("immutable source packet");
     let mut rig = rig();
     let output = mock::output(None).get();
@@ -864,7 +865,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
             Some(Duration::from_millis(expected_ms))
         );
     }
-    assert_eq!(receiver.duration(), Some(Duration::from_secs(2)));
+    assert_eq!(packets.playhead().duration(), Some(Duration::from_secs(2)));
 }
 
 #[kithara::test]
@@ -1611,5 +1612,5 @@ async fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_
     track.settle_lane();
     assert_eq!(track.source_basis, Some(original_basis));
     assert_eq!(track.snapshot().position, Duration::from_millis(media_ms));
-    assert_eq!(rig.mixer.held(A), Some("media-parked-repeat"));
+    assert_eq!(rig.mixer.held(A), Some(track.item));
 }

@@ -5,7 +5,10 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara_audio::{Audio, AudioReadError, ResamplerBackend, SeekOutcome, TrackFailureKind};
+use kithara_audio::{
+    Audio, AudioConfig, AudioReadError, AudioSession, ResamplerBackend, SeekOutcome,
+    TrackFailureKind,
+};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_command::{ChannelConfig, Inbox, Sender, channel};
 use kithara_decode::DecodeError;
@@ -21,8 +24,8 @@ use kithara_worker::{
 };
 
 use super::{
-    DecoderNode, PcmReceiver, PlayWorkerConfig, TrackConfig,
-    reader::PcmLead,
+    DecoderNode, OpenedPcm, PlayWorkerConfig, TrackConfig,
+    reader::{PcmLead, PcmProducer},
     scheduler::{PlaybackObserver, StreamWake},
     track::pcm_quantum,
 };
@@ -199,28 +202,27 @@ where
     ///
     /// # Errors
     /// Returns cancellation, source/decoder, invalid ring geometry, or pool failures.
-    pub fn load<T, B, C>(
+    pub fn load<T, B>(
         &self,
-        config: C,
+        audio: AudioConfig<T, B>,
+        config: TrackConfig,
         position: Duration,
         start: LaneStart,
         inbox: Inbox<LaneProtocol>,
-    ) -> impl Future<Output = OpenResult<PcmReceiver, DecoderNode<Audio<Stream<T>>, S>>>
+    ) -> impl Future<Output = OpenResult<OpenedPcm, DecoderNode<Audio<Stream<T>>, S>>>
     where
         T: StreamType<Events = EventBus>,
         B: Default + ResamplerBackend,
-        C: Into<TrackConfig<T, B>>,
     {
         Box::pin(async move {
             let TrackConfig {
-                audio,
                 engine_load,
                 warp,
                 preload_chunks,
                 declick,
                 audio_buffer_chunks,
                 block_on_underrun,
-            } = config.into();
+            } = config;
             let cancel = audio.cancel().cloned();
             self.check_load_cancelled(cancel.as_ref())?;
             if preload_chunks > audio_buffer_chunks {
@@ -228,11 +230,11 @@ where
                     detail: "lane preload quota exceeds PCM ring capacity",
                 }));
             }
-            let (receiver, lane) = {
-                let wake = StreamWake::new(self.0.dispatcher.wake_handle());
+            let (opened, lane) = {
+                let wake = self.0.dispatcher.wake_handle();
                 let prepared = Audio::<Stream<T>>::prepare(
                     audio,
-                    Arc::new(wake.clone()),
+                    Arc::new(StreamWake::new(wake.clone())),
                     self.pools().clone(),
                 )
                 .await;
@@ -250,13 +252,20 @@ where
                     end_timestamp: position,
                     ..AudioChunkInfo::default()
                 };
-                let (receiver, port) = PcmReceiver::new(
+                let (receiver, port) = PcmProducer::new(
                     PcmLead::new(audio_buffer_chunks, pcm_quantum(&warp)),
                     block_on_underrun,
                     wake,
-                    &audio,
+                    spec,
                     position,
+                    AudioSession::event_bus(&audio).clone(),
                 );
+                let opened = OpenedPcm {
+                    receiver,
+                    playhead: audio.playhead_read(),
+                    metadata: audio.metadata().clone(),
+                    abr: audio.abr_handle(),
+                };
                 let activity = audio.take_activity_writer();
                 let warp = Warp::new((), &warp.starting_at(warp.speed(), start.controls));
                 let pools = self.pools().clone();
@@ -310,11 +319,11 @@ where
                     self.pools().clone(),
                     cancel.clone(),
                 ));
-                (receiver, lane)
+                (opened, lane)
             };
             self.check_load_cancelled(cancel.as_ref())?;
             let latency = lane.engine_latency();
-            Ok((receiver, *lane, latency))
+            Ok((opened, *lane, latency))
         })
     }
 
@@ -405,8 +414,13 @@ mod tests {
         };
         let (_sender, inbox) = play.lane_channel();
         let start = LaneStart::default();
-        let preparation =
-            play.load::<File<_>, NoResamplerBackend, _>(audio(), Duration::ZERO, start, inbox);
+        let preparation = play.load(
+            audio(),
+            TrackConfig::default(),
+            Duration::ZERO,
+            start,
+            inbox,
+        );
         let source = Audio::<Stream<File<_>>>::prepare(
             audio(),
             Arc::new(StreamWake::new(play.0.dispatcher.wake_handle())),
@@ -476,12 +490,8 @@ mod tests {
             .build();
         let (_sender, inbox) = play.lane_channel();
         let start = LaneStart::default();
-        let mut opening = Box::pin(play.load::<GatedFailure, NoResamplerBackend, _>(
-            audio,
-            Duration::ZERO,
-            start,
-            inbox,
-        ));
+        let mut opening =
+            Box::pin(play.load(audio, TrackConfig::default(), Duration::ZERO, start, inbox));
         assert!(futures::poll!(opening.as_mut()).is_pending());
         if cancel_audio {
             audio_cancel.cancel();

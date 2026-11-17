@@ -35,13 +35,11 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     drop(ok);
 
     for attempt in 0..2 {
-        let result = kithara_integration_tests::mock::open_resource(&resource_config(
-            &bad_url,
-            store.clone(),
-            backend,
-            Some("mp3"),
-            play_worker(&region),
-        ))
+        let result = kithara_integration_tests::mock::open_resource(
+            &resource_config(&bad_url, store.clone(), backend, Some("mp3")),
+            &play_worker(&region),
+            kithara::play::TrackConfig::default(),
+        )
         .await;
         assert!(
             result.is_err(),
@@ -197,13 +195,11 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     );
 
     for attempt in 0..2 {
-        let result = kithara_integration_tests::mock::open_resource(&resource_config(
-            &bad_url,
-            store.clone(),
-            backend,
-            Some("mp3"),
-            worker.clone(),
-        ))
+        let result = kithara_integration_tests::mock::open_resource(
+            &resource_config(&bad_url, store.clone(), backend, Some("mp3")),
+            &worker,
+            kithara::play::TrackConfig::default(),
+        )
         .await;
         assert!(
             result.is_err(),
@@ -487,7 +483,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         progress_probe.progress_events
     );
 
-    let resource = resource_config(&url, store, backend, None, play_worker(&region));
+    let resource = resource_config(&url, store, backend, None);
     let mut player = OfflinePlayer::new(
         HostConfig::offline(region.clone())
             .settings(
