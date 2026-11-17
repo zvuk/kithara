@@ -30,6 +30,14 @@ ignore = [
   # dropping the feature; that file is being rewritten in parallel, so the entry
   # holds until that work lands. Not a vulnerability.
   "RUSTSEC-2026-0206",
+  # 2026-11-17. chrono is unmaintained. It arrives through keyring-core's sample
+  # store, used by tests and workspace-hack; the current keyring-core 1.0.1 still
+  # carries the same dependency. Not a vulnerability.
+  "RUSTSEC-2026-0543",
+  # 2026-11-17. humantime is unmaintained and has no safe upgrade. humantime-serde
+  # wraps it for the workspace's human-readable duration config; replacing that
+  # format is separate compatibility work. Not a vulnerability.
+  "RUSTSEC-2026-0542",
 ]
 
 [licenses]
