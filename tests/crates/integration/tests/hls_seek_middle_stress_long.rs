@@ -298,7 +298,6 @@ async fn hls_seek_middle_repeated_seeks_long_stress(
                     .build(),
             )
             .initial_abr_mode(AbrMode::manual(consts::GATED_VARIANT))
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build();
 
     let resource = cfg;

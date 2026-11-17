@@ -5,7 +5,7 @@ use kithara::{
     audio::AudioConfig,
     file::{File, FileConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -40,7 +40,7 @@ async fn create_file_audio(
         .hint(("mp3").to_string())
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    kithara_integration_tests::mock::load_audio(&worker, config)
+    kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
         .await
         .expect("create Audio<Stream<File>>")
 }

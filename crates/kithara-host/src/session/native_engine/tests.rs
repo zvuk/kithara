@@ -56,7 +56,7 @@ use crate::{
 use crate::{HostCore, HostOwner, HostSettings, PlayError, consts, rt::SessionOutput};
 
 #[cfg(feature = "offline")]
-type BaseCommand = HostCommand<TestPools, dyn HostedDeck<TestPools>>;
+type BaseCommand = HostCommand<dyn HostedDeck<TestPools>>;
 #[cfg(feature = "offline")]
 enum Command {
     Host(BaseCommand),
@@ -127,14 +127,14 @@ impl HostOwner<TestPools> for RigOwner {
                 visit: &mut dyn FnMut(
                     DeckId,
                     &mut Self::Deck,
-                    &mut Outbox<'_, TestPools>,
+                    &mut Outbox<'_>,
                     DeckPass<'_>,
                 ),
             );
             fn with_deck(
                 &mut self,
                 id: DeckId,
-                visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_, TestPools>, DeckPass<'_>),
+                visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_>, DeckPass<'_>),
             ) -> Result<(), PlayError>;
             fn prepare_offline(&mut self) -> Result<(), PlayError>;
             fn render_offline(

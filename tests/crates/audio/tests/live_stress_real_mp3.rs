@@ -14,7 +14,7 @@ use kithara::{
             task::{spawn, spawn_blocking},
         },
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     signal::AudioChunk,
     stream::Stream,
 };
@@ -408,13 +408,12 @@ async fn live_stress_real_mp3_seek_read_cache(
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = kithara_integration_tests::mock::load_audio(
         &worker,
-        kithara::play::TrackConfig::for_audio(
+        (
             AudioConfig::<File<TestPools>>::for_stream(file_config)
                 .hint(("mp3").to_string())
                 .build(),
-        )
-        .block_on_underrun(true)
-        .build(),
+            TrackConfig::builder().block_on_underrun(true).build(),
+        ),
     )
     .await
     .expect("audio creation");

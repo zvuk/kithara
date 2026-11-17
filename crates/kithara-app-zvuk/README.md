@@ -13,7 +13,7 @@
 # kithara-app-zvuk
 
 Workspace crate (`publish = false`) providing the Zvuk library source and page.
-Supports search, liked tracks, playlists, HLS stream resolution, and like/unlike
+Supports search, liked tracks, playlists, HLS/progressive stream resolution, and like/unlike
 requests on native and WASM targets.
 
 ## Usage
@@ -62,3 +62,18 @@ go out once.
 
 See [library sources](https://github.com/zvuk/kithara/wiki/kithara-app#library-sources)
 for the source contract.
+
+### Streaming
+
+Adaptive streaming chooses the initial URL for new resources: adaptive HLS
+when enabled, progressive MP3 or FLAC when disabled. New fixed loads prefer
+available High MP3, then Mid MP3, then lossless FLAC. The source supplies its
+available quality URLs and stable catalogue identity in the drag snapshot;
+changing the source preference leaves earlier snapshots intact. A deck's
+explicit AUTO or fixed-quality choice governs its loaded track independently.
+
+The native application stores the preference in `kithara/zvuk.json` under the
+operating system's user configuration directory. Writes finish before the
+switch accepts its new value; a failure is shown and preserves the accepted
+value. The sidecar does not modify the secret overlay. A caller supplying
+`Source::registered` without `settings_path` explicitly gets a session preference.

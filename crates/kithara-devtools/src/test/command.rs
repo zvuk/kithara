@@ -355,6 +355,64 @@ mod selection_tests {
     }
 
     #[test]
+    fn a_draft_cargo_suite_keeps_its_command_when_the_scope_admits_it() {
+        let mut test = drafted();
+        let config = test.lanes.get_mut("harness").expect("fixture lane");
+        config.cargo.profile = Some("test-release".to_owned());
+        config.runner = TestRunner::Cargo(TestCargoRunner {
+            name_filters: vec!["selenium".to_owned()],
+            no_capture: true,
+            ..TestCargoRunner::default()
+        });
+        config
+            .env
+            .insert("KITHARA_SELENIUM_BROWSER".to_owned(), "firefox".to_owned());
+        let root = crate::test::repository_tests::root();
+        let draft = request(&["--lane=harness", "--draft", "--offline"]);
+        assert!(matches!(
+            plan(&test, &root, &draft, None).expect("valid scope"),
+            Plan::NotRequired("harness")
+        ));
+        for block in [
+            r#"filter = "all()""#,
+            r#"packages = ["kithara-test-utils"]"#,
+            r#"filter = "test(seek)""#,
+        ] {
+            let command = match plan(&test, &root, &draft, Some(block)).expect("valid scope") {
+                Plan::Lane(lane) => requested_lane(&test, lane, &draft)
+                    .expect("resolved lane")
+                    .command(NextestAction::Run, &draft.passthrough),
+                Plan::Draft { lane, scope } => draft_command(&test, lane, &scope, &draft),
+                Plan::NotRequired(_) => panic!("the scope admits this suite"),
+            }
+            .expect("an admitted cargo suite runs its configured command");
+            assert_eq!(command.get_program(), "cargo");
+            assert_eq!(
+                args_of(&command),
+                [
+                    "test",
+                    "-p",
+                    "kithara-test-utils",
+                    "--profile",
+                    "test-release",
+                    "--offline",
+                    "--",
+                    "selenium",
+                    "--nocapture"
+                ]
+            );
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(key, value)| key == "KITHARA_SELENIUM_BROWSER"
+                        && value == Some(std::ffi::OsStr::new("firefox")))
+            );
+        }
+        let narrow = request(&["--lane=harness", "--draft", "--narrow=test(seek)"]);
+        assert!(requested_lane(&test, "harness", &narrow).is_err());
+    }
+
+    #[test]
     fn selection_output_names_the_lanes_in_the_execution_plan() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reports/selection.json");

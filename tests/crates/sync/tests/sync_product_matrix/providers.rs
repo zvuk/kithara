@@ -70,8 +70,9 @@ impl Provider {
                     names[deck % names.len()].replace("rhythm_wav_", "rhythm_expected_analysis_");
                 let asset = kithara_test_fixtures::assets::by_name(&name)
                     .unwrap_or_else(|| panic!("missing score grid {name}"));
-                let fingerprint =
-                    kithara::analysis::AnalysisFingerprint::new(Some("rhythm-fixture:v1"), None);
+                let fingerprint = kithara::analysis::AnalysisFingerprint::builder()
+                    .beat("rhythm-fixture:v1")
+                    .build();
                 let file = kithara::analysis::AnalysisFile::parse(asset.bytes(), &fingerprint)
                     .expect("fixture score analysis");
                 let grid =

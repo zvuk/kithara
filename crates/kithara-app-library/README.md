@@ -20,7 +20,8 @@ these and routes reads and writes to the owning source.
 
 A source exports a `Factory` that returns a `Registration`. It receives the
 services the app shares with plugins in `Environment`, and its configuration
-and cancellation token in `Context`. `Secrets::native` keeps secrets in the
+and cancellation token in `Context`. The context may also supply the source's
+native preference file; an absent path requests session-only preferences. `Secrets::native` keeps secrets in the
 `secrets` section of the configuration overlay it is given, or with the
 `keystore` feature in the operating system's store; without either, such as in
 the browser, every call returns `SecretError::Unsupported`.
@@ -28,6 +29,12 @@ the browser, every call returns `SecretError::Unsupported`.
 Use `Registration::fill` to add a document to an app collection, and
 `Registration::key_access` to grant the source's token to key requests of one
 domain. The app builds the source after loading the text catalog.
+
+`Playable` transfers the initial media URL and catalogue tags. A source can
+also supply a stable catalogue identity and available `PlaybackChoice` URLs;
+the initial URL must name one of those choices. Drag decoding validates the
+identity, labels and HTTP URLs before the shell receives them. Sources without
+quality choices keep their ordinary URL loading behavior.
 
 See [library sources](https://github.com/zvuk/kithara/wiki/kithara-app#library-sources)
 for the source contract.

@@ -14,7 +14,7 @@ use kithara::{
         time::{Duration, WallInstant},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     signal::{AudioChunk, AudioChunkInfo},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
@@ -247,9 +247,10 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .expect("create Audio<Stream<Hls>> pipeline");
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .expect("create Audio<Stream<Hls>> pipeline");
 
     let audio = kithara_integration_tests::mock::with_blocking_reads(audio);
     let _ = blocking_audio(audio, move |audio| {

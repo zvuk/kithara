@@ -15,7 +15,7 @@ use kithara::{
         time::{Duration, Instant},
         tokio::{sync::broadcast::error::TryRecvError, task::spawn_blocking},
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -76,7 +76,7 @@ pub(crate) async fn stream_continues_after_seek(
         .initial_abr_mode(abr_mode)
         .build();
 
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
@@ -84,9 +84,8 @@ pub(crate) async fn stream_continues_after_seek(
                     .build(),
             )
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create audio");
@@ -192,11 +191,10 @@ pub(crate) async fn fixed_variant_on_production_ladder_plays_without_hang(
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create audio");
@@ -267,7 +265,7 @@ pub(crate) async fn seek_after_eof_mmap_produces_samples(
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
@@ -275,9 +273,8 @@ pub(crate) async fn seek_after_eof_mmap_produces_samples(
                     .build(),
             )
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create audio");
@@ -357,13 +354,12 @@ pub(crate) async fn mp3_stream_continues_after_seek(
                 .build(),
         )
         .build();
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<File<TestPools>>::for_stream(file_config)
             .hint(("mp3").to_string())
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create audio");
@@ -679,7 +675,10 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
 
     let mut audio = kithara_integration_tests::mock::load_audio(
         &worker,
-        AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
+        (
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
+            TrackConfig::default(),
+        ),
     )
     .await
     .expect("audio creation");

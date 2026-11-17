@@ -2,13 +2,16 @@ use kithara_command::{Due, LevelInbox, Target};
 use kithara_signal::SessionFrame;
 
 use super::{
-    super::{processor::Deck, track::PlayerTrack},
+    super::{
+        processor::Deck,
+        track::{PlayerTrack, ReadPcm},
+    },
     state::{Armed, EndAction, shifted_slot},
 };
 use crate::bridge::{DeckFxChange, DeckPart, DeckProtocol, DeckRefusal, Slot};
 
 impl Deck {
-    pub(in crate::rt) fn arrivals(&mut self, level: &mut LevelInbox<'_, DeckProtocol>) {
+    pub(crate) fn arrivals(&mut self, level: &mut LevelInbox<'_, DeckProtocol>) {
         self.release_armed(level);
         while let Some(deferred) = level.next_deferred() {
             let (from, action) = match deferred.commands() {
@@ -35,11 +38,11 @@ impl Deck {
         }
     }
 
-    pub(in crate::rt) fn take_due(
+    pub(crate) fn take_due(
         &mut self,
         mut due: Due<'_, DeckProtocol>,
         context_valid: bool,
-        wait_for_pcm: bool,
+        read_pcm: ReadPcm,
     ) {
         if due
             .commands()
@@ -83,7 +86,7 @@ impl Deck {
             if let Some(slot) = shifted_slot(&part) {
                 self.interrupt_stop(&mut due, slot, remaining);
             }
-            if let Some(returned) = self.apply(part, at, seq, context_valid, wait_for_pcm) {
+            if let Some(returned) = self.apply(part, at, seq, context_valid, read_pcm) {
                 due.commands_mut().push(returned);
             }
         }
@@ -94,7 +97,7 @@ impl Deck {
         }
     }
 
-    pub(in crate::rt) fn resolve_armed(
+    pub(crate) fn resolve_armed(
         &mut self,
         level: &mut LevelInbox<'_, DeckProtocol>,
         start: SessionFrame,
@@ -133,13 +136,13 @@ impl Deck {
         }
     }
 
-    pub(in crate::rt) fn fire_ended(
+    pub(crate) fn fire_ended(
         &mut self,
         level: &mut LevelInbox<'_, DeckProtocol>,
         start: SessionFrame,
         at: SessionFrame,
         context_valid: bool,
-        wait_for_pcm: bool,
+        read_pcm: ReadPcm,
     ) {
         loop {
             let next = self
@@ -180,7 +183,7 @@ impl Deck {
                     }
                 }
             }
-            if let Some(returned) = self.apply(part, at, seq, context_valid, wait_for_pcm) {
+            if let Some(returned) = self.apply(part, at, seq, context_valid, read_pcm) {
                 due.commands_mut().push(returned);
             }
             due.apply(());

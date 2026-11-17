@@ -1,13 +1,12 @@
-use std::{marker::PhantomData, num::NonZeroU32};
+use std::num::NonZeroU32;
 
 use futures::future::Either;
-use kithara_audio::ResamplerBackend;
-use kithara_bufpool::HasPool;
+use kithara_audio::{AudioConfig, ResamplerBackend};
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_command::Inbox;
-use kithara_decode::DecodeError;
 use kithara_events::EventBus;
 use kithara_platform::{maybe_send::BoxFuture, sync::Arc, time::Duration};
-use kithara_render::{LaneProtocol, LaneStart, LoadRefusal, PcmReceiver, TrackConfig};
+use kithara_render::{LaneProtocol, LaneStart, LoadRefusal, OpenedPcm, TrackConfig};
 use kithara_signal::FrameCount;
 use kithara_stream::StreamType;
 
@@ -17,42 +16,40 @@ use super::{
 };
 use crate::PlayWorker;
 
-type ResourceTrack<S> = Either<
-    TrackConfig<kithara_file::File<S>, PlaybackResamplerBackend>,
-    TrackConfig<kithara_hls::Hls<S>, PlaybackResamplerBackend>,
+type ResourceAudio<S> = Either<
+    AudioConfig<kithara_file::File<S>, PlaybackResamplerBackend>,
+    AudioConfig<kithara_hls::Hls<S>, PlaybackResamplerBackend>,
 >;
-type OpenedLane<L> = Result<(PcmReceiver, L, FrameCount), LoadRefusal>;
+type OpenedLane<L> = Result<(OpenedPcm, L, FrameCount), LoadRefusal>;
 
-pub fn resource_tracks<S>(
+pub fn resource_audio<S>(
     config: &ResourceConfig<S>,
-) -> Result<(PlayWorker<S>, ResourceTrack<S>), LoadRefusal>
+    pools: &PoolRegion<S>,
+) -> Result<ResourceAudio<S>, LoadRefusal>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
-        detail: "ResourceConfig requires an explicit PlayWorker",
-    })?;
     let track = match SourceType::detect(&config.src)? {
         SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
             let audio = config.clone().build_file_config(None);
-            Either::Left(config.build_track_config(audio))
+            Either::Left(audio)
         }
         SourceType::HlsStream(_) => {
-            let audio = config.clone().build_hls_config(&worker, None)?;
-            Either::Right(config.build_track_config(audio))
+            let audio = config.clone().build_hls_config(pools.clone(), None)?;
+            Either::Right(audio)
         }
     };
-    Ok((worker, track))
+    Ok(track)
 }
 
 /// Opens an explicit source configuration through the real dispatcher and lane.
 pub fn track_load<T, B, S, L, F>(
-    config: TrackConfig<T, B>,
+    (audio, config): (AudioConfig<T, B>, TrackConfig),
     src: Arc<str>,
     worker: PlayWorker<S>,
     sample_rate: NonZeroU32,
     open: F,
-) -> ResourceLoad<S>
+) -> ResourceLoad
 where
     T: StreamType<Events = EventBus> + 'static,
     T::Config: Send,
@@ -61,7 +58,8 @@ where
     L: kithara_render::LaneTask + 'static,
     F: FnOnce(
             PlayWorker<S>,
-            TrackConfig<T, B>,
+            AudioConfig<T, B>,
+            TrackConfig,
             Duration,
             LaneStart,
             Inbox<LaneProtocol>,
@@ -78,17 +76,15 @@ where
     ResourceLoad {
         opener: Box::new(move |position, start, inbox| {
             Box::pin(async move {
-                let pools = worker.pools().clone();
-                let cancel = config.audio().cancel().cloned();
-                let (receiver, lane, latency) =
-                    open(worker, config, position, start, inbox).await?;
-                let opened = OpenedTrack::new(receiver, src, &pools).map_err(LoadRefusal::Pool)?;
+                let cancel = audio.cancel().cloned();
+                let (opened, lane, latency) =
+                    open(worker, audio, config, position, start, inbox).await?;
+                let opened = OpenedTrack::new(opened, src);
                 Ok((opened, ResourceLane::new(lane, cancel, None), latency))
             })
         }),
-        channel: Some(Box::new(move || channel_worker.lane_channel())),
+        channel: Box::new(move || channel_worker.lane_channel()),
         cancel: None,
         geometry,
-        marker: PhantomData,
     }
 }

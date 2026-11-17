@@ -30,13 +30,10 @@ use kithara_platform::{
 };
 use kithara_render::{
     Dispatched, DispatcherCommand, DispatcherProtocol, LaneTask, LoadRefusal, LoadRequest, Loaded,
-    Open,
+    OfflineDeck, Open, PlayerNode,
     bridge::{DeckEnds, DeckEvents, DeckPart, DeckProtocol, Fade, Slot, SlotState, scope_channels},
     mock::{MockDeck, TestSessionInbox},
-    rt::{
-        DeckMixerConfig, OfflineDeck, PlayerNode, StreamShape, install_render_context,
-        publish_render_context,
-    },
+    rt::{DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
 };
 use kithara_signal::{AudioSpec, FrameCount, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_sync::{SessionBeat, Tempo, TempoStep, TempoTrajectory};
@@ -44,7 +41,7 @@ use kithara_test_utils::kithara;
 use kithara_worker::Task;
 use num_traits::ToPrimitive;
 
-pub use crate::resource::source_mock::{resource_tracks, track_load};
+pub use crate::resource::source_mock::{resource_audio, track_load};
 use crate::{
     DeckPass, OpenedTrack, PlayError, ResourceLoad, TrackSettings, player::Outbox,
     session::SessionOutputView,
@@ -207,10 +204,13 @@ where
                     .build(),
             )
             .build();
-    let prepared = prep.prepare(config, output)?;
+    let (prepared, item) = prep.prepare(
+        config,
+        output,
+        Box::new(AudioObserverSlot::default().relay()),
+    )?;
     let bus = prepared.bus.clone().ok_or(PlayError::Closed)?;
-    let item = ResourceLoad::new(prepared, Box::new(AudioObserverSlot::default().relay()));
-    let (_control, inbox) = item.lane_channel()?;
+    let (_control, inbox) = item.lane_channel();
     assert_requested_render_off_bus(
         LoadRequest {
             item,
@@ -235,7 +235,7 @@ where
 /// Panics if either block is silent, stopped, stationary, or publishes source events.
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub async fn assert_requested_render_off_bus<S>(
-    request: LoadRequest<ResourceLoad<S>>,
+    request: LoadRequest<ResourceLoad>,
     bus: &kithara_events::EventBus,
     output: &crate::OutputSnapshot,
     pools: &kithara_bufpool::PoolRegion<S>,
@@ -263,7 +263,8 @@ where
     hang_reset!();
     preload_lane(&mut lane).await?;
     let required_span = f64::from(frames.get() * 2) / f64::from(rate.get());
-    let mut buffered = (opened.pcm.decoded_frontier() - position.as_secs_f64()).max(0.0);
+    let mut buffered =
+        (opened.pcm.decoded_frontier().as_secs_f64() - position.as_secs_f64()).max(0.0);
     while buffered < required_span {
         hang_tick!();
         {
@@ -275,7 +276,8 @@ where
         lane.preload_status()
             .map_err(|error| PlayError::Internal(format!("{error:?}")))?;
         kithara_platform::time::sleep(Duration::from_millis(1)).await;
-        let available = (opened.pcm.decoded_frontier() - position.as_secs_f64()).max(0.0);
+        let available =
+            (opened.pcm.decoded_frontier().as_secs_f64() - position.as_secs_f64()).max(0.0);
         if available > buffered {
             hang_reset!();
         }
@@ -324,12 +326,9 @@ where
 }
 
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-async fn open_render_request<S>(
-    request: LoadRequest<ResourceLoad<S>>,
-) -> Result<(OpenedTrack, crate::ResourceLane), PlayError>
-where
-    S: kithara_bufpool::HasPool<u8> + kithara_bufpool::HasPool<f32> + Send + Sync + 'static,
-{
+async fn open_render_request(
+    request: LoadRequest<ResourceLoad>,
+) -> Result<(OpenedTrack, crate::ResourceLane), PlayError> {
     let mut opening = std::pin::pin!(request.item.open(
         request.position,
         request.start,
@@ -613,8 +612,8 @@ pub struct DeckRig<S> {
     pub inbox: ScopedInbox<DeckProtocol, DeckProtocol>,
     pub mixer: MockDeck,
     pub events: DeckEvents,
-    pub dispatcher: Sender<DispatcherProtocol<ResourceLoad<S>>>,
-    pub opens: Inbox<DispatcherProtocol<ResourceLoad<S>>>,
+    pub dispatcher: Sender<DispatcherProtocol<ResourceLoad>>,
+    pub opens: Inbox<DispatcherProtocol<ResourceLoad>>,
     fixture_dispatcher: Option<FixtureDispatcher<S>>,
     lanes: Vec<HeldLane>,
     now: SessionFrame,
@@ -635,7 +634,7 @@ enum HeldLane {
 }
 
 struct FixtureDispatcher<S> {
-    sender: Sender<DispatcherProtocol<ResourceLoad<S>>>,
+    sender: Sender<DispatcherProtocol<ResourceLoad>>,
     _driver: kithara_worker::TaskHandle,
     _worker: crate::PlayWorker<S>,
 }
@@ -695,7 +694,7 @@ impl<S> DeckRig<S> {
     pub fn open(
         &mut self,
         opened: Result<Loaded<OpenedTrack>, LoadRefusal>,
-    ) -> Option<Receipt<DispatcherProtocol<ResourceLoad<S>>>> {
+    ) -> Option<Receipt<DispatcherProtocol<ResourceLoad>>> {
         kithara_platform::flash::participate_sync(|| {
             self.opens.drain();
             loop {
@@ -763,7 +762,7 @@ impl<S> DeckRig<S> {
     /// The queues a player sends to, lent for one pass.
     pub fn with_outbox<R, F>(&mut self, run: F) -> Result<R, PlayError>
     where
-        F: FnOnce(&mut Outbox<'_, S>) -> R,
+        F: FnOnce(&mut Outbox<'_>) -> R,
     {
         let mut scope = self.ring.scope(self.scope).ok_or(PlayError::Closed)?;
         let output = output(None).get();
@@ -797,11 +796,11 @@ where
     pub async fn load_fixture(
         &mut self,
         worker: &crate::PlayWorker<S>,
-        item: ResourceLoad<S>,
+        item: ResourceLoad,
         position: Duration,
     ) -> Result<Loaded<OpenedTrack>, PlayError> {
         let _io = kithara_platform::flash::real_io();
-        let (lane_sender, lane) = item.lane_channel()?;
+        let (lane_sender, lane) = item.lane_channel();
         let loaded = self
             .load_request_fixture(
                 worker,
@@ -828,14 +827,13 @@ where
     pub async fn load_request_fixture(
         &mut self,
         worker: &crate::PlayWorker<S>,
-        request: LoadRequest<ResourceLoad<S>>,
+        request: LoadRequest<ResourceLoad>,
     ) -> Result<Loaded<OpenedTrack>, PlayError> {
         let dispatcher = match &mut self.fixture_dispatcher {
             Some(dispatcher) => dispatcher,
             missing @ None => {
-                let (sender, inbox) = channel::<DispatcherProtocol<ResourceLoad<S>>>(
-                    ChannelConfig::builder().build(),
-                );
+                let (sender, inbox) =
+                    channel::<DispatcherProtocol<ResourceLoad>>(ChannelConfig::builder().build());
                 let driver = worker
                     .start_dispatcher(inbox)
                     .map_err(|error| PlayError::Internal(format!("{error:?}")))?;

@@ -8,7 +8,7 @@ use kithara_test_macros as kithara;
 use super::{
     super::{
         processor::Deck,
-        track::{PlayerResource, PlayerTrack},
+        track::{PlayerTrack, ReadPcm},
     },
     state::{answer_stop, returned_pcm},
 };
@@ -23,7 +23,7 @@ impl Deck {
         at: SessionFrame,
         seq: Seq,
         context_valid: bool,
-        wait_for_pcm: bool,
+        read_pcm: ReadPcm,
     ) -> Option<DeckPart> {
         self.interrupt_underrun(&part, at);
         match part {
@@ -33,7 +33,7 @@ impl Deck {
                 pcm,
                 segment,
             } => self.attach(slot, item_id, pcm, segment, at, seq),
-            DeckPart::Detach { slot } => self.detach(slot, context_valid, wait_for_pcm),
+            DeckPart::Detach { slot } => self.detach(slot, context_valid, read_pcm),
             DeckPart::Start { slot, fade } => {
                 if let Some(track) = self.tracks.at_mut(slot) {
                     track.start(fade);
@@ -42,7 +42,7 @@ impl Deck {
             }
             DeckPart::Stop { slot, fade } => self.stop_track(slot, fade, at, seq),
             DeckPart::Adopt { slot, segment } => {
-                Some(self.adopt_track(slot, segment, at, seq, context_valid, wait_for_pcm))
+                Some(self.adopt_track(slot, segment, at, seq, context_valid, read_pcm))
             }
             DeckPart::Fade {
                 slot,
@@ -65,7 +65,7 @@ impl Deck {
                 segment,
             } => {
                 let track = self.track(pcm, segment, item_id, seq);
-                Some(self.replace_track(slot, track, context_valid, wait_for_pcm))
+                Some(self.replace_track(slot, track, context_valid, read_pcm))
             }
             DeckPart::Chain { from, to } => Some(self.chain_tracks(from, to)),
             DeckPart::Clock { slot, clock } => {
@@ -166,7 +166,7 @@ impl Deck {
         &mut self,
         slot: Slot,
         item_id: TrackId,
-        pcm: Box<PlayerResource>,
+        pcm: Box<crate::PcmReceiver>,
         segment: SegmentId,
         at: SessionFrame,
         seq: Seq,
@@ -174,35 +174,32 @@ impl Deck {
         #[cfg(not(feature = "usdt"))]
         let _ = (at, seq);
         let track = self.track(pcm, segment, item_id, seq);
-        match self.tracks.put(slot, track) {
-            Ok(()) => {
-                #[cfg(feature = "usdt")]
-                {
-                    let track_id = item_id.as_u64();
-                    let slot = u32::from(slot.get());
-                    let segment = segment.get();
-                    let at = i64::from(at);
-                    let seq = seq.get();
-                    kithara::probe_event!(deck_attached, track_id, slot, segment, at, seq);
-                }
-                None
-            }
-            Err(resource) => Some(returned_pcm(slot, resource)),
+        if let Some(track) = self.tracks.put(slot, track) {
+            return Some(returned_pcm(slot, track));
         }
+        #[cfg(feature = "usdt")]
+        {
+            let track_id = item_id.as_u64();
+            let slot = u32::from(slot.get());
+            let segment = segment.get();
+            let at = i64::from(at);
+            let seq = seq.get();
+            kithara::probe_event!(deck_attached, track_id, slot, segment, at, seq);
+        }
+        None
     }
 
-    fn detach(&mut self, slot: Slot, context_valid: bool, wait_for_pcm: bool) -> Option<DeckPart> {
+    fn detach(&mut self, slot: Slot, context_valid: bool, read_pcm: ReadPcm) -> Option<DeckPart> {
         let mut track = self.tracks.take(slot)?;
         if context_valid {
             self.tails[slot.index()].fill(
                 &mut track,
                 self.declick_frames,
-                &self.metrics,
                 &mut self.recycle[slot.index()],
-                wait_for_pcm,
+                read_pcm,
             );
         }
-        Some(returned_pcm(slot, track.into_resource()))
+        Some(returned_pcm(slot, track))
     }
 
     fn stop_track(
@@ -228,7 +225,7 @@ impl Deck {
         at: SessionFrame,
         seq: Seq,
         context_valid: bool,
-        wait_for_pcm: bool,
+        read_pcm: ReadPcm,
     ) -> DeckPart {
         #[cfg(not(feature = "usdt"))]
         let _ = (at, seq);
@@ -237,9 +234,8 @@ impl Deck {
                 self.tails[slot.index()].fill(
                     track,
                     self.declick_frames,
-                    &self.metrics,
                     &mut self.recycle[slot.index()],
-                    wait_for_pcm,
+                    read_pcm,
                 );
             }
             track.adopt(segment);
@@ -261,33 +257,31 @@ impl Deck {
         slot: Slot,
         mut track: PlayerTrack,
         context_valid: bool,
-        wait_for_pcm: bool,
+        read_pcm: ReadPcm,
     ) -> DeckPart {
         track.start(Fade::Declick);
         track.snap_gate();
-        match self.tracks.replace(slot, track) {
-            Ok(mut old) => {
-                if old.state() == crate::bridge::SlotState::Playing {
-                    self.metrics.record_evicted_playing();
-                }
-                if context_valid {
-                    self.tails[slot.index()].fill(
-                        &mut old,
-                        self.evict_frames,
-                        &self.metrics,
-                        &mut self.recycle[slot.index()],
-                        wait_for_pcm,
-                    );
-                }
-                returned_pcm(slot, old.into_resource())
-            }
-            Err(resource) => returned_pcm(slot, resource),
+        let Some(current) = self.tracks.at_mut(slot) else {
+            return returned_pcm(slot, track);
+        };
+        let mut old = std::mem::replace(current, track);
+        if old.state() == crate::bridge::SlotState::Playing {
+            self.metrics.record_evicted_playing();
         }
+        if context_valid {
+            self.tails[slot.index()].fill(
+                &mut old,
+                self.evict_frames,
+                &mut self.recycle[slot.index()],
+                read_pcm,
+            );
+        }
+        returned_pcm(slot, old)
     }
 
     pub(in crate::rt) fn track(
         &self,
-        pcm: Box<PlayerResource>,
+        pcm: Box<crate::PcmReceiver>,
         segment: SegmentId,
         item_id: TrackId,
         seq: Seq,

@@ -159,7 +159,7 @@ impl Rig {
             .collect()
     }
 }
-pub(super) type Track = PlayerImpl<TestPools>;
+pub(super) type Track = PlayerImpl;
 
 pub(super) fn rig() -> Rig {
     Rig {
@@ -210,16 +210,23 @@ fn unseated_track() -> Track {
     held
 }
 
-pub(super) fn item() -> ResourceLoad<TestPools> {
+pub(super) fn item() -> ResourceLoad {
+    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build());
     let src = ResourceSrc::parse("https://example.com/song.mp3").expect("valid test source");
-    let config = ResourceConfig::for_src(src)
+    let config = ResourceConfig::<TestPools>::for_src(src)
         .store(AssetStore::builder(pools()).build())
-        .worker(crate::PlayWorker::new(
-            crate::PlayWorkerConfig::builder(pools()).build(),
-        ))
         .host_sample_rate(mock::SAMPLE_RATE)
         .build();
-    ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()))
+    crate::ResourcePrep::builder()
+        .worker(worker)
+        .build()
+        .prepare(
+            config,
+            &mock::output(None).get(),
+            Box::new(AudioObserverSlot::default().relay()),
+        )
+        .expect("prepared source load")
+        .1
 }
 
 pub(super) fn lane() -> (Sender<LaneProtocol>, Inbox<LaneProtocol>) {
@@ -302,7 +309,7 @@ pub(super) fn prepared_track() -> (Track, Inbox<LaneProtocol>) {
 pub(super) fn in_pass<R>(
     rig: &mut Rig,
     now: SessionFrame,
-    run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R,
+    run: impl FnOnce(&mut Outbox<'_>) -> R,
 ) -> R {
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot::default();
@@ -328,9 +335,19 @@ pub(super) fn in_pass<R>(
 pub(super) fn command_at_zero(
     track: &mut Track,
     rig: &mut Rig,
-    command: TrackCommand<TestPools>,
+    command: TrackCommand,
 ) -> Option<Seq> {
     in_pass(rig, frame(0), |out| track.apply(command, out)).expect("admitted owner command")
+}
+
+#[kithara::test]
+fn an_idle_player_does_not_require_a_pool_schema() {
+    let config = PlayerConfig::builder()
+        .item(TrackId::allocate())
+        .settings(TrackSettings::default())
+        .build();
+    let player = PlayerImpl::new(config).expect("valid idle player");
+    assert_eq!(player.snapshot().status, TrackStatus::Idle);
 }
 
 #[kithara::test]
@@ -486,9 +503,9 @@ async fn a_rejected_launch_leaves_the_member_silent() {
     let prep = crate::ResourcePrep::builder()
         .worker(worker.clone())
         .build();
-    let config: ResourceConfig<TestPools> = prep
+    let (_, load) = prep
         .prepare(
-            ResourceConfig::for_src(ResourceSrc::Path(path))
+            ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
                 .store(
                     AssetStore::builder(pools.clone())
                         .backend(kithara_assets::StorageBackend::Memory)
@@ -496,9 +513,9 @@ async fn a_rejected_launch_leaves_the_member_silent() {
                 )
                 .build(),
             &mock::output(None).get(),
+            Box::new(AudioObserverSlot::default().relay()),
         )
         .expect("prepared source");
-    let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
     hang_tick!("rejected launch: opening audible fixture".to_owned());
     let opened = rig
         .deck
@@ -733,11 +750,11 @@ async fn installed_free_receipt_is_consumed_once(#[case] foreign: u8) {
         0 => batch.basis = vec![(B, None)],
         2 => batch.basis = vec![(A, Some(other_seq))],
         3 => {
-            track.segment = Segment::issued(
+            track.select_segment(Segment::issued(
                 track.segment.id.next(),
                 track.segment.origin,
                 track.segment.speed,
-            );
+            ));
         }
         _ => {}
     }
@@ -802,7 +819,7 @@ async fn installed_free_receipt_is_consumed_once(#[case] foreign: u8) {
     assert_eq!(track.snapshot().speed, before.speed);
     assert_eq!(track.playback_commands.len(), 1);
     batch.basis = original_basis;
-    track.segment = original_segment;
+    track.select_segment(original_segment);
     assert!(
         matches!(rig.with_outbox(|out| track.settle(TrackReceipt::Deck {
         seq, outcome: &outcome, batch: &mut batch,
@@ -944,7 +961,7 @@ async fn a_next_pause_of_an_attached_track_settles_only_its_native_stop(
     assert_eq!(track.snapshot().position, stopped_mark.position);
     assert_eq!(track.resume, Some(stopped_mark));
     assert!(track.playback_commands.is_empty());
-    assert_eq!(rig.deck.mixer.held(A), Some("next-pause"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 }
 
 #[kithara::test]
@@ -1403,7 +1420,7 @@ fn a_relocation_is_refused_off_the_applied_lane(#[case] invalid: u8) {
     assert_eq!(track.snapshot().speed, before.speed);
     assert_eq!(track.snapshot().status, before.status);
     assert_eq!(track.snapshot().mark, before.mark);
-    assert!(track.lane_history.commands.is_empty());
+    assert!(track.lane_commands.operations().is_empty());
     assert!(track.playback_commands.is_empty());
 }
 
@@ -1433,7 +1450,7 @@ fn an_audible_member_under_a_map_the_group_never_applied_is_refused() {
     assert_eq!(track.snapshot().mark, before.mark);
     assert_eq!(track.snapshot().status, before.status);
     assert!(lane_commands(&mut inbox).is_empty());
-    assert!(track.lane_history.commands.is_empty());
+    assert!(track.lane_commands.operations().is_empty());
     assert!(track.playback_commands.is_empty());
     rig.deck.ring.publish().expect("publish empty scope");
     rig.deck.inbox.drain();
@@ -1486,25 +1503,21 @@ fn worker_handoff_geometry_derives_source_output_and_beat_together() {
     );
     assert_eq!(track.snapshot().position, Position::ZERO);
     assert!(lane_commands(&mut inbox).is_empty());
-    assert!(track.lane_history.commands.is_empty());
+    assert!(track.lane_commands.operations().is_empty());
     assert!(track.playback_commands.is_empty());
 }
 
 #[kithara::test]
-#[case::absent_owner(0)]
 #[case::closed_dispatcher(1)]
 #[case::unready_geometry(2)]
 fn a_staged_preparation_needs_an_owner_and_a_stageable_load(#[case] refusal: u8) {
     let mut rig = rig();
     let mut track = track(A);
+    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build());
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
         ResourceSrc::parse("https://example.com/song.mp3").expect("original source"),
     )
     .store(AssetStore::builder(pools()).build())
-    .maybe_worker(
-        (refusal != 0)
-            .then(|| crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build())),
-    )
     .host_sample_rate(mock::SAMPLE_RATE)
     .audio_buffer_chunks(if refusal == 2 {
         std::num::NonZeroUsize::MAX
@@ -1512,7 +1525,16 @@ fn a_staged_preparation_needs_an_owner_and_a_stageable_load(#[case] refusal: u8)
         std::num::NonZeroUsize::new(3).expect("ring depth")
     })
     .build();
-    let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
+    let load = crate::ResourcePrep::builder()
+        .worker(worker)
+        .build()
+        .prepare(
+            config,
+            &mock::output(None).get(),
+            Box::new(AudioObserverSlot::default().relay()),
+        )
+        .expect("prepared source load")
+        .1;
     if refusal == 1 {
         let (_, replacement) = channel(ChannelConfig::builder().build());
         drop(std::mem::replace(&mut rig.deck.opens, replacement));
@@ -1658,18 +1680,25 @@ async fn play_after_an_ended_seek_preserves_its_segment_and_receipt(#[case] offs
 
 #[kithara::test]
 fn playback_shared_seek_epoch_increments() {
+    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build());
     let mut rig = rig();
     let mut track = track(A);
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
         ResourceSrc::parse("https://example.com/song.mp3").expect("original source"),
     )
     .store(AssetStore::builder(pools()).build())
-    .worker(crate::PlayWorker::new(
-        crate::PlayWorkerConfig::builder(pools()).build(),
-    ))
     .host_sample_rate(mock::SAMPLE_RATE)
     .build();
-    let item = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
+    let item = crate::ResourcePrep::builder()
+        .worker(worker)
+        .build()
+        .prepare(
+            config,
+            &mock::output(None).get(),
+            Box::new(AudioObserverSlot::default().relay()),
+        )
+        .expect("prepared source load")
+        .1;
     rig.with_outbox(|out| {
         track.apply(
             TrackCommand::Load {
@@ -1945,20 +1974,19 @@ pub(super) async fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTra
     let worker = rig.worker().clone();
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
-        .worker(worker.clone())
         .host_sample_rate(mock::SAMPLE_RATE)
         .build();
-    let (_, config) = mock::resource_tracks(&config).expect("local source configuration");
+    let config = mock::resource_audio(&config, worker.pools()).expect("local source configuration");
     let futures::future::Either::Left(config) = config else {
         panic!("WAV is a file source")
     };
     let load = mock::track_load(
-        config,
+        (config, crate::TrackConfig::default()),
         Arc::from(src),
         worker.clone(),
         mock::SAMPLE_RATE,
-        |worker, config, position, start, inbox| {
-            Box::pin(async move { worker.load(config, position, start, inbox).await })
+        |worker, audio, config, position, start, inbox| {
+            Box::pin(async move { worker.load(audio, config, position, start, inbox).await })
         },
     );
     let opened = rig
@@ -1973,10 +2001,7 @@ pub(super) async fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTra
 pub(super) fn open_at_position(
     rig: &mut Rig,
     opened: Loaded<OpenedTrack>,
-) -> (
-    Receipt<DispatcherProtocol<ResourceLoad<TestPools>>>,
-    Position,
-) {
+) -> (Receipt<DispatcherProtocol<ResourceLoad>>, Position) {
     rig.opens.drain();
     let due = rig.opens.next_due((), 1).expect("one open");
     let [DispatcherCommand::Load(request)] = due.commands() else {
@@ -2054,7 +2079,7 @@ pub(super) async fn loaded_with_item(
     rig: &mut Rig,
     slot: Slot,
     src: &str,
-    item: ResourceLoad<TestPools>,
+    item: ResourceLoad,
 ) -> (Track, Inbox<LaneProtocol>) {
     let (sender, inbox) = lane();
     let mut track = track(slot);
@@ -2114,7 +2139,7 @@ async fn a_load_opens_its_source_once_and_attaches_on_the_next_block() {
         matches!(settled.as_slice(), [Settled::Applied { seq: answered, .. }] if *answered == seq),
         "the attach answers the load: {settled:?}"
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("track"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
     assert_eq!(track.snapshot().status, TrackStatus::Loaded);
 }
 
@@ -2228,7 +2253,7 @@ async fn a_track_loaded_at_a_position_stands_there_once_attached() {
         "the attach answers the load: {settled:?}"
     );
     assert!(receipts[0].batch().commands.is_empty());
-    assert_eq!(rig.deck.mixer.held(A), Some("track"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
     assert_eq!(track.snapshot().position, Position::from_secs(3));
 }
 
@@ -2445,7 +2470,7 @@ async fn every_part_a_track_sends_names_its_slot() {
         "{parts:?}"
     );
     assert!(receipts.iter_mut().all(|receipt| {
-        TrackReceipt::<TestPools>::Deck {
+        TrackReceipt::Deck {
             seq: receipt.seq,
             outcome: &receipt.outcome,
             batch: &mut receipt.batch,
@@ -2603,7 +2628,7 @@ async fn a_rejected_release_can_send_a_new_detach(#[case] stale: bool) {
             .any(|answer| { matches!(answer, Settled::Rejected { seq, .. } if *seq == first) })
     );
     assert!(track.attached());
-    assert_eq!(rig.deck.mixer.held(A), Some("track"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 
     let retry = rig
         .with_outbox(|out| track.apply(TrackCommand::Release, out))
@@ -2828,7 +2853,8 @@ async fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     );
     rig.with_outbox(|out| new.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live deck scope");
-    assert_eq!(rig.deck.mixer.held(A), Some("old"));
+    let old_receiver = std::ptr::from_ref(rig.deck.mixer.receiver(A).expect("original PCM"));
+    assert_eq!(rig.deck.mixer.held(A), Some(old.item));
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
@@ -2885,7 +2911,7 @@ async fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     };
     assert_eq!(
         rig.deck.mixer.held(A),
-        Some("old"),
+        Some(old.item),
         "the replace waits for its frame"
     );
 
@@ -2897,9 +2923,9 @@ async fn an_evicting_track_takes_the_slot_over_on_its_frame() {
         matches!(
             receipts[0].batch().commands.as_slice(),
             [
-                DeckPart::Returned(Returned::Pcm { slot, pcm }),
+                DeckPart::Returned(Returned::Pcm { slot, pcm, packet: None }),
                 DeckPart::Start { slot: started, fade: Fade::Crossfade(_) },
-            ] if *slot == A && &**pcm.src() == "old" && *started == A
+            ] if *slot == A && std::ptr::eq(pcm.as_ref(), old_receiver) && *started == A
         ),
         "{:?}",
         receipts[0].batch().commands
@@ -2908,7 +2934,7 @@ async fn an_evicting_track_takes_the_slot_over_on_its_frame() {
         matches!(settled.as_slice(), [Settled::Applied { seq: answered, at }] if *answered == seq && *at == frame(1_024)),
         "the replace answers the group: {settled:?}"
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("new"));
+    assert_eq!(rig.deck.mixer.held(A), Some(new.item));
     assert_eq!(old.snapshot().status, TrackStatus::Released);
     assert_eq!(
         new.snapshot().status,
@@ -2998,7 +3024,7 @@ async fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
                 .any(|part| matches!(part, DeckPart::Adopt { .. }))
         }));
         settle(&mut old, &mut rig, &mut receipts);
-        assert_eq!(rig.mixer.held(A), Some("old"));
+        assert_eq!(rig.mixer.held(A), Some(old.item));
         assert!(matches!(old.snapshot().status, TrackStatus::Playing { .. }));
         let mut receipts = rig.end(A, frame(1_024));
         assert!(!receipts.iter().any(|receipt| {
@@ -3116,7 +3142,7 @@ async fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
         assert!(settled.iter().any(|settled| matches!(settled,
             Settled::Rejected { seq: answer, reason: Rejection::Stale } if *answer == seq)));
         rig.block(frame(1_024), 0.0);
-        assert_eq!(rig.mixer.held(A), Some("old"));
+        assert_eq!(rig.mixer.held(A), Some(old.item));
         assert!(matches!(old.snapshot().status, TrackStatus::Playing { .. }));
     }
     assert_eq!(new.snapshot().status, TrackStatus::Released);
@@ -3124,9 +3150,9 @@ async fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
 
 pub(super) fn with_mixer<R>(
     mixer: &mut mock::MixerRig,
-    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad>>,
     now: SessionFrame,
-    run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R,
+    run: impl FnOnce(&mut Outbox<'_>) -> R,
 ) -> R {
     let output = mock::output(None).get();
     let deck = mixer.ends.snapshot.read();
@@ -3149,7 +3175,7 @@ pub(super) fn with_mixer<R>(
 fn repeat_wav_load(
     dir: &TestTempDir,
     frames: usize,
-) -> (crate::PlayWorker<TestPools>, ResourceLoad<TestPools>) {
+) -> (crate::PlayWorker<TestPools>, ResourceLoad) {
     let path = dir.path().join("repeat.wav");
     let fixture = match frames {
         441 => kithara_test_fixtures::assets::fixed_constant_wav_cd_half_441(),
@@ -3161,23 +3187,24 @@ fn repeat_wav_load(
     let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build());
     let config = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(AssetStore::builder(pools()).build())
-        .worker(worker.clone())
         .host_sample_rate(mock::SAMPLE_RATE)
-        // WHY: The mixer rig renders offline, so a read waits for the worker's
-        // PCM instead of underrunning; the oracle counts blocks, not wall time.
-        .block_on_underrun(true)
         .build();
-    let (_, config) = mock::resource_tracks(&config).expect("file config");
+    let config = mock::resource_audio(&config, worker.pools()).expect("file config");
     let futures::future::Either::Left(config) = config else {
         panic!("WAV source")
     };
     let item = mock::track_load(
-        config,
+        (
+            config,
+            crate::TrackConfig::builder()
+                .block_on_underrun(true)
+                .build(),
+        ),
         Arc::from("repeat"),
         worker.clone(),
         mock::SAMPLE_RATE,
-        |worker, config, position, start, inbox| {
-            Box::pin(async move { worker.load(config, position, start, inbox).await })
+        |worker, audio, config, position, start, inbox| {
+            Box::pin(async move { worker.load(audio, config, position, start, inbox).await })
         },
     );
     (worker, item)
@@ -3339,7 +3366,7 @@ async fn a_cancelled_repeat_reaches_its_original_end(#[case] frames: usize) {
 pub(super) fn settle_mixer(
     track: &mut Track,
     mixer: &mut mock::MixerRig,
-    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad>>,
     now: SessionFrame,
 ) {
     while let Some(receipt) = mixer.ring.receipt() {
@@ -3772,8 +3799,8 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
             )
             .expect("quiet rejected preparation");
             let seq = track
-                .lane_history
-                .commands
+                .lane_commands
+                .operations()
                 .last()
                 .expect("native preparation")
                 .seq;
@@ -3800,8 +3827,8 @@ async fn an_unchanged_speed_target_still_cancels_a_ramp() {
             assert!(!track.segment.ready);
             assert!(
                 track
-                    .lane_history
-                    .commands
+                    .lane_commands
+                    .operations()
                     .iter()
                     .all(|operation| operation.seq != seq)
             );
@@ -4236,6 +4263,94 @@ fn projecting_track() -> (Track, NonZeroU32) {
     (track, rate)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::test]
+#[case::snapshot(0)]
+#[case::position(1)]
+#[case::end(2)]
+fn temporal_queries_do_not_rebuild_the_admitted_plan(#[case] query: u8) {
+    let _observer = tracing::subscriber::set_default(tracing::subscriber::NoSubscriber::default());
+    let (mut track, rate) = projecting_track();
+    let (sender, _inbox) = lane();
+    replace_lane_sender(&mut track.lane, sender);
+    for (at, speed) in [(4, 2.0), (2, 1.5)] {
+        track
+            .send_lane(
+                LaneCommand::SetSpeed(SpeedCurve::Constant(speed)),
+                When::At(LaneFrame {
+                    segment: track.segment.id,
+                    frame: at,
+                }),
+            )
+            .expect("admitted temporal plan");
+    }
+    assert_eq!(track.snapshot().speed, 1.0);
+    assert_eq!(
+        track.planned(frame(8), rate).expect("planned position"),
+        (Duration::from_millis(13), 2.0)
+    );
+    assert_eq!(
+        track.planned_end(rate).expect("planned EOF"),
+        Some(frame(7))
+    );
+    track.mark = Some(SlotMark {
+        session: frame(1),
+        lane: LaneFrame {
+            segment: track.segment.id,
+            frame: 1,
+        },
+        position: Duration::from_millis(1),
+    });
+    assert_no_alloc::assert_no_alloc(|| match query {
+        0 => assert_eq!(track.snapshot().speed, 1.0),
+        1 => assert_eq!(
+            track.planned(frame(8), rate).expect("planned position"),
+            (Duration::from_millis(13), 2.0)
+        ),
+        _ => assert_eq!(
+            track.planned_end(rate).expect("planned EOF"),
+            Some(frame(7))
+        ),
+    });
+}
+
+#[kithara::test]
+#[case::overflow_first(true)]
+#[case::unknown_first(false)]
+fn temporal_plan_preserves_admission_error_order(#[case] overflow_first: bool) {
+    let (mut track, rate) = projecting_track();
+    let (sender, _inbox) = lane();
+    replace_lane_sender(&mut track.lane, sender);
+    track.geometry.declick = FrameCount::new(1);
+    let mut commands = [
+        (
+            LaneCommand::Jump { to: Duration::ZERO },
+            When::At(LaneFrame {
+                segment: track.segment.id,
+                frame: u64::MAX,
+            }),
+        ),
+        (LaneCommand::SetSpeed(SpeedCurve::Constant(2.0)), When::Next),
+    ];
+    if !overflow_first {
+        commands.reverse();
+    }
+    for (command, when) in commands {
+        track.send_lane(command, when).expect("admitted command");
+    }
+    for error in [
+        track
+            .planned(frame(8), rate)
+            .expect_err("invalid prediction"),
+        track.planned_end(rate).expect_err("invalid EOF prediction"),
+    ] {
+        assert!(matches!(
+            (overflow_first, error),
+            (true, PlayError::Untimed) | (false, PlayError::NotReady)
+        ));
+    }
+}
+
 #[kithara::test]
 fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
     let (mut track, rate) = projecting_track();
@@ -4294,7 +4409,7 @@ fn planned_end_rechecks_marks_and_changes_with_the_accepted_plan() {
         track.planned_end(rate).expect("new curve"),
         Some(frame(113))
     );
-    track.lane_history.retain(|operation| operation.seq != seq);
+    track.lane_commands.retain(|operation| operation.seq != seq);
     assert_eq!(
         track.planned_end(rate).expect("withdrawn curve"),
         Some(frame(107))
@@ -4458,8 +4573,8 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
         .expect("raw jump");
     assert!(
         track
-            .lane_history
-            .commands
+            .lane_commands
+            .operations()
             .iter()
             .any(|operation| operation.seq == seq)
     );
@@ -4475,16 +4590,17 @@ fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
         Some(frame(88))
     );
     track.extent.duration = Some(Duration::from_millis(1_669));
-    let operation = track
-        .lane_history
-        .commands
-        .iter_mut()
-        .find(|operation| operation.seq == seq)
-        .expect("accepted Jump");
-    operation.when = When::At(LaneFrame {
-        segment: track.segment.id,
-        frame: 40_000,
-    });
+    track
+        .lane_commands
+        .applied(
+            seq,
+            LaneFrame {
+                segment: track.segment.id,
+                frame: 40_000,
+            },
+            track.segment.id,
+        )
+        .for_each(drop);
     assert_eq!(
         track
             .planned_end(mock::SAMPLE_RATE)
@@ -4669,7 +4785,7 @@ async fn a_fade_in_after_an_outstanding_native_stop_sends_a_real_start() {
         track.snapshot().status,
         TrackStatus::Playing { since: frame(128) }
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("stop-then-fade"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 }
 
 #[kithara::test]
@@ -4839,8 +4955,8 @@ async fn a_grouped_fade_in_uses_only_its_own_slots_actual_last_transport(#[case]
     settle(&mut a, &mut rig, &mut receipts);
     settle(&mut b, &mut rig, &mut receipts);
     assert!(matches!(a.snapshot().status, TrackStatus::Playing { .. }));
-    assert_eq!(rig.deck.mixer.held(A), Some("group-a"));
-    assert_eq!(rig.deck.mixer.held(B), Some("group-b"));
+    assert_eq!(rig.deck.mixer.held(A), Some(a.item));
+    assert_eq!(rig.deck.mixer.held(B), Some(b.item));
 }
 
 #[kithara::test]
@@ -4933,7 +5049,7 @@ async fn a_fade_in_after_a_stop_and_transparent_envelope_still_starts(#[case] he
         track.snapshot().status,
         TrackStatus::Playing { since: frame(256) }
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("stop-envelope-start"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 }
 
 #[kithara::test]
@@ -4991,7 +5107,7 @@ async fn a_delayed_start_answer_cannot_overwrite_its_applied_stop(#[case] stop_a
             at: Duration::from_millis(500)
         }
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("held-start-stop"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
     assert!(
         settle(&mut track, &mut rig, &mut held)
             .iter()
@@ -5093,7 +5209,7 @@ async fn an_applied_resume_keeps_its_status_when_both_older_transport_answers_ar
         track.snapshot().status,
         TrackStatus::Playing { since: frame(256) }
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("held-start-stop-resume"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 }
 
 #[kithara::test]
@@ -5117,7 +5233,7 @@ async fn a_delayed_attach_answer_keeps_its_applied_dependent_start() {
         .find(|answer| answer.seq == attached)
         .expect("actual attachment");
     assert!(matches!(attachment.outcome, Outcome::Applied { at, .. } if at == frame(0)));
-    assert_eq!(rig.deck.mixer.held(A), Some("held-attach-start"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
     assert!(
         !attachment
             .batch
@@ -5161,7 +5277,7 @@ async fn a_delayed_attach_answer_keeps_its_applied_dependent_start() {
     );
     assert!(track.seat.attaching().is_none());
     assert!(track.loading.is_none());
-    assert_eq!(rig.deck.mixer.held(A), Some("held-attach-start"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 }
 
 #[kithara::test]
@@ -5244,7 +5360,7 @@ async fn a_refused_stop_cannot_hide_the_earlier_applied_start_answer() {
         track.snapshot().status,
         TrackStatus::Playing { since: frame(0) }
     );
-    assert_eq!(rig.deck.mixer.held(A), Some("held-start-refused-stop"));
+    assert_eq!(rig.deck.mixer.held(A), Some(track.item));
 }
 
 #[kithara::test(tokio)]

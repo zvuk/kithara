@@ -95,12 +95,7 @@ fn source_format_changes_preserve_pcm_metadata_and_the_deck_filter_rate(
         metadata.push(packet.meta);
         ring.push(PcmPacket::Chunk(Box::new(packet)));
     }
-    let resource = PlayerResource::new(
-        PcmConsumer::new(ring.receiver.take().expect("receiver")),
-        Arc::from("source format"),
-        &pools(),
-    )
-    .expect("resource");
+    let resource = Box::new(ring.receiver.take().expect("receiver"));
     let attached = send(
         &mut ends,
         at(1),
@@ -108,7 +103,7 @@ fn source_format_changes_preserve_pcm_metadata_and_the_deck_filter_rate(
             DeckPart::Attach {
                 slot: A,
                 item_id: kithara_events::TrackId::allocate(),
-                pcm: Box::new(resource),
+                pcm: resource,
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {

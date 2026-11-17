@@ -3727,10 +3727,6 @@ mod engine_selection_tests {
             );
         }
         assert_eq!(
-            project.test.lanes["analysis"].default_features,
-            ["kithara-beat/dsp", "kithara-waveform/dsp"]
-        );
-        assert_eq!(
             project.test.lanes["net-host"].default_backend.as_deref(),
             Some("host")
         );

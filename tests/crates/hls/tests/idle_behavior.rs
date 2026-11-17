@@ -14,7 +14,7 @@ use kithara::{
         time::{self, Duration},
         tokio::sync::broadcast::error::RecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
@@ -89,7 +89,10 @@ async fn idle_does_not_panic_hang_detector(
 
     let mut audio = kithara_integration_tests::mock::load_audio(
         &worker,
-        AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
+        (
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
+            TrackConfig::default(),
+        ),
     )
     .await
     .expect("audio creation");
@@ -188,9 +191,12 @@ async fn idle_prefetch_is_capped(
 
     let _audio = kithara_integration_tests::mock::load_audio(
         &worker,
-        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-            .events(bus.clone())
-            .build(),
+        (
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+                .events(bus.clone())
+                .build(),
+            TrackConfig::default(),
+        ),
     )
     .await
     .expect("audio creation");

@@ -6,7 +6,7 @@ use kithara::{
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{thread, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
@@ -52,7 +52,7 @@ async fn aac_he_v2_hls_produces_pcm(
         .build();
     // Park on ring underrun instead of spinning on Pending, so the read
     // loop needs no wall-clock iteration cap.
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
@@ -60,9 +60,8 @@ async fn aac_he_v2_hls_produces_pcm(
                     .build(),
             )
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
 
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await

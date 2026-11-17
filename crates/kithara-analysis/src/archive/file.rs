@@ -156,9 +156,10 @@ impl AnalysisFile {
     ///
     /// # Errors
     ///
-    /// Rejects stale analyzer fingerprints, invalid bounds, overflow,
-    /// malformed index entries, and a latest payload inconsistent with the
-    /// header/index.
+    /// Accepts a stored fingerprint whose tags are part of
+    /// `expected_fingerprint`, as a narrowed pass writes; rejects any other,
+    /// invalid bounds, overflow, malformed index entries, and a latest payload
+    /// inconsistent with the header/index.
     pub fn parse(
         bytes: &[u8],
         expected_fingerprint: &AnalysisFingerprint,
@@ -167,7 +168,7 @@ impl AnalysisFile {
             .get(..consts::HEADER_LEN)
             .ok_or(AnalysisFileError::Corrupt)?;
         let header = Header::decode(header_bytes)?;
-        if &header.fingerprint != expected_fingerprint {
+        if !header.fingerprint.serves(expected_fingerprint) {
             return Err(AnalysisFileError::Config);
         }
         let spec = AnalysisFileSpec::new(
@@ -317,7 +318,7 @@ struct HeaderOffsets {
 }
 
 impl Header {
-    const VERSION: u32 = 0x4b41_4604;
+    const VERSION: u32 = 0x4b41_4605;
 
     fn base(spec: &AnalysisFileSpec, layout: Layout) -> Self {
         Self {
@@ -343,6 +344,7 @@ impl Header {
         let offsets = read_header_offsets(&mut reader)?;
         let waveform = read_fingerprint(&mut reader)?;
         let beat = read_fingerprint(&mut reader)?;
+        let key = read_fingerprint(&mut reader)?;
         reader.finish().map_err(|_| AnalysisFileError::Corrupt)?;
         Ok(Self {
             settled: identity.settled,
@@ -356,7 +358,11 @@ impl Header {
             payload_end: offsets.payload_end,
             latest_payload_offset: offsets.latest_payload_offset,
             latest_payload_len: offsets.latest_payload_len,
-            fingerprint: AnalysisFingerprint::new(beat.as_deref(), waveform.as_deref()),
+            fingerprint: AnalysisFingerprint::builder()
+                .maybe_beat(beat)
+                .maybe_waveform(waveform)
+                .maybe_key(key)
+                .build(),
         })
     }
 
@@ -378,6 +384,7 @@ impl Header {
         push_u64(&mut out, self.latest_payload_len);
         push_fingerprint(&mut out, self.fingerprint.waveform())?;
         push_fingerprint(&mut out, self.fingerprint.beat())?;
+        push_fingerprint(&mut out, self.fingerprint.key())?;
         if out.len() != consts::HEADER_LEN {
             return Err(AnalysisFileError::Corrupt);
         }
@@ -638,7 +645,11 @@ fn index_entry_offset(layout: Layout, id: u64) -> Result<u64, AnalysisFileError>
 }
 
 fn validate_fingerprint(fingerprint: &AnalysisFingerprint) -> Result<(), AnalysisFileError> {
-    for value in [fingerprint.waveform(), fingerprint.beat()] {
+    for value in [
+        fingerprint.waveform(),
+        fingerprint.beat(),
+        fingerprint.key(),
+    ] {
         if value.is_some_and(str::is_empty) {
             return Err(AnalysisFileError::Config);
         }

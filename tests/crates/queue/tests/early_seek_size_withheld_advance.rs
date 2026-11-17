@@ -126,7 +126,6 @@ fn build_hls_source(
     master: &url::Url,
     downloader: &Downloader,
     store: &AssetStore<TestPools>,
-    worker: &PlayWorker<TestPools>,
 ) -> TrackSource<TestPools> {
     let cfg: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
@@ -138,7 +137,6 @@ fn build_hls_source(
                     .build(),
             )
             .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
-            .worker(worker.clone())
             .build();
     TrackSource::Config(Box::new(cfg))
 }
@@ -237,9 +235,9 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
 
     // Track 0 = the gated HLS track. Track 1 = a second HLS track so a forward
     // auto-advance has somewhere to land (observable as current_index 0 -> 1).
-    let target = build_hls_source(&master, &downloader, &store, &harness.worker);
+    let target = build_hls_source(&master, &downloader, &store);
     let target_src = kithara::platform::sync::Arc::from(master.as_str());
-    let next = build_hls_source(&master, &downloader, &store, &harness.worker);
+    let next = build_hls_source(&master, &downloader, &store);
     let queue = harness
         .host
         .insert_control(Queue::new(

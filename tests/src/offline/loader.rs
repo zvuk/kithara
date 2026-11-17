@@ -51,7 +51,7 @@ pub async fn append_source_loaded<F>(
     source: impl Into<TrackSource<TestPools>>,
 ) -> TrackId
 where
-    F: TrackFactory<TestPools> + Send + 'static,
+    F: TrackFactory + Send + 'static,
     F::Track: Send,
 {
     let source = source.into();
