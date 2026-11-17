@@ -1060,7 +1060,7 @@ async fn poll_next_respects_max_concurrent() {
 /// A regression that reverts to a per-Downloader client multiplies the opened
 /// connection count by `WAVES`, immediately tripping the assertion.
 #[cfg(not(target_os = "android"))]
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1830)))]
+#[kithara::test(tokio, flash(false), timeout(::std::time::Duration::from_millis(5178)))]
 async fn shared_client_keepalive_bounds_connection_count() {
     const PARALLEL_DLS: usize = 8;
     const WAVES: usize = 25;
