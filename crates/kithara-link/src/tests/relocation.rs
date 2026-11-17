@@ -9,8 +9,8 @@ use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 
 use super::fixtures::{
-    Command, Control, Deck, Rig, answer, deck, grid, load, loaded, position, provisional, sounding,
-    synced, trajectory,
+    Command, Control, Deck, Rig, answer, deck, grid, load, loaded, position, provisional, sound,
+    sounding, synced, trajectory,
 };
 use crate::{LinkedPlayer, SyncStatus};
 
@@ -268,8 +268,7 @@ fn a_new_load_owns_position_and_obsolete_jump_receipts_change_nothing() {
 #[kithara::test]
 fn aligned_seek_waits_for_a_grid_covering_its_cue() {
     let (mut deck, control, mut rig, _) = synced(provisional(&grid(24_000, 0, None, 192_000)));
-    let since = SessionFrame::new(0);
-    control.edit(|script| script.snapshot.status = TrackStatus::Playing { since });
+    sound(&control, &mut rig, 0, 0);
     assert_eq!(
         rig.run(|out| deck.apply(
             TrackCommand::Seek {
@@ -329,8 +328,7 @@ fn relocated(relocation: Relocation, to: u32, model: BeatGridModel) -> (Deck, Co
     let command = match relocation {
         Relocation::Cue => return (deck, control, rig),
         Relocation::Seek => {
-            let since = SessionFrame::new(0);
-            control.edit(|script| script.snapshot.status = TrackStatus::Playing { since });
+            sound(&control, &mut rig, 0, 0);
             TrackCommand::Seek { to: position(to) }
         }
         Relocation::Play => {

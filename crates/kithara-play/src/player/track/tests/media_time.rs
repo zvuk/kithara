@@ -202,17 +202,18 @@ fn assert_quiet_curve_projection(
     assert_eq!(track.snapshot().speed, 3.0);
     track.mark = Some(consumed);
     assert!(
-        matches!(track.speed_receipt(), Some(Settled::Applied { seq, at })
-            if seq == predecessor && at == frame(0))
+        matches!(track.lane_receipt(), Some(Settled::Applied { seq, at })
+            if seq == predecessor && at == (LaneFrame { segment: consumed.lane.segment, frame: 0 }))
     );
-    assert!(track.speed_receipt().is_none());
-    assert!(track.lane_history.speed_answers.is_empty());
+    assert!(track.lane_receipt().is_none());
+    assert!(track.lane_history.receipts.is_empty());
     track.status = TrackStatus::Paused {
         at: consumed.position,
     };
     track.resume = Some(consumed);
     track.mark = Some(consumed);
-    let available = track.lane.as_ref().expect("real lane").available();
+    let available = track.lane.sender().expect("real lane").available();
+    let issued_at = source.cursor();
     command_at_zero(
         &mut track,
         &mut rig,
@@ -229,7 +230,7 @@ fn assert_quiet_curve_projection(
         .expect("native Segment")
         .seq;
     assert_eq!(
-        track.lane.as_ref().expect("real lane").available() + 1,
+        track.lane.sender().expect("real lane").available() + 1,
         available
     );
     assert!(
@@ -239,7 +240,7 @@ fn assert_quiet_curve_projection(
             .iter()
             .rev()
             .take_while(|operation| operation.seq == seq)
-            .all(|operation| operation.applied().is_none())
+            .all(|operation| !operation.applied)
     );
     assert!(!track.segment.ready);
     let mut spans = Vec::new();
@@ -274,16 +275,12 @@ fn assert_quiet_curve_projection(
             .commands
             .iter()
             .filter(|operation| operation.seq == seq)
-            .all(|operation| operation.applied() == Some(true))
+            .all(|operation| operation.applied)
     );
     assert!(
-        track
-            .lane_history
-            .speed_answers
-            .iter()
-            .all(|(answered, _)| *answered != seq)
+        matches!(track.lane_receipt(), Some(Settled::Applied { seq: answered, at }) if answered == seq && at == issued_at)
     );
-    assert!(track.speed_receipt().is_none());
+    assert!(track.lane_receipt().is_none());
     track.observed_source = metadata.first().copied();
     let initial = spans
         .first()
@@ -548,7 +545,7 @@ fn an_alignment_replaces_older_future_speeds_without_cancelling_keylock() {
         ready: None,
     });
     track.settle_lane();
-    let answers: Vec<_> = std::iter::from_fn(|| track.speed_receipt()).collect();
+    let answers: Vec<_> = std::iter::from_fn(|| track.lane_receipt()).collect();
     assert!(answers.iter().any(|answer| matches!(answer, Settled::Rejected { seq, reason: Rejection::Stale } if *seq == obsolete)), "{answers:?}");
     let due = inbox
         .next_due(
@@ -654,7 +651,7 @@ fn independent_lane_speeds_keep_their_time_order_after_an_earlier_insertion() {
             .lane_history
             .commands
             .iter()
-            .all(|operation| operation.applied() == Some(true))
+            .all(|operation| operation.applied)
     );
 }
 

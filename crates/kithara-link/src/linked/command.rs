@@ -101,7 +101,6 @@ impl<P> Linked<P> {
         self.start = None;
         self.start_caller = None;
         self.withdrawn.clear();
-        self.retimes.clear();
         self.cue = self.synced().then_some(Cue::Beat(position));
         self.waiting = self
             .synced()
@@ -184,11 +183,16 @@ impl<P> Linked<P> {
     where
         P: Track<S>,
     {
+        let mark = self
+            .inner
+            .snapshot()
+            .as_ref()
+            .mark
+            .ok_or(PlayError::NotReady)?;
         let target = jump_target(&self.host, source, to, at).ok_or(PlayError::NotReady)?;
         let start = at - self.inner.snapshot().as_ref().declick;
         let (position, _) = self.planned::<S>(start)?;
         let (speed, coverage) = self.curve(source, position, start, Some((target, at)))?;
-        let mark = self.inner.snapshot().as_ref().mark;
         let sent = self.inner.apply(
             TrackCommand::Align {
                 to: target,
@@ -198,13 +202,14 @@ impl<P> Linked<P> {
             out,
         )?;
         if let Some(seq) = sent {
-            let state = mark.map(|mark| {
-                CorrectionState::Pending(RunningCorrection {
+            let state = Some(CorrectionState::Pending(
+                RunningCorrection {
                     at,
                     frames: FrameCount::new(0),
                     segment: mark.lane.segment,
-                })
-            });
+                },
+                mark,
+            ));
             self.speeds
                 .push((seq, SpeedOperation::Relocation { state, coverage }));
             self.alignment = None;

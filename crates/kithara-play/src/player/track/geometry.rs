@@ -1,6 +1,5 @@
 use kithara_platform::sync::Arc;
-use kithara_render::{LaneFrame, bridge::SlotMark};
-use kithara_signal::{ExponentialApproach, SessionFrame};
+use kithara_signal::ExponentialApproach;
 use kithara_sync::SpeedCurve;
 use num_traits::ToPrimitive;
 
@@ -55,19 +54,6 @@ fn check_approach(approach: ExponentialApproach) -> Result<f32, PlayError> {
         }
     }
     check_speed(approach.target().to_f32().ok_or(PlayError::Untimed)?)
-}
-
-pub(super) fn session_at(mark: SlotMark, lane: LaneFrame) -> Option<SessionFrame> {
-    if lane.segment != mark.lane.segment {
-        return None;
-    }
-    let distance = i64::try_from(lane.frame.abs_diff(mark.lane.frame)).ok()?;
-    let frame = if lane.frame >= mark.lane.frame {
-        i64::from(mark.session).checked_add(distance)
-    } else {
-        i64::from(mark.session).checked_sub(distance)
-    }?;
-    Some(SessionFrame::new(frame))
 }
 
 pub(super) fn curve_speed(curve: &SpeedCurve, origin: f64, frame: u64) -> Result<f64, PlayError> {

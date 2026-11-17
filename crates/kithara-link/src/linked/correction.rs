@@ -1,6 +1,7 @@
 use kithara_command::{Rejection, Seq, When};
-use kithara_play::{Outbox, PlayError, Position, Settled, Track, TrackCommand, TrackStatus};
-use kithara_signal::{FrameCount, SegmentId, SessionFrame};
+use kithara_play::{Outbox, PlayError, Position, Track, TrackCommand, TrackStatus};
+use kithara_render::{LaneFrame, bridge::SlotMark};
+use kithara_signal::{FrameCount, SessionFrame};
 use kithara_sync::{Slew, SlewCause, slew};
 
 use super::{
@@ -12,55 +13,52 @@ use super::{
 use crate::{covers, jump_target};
 
 impl<P> Linked<P> {
-    pub(super) fn drain_speed_receipts<S>(&mut self)
+    pub(super) fn drain_lane_receipts<S>(&mut self)
     where
         P: Track<S>,
     {
-        if self.speeds.is_empty() {
-            return;
-        }
-        while let Some(receipt) = self.inner.speed_receipt() {
-            match receipt {
-                Settled::Pending => {}
-                Settled::Applied { seq, at } => self.speed_applied(seq, at),
-                Settled::Rejected { seq, reason } => self.speed_rejected::<S>(seq, &reason),
-            }
-        }
+        while self.lane_receipt().is_some() {}
     }
 
     /// Native success activates the new plan and retires the speed law it replaced.
-    fn speed_applied(&mut self, seq: Seq, at: SessionFrame) {
-        let Some((_, operation)) = self.speeds.iter_mut().find(|(pending, _)| *pending == seq)
-        else {
+    pub(super) fn correction_applied(&mut self, seq: Seq, lane: LaneFrame) {
+        let Some(index) = self.speeds.iter().position(|(pending, _)| *pending == seq) else {
             return;
         };
-        let (coverage, keep_fence) = match operation {
+        let (coverage, at) = match &mut self.speeds[index].1 {
             SpeedOperation::Correction { state, .. } => {
-                if let CorrectionState::Pending(correction) = state {
-                    *state = CorrectionState::Applied(RunningCorrection { at, ..*correction });
+                if let CorrectionState::Pending(correction, mark) = state {
+                    if let Some(at) = mark.session_at(lane) {
+                        *state = CorrectionState::Applied(RunningCorrection { at, ..*correction });
+                    } else {
+                        self.speeds.remove(index);
+                    }
                 }
                 return;
             }
-            SpeedOperation::Relocation {
-                state, coverage, ..
-            }
+            SpeedOperation::Relocation { state, coverage }
             | SpeedOperation::Alignment { state, coverage } => {
-                if let Some(CorrectionState::Pending(correction)) = state {
-                    let applied = *correction;
-                    *state = Some(CorrectionState::Applied(applied));
-                }
-                (*coverage, state.is_some())
+                let Some(CorrectionState::Pending(correction, mark)) = state else {
+                    self.speeds.remove(index);
+                    return;
+                };
+                let Some(at) = mark.session_at(lane) else {
+                    self.speeds.remove(index);
+                    return;
+                };
+                let applied = *correction;
+                *state = Some(CorrectionState::Applied(applied));
+                (*coverage, at)
             }
         };
         self.speeds.retain(|(pending, operation)| {
             !(*pending < seq && matches!(operation, SpeedOperation::Correction { .. }))
-                && (*pending != seq || keep_fence)
         });
         self.plan_sent(at, coverage);
     }
 
     /// A synchronized track owes a refused speed's step again.
-    fn speed_rejected<S>(&mut self, seq: Seq, reason: &Rejection<PlayError>)
+    pub(super) fn speed_rejected<S>(&mut self, seq: Seq, reason: &Rejection<PlayError>)
     where
         P: Track<S>,
     {
@@ -100,14 +98,6 @@ impl<P> Linked<P> {
         }
     }
 
-    pub(super) fn record_retime(&mut self, at: SessionFrame, sent: Option<Seq>) {
-        let Some(seq) = sent else {
-            return;
-        };
-        self.retimes.retain(|(frame, _)| *frame != at);
-        self.retimes.push((at, seq));
-    }
-
     pub(super) fn correct<S>(
         &mut self,
         at: SessionFrame,
@@ -122,12 +112,13 @@ impl<P> Linked<P> {
         };
         let snapshot = self.inner.snapshot();
         let track = snapshot.as_ref();
-        let segment = track.mark.ok_or(PlayError::NotReady)?.lane.segment;
+        let mark = track.mark.ok_or(PlayError::NotReady)?;
+        let segment = mark.lane.segment;
         if self.speeds.iter().any(|(_, operation)| {
             matches!(operation, SpeedOperation::Relocation {
-                state: Some(CorrectionState::Pending(landing) | CorrectionState::Applied(landing)), ..
+                state: Some(CorrectionState::Pending(landing, _) | CorrectionState::Applied(landing)), ..
             } | SpeedOperation::Alignment {
-                state: Some(CorrectionState::Pending(landing) | CorrectionState::Applied(landing)), ..
+                state: Some(CorrectionState::Pending(landing, _) | CorrectionState::Applied(landing)), ..
             } if landing.segment == segment
                 && at >= landing.at - track.declick && at < landing.at)
         }) {
@@ -155,7 +146,7 @@ impl<P> Linked<P> {
             law,
             self.horizon(),
         );
-        self.close_phase(planned, cause, at, segment, out)
+        self.close_phase(planned, cause, at, mark, out)
     }
 
     /// Sends a bounded correction without relocating the sounding track.
@@ -164,7 +155,7 @@ impl<P> Linked<P> {
         planned: Option<Slew>,
         cause: Cause,
         at: SessionFrame,
-        segment: SegmentId,
+        mark: SlotMark,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError>
     where
@@ -195,11 +186,14 @@ impl<P> Linked<P> {
         };
         let sent = self.inner.apply(speed, out)?;
         if let Some(seq) = sent {
-            let state = CorrectionState::Pending(RunningCorrection {
-                at,
-                frames,
-                segment,
-            });
+            let state = CorrectionState::Pending(
+                RunningCorrection {
+                    at,
+                    frames,
+                    segment: mark.lane.segment,
+                },
+                mark,
+            );
             self.speeds
                 .push((seq, SpeedOperation::Correction { cause, state }));
             self.plan_sent(at, coverage);
@@ -269,7 +263,7 @@ impl<P> Linked<P> {
     {
         for &at in frames {
             match self.correct(at, Cause::Commanded, out) {
-                Ok(sent) => self.record_retime(at, sent),
+                Ok(_) => {}
                 Err(error) => {
                     if let Refusal::Retry = self.triage(&error, out) {
                         self.alignment = Some(Cause::Commanded);
@@ -313,22 +307,28 @@ impl<P> Linked<P> {
         if out.deck_available() == 0 {
             return Err(PlayError::Full("deck"));
         }
+        let mark = self
+            .inner
+            .snapshot()
+            .as_ref()
+            .mark
+            .ok_or(PlayError::NotReady)?;
         let to = jump_target(&self.host, source, position, at).ok_or(PlayError::NotReady)?;
         let start = at - self.inner.snapshot().as_ref().declick;
         let (before, _) = self.planned::<S>(start)?;
         let (speed, coverage) = self.curve(source, before, start, Some((to, at)))?;
-        let mark = self.inner.snapshot().as_ref().mark;
         let sent = self
             .inner
             .apply(TrackCommand::Align { to, speed, at }, out)?;
         if let Some(seq) = sent {
-            let state = mark.map(|mark| {
-                CorrectionState::Pending(RunningCorrection {
+            let state = Some(CorrectionState::Pending(
+                RunningCorrection {
                     at,
                     frames: FrameCount::new(0),
                     segment: mark.lane.segment,
-                })
-            });
+                },
+                mark,
+            ));
             self.speeds
                 .push((seq, SpeedOperation::Alignment { state, coverage }));
         }

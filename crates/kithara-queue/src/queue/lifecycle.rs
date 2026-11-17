@@ -439,15 +439,14 @@ where
         &mut self,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        let mut detach = false;
-        let mut dispatcher = self.active.parked_len();
-        for active in self.active.iter() {
-            if active.track.snapshot().as_ref().attached {
-                detach = true;
-            } else {
-                dispatcher += 1;
-            }
-        }
+        let detach = self.active.iter().any(|active| active.track.attached());
+        let dispatcher = self
+            .active
+            .tracks()
+            .filter(|track| {
+                !track.attached() && !track.source_closed() && track.source_request().is_none()
+            })
+            .count();
         if detach && out.deck_available() == 0 {
             return Err(PlayError::Full("deck"));
         }
@@ -491,6 +490,7 @@ where
         for index in (0..self.active.parked_len()).rev() {
             if self.active.parked_get_mut(index).is_some_and(|parked| {
                 parked.track.snapshot().as_ref().status == PlayingStatus::Released
+                    && parked.track.source_closed()
                     && !matches!(parked.load, Some(LoadState::Opening(_)))
             }) {
                 self.active.take_parked(index);
@@ -509,6 +509,13 @@ where
             .rev()
         {
             let active = self.active.remove(index);
+            if !active.track.source_closed() {
+                self.active.park(Parked {
+                    item: active.item,
+                    track: active.track,
+                    load: active.load,
+                });
+            }
             if active.role == Role::Leaving
                 && self.current == Some(active.item)
                 && self.active_current_index().is_none()
