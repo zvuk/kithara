@@ -61,10 +61,14 @@ pub(crate) fn render(recipe: &Recipe, sample_rate: u32) -> Vec<f32> {
             .round()
             .to_usize()
             .expect("a chord lasts a whole number of samples");
+        let frequencies = chord
+            .notes
+            .iter()
+            .map(|&note| 440.0 * 2.0f64.powf(f64::from(note - 69) / 12.0))
+            .collect::<Vec<_>>();
         for _ in 0..frames {
             let mut sample = 0.0;
-            for &note in &chord.notes {
-                let freq = 440.0 * 2.0f64.powf(f64::from(note - 69) / 12.0);
+            for &freq in &frequencies {
                 let mut harmonic = 1.0;
                 for amplitude in &recipe.partials {
                     sample += amplitude * (2.0 * PI * freq * harmonic * n / rate).sin();

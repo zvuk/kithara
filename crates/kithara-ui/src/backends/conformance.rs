@@ -24,8 +24,9 @@ use vello::{
     kurbo::Affine,
     peniko::{Color as VelloColor, color::palette::css::BLACK},
     wgpu::{
-        DeviceDescriptor, Extent3d, Instance, InstanceDescriptor, RequestAdapterOptions,
-        TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
+        Device, DeviceDescriptor, Extent3d, Instance, InstanceDescriptor, Queue,
+        RequestAdapterOptions, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
+        TextureViewDescriptor,
     },
 };
 
@@ -556,63 +557,86 @@ fn through_iced(list: &DrawList) -> Vec<u8> {
 
 /// A wgpu device with no surface, and one scene rasterised through it.
 fn rasterise(scene: &Scene) -> Result<Vec<u8>, String> {
-    rasterise_at(
+    Rasteriser::new()?.rasterise_at(
         scene,
         (u32::from(consts::SURFACE.0), u32::from(consts::SURFACE.1)),
         BLACK,
     )
 }
 
-pub(crate) fn rasterise_at(
-    scene: &Scene,
-    size: (u32, u32),
-    base: VelloColor,
-) -> Result<Vec<u8>, String> {
-    let (width, height) = size;
-    let instance = Instance::new(&InstanceDescriptor::default());
-    let adapter = block_on(instance.request_adapter(&RequestAdapterOptions::default()))
-        .map_err(|error| format!("no wgpu adapter: {error}"))?;
-    let (device, queue) = block_on(adapter.request_device(&DeviceDescriptor::default()))
-        .map_err(|error| format!("no wgpu device: {error}"))?;
-    let mut renderer = Renderer::new(
-        &device,
-        RendererOptions {
-            use_cpu: false,
-            antialiasing_support: AaSupport::area_only(),
-            num_init_threads: None,
-            pipeline_cache: None,
-        },
-    )
-    .map_err(|error| format!("vello renderer: {error}"))?;
-    let texture = device.create_texture(&TextureDescriptor {
-        label: Some("clip-conformance"),
-        size: Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: TextureFormat::Rgba8Unorm,
-        usage: TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    renderer
-        .render_to_texture(
+pub(crate) struct Rasteriser {
+    device: Device,
+    queue: Queue,
+    renderer: Renderer,
+}
+
+impl Rasteriser {
+    pub(crate) fn new() -> Result<Self, String> {
+        let instance = Instance::new(&InstanceDescriptor::default());
+        let adapter = block_on(instance.request_adapter(&RequestAdapterOptions::default()))
+            .map_err(|error| format!("no wgpu adapter: {error}"))?;
+        let (device, queue) = block_on(adapter.request_device(&DeviceDescriptor::default()))
+            .map_err(|error| format!("no wgpu device: {error}"))?;
+        let renderer = Renderer::new(
             &device,
-            &queue,
-            scene,
-            &texture.create_view(&TextureViewDescriptor::default()),
-            &RenderParams {
-                width,
-                height,
-                base_color: base,
-                antialiasing_method: AaConfig::Area,
+            RendererOptions {
+                use_cpu: false,
+                antialiasing_support: AaSupport::area_only(),
+                num_init_threads: None,
+                pipeline_cache: None,
             },
         )
-        .map_err(|error| format!("render_to_texture: {error}"))?;
-    let mut rgba = Vec::new();
-    read_back(&device, &queue, &texture, (width, height), &mut rgba)?;
-    Ok(rgba)
+        .map_err(|error| format!("vello renderer: {error}"))?;
+        Ok(Self {
+            device,
+            queue,
+            renderer,
+        })
+    }
+
+    pub(crate) fn rasterise_at(
+        &mut self,
+        scene: &Scene,
+        size: (u32, u32),
+        base: VelloColor,
+    ) -> Result<Vec<u8>, String> {
+        let (width, height) = size;
+        let texture = self.device.create_texture(&TextureDescriptor {
+            label: Some("clip-conformance"),
+            size: Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        self.renderer
+            .render_to_texture(
+                &self.device,
+                &self.queue,
+                scene,
+                &texture.create_view(&TextureViewDescriptor::default()),
+                &RenderParams {
+                    width,
+                    height,
+                    base_color: base,
+                    antialiasing_method: AaConfig::Area,
+                },
+            )
+            .map_err(|error| format!("render_to_texture: {error}"))?;
+        let mut rgba = Vec::new();
+        read_back(
+            &self.device,
+            &self.queue,
+            &texture,
+            (width, height),
+            &mut rgba,
+        )?;
+        Ok(rgba)
+    }
 }

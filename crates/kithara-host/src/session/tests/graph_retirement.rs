@@ -298,7 +298,10 @@ fn a_retained_output_waits_for_its_stopped_processor_before_restarting() {
         assert!(state.stream.is_none());
         assert_eq!(state.root.grid().clone(), idle);
     }
-    device(|dev| dev.retired_processors.clear());
+    device(|dev| {
+        dev.retired_processors.clear();
+        dev.defer_processor_drop = false;
+    });
     tick_session(&mut state).expect("restart after processor return");
     assert!(state.stream.is_some());
     let before = processed_frames(&state);

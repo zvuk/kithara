@@ -1002,7 +1002,7 @@ async fn settle(owner: &mut Owner) {
     }
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(native, tokio, timeout(Medium))]
 async fn a_stalled_analysis_pass_uses_the_virtual_progress_budget() {
     let (_publisher, mut publications) = watch::channel(None::<AnalysisProgress>);
     let virtual_mode = ::kithara::platform::flash::ambient_snapshot();
