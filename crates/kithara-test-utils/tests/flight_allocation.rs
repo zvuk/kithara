@@ -5,6 +5,8 @@ use std::{
     cell::Cell,
     fmt,
     hint::black_box,
+    sync::Barrier,
+    thread,
 };
 
 use kithara_test_utils::{
@@ -93,20 +95,39 @@ fn folded_flight_events_do_not_allocate_and_unique_events_still_do() {
     tracing::subscriber::with_default(subscriber, || {
         let calls = Cell::new(0);
         fire(&calls, "left");
-        let (folded, folded_thread_allocated) = observe_event(|| fire(&calls, "left"));
+        let gate = Barrier::new(2);
+        let (folded, folded_thread_allocated) = thread::scope(|scope| {
+            let gate = &gate;
+            scope.spawn(move || {
+                gate.wait();
+                gate.wait();
+                let held = black_box(String::with_capacity(144));
+                gate.wait();
+                gate.wait();
+                drop(held);
+            });
+            gate.wait();
+            let measured = observe_event(|| {
+                gate.wait();
+                gate.wait();
+                fire(&calls, "left");
+            });
+            gate.wait();
+            measured
+        });
         let (unique, unique_thread_allocated) = observe_event(|| fire(&calls, "right"));
         let (control, allocated) = memory::measure(|| black_box(String::with_capacity(515)));
         assert!(control.capacity() >= 515);
         assert!(allocated.held >= 515 && allocated.peak >= 515);
         drop(control);
         assert_eq!(calls.get(), 3);
-        assert_eq!(
-            folded.held, 0,
-            "emitter allocated: {folded_thread_allocated}"
+        assert!(
+            !folded_thread_allocated,
+            "the folded emitter allocated; process-wide heap: {folded:?}"
         );
-        assert_eq!(
-            folded.peak, 0,
-            "emitter allocated: {folded_thread_allocated}"
+        assert!(
+            folded.held >= 144 && folded.peak >= folded.held,
+            "the foreign-thread allocation control was observed: {folded:?}"
         );
         assert!(unique.held > 0 && unique.peak >= unique.held);
         assert!(

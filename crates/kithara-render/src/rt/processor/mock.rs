@@ -5,7 +5,7 @@ use kithara_command::{
     Batch, ChannelConfig, LevelInbox, Outcome, Port, ScopeId, ScopedConfig, ScopedInbox,
     ScopedReceipt, ScopedSender, Seq, When, scoped_channel,
 };
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_signal::{AudioSpec, SegmentId, SessionFrame};
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
@@ -16,12 +16,10 @@ use num_traits::ToPrimitive;
 
 use super::{DeckMixer, StreamShape};
 use crate::{
+    PcmReceiver,
     bridge::{DeckEnds, DeckPart, DeckProtocol, SessionInbox, Slot, scope_channels},
     mock::{PacketRing, chunk},
-    rt::{
-        DeckMixerConfig,
-        track::{PcmConsumer, PlayerResource},
-    },
+    rt::{DeckMixerConfig, track::PlayerResource},
     worker::PcmPacket,
 };
 
@@ -40,7 +38,7 @@ pub fn apply_initial_batch<E: SessionInbox>(
     let Some(due) = level.next_due(SessionFrame::new(0), 1) else {
         return false;
     };
-    mixer.deck.take_due(due, true, false);
+    mixer.deck.take_due(due, true, PlayerResource::read);
     true
 }
 
@@ -141,7 +139,7 @@ pub fn mixer_with_shape(
 /// # Panics
 /// Panics if duration is invalid or the fixture pools cannot allocate the PCM resource.
 #[must_use]
-pub fn pcm_samples(src: &str, seconds: f64, samples: &[f32], ended: bool) -> Box<PlayerResource> {
+pub fn pcm_samples(seconds: f64, samples: &[f32], ended: bool) -> Box<PcmReceiver> {
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("sample rate"));
     let mut ring = PacketRing::new(spec, Duration::from_secs_f64(seconds), 2);
     ring.push(PcmPacket::Chunk(Box::new(chunk(
@@ -162,14 +160,7 @@ pub fn pcm_samples(src: &str, seconds: f64, samples: &[f32], ended: bool) -> Box
         end.meta.end_of_track = true;
         ring.push(PcmPacket::Chunk(Box::new(end)));
     }
-    Box::new(
-        PlayerResource::new(
-            PcmConsumer::new(ring.receiver.take().expect("receiver")),
-            Arc::from(src),
-            &pools(),
-        )
-        .expect("resource"),
-    )
+    Box::new(ring.receiver.take().expect("receiver"))
 }
 
 pub fn send(ring: &mut TestEnds, when: When<SessionFrame>, parts: Vec<DeckPart>) -> Seq {
@@ -243,7 +234,7 @@ pub fn assert_applied_at(outcome: &Outcome<DeckProtocol>, frame: usize) {
 }
 
 pub type PreparedSeek = (
-    Box<PlayerResource>,
+    Box<PcmReceiver>,
     crate::worker::DecoderNode<SeekSource, TestPools>,
     kithara_command::Sender<crate::LaneProtocol>,
     std::sync::mpsc::Receiver<Duration>,
@@ -333,7 +324,6 @@ pub fn prepared_seek(spec: AudioSpec, segment: SegmentId, target: Duration) -> P
     }
     assert_eq!(counts.try_iter().collect::<Vec<_>>(), vec![target]);
     assert_eq!(lane.receipts().count(), 1);
-    let pcm = PlayerResource::new(PcmConsumer::new(receiver), Arc::from("split.mp3"), &pools())
-        .expect("prepared PCM");
-    (Box::new(pcm), node, lane, counts)
+    let pcm = Box::new(receiver);
+    (pcm, node, lane, counts)
 }

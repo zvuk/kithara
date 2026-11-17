@@ -14,9 +14,8 @@
 
 # kithara-ui-lottie
 
-The Lottie artwork kithara-ui ships, read once per process, and the emitter
-that draws one frame of any Lottie composition into the toolkit-neutral draw
-list. A frame is drawn whole or refused whole: an artwork that asks for
+Prepared built-in and caller-owned Lottie artwork, and the emitter that draws
+one supported frame into the toolkit-neutral draw list. A frame is drawn whole or refused whole: an artwork that asks for
 something the list has no word for — a trim, a mask, a matte, a ramped stroke
 — is refused by name and leaves the list untouched.
 
@@ -48,6 +47,27 @@ assert!(!list.finish().commands().is_empty());
 </table>
 
 ## Integration
+
+Call `Artwork::parse(bytes)` once when preparing caller resources. It returns
+`ArtworkError` for malformed JSON, unsupported authored features, invalid values
+or exceeded bounds. It checks the whole input, including layers inactive at the
+initial, middle and final frames, before Velato can discard unsupported data.
+Prepared compositions are immutable; `emit` performs no source IO or JSON parsing.
+
+Admission is limited to 128 KiB, 64 levels of JSON nesting and 16,384 JSON values.
+Dimensions and frame rate must be positive, the frame interval nonempty, numeric
+values finite and representable by the drawing stack, and layer ancestry acyclic.
+The supported subset is 2D shape/null layers with paths, rectangles, ellipses,
+groups, transforms, nonzero solid fills, linear/radial fills with two to four
+ordered stops, and solid strokes with the default miter limit. Masking, mattes,
+blend modes, repeaters/trims, gradient strokes, external assets/text, effects,
+expressions, split positions/rotations, spatial position tangents and layer time
+remapping, offset/stretch are refused. Layer transforms require rotation data.
+Unknown shape operations are refused rather than lost.
+
+Numerical smoke checks supplement structural admission. At emission, non-finite
+frame arguments or computed drawing data return `LottieError` before any command
+is appended; callers retain their existing list on refusal.
 
 `kithara-ui` re-exports this crate as `kithara_ui::lottie` under its `render`
 feature; the Lottie control picks an artwork by the name a document gives and

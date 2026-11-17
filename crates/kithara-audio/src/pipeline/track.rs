@@ -9,10 +9,11 @@ pub enum TrackStep<C> {
     Failed(crate::TrackFailureKind),
 }
 
-/// Why source progress is waiting on upstream work.
+/// Why decoded-source progress is waiting.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WaitingReason {
     Waiting,
     WaitingDemand,
     WaitingMetadata,
+    OperationPending,
 }

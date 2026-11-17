@@ -1,6 +1,7 @@
 #[cfg(feature = "analysis-beat")]
 pub(crate) mod beat;
 mod intake;
+pub(crate) mod key;
 #[cfg(not(feature = "analysis-beat"))]
 pub(crate) mod nobeat;
 #[cfg(not(feature = "analysis-waveform"))]

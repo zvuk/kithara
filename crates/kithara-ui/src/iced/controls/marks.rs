@@ -1,8 +1,9 @@
 use std::cell::RefCell;
 
-use iced::widget::canvas::Cache;
-
-use crate::draw::{CachedValue, DrawList};
+use crate::{
+    draw::{CachedValue, DrawList},
+    iced::immediate::cache::Cache,
+};
 
 /// What a frame cost a control that keeps what it drew.
 #[derive(Clone, Copy, Debug, PartialEq)]

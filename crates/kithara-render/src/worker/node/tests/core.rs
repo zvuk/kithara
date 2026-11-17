@@ -170,6 +170,47 @@ async fn decoder_node_upstream_park_after_audio_opens_the_preload_gate(
 }
 
 #[kithara::test(tokio)]
+async fn decoder_node_operation_pending_keeps_preload_shut_until_the_quota() {
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
+    let produced_frame = |frame| {
+        TrackStep::Produced(Fetch::data(chunk(
+            spec,
+            SegmentId::FIRST,
+            frame,
+            frame,
+            &[0.0; 2],
+        )))
+    };
+    let source = ScriptedSource::new([
+        produced_frame(0),
+        TrackStep::Blocked(WaitingReason::OperationPending),
+        TrackStep::Blocked(WaitingReason::OperationPending),
+        produced_frame(1),
+        produced_frame(2),
+    ]);
+    let (mut node, mut receiver, _lane) = prepared_node(source, 4, 3).await;
+    assert_eq!(node.tick(), TickResult::Progress);
+    assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.frames() == 1));
+    assert!(!node.source.is_preloaded(), "one chunk is below quota");
+    for _ in 0..2 {
+        assert_eq!(node.tick(), TickResult::Waiting);
+        assert!(
+            !node.source.is_preloaded(),
+            "an internal operation must not replace the preload quota"
+        );
+    }
+    assert_eq!(node.tick(), TickResult::Progress);
+    assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.frames() == 1));
+    assert!(!node.source.is_preloaded(), "two chunks are below quota");
+    assert_eq!(node.tick(), TickResult::Progress);
+    assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.frames() == 1));
+    assert!(
+        node.source.is_preloaded(),
+        "three admitted chunks meet quota"
+    );
+}
+
+#[kithara::test(tokio)]
 async fn decoder_node_eof_under_backpressure() {
     let (mut node, mut receiver, _lane) =
         prepared_node(ScriptedSource::new([produced()]), 1, 1).await;

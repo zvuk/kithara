@@ -1,5 +1,6 @@
 use std::{collections::BTreeSet, num::NonZeroU64};
 
+use kithara_key::KeyResume;
 use kithara_platform::sync::Arc;
 use kithara_signal::{CoverageRead, FrameCoverage};
 use kithara_waveform::WaveformResume;
@@ -36,7 +37,7 @@ impl AnalysisProgress {
         self.resume.as_ref().map(AnalysisResume::decode).transpose()
     }
 
-    pub(crate) fn resume_meta(&self) -> Option<(NonZeroU64, (bool, bool))> {
+    pub(crate) fn resume_meta(&self) -> Option<(NonZeroU64, ResumeShape)> {
         self.resume
             .as_ref()
             .map(|resume| (resume.chunk_frames, resume.shape))
@@ -79,11 +80,19 @@ impl From<AnalysisProgress> for TrackAnalysis {
     }
 }
 
+/// Which analyzers a resume record carries state for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ResumeShape {
+    pub(crate) waveform: bool,
+    pub(crate) beat: bool,
+    pub(crate) key: bool,
+}
+
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[derive(derive_more::Debug)]
 pub(crate) struct AnalysisResume {
-    shape: (bool, bool),
+    shape: ResumeShape,
     #[field(get, vis = "pub(crate)")]
     #[debug("{:?}", self.bytes.len())]
     bytes: Arc<[u8]>,
@@ -95,6 +104,7 @@ impl AnalysisResume {
         chunk_frames: NonZeroU64,
         waveform: Option<&[u8]>,
         beat: Option<&[u8]>,
+        key: Option<&[u8]>,
     ) -> Self {
         let mut bytes = Vec::new();
         let mut writer = Writer::new(&mut bytes);
@@ -102,10 +112,15 @@ impl AnalysisResume {
         writer.write_u64(chunk_frames.get());
         write_section(&mut writer, waveform);
         write_section(&mut writer, beat);
+        write_section(&mut writer, key);
         Self {
             chunk_frames,
             bytes: Arc::from(bytes),
-            shape: (waveform.is_some(), beat.is_some()),
+            shape: ResumeShape {
+                waveform: waveform.is_some(),
+                beat: beat.is_some(),
+                key: key.is_some(),
+            },
         }
     }
 
@@ -119,7 +134,11 @@ impl AnalysisResume {
         Ok(Self {
             bytes,
             chunk_frames: state.chunk_frames,
-            shape: (state.waveform.is_some(), state.beat.is_some()),
+            shape: ResumeShape {
+                waveform: state.waveform.is_some(),
+                beat: state.beat.is_some(),
+                key: state.key.is_some(),
+            },
         })
     }
 }
@@ -136,6 +155,7 @@ pub(crate) struct ResumeState {
     pub(crate) chunk_frames: NonZeroU64,
     pub(crate) beat: Option<BeatResume>,
     pub(crate) waveform: Option<WaveformResume>,
+    pub(crate) key: Option<KeyResume>,
 }
 
 pub(crate) struct BeatResume {
@@ -286,11 +306,13 @@ fn decode_resume(bytes: &[u8]) -> Result<ResumeState, BlobError> {
     let chunk_frames = NonZeroU64::new(reader.read_u64()?).ok_or(BlobError::Corrupt)?;
     let waveform = decode_section(&mut reader, WaveformResume::decode)?;
     let beat = decode_section(&mut reader, BeatResume::decode)?;
+    let key = decode_section(&mut reader, KeyResume::decode)?;
     reader.finish()?;
     Ok(ResumeState {
         chunk_frames,
         beat,
         waveform,
+        key,
     })
 }
 

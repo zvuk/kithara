@@ -12,6 +12,21 @@ pub struct SlotMark {
 }
 
 impl SlotMark {
+    /// Maps a frame on this segment back to the uninterrupted session clock.
+    #[must_use]
+    pub fn session_at(self, lane: LaneFrame) -> Option<SessionFrame> {
+        if lane.segment != self.lane.segment {
+            return None;
+        }
+        let distance = i64::try_from(lane.frame.abs_diff(self.lane.frame)).ok()?;
+        let frame = if lane.frame >= self.lane.frame {
+            i64::from(self.session).checked_add(distance)
+        } else {
+            i64::from(self.session).checked_sub(distance)
+        }?;
+        Some(SessionFrame::new(frame))
+    }
+
     /// Maps a playing, uninterrupted session frame onto this mark's segment.
     #[must_use]
     pub fn lane_at(self, session: SessionFrame) -> Option<LaneFrame> {
@@ -50,6 +65,38 @@ mod mapping_tests {
             }),
         );
         assert_eq!(mark.lane_at(SessionFrame::new(999)), None);
+        assert_eq!(
+            mark.session_at(LaneFrame {
+                frame: 640,
+                ..mark.lane
+            }),
+            Some(SessionFrame::new(1_240))
+        );
+        assert_eq!(
+            mark.session_at(LaneFrame {
+                frame: 399,
+                ..mark.lane
+            }),
+            Some(SessionFrame::new(999))
+        );
+        assert_eq!(
+            mark.session_at(LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: 400
+            }),
+            None
+        );
+        let last = SlotMark {
+            session: SessionFrame::new(i64::MAX),
+            ..mark
+        };
+        assert_eq!(
+            last.session_at(LaneFrame {
+                frame: 401,
+                ..mark.lane
+            }),
+            None
+        );
         let overflow = SlotMark {
             lane: LaneFrame {
                 frame: u64::MAX,

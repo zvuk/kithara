@@ -1,15 +1,15 @@
 use std::num::NonZeroU32;
 
-use kithara_events::{EventReceiver, EventSet};
+use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
+use kithara_worker::Wake;
 use ringbuf::traits::Consumer;
 
 use super::{
     PcmPacket, PcmReceiver,
     packet_mock::PacketRing,
     reader::{PcmLead, PcmProducer},
-    scheduler::StreamWake,
 };
 use crate::test_pools::{pools, sample_buffer};
 
@@ -20,15 +20,10 @@ pub(crate) struct PcmFixture {
 
 impl PcmFixture {
     pub(crate) async fn new(capacity: usize, blocking: bool) -> Self {
-        Self::with_wake(
-            capacity,
-            blocking,
-            StreamWake::new(kithara_worker::Wake::default()),
-        )
-        .await
+        Self::with_wake(capacity, blocking, Wake::default()).await
     }
 
-    pub(crate) async fn with_wake(capacity: usize, blocking: bool, wake: StreamWake) -> Self {
+    pub(crate) async fn with_wake(capacity: usize, blocking: bool, wake: Wake) -> Self {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let (receiver, producer) = PacketRing::with_wake(
             spec,
@@ -48,9 +43,14 @@ impl PcmFixture {
     /// A ring whose producer bounds its lead in render quanta, like a loaded lane.
     pub(in crate::worker) fn framed(lead: PcmLead) -> Self {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
-        let (receiver, producer) =
-            PacketRing::framed(spec, lead, StreamWake::new(kithara_worker::Wake::default()))
-                .into_ends();
+        let (receiver, producer) = PcmProducer::new(
+            lead,
+            false,
+            Wake::default(),
+            spec,
+            Duration::ZERO,
+            EventBus::default(),
+        );
         Self {
             receiver: Some(receiver),
             producer: Some(producer),

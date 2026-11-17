@@ -11,7 +11,7 @@ use crate::{
     pools::{AppResourceConfig, AppTrackSource},
 };
 
-/// Build an [`AppTrackSource`] with the app's shared network, asset, and DRM state.
+/// Build a track source with the app's network, asset, and DRM state.
 /// Matching policy headers also apply to playlist and segment requests.
 #[must_use]
 pub fn build_source(url: &str, config: &AppConfig) -> AppTrackSource {
@@ -63,7 +63,6 @@ pub(crate) fn build_resource_config(url: &str, config: &AppConfig) -> Option<App
     Some(
         builder
             .downloader(config.downloader.clone())
-            .worker(config.worker.clone())
             .store(config.store.clone())
             .keys(keys)
             .maybe_headers(headers)
