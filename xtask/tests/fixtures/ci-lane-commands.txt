@@ -1337,39 +1337,84 @@
 # deps-features-invariants / bench
   <require os> linux
   <require tools> cargo just
-  just deps hack-invariants
+  just deps hack-invariants-part --partition 1/2
+  just deps _hack-context
 # deps-features-invariants / branch
   <require os> linux
   <require tools> cargo just
-  just deps hack-invariants
+  just deps hack-invariants-part --partition 1/2
+  just deps _hack-context
 # deps-features-invariants / platforms
   <require os> linux
   <require tools> cargo just
-  just deps hack-invariants
+  just deps hack-invariants-part --partition 1/2
+  just deps _hack-context
 # deps-features-invariants / merge-request
   <require os> linux
   <require tools> cargo just
-  just deps hack-invariants
+  just deps hack-invariants-part --partition 1/2
+  just deps _hack-context
 # deps-features-invariants / quarantine
   <require os> linux
   <require tools> cargo just
-  just deps hack-invariants
+  just deps hack-invariants-part --partition 1/2
+  just deps _hack-context
 # deps-features-invariants / main
   <require os> linux
   <require tools> cargo just
-  just deps hack-invariants
+  just deps hack-invariants-part --partition 1/2
+  just deps _hack-context
 # deps-features-invariants / nightly
   <require os> linux
   <require tools> cargo just
-  just deps hack-invariants
+  just deps hack-invariants-part --partition 1/2
+  just deps _hack-context
 # deps-features-invariants / weekly
   <require os> linux
   <require tools> cargo just
-  just deps hack-invariants
+  just deps hack-invariants-part --partition 1/2
+  just deps _hack-context
 # deps-features-invariants / release
   <require os> linux
   <require tools> cargo just
-  just deps hack-invariants
+  just deps hack-invariants-part --partition 1/2
+  just deps _hack-context
+# deps-features-invariants-rest / bench
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants-part --partition 2/2
+# deps-features-invariants-rest / branch
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants-part --partition 2/2
+# deps-features-invariants-rest / platforms
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants-part --partition 2/2
+# deps-features-invariants-rest / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants-part --partition 2/2
+# deps-features-invariants-rest / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants-part --partition 2/2
+# deps-features-invariants-rest / main
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants-part --partition 2/2
+# deps-features-invariants-rest / nightly
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants-part --partition 2/2
+# deps-features-invariants-rest / weekly
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants-part --partition 2/2
+# deps-features-invariants-rest / release
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants-part --partition 2/2
 # deps-features-workspace / bench
   <require os> linux
   <require tools> cargo just
@@ -2372,46 +2417,55 @@
 # linux-tooling / bench
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / branch
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --draft --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / platforms
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / main
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / nightly
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / weekly
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-tooling / release
   <require os> linux
   <require tools> cargo just sccache kache
+  cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
 # linux-usdt / bench

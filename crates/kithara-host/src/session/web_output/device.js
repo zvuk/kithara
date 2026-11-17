@@ -24,6 +24,7 @@ export class HostDevice {
     ], { type: "text/javascript" }));
     try {
       await navigator.locks.request("wasm_safe_thread:bootstrap", async () => {
+        if (this.closed) return;
         await this.context.audioWorklet.addModule(url);
         if (this.closed) return;
         await new Promise((resolve, reject) => {

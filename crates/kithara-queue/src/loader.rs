@@ -76,14 +76,14 @@ where
     /// - [`TrackSource::Config`] is passed through untouched (DRM keys,
     ///   headers, format hints preserved).
     ///
-    /// Both paths finish with the deck's prepare, so the worker, the session
-    /// output and the bus labelled with the track are injected.
-    pub(crate) fn build_config(
+    /// Both paths use the deck's preparation owner and a bus labelled with the track.
+    pub(crate) fn prepare_source(
         &self,
         id: TrackId,
         source: TrackSource<S>,
         output: &OutputSnapshot,
-    ) -> Result<ResourceConfig<S>, QueueError> {
+        observer: Box<dyn AudioObserver>,
+    ) -> Result<(ResourceConfig<S>, ResourceLoad), QueueError> {
         let mut config = match source {
             TrackSource::Uri(url) => {
                 let src = ResourceSrc::parse(&url)
@@ -101,7 +101,9 @@ where
                 ..ScopeLabel::default()
             }));
         }
-        self.prep.prepare(config, output).map_err(QueueError::from)
+        self.prep
+            .prepare(config, output, observer)
+            .map_err(QueueError::from)
     }
 
     /// The open of `id` from `source`, its decoder reaching `observer`, and
@@ -113,13 +115,13 @@ where
         source: TrackSource<S>,
         observer: Box<dyn AudioObserver>,
         output: &OutputSnapshot,
-    ) -> Result<(ResourceLoad<S>, TrackLoad), QueueError> {
-        let config = self.build_config(id, source, output)?;
+    ) -> Result<(ResourceLoad, TrackLoad), QueueError> {
+        let (config, item) = self.prepare_source(id, source, output, observer)?;
         let load = TrackLoad::new(&config)?;
         let runtime = self.runtime.as_ref().ok_or(QueueError::NoRuntime)?;
         self.read_cover(runtime, id, &config, &load);
         self.watch_for_slow_transfer(runtime, id, &config, &load);
-        Ok((ResourceLoad::new(config, observer), load))
+        Ok((item, load))
     }
 
     /// Read the track's cover beside its audio, over the load's transport and
@@ -347,19 +349,17 @@ mod tests {
             ResourceSrc::parse("https://example.com/a.mp3").expect("valid url"),
         )
         .store(supplied_store.clone())
-        .preferred_peak_bitrate(321.0)
+        .discriminator("caller-source")
         .build();
-        let returned = loader
-            .build_config(
+        let (returned, _load) = loader
+            .prepare_source(
                 TrackId(1),
                 TrackSource::Config(Box::new(given)),
                 &mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("build_config should succeed");
-        assert!(
-            (returned.preferred_peak_bitrate() - 321.0).abs() < f64::EPSILON,
-            "caller-set fields must be preserved"
-        );
+        assert_eq!(returned.discriminator(), Some("caller-source"));
         assert!(returned.store().is_same(&supplied_store));
         assert!(!returned.store().is_same(&loader.store));
     }
@@ -369,16 +369,19 @@ mod tests {
         let (loader, _mailbox) = fixture(&worker_owner.0);
         let src = ResourceSrc::parse("https://example.com/a.mp3").expect("valid url");
         let grid = ResourceSrc::parse("https://example.com/a.grid").expect("valid artifact url");
+        let key = ResourceSrc::parse("https://example.com/a.key").expect("valid artifact url");
         let given = ResourceConfig::for_src(src)
             .store(AssetStore::builder(pools()).build())
             .beat_grid(ArtifactSource::from(grid.clone()))
+            .key(ArtifactSource::from(key.clone()))
             .waveform(ArtifactSource::Value(Arc::default()))
             .build();
-        let returned = loader
-            .build_config(
+        let (returned, _load) = loader
+            .prepare_source(
                 TrackId(7),
                 TrackSource::Config(Box::new(given)),
                 &mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("build_config should succeed");
         assert!(
@@ -389,17 +392,22 @@ mod tests {
             matches!(returned.waveform(), Some(ArtifactSource::Value(_))),
             "a caller-held waveform must reach the resource untouched"
         );
+        assert!(
+            matches!(returned.key(), Some(ArtifactSource::Source(src)) if *src == key),
+            "a key source must reach the resource untouched"
+        );
     }
 
     #[kithara::test(tokio)]
     async fn build_config_labels_default_bus_with_track_id(#[by_ref] worker_owner: &WorkerOwner) {
         let (loader, _mailbox) = fixture(&worker_owner.0);
         let mut rx = loader.prep.bus.subscribe::<QueueEvent>();
-        let config = loader
-            .build_config(
+        let (config, _load) = loader
+            .prepare_source(
                 TrackId(42),
                 TrackSource::Uri("https://example.com/a.mp3".into()),
                 &mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("build_config should succeed");
         let bus = config
@@ -416,10 +424,11 @@ mod tests {
     #[kithara::test(tokio)]
     async fn build_config_invalid_uri_errors(#[by_ref] worker_owner: &WorkerOwner) {
         let (loader, _mailbox) = fixture(&worker_owner.0);
-        let Err(err) = loader.build_config(
+        let Err(err) = loader.prepare_source(
             TrackId(1),
             TrackSource::Uri("not-a-url".into()),
             &mock::output(None).get(),
+            Box::new(AudioObserverSlot::default().relay()),
         ) else {
             panic!("should reject relative path");
         };
@@ -557,7 +566,7 @@ mod tests {
 
     #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    async fn open(item: ResourceLoad<TestPools>) -> Result<(), LoadRefusal> {
+    async fn open(item: ResourceLoad) -> Result<(), LoadRefusal> {
         let (_sender, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
         let mut opened = pin!(item.open(Duration::ZERO, LaneStart::default(), inbox,));
         loop {

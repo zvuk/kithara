@@ -18,7 +18,7 @@ use kithara_ffi::{
     observer::{PlayerObserver, SeekCallback},
     player::AudioPlayer,
 };
-use kithara_test_utils::wait_until;
+use kithara_test_utils::{test::OutputStartupProbe, wait_until};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -232,11 +232,12 @@ async fn surface_dependent_commands_share_owner_order_before_publication() {
         .map(|item| num_traits::cast(item.queue_id().as_u64()).expect("safe id"))
         .collect();
     assert_eq!(ids, [first, tail]);
-    assert!(
-        events
-            .lock()
-            .iter()
-            .all(|event| !matches!(event, FfiPlayerEvent::Error { .. })),
+    let error = events.lock().iter().find_map(|event| match event {
+        FfiPlayerEvent::Error { error } => Some(error.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        error, None,
         "known pending command targets must reach owner validation in order"
     );
 }
@@ -273,6 +274,7 @@ impl SeekCallback for Seeks {
 #[wasm_bindgen_test]
 async fn surface_settings_follow_owner_publication_and_report_refusal() {
     assert!(thread::is_main_thread());
+    let probe = OutputStartupProbe::new().expect("observe browser output startup");
     let player = Arc::new(surface_player());
     let events = Arc::new(Mutex::new(Vec::new()));
     player.set_observer(Arc::new(Events(Arc::clone(&events))));
@@ -298,7 +300,7 @@ async fn surface_settings_follow_owner_publication_and_report_refusal() {
         .expect("browser window")
         .document()
         .expect("browser document");
-    wait_until(Duration::from_secs(5), "owner settings", || {
+    let ready = wait_until(Duration::from_secs(5), "owner settings", || {
         player.tick_js();
         // The backend installs its resume listener after the worklet starts.
         let click = web_sys::Event::new("click").expect("build a click event");
@@ -307,8 +309,10 @@ async fn surface_settings_follow_owner_publication_and_report_refusal() {
             && player.volume() == 0.25
             && player.is_muted()
     })
-    .await
-    .unwrap_or_else(|error| {
+    .await;
+    let diagnostic = probe.snapshot().await;
+    wasm_bindgen_test::console_log!("OUTPUT_DIAGNOSTIC {diagnostic:?}");
+    ready.unwrap_or_else(|error| {
         panic!(
             "{error}; rate={}, volume={}, muted={}, process_calls={}, events={:?}",
             player.playing_rate(),

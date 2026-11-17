@@ -27,11 +27,8 @@ use kithara::{
         node::LimiterNode,
     },
     file::{File, FileConfig, FileSrc},
-    platform::{
-        sync::Arc,
-        time::{Duration, Instant},
-    },
-    play::{PlayWorker, PlayWorkerConfig},
+    platform::time::{Duration, Instant},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     queue::TrackSource,
     signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame, TransportRevision},
 };
@@ -51,10 +48,7 @@ use kithara_render::{
         DeckProtocol, EqGainProgram, Fade, FilterProgram, ParameterKnot, SessionInbox, Slot,
         SlotState, scope_channels,
     },
-    rt::{
-        DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context,
-        track::{PcmConsumer, PlayerResource},
-    },
+    rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
 };
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
 use kithara_test_utils::wait_until_blocking;
@@ -209,17 +203,20 @@ async fn processor(sources: &[PcmDeck], lane: Lane, limiter: LimiterConfig) -> B
         )
         .hint("wav".to_owned())
         .build();
-        let config = kithara::play::TrackConfig::for_audio(audio)
-            .preload_chunks(NonZeroUsize::new(16).expect("preload chunks"))
-            .audio_buffer_chunks(NonZeroUsize::new(32).expect("ring chunks"))
-            .build();
+        let config = (
+            audio,
+            TrackConfig::builder()
+                .preload_chunks(NonZeroUsize::new(16).expect("preload chunks"))
+                .audio_buffer_chunks(NonZeroUsize::new(32).expect("ring chunks"))
+                .build(),
+        );
         let (sender, inbox) = worker.lane_channel();
         let start = LaneStart::default();
         let (pcm, task, _) = {
             let _real_io = kithara::platform::flash::real_io();
             kithara::platform::time::timeout(
                 __hang_detector.remaining(),
-                worker.load(config, Duration::ZERO, start, inbox),
+                worker.load(config.0, config.1, Duration::ZERO, start, inbox),
             )
             .await
             .unwrap_or_else(|_| {
@@ -233,14 +230,7 @@ async fn processor(sources: &[PcmDeck], lane: Lane, limiter: LimiterConfig) -> B
         commands.push(DeckPart::Attach {
             item_id: kithara_events::TrackId::allocate(),
             slot,
-            pcm: Box::new(
-                PlayerResource::new(
-                    PcmConsumer::new(pcm),
-                    Arc::from(format!("bench-track-{index}")),
-                    &pools,
-                )
-                .expect("bench player resource fits the pool budget"),
-            ),
+            pcm: Box::new(pcm.receiver),
             segment: SegmentId::FIRST,
         });
         commands.push(DeckPart::Start {

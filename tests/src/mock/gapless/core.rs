@@ -124,7 +124,6 @@ pub async fn create_resource(
     any(target_os = "macos", target_os = "ios")
 ))]
 pub async fn create_apple_fused_resource(
-    worker: &PlayWorker<TestPools>,
     created: &CreatedHls,
     cache_dir: &std::path::Path,
 ) -> ResourceConfig<TestPools> {
@@ -141,9 +140,7 @@ pub async fn create_apple_fused_resource(
     )
     .downloader(create_test_downloader())
     .store(store)
-    .worker(worker.clone())
     .host_sample_rate(NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("device rate"))
-    .block_on_underrun(true)
     .decoder(
         AudioDecoderConfig::builder()
             .backend(DecoderBackend::Apple)

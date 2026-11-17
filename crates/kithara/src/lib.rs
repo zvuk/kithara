@@ -213,7 +213,8 @@ pub mod prelude {
     pub use kithara_abr::AbrMode;
     #[cfg(feature = "analysis")]
     pub use kithara_analysis::{
-        AnalysisDemand, AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, TrackAnalysis,
+        AnalysisDemand, AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, KeyEstimate,
+        MusicalKey, TrackAnalysis,
     };
     #[cfg(feature = "assets")]
     pub use kithara_assets::{AssetStore, StorageBackend};

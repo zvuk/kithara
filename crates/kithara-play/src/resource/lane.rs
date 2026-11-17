@@ -1,6 +1,6 @@
 use std::task::{Context, Poll};
 
-use kithara_platform::{CancelToken, CancelWakerGuard, sync::Arc};
+use kithara_platform::{CancelToken, CancelWakerGuard};
 use kithara_render::{LaneTask, ServiceClass};
 use kithara_worker::{Priority, Task, TickResult};
 
@@ -8,14 +8,14 @@ use kithara_worker::{Priority, Task, TickResult};
 pub struct ResourceLane {
     task: Box<dyn LaneTask>,
     cancel: Option<CancelToken>,
-    _cancel_link: Option<Arc<CancelWakerGuard>>,
+    _cancel_link: Option<CancelWakerGuard>,
 }
 
 impl ResourceLane {
     pub(crate) fn new(
         lane: impl LaneTask,
         cancel: Option<CancelToken>,
-        cancel_link: Option<Arc<CancelWakerGuard>>,
+        cancel_link: Option<CancelWakerGuard>,
     ) -> Self {
         Self {
             task: Box::new(lane),

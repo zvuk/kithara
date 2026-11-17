@@ -11,22 +11,15 @@ use kithara_download::Downloader;
 use kithara_events::EventBus;
 use kithara_file::FileConfigPatch;
 use kithara_hls::{HlsConfigPatch, KeyOptions};
+use kithara_key::MusicalKey;
 use kithara_net::Headers;
-use kithara_platform::{CancelToken, CancelWakerGuard, sync::Arc};
-use kithara_warp::WarpConfig;
+use kithara_platform::CancelToken;
 use kithara_waveform::Waveform;
 use url::Url;
 
 use super::{ArtifactSource, ResourceSrc, resampler::PlaybackResamplerBackend};
-use crate::{EngineLoad, PlayWorker};
 
-/// Unified configuration for opening an audio resource.
-///
-/// Holds the per-call wiring and per-stream input this resource is opened
-/// with, the runtime-owned audio capabilities a player overwrites, and what a
-/// configuration document says about each of the three configurations this
-/// resource builds — carried as patches, because none of those configurations
-/// can exist before the track does.
+/// Source and decoder inputs, artifacts and per-track buffering preferences.
 #[derive(Config)]
 #[config(construction, builder(on(String, into), start_fn = for_src))]
 #[non_exhaustive]
@@ -98,18 +91,12 @@ where
     /// standalone scope (see [`CancelScope::new`](kithara_platform::CancelScope)).
     #[config(skip = "composed into the resource cancel scope")]
     pub(crate) cancel: Option<CancelToken>,
-    /// Keeps the deck's cancellation connected to this track's subtree.
-    #[config(skip = "retained until the resource lane is released", builder(skip))]
-    pub(crate) cancel_link: Option<Arc<CancelWakerGuard>>,
     /// Optional cache discriminator mixed into the asset root.
     #[config(skip = "transferred to the asset key")]
     pub(crate) discriminator: Option<String>,
     /// Required for URL sources; the file or HLS owner refuses one without it.
     #[config(skip = "transferred to the selected stream")]
     pub(crate) downloader: Option<Downloader>,
-    /// Shared live audio-engine cost meter (decode + effects).
-    #[config(skip = "transferred to the play-owned producer")]
-    pub(crate) engine_load: Option<Arc<EngineLoad>>,
     /// Additional HTTP headers to include in all network requests.
     #[config(skip = "transferred to network requests")]
     pub(crate) headers: Option<Headers>,
@@ -121,9 +108,12 @@ where
     /// Base URL for resolving relative HLS playlist/segment URLs.
     #[config(skip = "transferred to HLS URL resolution")]
     pub(crate) hls_base_url: Option<Url>,
-    /// Rate the audio host actually opened, handed to the built audio
-    /// pipeline. The player overwrites it from its engine, so it is not a
-    /// document key.
+    /// A musical key this track already has, on the same terms as
+    /// [`Self::beat_grid`].
+    #[config(skip = "transferred to the resource artifact source")]
+    pub(crate) key: Option<ArtifactSource<MusicalKey>>,
+    /// Desired decoded sample rate. Playback preparation binds it to the
+    /// session's output rate; direct readers can request it independently.
     #[config(skip = "transferred to the audio host-rate owner")]
     pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// A waveform this track already has, on the same terms as
@@ -139,29 +129,6 @@ where
     /// default.
     #[config(skip = "transferred to the render lane's packet rings")]
     pub(crate) audio_buffer_chunks: Option<NonZeroUsize>,
-    /// Explicit playback worker. Player preparation fills this field; direct
-    /// Resource callers must configure it themselves.
-    #[config(skip = "transferred to the playback worker")]
-    pub(crate) worker: Option<PlayWorker<S>>,
-    /// Resident Warp resources and live temporal controls. Not a document
-    /// key: a player-managed resource has this overwritten with the player's
-    /// own `warp`, which is where a document's `player.warp:` section lands.
-    #[config(skip = "transferred to the play-owned warp lane", builder(default = WarpConfig::builder().build()))]
-    pub(crate) warp: WarpConfig,
-    /// Whether audio-thread reads block on a producer-ring underrun. Only an
-    /// offline harness or a player's own policy sets this, so it is not a
-    /// document key.
-    #[config(value, builder(default))]
-    pub(crate) block_on_underrun: bool,
-    /// Requested peak-bitrate ceiling in bits per second, held for an ABR
-    /// reader that does not exist yet. `resource/build.rs` forwards this to
-    /// neither branch, so no value here changes variant selection today, and
-    /// the one caller of [`ResourceConfig::preferred_peak_bitrate`] is a test
-    /// asserting the value survives `Loader::build_config`. Not a document key
-    /// for exactly that reason: a document knob the binary ignores is worse
-    /// than no knob. Make it one when the ABR wiring lands.
-    #[config(value, builder(default = 0.0))]
-    pub(crate) preferred_peak_bitrate: f64,
 }
 
 #[cfg(test)]
@@ -175,10 +142,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{
-        PlayWorkerConfig,
-        test_pools::{TestPools, pools},
-    };
+    use crate::test_pools::{TestPools, pools};
 
     fn downloader() -> Downloader {
         let config = kithara_download::DownloaderConfig::for_client(kithara_net::HttpClient::new(
@@ -203,10 +167,6 @@ mod tests {
         Ok(ResourceConfig::for_src(ResourceSrc::parse(input)?)
             .store(store())
             .build())
-    }
-
-    fn worker() -> PlayWorker<TestPools> {
-        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
     #[kithara::test]
@@ -283,26 +243,22 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn config_bus_propagates_to_hls_config() {
-        let worker = worker();
         let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
                 .downloader(downloader())
                 .store(store())
                 .events(EventBus::new(32))
                 .build();
-        let audio_config = config.build_hls_config(&worker, None).unwrap();
+        let audio_config = config.build_hls_config(pools(), None).unwrap();
         assert!(kithara_hls::Hls::<TestPools>::event_bus(audio_config.stream()).is_some());
     }
 
     #[kithara::test(native, tokio)]
-    async fn direct_resources_wake_the_worker_off_rt() {
+    async fn direct_resources_publish_decoder_events_without_a_play_worker() {
         use axum::{Router, routing::get};
-        use kithara_audio::{Audio, DecoderChangeCause, DecoderEvent};
-        use kithara_platform::sync::Arc;
-        use kithara_stream::mock::NoopWorkerWake;
+        use kithara_audio::{DecoderChangeCause, DecoderEvent};
         use kithara_test_utils::{TestHttpServer, TestTempDir};
 
-        let worker = worker();
         let dir = TestTempDir::new();
         let path = dir.path().join("direct.wav");
         std::fs::write(
@@ -317,13 +273,9 @@ mod tests {
                 .store(store())
                 .events(file_bus)
                 .build();
-        let _file = Audio::prepare(
-            file.build_file_config(None),
-            Arc::new(NoopWorkerWake),
-            pools(),
-        )
-        .await
-        .expect("direct file builds");
+        let _file = crate::Resource::open(file, kithara_worker::Wake::default(), pools())
+            .await
+            .expect("direct file builds");
         assert!(matches!(
             file_events
                 .try_recv()
@@ -356,14 +308,9 @@ mod tests {
                 .events(hls_bus)
                 .hint("wav")
                 .build();
-        let _hls = Audio::prepare(
-            hls.build_hls_config(&worker, None)
-                .expect("valid HLS config"),
-            Arc::new(NoopWorkerWake),
-            pools(),
-        )
-        .await
-        .expect("direct HLS builds");
+        let _hls = crate::Resource::open(hls, kithara_worker::Wake::default(), pools())
+            .await
+            .expect("direct HLS builds");
         assert!(matches!(
             hls_events.try_recv().expect("build publishes inline").event,
             DecoderEvent::DecoderChanged {
@@ -403,7 +350,6 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn config_explicit_resampler_backend_propagates_to_hls_config() {
-        let worker = worker();
         let decoder = AudioDecoderConfig::builder()
             .resampler(
                 DecoderResamplerSettings::builder()
@@ -417,7 +363,7 @@ mod tests {
                 .store(store())
                 .decoder(decoder)
                 .build();
-        let audio_config = config.build_hls_config(&worker, None).unwrap();
+        let audio_config = config.build_hls_config(pools(), None).unwrap();
 
         assert_eq!(
             audio_config
@@ -464,36 +410,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn config_bitrate_fields_default_zero() {
-        let config = test_config("https://example.com/live.m3u8").unwrap();
-        assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
-    }
-
-    #[kithara::test]
-    fn config_worker_default_none() {
-        let config = test_config("https://example.com/song.mp3").unwrap();
-        assert!(config.worker.is_none());
-    }
-
-    #[kithara::test]
-    fn config_stretch_defaults_to_unity() {
-        let config = test_config("https://example.com/song.mp3").unwrap();
-        assert!((config.warp.speed() - 1.0).abs() < f32::EPSILON);
-    }
-
-    #[kithara::test]
-    fn config_with_worker_sets_field() {
-        let worker = worker();
-        let config: ResourceConfig<TestPools> =
-            ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
-                .store(store())
-                .worker(worker.clone())
-                .build();
-        let configured = config.worker.as_ref().expect("worker must be configured");
-        assert!(std::ptr::eq(configured.pools(), worker.pools()));
-    }
-
-    #[kithara::test]
     fn file_hint_none_for_url_without_extension() {
         let config = test_config("https://cdn-edge.zvq.me/track/streamhq?id=125475417").unwrap();
         let audio_config = config.build_file_config(None);
@@ -511,8 +427,6 @@ mod tests {
     fn defaults_match_the_documented_values() {
         let config = test_config("https://example.com/song.mp3").expect("valid config");
 
-        assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
-        assert!(!config.block_on_underrun);
         assert!(config.host_sample_rate.is_none());
         assert!(
             config.hls.download_batch_size.is_none(),
