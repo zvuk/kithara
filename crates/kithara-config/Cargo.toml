@@ -9,12 +9,16 @@ description = "Retained configuration values and composed configuration macros."
 
 [dependencies]
 kithara-derive = { workspace = true, features = ["config", "patch"] }
+kithara-platform = { workspace = true }
 
 bon = { workspace = true }
+fundu-core = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 kithara-test-utils = { features = ["test"], workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_yaml_ng = { workspace = true }
 
 [lints]
 workspace = true
