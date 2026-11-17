@@ -112,7 +112,6 @@ impl ResourceFactory {
             reason: e.to_string(),
         })?;
         let config = FfiResourceConfig::for_src(src)
-            .preferred_peak_bitrate(item.preferred_peak_bitrate().max(0.0))
             .maybe_headers(self.merged_headers(item))
             .events(scoped.clone())
             .downloader(self.downloader.clone())

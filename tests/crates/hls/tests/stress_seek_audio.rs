@@ -6,7 +6,7 @@ use kithara::{
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     signal::SourceSpan,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
@@ -714,7 +714,7 @@ async fn stress_seek_audio_hls(
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .media_info(fixture.media_info())
             .decoder(
@@ -723,9 +723,8 @@ async fn stress_seek_audio_hls(
                     .build(),
             )
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let trace = usdt_trace::scope();
 
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)

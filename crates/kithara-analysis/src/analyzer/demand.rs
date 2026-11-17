@@ -13,6 +13,8 @@ bitflags! {
         const BEAT = 1 << 0;
         /// A waveform is asked for.
         const WAVEFORM = 1 << 1;
+        /// A key estimate is asked for.
+        const KEY = 1 << 2;
     }
 }
 
@@ -30,6 +32,12 @@ impl AnalysisDemand {
     #[must_use]
     pub const fn waveform(self) -> bool {
         self.contains(Self::WAVEFORM)
+    }
+
+    /// Whether a key estimate is asked for.
+    #[must_use]
+    pub const fn key(self) -> bool {
+        self.contains(Self::KEY)
     }
 }
 

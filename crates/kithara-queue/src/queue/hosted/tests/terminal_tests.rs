@@ -30,7 +30,7 @@ struct SnapshotTrack(
 );
 struct SnapshotFactory;
 
-impl TrackFactory<TestPools> for SnapshotFactory {
+impl TrackFactory for SnapshotFactory {
     type Track = SnapshotTrack;
     fn track(&self, config: PlayerConfig) -> Result<Self::Track, PlayError> {
         Ok(SnapshotTrack(
@@ -42,6 +42,7 @@ impl TrackFactory<TestPools> for SnapshotFactory {
                 speed: 1.0,
                 position: Duration::ZERO,
                 duration: None,
+                cached: Duration::ZERO,
                 abr: None,
                 metadata: TrackMetadata::default(),
                 mark: None,
@@ -60,8 +61,8 @@ impl TrackFactory<TestPools> for SnapshotFactory {
     }
 }
 
-impl Player<TestPools> for SnapshotTrack {
-    type Command = TrackCommand<TestPools>;
+impl Player for SnapshotTrack {
+    type Command = TrackCommand;
     type Snapshot = TrackSnapshot;
     fn entry(&self, bound: Bound) -> Option<SessionFrame> {
         Some(match bound {
@@ -71,7 +72,7 @@ impl Player<TestPools> for SnapshotTrack {
     fn apply(
         &mut self,
         command: Self::Command,
-        out: &mut Outbox<'_, TestPools>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         match command {
             TrackCommand::Configure(change, when) => {
@@ -89,11 +90,7 @@ impl Player<TestPools> for SnapshotTrack {
         }
         Ok(None)
     }
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, TestPools>,
-        _out: &mut Outbox<'_, TestPools>,
-    ) -> Settled {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, _out: &mut Outbox<'_>) -> Settled {
         if let TrackReceipt::Deck {
             seq,
             outcome: Outcome::Applied { at, .. },
@@ -110,7 +107,7 @@ impl Player<TestPools> for SnapshotTrack {
         }
         Settled::Pending
     }
-    fn tick(&mut self, _now: SessionFrame, _out: &mut Outbox<'_, TestPools>) {
+    fn tick(&mut self, _now: SessionFrame, _out: &mut Outbox<'_>) {
         self.4 = Some(self.0.pending_lane);
     }
     fn snapshot(&self) -> Self::Snapshot {
@@ -118,12 +115,12 @@ impl Player<TestPools> for SnapshotTrack {
     }
 }
 
-impl Track<TestPools> for SnapshotTrack {
+impl Track for SnapshotTrack {
     fn admit(
         &mut self,
         _change: TrackSettingsChange,
         at: When<SessionFrame>,
-        _out: &Outbox<'_, TestPools>,
+        _out: &Outbox<'_>,
     ) -> Result<Option<usize>, PlayError> {
         if self.0.lane_room == 0 {
             return Err(PlayError::Full("lane"));
@@ -146,7 +143,7 @@ impl Track<TestPools> for SnapshotTrack {
     fn prepare_entry(
         &mut self,
         at: SessionFrame,
-        _out: &mut Outbox<'_, TestPools>,
+        _out: &mut Outbox<'_>,
     ) -> Result<bool, PlayError> {
         Ok(!self.0.pending_lane && self.entry(Bound::AtOrAfter(at)).is_some())
     }
@@ -196,7 +193,7 @@ impl Track<TestPools> for SnapshotTrack {
         &mut self,
         _position: Duration,
         _speed: kithara_sync::SpeedCurve,
-        _out: &mut Outbox<'_, TestPools>,
+        _out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         panic!("terminal-event fixture does not send cue commands")
     }

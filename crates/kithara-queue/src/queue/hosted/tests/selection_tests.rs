@@ -1,3 +1,5 @@
+use kithara_play::Bound;
+
 use super::*;
 use crate::{
     AdvanceReason, CrossfadeSettings, QueueSettingsChange, Transition, mock::fixture_uri,
@@ -36,6 +38,62 @@ async fn select_pending_track_stashes_pending_select(#[by_ref] worker_owner: &Wo
     }
     drop((queue, fixture_deck));
     fixture_directory.finish().await;
+}
+
+#[kithara::test(tokio)]
+async fn selection_before_the_first_clock_keeps_the_requested_target(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, mut rig, directory) = empty_queue(&worker_owner.0);
+    queue.clock = None;
+    let source = fixture_uri(directory.path(), "entry.wav");
+    let first = TrackId::allocate();
+    let selected = TrackId::allocate();
+    let output = mock::output(None).get();
+    {
+        let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
+        let mut out = Outbox::new(&mut scope, &mut rig.dispatcher);
+        assert!(out.pass().is_none());
+        for id in [first, selected] {
+            queue
+                .apply_command(
+                    QueueCommand::Append {
+                        position: kithara_play::Position::ZERO,
+                        id,
+                        source: TrackSource::Uri(source.clone()),
+                    },
+                    Some(&output),
+                    &mut out,
+                )
+                .expect("append before the first clock");
+        }
+        queue
+            .apply_command(
+                QueueCommand::Select {
+                    id: selected,
+                    transition: Transition::None,
+                },
+                Some(&output),
+                &mut out,
+            )
+            .expect("selection waits for the first clock");
+        let target = queue.target.expect("retained selection");
+        assert_eq!(target.to, selected);
+        assert_eq!(target.bound, None);
+        assert_eq!(queue.transition_loaded(&mut out).unwrap(), None);
+        assert_eq!(queue.current, None);
+    }
+    tick_fixture(&mut queue, &mut rig);
+    assert_eq!(
+        queue.target.expect("selection after the first pass").bound,
+        Some(Bound::AtOrAfter(SessionFrame::new(128)))
+    );
+    answer_load(&mut queue, &mut rig, FixtureSource::Synthetic).await;
+    crate::mock::finish(&mut queue, &mut rig);
+    assert_eq!(queue.current, Some(selected));
+    assert!(queue.clock.is_some());
+    drop((queue, rig));
+    directory.finish().await;
 }
 
 #[kithara::test(tokio)]

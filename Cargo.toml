@@ -35,6 +35,7 @@ members = [
     "crates/kithara-fixture-media",
     "crates/kithara-hls",
     "crates/kithara-host",
+    "crates/kithara-key",
     "crates/kithara-link",
     "crates/kithara-mp4",
     "crates/kithara-mpa",
@@ -117,6 +118,7 @@ default-members = [
     "crates/kithara-fixture-media",
     "crates/kithara-hls",
     "crates/kithara-host",
+    "crates/kithara-key",
     "crates/kithara-derive",
     "crates/kithara-mp4",
     "crates/kithara-mpa",
@@ -327,6 +329,7 @@ kithara-fixture-media = { path = "crates/kithara-fixture-media", version = "0.0.
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha5", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha5", default-features = false }
 kithara-integration-tests = { path = "tests", default-features = false }
+kithara-key = { path = "crates/kithara-key", version = "0.0.1-alpha5" }
 kithara-link = { path = "crates/kithara-link", version = "0.0.1-alpha5", default-features = false }
 kithara-mp4 = { path = "crates/kithara-mp4", version = "0.0.1-alpha5" }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha5" }
@@ -429,6 +432,7 @@ dbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rus
 delegate = "0.13"
 derive-where = "1.7"
 derive_more = { version = "2.1", features = ["debug", "deref", "deref_mut", "display", "error", "from", "into"] }
+dirs-next = "2.0"
 fast-interleave = "0.1"
 fdk-aac-sys = "0.5.0"
 fearless_simd = "1.0"

@@ -182,12 +182,13 @@ mod runs {
     /// cancel token of the single live pass per track.
     pub(crate) struct AnalysisRuns {
         worker: Arc<AnalysisWorker>,
+        pools: Pools,
         live: Live,
     }
 
     impl AnalysisRuns {
         pub(crate) fn new(pools: Pools) -> Self {
-            let builder: WebAnalyzerBuilder = AnalyzerBuilder::new(pools)
+            let builder: WebAnalyzerBuilder = AnalyzerBuilder::new(pools.clone())
                 .with_beat_config(BeatAnalysisConfig::default())
                 .with_waveform(consts::WAVEFORM_MAX_BUCKETS)
                 .with_beat();
@@ -195,6 +196,7 @@ mod runs {
                 worker: Arc::new(AnalysisWorker::new(
                     AnalysisWorkerConfig::for_builder(builder).build(),
                 )),
+                pools,
                 live: Live::default(),
             }
         }
@@ -256,9 +258,10 @@ mod runs {
 
             let worker = Arc::clone(&self.worker);
             let reader_cancel = cancel.clone();
+            let pools = self.pools.clone();
             let queue = queue.clone();
             task_spawn(async move {
-                match open_reader(config, &reader_cancel, rate).await {
+                match open_reader(config, &reader_cancel, rate, pools).await {
                     Ok(reader) => {
                         queue.attach_observer(id, producer);
                         worker.start(pass, reader);
@@ -344,13 +347,14 @@ mod runs {
         mut config: FfiResourceConfig,
         cancel: &CancelToken,
         rate: NonZeroU32,
+        pools: Pools,
     ) -> Result<Box<dyn AudioReader>, String> {
         if cancel.is_cancelled() {
             return Err("the pass was cancelled before its reader opened".to_owned());
         }
         config.set_cancel(cancel.child());
         config.set_host_sample_rate(rate);
-        let mut resource = Resource::open(config, kithara::worker::Wake::default())
+        let mut resource = Resource::open(config, kithara::worker::Wake::default(), pools)
             .await
             .map_err(|error| format!("resource open failed: {error}"))?;
         resource

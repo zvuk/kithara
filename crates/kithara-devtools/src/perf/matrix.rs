@@ -508,10 +508,20 @@ store-failure-output = true
         .expect("subject manifest");
         fs::write(
             temp.path().join("lib.rs"),
-            "#[test]\nfn passes() { assert_eq!(2 + 2, 4); }\n",
+            r#"#[test]
+fn passes() {
+    let home = std::env::var_os("CARGO_HOME").expect("fixture Cargo home");
+    let expected = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/cargo-home");
+    assert_eq!(
+        std::fs::canonicalize(home).expect("actual Cargo home"),
+        std::fs::canonicalize(expected).expect("expected Cargo home"),
+    );
+}
+"#,
         )
         .expect("subject test");
         let cargo_home = temp.path().join("target/cargo-home");
+        fs::create_dir_all(&cargo_home).expect("subject Cargo home");
         let lock = Command::new("cargo")
             .args(["generate-lockfile", "--offline"])
             .env("CARGO_HOME", &cargo_home)

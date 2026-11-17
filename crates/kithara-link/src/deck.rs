@@ -16,16 +16,16 @@ pub trait LinkedDeck<S>: HostedDeck<S> {
     ///
     /// # Errors
     /// Returns the refusal of an alignment batch.
-    fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>;
+    fn sync(&mut self, on: bool, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError>;
     /// Delivers the planned Host trajectory to every active synchronized track.
     fn retime(
         &mut self,
         trajectory: &TempoTrajectory,
         frames: &[SessionFrame],
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     );
     /// Delivers analysis to the track owning the item.
-    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>);
+    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_>);
     /// Whether this deck follows the Host's tempo.
     fn synced(&self) -> bool;
     /// Maximum lane lead among sounding synchronized tracks.
@@ -35,11 +35,11 @@ pub trait LinkedDeck<S>: HostedDeck<S> {
     /// Scope batches needed to reopen silent tracks during a retime.
     fn scope_parts(&self) -> usize;
     /// Closes phase against the new trajectory without a commanded speed step.
-    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
+    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_>);
 }
 
-impl<S, D: HostedDeck<S> + LinkedPlayer<S>> LinkedDeck<S> for D {
-    fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+impl<S, D: HostedDeck<S> + LinkedPlayer> LinkedDeck<S> for D {
+    fn sync(&mut self, on: bool, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         LinkedPlayer::sync(self, on, out)
     }
 
@@ -47,12 +47,12 @@ impl<S, D: HostedDeck<S> + LinkedPlayer<S>> LinkedDeck<S> for D {
         &mut self,
         trajectory: &TempoTrajectory,
         frames: &[SessionFrame],
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) {
         LinkedPlayer::retime(self, trajectory, frames, out);
     }
 
-    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>) {
+    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_>) {
         LinkedPlayer::grid(self, answer, out);
     }
 
@@ -72,7 +72,7 @@ impl<S, D: HostedDeck<S> + LinkedPlayer<S>> LinkedDeck<S> for D {
         LinkedPlayer::scope_parts(self)
     }
 
-    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
+    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_>) {
         LinkedPlayer::realign(self, trajectory, at, out);
     }
 }
@@ -129,10 +129,10 @@ impl<S: 'static> HostedDeck<S> for LinkedHostDeck<S> {
             fn mixer_config(&self) -> DeckMixerConfig;
         }
         to self.hosted_mut() {
-            fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>);
-            fn settle(&mut self, receipt: TrackReceipt<'_, S>, pass: DeckPass<'_>, out: &mut Outbox<'_, S>);
-            fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>);
-            fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError>;
+            fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>);
+            fn settle(&mut self, receipt: TrackReceipt<'_>, pass: DeckPass<'_>, out: &mut Outbox<'_>);
+            fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>);
+            fn close(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError>;
             fn hold(&mut self, waker: Waker);
             fn release(&mut self);
         }

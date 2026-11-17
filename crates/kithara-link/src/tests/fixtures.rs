@@ -101,15 +101,23 @@ pub(super) fn grid(
     .expect("consistent test grid")
 }
 
-pub(super) fn resource() -> ResourceLoad<TestPools> {
-    ResourceLoad::new(
-        ResourceConfig::for_src(
-            ResourceSrc::parse("https://example.com/track.mp3").expect("test source"),
+pub(super) fn resource() -> ResourceLoad {
+    kithara_play::ResourcePrep::builder()
+        .worker(PlayWorker::new(
+            kithara_play::PlayWorkerConfig::builder(pools()).build(),
+        ))
+        .build()
+        .prepare(
+            ResourceConfig::<TestPools>::for_src(
+                ResourceSrc::parse("https://example.com/track.mp3").expect("test source"),
+            )
+            .store(AssetStore::builder(pools()).build())
+            .build(),
+            &kithara_play::mock::output(None).get(),
+            Box::new(AudioObserverSlot::default().relay()),
         )
-        .store(AssetStore::builder(pools()).build())
-        .build(),
-        Box::new(AudioObserverSlot::default().relay()),
-    )
+        .expect("prepared source load")
+        .1
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -229,10 +237,29 @@ impl ScriptedTrack {
         }
         Ok(sent)
     }
+
+    fn prepare_source(&mut self, sent: Option<Seq>) {
+        self.lane_commands.retain(|(seq, _, _)| Some(*seq) == sent);
+        self.control.edit(|script| {
+            for (seq, commands, current, _) in &mut script.pending {
+                if commands
+                    .iter()
+                    .any(|command| matches!(command, Command::Play(_)))
+                    || (Some(*seq) != sent
+                        && commands
+                            .iter()
+                            .any(|command| matches!(command, Command::Seek(_))))
+                {
+                    *current = false;
+                }
+            }
+            script.snapshot.pending_lane = true;
+        });
+    }
 }
 
-impl Player<TestPools> for ScriptedTrack {
-    type Command = TrackCommand<TestPools>;
+impl Player for ScriptedTrack {
+    type Command = TrackCommand;
     type Snapshot = TrackSnapshot;
 
     fn entry(&self, bound: Bound) -> Option<SessionFrame> {
@@ -252,8 +279,16 @@ impl Player<TestPools> for ScriptedTrack {
     fn apply(
         &mut self,
         command: Self::Command,
-        _out: &mut Outbox<'_, TestPools>,
+        _out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
+        let held_speed = match &command {
+            TrackCommand::Seek { .. }
+                if !matches!(self.snapshot().status, TrackStatus::Playing { .. }) =>
+            {
+                Some(SpeedCurve::Constant(self.projected().speed()))
+            }
+            _ => None,
+        };
         let command = match command {
             TrackCommand::Align { to, speed, at } => {
                 return self.send(vec![
@@ -302,15 +337,14 @@ impl Player<TestPools> for ScriptedTrack {
                     script.snapshot.position = position;
                 }
             });
+        } else if let (Some(seq), Some(speed)) = (sent, held_speed) {
+            self.lane_commands.push((seq, speed, When::Next));
+            self.prepare_source(sent);
         }
         Ok(sent)
     }
 
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, TestPools>,
-        _out: &mut Outbox<'_, TestPools>,
-    ) -> Settled {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, _out: &mut Outbox<'_>) -> Settled {
         let TrackReceipt::Deck { seq, outcome, .. } = receipt else {
             return Settled::Pending;
         };
@@ -435,19 +469,19 @@ impl Player<TestPools> for ScriptedTrack {
         settled
     }
 
-    fn tick(&mut self, _now: SessionFrame, _out: &mut Outbox<'_, TestPools>) {}
+    fn tick(&mut self, _now: SessionFrame, _out: &mut Outbox<'_>) {}
 
     fn snapshot(&self) -> Self::Snapshot {
         self.control.edit(|script| script.snapshot.clone())
     }
 }
 
-impl Track<TestPools> for ScriptedTrack {
+impl Track for ScriptedTrack {
     fn admit(
         &mut self,
         _change: TrackSettingsChange,
         _at: When<SessionFrame>,
-        _out: &Outbox<'_, TestPools>,
+        _out: &Outbox<'_>,
     ) -> Result<Option<usize>, PlayError> {
         Ok(Some(0))
     }
@@ -491,7 +525,7 @@ impl Track<TestPools> for ScriptedTrack {
     fn prepare_entry(
         &mut self,
         at: SessionFrame,
-        _out: &mut Outbox<'_, TestPools>,
+        _out: &mut Outbox<'_>,
     ) -> Result<bool, PlayError> {
         Ok(self.entry(Bound::AtOrAfter(at)).is_some())
     }
@@ -552,28 +586,13 @@ impl Track<TestPools> for ScriptedTrack {
         &mut self,
         position: Position,
         speed: SpeedCurve,
-        _out: &mut Outbox<'_, TestPools>,
+        _out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let sent = self.send(vec![
             Command::Speed(speed, When::Next),
             Command::Seek(position),
         ])?;
-        self.lane_commands.retain(|(seq, _, _)| Some(*seq) == sent);
-        self.control.edit(|script| {
-            for (seq, commands, current, _) in &mut script.pending {
-                if commands
-                    .iter()
-                    .any(|command| matches!(command, Command::Play(_)))
-                    || (Some(*seq) != sent
-                        && commands
-                            .iter()
-                            .any(|command| matches!(command, Command::Seek(_))))
-                {
-                    *current = false;
-                }
-            }
-            script.snapshot.pending_lane = true;
-        });
+        self.prepare_source(sent);
         Ok(sent)
     }
 }
@@ -585,19 +604,14 @@ impl HostedDeck<TestPools> for ScriptedTrack {
     fn mixer_config(&self) -> DeckMixerConfig {
         DeckMixerConfig::default()
     }
-    fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {}
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, TestPools>,
-        _pass: DeckPass<'_>,
-        out: &mut Outbox<'_, TestPools>,
-    ) {
+    fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_>) {}
+    fn settle(&mut self, receipt: TrackReceipt<'_>, _pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         Player::settle(self, receipt, out);
     }
-    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, TestPools>) {
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         Player::tick(self, pass.now, out);
     }
-    fn close(&mut self, out: &mut Outbox<'_, TestPools>) -> Result<(), PlayError> {
+    fn close(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError> {
         self.apply(TrackCommand::Release, out).map(|_| ())
     }
     fn hold(&mut self, _waker: Waker) {}
@@ -628,13 +642,13 @@ impl Rig {
         }
     }
 
-    pub(super) fn run<R>(&mut self, run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R) -> R {
+    pub(super) fn run<R>(&mut self, run: impl FnOnce(&mut Outbox<'_>) -> R) -> R {
         self.run_pass(|out, _pass| run(out))
     }
 
     pub(super) fn run_pass<R>(
         &mut self,
-        run: impl FnOnce(&mut Outbox<'_, TestPools>, DeckPass<'_>) -> R,
+        run: impl FnOnce(&mut Outbox<'_>, DeckPass<'_>) -> R,
     ) -> R {
         let mut port = self
             .queues
@@ -702,6 +716,7 @@ pub(super) fn ordinary() -> (ScriptedTrack, Control) {
             speed: 1.0,
             position: Position::ZERO,
             duration: None,
+            cached: Position::ZERO,
             abr: None,
             metadata: TrackMetadata::default(),
             mark: None,

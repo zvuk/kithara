@@ -148,6 +148,9 @@ kithara = { workspace = true, default-features = false, features = ["download", 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"), not(all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["download", "fdk-aac"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dirs-next = { workspace = true }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["symphonia", "webcodecs", "client-reqwest", "tls-rustls"] }
 

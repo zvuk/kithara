@@ -4,7 +4,7 @@ use kithara::{
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
@@ -104,7 +104,7 @@ async fn startup_issues_no_eager_size_probe_storm(
         .initial_abr_mode(AbrMode::manual(ACTIVE_VARIANT))
         .build();
 
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .media_info(fixture.media_info())
             .decoder(
@@ -113,9 +113,8 @@ async fn startup_issues_no_eager_size_probe_storm(
                     .build(),
             )
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
 
     // NOTE: this is the historical storm seam. Keep creation and first-frame
     // decode ahead of the counter read so both construction-time and startup

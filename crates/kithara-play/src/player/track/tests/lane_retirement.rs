@@ -1,10 +1,13 @@
+use kithara_platform::sync::Arc;
+use kithara_stream::{PlayheadState, PlayheadWrite};
+
 use super::*;
 use crate::{Bound, TrackSettingsChange};
 
 fn answer_source(
     track: &mut Track,
     rig: &mut Rig,
-    receipt: Receipt<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    receipt: Receipt<DispatcherProtocol<ResourceLoad>>,
 ) -> Settled {
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live deck scope")
@@ -102,6 +105,8 @@ async fn lane_retirement_during_open_keeps_admission_closed(#[case] opened: bool
     assert_eq!(track.snapshot().engine_latency, latency);
     assert!(!track.segment.ready);
     assert!(track.source_basis.is_none() && track.observed_source.is_none());
+    assert!(track.playhead.is_none());
+    assert_eq!(track.snapshot().cached, Duration::ZERO);
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -143,7 +148,11 @@ async fn lane_retirement_survives_a_full_dispatcher(#[case] drive: RetirementDri
         }
         assert_eq!(scope.available(), 0);
     }
-    let opened = opened_fixture(&mut rig, "retiring").await;
+    let mut opened = opened_fixture(&mut rig, "retiring").await;
+    let old_source = Arc::new(PlayheadState::new());
+    old_source.set_duration(Some(Duration::from_secs(187)));
+    old_source.set_cached(4, 4);
+    opened.opened.playhead = old_source.clone();
     let resident = opened.lane;
     let receipt = rig.open(Ok(opened)).expect("opened source");
     for _ in 0..rig.dispatcher.available() {
@@ -170,6 +179,8 @@ async fn lane_retirement_survives_a_full_dispatcher(#[case] drive: RetirementDri
         }
     ));
     assert_eq!(track.status(), TrackStatus::Idle);
+    assert_eq!(track.snapshot().cached, Duration::ZERO);
+    assert!(track.playhead.is_none());
 
     rig.opens.drain();
     while let Some(due) = rig.opens.next_due((), 1) {
@@ -231,9 +242,16 @@ async fn lane_retirement_survives_a_full_dispatcher(#[case] drive: RetirementDri
     let _ = rig.block(frame(0), 0.0);
     while track.lane_receipt().is_some() {}
     load(&mut track, &mut rig, Position::ZERO);
-    let opened = opened_fixture(&mut rig, "reloaded").await;
+    let mut opened = opened_fixture(&mut rig, "reloaded").await;
+    let fresh_source = Arc::new(PlayheadState::new());
+    opened.opened.playhead = fresh_source.clone();
     let receipt = rig.open(Ok(opened)).expect("fresh opened source");
     answer_source(&mut track, &mut rig, receipt);
+    old_source.set_duration(Some(Duration::from_secs(999)));
+    assert_eq!(track.snapshot().cached, Duration::ZERO);
+    fresh_source.set_duration(Some(Duration::from_secs(3)));
+    fresh_source.set_cached(1, 1);
+    assert_eq!(track.snapshot().cached, Duration::from_secs(3));
     let mut replies = rig.block(frame(0), 0.0);
     settle(&mut track, &mut rig, &mut replies);
     assert_eq!(track.status(), TrackStatus::Loaded);
@@ -366,4 +384,61 @@ fn lane_retirement_late_receipts_do_not_reopen_or_reconfigure_the_scope() {
     answer_source(&mut track, &mut rig, receipt);
     assert_eq!(track.status(), TrackStatus::Released);
     assert!(!track.projected().pitch().keylock());
+}
+
+#[kithara::test]
+fn cached_source_progress_does_not_need_a_render_turn() {
+    use kithara_render::{
+        PcmPacket,
+        mock::{PacketRing, chunk},
+    };
+    use kithara_signal::AudioSpec;
+
+    let mut rig = rig();
+    let mut track = Track::new(PlayerConfig {
+        item: TrackId::allocate(),
+        slot: None,
+        settings: TrackSettings::default(),
+    })
+    .expect("valid background track");
+    let seq = load(&mut track, &mut rig, Position::from_secs(10));
+    let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("source rate"));
+    let mut packets = PacketRing::with_duration(spec, None, 1);
+    packets.push(PcmPacket::Chunk(Box::new(chunk(
+        spec,
+        SegmentId::FIRST,
+        0,
+        0,
+        &[0.5; 8],
+    ))));
+    let source = packets.playhead();
+    let opened = OpenedTrack {
+        src: Arc::from("paused"),
+        pcm: Box::new(packets.receiver.take().expect("PCM receiver")),
+        playhead: source.clone(),
+        metadata: kithara_decode::TrackMetadata::default(),
+        abr: None,
+    };
+    let receipt = rig
+        .open(Ok(kithara_render::mock::loaded(seq, opened)))
+        .expect("opened source");
+    answer_source(&mut track, &mut rig, receipt);
+    assert_eq!(track.status(), TrackStatus::Loaded);
+    assert!(!packets.playing());
+    assert_eq!(track.snapshot().cached, Duration::ZERO);
+    source.set_cached(1, 4);
+    assert_eq!(track.snapshot().cached, Duration::ZERO);
+    source.set_duration(Some(Duration::from_secs(187)));
+    assert_eq!(track.snapshot().cached, Duration::from_millis(46_750));
+    source.set_cached(4, 4);
+    assert_eq!(track.snapshot().cached, Duration::from_secs(187));
+    source.set_cached(3, 0);
+    assert_eq!(track.snapshot().cached, Duration::from_secs(187));
+    assert_eq!(track.snapshot().position, Position::from_secs(10));
+    assert!(!packets.playing());
+
+    command_at_zero(&mut track, &mut rig, TrackCommand::Release);
+    source.set_duration(Some(Duration::from_secs(999)));
+    assert_eq!(track.snapshot().cached, Duration::ZERO);
+    assert!(track.playhead.is_none());
 }

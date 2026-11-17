@@ -6,6 +6,7 @@ use std::{
 };
 
 use kithara::{
+    abr::AbrHandle,
     audio::{
         Audio, AudioConfig, AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome,
         FailureSource, PendingReason, ReadOutcome, ResamplerBackend, SeekOutcome, TrackFailureKind,
@@ -30,14 +31,16 @@ use super::dispatcher::{LaneLoader, LaneOpen, ReleaseLane};
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub async fn open_resource(
     config: &kithara::play::ResourceConfig<crate::bufpool_ext::TestPools>,
+    worker: &PlayWorker<crate::bufpool_ext::TestPools>,
+    producer: TrackConfig,
 ) -> Result<kithara::play::Resource, LoadRefusal> {
-    let (worker, track) = kithara::play::mock::resource_tracks(config)?;
+    let track = kithara::play::mock::resource_audio(config, worker.pools())?;
     let resource = match track {
         futures::future::Either::Left(track) => {
-            kithara::play::Resource::from_reader(load_audio(&worker, track).await?, None)
+            kithara::play::Resource::from_reader(load_audio(worker, (track, producer)).await?, None)
         }
         futures::future::Either::Right(track) => {
-            kithara::play::Resource::from_reader(load_audio(&worker, track).await?, None)
+            kithara::play::Resource::from_reader(load_audio(worker, (track, producer)).await?, None)
         }
     };
     Ok(resource)
@@ -163,6 +166,9 @@ pub struct LaneAudio<T, S> {
     block_on_underrun: bool,
     sender: Sender<LaneProtocol>,
     pcm: PcmReceiver,
+    playhead: kithara::platform::sync::Arc<dyn kithara::stream::PlayheadRead>,
+    metadata: TrackMetadata,
+    abr: Option<AbrHandle>,
     bus: EventBus,
     #[field(get, copy)]
     segment: SegmentId,
@@ -177,16 +183,15 @@ pub struct LaneAudio<T, S> {
     marker: PhantomData<fn() -> T>,
 }
 
-pub async fn load_audio<T, B, S, C>(
+pub async fn load_audio<T, B, S>(
     worker: &PlayWorker<S>,
-    config: C,
+    config: (AudioConfig<T, B>, TrackConfig),
 ) -> Result<LaneAudio<Stream<T>, S>, LoadRefusal>
 where
     T: StreamType<Events = EventBus>,
     T::Config: Send + 'static,
     B: Default + ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    C: Into<TrackConfig<T, B>>,
 {
     let mut loader = LaneLoader::new(worker)?;
     loader.load(config).await
@@ -199,14 +204,13 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3), ctx = String)]
-    pub async fn load<C>(&mut self, config: C) -> Result<LaneAudio<Stream<T>, S>, LoadRefusal>
-    where
-        C: Into<TrackConfig<T, B>>,
-    {
+    pub async fn load(
+        &mut self,
+        (audio, config): (AudioConfig<T, B>, TrackConfig),
+    ) -> Result<LaneAudio<Stream<T>, S>, LoadRefusal> {
         let worker = &self.worker;
-        let config = config.into();
-        let bus = T::event_bus(config.audio().stream())
-            .or_else(|| config.audio().bus().cloned())
+        let bus = T::event_bus(audio.stream())
+            .or_else(|| audio.bus().cloned())
             .unwrap_or_default();
         let start = LaneStart::new(config.warp().speed(), config.warp().pitch());
         let speed = start.speed.clone();
@@ -225,7 +229,7 @@ where
                         class: ServiceClass::Warm,
                         item: LaneOpen {
                             worker: worker.clone(),
-                            config,
+                            config: (audio, config),
                         },
                         position: Duration::ZERO,
                         start,
@@ -292,7 +296,10 @@ where
             }),
             block_on_underrun,
             sender,
-            pcm: loaded.opened,
+            pcm: loaded.opened.receiver,
+            playhead: loaded.opened.playhead,
+            metadata: loaded.opened.metadata,
+            abr: loaded.opened.abr,
             bus,
             segment: SegmentId::FIRST,
             speed,
@@ -374,6 +381,19 @@ impl<T, S> LaneAudio<T, S> {
             .await
             .is_err()
         {
+            let queued_segment = self.pcm.peek().map(|packet| match packet {
+                PcmPacket::Chunk(chunk) => chunk.meta.segment,
+                PcmPacket::Failed { segment, .. } => *segment,
+            });
+            tracing::error!(
+                segment = self.segment.get(),
+                ready_segment = ?self.ready,
+                ?queued_segment,
+                decoded_frontier = ?self.pcm.decoded_frontier(),
+                cached_span = ?self.playhead.cached(),
+                closed = self.pcm.is_closed(),
+                "test lane preload timed out"
+            );
             hang_tick!(format!(
                 "{label}: lane waits for segment {:?}",
                 self.segment
@@ -481,6 +501,9 @@ impl<T, S> AudioRead for LaneAudio<T, S> {
             fn spec(&self) -> AudioSpec;
             fn position(&self) -> Duration;
             fn decoded_frontier(&self) -> Duration;
+        }
+        to self.playhead {
+            #[call(cached)]
             fn cached_span(&self) -> Duration;
         }
     }
@@ -662,11 +685,17 @@ impl<T, S> AudioSession for LaneAudio<T, S> {
     }
 
     delegate::delegate! {
-        to self.pcm {
+        to self.playhead {
             fn duration(&self) -> Option<Duration>;
-            fn metadata(&self) -> &TrackMetadata;
-            fn abr_handle(&self) -> Option<kithara::abr::AbrHandle>;
         }
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        &self.metadata
+    }
+
+    fn abr_handle(&self) -> Option<AbrHandle> {
+        self.abr.clone()
     }
 
     fn event_bus(&self) -> &EventBus {

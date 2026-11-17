@@ -123,6 +123,21 @@ where
         self.call(QueueCommand::Select { id, transition })
     }
 
+    /// Replaces the current track's source, retaining its identity and media position.
+    /// The accepted source changes when the replacement enters the deck.
+    /// # Errors
+    /// Returns an unknown or non-current identity, an admission refusal or a closed mailbox.
+    pub fn replace_source<T: Into<TrackSource<S>>>(
+        &self,
+        id: TrackId,
+        source: T,
+    ) -> Result<(), QueueError> {
+        self.call(QueueCommand::ReplaceSource {
+            id,
+            source: source.into(),
+        })
+    }
+
     /// Moves after the last requested target.
     /// Answers once the owner accepted and sent it; effects publish on receipts.
     /// # Errors

@@ -1,3 +1,6 @@
+use kithara_config::ConfigOwner;
+use kithara_stream::PlayheadRead;
+
 use super::*;
 
 #[cfg(any(
@@ -204,7 +207,7 @@ fn assert_quiet_curve_projection(
             if seq == predecessor && at == (LaneFrame { segment: consumed.lane.segment, frame: 0 }))
     );
     assert!(track.lane_receipt().is_none());
-    assert!(track.lane_history.receipts.is_empty());
+    assert!(track.lane_commands.receipts.is_empty());
     track.status = TrackStatus::Paused {
         at: consumed.position,
     };
@@ -222,8 +225,8 @@ fn assert_quiet_curve_projection(
     );
     let segment = track.segment.id;
     let seq = track
-        .lane_history
-        .commands
+        .lane_commands
+        .operations()
         .last()
         .expect("native Segment")
         .seq;
@@ -233,8 +236,8 @@ fn assert_quiet_curve_projection(
     );
     assert!(
         track
-            .lane_history
-            .commands
+            .lane_commands
+            .operations()
             .iter()
             .rev()
             .take_while(|operation| operation.seq == seq)
@@ -269,8 +272,8 @@ fn assert_quiet_curve_projection(
     assert_eq!(track.segment.id, segment);
     assert!(
         track
-            .lane_history
-            .commands
+            .lane_commands
+            .operations()
             .iter()
             .filter(|operation| operation.seq == seq)
             .all(|operation| operation.applied)
@@ -456,6 +459,284 @@ fn unknown_media_translation_refuses_commands_without_changing_the_snapshot(#[ca
 }
 
 #[kithara::test]
+fn an_alignment_replaces_older_future_speeds_without_cancelling_keylock() {
+    let (mut track, mut inbox) = prepared_track();
+    let segment = track.segment.id;
+    track.status = TrackStatus::Playing { since: frame(0) };
+    track.mark = Some(SlotMark {
+        session: frame(0),
+        lane: LaneFrame { segment, frame: 0 },
+        position: Duration::ZERO,
+    });
+    let mut rig = rig();
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Configure(TrackSettingsChange::Pitch(Pitch::HELD), When::Next),
+    )
+    .expect("initial keylock sequence");
+    assert!(matches!(
+        lane_commands(&mut inbox).as_slice(),
+        [LaneCommand::SetPitch(Pitch::HELD)]
+    ));
+    track.settle_lane();
+    assert_eq!(track.settings.config().pitch(), Pitch::HELD);
+    let obsolete = in_pass(&mut rig, frame(0), |out| {
+        track.apply(
+            TrackCommand::SetSpeed {
+                speed: SpeedCurve::Constant(1.5),
+                at: When::At(frame(20_000)),
+            },
+            out,
+        )
+    })
+    .expect("future old-source speed")
+    .expect("speed sequence");
+    let keylock = in_pass(&mut rig, frame(0), |out| {
+        track.apply(
+            TrackCommand::Configure(
+                TrackSettingsChange::Pitch(Pitch::default()),
+                When::At(frame(18_000)),
+            ),
+            out,
+        )
+    })
+    .expect("independent future keylock")
+    .expect("keylock sequence");
+    let aligned = in_pass(&mut rig, frame(0), |out| {
+        track.apply(
+            TrackCommand::Align {
+                to: Position::from_secs(2),
+                speed: SpeedCurve::Constant(1.25),
+                at: frame(8_000),
+            },
+            out,
+        )
+    })
+    .expect("new-source alignment")
+    .expect("alignment sequence");
+    assert_eq!(track.projected().speed(), 1.25);
+    let fresh = in_pass(&mut rig, frame(0), |out| {
+        track.apply(
+            TrackCommand::SetSpeed {
+                speed: SpeedCurve::Constant(1.3),
+                at: When::At(frame(22_000)),
+            },
+            out,
+        )
+    })
+    .expect("fresh speed uses the aligned source")
+    .expect("fresh speed sequence");
+    assert_eq!(
+        track
+            .planned(frame(21_000), NonZeroU32::new(48_000).expect("rate"))
+            .expect("projected new-source speed")
+            .1,
+        1.25,
+        "pending old-source plans no longer participate in projection"
+    );
+    inbox.drain();
+    let due = inbox
+        .next_due(LaneFrame { segment, frame: 0 }, 8_001)
+        .expect("earlier alignment");
+    assert_eq!(due.seq(), aligned);
+    due.apply(kithara_render::LaneApplied {
+        source_basis: None,
+        engine_latency: FrameCount::new(0),
+        ready: None,
+    });
+    track.settle_lane();
+    let answers: Vec<_> = std::iter::from_fn(|| track.lane_receipt()).collect();
+    assert!(answers.iter().any(|answer| matches!(answer, Settled::Rejected { seq, reason: Rejection::Stale } if *seq == obsolete)), "{answers:?}");
+    let due = inbox
+        .next_due(
+            LaneFrame {
+                segment,
+                frame: 18_000,
+            },
+            1,
+        )
+        .expect("keylock remains scheduled");
+    assert_eq!(due.seq(), keylock);
+    assert!(matches!(due.commands(), [LaneCommand::SetPitch(pitch)] if *pitch == Pitch::default()));
+    due.apply(kithara_render::LaneApplied {
+        source_basis: None,
+        engine_latency: FrameCount::new(0),
+        ready: None,
+    });
+    assert!(
+        inbox
+            .next_due(
+                LaneFrame {
+                    segment,
+                    frame: 20_000
+                },
+                1
+            )
+            .is_none()
+    );
+    track.settle_lane();
+    assert_eq!(track.settings.config().speed(), 1.25);
+    assert_eq!(track.settings.config().pitch(), Pitch::default());
+    inbox.drain();
+    let due = inbox
+        .next_due(
+            LaneFrame {
+                segment,
+                frame: 22_000,
+            },
+            1,
+        )
+        .expect("fresh speed survives");
+    assert_eq!(due.seq(), fresh);
+    due.apply(kithara_render::LaneApplied {
+        source_basis: None,
+        engine_latency: FrameCount::new(0),
+        ready: None,
+    });
+    track.settle_lane();
+    assert_eq!(track.settings.config().speed(), 1.3);
+}
+
+#[kithara::test]
+fn independent_lane_speeds_keep_their_time_order_after_an_earlier_insertion() {
+    let (mut track, mut inbox) = prepared_track();
+    let segment = track.segment.id;
+    track.status = TrackStatus::Playing { since: frame(0) };
+    track.mark = Some(SlotMark {
+        session: frame(0),
+        lane: LaneFrame { segment, frame: 0 },
+        position: Duration::ZERO,
+    });
+    let future = track
+        .send_lane(
+            LaneCommand::SetSpeed(SpeedCurve::Constant(1.5)),
+            When::At(LaneFrame {
+                segment,
+                frame: 20_000,
+            }),
+        )
+        .expect("independent future speed");
+    let earlier = track
+        .send_lane(
+            LaneCommand::SetSpeed(SpeedCurve::Constant(1.25)),
+            When::At(LaneFrame {
+                segment,
+                frame: 8_000,
+            }),
+        )
+        .expect("independent earlier speed");
+    assert_eq!(
+        track
+            .planned(frame(24_000), NonZeroU32::new(48_000).expect("rate"))
+            .expect("complete independent schedule")
+            .1,
+        1.5
+    );
+    inbox.drain();
+    for expected in [earlier, future] {
+        let due = inbox
+            .next_due(LaneFrame { segment, frame: 0 }, 24_001)
+            .expect("both independent speed commands remain scheduled");
+        assert_eq!(due.seq(), expected);
+        assert!(due.basis().is_empty());
+        due.apply(kithara_render::LaneApplied {
+            source_basis: None,
+            engine_latency: FrameCount::new(0),
+            ready: None,
+        });
+    }
+    track.settle_lane();
+    assert!(
+        track
+            .lane_commands
+            .operations()
+            .iter()
+            .all(|operation| operation.applied)
+    );
+}
+
+#[kithara::test]
+fn a_pending_next_speed_still_blocks_projection_after_an_applied_timed_speed() {
+    let (mut track, mut inbox) = prepared_track();
+    let segment = track.segment.id;
+    track.status = TrackStatus::Playing { since: frame(0) };
+    track.mark = Some(SlotMark {
+        session: frame(0),
+        lane: LaneFrame { segment, frame: 0 },
+        position: Duration::ZERO,
+    });
+    let mut rig = rig();
+    in_pass(&mut rig, frame(0), |out| {
+        track.apply(
+            TrackCommand::SetSpeed {
+                speed: SpeedCurve::Constant(1.0),
+                at: When::At(frame(128)),
+            },
+            out,
+        )
+    })
+    .expect("initial speed");
+    inbox.drain();
+    inbox
+        .next_due(
+            LaneFrame {
+                segment,
+                frame: 128,
+            },
+            1,
+        )
+        .expect("initial applied speed")
+        .apply(kithara_render::LaneApplied {
+            source_basis: None,
+            engine_latency: FrameCount::new(0),
+            ready: None,
+        });
+    track.settle_lane();
+    let pending = in_pass(&mut rig, frame(0), |out| {
+        track.apply(
+            TrackCommand::SetSpeed {
+                speed: SpeedCurve::Constant(1.25),
+                at: When::Next,
+            },
+            out,
+        )
+    })
+    .expect("public Next speed")
+    .expect("speed sequence");
+    assert_eq!(track.projected().speed(), 1.25);
+    let rate = NonZeroU32::new(48_000).expect("rate");
+    assert!(
+        matches!(track.planned(frame(512), rate), Err(PlayError::NotReady)),
+        "the valid Next speed has no known application frame"
+    );
+    inbox.drain();
+    let due = inbox
+        .next_due(
+            LaneFrame {
+                segment,
+                frame: 256,
+            },
+            1,
+        )
+        .expect("Next speed remains valid");
+    assert_eq!(due.seq(), pending);
+    due.apply(kithara_render::LaneApplied {
+        source_basis: None,
+        engine_latency: FrameCount::new(0),
+        ready: None,
+    });
+    track.settle_lane();
+    assert_eq!(
+        track
+            .planned(frame(512), rate)
+            .expect("settled speed has a frame")
+            .1,
+        1.25
+    );
+}
+
+#[kithara::test]
 #[case::inside_prefix(250, 0)]
 #[case::past_media_zero(400, 224)]
 fn planned_media_position_integrates_the_raw_prefix_before_clamping(
@@ -503,7 +784,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
     pcm.meta.media_origin = Some(Duration::from_millis(576));
     packets.push(kithara_render::PcmPacket::Chunk(Box::new(pcm)));
     let receiver = packets.receiver.take().expect("prepared source receiver");
-    assert_eq!(receiver.duration(), Some(Duration::from_secs(2)));
+    assert_eq!(packets.playhead().duration(), Some(Duration::from_secs(2)));
     let source = receiver.next_chunk_info().expect("immutable source packet");
     let mut rig = rig();
     let output = mock::output(None).get();
@@ -578,7 +859,7 @@ fn public_media_extent_uses_the_same_basis_as_public_position(
             Some(Duration::from_millis(expected_ms))
         );
     }
-    assert_eq!(receiver.duration(), Some(Duration::from_secs(2)));
+    assert_eq!(packets.playhead().duration(), Some(Duration::from_secs(2)));
 }
 
 #[kithara::test]
@@ -1325,5 +1606,5 @@ async fn cancelled_parked_repeat_restores_the_raw_coordinate_without_reapplying_
     track.settle_lane();
     assert_eq!(track.source_basis, Some(original_basis));
     assert_eq!(track.snapshot().position, Duration::from_millis(media_ms));
-    assert_eq!(rig.mixer.held(A), Some("media-parked-repeat"));
+    assert_eq!(rig.mixer.held(A), Some(track.item));
 }
