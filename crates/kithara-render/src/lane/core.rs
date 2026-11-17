@@ -240,7 +240,7 @@ impl Lane {
     }
 
     pub(crate) fn declick_frames(&self, sample_rate: NonZeroU32) -> FrameCount {
-        crate::rt::declick_frame_count(self.state.declick, sample_rate)
+        FrameCount::for_seconds(self.state.declick.smooth_seconds, sample_rate)
     }
 
     pub(crate) fn is_preloaded(&self) -> bool {

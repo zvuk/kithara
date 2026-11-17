@@ -44,9 +44,12 @@ use kithara_render::{
     bridge::{
         CrossfaderGain, CurveShape, DeckEnds, DeckEqChange, DeckMixSettingsChange, DeckPart,
         DeckProtocol, EqGainProgram, Fade, FilterProgram, ParameterKnot, SessionInbox, Slot,
-        SlotState, scope_channels,
+        SlotState,
     },
-    rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
+    rt::{
+        DeckMixer, DeckMixerConfig, MixerInputs, StreamShape, install_render_context,
+        publish_render_context,
+    },
 };
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
 
@@ -185,7 +188,7 @@ async fn processor(count: usize, lane: Lane, limiter: LimiterConfig) -> BenchMix
     let scope = control
         .open(config.slots().get())
         .expect("bench deck scope");
-    let (deck, inputs) = scope_channels(scope, config);
+    let (deck, inputs) = MixerInputs::new(scope, config);
     let pools = pools();
     let shape = StreamShape {
         sample_rate: non_zero(consts::SAMPLE_RATE, "sample rate"),

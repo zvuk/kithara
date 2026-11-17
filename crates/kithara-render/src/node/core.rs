@@ -15,8 +15,8 @@ use kithara_platform::sync::{Arc, Mutex};
 use super::processor::PlayerProcessor;
 use crate::{
     OfflineDeck,
-    bridge::{MixerInputs, SessionInbox},
-    rt::{DeckMixer, OfflineProcessor, PreparedDeck, StreamShape},
+    bridge::SessionInbox,
+    rt::{DeckMixer, MixerInputs, OfflineProcessor, PreparedDeck, StreamShape},
 };
 
 /// A deck node whose processor borrows its commands from the Host's session store.
@@ -264,7 +264,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        bridge::{DeckEnds, DeckPart, DeckProtocol, Fade, Slot, SlotState, scope_channels},
+        bridge::{DeckEnds, DeckPart, DeckProtocol, Fade, Slot, SlotState},
         rt::DeckMixerConfig,
         test_pools::{TestPools, pools},
     };
@@ -295,7 +295,7 @@ mod tests {
                 .build(),
         );
         let scope = sender.open(config.slots().get()).expect("deck scope");
-        let (ends, inputs) = scope_channels(scope, config);
+        let (ends, inputs) = MixerInputs::new(scope, config);
         (
             PlayerNode::new(inputs, pools()),
             ends,

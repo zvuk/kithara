@@ -496,7 +496,8 @@ fn native_marked_at<R>(
 ) -> R {
     let output = mock::output(None).get();
     let spec = AudioSpec::new(2, mock::SAMPLE_RATE);
-    let mut snapshot = DeckSnapshot::new(DeckMixerConfig::default());
+    let mixer_config = DeckMixerConfig::default();
+    let mut snapshot = DeckSnapshot::new(mixer_config.slots(), mixer_config.eq_bands());
     snapshot.slots[0].mark = Some(mark);
     snapshot.slots[0].position = mark.position.as_secs_f64();
     snapshot.slots[0].source = Some(AudioChunkInfo {

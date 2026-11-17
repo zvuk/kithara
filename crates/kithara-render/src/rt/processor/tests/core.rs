@@ -87,7 +87,7 @@ pub(super) fn mixer_without_declick() -> (TestMixer, TestEnds) {
 fn a_constructed_deck_retains_scope_state_until_its_first_render() {
     let config = DeckMixerConfig::default();
     let (mut mixer, mut ends) = mixer_with_config(config, 64);
-    let initial = crate::bridge::DeckSnapshot::new(config);
+    let initial = crate::bridge::DeckSnapshot::new(config.slots(), config.eq_bands());
     assert_eq!(*ends.deck.snapshot.read(), initial);
     render(&mut mixer, 0);
     let snapshot = ends.deck.snapshot.read();

@@ -5,7 +5,7 @@ use kithara_command::{Live, ScopeId, ScopedReceipt, When};
 use kithara_effects::LimiterConfig;
 use kithara_events::EventBus;
 use kithara_play::{PlayError, SessionTransportSnapshot};
-use kithara_render::{bridge::scope_channels, rt::DeckMixerConfig};
+use kithara_render::rt::{DeckMixerConfig, MixerInputs};
 use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::BeatGridId;
 
@@ -86,7 +86,7 @@ impl<T> GraphSession<T> {
             .expect("graph channel")
             .open(config.slots().get())
             .expect("fixture scope");
-        let (_ends, inputs) = scope_channels(scope, config);
+        let (_ends, inputs) = MixerInputs::new(scope, config);
         install_deck(&mut self.state, id, inputs, pools(), Some(bus))?;
         self.scopes.push((id, scope));
         Ok(())

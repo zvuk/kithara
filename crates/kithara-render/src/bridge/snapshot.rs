@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use kithara_command::Seq;
 use kithara_effects::GainDb;
 use kithara_signal::AudioChunkInfo;
@@ -6,7 +8,6 @@ use super::{
     EqBinding, FilterSnapshot, RtMetricsSnapshot, SlotBinding, SlotMark, SlotOutputSnapshot,
     SlotState,
 };
-use crate::rt::DeckMixerConfig;
 
 /// What a deck's mixer last published of each slot and of itself, once per block.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -24,16 +25,17 @@ pub struct DeckSnapshot {
 }
 
 impl DeckSnapshot {
+    /// Allocates an empty snapshot for the deck's fixed slot and EQ capacities.
     #[must_use]
-    pub fn new(config: DeckMixerConfig) -> Self {
+    pub fn new(slots: NonZeroUsize, eq_bands: usize) -> Self {
         Self {
-            slots: vec![SlotSnapshot::default(); config.slots().get()],
+            slots: vec![SlotSnapshot::default(); slots.get()],
             eq: EqSnapshot {
-                bands: config.eq_bands(),
-                gains: vec![GainDb::default(); config.eq_bands()],
+                bands: eq_bands,
+                gains: vec![GainDb::default(); eq_bands],
                 binding: None,
-                programs: vec![None; config.eq_bands()],
-                authorities: vec![None; config.eq_bands()],
+                programs: vec![None; eq_bands],
+                authorities: vec![None; eq_bands],
             },
             ..Self::default()
         }

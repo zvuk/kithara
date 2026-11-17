@@ -23,10 +23,10 @@ use super::{
 };
 use crate::{
     bridge::{
-        DeckEvent, DeckMixSettings, DeckProtocol, DeckSnapshot, MixerInputs, RtMetrics,
-        SessionInbox, Slot, SlotSnapshot, SlotState,
+        DeckEvent, DeckMixSettings, DeckProtocol, DeckSnapshot, RtMetrics, SessionInbox, Slot,
+        SlotSnapshot, SlotState,
     },
-    rt::{RenderPass, TrackSlots},
+    rt::{MixerInputs, RenderPass, TrackSlots},
 };
 
 /// The realtime executor of one generation of a session's deck scope.
@@ -499,7 +499,7 @@ impl Deck {
         }
         self.sample_rate = sample_rate;
         self.declick_frames =
-            super::super::config::declick_frame_count(self.declick, sample_rate).get();
+            FrameCount::for_seconds(self.declick.smooth_seconds, sample_rate).get();
         for (_, track) in self.tracks.iter_mut() {
             track.set_host_sample_rate(sample_rate);
         }

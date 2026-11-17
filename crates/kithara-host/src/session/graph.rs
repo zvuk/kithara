@@ -2,7 +2,7 @@ use firewheel::node::NodeID;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
-use kithara_render::bridge::MixerInputs;
+use kithara_render::rt::MixerInputs;
 use kithara_warp::MapAxis;
 use tracing::{debug, warn};
 

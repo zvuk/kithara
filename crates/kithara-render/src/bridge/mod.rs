@@ -11,7 +11,7 @@ pub mod protocol;
 pub mod snapshot;
 
 pub use binding::{EffectBinding, EqBinding, FilterBinding};
-pub use channels::{DeckEnds, DeckEvents, MixTapWriter, MixerInputs, SessionInbox, scope_channels};
+pub use channels::{DeckEnds, DeckEvents, MixTapWriter, SessionInbox};
 pub use filter::FilterSnapshot;
 pub use gain::{SlotBinding, SlotGainProgram, SlotOutputSnapshot};
 pub use kithara_dsp::curve::{CurveShape, CurveShapeError};
