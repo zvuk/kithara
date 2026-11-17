@@ -5,40 +5,12 @@ use kithara_signal::OutputContext;
 use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 
-use super::{PlayerTrack, ReadOutcome, RtSink};
-use crate::bridge::{DeckEvent, ParameterCurve, PlaybackFault, RtMetrics, SlotState};
+use super::{PlayerTrack, ReadOutcome, ReadPcm, RtSink};
+use crate::bridge::{DeckEvent, ParameterCurve, PlaybackFault, SlotState};
 
 pub(crate) struct TrackBuffers<'block, 'scratch, 'bus> {
     pub(crate) scratch: &'block mut [&'scratch mut [f32]],
     pub(crate) bus: &'block mut [&'bus mut [f32]],
-}
-
-/// Result of an exact packet-backed render range.
-#[derive(Debug)]
-pub enum TrackReadOutcome {
-    Full {
-        position: f64,
-        frames: usize,
-        duration: f64,
-        frames_until_eof: Option<usize>,
-    },
-    Partial {
-        frames: usize,
-        duration: f64,
-    },
-    Eof,
-    Failed(PlaybackFault),
-}
-
-impl TrackReadOutcome {
-    #[must_use]
-    pub const fn ended_at(&self, range: &Range<usize>) -> Option<usize> {
-        match self {
-            Self::Full { .. } => None,
-            Self::Partial { frames, .. } => Some(range.start.saturating_add(*frames)),
-            Self::Eof | Self::Failed(_) => Some(range.start),
-        }
-    }
 }
 
 impl PlayerTrack {
@@ -51,7 +23,7 @@ impl PlayerTrack {
         if self.state != SlotState::Playing {
             return false;
         }
-        let Some(outcome) = self.resource.poll_end(budget, false) else {
+        let Some(outcome) = self.resource.poll_end(budget) else {
             return false;
         };
         let event = match outcome {
@@ -99,18 +71,13 @@ impl PlayerTrack {
         budget: &mut usize,
         sink: &mut RtSink<'_>,
         curve: Option<&ParameterCurve>,
-    ) -> TrackReadOutcome {
+    ) -> ReadOutcome {
         let TrackBuffers { scratch, bus } = buffers;
         if self.state == SlotState::Ended {
-            return TrackReadOutcome::Eof;
+            return ReadOutcome::Eof;
         }
-        if self.state != SlotState::Playing || self.gate.is_shut() {
-            return TrackReadOutcome::Full {
-                position: self.position(),
-                frames: 0,
-                duration: self.duration(),
-                frames_until_eof: None,
-            };
+        if !self.can_read() {
+            return ReadOutcome::Full { frames: 0 };
         }
         let valid =
             context.is_some_and(|context| context.for_output_range(range.clone()).is_some());
@@ -122,12 +89,7 @@ impl PlayerTrack {
                 range_start = range.start,
                 range_end = range.end
             );
-            return TrackReadOutcome::Full {
-                position: self.position(),
-                frames: 0,
-                duration: self.duration(),
-                frames_until_eof: None,
-            };
+            return ReadOutcome::Full { frames: 0 };
         }
         let limit = if self.fade.is_fading_out() {
             usize::try_from(self.fade.remaining())
@@ -149,10 +111,7 @@ impl PlayerTrack {
         };
         let frames = match outcome {
             ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
-            ReadOutcome::Eof => return TrackReadOutcome::Eof,
-            ReadOutcome::Failed(kind) => {
-                return TrackReadOutcome::Failed(PlaybackFault::Source(kind.into()));
-            }
+            ReadOutcome::Eof | ReadOutcome::Failed(_) => return outcome,
         };
         if frames > 0 {
             self.end_underrun(range.start, recovery_position, true, sink);
@@ -165,34 +124,20 @@ impl PlayerTrack {
         if matches!(outcome, ReadOutcome::Full { .. }) {
             self.record_missing_frames(range.start, frames, limit, sink);
         }
-        match outcome {
-            ReadOutcome::Partial { .. } => TrackReadOutcome::Partial {
-                frames,
-                duration: self.duration(),
-            },
-            ReadOutcome::Full { .. } => TrackReadOutcome::Full {
-                position: self.position(),
-                frames,
-                duration: self.duration(),
-                frames_until_eof: self.resource.frames_until_eof(),
-            },
-            ReadOutcome::Eof | ReadOutcome::Failed(_) => unreachable!(),
-        }
+        outcome
     }
 
     /// Drops the lane frames a session-time dropout missed before any plays;
     /// a debt PCM cannot cover yet keeps the track silent.
-    fn pay_owed(&mut self, budget: &mut usize) -> Option<TrackReadOutcome> {
+    fn pay_owed(&mut self, budget: &mut usize) -> Option<ReadOutcome> {
         let owed = usize::try_from(self.owed()).unwrap_or(usize::MAX);
         if owed == 0 {
             return None;
         }
-        let dropped = match self.resource.discard(owed, budget) {
+        let outcome = self.resource.discard(owed, budget);
+        let dropped = match outcome {
             ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
-            ReadOutcome::Eof => return Some(TrackReadOutcome::Eof),
-            ReadOutcome::Failed(kind) => {
-                return Some(TrackReadOutcome::Failed(PlaybackFault::Source(kind.into())));
-            }
+            ReadOutcome::Eof | ReadOutcome::Failed(_) => return Some(outcome),
         };
         self.paid = self
             .paid
@@ -255,8 +200,8 @@ impl PlayerTrack {
         }
     }
 
-    pub(in crate::rt) fn prepare_offline(&mut self) -> bool {
-        self.state == SlotState::Playing && !self.gate.is_shut() && self.resource.prepare_offline()
+    pub(crate) fn can_read(&self) -> bool {
+        self.state == SlotState::Playing && !self.gate.is_shut()
     }
 
     /// Reads a fading tail; `usize` frame counts fit within `f32`'s finite range.
@@ -264,9 +209,8 @@ impl PlayerTrack {
         &mut self,
         left: &mut [f32],
         right: &mut [f32],
-        _metrics: &RtMetrics,
         budget: &mut usize,
-        wait_for_pcm: bool,
+        read_pcm: ReadPcm,
     ) -> usize {
         let length = left.len().min(right.len());
         if self.state != SlotState::Playing || length == 0 {
@@ -279,14 +223,10 @@ impl PlayerTrack {
                 .to_f32()
                 .expect("prepared output gain fits f32");
         let mut buffers = [&mut left[..length], &mut right[..length]];
-        let written =
-            match self
-                .resource
-                .read_in(None, &mut buffers, 0..length, budget, wait_for_pcm)
-            {
-                ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
-                ReadOutcome::Eof | ReadOutcome::Failed(_) => 0,
-            };
+        let written = match read_pcm(&mut self.resource, None, &mut buffers, 0..length, budget) {
+            ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
+            ReadOutcome::Eof | ReadOutcome::Failed(_) => 0,
+        };
         let mut gains = [0.0; crate::consts::FADE_CHUNK];
         for (block, (left, right)) in left[..written]
             .chunks_mut(crate::consts::FADE_CHUNK)
@@ -314,13 +254,12 @@ impl PlayerTrack {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_platform::time::Duration;
     use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
     use kithara_test_utils::kithara;
 
     use crate::{
-        rt::track::{PcmConsumer, PlayerResource},
-        test_pools::pools,
+        rt::track::PlayerResource,
         worker::{
             PcmPacket,
             packet_tests::{PacketRing, chunk},
@@ -349,12 +288,7 @@ mod tests {
             8_000,
             &[0.5; 2],
         ))));
-        let mut resource = PlayerResource::new(
-            PcmConsumer::new(ring.receiver.take().expect("receiver")),
-            Arc::from("publication"),
-            &pools(),
-        )
-        .expect("resource");
+        let mut resource = PlayerResource::new(Box::new(ring.receiver.take().expect("receiver")));
         resource.refresh_mark(&mut 1);
         let frontier = resource
             .mark(context.output_frames().start)

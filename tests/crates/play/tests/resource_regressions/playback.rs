@@ -32,7 +32,6 @@ async fn stress_offline_crossfade_no_gaps(
 
     let master_scope = CancelScope::new(None);
     let master_cancel = master_scope.token();
-    let worker = play_worker_with_cancel(&region, master_cancel.child());
     let mut player = OfflinePlayer::new(
         HostConfig::offline(region.clone())
             .settings(
@@ -47,44 +46,42 @@ async fn stress_offline_crossfade_no_gaps(
     let media_dir = temp_dir();
     let local_mp3 = media_dir.write("track.mp3", tone_mp3);
 
-    let make_mp3 = |w: PlayWorker<TestPools>, s: AssetStore<TestPools>, cancel: CancelToken| {
+    let make_mp3 = |s: AssetStore<TestPools>, cancel: CancelToken| {
         let p = local_mp3.clone();
         async move {
             ResourceConfig::for_src(ResourceSrc::Path(p))
                 .store(s)
-                .worker(w)
                 .hint("mp3".to_string())
                 .cancel(cancel)
                 .build()
         }
     };
 
-    let make_hls = |w: PlayWorker<TestPools>, s: AssetStore<TestPools>, cancel: CancelToken| {
+    let make_hls = |s: AssetStore<TestPools>, cancel: CancelToken| {
         let u = hls_url.clone();
         async move {
             ResourceConfig::for_src(ResourceSrc::Url(u))
                 .downloader(create_test_downloader())
                 .store(s)
-                .worker(w)
                 .hint("wav")
                 .cancel(cancel)
                 .build()
         }
     };
 
-    let mp3_1 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
+    let mp3_1 = make_mp3(store.clone(), master_cancel.child()).await;
     player.load_config(mp3_1).await;
     let s1a = render_offline_window(&mut player, 40, "MP3 solo", BLOCK, SR).await;
 
-    let hls_1 = make_hls(worker.clone(), store.clone(), master_cancel.child()).await;
+    let hls_1 = make_hls(store.clone(), master_cancel.child()).await;
     player.load_config(hls_1).await;
     let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR).await;
 
-    let mp3_2 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
+    let mp3_2 = make_mp3(store.clone(), master_cancel.child()).await;
     player.load_config(mp3_2).await;
     let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR).await;
 
-    let mp3_3 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
+    let mp3_3 = make_mp3(store.clone(), master_cancel.child()).await;
     player.load_config(mp3_3).await;
     let s3 = render_offline_window(&mut player, 80, "MP3→MP3 fade", BLOCK, SR).await;
 
@@ -94,7 +91,6 @@ async fn stress_offline_crossfade_no_gaps(
     }
 
     master_scope.cancel();
-    drop(worker);
 
     let all = [&s1b, &s2, &s3];
     for s in &all {
@@ -144,10 +140,14 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     let store = asset_store(&temp_dir, true, &region);
     let path = url.as_str();
 
-    let config = resource_config(&url, store, backend, None, play_worker(&region));
-    let mut resource = kithara_integration_tests::mock::open_resource(&config)
-        .await
-        .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));
+    let config = resource_config(&url, store, backend, None);
+    let mut resource = kithara_integration_tests::mock::open_resource(
+        &config,
+        &play_worker(&region),
+        kithara::play::TrackConfig::default(),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));
 
     let duration = resource.duration();
     assert!(
@@ -248,12 +248,15 @@ async fn local_resource_decodes_with_duration(
                     .backend(backend)
                     .build(),
             )
-            .worker(play_worker(&region))
             .build();
 
-    let mut resource = kithara_integration_tests::mock::open_resource(&config)
-        .await
-        .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
+    let mut resource = kithara_integration_tests::mock::open_resource(
+        &config,
+        &play_worker(&region),
+        kithara::play::TrackConfig::default(),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 
     let duration = resource.duration();
     assert!(duration.is_some(), "{url}: duration must be reported");

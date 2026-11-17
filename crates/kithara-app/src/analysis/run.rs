@@ -191,6 +191,7 @@ impl Owner {
             fresh,
             beat = demand.beat(),
             waveform = demand.waveform(),
+            key = demand.key(),
             axis = axis.get(),
             "analysis: pass opened"
         );

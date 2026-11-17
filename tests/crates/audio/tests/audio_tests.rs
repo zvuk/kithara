@@ -11,7 +11,7 @@ use kithara::{
     events::{EventBus, EventReceiver},
     file::{FileConfig, FileSrc},
     platform::time::{self, Duration, Instant},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     signal::{AudioSpec, SegmentId},
 };
 use kithara_integration_tests::{
@@ -81,9 +81,10 @@ async fn test_audio_new(#[case] wav_input: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_input, &worker);
-    let _audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap();
+    let _audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap();
 }
 
 /// The decoder topic opens with the initial `DecoderChanged`.
@@ -104,9 +105,10 @@ async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFil
         .events(bus)
         .build();
 
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap();
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap();
     #[cfg(target_os = "android")]
     let expected_backend = DecoderBackend::Android;
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -163,9 +165,10 @@ async fn test_audio_spec(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_1000, &worker);
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap();
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap();
 
     let spec = audio.spec();
     assert_eq!(spec.sample_rate.get(), 44100);
@@ -177,9 +180,10 @@ async fn test_audio_read(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_1000, &worker);
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap();
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap();
     let audio = kithara_integration_tests::mock::with_blocking_reads(audio);
 
     let (_audio, (total_read, saw_eof)) = blocking_audio(audio, |audio| {
@@ -207,9 +211,10 @@ async fn test_audio_read_small_buffer(#[case] wav_input: NamedTempFile, #[case] 
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_input, &worker);
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap();
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap();
 
     let (_audio, outcome) = blocking_audio(audio, move |audio| {
         let mut buf = vec![0.0f32; buf_len];
@@ -229,9 +234,10 @@ async fn test_audio_seek(wav_44100: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_44100, &worker);
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap();
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap();
 
     let (audio, initial_read) = blocking_audio(audio, |audio| {
         let mut buf = [0.0f32; 256];
@@ -258,9 +264,10 @@ async fn test_audio_playback_progress_uses_output_commit(wav_1024: NamedTempFile
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_1024, &worker);
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap();
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap();
 
     let mut buf = [0.0f32; 256];
     let (audio, read_result) = blocking_audio(audio, move |audio| audio.read(&mut buf)).await;
@@ -279,9 +286,10 @@ async fn test_seek_emits_matching_playback_progress(wav_176400: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_176400, &worker);
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap();
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap();
 
     let (mut audio, seek_result) =
         blocking_audio(audio, |audio| audio.seek(Duration::from_secs_f64(2.5))).await;
@@ -305,9 +313,10 @@ async fn test_seek_complete_emitted_only_after_output_commit(
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let (_cache, config) = test_wav_config(&wav_176400, &worker);
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap();
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap();
 
     let (mut audio, seek_result) =
         blocking_audio(audio, |audio| audio.seek(Duration::from_secs_f64(1.5))).await;

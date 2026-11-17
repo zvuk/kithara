@@ -30,7 +30,7 @@ use kithara::{
         time::Duration,
         tokio::runtime::{Builder, Runtime},
     },
-    play::{PlayWorker, PlayWorkerConfig, SessionDuckingMode},
+    play::{PlayWorker, PlayWorkerConfig, SessionDuckingMode, TrackConfig},
     queue::RepeatMode,
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
@@ -336,9 +336,12 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
                         .hint(("mp3").to_string())
                         .build();
                     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-                    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-                        .await
-                        .unwrap_or_else(|e| panic!("audio init failed: {e}"));
+                    let mut audio = kithara_integration_tests::mock::load_audio(
+                        &worker,
+                        (config, TrackConfig::default()),
+                    )
+                    .await
+                    .unwrap_or_else(|e| panic!("audio init failed: {e}"));
 
                     let mut buf = [0.0_f32; 4_096];
                     let mut total = 0usize;

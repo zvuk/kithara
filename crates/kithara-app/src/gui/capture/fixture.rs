@@ -65,7 +65,10 @@ impl Fixture {
     }
 
     fn on(endpoint: &str) -> bool {
-        endpoint == "deck.eq.three_band"
+        matches!(
+            endpoint,
+            "deck.eq.three_band" | "deck.stream.quality_ready" | "deck.stream.error_hidden"
+        )
     }
 }
 

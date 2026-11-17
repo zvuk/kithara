@@ -33,20 +33,20 @@ pub trait HostedDeck<S>: Send + 'static {
     fn mixer_config(&self) -> DeckMixerConfig;
 
     /// Runs every command the deck's handles posted since the last drain.
-    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>);
+    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>);
 
     /// Takes a receipt or an event of the deck's slots.
-    fn settle(&mut self, receipt: TrackReceipt<'_, S>, pass: DeckPass<'_>, out: &mut Outbox<'_, S>);
+    fn settle(&mut self, receipt: TrackReceipt<'_>, pass: DeckPass<'_>, out: &mut Outbox<'_>);
 
     /// One step of session time.
-    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>);
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>);
 
     /// Stops the deck's tracks and lets their slots go.
     ///
     /// # Errors
     ///
     /// Returns why the release did not go out.
-    fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError>;
+    fn close(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError>;
 
     /// An executor took the deck: `waker` tells it when the deck's handles
     /// post a command.

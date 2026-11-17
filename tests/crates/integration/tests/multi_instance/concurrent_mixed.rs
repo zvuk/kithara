@@ -9,7 +9,7 @@ use kithara::{
         time::Duration,
         tokio::task::{JoinHandle, spawn_blocking},
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
@@ -60,9 +60,10 @@ async fn spawn_file_instance(
         .hint(("mp3").to_string())
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .expect("create File audio");
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .expect("create File audio");
 
     spawn_blocking(move || {
         #[cfg(not(target_arch = "wasm32"))]
@@ -123,9 +124,10 @@ async fn spawn_hls_instance(
         .build();
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .expect("create HLS audio");
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .expect("create HLS audio");
 
     let handle = spawn_blocking(move || {
         #[cfg(not(target_arch = "wasm32"))]

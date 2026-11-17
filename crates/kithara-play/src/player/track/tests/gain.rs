@@ -21,7 +21,7 @@ fn knot(at: i64, value: f64, shape: CurveShape) -> ParameterKnot {
 fn settle_outputs(
     tracks: &mut [Track],
     mixer: &mut mock::MixerRig,
-    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad>>,
     at: SessionFrame,
 ) {
     while let Some(reply) = mixer.ring.receipt() {
@@ -47,7 +47,7 @@ fn settle_outputs(
 
 struct PreparedOutputs {
     mixer: mock::MixerRig,
-    dispatcher: Sender<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    dispatcher: Sender<DispatcherProtocol<ResourceLoad>>,
     tracks: [Track; 2],
     _lanes: [Inbox<LaneProtocol>; 2],
 }
@@ -73,7 +73,7 @@ fn prepared_outputs() -> PreparedOutputs {
                 DeckPart::Attach {
                     slot,
                     item_id: track.item,
-                    pcm: pcm_samples("prepared combined PCM", 1.0, &[sample; 512], true),
+                    pcm: pcm_samples(1.0, &[sample; 512], true),
                     segment: SegmentId::FIRST,
                 },
             )
@@ -314,7 +314,7 @@ fn future_gain_program_cannot_mute_a_reused_attachment() {
             DeckPart::Replace {
                 slot: A,
                 item_id: tracks[0].item,
-                pcm: pcm_samples("replacement PCM", 1.0, &[0.125; 512], true),
+                pcm: pcm_samples(1.0, &[0.125; 512], true),
                 segment: SegmentId::FIRST,
             },
         )
@@ -517,7 +517,7 @@ fn muted_complete_output_stays_muted_in_the_evicted_consumer_tail() {
             DeckPart::Replace {
                 slot: A,
                 item_id: tracks[0].item,
-                pcm: pcm_samples("unmuted replacement", 1.0, &[0.125; 512], true),
+                pcm: pcm_samples(1.0, &[0.125; 512], true),
                 segment: SegmentId::FIRST,
             },
         )

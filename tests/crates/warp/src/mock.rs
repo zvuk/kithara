@@ -295,11 +295,11 @@ fn warp_config(stretch: Option<(StretchKind, f32)>) -> WarpConfig {
 fn audio_config(
     source: BurstSource,
     warp: WarpConfig,
-) -> TrackConfig<BurstStream, NoResamplerBackend> {
+) -> (AudioConfig<BurstStream, NoResamplerBackend>, TrackConfig) {
     let audio = AudioConfig::<BurstStream>::for_stream(Some(source))
         .hint("wav".to_owned())
         .build();
-    TrackConfig::for_audio(audio).warp(warp).build()
+    (audio, TrackConfig::builder().warp(warp).build())
 }
 
 #[hang_watchdog]
@@ -337,8 +337,8 @@ async fn passthrough_player(
         Arc::from(source.as_str()),
         player.worker().clone(),
         NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"),
-        |worker, config, position, start, inbox| {
-            Box::pin(async move { worker.load(config, position, start, inbox).await })
+        |worker, audio, config, position, start, inbox| {
+            Box::pin(async move { worker.load(audio, config, position, start, inbox).await })
         },
     );
     let mut events = player.player().subscribe();

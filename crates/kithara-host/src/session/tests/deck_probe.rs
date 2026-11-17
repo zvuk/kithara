@@ -48,19 +48,13 @@ impl HostedDeck<TestPools> for Probe {
         DeckMixerConfig::default()
     }
 
-    fn settle(
-        &mut self,
-        _receipt: TrackReceipt<'_, TestPools>,
-        _pass: DeckPass<'_>,
-        _out: &mut Outbox<'_, TestPools>,
-    ) {
-    }
+    fn settle(&mut self, _receipt: TrackReceipt<'_>, _pass: DeckPass<'_>, _out: &mut Outbox<'_>) {}
 
-    fn close(&mut self, _out: &mut Outbox<'_, TestPools>) -> Result<(), PlayError> {
+    fn close(&mut self, _out: &mut Outbox<'_>) -> Result<(), PlayError> {
         Ok(())
     }
 
-    fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {
+    fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_>) {
         self.report(Seen::Drained(here()));
     }
 
@@ -72,7 +66,7 @@ impl HostedDeck<TestPools> for Probe {
         self.report(Seen::Released);
     }
 
-    fn tick(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {
+    fn tick(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_>) {
         self.report(Seen::Ticked(here()));
     }
 }

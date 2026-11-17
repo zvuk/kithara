@@ -166,7 +166,7 @@ jobs:
       kind: ${{ inputs.kind }}
       timeout-minutes: ${{ matrix.timeout }}
       history: ${{ matrix.history }}
-      download: ${{ join(matrix.needs, ' ') }}
+      download: ${{ join(matrix.download, '|') }}
       artifact-name: ${{ matrix.artifact.name || '' }}
       artifact-path: ${{ matrix.artifact.path || '' }}
       artifact-when: ${{ matrix.artifact.when || 'always' }}

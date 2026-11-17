@@ -42,9 +42,11 @@ let stage = WarpSource::new(source, renderer, spec, pools, lane);
 
 <tr><td><code>rt::DeckMixer</code></td><td>The deck on the audio thread: takes its command batches at their frames and mixes its tracks, crossfades and declicks between them</td></tr>
 
-<tr><td><code>rt::PlayerNode</code></td><td>The Firewheel node that hosts a deck in the output graph</td></tr>
+<tr><td><code>PlayerNode</code></td><td>The Firewheel node that hosts a deck in the output graph</td></tr>
 
-<tr><td><code>rt::track::PcmConsumer</code></td><td>The half of a load a deck slot reads: the reader, the render it publishes, its playback rate and worker priority</td></tr>
+<tr><td><code>OpenedPcm</code></td><td>The worker's off-RT load result: a PCM receiver, initial track metadata and ABR control</td></tr>
+
+<tr><td><code>rt::track::PlayerResource</code></td><td>Owns the PCM receiver and the deck slot's consumption cursor</td></tr>
 
 <tr><td><code>bridge</code></td><td>The deck's channels, protocol, playback atomics, metrics and EQ control plane shared with the control side</td></tr>
 
@@ -64,8 +66,13 @@ let stage = WarpSource::new(source, renderer, spec, pools, lane);
 ## Integration
 
 `kithara-play` builds one `WarpSource` per loaded track on its worker and
-steps it from the decoder node, and hands each loaded track's `PcmConsumer` to
-its deck. `kithara-host` places each deck's `PlayerNode` in the output graph.
+steps it from the decoder node. It retains metadata and ABR from `OpenedPcm`
+off RT and transfers only the boxed receiver to its deck. The deck initializes
+the consumption cursor in its preallocated slot and returns the receiver with
+any held packet for destruction off RT.
+`PlayWorker::load` takes source/decoder `AudioConfig` and producer `TrackConfig`
+as separate inputs; buffer and Warp geometry require no source configuration.
+`kithara-host` places each deck's `PlayerNode` in the output graph.
 The crate depends on the engine layer (`kithara-audio`, `kithara-effects`,
 `kithara-warp`, `kithara-output`) and on nothing in the player.
 

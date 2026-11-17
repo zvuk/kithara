@@ -13,7 +13,7 @@ use kithara::{
         CancelToken, thread,
         time::{Duration, Instant},
     },
-    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     offline::{OfflinePlayer, WindowStats},
@@ -101,7 +101,6 @@ fn resource_config(
     ResourceConfig::for_src(
         ResourceSrc::parse(url).unwrap_or_else(|e| panic!("ResourceSrc::parse({url}): {e}")),
     )
-    .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
     .downloader(downloader.clone())
     .discriminator(format!("{iter_label}|{url}"))
     .store(store)
