@@ -39,7 +39,6 @@ dashmap = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
-humantime-serde = { workspace = true }
 num-traits = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

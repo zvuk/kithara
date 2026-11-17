@@ -189,7 +189,7 @@ kithara-app = { workspace = true, default-features = false, optional = true }
 kithara-app-library = { workspace = true, optional = true }
 kithara-devtools-trace-format = { workspace = true, optional = true }
 
-keyring-core = { workspace = true, optional = true, features = ["sample"] }
+keyring-core = { workspace = true, optional = true }
 
 # `bungee-sys` fails through `cmake`/MSVC and its build script refuses Android
 # by target triple. Android stretches through Signalsmith, the backend
