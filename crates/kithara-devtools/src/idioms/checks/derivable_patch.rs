@@ -57,7 +57,7 @@ struct PatchVisitor {
 impl<'ast> Visit<'ast> for PatchVisitor {
     fn visit_attribute(&mut self, attribute: &'ast Attribute) {
         const VERBOSE_HUMANTIME: &str =
-            "patch (attribute (serde (with = \"humantime_serde::option\")))";
+            "patch (attribute (serde (with = \"kithara_config::duration::option\")))";
 
         if attribute.meta.to_token_stream().to_string() == VERBOSE_HUMANTIME {
             self.findings.push(attribute.pound_token.span.start().line);
@@ -72,7 +72,7 @@ mod tests {
 
     #[test]
     fn reports_verbose_humantime_attribute() {
-        assert_eq!(check_source("struct C { #[patch(attribute(serde(with = \"humantime_serde::option\")))] timeout: Duration }").len(), 1);
+        assert_eq!(check_source("struct C { #[patch(attribute(serde(with = \"kithara_config::duration::option\")))] timeout: Duration }").len(), 1);
     }
 
     #[test]

@@ -101,11 +101,21 @@ impl Store {
             let written = item
                 .last_modified
                 .with_context(|| format!("{} is listed without a date", item.key))?;
-            let written_s = humantime::parse_rfc3339(&written)
+            ensure!(
+                written.as_bytes().get(10) == Some(&b'T')
+                    && (written.ends_with('Z') || written.ends_with("+00:00")),
+                "{} is listed as written at {written}",
+                item.key
+            );
+            let written_s = u64::try_from(
+                time::OffsetDateTime::parse(
+                    &written,
+                    &time::format_description::well_known::Rfc3339,
+                )
                 .with_context(|| format!("{} is listed as written at {written}", item.key))?
-                .duration_since(std::time::UNIX_EPOCH)
-                .with_context(|| format!("{} was written before 1970", item.key))?
-                .as_secs();
+                .unix_timestamp(),
+            )
+            .with_context(|| format!("{} was written before 1970", item.key))?;
             page.objects.push(Listed {
                 key: item.key,
                 size,

@@ -48,7 +48,7 @@ kithara-test-utils = { workspace = true, features = ["test", "http-server", "tem
 
 async-trait = { workspace = true }
 axum = { workspace = true }
-keyring-core = { workspace = true, features = ["sample"] }
+keyring-core = { workspace = true }
 serde_yaml_ng = { workspace = true }
 unimock = { workspace = true }
 
