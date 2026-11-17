@@ -665,7 +665,7 @@ fn classify<'a>(field: &'a Field, defaults: &[Attribute]) -> Result<Classified<'
             } else if meta.path.is_ident("humantime") {
                 attribute::set(
                     &mut deserialize,
-                    parse_quote!(::humantime_serde::deserialize),
+                    parse_quote!(::kithara_config::duration::option::deserialize),
                 )?;
             } else {
                 return Err(meta.error(
@@ -928,7 +928,10 @@ mod tests {
         };
 
         let expanded = expansion(&input);
-        assert!(expanded.contains(":: humantime_serde :: deserialize (deserializer)"));
+        assert!(
+            expanded
+                .contains(":: kithara_config :: duration :: option :: deserialize (deserializer)")
+        );
     }
 
     #[kithara::test(native, flash(false))]

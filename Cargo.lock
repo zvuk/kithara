@@ -1347,19 +1347,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chrono"
-version = "0.4.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
-dependencies = [
- "iana-time-zone",
- "js-sys",
- "num-traits",
- "wasm-bindgen",
- "windows-link",
-]
-
-[[package]]
 name = "chunked_transfer"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2129,7 +2116,6 @@ dependencies = [
  "lock_api",
  "once_cell",
  "parking_lot_core",
- "serde",
 ]
 
 [[package]]
@@ -3138,6 +3124,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fundu-core"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "358c273f0d54362c071e0d60af2ed872c264697ceccaa8e43b73abc508142830"
+
+[[package]]
 name = "funutd"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3873,22 +3865,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
-name = "humantime"
-version = "2.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"
-
-[[package]]
-name = "humantime-serde"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57a3db5ea5923d99402c94e9feb261dc5ee9b4efa158b0315f788cf549cc200c"
-dependencies = [
- "humantime",
- "serde",
-]
-
-[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3970,30 +3946,6 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
-]
-
-[[package]]
-name = "iana-time-zone"
-version = "0.1.65"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e31bc9ad994ba00e440a8aa5c9ef0ec67d5cb5e5cb0cc7f8b744a35b389cc470"
-dependencies = [
- "android_system_properties",
- "core-foundation-sys",
- "iana-time-zone-haiku",
- "js-sys",
- "log",
- "wasm-bindgen",
- "windows-core 0.62.2",
-]
-
-[[package]]
-name = "iana-time-zone-haiku"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -4556,13 +4508,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fb1e621458ca9c51aa110bd0339d4751a056b9576bf1253aee1aa560dda0fc9d"
 dependencies = [
- "chrono",
- "dashmap",
  "log",
- "regex",
- "ron",
- "serde",
- "uuid",
 ]
 
 [[package]]
@@ -4635,7 +4581,6 @@ dependencies = [
  "delegate",
  "derive_more",
  "fieldwork",
- "humantime-serde",
  "kithara-abr",
  "kithara-config",
  "kithara-derive",
@@ -4883,7 +4828,6 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "hex",
- "humantime-serde",
  "kithara-assets",
  "kithara-bufpool",
  "kithara-config",
@@ -5018,7 +4962,6 @@ dependencies = [
  "bytes",
  "derive-where",
  "hls_m3u8",
- "humantime-serde",
  "kithara-bufpool",
  "kithara-config",
  "kithara-decode",
@@ -5101,9 +5044,12 @@ name = "kithara-config"
 version = "0.0.1-alpha5"
 dependencies = [
  "bon",
+ "fundu-core",
  "kithara-derive",
+ "kithara-platform",
  "kithara-test-utils",
  "serde",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -5182,7 +5128,7 @@ dependencies = [
 name = "kithara-derive"
 version = "0.0.1-alpha5"
 dependencies = [
- "humantime-serde",
+ "kithara-config",
  "kithara-test-dylib",
  "kithara-test-utils",
  "proc-macro2",
@@ -5251,7 +5197,6 @@ dependencies = [
  "delegate",
  "derive_more",
  "futures",
- "humantime-serde",
  "kithara-abr",
  "kithara-android",
  "kithara-config",
@@ -5497,7 +5442,6 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "hotpath",
- "humantime-serde",
  "kithara-abr",
  "kithara-assets",
  "kithara-bufpool",
@@ -5912,7 +5856,6 @@ dependencies = [
  "futures",
  "hotpath",
  "http",
- "humantime-serde",
  "kithara-apple",
  "kithara-bufpool",
  "kithara-config",
@@ -6189,7 +6132,6 @@ dependencies = [
  "firewheel",
  "futures",
  "hotpath",
- "humantime-serde",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -6743,7 +6685,6 @@ dependencies = [
  "delegate",
  "fieldwork",
  "hotpath",
- "humantime-serde",
  "kithara-config",
  "kithara-derive",
  "kithara-platform",
@@ -6779,7 +6720,6 @@ dependencies = [
  "cookie",
  "crc32fast",
  "crossbeam-utils",
- "dashmap",
  "dasp_sample",
  "digest 0.10.7",
  "dispatch2",
@@ -6805,7 +6745,6 @@ dependencies = [
  "itertools 0.13.0",
  "jni",
  "js-sys",
- "keyring-core",
  "libc",
  "linux-raw-sys 0.12.1",
  "log",
@@ -6851,7 +6790,6 @@ dependencies = [
  "tracing-core",
  "typenum",
  "url",
- "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -13323,7 +13261,6 @@ dependencies = [
  "fs4",
  "glob",
  "hex",
- "humantime",
  "kithara-devtools",
  "kithara-test-args",
  "kithara-test-utils",
@@ -13341,6 +13278,7 @@ dependencies = [
  "socket2",
  "syn 3.0.6",
  "tempfile",
+ "time",
  "tiny_http",
  "toml 1.1.7+spec-1.1.0",
  "tracing",
