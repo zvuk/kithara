@@ -27,6 +27,7 @@ export class HostDevice {
       console.debug("KITHARA_BOOTSTRAP audio lock-request");
       await navigator.locks.request("wasm_safe_thread:bootstrap", async () => {
         console.debug("KITHARA_BOOTSTRAP audio lock-enter");
+        if (this.closed) return;
         await this.context.audioWorklet.addModule(url);
         console.debug("KITHARA_BOOTSTRAP audio module-ready");
         if (this.closed) return;

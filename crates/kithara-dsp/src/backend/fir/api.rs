@@ -6,7 +6,7 @@ use fearless_simd::{Level, dispatch};
 #[non_exhaustive]
 pub struct Fir<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTORY: usize>
 {
-    pub(super) taps: [[f32; TAPS]; PHASES],
+    pub(super) taps: [[f32; PHASES]; TAPS],
     pub(super) history: [[f32; HISTORY]; CHANNELS],
     pub(super) shared_peak: [f32; CHANNELS],
     pub(super) shared_valid: [bool; CHANNELS],
@@ -16,11 +16,18 @@ pub struct Fir<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, co
 impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTORY: usize>
     Fir<TAPS, PHASES, CHANNELS, HISTORY>
 {
-    /// Store phase-major coefficients and start every channel at zero history.
+    /// Accept phase-major coefficients and start every channel at zero history.
     #[must_use]
     pub fn new(taps: [[f32; TAPS]; PHASES]) -> Self {
         Self {
-            taps,
+            taps: std::array::from_fn(|tap| {
+                std::array::from_fn(|phase| {
+                    taps.get(phase)
+                        .and_then(|branch| branch.get(tap))
+                        .copied()
+                        .unwrap_or_default()
+                })
+            }),
             history: [[0.0; HISTORY]; CHANNELS],
             shared_peak: [0.0; CHANNELS],
             shared_valid: [false; CHANNELS],

@@ -464,7 +464,7 @@ pub(in crate::defs) fn analysis_file(
         .source_sample_rate(sample_rate)
         .extent(frames)
         .coverage(coverage)
-        .fingerprint(AnalysisFingerprint::new(Some(FINGERPRINT), None))
+        .fingerprint(AnalysisFingerprint::builder().beat(FINGERPRINT).build())
         .settled(true)
         .maybe_waveform(None)
         .maybe_beat(

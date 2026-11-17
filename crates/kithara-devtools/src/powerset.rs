@@ -15,6 +15,9 @@ pub struct PowersetArgs {
     /// Select one complete part of the canonical feature-check plan.
     #[arg(long, value_enum, default_value_t = Part::Full)]
     part: Part,
+    /// Forward the native cargo-hack M/N partition to each invocation.
+    #[arg(long)]
+    partition: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -25,7 +28,7 @@ enum Part {
 }
 
 pub(crate) fn run(args: &PowersetArgs, ctx: &Ctx) -> Result<()> {
-    for command in plan(ctx, args.no_dev_deps, args.part)? {
+    for command in plan(ctx, args.no_dev_deps, args.part, args.partition.as_deref())? {
         let status = Command::new("cargo")
             .args(&command)
             .status()
@@ -44,7 +47,12 @@ pub(crate) fn run(args: &PowersetArgs, ctx: &Ctx) -> Result<()> {
 /// `--at-least-one-of` silently drops combinations from a crate that has none
 /// of the named features — applied workspace-wide it would quietly narrow the
 /// coverage of every other crate.
-fn plan(ctx: &Ctx, no_dev_deps: bool, part: Part) -> Result<Vec<Vec<String>>> {
+fn plan(
+    ctx: &Ctx,
+    no_dev_deps: bool,
+    part: Part,
+    partition: Option<&str>,
+) -> Result<Vec<Vec<String>>> {
     let health = &ctx.config.health;
     let declared = declaring_crates(ctx)?;
 
@@ -80,6 +88,11 @@ fn plan(ctx: &Ctx, no_dev_deps: bool, part: Part) -> Result<Vec<Vec<String>>> {
             args.extend(invariant.args());
         }
         plan.push(args);
+    }
+    if let Some(partition) = partition {
+        for command in &mut plan {
+            command.extend(["--partition".to_owned(), partition.to_owned()]);
+        }
     }
     Ok(match part {
         Part::Full => plan,
@@ -266,9 +279,9 @@ always = ["codec"]
                     command.insert(5, "--no-dev-deps".to_owned());
                 }
             }
-            let full = plan(&ctx, no_dev_deps, Part::Full)?;
-            let workspace = plan(&ctx, no_dev_deps, Part::Workspace)?;
-            let invariants = plan(&ctx, no_dev_deps, Part::Invariants)?;
+            let full = plan(&ctx, no_dev_deps, Part::Full, None)?;
+            let workspace = plan(&ctx, no_dev_deps, Part::Workspace, None)?;
+            let invariants = plan(&ctx, no_dev_deps, Part::Invariants, None)?;
             assert_eq!(full, expected);
             assert_eq!(workspace, full[..1]);
             assert_eq!(invariants, full[1..]);
@@ -285,6 +298,23 @@ always = ["codec"]
     }
 
     #[test]
+    fn native_partition_preserves_every_invocation_and_its_invariants() -> Result<()> {
+        let (_root, ctx) = workspace()?;
+        for part in [Part::Full, Part::Workspace, Part::Invariants] {
+            let full = plan(&ctx, true, part, None)?;
+            for partition in ["1/2", "2/2"] {
+                let selected = plan(&ctx, true, part, Some(partition))?;
+                assert_eq!(selected.len(), full.len());
+                for (command, original) in selected.iter().zip(&full) {
+                    assert_eq!(&command[..command.len() - 2], original);
+                    assert_eq!(&command[command.len() - 2..], ["--partition", partition]);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn omitted_part_preserves_the_complete_health_cli_contract() -> Result<()> {
         #[derive(Parser)]
         struct Cli {
@@ -295,9 +325,14 @@ always = ["codec"]
         let health = Cli::try_parse_from(["powerset"])?;
         assert!(matches!(health.powerset.part, Part::Full));
         assert!(!health.powerset.no_dev_deps);
+        assert!(health.powerset.partition.is_none());
         let dependency = Cli::try_parse_from(["powerset", "--no-dev-deps"])?;
         assert!(matches!(dependency.powerset.part, Part::Full));
         assert!(dependency.powerset.no_dev_deps);
+        let partitioned =
+            Cli::try_parse_from(["powerset", "--part", "invariants", "--partition", "1/2"])?;
+        assert!(matches!(partitioned.powerset.part, Part::Invariants));
+        assert_eq!(partitioned.powerset.partition.as_deref(), Some("1/2"));
         Ok(())
     }
 }

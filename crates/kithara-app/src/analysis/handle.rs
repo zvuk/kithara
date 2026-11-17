@@ -9,7 +9,7 @@ use kithara::{
 };
 use tracing::debug;
 
-use super::TrackArtifacts;
+use super::{TrackArtifacts, TrackFacts};
 use crate::pools::{AppQueueControl, AppTrackSource};
 
 pub(crate) enum Request {
@@ -30,21 +30,21 @@ pub(crate) enum Request {
 #[derive(Clone)]
 pub(crate) struct AnalysisHandle {
     tx: mpsc::Sender<Request>,
-    bpms: watch::Receiver<Arc<BTreeMap<String, f64>>>,
+    facts: watch::Receiver<Arc<BTreeMap<String, TrackFacts>>>,
 }
 
 impl AnalysisHandle {
     const QUEUE_DEPTH: usize = 32;
 
     pub(crate) fn channel(
-        bpms: watch::Receiver<Arc<BTreeMap<String, f64>>>,
+        facts: watch::Receiver<Arc<BTreeMap<String, TrackFacts>>>,
     ) -> (Self, mpsc::Receiver<Request>) {
         let (tx, rx) = mpsc::channel(Self::QUEUE_DEPTH);
-        (Self { tx, bpms }, rx)
+        (Self { tx, facts }, rx)
     }
 
-    pub(crate) fn bpms(&self) -> watch::Ref<'_, Arc<BTreeMap<String, f64>>> {
-        self.bpms.borrow()
+    pub(crate) fn track_facts(&self) -> watch::Ref<'_, Arc<BTreeMap<String, TrackFacts>>> {
+        self.facts.borrow()
     }
 
     pub(crate) async fn subscribe(

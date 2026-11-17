@@ -163,7 +163,7 @@ fn a_started_offline_owner_executes_a_post_in_the_same_drain() {
         .as_ref()
         .is_some_and(|ctx| ctx.is_active() && ctx.stream_info().is_some())
         && state.session_output_node_id.is_some()
-        && !state.stream_needs_restart;
+        && state.output_phase == OutputPhase::Running;
     let (postbox, mut mailbox) = mailbox::<Command, PlayError>();
     let id = BeatGridId::allocate().expect("deck identity");
     let ticket = postbox

@@ -57,6 +57,15 @@ queue.play();
 `should_autoplay(true)` the queue waits for `select` before playing.
 `append_at(source, position)` starts a track at a given position.
 
+`replace_source(current_id, source)` prepares another source for the current
+track, retaining its identity, metadata, position and play/pause state. The
+accepted URL changes when the replacement enters the deck. Preparation failure
+keeps the accepted resource. A seek cancels preparation; during a submitted
+handover it returns `NotReady` until that handover settles.
+
+`next` starts the prepared automatic successor without waiting for track end.
+An accepted manual target remains the cursor for later `next` calls.
+
 ## Key Types
 
 - `Queue` / `QueueConfig` — the deck and its builder: playback order, repeat,

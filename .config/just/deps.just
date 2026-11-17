@@ -42,8 +42,12 @@ hack-workspace:
     just _xtask powerset --no-dev-deps --part workspace
 
 hack-invariants:
-    just _xtask powerset --no-dev-deps --part invariants
+    just deps hack-invariants-part
     just deps _hack-context
+
+[positional-arguments]
+hack-invariants-part *ARGS:
+    just _xtask powerset --no-dev-deps --part invariants "$@"
 
 [private]
 _hack-context:

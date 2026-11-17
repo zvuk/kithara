@@ -2,10 +2,14 @@
 
 use admission::Admission;
 use kithara::platform::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     thread,
     time::{Duration, timeout},
 };
-use kithara_ffi::{player::AudioPlayer, web::bindings};
+use kithara_ffi::{observer::SeekCallback, player::AudioPlayer, web::bindings};
 use kithara_test_utils::wait_until;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -52,11 +56,11 @@ async fn worklet_import_waits_for_worker_bootstrap_admission() {
     let mixer_blocks = player.rt_process_calls_js();
     let started_within_lease = admission.processor_started_within_lease();
     let contexts = admission.audio_contexts();
-    let bootstrap = admission.bootstrap_events();
     // A stuck snapshot query must not hold up reporting a readiness failure.
     let locks = timeout(Duration::from_millis(100), admission.bootstrap_locks()).await;
+    let events = admission.bootstrap_events();
     wasm_bindgen_test::console_log!(
-        "BOOTSTRAP_READY volume={} mixer_blocks={} worklet_imports={} audio_contexts={} bootstrap={bootstrap:?} bootstrap_locks={locks:?} held_bootstrap_locks={held_locks:?}",
+        "BOOTSTRAP_READY volume={} mixer_blocks={} worklet_imports={} audio_contexts={} bootstrap_events={events:?} bootstrap_locks={locks:?} held_bootstrap_locks={held_locks:?}",
         volume,
         mixer_blocks,
         admission.worklet_imports(),
@@ -79,6 +83,40 @@ async fn worklet_import_waits_for_worker_bootstrap_admission() {
         started_within_lease,
         "the worklet processor starts its thread within the bootstrap admission",
     );
+    drop(admission);
+    let mut admission = Admission::hold()
+        .await
+        .expect("hold unrelated worker bootstrap");
+    let completion = Arc::new(Completion(AtomicUsize::new(0)));
+    player.seek(0.0, None, completion.clone());
+    let answered = wait_until(
+        Duration::from_secs(5),
+        "queue answer under held bootstrap",
+        || {
+            player.tick_js();
+            completion.0.load(Ordering::Acquire) != 0
+        },
+    )
+    .await;
+    admission
+        .release()
+        .await
+        .expect("release bootstrap before assertion");
+    answered.expect("an owner reply must not need another worker to bootstrap");
+    assert_eq!(
+        completion.0.load(Ordering::Acquire),
+        2,
+        "the owner confirms the empty queue seek"
+    );
+}
+
+struct Completion(AtomicUsize);
+
+impl SeekCallback for Completion {
+    fn on_complete(&self, finished: bool) {
+        self.0
+            .store(if finished { 2 } else { 1 }, Ordering::Release);
+    }
 }
 
 mod admission {

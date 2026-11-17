@@ -4675,6 +4675,7 @@ dependencies = [
  "kithara-derive",
  "kithara-dsp",
  "kithara-events",
+ "kithara-key",
  "kithara-platform",
  "kithara-resampler",
  "kithara-signal",
@@ -4736,6 +4737,7 @@ dependencies = [
  "clap",
  "delegate",
  "derive_more",
+ "dirs-next",
  "fieldwork",
  "futures",
  "getrandom 0.4.3",
@@ -4788,6 +4790,7 @@ dependencies = [
  "apple-native-keyring-store",
  "dbus-secret-service-keyring-store",
  "derive_more",
+ "fieldwork",
  "keyring-core",
  "kithara-net",
  "kithara-platform",
@@ -4795,6 +4798,7 @@ dependencies = [
  "kithara-ui",
  "kithara-workspace-hack",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "url",
@@ -4807,8 +4811,10 @@ dependencies = [
 name = "kithara-app-tests"
 version = "0.0.1-alpha5"
 dependencies = [
+ "axum",
  "kithara",
  "kithara-app",
+ "kithara-app-library",
  "kithara-command",
  "kithara-integration-tests",
  "kithara-render",
@@ -4840,6 +4846,7 @@ dependencies = [
  "rand 0.10.3",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "unimock",
  "url",
@@ -5819,6 +5826,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-key"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara-blob",
+ "kithara-bufpool",
+ "kithara-dsp",
+ "kithara-signal",
+ "kithara-test-dylib",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "num-traits",
+ "rangemap",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "kithara-link"
 version = "0.0.1-alpha5"
 dependencies = [
@@ -5993,6 +6019,7 @@ dependencies = [
  "kithara-events",
  "kithara-file",
  "kithara-hls",
+ "kithara-key",
  "kithara-net",
  "kithara-platform",
  "kithara-play",
@@ -6457,6 +6484,7 @@ dependencies = [
  "arrayvec",
  "axum",
  "fieldwork",
+ "js-sys",
  "kithara-bufpool",
  "kithara-platform",
  "kithara-test-macros",
@@ -6474,6 +6502,8 @@ dependencies = [
  "unimock",
  "url",
  "usdt",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
 ]
 
 [[package]]

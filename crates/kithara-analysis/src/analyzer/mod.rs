@@ -9,6 +9,7 @@ pub use demand::AnalysisDemand;
 pub(crate) use extent::Extent;
 pub(crate) use session::{Ingest, TrackAnalyzers};
 pub use set::AnalyzerBuilder;
+pub(crate) use set::PassError;
 
 #[cfg(feature = "analysis-beat")]
 pub(crate) use crate::model::detector as default_beat_detector;

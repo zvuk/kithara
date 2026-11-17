@@ -205,6 +205,14 @@ pub(crate) type DeviceBackend = Box<super::native_engine::NativeStream>;
 #[cfg(target_arch = "wasm32")]
 pub(crate) type DeviceBackend = super::web_output::WebOutput;
 
+/// Output intent while a stopped backend may still be returning.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OutputPhase {
+    Idle,
+    Starting,
+    Running,
+}
+
 pub(crate) enum SessionStream<T = DeviceBackend> {
     Realtime {
         _backend: T,
@@ -271,7 +279,7 @@ pub(crate) struct SessionState<T, S> {
     /// Set when the output device is acquired once and cannot be rebuilt, so
     /// an idle session must keep it rather than release it.
     pub(crate) retains_output: bool,
-    pub(crate) stream_needs_restart: bool,
+    pub(crate) output_phase: OutputPhase,
 }
 
 /// Current and retired contexts drop after streams and before other state.
@@ -334,7 +342,7 @@ impl<T, S> SessionState<T, S> {
             session_output_node_id: None,
             session_limiter_node_id: None,
             retains_output: false,
-            stream_needs_restart: false,
+            output_phase: OutputPhase::Idle,
             reserved_session_grid: Some(generation),
             settled: Vec::new(),
             iteration_clock: None,
@@ -460,7 +468,7 @@ fn ensure_stream_ready<T, S>(state: &mut SessionState<T, S>) -> Result<(), Sessi
         return create_firewheel_context(state);
     }
 
-    if state.stream_needs_restart || state.stream.is_none() {
+    if state.output_phase == OutputPhase::Starting || state.stream.is_none() {
         debug!("[KITHARA-ROUTE] ensuring stopped stream is restarted");
         restart_stream(state)?;
     }
@@ -522,7 +530,11 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
         .is_some_and(SessionGraph::output_starting);
     #[cfg(not(target_arch = "wasm32"))]
     let starting = false;
-    state.stream_needs_restart = starting;
+    state.output_phase = if starting {
+        OutputPhase::Starting
+    } else {
+        OutputPhase::Running
+    };
     state.publish_root();
     trace_stream_info(state, "start-stream");
     debug!(sample_rate, "[KITHARA-ROUTE] firewheel context ready");

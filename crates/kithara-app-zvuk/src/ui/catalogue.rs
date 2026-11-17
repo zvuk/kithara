@@ -94,7 +94,7 @@ impl Catalogue {
         self.filter();
     }
 
-    pub(super) fn accept(&mut self, page: TrackPage, streams: Vec<MediaTrack>) {
+    pub(super) fn accept(&mut self, page: TrackPage, streams: Vec<MediaTrack>, adaptive: bool) {
         self.total = page.total;
         let streams: HashMap<_, _> = streams
             .into_iter()
@@ -105,7 +105,7 @@ impl Catalogue {
             .into_iter()
             .map(|track| {
                 let stream = streams.get(&track.id);
-                Row::new(track, stream)
+                Row::new(track, stream, adaptive)
             })
             .collect();
         self.filter();
@@ -117,6 +117,12 @@ impl Catalogue {
             .map(|index| &self.rows[*index])
             .find(|row| row.id.0 == id)
             .map(|row| (row.id.clone(), !row.liked))
+    }
+
+    pub(super) fn set_adaptive(&mut self, adaptive: bool) {
+        for row in &mut self.rows {
+            row.set_adaptive(adaptive);
+        }
     }
 
     pub(super) fn confirm_reaction(&mut self, id: &TrackId, liked: bool) -> bool {

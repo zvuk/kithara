@@ -20,6 +20,10 @@
 # The last four terms are the UI, which owns a graphics-backed pipeline of its
 # own: `[test.lanes.ui]` opts out of this filter with `runner.nextest.ignore_default_filter`
 # and runs exactly that set on the GPU runner.
+# App fixtures include cold native codec initialization in their startup budget.
+[test-groups.macos-app]
+max-threads = 1
+
 [profile.default]
 default-filter = """
 not (
@@ -155,6 +159,21 @@ leak-timeout = { period = "2s", result = "fail" }
 [profile.rtsan.junit]
 path = "junit.xml"
 store-failure-output = true
+
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'package(kithara-app)'
+test-group = 'macos-app'
+
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'package(kithara-app)'
+test-group = 'macos-app'
+
+[[profile.stress.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'package(kithara-app)'
+test-group = 'macos-app'
 
 [[profile.default.overrides]]
 filter = 'binary_id(=kithara-sync-tests::sync) and test(/^sync_product_matrix::queue::/)'

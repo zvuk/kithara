@@ -824,6 +824,7 @@ mod tests {
                 std::num::NonZeroU64::MIN,
                 None,
                 Some(&beat),
+                None,
             )
             .decode()
             .expect("observed source origin round trips");

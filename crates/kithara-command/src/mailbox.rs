@@ -133,6 +133,27 @@ impl<R> Ticket<R> {
             Err(_) => Ok(Err(Refused::Unanswered)),
         }
     }
+
+    /// Awaits an owner reply on WASM without blocking the browser executor.
+    ///
+    /// # Errors
+    /// Returns the ticket intact at `deadline`, the owner's refusal, or
+    /// [`Refused::Unanswered`] when the reply channel closes.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn wait_until_async(self, deadline: Instant) -> Result<Result<(), Refused<R>>, Self> {
+        use kithara_platform::time::timeout;
+
+        match timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            self.answered.recv_async(),
+        )
+        .await
+        {
+            Ok(Ok(answer)) => Ok(answer.map_err(Refused::Owner)),
+            Ok(Err(_)) => Ok(Err(Refused::Unanswered)),
+            Err(_) => Err(self),
+        }
+    }
 }
 
 /// One command an owner drained, with the answer its poster waits for.
@@ -204,6 +225,56 @@ mod tests {
 
     use super::{PostError, Refused, mailbox};
     use crate::wakes::waker;
+
+    #[cfg(target_arch = "wasm32")]
+    #[kithara::test(wasm, flash(false))]
+    async fn async_tickets_preserve_pending_deadlines_and_owner_outcomes() {
+        use std::{pin::pin, task::Poll};
+
+        use kithara_platform::time::{Duration, Instant};
+
+        for outcome in [Ok(()), Err("refused")] {
+            let (postbox, mut mailbox) = mailbox::<(), &str>();
+            let ticket = postbox.post(()).unwrap();
+            let waiting = ticket.wait_until_async(Instant::now() + Duration::from_secs(1));
+            let mut waiting = pin!(waiting);
+            assert!(matches!(futures::poll!(waiting.as_mut()), Poll::Pending));
+            mailbox.drain().next().unwrap().answer.answer(outcome);
+            assert_eq!(waiting.await.ok(), Some(outcome.map_err(Refused::Owner)));
+        }
+
+        let (postbox, mut mailbox) = mailbox::<(), &str>();
+        let ticket = postbox.post(()).unwrap();
+        let seq = ticket.seq();
+        let pending = match ticket.wait_until_async(Instant::now()).await {
+            Err(pending) => pending,
+            Ok(_) => panic!("an unanswered ticket must reach its deadline"),
+        };
+        assert_eq!(pending.seq(), seq);
+        mailbox.drain().next().unwrap().answer.answer(Ok(()));
+        assert_eq!(
+            pending.wait_until_async(Instant::now()).await.ok(),
+            Some(Ok(()))
+        );
+
+        let ticket = postbox.post(()).unwrap();
+        drop(mailbox.drain().next().unwrap().answer);
+        assert_eq!(
+            ticket.wait_until_async(Instant::now()).await.ok(),
+            Some(Err(Refused::Unanswered))
+        );
+
+        let ticket = postbox.post(()).unwrap();
+        let mut waiting =
+            Box::pin(ticket.wait_until_async(Instant::now() + Duration::from_secs(1)));
+        assert!(matches!(futures::poll!(waiting.as_mut()), Poll::Pending));
+        drop(waiting);
+        assert_eq!(
+            mailbox.drain().count(),
+            1,
+            "canceling a wait keeps its post"
+        );
+    }
 
     #[kithara::test]
     fn is_empty_tracks_posts_without_taking_them() {

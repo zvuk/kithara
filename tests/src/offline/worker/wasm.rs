@@ -1,4 +1,4 @@
-use futures::future::LocalBoxFuture;
+use futures::{channel::oneshot, future::LocalBoxFuture};
 use kithara::platform::{
     sync::mpsc::{Receiver, Sender, channel},
     thread::{keep_worker_alive, spawn_named},
@@ -19,17 +19,20 @@ pub struct OfflineWorker {
 type Command = Box<dyn for<'a> FnOnce(&'a OfflinePlayer) -> LocalBoxFuture<'a, ()> + Send>;
 
 impl OfflineWorker {
-    /// Build the offline player on a Web Worker that then serves commands until
-    /// this owner drops.
+    /// Build the player on a Web Worker before returning its command endpoint.
     pub async fn new<F>(build: F) -> Self
     where
         F: AsyncFnOnce() -> OfflinePlayer + Send + 'static,
     {
         let (commands, rx) = channel::<Command>();
+        let (ready, initialized) = oneshot::channel();
         spawn_named("offline-harness", move || {
             keep_worker_alive();
-            task::spawn(serve(rx, build));
+            task::spawn(serve(rx, ready, build));
         });
+        initialized
+            .await
+            .expect("offline harness Worker builds its player");
         Self { commands }
     }
 
@@ -65,11 +68,14 @@ impl OfflineWorker {
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
-async fn serve<F>(rx: Receiver<Command>, build: F)
+async fn serve<F>(rx: Receiver<Command>, ready: oneshot::Sender<()>, build: F)
 where
     F: AsyncFnOnce() -> OfflinePlayer + Send + 'static,
 {
     let player = build().await;
+    if ready.send(()).is_err() {
+        return;
+    }
     while let Ok(command) = rx.recv_async().await {
         hang_reset!();
         hang_tick!("offline Worker applies an accepted command".to_owned());
