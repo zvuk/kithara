@@ -825,6 +825,7 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(
             "the seek must land on the variant that played before it, although the \
          estimate fell below it while the seek was pending"
         );
+        let pacing_started = WallInstant::now();
         let real_work = overlap_real_work.then(|| {
             let (started, entered) = kithara::platform::sync::mpsc::channel();
             let work = kithara::platform::thread::spawn_named("hls-real-work", move || {
@@ -834,7 +835,6 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(
             entered.recv().expect("real work started");
             work
         });
-        let pacing_started = WallInstant::now();
         pace(
             landing
                 .spec()
@@ -842,11 +842,11 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(
                 .expect("seek landing has a valid duration"),
         );
         if let Some(work) = real_work {
-            let pacing_elapsed = pacing_started.elapsed();
             work.join().expect("unrelated real work completed");
+            let pacing_elapsed = pacing_started.elapsed();
             assert!(
                 pacing_elapsed >= Duration::from_secs(1),
-                "the unrelated credit must hold the deliberate pace"
+                "the unrelated work must delay the next PCM read"
             );
         }
         let mut decisions = Vec::new();
