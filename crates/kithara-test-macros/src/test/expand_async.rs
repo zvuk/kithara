@@ -6,10 +6,11 @@ use syn::{Attribute, Ident};
 use super::{
     fixture_args::Preamble,
     shared::{
-        finalize_body, make_ambient_stmt, make_clock_measurement_stmt,
+        expects_panic, finalize_body, make_ambient_stmt, make_clock_measurement_stmt,
         make_dedicated_worker_config, make_hang_budget, make_hard_timeout_watchdog,
         make_runtime_builder, make_selenium_attrs, make_serial_attr, make_test_setup,
-        make_wasm_serial_guard, wrap_with_model, wrap_with_soft_fail, wrap_with_timeout,
+        make_wasm_serial_guard, native_sync_keeps_body_return, wrap_with_model,
+        wrap_with_soft_fail, wrap_with_timeout,
     },
 };
 
@@ -214,7 +215,7 @@ pub(crate) fn emit_browser_test(
         #ambient
         #(#body_stmts)*
     };
-    let wasm_with_timeout = wrap_with_timeout(&wasm_body, args, true, fn_name);
+    let wasm_with_timeout = wrap_with_timeout(&wasm_body, args, true, fn_name, ret_type, false);
     let wasm_wrapped = finalize_body(&wasm_with_timeout, args, fn_name, true);
     let wasm_serial_guard = make_wasm_serial_guard(args);
     output.extend(quote! {
@@ -248,14 +249,27 @@ pub(crate) fn emit_browser_test(
             let sync_body =
                 super::shared::wrap_with_sync_participation(&quote! { #(#body_stmts)* }, args);
             let native_body_held = quote! { #test_setup #scoped #bindings #ambient #sync_body };
-            let native_with_timeout = wrap_with_timeout(&native_body_held, args, false, fn_name);
+            let should_panic = expects_panic(remaining_attrs);
+            let native_with_timeout = wrap_with_timeout(
+                &native_body_held,
+                args,
+                false,
+                fn_name,
+                ret_type,
+                should_panic,
+            );
             let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, false);
+            let native_ret = if native_sync_keeps_body_return(args, should_panic) {
+                quote! { #ret_type }
+            } else {
+                quote! { -> ::std::process::ExitCode }
+            };
             output.extend(quote! {
                 #(#remaining_attrs)*
                 #serial_attr
                 #[cfg(not(target_arch = "wasm32"))]
                 #[test]
-                #vis fn #fn_name() #ret_type #native_wrapped
+                #vis fn #fn_name() #native_ret #native_wrapped
             });
         }
     }

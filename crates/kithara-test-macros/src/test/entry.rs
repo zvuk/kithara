@@ -16,8 +16,7 @@ use super::{
     fixture_args::{ParamInfo, extract_params, make_preamble},
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_serial_attr,
-        make_sync_test_attrs, make_test_setup, make_wasm_serial_guard,
-        wrap_with_sync_participation, wrap_with_timeout,
+        make_test_setup, make_wasm_serial_guard, wrap_with_sync_participation, wrap_with_timeout,
     },
 };
 
@@ -123,7 +122,7 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
         let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
         let full = quote! { { #test_setup #scoped #preamble #ambient #(#body_stmts)* } };
-        let with_timeout = wrap_with_timeout(&full, ctx.args, true, name);
+        let with_timeout = wrap_with_timeout(&full, ctx.args, true, name, ctx.ret_type, false);
         let wrapped = finalize_body(&with_timeout, ctx.args, name, true);
         let serial_guard = make_wasm_serial_guard(ctx.args);
         let remaining_attrs = ctx.remaining_attrs;
@@ -237,7 +236,6 @@ fn generate_browser(ctx: &GenCtx<'_>) -> TokenStream2 {
 
 /// Default branch: sync native + WASM, or single-platform when async. One test per case.
 fn generate_default(ctx: &GenCtx<'_>) -> TokenStream2 {
-    let test_attrs = make_sync_test_attrs();
     let mut tests = TokenStream2::new();
 
     let mut emit = |name: &Ident, case_values: Option<&[Expr]>| {
@@ -247,7 +245,6 @@ fn generate_default(ctx: &GenCtx<'_>) -> TokenStream2 {
             ctx.vis,
             ctx.ret_type,
             ctx.remaining_attrs,
-            &test_attrs,
             ctx.is_async,
             &preamble,
             ctx.body_stmts,

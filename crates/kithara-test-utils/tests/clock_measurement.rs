@@ -24,6 +24,11 @@ fn sync_timeout() {
     platform::thread::sleep(STEP);
 }
 
+#[kithara::test(native)]
+fn sync_timeout_accepts_a_non_send_error() -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+
 #[kithara::test(native, browser)]
 fn browser_native_sync() {
     platform::thread::sleep(STEP);

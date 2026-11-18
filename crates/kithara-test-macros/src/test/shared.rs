@@ -6,7 +6,7 @@
 use kithara_test_args::{TestArgs, TestFlags};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Attribute, Ident, ext::IdentExt as _};
+use syn::{Attribute, Ident, ReturnType, ext::IdentExt as _};
 
 pub(crate) fn make_serial_attr(args: &TestArgs) -> TokenStream2 {
     if args.flags().contains(TestFlags::SERIAL) {
@@ -33,16 +33,6 @@ pub(crate) fn make_wasm_serial_guard(args: &TestArgs) -> TokenStream2 {
     } else {
         quote! {}
     }
-}
-
-/// Test attributes for **sync** tests only (dual-platform: native `#[test]` + WASM).
-///
-/// Async tests are handled separately via `emit_async_runtime_test` /
-/// `emit_async_timeout_test` which create a manual tokio runtime on native.
-pub(crate) fn make_sync_test_attrs() -> TokenStream2 {
-    let native = quote! { #[cfg_attr(not(target_arch = "wasm32"), test)] };
-    let wasm = quote! { #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)] };
-    quote! { #native #wasm }
 }
 
 /// Generate the tokio runtime builder expression.
@@ -164,13 +154,23 @@ pub(crate) fn make_test_setup(args: &TestArgs, remaining_attrs: &[&Attribute]) -
 /// Token-level matching keeps the `cfg_attr` form covered without evaluating
 /// its condition: suppressing on a platform where the attribute is inactive
 /// only skips a dump for a test that then does not panic.
-fn expects_panic(remaining_attrs: &[&Attribute]) -> bool {
+pub(crate) fn expects_panic(remaining_attrs: &[&Attribute]) -> bool {
     use quote::ToTokens as _;
     remaining_attrs.iter().any(|attr| {
         attr.path().is_ident("should_panic")
             || (attr.path().is_ident("cfg_attr")
                 && attr.to_token_stream().to_string().contains("should_panic"))
     })
+}
+
+/// Whether a native sync entry keeps the body's own return type instead of
+/// returning `ExitCode`.
+///
+/// `#[serial]` entries must: `serial_test` rewraps the entry and accepts only
+/// `()` or `Result<..>`, never `ExitCode`. `#[should_panic]` entries must
+/// return `()` per the standard test harness.
+pub(crate) fn native_sync_keeps_body_return(args: &TestArgs, should_panic: bool) -> bool {
+    args.flags().contains(TestFlags::SERIAL) || should_panic
 }
 
 pub(crate) fn make_prekill_guard(fn_name: &Ident) -> TokenStream2 {
@@ -228,6 +228,8 @@ pub(crate) fn wrap_with_timeout(
     args: &TestArgs,
     is_async: bool,
     fn_name: &Ident,
+    ret_type: &ReturnType,
+    should_panic: bool,
 ) -> TokenStream2 {
     let fn_name_str = fn_name.to_string();
     let dur = super::timeout::resolve(args);
@@ -257,6 +259,23 @@ pub(crate) fn wrap_with_timeout(
             }
         }
     } else {
+        let ret_ty = match ret_type {
+            ReturnType::Default => quote! { () },
+            ReturnType::Type(_, ty) => quote! { #ty },
+        };
+        // `#[should_panic]` forces the native entry to return `()` (std
+        // rejects any other return type), so the worker forwards the body's
+        // `()` directly. `#[serial]` keeps the body's return type because
+        // `serial_test` rewraps the entry and rejects `ExitCode`. Otherwise
+        // the worker converts the body result to an `ExitCode` via
+        // `Termination::report`, which needs only `Debug` on the error type
+        // — not `Send` — so a non-`Send` error can cross the thread boundary
+        // safely.
+        let report = if native_sync_keeps_body_return(args, should_panic) {
+            quote! { __result }
+        } else {
+            quote! { ::std::process::Termination::report(__result) }
+        };
         quote! {
             {
                 #prekill_guard
@@ -272,13 +291,23 @@ pub(crate) fn wrap_with_timeout(
                     }
                     let handle = __thread_builder
                         .spawn(move || {
-                            tx.send(({ __body })()).ok();
+                            let __outcome = ::std::panic::catch_unwind(
+                                ::std::panic::AssertUnwindSafe(|| {
+                                    let __result: #ret_ty = ({ __body })();
+                                    #report
+                                }),
+                            );
+                            let _ = tx.send(__outcome);
                         })
                         .expect("kithara sync test thread");
                     match rx.recv_timeout(__timeout_dur) {
-                        Ok(v) => {
+                        Ok(Ok(__code)) => {
                             handle.join().ok();
-                            v
+                            __code
+                        }
+                        Ok(Err(__payload)) => {
+                            handle.join().ok();
+                            ::std::panic::resume_unwind(__payload)
                         }
                         Err(::std::sync::mpsc::RecvTimeoutError::Timeout) => {
                             let __timeout_diagnostic = format!(
@@ -455,7 +484,7 @@ pub(crate) fn finalize_body(
 mod tests {
     use kithara_test_args::TestArgs;
     use quote::quote;
-    use syn::{Ident, Stmt, parse_quote};
+    use syn::{Ident, ReturnType, Stmt, parse_quote};
 
     use super::{make_clock_measurement_stmt, wrap_with_timeout};
 
@@ -475,8 +504,15 @@ mod tests {
     fn default_timeout_native_body_installs_prekill_guard() {
         let name: Ident = parse_quote!(stress_case);
 
-        let expanded =
-            wrap_with_timeout(&quote!({}), &TestArgs::default(), false, &name).to_string();
+        let expanded = wrap_with_timeout(
+            &quote!({}),
+            &TestArgs::default(),
+            false,
+            &name,
+            &ReturnType::Default,
+            false,
+        )
+        .to_string();
 
         assert!(expanded.contains("PreKillGuard"));
         assert!(expanded.contains("stress_case"));
@@ -488,7 +524,15 @@ mod tests {
         let mut args = TestArgs::default();
         args.set_timeout(Some(parse_quote!(::std::time::Duration::from_secs(5))));
 
-        let expanded = wrap_with_timeout(&quote!({}), &args, false, &name).to_string();
+        let expanded = wrap_with_timeout(
+            &quote!({}),
+            &args,
+            false,
+            &name,
+            &ReturnType::Default,
+            false,
+        )
+        .to_string();
 
         assert!(expanded.contains("record_test_hang"));
         assert!(expanded.contains("sync-timeout"));
@@ -501,7 +545,9 @@ mod tests {
         let mut args = TestArgs::default();
         args.set_timeout(Some(parse_quote!(::std::time::Duration::from_secs(5))));
 
-        let expanded = wrap_with_timeout(&quote!({}), &args, true, &name).to_string();
+        let expanded =
+            wrap_with_timeout(&quote!({}), &args, true, &name, &ReturnType::Default, false)
+                .to_string();
 
         assert!(expanded.contains("record_test_hang"));
         assert!(expanded.contains("wall-timeout"));
