@@ -1,6 +1,6 @@
 use std::path::Path;
 
-// Limit network traces to the FFI fixture binaries that stall at page load.
+// Limit network traces to the stall fixtures: the worklet-import pair and one lib-test representative.
 pub(crate) fn perf_logging_target(args: &[String]) -> bool {
     args.iter().any(|arg| {
         let name = Path::new(arg)
@@ -11,7 +11,7 @@ pub(crate) fn perf_logging_target(args: &[String]) -> bool {
             Some(name)
                 if (name.starts_with("web_bootstrap-")
                     || name.starts_with("web_analysis-")
-                    || name.starts_with("kithara_host-"))
+                    || name.starts_with("kithara_ffi-"))
                     && name.ends_with(".wasm")
         )
     })
@@ -72,11 +72,14 @@ mod tests {
         for binary in [
             "/cache/deps/web_bootstrap-8f845460d7dd326c.wasm",
             "/cache/deps/web_analysis-3b2b9b5370fa3bf7.wasm",
-            "/cache/deps/kithara_host-aa09f0f5e0f4e800.wasm",
+            "/cache/deps/kithara_ffi-9c2b1f7e4d8a3c5b.wasm",
         ] {
             assert!(perf_logging_target(&[binary.to_string()]));
         }
-        for other in ["/cache/deps/web_observer-fc399469e0e06114.wasm"] {
+        for other in [
+            "/cache/deps/kithara_host-aa09f0f5e0f4e800.wasm",
+            "/cache/deps/web_observer-fc399469e0e06114.wasm",
+        ] {
             assert!(!perf_logging_target(&[other.to_string()]));
         }
     }
