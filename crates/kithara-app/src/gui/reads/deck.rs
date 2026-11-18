@@ -14,10 +14,7 @@ use super::value::{Value, impl_child_node};
 use crate::{
     deck::{EqMode, TempoPercent},
     engine::DeckSnapshot,
-    gui::{
-        deck::consts::TEMPO_RANGE,
-        ui::cache::{DeckCache, pitch_shift},
-    },
+    gui::{deck::consts::TEMPO_RANGE, ui::cache::DeckCache},
     state::AbrVariant,
 };
 
@@ -197,10 +194,12 @@ struct KeyNode<'a> {
 
 impl KeyNode<'_> {
     fn sounding(&self) -> Option<MusicalKey> {
-        self.shown
-            .analysis
-            .key
-            .map(|key| key.transposed(pitch_shift(self.shown.pitch)))
+        self.shown.analysis.key.map(|key| {
+            let speed = f64::from(self.shown.speed);
+            let factor = self.shown.pitch.map_or(speed, |pitch| pitch.factor(speed));
+            let shift = (12.0 * factor.log2()).round().rem_euclid(12.0).as_();
+            key.transposed(shift)
+        })
     }
 }
 

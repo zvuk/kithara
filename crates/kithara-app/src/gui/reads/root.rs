@@ -115,7 +115,10 @@ mod tests {
         platform::{time::Duration, tokio::runtime::Handle},
         play::Pitch,
         prelude::TrackMetadata,
-        ui::render::{ReadValue, Reads, TableCell, Walk},
+        ui::{
+            render::{ReadValue, Reads, TableCell, Walk},
+            skin::ColorRole,
+        },
         warp::Semitones,
     };
     use iced::Size;
@@ -743,6 +746,56 @@ mod tests {
         );
     }
 
+    #[kithara::test]
+    fn sounding_key_follows_effective_pitch() {
+        let fixture = Fixture::new(["+0.0%", "+0.0%"]);
+        for (speed_shift, pitch, expected, color) in [
+            (1.0_f32, Some(Pitch::default()), "8d", ColorRole::Key8d),
+            (-1.0, Some(Pitch::default()), "6d", ColorRole::Key6d),
+            (1.0, Some(Pitch::HELD), "1d", ColorRole::Key1d),
+            (0.49, Some(Pitch::default()), "1d", ColorRole::Key1d),
+            (0.51, Some(Pitch::default()), "8d", ColorRole::Key8d),
+            (1.0, None, "8d", ColorRole::Key8d),
+            (0.0, None, "1d", ColorRole::Key1d),
+            (144.0, Some(Pitch::default()), "1d", ColorRole::Key1d),
+            (
+                1.0,
+                Some(Pitch::Vinyl {
+                    shift: Semitones::DEFAULT.step_up(),
+                }),
+                "3d",
+                ColorRole::Key3d,
+            ),
+        ] {
+            let mut shown = fixture.shown();
+            shown.decks[0].analysis.key = Some(MusicalKey {
+                tonic: PitchClass::C,
+                mode: Mode::Major,
+            });
+            shown.decks[0].pitch = pitch;
+            shown.decks[0].speed = (speed_shift / 12.0).exp2();
+            let root = fixture.root(&shown);
+            let walk = Walk::new(&root);
+
+            assert_eq!(
+                walk.get("deck.key.sounding@deck=a"),
+                Some(ReadValue::Text(expected))
+            );
+            assert_eq!(
+                walk.get("deck.key.color@deck=a"),
+                Some(ReadValue::Color(color))
+            );
+            assert_eq!(
+                walk.get("deck.track.key@deck=a"),
+                Some(ReadValue::Text("1d"))
+            );
+            assert_eq!(
+                walk.get("deck.track.key_color@deck=a"),
+                Some(ReadValue::Color(ColorRole::Key1d))
+            );
+        }
+    }
+
     #[kithara::test(native, tokio)]
     async fn strip_keeps_track_key_chip_sounds_transposed_library_stays_source() {
         let a_minor = MusicalKey {
@@ -811,8 +864,8 @@ mod tests {
         );
         assert_eq!(
             Walk::new(&fixture.root(&unlocked)).get("deck.key.sounding@deck=a"),
-            Some(ReadValue::Text("1m")),
-            "+8% tempo with KEY LOCK off leaves the sounding key alone"
+            Some(ReadValue::Text("8m")),
+            "+8% tempo with KEY LOCK off rounds the sounding key up one semitone"
         );
 
         fixture.decks[0].0.set_analysis(Some(artefacts(c_major)));
