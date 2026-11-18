@@ -5,7 +5,7 @@ use kithara_apple::foundation::{
         NSInteger, NSOperationQueue, NSUInteger, NSURLSession, NSURLSessionConfiguration,
         NSURLSessionDataTask, NSURLSessionTask,
     },
-    objc::rc::Retained,
+    objc::rc::{Retained, autoreleasepool},
     urlsession::{self, UrlSessionDelegate},
 };
 use kithara_bufpool::{HasPool, PoolRegion};
@@ -80,33 +80,35 @@ impl AppleSession {
         let (head_sender, head_receiver) = oneshot::channel();
         let accept_encoding = request.accept_encoding();
         let request = request.into_ns_request(&self.accept_encoding)?;
-        let data_task = self.shared.session.dataTaskWithRequest(&request);
-        let task: AppleTask = data_task.into();
-        let body_queue = Arc::new(AppleBodyQueue::new(
-            task.clone(),
-            self.body_queue_capacity,
-            self.body_queue_resume_at,
-            self.buffers.clone(),
-        ));
-        let task_id = task.id();
-        self.shared
-            .events
-            .register_metrics(task_id, self.connection_metrics.clone());
-        self.shared.events.register_stream(
-            task_id,
-            StreamState {
-                accept_encoding,
-                body_queue: Some(Arc::clone(&body_queue)),
-                head_sender: Some(head_sender),
-            },
-        );
-        task.resume();
+        autoreleasepool(move |_| {
+            let data_task = self.shared.session.dataTaskWithRequest(&request);
+            let task: AppleTask = data_task.into();
+            let body_queue = Arc::new(AppleBodyQueue::new(
+                task.clone(),
+                self.body_queue_capacity,
+                self.body_queue_resume_at,
+                self.buffers.clone(),
+            ));
+            let task_id = task.id();
+            self.shared
+                .events
+                .register_metrics(task_id, self.connection_metrics.clone());
+            self.shared.events.register_stream(
+                task_id,
+                StreamState {
+                    accept_encoding,
+                    body_queue: Some(Arc::clone(&body_queue)),
+                    head_sender: Some(head_sender),
+                },
+            );
+            task.resume();
 
-        Ok(StartedStream {
-            task,
-            body_queue,
-            head_receiver,
-            task_id,
+            Ok(StartedStream {
+                task,
+                body_queue,
+                head_receiver,
+                task_id,
+            })
         })
     }
 
@@ -126,25 +128,27 @@ impl AppleSession {
 
 impl SharedSession {
     fn new(key: SharedSessionKey) -> Self {
-        let events = AppleSessionEvents::new(key.is_insecure);
-        let delegate = make_delegate(&events);
-        let configuration = NSURLSessionConfiguration::ephemeralSessionConfiguration();
-        if let Ok(max_connections) = NSInteger::try_from(key.max_connections_per_host)
-            && max_connections > 0
-        {
-            configuration.setHTTPMaximumConnectionsPerHost(max_connections);
-        }
+        autoreleasepool(|_| {
+            let events = AppleSessionEvents::new(key.is_insecure);
+            let delegate = make_delegate(&events);
+            let configuration = NSURLSessionConfiguration::ephemeralSessionConfiguration();
+            if let Ok(max_connections) = NSInteger::try_from(key.max_connections_per_host)
+                && max_connections > 0
+            {
+                configuration.setHTTPMaximumConnectionsPerHost(max_connections);
+            }
 
-        let queue = NSOperationQueue::new();
-        queue.setMaxConcurrentOperationCount(1);
-        let session = urlsession::session_with_delegate(&configuration, &delegate, &queue);
+            let queue = NSOperationQueue::new();
+            queue.setMaxConcurrentOperationCount(1);
+            let session = urlsession::session_with_delegate(&configuration, &delegate, &queue);
 
-        Self {
-            events,
-            session,
-            key,
-            _delegate: delegate,
-        }
+            Self {
+                events,
+                session,
+                key,
+                _delegate: delegate,
+            }
+        })
     }
 }
 

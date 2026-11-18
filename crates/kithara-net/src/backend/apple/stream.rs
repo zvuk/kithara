@@ -361,7 +361,7 @@ impl Drop for StreamStartGuard {
 pub(super) mod tests {
     use kithara_apple::foundation::{
         ns::{NSURLSession, NSURLSessionDataTask},
-        objc::rc::Retained,
+        objc::rc::{Retained, autoreleasepool},
     };
     use kithara_test_utils::{cancel_token, kithara};
     use url::Url;
@@ -386,7 +386,7 @@ pub(super) mod tests {
         .expect("Apple request")
         .into_ns_request("identity")
         .expect("native request");
-        NSURLSession::sharedSession().dataTaskWithRequest(&request)
+        autoreleasepool(move |_| NSURLSession::sharedSession().dataTaskWithRequest(&request))
     }
 
     #[kithara::test(native, flash(false))]
