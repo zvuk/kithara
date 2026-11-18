@@ -389,7 +389,7 @@ pub(super) mod tests {
         autoreleasepool(move |_| NSURLSession::sharedSession().dataTaskWithRequest(&request))
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     #[case::empty_complete(Some(0), 0, false)]
     #[case::finite_complete(Some(4), 4, false)]
     #[case::finite_incomplete(Some(4), 2, true)]
