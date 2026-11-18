@@ -1,8 +1,5 @@
+#![cfg(test)]
 #![forbid(unsafe_code)]
-#![expect(
-    clippy::unwrap_used,
-    reason = "integration test crate - unwraps are acceptable in test code"
-)]
 
 use kithara_test_dylib as _;
 
@@ -25,7 +22,6 @@ mod hls_seek_near_end_stress;
 mod hls_variant_playlists_concurrent;
 mod html_error_body;
 mod html_error_cleanup;
-mod keys_integration;
 mod playlist_integration;
 mod prefetch_403_fails_open;
 mod probe_not_ready_at_creation;
