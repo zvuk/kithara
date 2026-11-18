@@ -122,14 +122,7 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
         let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
         let full = quote! { { #test_setup #scoped #preamble #ambient #(#body_stmts)* } };
-        let with_timeout = wrap_with_timeout(
-            &full,
-            ctx.args,
-            true,
-            name,
-            ctx.ret_type,
-            &ReturnType::Default,
-        );
+        let with_timeout = wrap_with_timeout(&full, ctx.args, true, name, ctx.ret_type);
         let wrapped = finalize_body(&with_timeout, ctx.args, name, true);
         let serial_guard = make_wasm_serial_guard(ctx.args);
         let remaining_attrs = ctx.remaining_attrs;
@@ -275,73 +268,6 @@ mod tests {
     use syn::visit_mut::{self, VisitMut};
 
     use super::{TestArgs, emitted_name, generate};
-
-    #[test]
-    fn native_sync_entry_keeps_the_harness_return_shape() -> syn::Result<()> {
-        use syn::Item;
-        // The native sync entry keeps the user's own return type so the
-        // standard harness rejects `Result` + `#[should_panic]` (including
-        // the active `cfg_attr` form) and accepts an inactive
-        // `cfg_attr(any(), should_panic)` as a normal test. `soft_fail` uses
-        // `ExitCode` so a body failure stays a value, not a panic.
-        for (attrs, source, expect) in [
-            ("native", "fn contract() {}", ReturnExpect::Unit),
-            (
-                "native",
-                "fn contract() -> Result<(), Box<dyn std::error::Error>> { Ok(()) }",
-                ReturnExpect::Result,
-            ),
-            (
-                "native",
-                "#[should_panic] fn contract() -> Result<(), Box<dyn std::error::Error>> { Ok(()) }",
-                ReturnExpect::Result,
-            ),
-            (
-                "native",
-                "#[cfg_attr(any(), should_panic)] fn contract() -> Result<(), Box<dyn std::error::Error>> { Ok(()) }",
-                ReturnExpect::Result,
-            ),
-            (
-                "native, soft_fail(\"x\")",
-                "fn contract() -> Result<(), Box<dyn std::error::Error>> { Ok(()) }",
-                ReturnExpect::ExitCode,
-            ),
-        ] {
-            let expanded = generate(syn::parse_str(attrs)?, syn::parse_str(source)?)?;
-            let file = syn::parse2::<syn::File>(expanded.clone())?;
-            let native = file
-                .items
-                .iter()
-                .find_map(|item| match item {
-                    Item::Fn(func) if func.sig.asyncness.is_none() => Some(func),
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("no native sync entry: {expanded}"));
-            let actual = match &native.sig.output {
-                syn::ReturnType::Default => ReturnExpect::Unit,
-                syn::ReturnType::Type(_, ty) => {
-                    let last = match ty.as_ref() {
-                        syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
-                        _ => None,
-                    };
-                    match last.as_deref() {
-                        Some("Result") => ReturnExpect::Result,
-                        Some("ExitCode") => ReturnExpect::ExitCode,
-                        _ => ReturnExpect::Unit,
-                    }
-                }
-            };
-            assert_eq!(actual, expect, "{attrs} | {source}: {expanded}");
-        }
-        Ok(())
-    }
-
-    #[derive(PartialEq, Eq, Debug)]
-    enum ReturnExpect {
-        Unit,
-        Result,
-        ExitCode,
-    }
 
     #[test]
     fn every_emission_defaults_to_a_constant_quick_timeout() -> syn::Result<()> {
@@ -617,8 +543,6 @@ mod tests {
         for source in [
             "#[should_panic]\nfn contract() {}",
             "#[should_panic(expected = \"boom\")]\nasync fn contract() {}",
-            "#[cfg_attr(not(target_arch = \"wasm32\"), should_panic(expected = \"boom\"))]\n\
-             fn contract() {}",
         ] {
             let args = syn::parse_str::<TestArgs>("")?;
             let function = syn::parse_str(source)?;

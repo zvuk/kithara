@@ -7,8 +7,9 @@ use super::{
     expand_async::emit_async_timeout_test,
     fixture_args::Preamble,
     shared::{
-        exit_code_ret, finalize_body, make_ambient_stmt, make_serial_attr, make_test_setup,
-        make_wasm_serial_guard, wrap_with_model, wrap_with_sync_participation, wrap_with_timeout,
+        finalize_body, make_ambient_stmt, make_serial_attr, make_test_setup,
+        make_wasm_serial_guard, sync_test_body, wrap_with_model, wrap_with_sync_participation,
+        wrap_with_timeout,
     },
 };
 
@@ -50,14 +51,7 @@ pub(crate) fn emit_one_test(
             args,
             &serial_attr,
         );
-        let wasm_timeout = wrap_with_timeout(
-            &full_held,
-            args,
-            true,
-            fn_name,
-            ret_type,
-            &ReturnType::Default,
-        );
+        let wasm_timeout = wrap_with_timeout(&full_held, args, true, fn_name, ret_type);
         let wasm_wrapped = finalize_body(&wasm_timeout, args, fn_name, true);
         output.extend(quote! {
             #(#remaining_attrs)*
@@ -72,55 +66,27 @@ pub(crate) fn emit_one_test(
     }
 
     let modeled = wrap_with_model(&full_held, args, fn_name);
-    let unit_ret = ReturnType::Default;
-    let exit_ret = exit_code_ret();
-    let soft_fail = !args.soft_fail_patterns().is_empty();
-    // `serial_test` (`#[serial]`) rewraps the entry and only accepts `()` or
-    // `Result`, so a serial entry keeps a bare `()` signature. `soft_fail`
-    // returns `ExitCode` so a body failure stays a value, not a panic.
-    // Everything else carries the user's own return type so the standard
-    // harness (in the consumer) rejects `Result` + `#[should_panic]` and
-    // accepts an inactive `cfg_attr(..., should_panic)`.
-    let (entry_ret, native_ret): (&ReturnType, TokenStream2) =
-        if args.flags().contains(TestFlags::SERIAL) {
-            (&unit_ret, quote! {})
-        } else if soft_fail {
-            (&exit_ret, quote! { -> ::std::process::ExitCode })
-        } else {
-            (ret_type, quote! { #ret_type })
-        };
-    let with_timeout = wrap_with_timeout(&modeled, args, false, fn_name, ret_type, entry_ret);
-    let wrapped = finalize_body(&with_timeout, args, fn_name, false);
+    let wrapped = sync_test_body(&modeled, args, fn_name, ret_type, remaining_attrs);
 
-    if args.flags().contains(TestFlags::SERIAL) {
-        return quote! {
-            #(#remaining_attrs)*
-            #[cfg(not(target_arch = "wasm32"))]
-            #serial_attr
-            #[test]
-            #vis fn #fn_name() #native_ret #wrapped
-
-            #(#remaining_attrs)*
-            #[cfg(target_arch = "wasm32")]
-            #[wasm_bindgen_test::wasm_bindgen_test]
-            #vis async fn #fn_name() #ret_type {
-                #wasm_serial_guard
-                #wrapped
-            }
-        };
-    }
+    let wasm_async = args
+        .flags()
+        .contains(TestFlags::SERIAL)
+        .then(|| quote! { async });
 
     quote! {
         #(#remaining_attrs)*
         #serial_attr
         #[cfg(not(target_arch = "wasm32"))]
         #[test]
-        #vis fn #fn_name() #native_ret #wrapped
+        #vis fn #fn_name() #wrapped
 
         #(#remaining_attrs)*
         #[cfg(target_arch = "wasm32")]
         #[wasm_bindgen_test::wasm_bindgen_test]
-        #vis fn #fn_name() #ret_type #wrapped
+        #vis #wasm_async fn #fn_name() #ret_type {
+            #wasm_serial_guard
+            #wrapped
+        }
     }
 }
 
@@ -152,20 +118,12 @@ pub(crate) fn emit_native_only_one(
         );
     }
     let modeled = wrap_with_model(full_held, args, name);
-    let exit_ret = exit_code_ret();
-    let (entry_ret, native_ret): (&ReturnType, TokenStream2) =
-        if !args.soft_fail_patterns().is_empty() {
-            (&exit_ret, quote! { -> ::std::process::ExitCode })
-        } else {
-            (ret_type, quote! { #ret_type })
-        };
-    let with_timeout = wrap_with_timeout(&modeled, args, false, name, ret_type, entry_ret);
-    let wrapped = finalize_body(&with_timeout, args, name, false);
+    let wrapped = sync_test_body(&modeled, args, name, ret_type, remaining_attrs);
     quote! {
         #(#remaining_attrs)*
         #serial_attr
         #[cfg(not(target_arch = "wasm32"))]
         #[test]
-        #vis fn #name() #native_ret #wrapped
+        #vis fn #name() #wrapped
     }
 }

@@ -60,6 +60,24 @@ pub use temp_dir::{TestTempDir, temp_dir, temp_path};
 pub use test::TestBudget;
 pub use wait::{wait_until, wait_until_blocking};
 
+/// Test and instrumentation attributes.
+/// A native synchronous test with an active `should_panic` must return unit,
+/// including when the harness serializes it.
+///
+/// ```compile_fail,E0308,test_harness
+/// use kithara_test_utils::kithara;
+/// #[kithara::test(serial)]
+/// #[should_panic]
+/// fn returned_error() -> Result<(), &'static str> { Err("body failed") }
+/// ```
+///
+/// ```compile_fail,E0308,test_harness
+/// use kithara_test_utils::kithara;
+/// type TestResult = Result<(), &'static str>;
+/// #[kithara::test(native, serial)]
+/// #[cfg_attr(all(), cfg_attr(all(), should_panic))]
+/// fn returned_error() -> TestResult { Err("body failed") }
+/// ```
 pub mod kithara {
     pub use kithara_test_macros::{
         IntoProbeArg, Probe, allow_block, hang_watchdog, measure, measure_block, mock, no_block,
