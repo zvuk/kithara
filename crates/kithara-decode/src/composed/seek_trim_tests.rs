@@ -38,6 +38,28 @@ fn test_frame(sample_rate: u32, timestamp: Duration) -> u64 {
         .expect("test frame is representable")
 }
 
+#[kithara::test]
+#[case::equal_rate(44_100, 44_100, 1024)]
+#[case::upsampled(44_100, 48_000, 1115)]
+#[case::downsampled(48_000, 44_100, 941)]
+fn default_priming_follows_the_codec_output_clock(
+    #[case] source_rate: u32,
+    #[case] output_rate: u32,
+    #[case] expected: u64,
+) {
+    let codec = test_stub_codec::ConstFrameCodec::new(Vec::new(), test_spec(output_rate), 0);
+    let demuxer = BoundaryFrameDemuxer {
+        track: track_with_rate(source_rate),
+        frames: Vec::new(),
+        held: Vec::new(),
+        idx: 0,
+    };
+    let decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+
+    assert_eq!(decoder.default_priming_frames(AudioCodec::AacLc), expected);
+    assert_eq!(decoder.default_priming_frames(AudioCodec::Flac), 0);
+}
+
 struct ThreeFrameDemuxer {
     track: TrackInfo,
     held: Vec<u8>,
