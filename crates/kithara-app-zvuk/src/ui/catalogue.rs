@@ -88,6 +88,10 @@ impl Catalogue {
             .then(|| self.query.trim().to_owned())
     }
 
+    pub(super) fn is_search(&self) -> bool {
+        self.mode == Mode::Search
+    }
+
     fn filter(&mut self) {
         let query = if matches!(self.mode, Mode::Liked | Mode::Playlist(_)) {
             self.query.trim().to_lowercase()

@@ -203,9 +203,6 @@ async fn a_side_operation_fault_keeps_the_page_fault_and_its_retry() {
             )))),
         NetMock::post_bytes
             .next_call(matching!(_, _, _))
-            .returns(Ok(search_reply())),
-        NetMock::post_bytes
-            .next_call(matching!(_, _, _))
             .returns(Ok(stream_reply())),
     )));
     let mut source = loaded_search(net.clone()).await;

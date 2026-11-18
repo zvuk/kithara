@@ -307,6 +307,143 @@ async fn reselecting_search_after_a_failed_continuation_keeps_accumulated_pages(
     release(source, &net).await;
 }
 
+fn assert_playback_urls(source: &dyn LibrarySource) {
+    let rows = source.rows(None);
+    assert_eq!(rows.len(), 2);
+    for (row, id) in rows.iter().zip(["1000", "1003"]) {
+        let playback = row.drag().expect("accepted track is playable");
+        assert_eq!(
+            playback["source"],
+            format!("https://media.example.invalid/{id}/master.m3u8"),
+        );
+    }
+}
+
+#[kithara::test]
+#[case::nonterminal(Some("two"))]
+#[case::terminal(None)]
+async fn reselecting_search_retries_the_accepted_stream_batch(#[case] cursor: Option<&str>) {
+    let net = DelayedNet::new(Unimock::new((
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if {
+                let body: Value = serde_json::from_slice(body).unwrap();
+                body["query"].as_str().unwrap().contains("KitharaSearch")
+                    && body["variables"]["cursor"].is_null()
+            }))
+            .returns(Ok(track_page(&["1000"], Some("one")))),
+        NetMock::post_bytes
+            .next_call(matching!(_, _, _))
+            .returns(Ok(streams(&["1000"]))),
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if serde_json::from_slice::<Value>(body).unwrap()["variables"]["cursor"] == "one"))
+            .returns(Ok(track_page(&["1000", "1003"], cursor))),
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if {
+                let body = String::from_utf8_lossy(body);
+                body.contains("KitharaStreams") && body.contains("1003") && !body.contains("1000")
+            }))
+            .returns(Err(NetError::Timeout)),
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if {
+                let body = String::from_utf8_lossy(body);
+                body.contains("KitharaStreams") && body.contains("1003") && !body.contains("1000")
+            }))
+            .returns(Ok(streams(&["1003"]))),
+    )));
+    let mut source = source(net.clone()).await;
+    source.write("query", &WriteValue::Text("needle".into()));
+    time::sleep(Duration::from_millis(300)).await;
+    until(&mut *source, PageStatus::Ready).await;
+    assert_eq!(keys(&*source), ["1000"]);
+
+    source.write("load_more", &WriteValue::Trigger);
+    until(&mut *source, PageStatus::Ready).await;
+    assert_eq!(keys(&*source), ["1000", "1003"]);
+    assert!(source.rows(None)[0].drag().is_some());
+    assert!(source.rows(None)[1].muted());
+    assert!(matches!(source.read("fault"), Some(ReadValue::Text(text)) if !text.is_empty()));
+
+    source.select("search");
+    until(&mut *source, PageStatus::Ready).await;
+    assert_eq!(keys(&*source), ["1000", "1003"]);
+    assert_playback_urls(&*source);
+    assert_eq!(
+        source.read("load_more_hidden"),
+        Some(ReadValue::Bool(cursor.is_none())),
+    );
+    assert_eq!(source.read("fault"), Some(ReadValue::Text("")));
+    release(source, &net).await;
+}
+
+#[kithara::test]
+async fn a_reaction_during_enrichment_keeps_the_stream_batch() {
+    let net = DelayedNet::new(Unimock::new((
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if {
+                let body: Value = serde_json::from_slice(body).unwrap();
+                body["query"].as_str().unwrap().contains("KitharaSearch")
+                    && body["variables"]["cursor"].is_null()
+            }))
+            .returns(Ok(track_page(&["1000"], Some("one")))),
+        NetMock::post_bytes
+            .next_call(matching!(_, _, _))
+            .returns(Ok(streams(&["1000"]))),
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if serde_json::from_slice::<Value>(body).unwrap()["variables"]["cursor"] == "one"))
+            .returns(Ok(track_page(&["1000", "1003"], Some("two")))),
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if {
+                let body: Value = serde_json::from_slice(body).unwrap();
+                body["query"].as_str().unwrap().contains(r#"addItem(id: "1000""#)
+            }))
+            .returns(Ok(Bytes::from_static(include_bytes!(
+                "../fixtures/like.json"
+            )))),
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if {
+                let body = String::from_utf8_lossy(body);
+                body.contains("KitharaStreams") && body.contains("1003") && !body.contains("1000")
+            }))
+            .returns(Ok(streams(&["1003"]))),
+    )));
+    let mut source = source(net.clone()).await;
+    source.write("query", &WriteValue::Text("needle".into()));
+    time::sleep(Duration::from_millis(300)).await;
+    until(&mut *source, PageStatus::Ready).await;
+
+    net.hold_streams(true);
+    source.write("load_more", &WriteValue::Trigger);
+    wait_until(
+        Duration::from_secs(2),
+        "the continuation streams are held",
+        || {
+            source.tick();
+            keys(&*source) == ["1000", "1003"] && net.stream_waiting()
+        },
+    )
+    .await
+    .expect("the second page must be accepted while its streams wait");
+
+    source.write("like_track", &WriteValue::Text("1000".into()));
+    wait_until(
+        Duration::from_secs(2),
+        "the reaction confirms while streams wait",
+        || {
+            source.tick();
+            reactions(&*source, "1000") == [true]
+        },
+    )
+    .await
+    .expect("the reaction must confirm while the stream batch is held");
+
+    net.hold_streams(false);
+    until(&mut *source, PageStatus::Ready).await;
+    assert_eq!(keys(&*source), ["1000", "1003"]);
+    assert_playback_urls(&*source);
+    assert_eq!(reactions(&*source, "1000"), [true]);
+    release(source, &net).await;
+}
+
 #[kithara::test]
 async fn continuation_without_a_new_identity_ends_pagination() {
     let net = DelayedNet::new(Unimock::new((

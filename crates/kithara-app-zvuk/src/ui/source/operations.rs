@@ -12,6 +12,23 @@ impl<N: Net + Clone + 'static> Source<N> {
         self.queue_request(self.catalogue.resume(), due);
     }
 
+    pub(super) fn retry_page(&mut self) {
+        self.faults.record(Operation::Page, Ok(()));
+        if let Load::EnrichmentFailed(ids) = &mut self.load {
+            let ids = std::mem::take(ids);
+            self.enrich_batch(ids);
+        } else {
+            self.queue(Instant::now());
+        }
+    }
+
+    fn enrich_batch(&mut self, ids: Vec<TrackId>) {
+        let batch = ids.clone();
+        self.load = self
+            .spawn(move |client, token| async move { client.streams(&token, &batch).await })
+            .map_or(Load::Idle, |job| Load::Enriching { ids, job });
+    }
+
     fn queue_request(&mut self, request: Option<Request>, due: Instant) {
         self.load = request.map_or(Load::Idle, |request| Load::Due { due, request });
     }
@@ -71,7 +88,11 @@ impl<N: Net + Clone + 'static> Source<N> {
     }
 
     pub(super) fn load_more(&mut self) {
-        if !matches!(self.load, Load::Idle) {
+        if self.load.is_loading() {
+            return;
+        }
+        if matches!(self.load, Load::EnrichmentFailed(_)) {
+            self.retry_page();
             return;
         }
         let Some(request) = self.catalogue.continuation() else {
@@ -153,10 +174,16 @@ impl<N: Net + Clone + 'static> Source<N> {
         }
     }
 
-    /// Takes the results of finished jobs; a reaction confirmed while the
-    /// page loads reloads the page, whose snapshot may predate it.
+    /// Applies confirmed reactions before accepting potentially stale page responses.
     pub(super) fn settle(&mut self) {
-        let confirmed: Vec<(TrackId, Result<bool, Error>)> = self
+        self.settle_reactions();
+        self.settle_listing();
+        self.settle_suggestions();
+        self.settle_page();
+    }
+
+    fn settle_reactions(&mut self) {
+        let confirmed: Vec<_> = self
             .likes
             .iter_mut()
             .filter_map(|(id, job)| job.finished().map(|result| (id.clone(), result)))
@@ -166,43 +193,59 @@ impl<N: Net + Clone + 'static> Source<N> {
             let Some(liked) = self.faults.record(Operation::Like, result) else {
                 continue;
             };
-            let reload = self.catalogue.confirm_reaction(&id, liked);
-            if matches!(self.load, Load::Running(_) | Load::Enriching(_))
-                || (reload && matches!(self.load, Load::Idle))
-            {
+            let membership_changed = self.catalogue.confirm_reaction(&id, liked);
+            let reload = match self.load {
+                Load::Running(_) => true,
+                Load::Enriching { .. } => !self.catalogue.is_search(),
+                Load::Due { .. } => false,
+                Load::Idle | Load::EnrichmentFailed(_) => membership_changed,
+            };
+            if reload {
                 self.queue(Instant::now());
             }
         }
+    }
+
+    fn settle_listing(&mut self) {
         if let Some(result) = self.listing.as_mut().and_then(Job::finished) {
             self.listing = None;
             if let Some(listed) = self.faults.record(Operation::Playlists, result) {
                 accept_playlists(&mut self.branch, listed);
             }
         }
+    }
+
+    fn settle_suggestions(&mut self) {
         if let Some(result) = self.suggestions.as_mut().and_then(Job::finished) {
             self.suggestions = None;
             if let Some(suggestions) = self.faults.record(Operation::Suggestions, result) {
                 self.catalogue.accept_suggestions(suggestions);
             }
         }
+    }
+
+    fn settle_page(&mut self) {
         if let Load::Running(job) = &mut self.load
             && let Some(result) = job.finished()
         {
             self.load = Load::Idle;
             if let Some(loaded) = self.faults.record(Operation::Page, result) {
                 let ids = self.catalogue.accept(loaded, self.streaming.adaptive);
-                self.load = self
-                    .spawn(move |client, token| async move { client.streams(&token, &ids).await })
-                    .map_or(Load::Idle, Load::Enriching);
+                if !ids.is_empty() {
+                    self.enrich_batch(ids);
+                }
             }
         }
-        if let Load::Enriching(job) = &mut self.load
+        if let Load::Enriching { ids, job } = &mut self.load
             && let Some(result) = job.finished()
         {
-            self.load = Load::Idle;
-            if let Some(streams) = self.faults.record(Operation::Page, result) {
-                self.catalogue.enrich(streams, self.streaming.adaptive);
-            }
+            self.load = match self.faults.record(Operation::Page, result) {
+                Some(streams) => {
+                    self.catalogue.enrich(streams, self.streaming.adaptive);
+                    Load::Idle
+                }
+                None => Load::EnrichmentFailed(std::mem::take(ids)),
+            };
         }
     }
 }

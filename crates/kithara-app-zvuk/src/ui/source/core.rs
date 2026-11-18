@@ -106,7 +106,20 @@ pub(super) enum Load {
         request: Request,
     },
     Running(Job<Result<Loaded, Error>>),
-    Enriching(Job<Result<Vec<MediaTrack>, Error>>),
+    Enriching {
+        ids: Vec<TrackId>,
+        job: Job<Result<Vec<MediaTrack>, Error>>,
+    },
+    EnrichmentFailed(Vec<TrackId>),
+}
+
+impl Load {
+    pub(super) fn is_loading(&self) -> bool {
+        matches!(
+            self,
+            Self::Due { .. } | Self::Running(_) | Self::Enriching { .. }
+        )
+    }
 }
 
 /// An operation whose failure the page shows; in the order they are shown.
@@ -345,22 +358,20 @@ impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
         let Some(changed) = self.catalogue.select(node) else {
             return;
         };
-        if matches!(self.load, Load::Idle) && self.faults.has(Operation::Page) {
-            self.faults.record(Operation::Page, Ok(()));
-        } else if !changed {
-            return;
-        }
         if changed {
             self.suggestions = None;
+            self.faults.record(Operation::Page, Ok(()));
+            self.queue(Instant::now());
+        } else if !self.load.is_loading() && self.faults.has(Operation::Page) {
+            self.retry_page();
         }
-        self.queue(Instant::now());
     }
 
     /// Projects the current page state without hiding errors alongside rows.
     fn status(&self) -> PageStatus<'_> {
         if !self.has_token {
             PageStatus::Unreadable(Some(&self.not_connected))
-        } else if !self.streaming.loaded() || !matches!(self.load, Load::Idle) {
+        } else if !self.streaming.loaded() || self.load.is_loading() {
             PageStatus::Loading
         } else if !self.catalogue.is_empty() {
             PageStatus::Ready
