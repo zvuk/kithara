@@ -250,6 +250,63 @@ async fn continuation_appends_distinct_rows_and_retries_the_same_cursor() {
     release(source, &net).await;
 }
 
+/// Re-selecting the current search node after a failed continuation resumes
+/// that continuation instead of restarting the search, so the accepted pages
+/// stay.
+#[kithara::test]
+async fn reselecting_search_after_a_failed_continuation_keeps_accumulated_pages() {
+    let net = DelayedNet::new(Unimock::new((
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if {
+                let body: Value = serde_json::from_slice(body).unwrap();
+                body["query"].as_str().unwrap().contains("KitharaSearch")
+                    && body["variables"]["cursor"].is_null()
+            }))
+            .returns(Ok(track_page(&["1000"], Some("one")))),
+        NetMock::post_bytes
+            .next_call(matching!(_, _, _))
+            .returns(Ok(streams(&["1000"]))),
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if serde_json::from_slice::<Value>(body).unwrap()["variables"]["cursor"] == "one"))
+            .returns(Ok(track_page(&["1000", "1003"], Some("two")))),
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if {
+                let body = String::from_utf8_lossy(body);
+                body.contains("KitharaStreams") && body.contains("1003") && !body.contains("1000")
+            }))
+            .returns(Ok(streams(&["1003"]))),
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if serde_json::from_slice::<Value>(body).unwrap()["variables"]["cursor"] == "two"))
+            .returns(Err(NetError::Timeout)),
+        NetMock::post_bytes
+            .next_call(matching!((_, body, _) if serde_json::from_slice::<Value>(body).unwrap()["variables"]["cursor"] == "two"))
+            .returns(Ok(track_page(&["1006"], Some("two")))),
+        NetMock::post_bytes
+            .next_call(matching!(_, _, _))
+            .returns(Ok(streams(&["1006"]))),
+    )));
+    let mut source = source(net.clone()).await;
+    source.write("query", &WriteValue::Text("needle".into()));
+    time::sleep(Duration::from_millis(300)).await;
+    until(&mut *source, PageStatus::Ready).await;
+
+    source.write("load_more", &WriteValue::Trigger);
+    until(&mut *source, PageStatus::Ready).await;
+    assert_eq!(keys(&*source), ["1000", "1003"]);
+
+    source.write("load_more", &WriteValue::Trigger);
+    until(&mut *source, PageStatus::Ready).await;
+    assert_eq!(keys(&*source), ["1000", "1003"]);
+    assert!(matches!(source.read("fault"), Some(ReadValue::Text(text)) if !text.is_empty()));
+
+    source.select("search");
+    until(&mut *source, PageStatus::Ready).await;
+    assert_eq!(keys(&*source), ["1000", "1003", "1006"]);
+    assert_eq!(source.read("load_more_hidden"), Some(ReadValue::Bool(true)));
+    assert_eq!(source.read("fault"), Some(ReadValue::Text("")));
+    release(source, &net).await;
+}
+
 #[kithara::test]
 async fn continuation_without_a_new_identity_ends_pagination() {
     let net = DelayedNet::new(Unimock::new((
@@ -292,8 +349,12 @@ async fn suggestions_are_capped_and_choosing_one_searches_its_text() {
             .returns(Ok(stream_reply())),
     )));
     net.autocomplete([
-        Ok(Bytes::from_static(br#"{"data":{"searchAutocomplete":[{"content":"Mozart"},{"content":"Most"},{"content":"Mosaic"},{"content":"Fourth"}]}}"#)),
-        Ok(Bytes::from_static(br#"{"data":{"searchAutocomplete":[{"content":"Mozart"}]}}"#)),
+        Ok(Bytes::from_static(
+            br#"{"data":{"searchAutocomplete":{"content":["Mozart","Most","Mosaic","Fourth"]}}}"#,
+        )),
+        Ok(Bytes::from_static(
+            br#"{"data":{"searchAutocomplete":{"content":["Mozart"]}}}"#,
+        )),
     ]);
     let mut source = source(net.clone()).await;
     source.write("query", &WriteValue::Text("mo".into()));
@@ -334,10 +395,10 @@ async fn suggestion_failure_keeps_catalogue_rows_and_stale_replies_are_dropped()
     ));
     net.autocomplete([
         Ok(Bytes::from_static(
-            br#"{"data":{"searchAutocomplete":[{"content":"Old"}]}}"#,
+            br#"{"data":{"searchAutocomplete":{"content":["Old"]}}}"#,
         )),
         Ok(Bytes::from_static(
-            br#"{"data":{"searchAutocomplete":[{"content":"Fresh"}]}}"#,
+            br#"{"data":{"searchAutocomplete":{"content":["Fresh"]}}}"#,
         )),
     ]);
     let mut source = source(net.clone()).await;

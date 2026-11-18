@@ -6,9 +6,10 @@ use super::core::{Faults, Load, Operation, Source, accept_playlists, playlists, 
 use crate::{Client, Command, Error, SearchScope, TrackId, job::Job, ui::request::Request};
 
 impl<N: Net + Clone + 'static> Source<N> {
-    /// Queues the current node's request for `due`, dropping the one in flight.
+    /// Queues the current node's request at its current progress for `due`,
+    /// dropping the one in flight.
     pub(super) fn queue(&mut self, due: Instant) {
-        self.queue_request(self.catalogue.request(), due);
+        self.queue_request(self.catalogue.resume(), due);
     }
 
     fn queue_request(&mut self, request: Option<Request>, due: Instant) {

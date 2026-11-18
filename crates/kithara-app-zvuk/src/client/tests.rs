@@ -194,7 +194,7 @@ async fn autocomplete_and_entity_track_reads_validate_the_service_contract() {
                 body["query"].as_str().unwrap().contains("searchAutocomplete(query: $query, limit: 3)")
                     && body["variables"]["query"] == "Moz"
             }))
-            .returns(Ok(Bytes::from_static(br#"{"data":{"searchAutocomplete":[{"content":"Mozart"},{"content":"Mozart Requiem"},{"content":"Mozart Symphony"}]}}"#))),
+            .returns(Ok(Bytes::from_static(br#"{"data":{"searchAutocomplete":{"content":["Mozart","Mozart Requiem","Mozart Symphony"]}}}"#))),
     );
     assert_eq!(
         mock_client(suggestions)

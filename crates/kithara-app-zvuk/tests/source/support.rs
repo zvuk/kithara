@@ -527,7 +527,9 @@ impl Net for DelayedNet {
             })
             .flatten();
         if autocomplete && scripted.is_none() {
-            return Ok(Bytes::from_static(br#"{"data":{"searchAutocomplete":[]}}"#));
+            return Ok(Bytes::from_static(
+                br#"{"data":{"searchAutocomplete":{"content":[]}}}"#,
+            ));
         }
         let query = value["variables"]["query"]
             .as_str()

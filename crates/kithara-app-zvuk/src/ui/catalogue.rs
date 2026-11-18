@@ -76,6 +76,13 @@ impl Catalogue {
         })
     }
 
+    /// The request that resumes the current node at its current progress: the
+    /// next continuation when pages were already accepted, else the fresh
+    /// request.
+    pub(super) fn resume(&self) -> Option<Request> {
+        self.continuation().or_else(|| self.request())
+    }
+
     pub(super) fn autocomplete_query(&self) -> Option<String> {
         (self.mode == Mode::Search && !self.query.trim().is_empty())
             .then(|| self.query.trim().to_owned())

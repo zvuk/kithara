@@ -108,11 +108,7 @@ impl<N: Net> Client<N> {
                 json!({ "query": query }),
             )
             .await?;
-        let suggestions: Vec<Suggestion> = decode(&data, "/searchAutocomplete")?;
-        Ok(suggestions
-            .into_iter()
-            .map(|suggestion| suggestion.content)
-            .collect())
+        decode(&data, "/searchAutocomplete/content")
     }
 
     /// Loads the first liked page and the configured account's collection count.
@@ -350,11 +346,6 @@ impl<N: Net> Client<N> {
             .await?;
         serde_json::from_slice(&response).map_err(|_| Error::Protocol("invalid JSON envelope"))
     }
-}
-
-#[derive(serde::Deserialize)]
-struct Suggestion {
-    content: String,
 }
 
 fn search_page<T: DeserializeOwned>(data: &Value, field: &str) -> Result<SearchPage<T>, Error> {
