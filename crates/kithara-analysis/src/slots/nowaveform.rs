@@ -1,7 +1,7 @@
 use std::{convert::Infallible, num::NonZeroU32};
 
-use kithara_bufpool::{HasPool, PoolError, PoolRegion};
-use kithara_waveform::WaveformResume;
+use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_waveform::{AnalyzerError, WaveformResume};
 
 use crate::{BlobError, Waveform};
 
@@ -14,7 +14,7 @@ impl<S> TryFrom<(usize, NonZeroU32, &PoolRegion<S>)> for Slot
 where
     S: HasPool<f32>,
 {
-    type Error = PoolError;
+    type Error = AnalyzerError;
 
     fn try_from(_: (usize, NonZeroU32, &PoolRegion<S>)) -> Result<Self, Self::Error> {
         Ok(Self(None))

@@ -17,13 +17,15 @@ fn engine_allocate_and_release_slot() {
         .build();
     let (mut mixer, mut ends) = mixer_with_config(config, 8);
     let slot_id = A;
+    let input = pcm_samples(1.0, &[0.0; 2], false);
+    let original = std::ptr::from_ref(input.as_ref());
     let attach = send(
         &mut ends,
         When::Next,
         vec![DeckPart::Attach {
             item_id: kithara_events::TrackId::allocate(),
             slot: slot_id,
-            pcm: pcm_samples("allocated", 1.0, &[0.0; 2], false),
+            pcm: input,
             segment: SegmentId::FIRST,
         }],
     );
@@ -50,8 +52,8 @@ fn engine_allocate_and_release_slot() {
     assert_applied_at(outcome_of(&answered, release), 0);
     assert!(matches!(
         answered[0].2.as_slice(),
-        [DeckPart::Returned(Returned::Pcm { slot, pcm })]
-            if *slot == slot_id && &**pcm.src() == "allocated"
+        [DeckPart::Returned(Returned::Pcm { slot, pcm, .. })]
+            if *slot == slot_id && std::ptr::eq(pcm.as_ref(), original)
     ));
     assert_eq!(occupied(&mixer).len(), 0);
 }
@@ -62,13 +64,15 @@ fn engine_arena_full_error() {
         .slots(NonZeroUsize::new(1).expect("one slot"))
         .build();
     let (mut mixer, mut ends) = mixer_with_config(config, 8);
+    let first_pcm = pcm_samples(1.0, &[0.0; 2], false);
+    let first_ptr = std::ptr::from_ref(first_pcm.as_ref());
     let first = send(
         &mut ends,
         When::Next,
         vec![DeckPart::Attach {
             item_id: kithara_events::TrackId::allocate(),
             slot: A,
-            pcm: pcm_samples("first", 1.0, &[0.0; 2], false),
+            pcm: first_pcm,
             segment: SegmentId::FIRST,
         }],
     );
@@ -87,7 +91,7 @@ fn engine_arena_full_error() {
         vec![DeckPart::Attach {
             item_id: kithara_events::TrackId::allocate(),
             slot: A,
-            pcm: pcm_samples("refused", 1.0, &[0.0; 2], false),
+            pcm: pcm_samples(1.0, &[0.0; 2], false),
             segment: SegmentId::FIRST.next(),
         }],
     );
@@ -101,7 +105,13 @@ fn engine_arena_full_error() {
         Outcome::Rejected(Rejection::Refused(DeckRefusal::Occupied { slot: A }))
     ));
     assert_eq!(occupied(&mixer), vec![A]);
-    assert_eq!(mixer.track(A).map(|track| &**track.src()), Some("first"));
+    assert_eq!(
+        mixer
+            .track(A)
+            .and_then(|track| track.slot_binding(SessionEpoch::new(0)))
+            .map(|binding| binding.attachment()),
+        Some(first)
+    );
     assert_eq!(
         mixer.track(A).map(PlayerTrack::segment),
         Some(SegmentId::FIRST)
@@ -109,13 +119,15 @@ fn engine_arena_full_error() {
     assert!(mixer.track(B).is_none());
 
     let segment = SegmentId::FIRST.next();
+    let second_pcm = pcm_samples(1.0, &[0.0; 2], false);
+    let second_ptr = std::ptr::from_ref(second_pcm.as_ref());
     let second = send(
         &mut ends,
         When::Next,
         vec![DeckPart::Replace {
             item_id: kithara_events::TrackId::allocate(),
             slot: A,
-            pcm: pcm_samples("second", 1.0, &[0.0; 2], false),
+            pcm: second_pcm,
             segment,
         }],
     );
@@ -127,8 +139,8 @@ fn engine_arena_full_error() {
     assert_applied_at(outcome_of(&answered, second), 0);
     assert!(matches!(
         answered[0].2.as_slice(),
-        [DeckPart::Returned(Returned::Pcm { slot, pcm })]
-            if *slot == A && &**pcm.src() == "first"
+        [DeckPart::Returned(Returned::Pcm { slot, pcm, .. })]
+            if *slot == A && std::ptr::eq(pcm.as_ref(), first_ptr)
     ));
     assert_eq!(occupied(&mixer), vec![A]);
     assert_eq!(mixer.track(A).map(PlayerTrack::segment), Some(segment));
@@ -147,8 +159,8 @@ fn engine_arena_full_error() {
     assert_applied_at(outcome_of(&answered, release), 0);
     assert!(matches!(
         answered[0].2.as_slice(),
-        [DeckPart::Returned(Returned::Pcm { slot, pcm })]
-            if *slot == A && &**pcm.src() == "second"
+        [DeckPart::Returned(Returned::Pcm { slot, pcm, .. })]
+            if *slot == A && std::ptr::eq(pcm.as_ref(), second_ptr)
     ));
     assert_eq!(occupied(&mixer).len(), 0);
 }

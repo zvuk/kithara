@@ -46,8 +46,8 @@ where
 pub struct HostCore<S: 'static, D: ?Sized + HostedDeck<S> = dyn HostedDeck<S>> {
     pub(crate) session: SessionState<DeviceBackend, S>,
     decks: Decks<S, D>,
-    dispatcher: Sender<DispatcherProtocol<ResourceLoad<S>>>,
-    dispatcher_inbox: Option<kithara_command::Inbox<DispatcherProtocol<ResourceLoad<S>>>>,
+    dispatcher: Sender<DispatcherProtocol<ResourceLoad>>,
+    dispatcher_inbox: Option<kithara_command::Inbox<DispatcherProtocol<ResourceLoad>>>,
     dispatcher_task: Option<(TaskHandle, PlayWorker<S>)>,
     retired_dispatches: Vec<Seq>,
     retired_lanes: Vec<kithara_render::LaneId>,
@@ -258,7 +258,7 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
     D: ?Sized + HostedDeck<S>,
 {
-    type Command = HostCommand<S, D>;
+    type Command = HostCommand<D>;
     type Deck = D;
 
     fn poll_output(&mut self) -> std::task::Poll<Result<(), PlayError>> {
@@ -290,9 +290,6 @@ where
                 Ok(None)
             }
             HostCommand::Restart => self.restart().map(|()| None),
-            HostCommand::_Marker(_) => Err(PlayError::Internal(
-                "a marker is not an owner command".to_owned(),
-            )),
         }
     }
 
@@ -300,10 +297,7 @@ where
         self.register_deck(id, deck)
     }
 
-    fn each_deck(
-        &mut self,
-        visit: &mut dyn FnMut(DeckId, &mut D, &mut Outbox<'_, S>, DeckPass<'_>),
-    ) {
+    fn each_deck(&mut self, visit: &mut dyn FnMut(DeckId, &mut D, &mut Outbox<'_>, DeckPass<'_>)) {
         let timed = self.clock();
         let output = self.session.root_view.output.get();
         let planned_tempo = self.session.timeline.trajectory();
@@ -329,7 +323,7 @@ where
     fn with_deck(
         &mut self,
         id: DeckId,
-        visit: &mut dyn FnMut(&mut D, &mut Outbox<'_, S>, DeckPass<'_>),
+        visit: &mut dyn FnMut(&mut D, &mut Outbox<'_>, DeckPass<'_>),
     ) -> Result<(), PlayError> {
         let index = self.decks.index(id)?;
         let timed = self.clock();
@@ -704,20 +698,20 @@ where
 }
 
 /// A deck record split into what one pass lends.
-struct DeckVisit<'a, S, D: ?Sized> {
+struct DeckVisit<'a, D: ?Sized> {
     deck: &'a mut D,
     receipts: &'a mut DeckEvents,
-    out: Outbox<'a, S>,
+    out: Outbox<'a>,
     pass: DeckPass<'a>,
 }
 
-impl<'a, S, D: ?Sized> DeckVisit<'a, S, D> {
+impl<'a, D: ?Sized> DeckVisit<'a, D> {
     /// Splits `record` into what the pass lends. A pass on the session clock
     /// also carries its view in the outbox.
-    fn open(
+    fn open<S>(
         record: &'a mut Deck<S, D>,
         port: &'a mut dyn Port<DeckProtocol>,
-        dispatcher: &'a mut Sender<DispatcherProtocol<ResourceLoad<S>>>,
+        dispatcher: &'a mut Sender<DispatcherProtocol<ResourceLoad>>,
         clock: Option<PassClock>,
         output: &'a OutputSnapshot,
         planned_tempo: &'a TempoTrajectory,

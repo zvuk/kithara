@@ -2,8 +2,9 @@
 
 use std::num::NonZeroU32;
 
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
+use kithara_stream::PlayheadRead;
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use kithara_test_utils::kithara;
 use ringbuf::{
@@ -15,7 +16,6 @@ use super::{tests::stop_seq, *};
 use crate::{
     CrossfadeSettings,
     bridge::{DeckEvent, Fade, FadeDir, RtMetrics, Slot, SlotState},
-    test_pools::pools,
     worker::{
         PcmPacket,
         packet_tests::{PacketRing, chunk},
@@ -82,17 +82,12 @@ fn make_track_with(input: &'static [u8], seconds: f64, _slot: Slot) -> Fixture {
     let mut terminal = chunk(spec(), SegmentId::FIRST, frames, frames, &[]);
     terminal.meta.end_of_track = true;
     packets.push(PcmPacket::Chunk(Box::new(terminal)));
-    let resource = PlayerResource::new(
-        PcmConsumer::new(packets.receiver.take().expect("receiver")),
-        Arc::from("test.mp3"),
-        &pools(),
-    )
-    .expect("resource");
+    let resource = Box::new(packets.receiver.take().expect("receiver"));
     Fixture {
         track: PlayerTrack::builder()
             .item_id(kithara_events::TrackId::allocate())
             .sample_rate(spec().sample_rate)
-            .build(Box::new(resource)),
+            .build(resource),
         packets,
     }
 }
@@ -111,7 +106,7 @@ fn render_track(
     bus: &mut [&mut [f32]],
     range: std::ops::Range<usize>,
     sink: &mut RtSink<'_>,
-) -> TrackReadOutcome {
+) -> ReadOutcome {
     let context = OutputContext::new(
         SessionFrame::new(0)..SessionFrame::new(512),
         spec().sample_rate,
@@ -127,14 +122,11 @@ fn render_track(
         sink,
         None,
     );
-    if matches!(
-        outcome,
-        TrackReadOutcome::Eof | TrackReadOutcome::Partial { .. }
-    ) {
+    if matches!(outcome, ReadOutcome::Eof | ReadOutcome::Partial { .. }) {
         track.poll_end(
             range.start
                 + match outcome {
-                    TrackReadOutcome::Partial { frames, .. } => frames,
+                    ReadOutcome::Partial { frames, .. } => frames,
                     _ => 0,
                 },
             &mut 8,
@@ -208,16 +200,20 @@ async fn track_state_transitions(
 }
 
 #[kithara::test(tokio)]
-async fn track_src_returns_identifier(constant_half: &'static [u8]) {
-    let track = make_track(constant_half);
-    assert_eq!(&**track.src(), "test.mp3");
-}
-
-#[kithara::test(tokio)]
 async fn track_initial_position_and_duration(constant_half: &'static [u8]) {
     let track = make_track(constant_half);
     assert_eq!(track.position(), 0.0);
-    assert!((track.duration() - 60.0).abs() < f64::EPSILON);
+    assert!(
+        (track
+            .packets
+            .playhead()
+            .duration()
+            .expect("source duration")
+            .as_secs_f64()
+            - 60.0)
+            .abs()
+            < f64::EPSILON
+    );
 }
 
 #[kithara::test(tokio)]
@@ -409,31 +405,30 @@ async fn read_outcome_matches_track_state(
     );
 
     match scenario {
-        ReadOutcomeScenario::Playing => assert!(matches!(
-            outcome,
-            TrackReadOutcome::Full {
-                position,
-                duration,
-                ..
-            } if position >= 0.0 && duration > 0.0
-        )),
-        ReadOutcomeScenario::Finished => assert!(matches!(outcome, TrackReadOutcome::Eof)),
+        ReadOutcomeScenario::Playing => {
+            assert!(matches!(outcome, ReadOutcome::Full { frames: 512 }));
+            assert!(track.position() >= 0.0);
+            assert!(
+                track
+                    .packets
+                    .playhead()
+                    .duration()
+                    .expect("source duration")
+                    > Duration::ZERO
+            );
+        }
+        ReadOutcomeScenario::Finished => assert!(matches!(outcome, ReadOutcome::Eof)),
     }
 }
 
 #[kithara::test]
 fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
     let mut packets = PacketRing::new(spec(), Duration::from_secs(100), 4);
-    let resource = PlayerResource::new(
-        PcmConsumer::new(packets.receiver.take().expect("receiver")),
-        Arc::from("frontier.flac"),
-        &pools(),
-    )
-    .expect("resource");
+    let resource = Box::new(packets.receiver.take().expect("receiver"));
     let track = PlayerTrack::builder()
         .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec().sample_rate)
-        .build(Box::new(resource));
+        .build(resource);
 
     assert_eq!(track.decoded_frontier(), 0.0);
     let source = u64::try_from(
@@ -490,20 +485,20 @@ async fn read_outcome_partial_then_eof(constant_half: &'static [u8]) {
         );
 
         match outcome {
-            TrackReadOutcome::Partial { frames, .. } => {
+            ReadOutcome::Partial { frames, .. } => {
                 assert!(!saw_partial, "expected exactly one Partial outcome");
                 assert!(frames > 0);
                 saw_partial = true;
             }
-            TrackReadOutcome::Eof => {
+            ReadOutcome::Eof => {
                 if saw_partial {
                     saw_eof_after_partial = true;
                     break;
                 }
             }
-            TrackReadOutcome::Full { .. } => {}
-            TrackReadOutcome::Failed(fault) => {
-                panic!("unexpected Failed in this scenario: {fault}")
+            ReadOutcome::Full { .. } => {}
+            ReadOutcome::Failed(fault) => {
+                panic!("unexpected Failed in this scenario: {fault:?}")
             }
         }
 
@@ -527,16 +522,11 @@ async fn a_buffered_eof_corrects_an_overestimated_duration(constant_half: &'stat
     let mut terminal = chunk(spec(), SegmentId::FIRST, 900, 900, &[]);
     terminal.meta.end_of_track = true;
     packets.push(PcmPacket::Chunk(Box::new(terminal)));
-    let resource = PlayerResource::new(
-        PcmConsumer::new(packets.receiver.take().expect("receiver")),
-        Arc::from("misreported.mp3"),
-        &pools(),
-    )
-    .expect("resource");
+    let resource = Box::new(packets.receiver.take().expect("receiver"));
     let mut track = PlayerTrack::builder()
         .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec().sample_rate)
-        .build(Box::new(resource));
+        .build(resource);
     let (tx, mut rx) = HeapRb::<DeckEvent>::new(16).split();
     let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
@@ -561,14 +551,15 @@ async fn a_buffered_eof_corrects_an_overestimated_duration(constant_half: &'stat
         ),
     );
 
-    assert!(matches!(
-        outcome,
-        TrackReadOutcome::Full {
-            frames_until_eof: Some(388),
-            duration,
-            ..
-        } if duration < 10.0
-    ));
+    assert_eq!(outcome, ReadOutcome::Full { frames: 512 });
+    assert!(
+        packets
+            .playhead()
+            .duration()
+            .expect("corrected duration")
+            .as_secs_f64()
+            < 10.0
+    );
     let notifications = collect_notifications(&mut rx);
     assert!(
         !notifications
@@ -576,4 +567,37 @@ async fn a_buffered_eof_corrects_an_overestimated_duration(constant_half: &'stat
             .any(|notification| { matches!(notification, DeckEvent::Ended { .. }) }),
         "the first full block must not emit EOF"
     );
+
+    let remainder = render_track(
+        &mut track,
+        &mut scratch_bufs,
+        &mut mix_bufs,
+        0..512,
+        &mut RtSink::new(
+            &mut notification_tx,
+            &RtMetrics::default(),
+            ITEM,
+            SessionFrame::new(512),
+        ),
+    );
+    assert_eq!(remainder, ReadOutcome::Partial { frames: 388 });
+    assert!(
+        matches!(collect_notifications(&mut rx).as_slice(), [DeckEvent::Ended { slot, at }] if *slot == ITEM && *at == SessionFrame::new(900))
+    );
+    assert_eq!(
+        render_track(
+            &mut track,
+            &mut scratch_bufs,
+            &mut mix_bufs,
+            0..512,
+            &mut RtSink::new(
+                &mut notification_tx,
+                &RtMetrics::default(),
+                ITEM,
+                SessionFrame::new(1_024)
+            ),
+        ),
+        ReadOutcome::Eof
+    );
+    assert!(collect_notifications(&mut rx).is_empty());
 }

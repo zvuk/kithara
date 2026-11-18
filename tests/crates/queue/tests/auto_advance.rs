@@ -232,6 +232,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
 async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -1721,11 +1722,12 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
 
     assert!(
         mean_mid > 0.005,
-        "no signal mid-playback (mean={mean_mid}) — decoder likely self-armed; onset={onset}, window={window}, pcm_samples={}, current={:?}, deck={:?}, metrics={:?}",
+        "no signal mid-playback (mean={mean_mid}); onset={onset}, window={window}, pcm_samples={}, current={:?}, playback={:?}, metrics={:?}, mixer_blocks={}",
         pcm.len(),
         queue.current().map(|entry| (entry.id, entry.status)),
-        harness.deck_snapshot(),
-        harness.metrics(),
+        queue.playback_view(),
+        queue.mixer_metrics(),
+        queue.mixer_blocks(),
     );
     assert_eq!(
         queue.current_index(),

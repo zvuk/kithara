@@ -22,7 +22,7 @@ use super::cases::{BLOCK_FRAMES, ROOMY_CAPACITY, SAMPLE_RATE, load_source, rende
 #[case::output_muted(true)]
 async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] muted: bool) {
     let options = OfflinePlayerOptions::builder()
-        .block_on_underrun(false)
+        .block_on_underrun(true)
         .eq_layout(vec![EqBandConfig::builder().build()])
         .output_block_frames(NonZeroU32::new(64).expect("callback size"))
         .warp(

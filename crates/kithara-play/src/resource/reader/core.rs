@@ -1,6 +1,5 @@
 use std::{
     fmt::{self, Debug, Formatter},
-    marker::PhantomData,
     num::{NonZeroU32, NonZeroUsize},
     pin::pin,
 };
@@ -11,20 +10,21 @@ use kithara_audio::{
     Audio, AudioObserver, AudioReadError, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend,
     SeekOutcome,
 };
-use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_command::{Inbox, Sender};
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
-use kithara_platform::{CancelToken, maybe_send::BoxFuture, sync::Arc, time::Duration};
+use kithara_platform::{
+    CancelToken, CancelWakerGuard, maybe_send::BoxFuture, sync::Arc, time::Duration,
+};
 use kithara_render::{
-    LaneProtocol, LaneStart, LoadRefusal, Open, PcmReceiver,
-    rt::track::{PcmConsumer, PlayerResource},
+    LaneProtocol, LaneStart, LoadRefusal, Open, OpenedPcm, PcmReceiver, TrackConfig,
 };
 use kithara_signal::{AudioSpec, FrameCount};
 use tracing::warn;
 
-use super::super::{PlaybackResamplerBackend, ResourceConfig, ResourceLane, SourceType};
-use crate::PlayError;
+use super::super::{ResourceConfig, ResourceLane, SourceType};
+use crate::{PlayError, PlayWorker};
 
 /// A directly owned decoded reader used outside the deck's packet-ring path.
 #[derive(fieldwork::Fieldwork)]
@@ -45,6 +45,7 @@ impl Resource {
     pub async fn open<S, B>(
         config: ResourceConfig<S, B>,
         wake: kithara_worker::Wake,
+        pools: PoolRegion<S>,
     ) -> Result<Self, DecodeError>
     where
         B: Default + ResamplerBackend,
@@ -52,10 +53,6 @@ impl Resource {
     {
         let src: Arc<str> = Arc::from(config.src.to_string());
         let source_type = SourceType::detect(&config.src)?;
-        let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
-            detail: "ResourceConfig requires an explicit PlayWorker",
-        })?;
-        let pools = worker.pools().clone();
         let wake: Arc<dyn kithara_stream::WorkerWake> =
             Arc::new(kithara_render::StreamWake::new(wake));
         Ok(match source_type {
@@ -64,7 +61,7 @@ impl Resource {
                 Some(src),
             ),
             SourceType::HlsStream(_) => Self::from_reader(
-                Audio::prepare(config.build_hls_config(&worker, None)?, wake, pools).await?,
+                Audio::prepare(config.build_hls_config(pools.clone(), None)?, wake, pools).await?,
                 Some(src),
             ),
         })
@@ -152,7 +149,6 @@ type ResourceOpen = Result<(OpenedTrack, ResourceLane, FrameCount), LoadRefusal>
 type LaneChannel = (Sender<LaneProtocol>, Inbox<LaneProtocol>);
 type ResourceOpener =
     dyn FnOnce(Duration, LaneStart, Inbox<LaneProtocol>) -> BoxFuture<'static, ResourceOpen> + Send;
-type ResourceMarker<S, B> = fn() -> (S, B);
 
 pub(super) fn geometry(
     warp: &kithara_warp::WarpConfig,
@@ -178,15 +174,14 @@ pub(crate) struct LaneGeometry {
 }
 
 /// A single-use source open and its preparation-owned lane wiring.
-pub struct ResourceLoad<S, B = PlaybackResamplerBackend> {
+pub struct ResourceLoad {
     pub(super) opener: Box<ResourceOpener>,
-    pub(super) channel: Option<Box<dyn Fn() -> LaneChannel + Send>>,
+    pub(super) channel: Box<dyn Fn() -> LaneChannel + Send>,
     pub(super) cancel: Option<CancelToken>,
     pub(super) geometry: Result<LaneGeometry, PlayError>,
-    pub(super) marker: PhantomData<ResourceMarker<S, B>>,
 }
 
-impl<S, B> Debug for ResourceLoad<S, B> {
+impl Debug for ResourceLoad {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ResourceLoad")
@@ -194,54 +189,76 @@ impl<S, B> Debug for ResourceLoad<S, B> {
     }
 }
 
-impl<S, B> ResourceLoad<S, B> {
+impl ResourceLoad {
     /// Allocates the owner's lane sender before transferring the inbox in Load.
-    pub(crate) fn lane_channel(
-        &self,
-    ) -> Result<(Sender<LaneProtocol>, Inbox<LaneProtocol>), PlayError> {
-        let channel = self.channel.as_ref().ok_or_else(|| {
-            PlayError::Internal("ResourceConfig requires an explicit PlayWorker".into())
-        })?;
-        Ok(channel())
+    pub(crate) fn lane_channel(&self) -> LaneChannel {
+        (self.channel)()
     }
 
     pub(crate) fn lane_geometry(&self) -> Result<LaneGeometry, PlayError> {
         self.geometry.clone()
     }
-}
 
-impl<S, B> ResourceLoad<S, B>
-where
-    B: Default + ResamplerBackend,
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    /// Captures the configured source and decoder observer for one open.
+    /// Captures source inputs, the playback worker and decoder observer for one open.
     #[must_use]
-    pub fn new(config: ResourceConfig<S, B>, observer: Box<dyn AudioObserver>) -> Self {
-        let geometry = Self::config_geometry(&config);
-        let channel = config.worker.clone().map(|worker| {
-            Box::new(move || worker.lane_channel()) as Box<dyn Fn() -> LaneChannel + Send>
-        });
+    pub(in crate::resource) fn prepared<S, B>(
+        config: ResourceConfig<S, B>,
+        track: TrackConfig,
+        worker: PlayWorker<S>,
+        observer: Box<dyn AudioObserver>,
+        cancel_link: Option<CancelWakerGuard>,
+    ) -> Self
+    where
+        B: Default + ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    {
+        let geometry = Self::config_geometry(&track, config.host_sample_rate);
+        let channel_worker = worker.clone();
         let cancel = config.cancel.clone();
         Self {
             opener: Box::new(move |position, start, inbox| {
-                Box::pin(Self::load(config, observer, position, start, inbox))
+                Box::pin(async move {
+                    let src: Arc<str> = Arc::from(config.src.to_string());
+                    let source_type = SourceType::detect(&config.src)?;
+                    let cancel = config.cancel.clone();
+                    let (opened, lane, latency) = match source_type {
+                        SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
+                            let audio = config.build_file_config(Some(observer));
+                            let (opened, lane, latency) =
+                                worker.load(audio, track, position, start, inbox).await?;
+                            (
+                                opened,
+                                ResourceLane::new(lane, cancel, cancel_link),
+                                latency,
+                            )
+                        }
+                        SourceType::HlsStream(_) => {
+                            let audio =
+                                config.build_hls_config(worker.pools().clone(), Some(observer))?;
+                            let (opened, lane, latency) =
+                                worker.load(audio, track, position, start, inbox).await?;
+                            (
+                                opened,
+                                ResourceLane::new(lane, cancel, cancel_link),
+                                latency,
+                            )
+                        }
+                    };
+                    Ok((OpenedTrack::new(opened, src), lane, latency))
+                })
             }),
-            channel,
+            channel: Box::new(move || channel_worker.lane_channel()),
             cancel,
             geometry,
-            marker: PhantomData,
         }
     }
 
-    fn config_geometry(config: &ResourceConfig<S, B>) -> Result<LaneGeometry, PlayError> {
-        config.worker.as_ref().ok_or_else(|| {
-            PlayError::Internal("ResourceConfig requires an explicit PlayWorker".into())
-        })?;
-        let audio = config.clone().build_file_config(None);
-        let track = config.build_track_config(audio);
+    fn config_geometry(
+        track: &TrackConfig,
+        rate: Option<NonZeroU32>,
+    ) -> Result<LaneGeometry, PlayError> {
         let ring_depth = geometry(track.warp(), track.audio_buffer_chunks())?;
-        let rate = config.host_sample_rate.ok_or_else(|| {
+        let rate = rate.ok_or_else(|| {
             PlayError::Internal("lane geometry requires the prepared host sample rate".into())
         })?;
         Ok(LaneGeometry {
@@ -249,54 +266,13 @@ where
             declick: track.declick_frames(rate),
         })
     }
-
-    async fn load(
-        config: ResourceConfig<S, B>,
-        observer: Box<dyn AudioObserver>,
-        position: Duration,
-        start: LaneStart,
-        inbox: Inbox<LaneProtocol>,
-    ) -> ResourceOpen {
-        let src: Arc<str> = Arc::from(config.src.to_string());
-        let source_type = SourceType::detect(&config.src)?;
-        let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
-            detail: "ResourceConfig requires an explicit PlayWorker",
-        })?;
-        let cancel_link = config.cancel_link.clone();
-        let cancel = config.cancel.clone();
-        let (receiver, lane, latency) = match source_type {
-            SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-                let audio = config.clone().build_file_config(Some(observer));
-                let track = config.build_track_config(audio);
-                let (receiver, lane, latency) = worker.load(track, position, start, inbox).await?;
-                (
-                    receiver,
-                    ResourceLane::new(lane, cancel, cancel_link),
-                    latency,
-                )
-            }
-            SourceType::HlsStream(_) => {
-                let audio = config.clone().build_hls_config(&worker, Some(observer))?;
-                let track = config.build_track_config(audio);
-                let (receiver, lane, latency) = worker.load(track, position, start, inbox).await?;
-                (
-                    receiver,
-                    ResourceLane::new(lane, cancel, cancel_link),
-                    latency,
-                )
-            }
-        };
-        Ok((
-            OpenedTrack::new(receiver, src, worker.pools())?,
-            lane,
-            latency,
-        ))
-    }
 }
 
 /// The owner-facing receiver and source facts returned by a dispatcher load.
 pub struct OpenedTrack {
-    pub pcm: Box<PlayerResource>,
+    pub pcm: Box<PcmReceiver>,
+    pub src: Arc<str>,
+    pub playhead: Arc<dyn kithara_stream::PlayheadRead>,
     pub abr: Option<kithara_abr::AbrHandle>,
     pub metadata: TrackMetadata,
 }
@@ -305,28 +281,24 @@ impl Debug for OpenedTrack {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("OpenedTrack")
-            .field("src", self.pcm.src())
+            .field("src", &self.src)
             .finish_non_exhaustive()
     }
 }
 
 impl OpenedTrack {
-    pub(super) fn new<S>(
-        receiver: PcmReceiver,
-        src: Arc<str>,
-        pools: &PoolRegion<S>,
-    ) -> Result<Self, PoolError>
-    where
-        S: HasPool<f32>,
-    {
-        let abr = receiver.abr_handle();
-        let metadata = receiver.metadata().clone();
-        let pcm = Box::new(PlayerResource::new(PcmConsumer::new(receiver), src, pools)?);
-        Ok(Self { pcm, abr, metadata })
+    pub(super) fn new(opened: OpenedPcm, src: Arc<str>) -> Self {
+        Self {
+            pcm: Box::new(opened.receiver),
+            src,
+            playhead: opened.playhead,
+            abr: opened.abr,
+            metadata: opened.metadata,
+        }
     }
 }
 
-impl<S, B> Open for ResourceLoad<S, B> {
+impl Open for ResourceLoad {
     type Opened = OpenedTrack;
     type Lane = ResourceLane;
 
@@ -406,24 +378,108 @@ mod tests {
         test_pools::{TestPools, pools},
     };
 
+    #[kithara::test]
+    fn opened_source_facts_can_be_released_while_pcm_remains_live() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("source rate"));
+        let mut ring = kithara_render::mock::PacketRing::new(spec, Duration::from_secs(1), 2);
+        let artwork = Arc::new(vec![1, 2, 3]);
+        let released = Arc::downgrade(&artwork);
+        let metadata = TrackMetadata {
+            album: Some("album".into()),
+            artist: Some("artist".into()),
+            title: Some("title".into()),
+            artwork: Some(artwork),
+        };
+        let opened = OpenedTrack::new(
+            OpenedPcm {
+                receiver: ring.receiver.take().expect("PCM receiver"),
+                playhead: ring.playhead(),
+                metadata,
+                abr: None,
+            },
+            Arc::from("source"),
+        );
+        assert_eq!(opened.metadata.album.as_deref(), Some("album"));
+        assert_eq!(opened.metadata.artist.as_deref(), Some("artist"));
+        assert_eq!(opened.metadata.title.as_deref(), Some("title"));
+        assert_eq!(
+            opened.metadata.artwork.as_deref().map(Vec::as_slice),
+            Some([1, 2, 3].as_slice())
+        );
+        assert!(opened.abr.is_none());
+
+        drop(opened.metadata);
+
+        assert!(released.upgrade().is_none());
+        assert_eq!(opened.pcm.spec(), spec);
+        assert_eq!(opened.src.as_ref(), "source");
+    }
+
+    #[kithara::test]
+    fn pcm_payload_does_not_retain_its_opening_source_label() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("source rate"));
+        let mut packets = kithara_render::mock::PacketRing::new(spec, Duration::from_secs(1), 2);
+        packets.push(kithara_render::PcmPacket::Chunk(Box::new(
+            kithara_render::mock::chunk(spec, SegmentId::FIRST, 0, 0, &[0.25; 16]),
+        )));
+        let src: Arc<str> = Arc::from("opening-source");
+        let released = Arc::downgrade(&src);
+        let pcm = OpenedTrack::new(
+            OpenedPcm {
+                receiver: packets.receiver.take().expect("PCM receiver"),
+                metadata: TrackMetadata::default(),
+                abr: None,
+                playhead: packets.playhead(),
+            },
+            src,
+        )
+        .pcm;
+        assert!(
+            released.upgrade().is_none(),
+            "PCM must not retain off-RT source metadata"
+        );
+        assert_eq!(pcm.spec(), spec);
+        assert_eq!(pcm.next_chunk_info().expect("admitted packet").frames, 8);
+    }
+
+    #[kithara::test]
+    fn a_load_requires_its_worker_separately_from_source_inputs() {
+        let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
+            ResourceSrc::parse("https://example.com/song.mp3").expect("source"),
+        )
+        .store(AssetStore::builder(pools()).build())
+        .host_sample_rate(crate::mock::SAMPLE_RATE)
+        .build();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        let load = crate::ResourcePrep::builder()
+            .worker(worker)
+            .build()
+            .prepare(
+                config,
+                &crate::mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
+            )
+            .expect("prepared source load")
+            .1;
+        let (_sender, _inbox) = load.lane_channel();
+        assert!(load.lane_geometry().is_ok());
+    }
+
     #[kithara::test(tokio)]
     #[kithara::hang_watchdog(ctx = String)]
-    async fn a_direct_resource_decodes_to_the_end_without_the_play_dispatcher() {
+    async fn a_direct_resource_decodes_to_the_end_without_a_play_worker() {
         let dir = TestTempDir::new();
         let path = dir.path().join("direct.wav");
         std::fs::write(&path, assets::fixed_constant_wav_cd_half_4096().bytes())
             .expect("float WAV");
-        let cancel = CancelToken::root();
-        cancel.cancel();
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).cancel(cancel).build());
-        let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
-            .store(
-                AssetStore::builder(pools())
-                    .backend(StorageBackend::Memory)
-                    .build(),
-            )
-            .worker(worker)
-            .build();
+        let config: ResourceConfig<TestPools> =
+            ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
+                .store(
+                    AssetStore::builder(pools())
+                        .backend(StorageBackend::Memory)
+                        .build(),
+                )
+                .build();
         let wake = kithara_worker::Wake::default();
         let resource = {
             // WHY: The fixture's disk open must consume real time before the watchdog expires.
@@ -431,7 +487,7 @@ mod tests {
             hang_tick!("direct resource awaits its source open".to_owned());
             kithara_platform::time::timeout(
                 __hang_detector.remaining(),
-                Resource::open(config, wake.clone()),
+                Resource::open(config, wake.clone(), pools()),
             )
             .await
             .expect("direct reader opens within the watchdog budget")
@@ -475,21 +531,31 @@ mod tests {
         #[case] quantum: Option<usize>,
         #[case] expected_frames: usize,
     ) {
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
             ResourceSrc::parse("https://example.com/song.wav").expect("valid source"),
         )
         .store(AssetStore::builder(pools()).build())
-        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .host_sample_rate(NonZeroU32::new(48_000).expect("nonzero rate"))
         .audio_buffer_chunks(NonZeroUsize::new(3).expect("nonzero ring"))
-        .warp(
-            WarpConfig::builder()
-                .source_block_frames(NonZeroUsize::new(256).expect("nonzero block"))
-                .maybe_render_quantum_frames(quantum.and_then(NonZeroUsize::new))
-                .build(),
-        )
         .build();
-        let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
+        let load = crate::ResourcePrep::builder()
+            .worker(worker)
+            .warp(
+                WarpConfig::builder()
+                    .source_block_frames(NonZeroUsize::new(256).expect("nonzero block"))
+                    .maybe_render_quantum_frames(quantum.and_then(NonZeroUsize::new))
+                    .build(),
+            )
+            .build()
+            .prepare(
+                config,
+                &crate::SessionOutputView::new(NonZeroU32::new(48_000).expect("nonzero rate"))
+                    .get(),
+                Box::new(AudioObserverSlot::default().relay()),
+            )
+            .expect("prepared source load")
+            .1;
 
         let ring_depth = load
             .lane_geometry()
@@ -547,11 +613,14 @@ mod tests {
         .store(AssetStore::builder(pools()).build())
         .cancel(track_cancel.clone())
         .build();
-        let prepared = prep
-            .prepare(config, &crate::mock::output(None).get())
+        let (prepared, mut load) = prep
+            .prepare(
+                config,
+                &crate::mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
+            )
             .expect("unmeasured preparation");
         let cancel = prepared.cancel.clone().expect("per-track child");
-        let mut load = ResourceLoad::new(prepared, Box::new(AudioObserverSlot::default().relay()));
         let source = load.opener;
         let state = Arc::new(AtomicU8::new(0));
         let probe = Probe {
@@ -568,7 +637,7 @@ mod tests {
                 Err(LoadRefusal::Cancelled)
             })
         });
-        let (_sender, inbox) = load.lane_channel().expect("configured lane");
+        let (_sender, inbox) = load.lane_channel();
         let opening = load.open(
             Duration::ZERO,
             crate::TrackSettings::default().lane_start(),
@@ -792,17 +861,24 @@ mod tests {
         let sample_rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("static rate");
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let warp = WarpConfig::builder().speed(speed).build();
-        let load: ResourceLoad<TestPools> = ResourceLoad::new(
-            ResourceConfig::for_src(ResourceSrc::Path(path))
-                .store(AssetStore::builder(pools()).build())
-                .worker(worker)
-                .host_sample_rate(sample_rate)
-                .audio_buffer_chunks(NonZeroUsize::new(RATE_RING_PACKETS).expect("nonzero ring"))
-                .warp(warp)
-                .build(),
-            Box::new(AudioObserverSlot::default().relay()),
-        );
-        let (sender, inbox) = load.lane_channel().expect("explicit lane");
+        let load: ResourceLoad = crate::ResourcePrep::builder()
+            .worker(worker)
+            .warp(warp)
+            .build()
+            .prepare(
+                ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
+                    .store(AssetStore::builder(pools()).build())
+                    .host_sample_rate(sample_rate)
+                    .audio_buffer_chunks(
+                        NonZeroUsize::new(RATE_RING_PACKETS).expect("nonzero ring"),
+                    )
+                    .build(),
+                &crate::SessionOutputView::new(sample_rate).get(),
+                Box::new(AudioObserverSlot::default().relay()),
+            )
+            .expect("prepared source load")
+            .1;
+        let (sender, inbox) = load.lane_channel();
         let start = crate::TrackSettings::builder()
             .speed(speed)
             .build()
@@ -1205,6 +1281,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn a_cancelled_load_is_refused_without_opening_its_source() {
         let pools = pools();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let mut config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(ResourceSrc::Path("/kithara/missing.mp3".into()))
                 .store(
@@ -1212,24 +1289,24 @@ mod tests {
                         .backend(StorageBackend::Memory)
                         .build(),
                 )
-                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools).build()))
                 .build();
         let track = CancelToken::never().child();
         track.cancel();
         config.cancel = Some(track);
 
-        let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
-        let (_sender, inbox) = load.lane_channel().expect("configured worker lane channel");
-        let refused = load
-            .open(
-                Duration::ZERO,
-                LaneStart {
-                    speed: SpeedCurve::Constant(1.0),
-                    keylock: false,
-                    backend: StretchKind::default(),
-                },
-                inbox,
+        let load = crate::ResourcePrep::builder()
+            .worker(worker)
+            .build()
+            .prepare(
+                config,
+                &crate::mock::output(None).get(),
+                Box::new(AudioObserverSlot::default().relay()),
             )
+            .expect("prepared source load")
+            .1;
+        let (_sender, inbox) = load.lane_channel();
+        let refused = load
+            .open(Duration::ZERO, LaneStart::default(), inbox)
             .await
             .map(|(opened, _, _)| opened);
 
@@ -1285,22 +1362,22 @@ mod tests {
                         .backend(StorageBackend::Memory)
                         .build(),
                 )
-                .worker(worker.clone())
                 .build();
             config.cancel = Some(track);
-            let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
-            let (sender, inbox) = load.lane_channel().expect("configured worker lane channel");
+            let load = crate::ResourcePrep::builder()
+                .worker(worker.clone())
+                .build()
+                .prepare(
+                    config,
+                    &crate::mock::output(None).get(),
+                    Box::new(AudioObserverSlot::default().relay()),
+                )
+                .expect("prepared source load")
+                .1;
+            let (sender, inbox) = load.lane_channel();
             async move {
                 let opened = load
-                    .open(
-                        Duration::ZERO,
-                        LaneStart {
-                            speed: SpeedCurve::Constant(1.0),
-                            keylock: false,
-                            backend: StretchKind::default(),
-                        },
-                        inbox,
-                    )
+                    .open(Duration::ZERO, LaneStart::default(), inbox)
                     .await
                     .map(|(opened, _, _)| opened);
                 drop(sender);

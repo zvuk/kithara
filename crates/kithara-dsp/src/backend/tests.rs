@@ -16,7 +16,7 @@ use super::accelerate;
 use super::{
     cascade,
     curve::{self, fade},
-    delay, platform, portable, simd, strided,
+    delay, platform, portable, route, simd, strided,
 };
 use crate::{
     curve::Progression,
@@ -667,7 +667,7 @@ macro_rules! handover_run {
             let half = frames.wrapping_div(2);
             for (section, coefficients) in halves[0].iter().enumerate() {
                 cascade
-                    .set_section(section, *coefficients)
+                    .set_section(section, 0..channels.get(), *coefficients)
                     .expect("section");
             }
             cascade
@@ -677,7 +677,8 @@ macro_rules! handover_run {
             cascade.process(planes, 0..half).expect("shape matches");
             twin.copy_state_from(&cascade).expect("same shape");
             for (section, coefficients) in halves[1].iter().enumerate() {
-                twin.set_section(section, *coefficients).expect("section");
+                twin.set_section(section, 0..channels.get(), *coefficients)
+                    .expect("section");
             }
             twin.process(planes, half..frames).expect("shape matches");
         }
@@ -694,7 +695,7 @@ fn portable_fallback_run(planes: &mut [Vec<f32>], halves: &[Vec<[f32; 5]>; 2]) {
     for (range, set) in [(0..half, &halves[0]), (half..frames, &halves[1])] {
         for (section, coefficients) in set.iter().enumerate() {
             cascade
-                .set_section(section, *coefficients)
+                .set_section(section, 0..channels.get(), *coefficients)
                 .expect("section");
         }
         dispatch!(Level::fallback(), simd => cascade::cascade_kernel(simd, &mut cascade, planes, range));
@@ -765,7 +766,7 @@ fn a_silent_channel_beside_a_playing_one_never_reaches_subnormals() {
     ];
     for (name, call) in runs {
         let mut cascade = cascade::Cascade::new(stride(2), stride(1)).expect("cascade");
-        cascade.set_section(0, section).expect("section");
+        cascade.set_section(0, 0..2, section).expect("section");
         assert_eq!(sine_440().len(), CALL.saturating_mul(CALLS));
         let subnormal: usize = sine_440()
             .as_chunks::<CALL>()
@@ -849,28 +850,17 @@ fn vectors() -> Vec<Vectors> {
     ])
 }
 
-/// The `ramp` kernel at the native and the fallback level: one kernel on
-/// every platform.
-fn ramps() -> [(&'static str, WithScalars); 2] {
-    [
-        ("native", simd::ramp),
-        (
-            "fallback",
-            |output, start, step| dispatch!(Level::fallback(), simd => simd::ramp_kernel(simd, output, start, step)),
-        ),
-    ]
+/// Measured ramp forms and the fallback parity reference.
+fn ramps() -> impl Iterator<Item = (&'static str, WithScalars)> {
+    let fallback: WithScalars = |output, start, step| dispatch!(Level::fallback(), simd => simd::ramp_kernel(simd, output, start, step));
+    route::table::ramp::routes().chain([("fallback", fallback)])
 }
 
-/// The `mul_add` kernel at the native and the fallback level: one kernel on
-/// every platform.
-fn mul_adds() -> [(&'static str, MulAdd); 2] {
-    [
-        ("native", simd::mul_add),
-        (
-            "fallback",
-            |x, y, acc| dispatch!(Level::fallback(), simd => simd::mul_add_kernel(simd, x, y, acc)),
-        ),
-    ]
+/// Measured multiply-add forms and the fallback parity reference.
+fn mul_adds() -> impl Iterator<Item = (&'static str, MulAdd)> {
+    let fallback: MulAdd =
+        |x, y, acc| dispatch!(Level::fallback(), simd => simd::mul_add_kernel(simd, x, y, acc));
+    route::table::mul_add::routes().chain([("fallback", fallback)])
 }
 
 /// Equal bits, or both `NaN`: a `NaN` payload is the backend's to choose.
@@ -1157,10 +1147,9 @@ fn ramp_counts_exactly_at_every_level() {
 #[kithara::test]
 fn div_matches_ieee_division_at_every_level() {
     let fallback = |samples: &mut [f32], divisor: f32| dispatch!(Level::fallback(), simd => simd::div_kernel(simd, samples, divisor));
-    for (name, div) in [
-        ("native", simd::div as fn(&mut [f32], f32) -> usize),
-        ("fallback", fallback),
-    ] {
+    for (name, div) in
+        route::table::div::routes().chain([("fallback", fallback as fn(&mut [f32], f32) -> usize)])
+    {
         for divisor in [3.0, -0.7].into_iter().chain(SPECIALS) {
             for size in SIZES {
                 for offset in OFFSETS {
@@ -1178,6 +1167,56 @@ fn div_matches_ieee_division_at_every_level() {
                     );
                 }
             }
+        }
+    }
+}
+
+#[kithara::test]
+fn routed_vector_forms_keep_bits_and_untouched_tails() {
+    for frames in [0_usize, 1, 3, 7, 31, 128, 129, 512, 513] {
+        let input: Vec<_> = SPECIALS.into_iter().cycle().take(frames).collect();
+        let seed: Vec<_> = input.iter().copied().chain([UNWRITTEN; 3]).collect();
+        let mut expected = seed.clone();
+        simd::ramp(expected.split_at_mut(frames).0, -0.0, 0.125);
+        for (name, kernel) in route::table::ramp::routes() {
+            let mut actual = seed.clone();
+            assert_eq!(kernel(actual.split_at_mut(frames).0, -0.0, 0.125), frames);
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "ramp {name}"
+            );
+        }
+
+        let mut expected = seed.clone();
+        simd::div(expected.split_at_mut(frames).0, 3.0);
+        for (name, kernel) in route::table::div::routes() {
+            let mut actual = seed.clone();
+            assert_eq!(kernel(actual.split_at_mut(frames).0, 3.0), frames);
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "div {name}"
+            );
+        }
+
+        let short = input.split_at(frames.saturating_sub(1)).0;
+        let mut expected = seed.clone();
+        let count = simd::mul_add(&input, short, &mut expected);
+        for (name, kernel) in route::table::mul_add::routes() {
+            let mut actual = seed.clone();
+            assert_eq!(kernel(&input, short, &mut actual), count);
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "mul_add {name}"
+            );
         }
     }
 }
@@ -1758,6 +1797,11 @@ fn native_and_fallback_interpolation_keep_scalar_order_and_endpoints() {
             second: 0.6,
         },
     ] {
+        let routes: Vec<_> = match shape {
+            Progression::Hold => route::table::parameter_hold::routes().collect(),
+            Progression::Linear => route::table::parameter_linear::routes().collect(),
+            Progression::Cubic { .. } => Vec::new(),
+        };
         for endpoints in [
             [0.75, 0.25],
             [0.25, 0.75],
@@ -1804,12 +1848,26 @@ fn native_and_fallback_interpolation_keep_scalar_order_and_endpoints() {
                         *slot = *value;
                     }
                     let mut fallback = native.clone();
+                    dispatch!(Level::fallback(), simd => curve::parameter::kernel(simd, shape, fallback.get_mut(offset..end).expect("prepared prefix"), endpoints));
+                    for &(name, kernel) in &routes {
+                        let mut actual = native.clone();
+                        kernel(
+                            actual.get_mut(offset..end).expect("prepared prefix"),
+                            endpoints,
+                        );
+                        assert!(
+                            actual
+                                .iter()
+                                .zip(&fallback)
+                                .all(|(actual, fallback)| actual.to_bits() == fallback.to_bits()),
+                            "{name}: endpoints {endpoints:?}, offset {offset}, length {length}"
+                        );
+                    }
                     curve::interpolate(
                         shape,
                         native.get_mut(offset..end).expect("prepared prefix"),
                         endpoints,
                     );
-                    dispatch!(Level::fallback(), simd => curve::parameter::kernel(simd, shape, fallback.get_mut(offset..end).expect("prepared prefix"), endpoints));
                     assert!(
                         native
                             .get(offset..end)
@@ -1853,8 +1911,8 @@ fn native_and_fallback_ratio_and_conversion_keep_integer_precision_and_prefix() 
                 let divisor = NonZeroU64::new(denominator).expect("divisor");
                 let mut native = vec![0.0; length];
                 let mut fallback = native.clone();
-                simd::ratio_ramp(&mut native, first, divisor);
-                dispatch!(Level::fallback(), simd => simd::ratio_kernel(simd, &mut fallback, first, divisor));
+                super::ratio_ramp(&mut native, first, divisor);
+                dispatch!(Level::fallback(), simd => curve::ratio::ratio_kernel(simd, &mut fallback, first, divisor));
                 let expected: Vec<f64> = (0..length)
                     .map(|index| {
                         let numerator: f64 = first.saturating_add(index.as_()).as_();
@@ -1876,6 +1934,17 @@ fn native_and_fallback_ratio_and_conversion_keep_integer_precision_and_prefix() 
                         .map(|x| x.to_bits())
                         .eq(fallback.iter().map(|x| x.to_bits()))
                 );
+                for (name, kernel) in route::table::ratio_ramp::routes() {
+                    let mut actual = vec![0.0; length];
+                    assert_eq!(kernel(&mut actual, first, divisor), length, "{name}");
+                    assert!(
+                        actual
+                            .iter()
+                            .map(|x| x.to_bits())
+                            .eq(expected.iter().map(|x| x.to_bits())),
+                        "{name}: first {first}, divisor {divisor}, length {length}"
+                    );
+                }
                 let mut narrow = vec![-17.0; length.saturating_add(3)];
                 let mut fallback_narrow = narrow.clone();
                 let mut platform_narrow = narrow.clone();

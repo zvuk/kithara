@@ -9,7 +9,7 @@ use kithara::{
         time::{Duration, sleep},
         tokio::task::yield_now,
     },
-    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     SegmentGateHandle, TestServerHelper, fixture_protocol::DelayRule, hls_server::packaged_ladder,
@@ -191,7 +191,6 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
     let cfg: ResourceConfig<TestPools> = {
         let builder =
             ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
-                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
                 .downloader(downloader.clone())
                 .discriminator("t0")
                 .store(store);

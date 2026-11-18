@@ -50,4 +50,24 @@ compiler producing a normalized UI tree for renderers.
 
 ## Integration
 
+A skin supplies caller-owned Lottie JSON through its ordinary resolver:
+
+```ron
+(schema: "kithara.skin", version: 1, id: "caller",
+ artworks: {"caller": "art/picture.json"})
+```
+
+`parse_skin_over`/`load_skin` retain the declaring origin through inheritance and
+overlays. `Skin::resolve_with_font_policy` loads and admits each declared artwork
+once; cloned skins share it. With `render` enabled, `compile` checks required
+`Lottie.artwork` and present `active_artwork` names after parameter substitution,
+returning `UiDocError::UnknownArtwork` with the declaring document and control
+path. An absent optional active artwork remains absent, and direct optional
+`Skin::artwork` lookup retains its `Option` contract. The resolved resource is
+replayed by both hosts without source reads or JSON parsing during frames.
+
+The Iced drawing adapter preserves linear interpolation, coincident stops and
+premultiplied opacity with native vertex-colour meshes. Geometry is prepared
+before caching, so unchanged controls reuse it without retessellation.
+
 [Crate contracts](https://github.com/zvuk/kithara/wiki/kithara-ui).

@@ -3,7 +3,7 @@ mod tests;
 mod tree;
 
 pub use self::tree::{
-    Binding, BindingKind, BlockSpec, ControlSpec, ExpandedNode, MagnetSpec, MeasureSpec,
+    Binding, BindingKind, BlockSpec, ColorSpec, ControlSpec, ExpandedNode, MagnetSpec, MeasureSpec,
     SurfaceSpec,
 };
 pub(crate) use self::tree::{

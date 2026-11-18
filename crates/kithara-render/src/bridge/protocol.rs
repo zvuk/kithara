@@ -11,7 +11,7 @@ use kithara_signal::{SegmentId, SessionFrame};
 use super::{
     DeckMixSettingsChange, DeckParameter, DeckProgram, SlotBinding, SlotGainProgram, SlotMark,
 };
-use crate::{CrossfadeSettings, rt::track::PlayerResource};
+use crate::{CrossfadeSettings, PcmPacket, PcmReceiver};
 
 /// One scoped deck's commands, clock and verdicts.
 #[derive(Debug)]
@@ -114,7 +114,7 @@ pub enum DeckPart {
     Attach {
         slot: Slot,
         item_id: TrackId,
-        pcm: Box<PlayerResource>,
+        pcm: Box<PcmReceiver>,
         segment: SegmentId,
     },
     Detach {
@@ -140,7 +140,7 @@ pub enum DeckPart {
     Replace {
         slot: Slot,
         item_id: TrackId,
-        pcm: Box<PlayerResource>,
+        pcm: Box<PcmReceiver>,
         segment: SegmentId,
     },
     Chain {
@@ -174,7 +174,9 @@ pub enum Returned {
     Program(DeckProgram),
     Pcm {
         slot: Slot,
-        pcm: Box<PlayerResource>,
+        pcm: Box<PcmReceiver>,
+        /// Keeps a popped packet owned when the reverse ring is full.
+        packet: Option<PcmPacket>,
     },
     Eq(Box<EqLayout>),
     Stopped {
@@ -286,7 +288,7 @@ impl fmt::Debug for DeckPart {
                 })
                 .field("slot", slot)
                 .field("item_id", item_id)
-                .field("src", pcm.src())
+                .field("pcm", pcm)
                 .field("segment", segment)
                 .finish(),
             Self::Detach { slot } => formatter
@@ -360,10 +362,11 @@ impl fmt::Debug for DeckPart {
 impl fmt::Debug for Returned {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Pcm { slot, pcm } => formatter
+            Self::Pcm { slot, pcm, packet } => formatter
                 .debug_struct("Pcm")
                 .field("slot", slot)
-                .field("src", pcm.src())
+                .field("pcm", pcm)
+                .field("held_packet", &packet.is_some())
                 .finish(),
             Self::Eq(_) => formatter.write_str("Eq"),
             Self::Program(program) => formatter.debug_tuple("Program").field(program).finish(),

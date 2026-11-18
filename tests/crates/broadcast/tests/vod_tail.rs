@@ -13,7 +13,7 @@ use kithara::{
         time::Duration,
         tokio::{runtime::Handle, task::spawn_blocking},
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -68,9 +68,12 @@ async fn the_production_client_plays_the_stopped_broadcast(origin_tone: Vec<f32>
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
 
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, audio_config)
-        .await
-        .expect("open the stopped broadcast as HLS");
+    let mut audio = kithara_integration_tests::mock::load_audio(
+        &worker,
+        (audio_config, TrackConfig::default()),
+    )
+    .await
+    .expect("open the stopped broadcast as HLS");
     audio.preload().expect("preload the VOD tail");
 
     let channels = usize::from(audio.spec().channels);

@@ -6,12 +6,12 @@ use kithara_signal::{FrameCount, SessionFrame};
 
 use crate::{GridAnswer, LinkedFactory, LinkedPlayer, TempoTrajectory};
 
-impl<S, F> LinkedPlayer<S> for Queue<S, LinkedFactory<F>>
+impl<S, F> LinkedPlayer for Queue<S, LinkedFactory<F>>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
-    fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+    fn sync(&mut self, on: bool, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError> {
         let sent = sync_tracks(self.tracks_mut(), on, out)?;
         self.factory_mut().set_synced(on);
         Ok(sent)
@@ -21,7 +21,7 @@ where
         &mut self,
         trajectory: &TempoTrajectory,
         frames: &[SessionFrame],
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) {
         self.factory_mut().set_trajectory(trajectory);
         for track in self.tracks_mut() {
@@ -29,7 +29,7 @@ where
         }
     }
 
-    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>) {
+    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_>) {
         for track in self.tracks_mut() {
             track.grid(answer.clone(), out);
         }
@@ -59,19 +59,7 @@ where
         self.tracks_active().map(LinkedPlayer::scope_parts).sum()
     }
 
-    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool> {
-        let mut awaiting = false;
-        for track in self.tracks_mut() {
-            match track.retime_applied(at) {
-                Some(true) => return Some(true),
-                None => awaiting = true,
-                Some(false) => {}
-            }
-        }
-        (!awaiting).then_some(false)
-    }
-
-    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
+    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_>) {
         self.factory_mut().set_trajectory(trajectory);
         for track in self.tracks_mut() {
             track.realign(trajectory, at, out);
@@ -81,13 +69,13 @@ where
 
 /// Syncs each track in turn; a refusal turns back the tracks this call
 /// turned and answers the refusal.
-fn sync_tracks<'a, S, T>(
+fn sync_tracks<'a, T>(
     mut tracks: impl Iterator<Item = &'a mut T>,
     on: bool,
-    out: &mut Outbox<'_, S>,
+    out: &mut Outbox<'_>,
 ) -> Result<Option<Seq>, PlayError>
 where
-    T: LinkedPlayer<S> + 'a,
+    T: LinkedPlayer + 'a,
 {
     let Some(track) = tracks.next() else {
         return Ok(None);

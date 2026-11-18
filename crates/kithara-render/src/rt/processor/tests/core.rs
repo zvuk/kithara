@@ -8,7 +8,7 @@ pub(super) use kithara_effects::{
     GainDb,
     eq::{EqBandConfig, EqConfig, EqLayout},
 };
-pub(super) use kithara_platform::{sync::Arc, time::Duration};
+pub(super) use kithara_platform::time::Duration;
 pub(super) use kithara_signal::{
     AudioSpec, OutputContext, SessionEpoch, SessionFrame, TransportRevision,
 };
@@ -16,13 +16,11 @@ pub(super) use kithara_test_fixtures::integration_fixtures::constant_half;
 pub(super) use num_traits::{ToPrimitive, cast};
 
 use super::*;
+use crate::PcmReceiver;
 pub(super) use crate::{
     CrossfadeCurve, CrossfadeSettings,
     bridge::{DeckEqChange, DeckPart, DeckRefusal, Fade, FadeDir, Returned},
-    rt::{
-        DeckMixerConfig,
-        track::{PcmConsumer, PlayerResource},
-    },
+    rt::DeckMixerConfig,
     test_pools::pools,
     worker::{
         PcmPacket,
@@ -162,7 +160,7 @@ fn session_processors_read_the_same_host_context() {
     assert_eq!(left.transport_revision(), Some(TransportRevision::first()));
 }
 
-pub(super) fn pcm(constant_half: &'static [u8], src: &str, seconds: f64) -> Box<PlayerResource> {
+pub(super) fn pcm(constant_half: &'static [u8], seconds: f64) -> Box<PcmReceiver> {
     let total = (seconds * f64::from(RATE))
         .floor()
         .to_usize()
@@ -175,7 +173,7 @@ pub(super) fn pcm(constant_half: &'static [u8], src: &str, seconds: f64) -> Box<
         .take(frames * 2)
         .map(|bytes| f32::from_le_bytes(*bytes))
         .collect::<Vec<_>>();
-    pcm_samples(src, seconds, &samples, frames == total)
+    pcm_samples(seconds, &samples, frames == total)
 }
 
 pub(super) use crate::mock::{pcm_samples, send, send_on};
@@ -203,6 +201,17 @@ pub(super) fn render_frames(mixer: &mut TestMixer, start: usize, frames: usize) 
         outputs: &mut outputs,
     };
     mixer.inbox.0.drain();
+    render_realtime(mixer, start, frames, &mut buffers);
+    left
+}
+
+#[kithara::rtsan_forbid_blocking]
+pub(super) fn render_realtime(
+    mixer: &mut TestMixer,
+    start: usize,
+    frames: usize,
+    buffers: &mut ProcBuffers,
+) {
     let level = mixer.inbox.scope(mixer.mixer.scope).expect("live scope");
     let context = OutputContext::new(
         frame_at(start)..frame_at(start + frames),
@@ -215,10 +224,9 @@ pub(super) fn render_frames(mixer: &mut TestMixer, start: usize, frames: usize) 
         Some(level),
         Some(&context),
         frame_at(start),
-        &mut buffers,
+        buffers,
         frames,
     );
-    left
 }
 
 pub(super) use crate::mock::{assert_applied_at, outcome_of, receipts};
@@ -244,7 +252,7 @@ pub(super) fn start_dc(mixer: &mut TestMixer, ends: &mut TestEnds, slots: &[Slot
         parts.push(DeckPart::Attach {
             item_id: kithara_events::TrackId::allocate(),
             slot: *slot,
-            pcm: pcm_samples("dc", 1.0, &vec![1.0; 8192], false),
+            pcm: pcm_samples(1.0, &vec![1.0; 8192], false),
             segment: SegmentId::FIRST,
         });
         parts.push(DeckPart::Start {
@@ -327,7 +335,7 @@ fn an_interrupted_stop_still_answers_its_batch(#[case] replace: bool) {
             DeckPart::Replace {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: A,
-                pcm: pcm_samples("replacement", 1.0, &vec![1.0; 8192], false),
+                pcm: pcm_samples(1.0, &vec![1.0; 8192], false),
                 segment: SegmentId::FIRST,
             }
         } else {
@@ -484,10 +492,7 @@ fn adopt_never_mixes_a_blocked_older_packet_or_publishes_its_mark(#[case] check_
     packets.push(PcmPacket::Chunk(Box::new(chunk(
         spec, old, 0, 0, &[1.0; 32],
     ))));
-    let resource = Box::new(
-        PlayerResource::new(PcmConsumer::new(receiver), Arc::from("segments"), &pools())
-            .expect("resource"),
-    );
+    let resource = Box::new(receiver);
     let instant = Fade::Crossfade(
         CrossfadeSettings::new(0.0, CrossfadeCurve::Linear, 1.0, 0.5).expect("instant envelope"),
     );
@@ -571,7 +576,7 @@ fn removing_a_slot_while_its_tail_sounds_preserves_gain_continuity(#[case] repla
         vec![DeckPart::Replace {
             item_id: kithara_events::TrackId::allocate(),
             slot: A,
-            pcm: pcm_samples("second dc", 1.0, &vec![1.0; 8192], false),
+            pcm: pcm_samples(1.0, &vec![1.0; 8192], false),
             segment: SegmentId::FIRST,
         }],
     );
@@ -583,7 +588,7 @@ fn removing_a_slot_while_its_tail_sounds_preserves_gain_continuity(#[case] repla
             DeckPart::Replace {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: A,
-                pcm: pcm_samples("silence", 1.0, &vec![0.0; 8192], false),
+                pcm: pcm_samples(1.0, &vec![0.0; 8192], false),
                 segment: SegmentId::FIRST,
             }
         } else {

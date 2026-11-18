@@ -6,7 +6,7 @@ use kithara::{
     decode::DecoderBackend,
     file::{File, FileConfig, FileSrc},
     platform::{time::Duration, tokio::task::spawn_blocking},
-    play::{LoadRefusal, PlayWorker, PlayWorkerConfig},
+    play::{LoadRefusal, PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::Stream,
 };
 #[cfg(all(
@@ -71,9 +71,10 @@ fn local_signal(asset: SignalAsset) -> (SignalAsset, TestTempDir, PathBuf) {
 }
 
 async fn open_audio(
-    config: impl Into<
-        kithara::play::TrackConfig<File<TestPools>, kithara::resampler::NoResamplerBackend>,
-    >,
+    config: (
+        AudioConfig<File<TestPools>, kithara::resampler::NoResamplerBackend>,
+        TrackConfig,
+    ),
     pools: &Pools,
 ) -> Result<LaneAudio<Stream<File<TestPools>>, TestPools>, LoadRefusal> {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
@@ -111,7 +112,7 @@ async fn run_case(
         .store(store)
         .build();
     // Park on ring underrun: the offline scan needs no wall-clock pacing.
-    let audio_config = kithara::play::TrackConfig::for_audio(
+    let audio_config = (
         AudioConfig::<File<TestPools>>::for_stream(file_config)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
@@ -120,9 +121,8 @@ async fn run_case(
             )
             .maybe_hint(Some(asset.ext().to_owned()))
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let mut audio = open_audio(audio_config, &pools)
         .await
         .expect("create Audio<Stream<File>>");
@@ -204,7 +204,7 @@ async fn local_run_case(source: (SignalAsset, TestTempDir, PathBuf), backend: De
         )
         .maybe_hint(Some(asset.ext().to_owned()))
         .build();
-    let mut audio = open_audio(audio_config, &pools)
+    let mut audio = open_audio((audio_config, TrackConfig::default()), &pools)
         .await
         .expect("create local Audio<Stream<File>>");
     audio = kithara_integration_tests::mock::with_blocking_reads(audio);
@@ -279,7 +279,7 @@ async fn local_apple_fused_run_case(source: (SignalAsset, TestTempDir, PathBuf))
         )
         .maybe_hint(Some("m4a".to_owned()))
         .build();
-    let mut audio = open_audio(audio_config, &pools)
+    let mut audio = open_audio((audio_config, TrackConfig::default()), &pools)
         .await
         .expect("create fused local Audio<Stream<File>>");
 
@@ -408,7 +408,7 @@ async fn decode_pcm_seconds(source: ServedSignal, backend: DecoderBackend, secs:
         .store(store)
         .build();
     // Park on ring underrun instead of spinning on Pending.
-    let audio_config = kithara::play::TrackConfig::for_audio(
+    let audio_config = (
         AudioConfig::<File<TestPools>>::for_stream(file_config)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
@@ -417,9 +417,8 @@ async fn decode_pcm_seconds(source: ServedSignal, backend: DecoderBackend, secs:
             )
             .maybe_hint(Some(asset.ext().to_owned()))
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let mut audio = open_audio(audio_config, &pools)
         .await
         .expect("create Audio<Stream<File>>");
@@ -713,7 +712,7 @@ async fn bit_rate_e2e_does_not_hang(#[case] source: ServedSignal) {
         .maybe_hint(Some(asset.ext().to_owned()))
         .build();
 
-    let audio = open_audio(audio_config, &pools)
+    let audio = open_audio((audio_config, TrackConfig::default()), &pools)
         .await
         .expect("create Audio<Stream<File>>");
     let duration_secs = audio
@@ -1031,7 +1030,7 @@ async fn build_aac_sine_audio(
         .store(store)
         .build();
     // Park on ring underrun: covers both the cold and seeked handles.
-    let audio_config = kithara::play::TrackConfig::for_audio(
+    let audio_config = (
         AudioConfig::<File<TestPools>>::for_stream(file_config)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
@@ -1040,9 +1039,8 @@ async fn build_aac_sine_audio(
             )
             .maybe_hint(Some("aac".to_owned()))
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     open_audio(audio_config, &pools)
         .await
         .expect("create Audio<Stream<File>>")

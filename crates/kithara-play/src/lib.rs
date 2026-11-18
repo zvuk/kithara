@@ -39,7 +39,7 @@ pub use kithara_net::Headers;
 pub use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError,
     DispatcherProtocol, EngineLoad, EngineLoadSnapshot, InvalidCrossfade, LaneId, LoadRefusal,
-    PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
+    PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, PlayerNode, ServiceClass, TrackConfig,
     bridge::{
         CrossfaderGain, CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckFxChange,
         DeckMixSettings, DeckMixSettingsChange, DeckParameter, DeckPart, DeckProgram, DeckProtocol,
@@ -51,11 +51,13 @@ pub use kithara_render::{
     dispatch,
     rt::{
         BufferGeometryError, DeckMixerConfig, DeckMixerConfigPatch, DeckMixerConfigPatchError,
-        PlayerNode, StreamShape,
+        StreamShape,
     },
 };
 pub use kithara_sync::MIN_SPEED;
-pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, StretchKind};
+pub use kithara_warp::{
+    BeatGrid, BeatGridId, BeatGridSnapshot, Pitch, PitchStep, Semitones, StretchKind,
+};
 pub use player::{
     Bound, DeckControl, DeckPass, HostedDeck, Outbox, Player, PlayerConfig, PlayerFactory,
     PlayerImpl, Position, SeekBatch, Settled, Track, TrackCommand, TrackFactory, TrackReceipt,

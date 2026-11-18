@@ -1,5 +1,5 @@
 use kithara::{
-    analysis::BeatGridModel,
+    analysis::{BeatGridModel, MusicalKey},
     events::TrackId,
     platform::{
         sync::Arc,
@@ -16,6 +16,7 @@ use crate::wave_cache::AnalysisTarget;
 /// One artifact, as its external source answered for it.
 pub(super) enum Loaded {
     BeatGrid(Result<Arc<BeatGridModel>, ArtifactLoadError>),
+    Key(Result<Arc<MusicalKey>, ArtifactLoadError>),
     Waveform(Result<Arc<Waveform>, ArtifactLoadError>),
 }
 
@@ -23,8 +24,10 @@ impl Loaded {
     /// Why the load failed, when it did.
     const fn error(&self) -> Option<&ArtifactLoadError> {
         match self {
-            Self::BeatGrid(Err(error)) | Self::Waveform(Err(error)) => Some(error),
-            Self::BeatGrid(Ok(_)) | Self::Waveform(Ok(_)) => None,
+            Self::BeatGrid(Err(error)) | Self::Key(Err(error)) | Self::Waveform(Err(error)) => {
+                Some(error)
+            }
+            Self::BeatGrid(Ok(_)) | Self::Key(Ok(_)) | Self::Waveform(Ok(_)) => None,
         }
     }
 
@@ -51,6 +54,7 @@ impl Loaded {
     const fn kind(&self) -> &'static str {
         match self {
             Self::BeatGrid(_) => "beat grid",
+            Self::Key(_) => "key",
             Self::Waveform(_) => "waveform",
         }
     }
@@ -70,8 +74,8 @@ pub(super) struct LoadReply {
 impl Owner {
     /// Read whatever external artifacts this entry is still waiting on.
     ///
-    /// Both artifacts of one track are read by one task, in order: they share
-    /// a host and a connection, and neither is on a deadline the other cares
+    /// Every artifact of one track is read by one task, in order: they share
+    /// a host and a connection, and none is on a deadline another cares
     /// about. The task holds only a cloned configuration, so it outlives
     /// nothing and cancels with the load epoch the configuration carries.
     pub(super) fn start_loads(&self, index: usize) {
@@ -90,7 +94,13 @@ impl Owner {
             .is_pending()
             .then(|| config.waveform().cloned())
             .flatten();
-        if beat_grid.is_none() && waveform.is_none() {
+        let key = entry
+            .prepared()
+            .key
+            .is_pending()
+            .then(|| config.key().cloned())
+            .flatten();
+        if beat_grid.is_none() && waveform.is_none() && key.is_none() {
             return;
         }
         let track_id = entry.track_id();
@@ -105,8 +115,15 @@ impl Owner {
             {
                 return;
             }
-            if let Some(source) = waveform {
-                Loaded::Waveform(source.load(&fetch).await)
+            if let Some(source) = waveform
+                && !Loaded::Waveform(source.load(&fetch).await)
+                    .hand(&tx, epoch, target.clone(), track_id)
+                    .await
+            {
+                return;
+            }
+            if let Some(source) = key {
+                Loaded::Key(source.load(&fetch).await)
                     .hand(&tx, epoch, target, track_id)
                     .await;
             }

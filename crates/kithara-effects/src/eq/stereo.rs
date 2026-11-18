@@ -230,8 +230,11 @@ impl StereoEq {
         right: &mut [f32],
         gains: &[G],
     ) -> Result<(), GainShapeError> {
-        validate_gains(gains, left.len().min(right.len()))?;
-        self.process_gains(left, right, gains);
+        if validate_gains(gains, left.len().min(right.len()))? {
+            self.process_gains(left, right, gains);
+        } else {
+            self.process(left, right);
+        }
         Ok(())
     }
 
@@ -243,8 +246,9 @@ impl StereoEq {
         gains: &[G],
         frames: usize,
     ) -> Result<(), GainShapeError> {
-        validate_gains(gains, frames)?;
-        if let Some(active) = self.active.as_deref_mut() {
+        if validate_gains(gains, frames)?
+            && let Some(active) = self.active.as_deref_mut()
+        {
             for frame in 0..frames {
                 active.apply_gains(gains, frame);
             }
@@ -284,7 +288,8 @@ impl StereoEq {
     }
 }
 
-fn validate_gains(gains: &[impl AsRef<[f64]>], expected: usize) -> Result<(), GainShapeError> {
+fn validate_gains(gains: &[impl AsRef<[f64]>], expected: usize) -> Result<bool, GainShapeError> {
+    let mut has_gains = false;
     for (band, values) in gains.iter().enumerate() {
         let actual = values.as_ref().len();
         if actual != 0 && actual != expected {
@@ -294,8 +299,9 @@ fn validate_gains(gains: &[impl AsRef<[f64]>], expected: usize) -> Result<(), Ga
                 actual,
             });
         }
+        has_gains |= actual != 0;
     }
-    Ok(())
+    Ok(has_gains)
 }
 
 fn render_stereo(
@@ -347,16 +353,16 @@ mod tests {
         let mut eq = StereoEq::with_layout(&config, rate, Box::new(layout));
         for count in [1, 2, 4, 5] {
             let row = vec![-6.0; count];
+            let rows = [&[-6.0; 3][..], row.as_slice()];
+            let error = Err(GainShapeError {
+                band: 1,
+                expected: 3,
+                actual: count,
+            });
             let mut left = [0.25; 3];
             let mut right = [-0.5; 3];
-            assert_eq!(
-                eq.process_with_gains(&mut left, &mut right, &[row]),
-                Err(GainShapeError {
-                    band: 0,
-                    expected: 3,
-                    actual: count
-                })
-            );
+            assert_eq!(eq.process_with_gains(&mut left, &mut right, &rows), error);
+            assert_eq!(eq.advance_gains(&rows, 3), error);
             assert_eq!(left, [0.25; 3]);
             assert_eq!(right, [-0.5; 3]);
             let mut gains = [GainDb::MIN];

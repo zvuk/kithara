@@ -12,7 +12,7 @@ use kithara::{
         time::{Duration, Instant, WallInstant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
     signal::AudioSpec,
     stream::AudioCodec,
 };
@@ -386,7 +386,6 @@ async fn prepare_player(
     )
     .store(store)
     .downloader(downloader)
-    .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
     .decoder(
         kithara::audio::AudioDecoderConfig::builder()
             .backend(backend)

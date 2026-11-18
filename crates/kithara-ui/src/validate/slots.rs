@@ -10,6 +10,7 @@ use crate::{
 pub(crate) enum Gesture {
     Press,
     Secondary,
+    Double,
     Scalar,
     Step,
     Index,
@@ -125,6 +126,7 @@ pub(super) fn read_slots(
     [
         (site.status, Some(ValueKind::Text)),
         (site.query, Some(ValueKind::Text)),
+        (site.color_read, Some(ValueKind::Color)),
         (site.scope, Some(ValueKind::Scalar)),
         (site.zoom, Some(ValueKind::Scalar)),
         (site.active, Some(ValueKind::Bool)),
@@ -157,6 +159,13 @@ pub(crate) fn write_slots(site: ControlSite<'_>) -> Vec<WriteSlot<'_>> {
         (
             writes.secondary,
             Gesture::Secondary,
+            ValueKind::Trigger,
+            None,
+            BindingSide::Write,
+        ),
+        (
+            writes.double,
+            Gesture::Double,
             ValueKind::Trigger,
             None,
             BindingSide::Write,

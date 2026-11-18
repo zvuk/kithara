@@ -1,7 +1,14 @@
 use kithara_ui::render::{ReadValue, Scope, WriteValue};
 
 mod consts {
+    use kithara_key::{Mode, MusicalKey, PitchClass};
+
     use super::Source;
+
+    pub(super) const TRACK_KEY: MusicalKey = MusicalKey {
+        mode: Mode::Minor,
+        tonic: PitchClass::FSharp,
+    };
 
     pub(super) const SOURCES: [Source; 8] = [
         Source::new("auto", "AUTO", "124.00", "FOLLOW", "+0.0 ms", "0.00%"),
@@ -46,6 +53,9 @@ impl Source {
 
 pub(crate) struct ClockState {
     bpm_label: String,
+    transpose_label: String,
+    bpm: f64,
+    source: usize,
     click: bool,
     family_step: bool,
     key_locked: bool,
@@ -53,23 +63,24 @@ pub(crate) struct ClockState {
     midi_send: bool,
     quantize: bool,
     snap: bool,
-    bpm: f64,
-    source: usize,
+    transpose: i8,
 }
 
 impl Default for ClockState {
     fn default() -> Self {
         let mut state = Self {
             bpm_label: String::new(),
+            transpose_label: String::new(),
+            bpm: 124.0,
             source: 0,
-            family_step: true,
-            quantize: true,
-            snap: true,
             click: false,
+            family_step: true,
             key_locked: true,
             link: true,
             midi_send: false,
-            bpm: 124.0,
+            quantize: true,
+            snap: true,
+            transpose: 0,
         };
         state.rebuild();
         state
@@ -77,39 +88,31 @@ impl Default for ClockState {
 }
 
 impl ClockState {
+    pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
+        self.read_clock(id)
+            .or_else(|| self.read_grid(id))
+            .or_else(|| self.read_sync(id))
+            .or_else(|| self.read_source(id, scope))
+            .or_else(|| self.read_deck_key(id))
+    }
+
     pub(crate) fn write(&mut self, id: &str, scope: Scope<'_>, value: &WriteValue) {
-        match (id, value) {
-            ("clock.source.select", WriteValue::Trigger) => {
-                if let Some(source) = scope
-                    .get("source")
-                    .and_then(|id| consts::SOURCES.iter().position(|source| source.id == id))
-                {
-                    self.source = source;
-                }
-            }
-            ("clock.tempo", WriteValue::Step(steps)) => self.step(f64::from(*steps) * 0.01),
-            ("clock.nudge_up", WriteValue::Trigger) => self.step(0.01),
-            ("clock.nudge_down", WriteValue::Trigger) => self.step(-0.01),
-            ("clock.family.step", WriteValue::Trigger) => self.family_step = true,
-            ("clock.family.leap", WriteValue::Trigger) => self.family_step = false,
-            ("clock.grid.toggle_quantize", WriteValue::Trigger) => self.quantize = !self.quantize,
-            ("clock.grid.toggle_snap", WriteValue::Trigger) => self.snap = !self.snap,
-            ("clock.grid.toggle_click", WriteValue::Trigger) => self.click = !self.click,
-            ("clock.link.toggle", WriteValue::Trigger) => self.link = !self.link,
-            ("clock.midi.toggle_send", WriteValue::Trigger) => self.midi_send = !self.midi_send,
-            ("clock.tap", WriteValue::Trigger) => self.set_bpm(125.0),
-            ("clock.half", WriteValue::Trigger) => self.set_bpm(self.bpm / 2.0),
-            ("clock.double", WriteValue::Trigger) => self.set_bpm(self.bpm * 2.0),
-            ("clock.reset", WriteValue::Trigger) => self.set_bpm(124.0),
-            ("deck.key.toggle_lock", WriteValue::Trigger) => self.key_locked = !self.key_locked,
-            _ => {}
+        if let ("clock.tempo", WriteValue::Step(steps)) = (id, value) {
+            self.step(f64::from(*steps) * 0.01);
+            return;
+        }
+        let WriteValue::Trigger = value else {
+            return;
+        };
+        if id == "clock.source.select" {
+            self.select_source(scope);
+        } else if !self.write_clock(id) && !self.write_grid_and_sync(id) {
+            self.write_deck_key(id);
         }
     }
 
-    pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-        let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
-        let source = scope_value(scope, "source")
-            .and_then(|id| consts::SOURCES.iter().find(|source| source.id == id));
+    fn read_clock(&self, id: &str) -> Option<ReadValue<'_>> {
         let value = match id {
             "clock.bpm" => ReadValue::Text(&self.bpm_label),
             "clock.source" => ReadValue::Text(consts::SOURCES[self.source].name),
@@ -118,23 +121,67 @@ impl ClockState {
             "clock.family.leap" => ReadValue::Bool(!self.family_step),
             "clock.limit" => ReadValue::Scalar(8.0),
             "clock.tolerance" => ReadValue::Scalar(0.02),
+            _ => return None,
+        };
+        Some(value)
+    }
+
+    fn read_deck_key(&self, id: &str) -> Option<ReadValue<'_>> {
+        let value = match id {
+            "deck.track.key" => ReadValue::Text(consts::TRACK_KEY.open_key()),
+            "deck.track.key_color" => ReadValue::Color(
+                kithara_ui::builtin::MINOR_KEY_COLORS[consts::TRACK_KEY.open_key_index()],
+            ),
+            "deck.key.sounding" => {
+                ReadValue::Text(consts::TRACK_KEY.transposed(self.transpose).open_key())
+            }
+            "deck.key.color" => ReadValue::Color(
+                kithara_ui::builtin::MINOR_KEY_COLORS[consts::TRACK_KEY
+                    .transposed(self.transpose)
+                    .open_key_index()],
+            ),
+            "deck.key.sounding_hidden" => ReadValue::Bool(false),
+            "deck.key.transpose_hidden" => ReadValue::Bool(self.transpose == 0),
+            "deck.key.locked" => ReadValue::Bool(self.key_locked),
+            "deck.key.transpose" => ReadValue::Text(&self.transpose_label),
+            _ => return None,
+        };
+        Some(value)
+    }
+
+    fn read_grid(&self, id: &str) -> Option<ReadValue<'_>> {
+        let value = match id {
             "clock.grid.quantize" => ReadValue::Bool(self.quantize),
             "clock.grid.division" => ReadValue::Text("1/16"),
             "clock.grid.snap" => ReadValue::Bool(self.snap),
             "clock.grid.click" => ReadValue::Bool(self.click),
+            _ => return None,
+        };
+        Some(value)
+    }
+
+    fn read_source(&self, id: &str, scope: &str) -> Option<ReadValue<'_>> {
+        let source = find_source(scope)?;
+        let value = match id {
+            "clock.source.active" => ReadValue::Bool(source.id == consts::SOURCES[self.source].id),
+            "clock.source.name" => ReadValue::Text(source.name),
+            "clock.source.tempo" => ReadValue::Text(source.tempo),
+            "clock.source.mode" => ReadValue::Text(source.mode),
+            "clock.source.pulse" => ReadValue::Text(source.pulse),
+            "clock.source.stretch" => ReadValue::Text(source.stretch),
+            "clock.source.synced" => ReadValue::Bool(!matches!(source.id, "c" | "d")),
+            _ => return None,
+        };
+        Some(value)
+    }
+
+    fn read_sync(&self, id: &str) -> Option<ReadValue<'_>> {
+        let value = match id {
             "clock.link.enabled" => ReadValue::Bool(self.link),
             "clock.link.peers" => ReadValue::Text("2 PEERS"),
             "clock.midi.input" => ReadValue::Text("TR-8S"),
             "clock.midi.output" => ReadValue::Text("ALL PORTS"),
             "clock.midi.send" => ReadValue::Bool(self.midi_send),
-            "clock.source.active" => ReadValue::Bool(source?.id == consts::SOURCES[self.source].id),
-            "clock.source.name" => ReadValue::Text(source?.name),
-            "clock.source.tempo" => ReadValue::Text(source?.tempo),
-            "clock.source.mode" => ReadValue::Text(source?.mode),
-            "clock.source.pulse" => ReadValue::Text(source?.pulse),
-            "clock.source.stretch" => ReadValue::Text(source?.stretch),
-            "clock.source.synced" => ReadValue::Bool(source?.id != "c" && source?.id != "d"),
-            "deck.key.locked" => ReadValue::Bool(self.key_locked),
             _ => return None,
         };
         Some(value)
@@ -142,6 +189,15 @@ impl ClockState {
 
     fn rebuild(&mut self) {
         self.bpm_label = format!("{:.2}", self.bpm);
+    }
+
+    fn select_source(&mut self, scope: Scope<'_>) {
+        if let Some(source) = scope
+            .get("source")
+            .and_then(|id| consts::SOURCES.iter().position(|source| source.id == id))
+        {
+            self.source = source;
+        }
     }
 
     fn set_bpm(&mut self, bpm: f64) {
@@ -152,6 +208,59 @@ impl ClockState {
     fn step(&mut self, steps: f64) {
         self.set_bpm(self.bpm + steps);
     }
+
+    fn transpose_to(&mut self, semitones: i8) {
+        const MINUS_SIGN: char = '\u{2212}';
+
+        self.transpose = semitones.clamp(-12, 12);
+        self.transpose_label = match self.transpose {
+            0 => String::new(),
+            up if up > 0 => format!("+{up}"),
+            down => format!("{MINUS_SIGN}{}", down.unsigned_abs()),
+        };
+    }
+
+    fn write_clock(&mut self, id: &str) -> bool {
+        match id {
+            "clock.nudge_up" => self.step(0.01),
+            "clock.nudge_down" => self.step(-0.01),
+            "clock.family.step" => self.family_step = true,
+            "clock.family.leap" => self.family_step = false,
+            "clock.tap" => self.set_bpm(125.0),
+            "clock.half" => self.set_bpm(self.bpm / 2.0),
+            "clock.double" => self.set_bpm(self.bpm * 2.0),
+            "clock.reset" => self.set_bpm(124.0),
+            _ => return false,
+        }
+        true
+    }
+
+    fn write_deck_key(&mut self, id: &str) {
+        match id {
+            "deck.key.toggle_lock" => self.key_locked = !self.key_locked,
+            "deck.key.transpose_up" => self.transpose_to(self.transpose + 1),
+            "deck.key.transpose_down" => self.transpose_to(self.transpose - 1),
+            "deck.key.transpose_reset" => self.transpose_to(0),
+            _ => {}
+        }
+    }
+
+    fn write_grid_and_sync(&mut self, id: &str) -> bool {
+        match id {
+            "clock.grid.toggle_quantize" => self.quantize = !self.quantize,
+            "clock.grid.toggle_snap" => self.snap = !self.snap,
+            "clock.grid.toggle_click" => self.click = !self.click,
+            "clock.link.toggle" => self.link = !self.link,
+            "clock.midi.toggle_send" => self.midi_send = !self.midi_send,
+            _ => return false,
+        }
+        true
+    }
+}
+
+fn find_source(scope: &str) -> Option<&'static Source> {
+    let id = scope_value(scope, "source")?;
+    consts::SOURCES.iter().find(|source| source.id == id)
 }
 
 fn scope_value<'a>(scope: &'a str, name: &str) -> Option<&'a str> {

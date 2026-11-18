@@ -2,12 +2,13 @@ use std::{num::NonZeroU32, ops::Range, sync::OnceLock};
 
 use bon::Builder;
 use kithara_beat::BeatGridModel;
+use kithara_key::KeyEstimate;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::FrameCoverage;
 use rangemap::RangeSet;
 use tracing::debug;
 
-use super::snapshot::BeatSnapshot;
+use super::{fingerprint::AnalysisFingerprint, snapshot::BeatSnapshot};
 use crate::Waveform;
 
 /// Opaque identity the caller opens a pass with, echoed on every snapshot and
@@ -34,37 +35,6 @@ impl From<String> for AnalysisToken {
     }
 }
 
-/// What produced a snapshot, per artifact. The two are separate so a change to
-/// one analyzer's configuration cannot invalidate the other's stored results.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct AnalysisFingerprint {
-    beat: Option<Arc<str>>,
-    waveform: Option<Arc<str>>,
-}
-
-impl AnalysisFingerprint {
-    #[must_use]
-    pub fn new(beat: Option<&str>, waveform: Option<&str>) -> Self {
-        Self {
-            beat: beat.map(Arc::from),
-            waveform: waveform.map(Arc::from),
-        }
-    }
-
-    /// Beat backend, model, and artifact semantics.
-    #[must_use]
-    pub fn beat(&self) -> Option<&str> {
-        self.beat.as_deref()
-    }
-
-    /// Waveform analyzer configuration.
-    #[must_use]
-    pub fn waveform(&self) -> Option<&str> {
-        self.waveform.as_deref()
-    }
-}
-
 /// One publication of an analysis pass: self-contained, so a consumer holding
 /// only this can render the waveform, place markers on the source timeline, and
 /// tell how much of the track it is based on.
@@ -88,6 +58,7 @@ pub struct TrackAnalysis {
     beat: Option<BeatSnapshot>,
     extent: Option<u64>,
     waveform: Option<Waveform>,
+    key: Option<KeyEstimate>,
     #[builder(default)]
     coverage: RangeSet<u64>,
     #[builder(default)]
@@ -137,6 +108,13 @@ impl TrackAnalysis {
                 }
             })
             .as_ref()
+    }
+
+    /// The key over the covered frames, final once the snapshot is settled;
+    /// `None` while they carry no tonal energy or no key was asked for.
+    #[must_use]
+    pub const fn key(&self) -> Option<KeyEstimate> {
+        self.key
     }
 
     /// Whether the whole known extent sits in one covered run.

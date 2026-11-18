@@ -9,7 +9,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     net::NetOptions,
     platform::{CancelToken, time, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -101,7 +101,10 @@ async fn run_drm_seek_resume_cycle(
 
     let mut audio = kithara_integration_tests::mock::load_audio(
         shared_worker,
-        AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
+        (
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
+            TrackConfig::default(),
+        ),
     )
     .await
     .expect("audio creation");

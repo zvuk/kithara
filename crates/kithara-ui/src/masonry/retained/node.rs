@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::time::Duration;
 use masonry::{
     accesskit::{Node as AccessNode, Role},
     core::{
@@ -23,12 +23,12 @@ use super::{
     picker::{HostedEngine, local_ime_area, sync_ime_area},
     spot::Spot,
 };
+pub(crate) use crate::masonry::widgets::detent::Detent;
 use crate::{
     backends::VelloBackend,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
     hosts::{
         solve::{self, Limits, Size},
-        surface::{Entry, SteppingSurface},
         vis::VisFrame,
     },
     interact::{
@@ -41,108 +41,11 @@ use crate::{
     layout::{FrameCorners, FrameSides},
     masonry::{
         external::ExternalImageDeclaration,
-        paint::corner::{corner_frame, corner_path},
+        paint::corner::{paint_node_background, paint_node_frame},
         shader::ShaderDeclaration,
     },
-    render::{Published, ReadValue, Skin, document::Ctx},
+    render::{ReadValue, document::Ctx},
 };
-
-/// The stepping surface a flow declares over itself: a detent anywhere on it
-/// moves the value the document named, and so does a held drag.
-///
-/// The gesture is the one the immediate host puts over the same flow, so the
-/// two hosts step alike; only the way it is mounted differs. Where the document
-/// declares an entry, `entry` holds the text the number field opens with and
-/// the skin it is drawn in.
-pub(crate) struct Detent {
-    map_event: Rc<dyn Fn(Published) -> HostAction>,
-    surface: SteppingSurface,
-    entry: Option<(String, Skin)>,
-    path: String,
-}
-
-impl Detent {
-    pub(crate) fn new(
-        path: String,
-        map_event: Rc<dyn Fn(Published) -> HostAction>,
-        entry: Option<(String, Skin)>,
-    ) -> Self {
-        Self {
-            path,
-            map_event,
-            entry,
-            surface: SteppingSurface::default(),
-        }
-    }
-
-    delegate::delegate! {
-        to self.surface {
-            /// Closes the number field unchanged, answering whether one stood open.
-            fn close(&mut self) -> bool;
-            /// The hand this surface asks for, which is the one the immediate
-            /// host puts over the same flow.
-            fn cursor(&self, hit: &Hit) -> CursorShape;
-        }
-    }
-
-    const fn declares_entry(&self) -> bool {
-        self.entry.is_some()
-    }
-
-    fn paint(&self, bounds: Rect, list: &mut DrawListBuilder) {
-        if let Some((_, skin)) = &self.entry {
-            self.surface.paint(list, bounds, skin);
-        }
-    }
-
-    /// Keeps the text the next double-click opens the field holding.
-    fn show(&mut self, value: &ReadValue<'_>) {
-        if let (Some((held, _)), ReadValue::Text(text)) = (&mut self.entry, value)
-            && held.as_str() != *text
-        {
-            (*text).clone_into(held);
-        }
-    }
-
-    /// Offers one input to this surface, answering whether the surface took it.
-    ///
-    /// The surface holds the pointer for as long as the drag lasts. Routing
-    /// here is hit-tested, so without that a drag walking off the flow would
-    /// stop arriving and the release ending it would land on whatever the
-    /// pointer wandered onto, leaving this one armed for the next hover.
-    fn step(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>, hit: &Hit) -> bool {
-        let held = self.surface.dragging();
-        let editing = self.surface.editing();
-        let entry = self
-            .entry
-            .as_ref()
-            .map(|(value, skin)| Entry { value, skin });
-        let outcome = self.surface.on_input(input, hit, Instant::now(), entry);
-        if editing || self.surface.editing() {
-            ctx.request_paint_only();
-        }
-        match (editing, self.surface.editing()) {
-            (false, true) => ctx.request_focus(),
-            (true, false) => ctx.resign_focus(),
-            _ => {}
-        }
-        match outcome.ownership() {
-            PointerOwnership::Claim => ctx.capture_pointer(),
-            PointerOwnership::Release if held => ctx.release_pointer(),
-            PointerOwnership::Unchanged | PointerOwnership::Release => {}
-        }
-        let taken = outcome.is_captured() || held;
-        if let Some(action) = outcome.value() {
-            ctx.submit_action::<HostAction>((self.map_event)(crate::hosts::event::control_event(
-                &self.path, action,
-            )));
-        }
-        if taken {
-            ctx.set_handled();
-        }
-        taken
-    }
-}
 
 /// One face a flow shows: what it fills itself with, and what it draws around
 /// itself.
@@ -176,7 +79,6 @@ pub(crate) struct Node {
     lit: Option<Faces>,
     pointer: Option<(Pt, Pt)>,
     primary: Option<Box<dyn Fn() -> HostAction>>,
-    secondary: Option<Box<dyn Fn() -> HostAction>>,
     /// Where this node stands in the stage that holds it, when it is one of
     /// its placements.
     spot: Option<Spot>,
@@ -205,7 +107,6 @@ impl Node {
             frame,
             limits: None,
             primary: None,
-            secondary: None,
             round: FrameCorners::EMPTY,
             radius: 0.0,
             double_click: false,
@@ -355,56 +256,6 @@ impl Node {
         flow || leaf
     }
 
-    fn paint_background(&self, bounds: Rect, list: &mut DrawListBuilder) {
-        let Some(color) = self.background else {
-            return;
-        };
-        if self.rounded() {
-            list.fill_path(corner_path(bounds, self.radius, self.round), color);
-        } else {
-            list.fill_rect(bounds, color);
-        }
-    }
-
-    /// A frame is drawn over whatever the node holds, not under it: a child
-    /// that fills its parent to the edge would otherwise paint the side away,
-    /// which is what the other host, stacking the frame above the body, never
-    /// does.
-    fn paint_frame(&self, bounds: Rect, list: &mut DrawListBuilder) {
-        let Some((sides, color, width)) = self.frame else {
-            return;
-        };
-        if self.rounded() {
-            corner_frame(list, bounds, self.radius, self.round, sides, color, width);
-            return;
-        }
-        let right = bounds.x + (bounds.w - width).max(0.0);
-        let bottom = bounds.y + (bounds.h - width).max(0.0);
-        let mut side = |x: f32, y: f32, w: f32, h: f32| {
-            list.fill_rect(
-                Rect {
-                    x,
-                    y,
-                    w: w.max(0.0),
-                    h: h.max(0.0),
-                },
-                color,
-            );
-        };
-        if sides.top {
-            side(bounds.x, bounds.y, bounds.w, width);
-        }
-        if sides.right {
-            side(right, bounds.y, width, bounds.h);
-        }
-        if sides.bottom {
-            side(bounds.x, bottom, bounds.w, width);
-        }
-        if sides.left {
-            side(bounds.x, bounds.y, width, bounds.h);
-        }
-    }
-
     fn pointer_input(
         &mut self,
         ctx: &EventCtx<'_>,
@@ -493,30 +344,8 @@ impl Node {
         self.leaf_input(ctx, &cancel, input, Hit::new(None, area));
     }
 
-    fn queue_pointer(&self, ctx: &mut EventCtx<'_>, event: &PointerEvent) {
-        let PointerEvent::Down(button) = event else {
-            return;
-        };
-        let action = match button.button {
-            Some(MasonryPointerButton::Secondary) => self.secondary.as_ref(),
-            Some(MasonryPointerButton::Primary) | None => self.primary.as_ref(),
-            _ => None,
-        };
-        if let Some(action) = action {
-            ctx.submit_action::<HostAction>(action());
-            ctx.set_handled();
-        }
-    }
-
     pub(crate) fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
         self.layout.leaf().is_some_and(|leaf| leaf.refresh(ctx))
-    }
-
-    /// Whether this node stands at a window corner the skin gives a radius to.
-    /// Everywhere else the box is square, and the square path is the one that
-    /// matches the other host pixel for pixel.
-    const fn rounded(&self) -> bool {
-        self.round.any() && self.radius > 0.0
     }
 
     /// Offers a key to the number field this flow has open.
@@ -563,6 +392,25 @@ impl Node {
         self.lit = Some(faces);
     }
 
+    pub(crate) fn tint_background(&mut self, color: Rgba, on: bool) -> bool {
+        if let Some(faces) = &mut self.lit {
+            faces.lit.background = Some(color);
+        }
+        self.light(on)
+    }
+
+    pub(crate) fn tint_text(
+        &mut self,
+        role: crate::skin::ColorRole,
+        color: Rgba,
+        on: bool,
+        active_uses_base: bool,
+    ) -> bool {
+        self.layout
+            .leaf()
+            .is_some_and(|leaf| leaf.tint_text(role, color, on, active_uses_base))
+    }
+
     /// Shows the value an engine just published for this node's control, without
     /// waiting for the rebuild that follows the gesture.
     pub(crate) fn show_live(&mut self, value: &ReadValue<'_>) -> bool {
@@ -582,6 +430,19 @@ impl Node {
         self.detent
             .as_mut()
             .is_some_and(|detent| detent.step(ctx, input, hit))
+    }
+}
+
+/// What a primary press on a node runs.
+impl Node {
+    fn queue_pointer(&mut self, ctx: &mut EventCtx<'_>, event: &PointerEvent) {
+        let (PointerEvent::Down(button), Some(action)) = (event, &self.primary) else {
+            return;
+        };
+        if matches!(button.button, Some(MasonryPointerButton::Primary) | None) {
+            ctx.submit_action::<HostAction>(action());
+            ctx.set_handled();
+        }
     }
 }
 
@@ -678,15 +539,9 @@ impl Node {
         moved
     }
 
-    /// What this node runs when it is pressed, and what it runs when it is
-    /// pressed with the other button.
-    pub(crate) fn set_actions(
-        &mut self,
-        primary: Option<Box<dyn Fn() -> HostAction>>,
-        secondary: Option<Box<dyn Fn() -> HostAction>>,
-    ) {
-        self.primary = primary;
-        self.secondary = secondary;
+    /// What this node runs when it is pressed.
+    pub(crate) fn set_primary(&mut self, primary: Box<dyn Fn() -> HostAction>) {
+        self.primary = Some(primary);
     }
 
     /// The stepping surface this flow is asked to carry over itself.
@@ -731,7 +586,6 @@ impl Widget for Node {
     /// widget Masonry counts as taking the pointer.
     fn accepts_pointer_interaction(&self) -> bool {
         self.primary.is_some()
-            || self.secondary.is_some()
             || self.detent.is_some()
             || self.spot.as_ref().is_some_and(Spot::grips)
             || self.layout.accepts_input()
@@ -911,7 +765,7 @@ impl Widget for Node {
         let size = ctx.size();
         let bounds = own_box(size);
         let mut list = DrawListBuilder::default();
-        self.paint_background(bounds, &mut list);
+        paint_node_background(bounds, self.background, self.round, self.radius, &mut list);
         replay(&list.finish(), &mut VelloBackend::new(scene));
         if let Some(leaf) = self.layout.leaf() {
             leaf.paint(bounds, scene);
@@ -936,7 +790,7 @@ impl Widget for Node {
         if let Some(detent) = &self.detent {
             detent.paint(bounds, &mut list);
         }
-        self.paint_frame(bounds, &mut list);
+        paint_node_frame(bounds, self.frame, self.round, self.radius, &mut list);
         replay(&list.finish(), &mut VelloBackend::new(scene));
     }
 
@@ -1062,7 +916,9 @@ mod tests {
 
     #[kithara::test]
     fn the_pass_under_a_node_s_children_lays_down_its_ground_alone() {
-        let commands = drawn(|node, list| node.paint_background(consts::BOX, list));
+        let commands = drawn(|node, list| {
+            paint_node_background(consts::BOX, node.background, node.round, node.radius, list);
+        });
 
         assert_eq!(
             rects(&commands),
@@ -1073,7 +929,9 @@ mod tests {
 
     #[kithara::test]
     fn a_node_puts_every_side_of_its_frame_in_the_pass_over_its_children() {
-        let commands = drawn(|node, list| node.paint_frame(consts::BOX, list));
+        let commands = drawn(|node, list| {
+            paint_node_frame(consts::BOX, node.frame, node.round, node.radius, list);
+        });
 
         assert_eq!(
             rects(&commands),
@@ -1112,7 +970,7 @@ mod tests {
     #[kithara::test]
     fn a_node_at_a_window_corner_lays_its_ground_down_as_a_path() {
         let commands = painted(&at_a_window_corner(), |node, list| {
-            node.paint_background(consts::BOX, list);
+            paint_node_background(consts::BOX, node.background, node.round, node.radius, list);
         });
 
         assert!(
@@ -1132,7 +990,7 @@ mod tests {
     #[kithara::test]
     fn a_node_at_a_window_corner_draws_its_frame_as_one_band() {
         let commands = painted(&at_a_window_corner(), |node, list| {
-            node.paint_frame(consts::BOX, list);
+            paint_node_frame(consts::BOX, node.frame, node.round, node.radius, list);
         });
 
         assert!(
@@ -1148,7 +1006,9 @@ mod tests {
         let mut node = framed();
         node.set_round(FrameCorners::EMPTY, 6.0);
 
-        let commands = painted(&node, |node, list| node.paint_frame(consts::BOX, list));
+        let commands = painted(&node, |node, list| {
+            paint_node_frame(consts::BOX, node.frame, node.round, node.radius, list);
+        });
 
         assert_eq!(rects(&commands).len(), 4, "{commands:?}");
     }
@@ -1163,7 +1023,7 @@ mod tests {
             None,
         );
         let mut list = DrawListBuilder::default();
-        node.paint_frame(consts::BOX, &mut list);
+        paint_node_frame(consts::BOX, node.frame, node.round, node.radius, &mut list);
 
         assert!(
             list.finish().commands().is_empty(),

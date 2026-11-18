@@ -1,14 +1,11 @@
 use kithara_audio::{AudioConfig, AudioObserver, ResamplerBackend};
-use kithara_bufpool::HasPool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::DecodeError;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
-use kithara_render::{TrackConfig, TrackConfigPatch};
-use kithara_stream::StreamType;
 use url::Url;
 
 use super::{ResourceConfig, ResourceSrc};
-use crate::PlayWorker;
 
 fn derive_remote_file_hint(url: &Url) -> Option<String> {
     url.path_segments()
@@ -73,10 +70,9 @@ where
     /// Build an `AudioConfig<Hls<S>>` from this resource configuration.
     pub(crate) fn build_hls_config(
         self,
-        worker: &PlayWorker<S>,
+        pools: PoolRegion<S>,
         observer: Option<Box<dyn AudioObserver>>,
     ) -> Result<AudioConfig<kithara_hls::Hls<S>, B>, DecodeError> {
-        let pools = worker.pools().clone();
         let url = match self.src {
             ResourceSrc::Url(ref url) => url.clone(),
             ResourceSrc::Path(_) => {
@@ -111,42 +107,20 @@ where
         audio_config.apply(self.audio.clone());
         Ok(audio_config)
     }
-
-    /// Transfers playback geometry to one render lane.
-    pub(crate) fn build_track_config<T>(&self, audio: AudioConfig<T, B>) -> TrackConfig<T, B>
-    where
-        T: StreamType,
-    {
-        let mut config = TrackConfig::for_audio(audio)
-            .block_on_underrun(self.block_on_underrun)
-            .maybe_engine_load(self.engine_load.clone())
-            .warp(self.warp.clone())
-            .build();
-        let mut patch = TrackConfigPatch::default();
-        patch.preload_chunks = self.preload_chunks;
-        patch.audio_buffer_chunks = self.audio_buffer_chunks;
-        config.apply(patch);
-        config
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Read, num::NonZeroUsize};
+    use std::io::Read;
 
     use kithara_assets::{AcquisitionResult, AssetResource, AssetStore, StorageBackend, WriteSide};
     use kithara_config::Config as _;
     use kithara_test_utils::kithara;
 
     use crate::{
-        PlayWorker, PlayWorkerConfig,
         resource::{ResourceConfig, ResourceSrc},
         test_pools::{TestPools, pools},
     };
-
-    fn worker() -> PlayWorker<TestPools> {
-        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
-    }
 
     fn config(source: &str) -> ResourceConfig<TestPools> {
         ResourceConfig::for_src(ResourceSrc::parse(source).expect("valid test source"))
@@ -176,7 +150,7 @@ mod tests {
         config.hls.download_batch_size = Some(6);
 
         let built = config
-            .build_hls_config(&worker(), None)
+            .build_hls_config(pools(), None)
             .expect("valid HLS config");
 
         assert_eq!(built.stream().values().download_batch_size, 6);
@@ -305,83 +279,5 @@ mod tests {
             .read_exact(&mut read)
             .expect("read cached source bytes");
         assert_eq!(read, bytes);
-    }
-
-    /// `preload_chunks` is both a document key and read in production, so the
-    /// value a document names has to survive the whole way to the built HLS
-    /// pipeline.
-    #[kithara::test(tokio)]
-    async fn the_document_preload_count_reaches_the_built_hls_config() {
-        let mut config = config("https://example.com/live.m3u8");
-        config.preload_chunks = NonZeroUsize::new(9);
-
-        let audio = config
-            .clone()
-            .build_hls_config(&worker(), None)
-            .expect("valid HLS config");
-        let built = config.build_track_config(audio);
-
-        assert_eq!(built.preload_chunks().get(), 9);
-    }
-
-    /// The file branch reads the same field from the same place.
-    #[kithara::test(tokio)]
-    async fn the_document_preload_count_reaches_the_built_file_config() {
-        let mut config = config("https://example.com/song.mp3");
-        config.preload_chunks = NonZeroUsize::new(9);
-
-        let audio = config.clone().build_file_config(None);
-        let built = config.build_track_config(audio);
-
-        assert_eq!(built.preload_chunks().get(), 9);
-    }
-
-    /// `audio_buffer_chunks` reached the built `AudioConfig` through no path
-    /// while `ResourceConfig` forwarded individual audio fields one by one:
-    /// it never mirrored this one. Carrying the audio patch whole closes that
-    /// gap, the same collapse `hls` and `file` already went through.
-    #[kithara::test(tokio)]
-    async fn an_audio_knob_the_resource_never_declared_reaches_the_built_config() {
-        let mut config = config("https://example.com/live.m3u8");
-        config.audio_buffer_chunks = NonZeroUsize::new(24);
-
-        let audio = config
-            .clone()
-            .build_hls_config(&worker(), None)
-            .expect("valid HLS config");
-        let built = config.build_track_config(audio);
-
-        assert_eq!(built.audio_buffer_chunks().get(), 24);
-    }
-
-    /// `block_on_underrun` is the one audio knob no document can name, so the
-    /// only route from a caller to the producer ring is this field. An offline
-    /// suite that reads its own rendered PCM opts in through it; were the field
-    /// dropped here the opt-in would compile and read as a zero-filled range
-    /// indistinguishable from rendered silence.
-    #[kithara::test(tokio)]
-    async fn the_underrun_block_choice_reaches_the_built_hls_config() {
-        let mut config = config("https://example.com/live.m3u8");
-        config.block_on_underrun = true;
-
-        let audio = config
-            .clone()
-            .build_hls_config(&worker(), None)
-            .expect("valid HLS config");
-        let built = config.build_track_config(audio);
-
-        assert!(built.block_on_underrun());
-    }
-
-    /// The file branch reads the same field from the same place.
-    #[kithara::test(tokio)]
-    async fn the_underrun_block_choice_reaches_the_built_file_config() {
-        let mut config = config("https://example.com/song.mp3");
-        config.block_on_underrun = true;
-
-        let audio = config.clone().build_file_config(None);
-        let built = config.build_track_config(audio);
-
-        assert!(built.block_on_underrun());
     }
 }

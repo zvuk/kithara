@@ -3,8 +3,7 @@ use std::ops::Range;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_signal::FrameCount;
 
-use super::track::PlayerTrack;
-use crate::bridge::RtMetrics;
+use super::track::{PlayerTrack, ReadPcm};
 
 /// What a slot still sounds of the consumer a `Replace` took out of it: its next frames, ramped
 /// down to silence, played under the consumer that took its place.
@@ -40,9 +39,8 @@ impl SlotTail {
         &mut self,
         track: &mut PlayerTrack,
         frames: usize,
-        metrics: &RtMetrics,
         budget: &mut usize,
-        wait_for_pcm: bool,
+        read_pcm: ReadPcm,
     ) {
         let remaining = self.len - self.pos;
         self.left.copy_within(self.pos..self.len, 0);
@@ -51,9 +49,8 @@ impl SlotTail {
         let written = track.read_tail(
             &mut self.incoming_left[..frames],
             &mut self.incoming_right[..frames],
-            metrics,
             budget,
-            wait_for_pcm,
+            read_pcm,
         );
         self.len = remaining.max(written);
         self.left[remaining..self.len].fill(0.0);
@@ -94,7 +91,7 @@ impl SlotTail {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_platform::time::Duration;
     use kithara_signal::{AudioSpec, SegmentId};
     use kithara_test_utils::kithara;
     use num_traits::ToPrimitive;
@@ -103,7 +100,7 @@ mod tests {
     use crate::{
         CrossfadeSettings,
         bridge::Fade,
-        rt::track::{PcmConsumer, PlayerResource},
+        rt::track::PlayerResource,
         worker::{
             PcmPacket,
             packet_tests::{PacketRing, chunk},
@@ -126,16 +123,11 @@ mod tests {
                         &vec![0.5; available * 2],
                     ))));
                 }
-                let resource = PlayerResource::new(
-                    PcmConsumer::new(ring.receiver.take().expect("receiver")),
-                    Arc::from("tail"),
-                    &pools,
-                )
-                .expect("resource");
+                let resource = Box::new(ring.receiver.take().expect("receiver"));
                 let mut track = PlayerTrack::builder()
                     .item_id(kithara_events::TrackId::allocate())
                     .sample_rate(spec.sample_rate)
-                    .build(Box::new(resource));
+                    .build(resource);
                 track.start(Fade::Crossfade(CrossfadeSettings {
                     duration: 0.0,
                     ..Default::default()
@@ -171,7 +163,7 @@ mod tests {
                     expected_left[frame] += incoming;
                     expected_right[frame] += incoming;
                 }
-                tail.fill(&mut track, requested, &RtMetrics::default(), &mut 16, false);
+                tail.fill(&mut track, requested, &mut 16, PlayerResource::read);
                 assert_eq!(&*tail.left, expected_left);
                 assert_eq!(&*tail.right, expected_right);
                 assert_eq!(tail.len, len);

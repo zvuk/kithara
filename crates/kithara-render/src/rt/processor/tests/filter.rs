@@ -17,21 +17,7 @@ fn stereo_frames(mixer: &mut TestMixer, start: usize, frames: usize) -> [Vec<f32
         outputs: &mut outputs,
     };
     mixer.inbox.0.drain();
-    let level = mixer.inbox.scope(mixer.mixer.scope).expect("live scope");
-    let context = OutputContext::new(
-        frame_at(start)..frame_at(start + frames),
-        shape().sample_rate,
-        SessionEpoch::new(0),
-        None,
-    )
-    .expect("output range");
-    mixer.mixer.render_block(
-        Some(level),
-        Some(&context),
-        frame_at(start),
-        &mut buffers,
-        frames,
-    );
+    render_realtime(mixer, start, frames, &mut buffers);
     pcm
 }
 
@@ -100,12 +86,7 @@ fn source_format_changes_preserve_pcm_metadata_and_the_deck_filter_rate(
         metadata.push(packet.meta);
         ring.push(PcmPacket::Chunk(Box::new(packet)));
     }
-    let resource = PlayerResource::new(
-        PcmConsumer::new(ring.receiver.take().expect("receiver")),
-        Arc::from("source format"),
-        &pools(),
-    )
-    .expect("resource");
+    let resource = Box::new(ring.receiver.take().expect("receiver"));
     let attached = send(
         &mut ends,
         at(1),
@@ -113,7 +94,7 @@ fn source_format_changes_preserve_pcm_metadata_and_the_deck_filter_rate(
             DeckPart::Attach {
                 slot: A,
                 item_id: kithara_events::TrackId::allocate(),
-                pcm: Box::new(resource),
+                pcm: resource,
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {

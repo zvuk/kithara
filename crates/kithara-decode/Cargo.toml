@@ -120,7 +120,7 @@ kithara-android = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-decode = { path = ".", default-features = false, features = ["usdt"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "subscriber"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang", "subscriber"] }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 

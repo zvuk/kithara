@@ -33,6 +33,7 @@ pub(crate) struct OverlayData {
     pub(crate) badge: String,
     pub(crate) bpm: String,
     pub(crate) key: String,
+    pub(crate) key_color: Option<crate::skin::ColorRole>,
     pub(crate) remain: String,
     pub(crate) title: String,
 }

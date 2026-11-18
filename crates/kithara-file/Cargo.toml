@@ -64,7 +64,6 @@ delegate = { workspace = true }
 derive-where = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
-humantime-serde = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -80,7 +79,7 @@ hotpath = { workspace = true, optional = true }
 [dev-dependencies]
 kithara-bufpool = { workspace = true }
 kithara-file = { path = ".", default-features = false, features = ["usdt"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang"] }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 

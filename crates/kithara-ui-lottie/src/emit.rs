@@ -32,6 +32,9 @@ pub fn emit(
     frame: f64,
     into: &mut DrawListBuilder,
 ) -> Result<(), LottieError> {
+    if !frame.is_finite() {
+        return Err(LottieError::InvalidFrame);
+    }
     let mut painted = Vec::new();
     for layer in composition.layers.iter().rev() {
         if layer.is_mask {
@@ -45,6 +48,9 @@ pub fn emit(
             frame,
             &mut painted,
         )?;
+    }
+    if !painted.iter().all(Part::finite) {
+        return Err(LottieError::Numeric);
     }
     for part in painted {
         part.draw(into);
@@ -72,6 +78,47 @@ enum Ink {
 }
 
 impl Part {
+    fn finite(&self) -> bool {
+        let transform = self.transform;
+        let transform = [
+            transform.xx,
+            transform.xy,
+            transform.yx,
+            transform.yy,
+            transform.dx,
+            transform.dy,
+        ];
+        let geometry = self.verbs.iter().all(|verb| match *verb {
+            Verb::MoveTo(to) | Verb::LineTo(to) => finite_point(to),
+            Verb::QuadTo { control, to } => finite_point(control) && finite_point(to),
+            Verb::CurveTo { first, second, to } => {
+                finite_point(first) && finite_point(second) && finite_point(to)
+            }
+            Verb::Close => true,
+        });
+        let paint = match self.ink {
+            Ink::Stroke { color, pen } => finite_color(color) && pen.width.is_finite(),
+            Ink::Fill(paint) => match paint {
+                Paint::Solid(color) => finite_color(color),
+                Paint::Linear { from, to, stops } => {
+                    finite_point(from)
+                        && finite_point(to)
+                        && stops.as_slice().iter().all(|stop| finite_color(stop.color))
+                }
+                Paint::Radial {
+                    center,
+                    radius,
+                    stops,
+                } => {
+                    finite_point(center)
+                        && radius.is_finite()
+                        && stops.as_slice().iter().all(|stop| finite_color(stop.color))
+                }
+            },
+        };
+        transform.iter().all(|value| value.is_finite()) && geometry && paint
+    }
+
     fn draw(self, into: &mut DrawListBuilder) {
         into.transformed(self.transform, |list| {
             let path = list.path(FillRule::NonZero, self.verbs);
@@ -81,6 +128,16 @@ impl Part {
             }
         });
     }
+}
+
+fn finite_point(point: Pt) -> bool {
+    point.x.is_finite() && point.y.is_finite()
+}
+
+fn finite_color(color: Rgba) -> bool {
+    [color.r, color.g, color.b, color.a]
+        .iter()
+        .all(|value| value.is_finite())
 }
 
 fn layer_at(

@@ -215,7 +215,7 @@ fn independent_levels_for_one_deck_apply_in_send_order() {
 
 #[kithara::test]
 fn a_refused_group_sends_none_of_its_staged_eq_changes() {
-    fn stage(out: &mut kithara_play::Outbox<'_, TestPools>) -> Result<(), PlayError> {
+    fn stage(out: &mut kithara_play::Outbox<'_>) -> Result<(), PlayError> {
         for (band, gain) in [(0, -6.0), (1, 3.0)] {
             assert_eq!(
                 out.eq(vec![DeckEqChange::Gain {
@@ -355,7 +355,7 @@ fn a_program_admitted_from_a_stale_snapshot_returns_its_late_owner_receipt() {
             deck: &snapshot,
             planned_tempo: &tempo,
         };
-        Outbox::<TestPools>::new(&mut port, &mut dispatcher)
+        Outbox::new(&mut port, &mut dispatcher)
             .in_pass(pass)
             .deck_programs(vec![program])
             .expect("synchronous admission uses the published frontier")

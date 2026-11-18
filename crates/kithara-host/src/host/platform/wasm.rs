@@ -163,7 +163,7 @@ mod tests {
         wasm::{HostRoute, HostSender},
     };
 
-    type Command = HostCommand<TestPools, dyn HostedDeck<TestPools>>;
+    type Command = HostCommand<dyn HostedDeck<TestPools>>;
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Outcome {
@@ -219,12 +219,12 @@ mod tests {
             DeckMixerConfig::default()
         }
 
-        fn close(&mut self, _out: &mut Outbox<'_, TestPools>) -> Result<(), PlayError> {
+        fn close(&mut self, _out: &mut Outbox<'_>) -> Result<(), PlayError> {
             self.close.result()?;
             self.detach.result()
         }
 
-        fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {
+        fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_>) {
             self.drains.fetch_add(1, Ordering::SeqCst);
         }
 
@@ -236,15 +236,15 @@ mod tests {
             self.waker.lock().take();
         }
 
-        fn tick(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {
+        fn tick(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_>) {
             self.ticks.fetch_add(1, Ordering::SeqCst);
         }
 
         fn settle(
             &mut self,
-            _receipt: TrackReceipt<'_, TestPools>,
+            _receipt: TrackReceipt<'_>,
             _pass: DeckPass<'_>,
-            _out: &mut Outbox<'_, TestPools>,
+            _out: &mut Outbox<'_>,
         ) {
         }
     }

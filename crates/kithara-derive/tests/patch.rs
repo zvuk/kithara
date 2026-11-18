@@ -27,7 +27,7 @@ struct Settings {
     timeout: Duration,
     #[patch(attribute(serde(
         rename = "pause",
-        deserialize_with = "humantime_serde::option::deserialize"
+        deserialize_with = "kithara_config::duration::option::deserialize"
     )))]
     idle: Option<Duration>,
     #[patch(humantime)]
@@ -118,6 +118,42 @@ fn rejected_nested_patch_commits_nothing() {
     assert!(owner.apply(patch).is_err());
     assert_eq!(owner.settings, original);
     assert_eq!(owner.other, Some(11));
+}
+
+#[derive(Clone, Debug, PartialEq, Patch)]
+struct DurationPatchContract {
+    #[patch(humantime)]
+    timeout: Duration,
+    #[patch(humantime)]
+    idle: Option<Duration>,
+}
+
+fn duration_patch_contract() -> DurationPatchContract {
+    DurationPatchContract {
+        timeout: Duration::from_secs(3),
+        idle: Some(Duration::from_secs(5)),
+    }
+}
+
+#[kithara::test(native, flash(false))]
+fn humantime_patch_fields_update_present_values_and_reject_null() {
+    let mut config = duration_patch_contract();
+    config.apply(
+        serde_yaml_ng::from_str("timeout: 7s\nidle: 9s").expect("the duration patch parses"),
+    );
+    assert_eq!(config.timeout, Duration::from_secs(7));
+    assert_eq!(config.idle, Some(Duration::from_secs(9)));
+
+    let unchanged = config.clone();
+    config.apply(serde_yaml_ng::from_str("{}").expect("an empty patch parses"));
+    assert_eq!(config, unchanged, "missing keys preserve their values");
+
+    for document in ["timeout: null", "idle: null"] {
+        assert!(
+            serde_yaml_ng::from_str::<DurationPatchContractPatch>(document).is_err(),
+            "{document}"
+        );
+    }
 }
 
 #[derive(Patch)]

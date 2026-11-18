@@ -170,6 +170,24 @@ fn curve(c: &mut Criterion) {
                     },
                 );
             }
+            let hold = kithara_dsp::routes::parameter_hold::routes();
+            let linear = kithara_dsp::routes::parameter_linear::routes();
+            for (form, kernel) in hold
+                .filter(|_| name == "hold")
+                .chain(linear.filter(|_| name == "linear"))
+            {
+                group.bench_with_input(
+                    BenchmarkId::new(form, frames),
+                    &positions,
+                    |b, positions| {
+                        b.iter_batched_ref(
+                            || positions.clone(),
+                            |values| kernel(black_box(values), black_box([0.75, 0.25])),
+                            BatchSize::SmallInput,
+                        );
+                    },
+                );
+            }
         }
         group.finish();
     }
@@ -215,26 +233,18 @@ fn ratio_ramp(c: &mut Criterion) {
     let mut group = c.benchmark_group("ratio_ramp");
     for frames in [128, 512] {
         let mut output = vec![0.0; frames];
-        for native in [true, false] {
-            group.bench_function(
-                BenchmarkId::new(if native { "native" } else { "scalar" }, frames),
-                |b| {
-                    b.iter(|| {
-                        let output = black_box(&mut output);
-                        let first = black_box((1_u64 << 25) + 3);
-                        let divisor = black_box(NonZeroU64::new(997).expect("positive"));
-                        if native {
-                            kithara_dsp::ratio_ramp(output, first, divisor);
-                        } else {
-                            let divisor: f64 = divisor.get().as_();
-                            for (index, value) in output.iter_mut().enumerate() {
-                                let numerator: f64 = first.saturating_add(index.as_()).as_();
-                                *value = numerator / divisor;
-                            }
-                        }
-                    });
-                },
-            );
+        let native: kithara_dsp::routes::ratio_ramp::Kernel = kithara_dsp::ratio_ramp;
+        for (name, kernel) in kithara_dsp::routes::ratio_ramp::routes().chain([("native", native)])
+        {
+            group.bench_function(BenchmarkId::new(name, frames), |b| {
+                b.iter(|| {
+                    kernel(
+                        black_box(&mut output),
+                        black_box((1_u64 << 25) + 3),
+                        black_box(NonZeroU64::new(997).expect("positive")),
+                    );
+                });
+            });
         }
     }
     group.finish();
@@ -295,6 +305,54 @@ fn multiply_squared(c: &mut Criterion) {
                     );
                 },
             );
+        }
+    }
+    group.finish();
+}
+
+fn routed_ramp(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ramp");
+    for frames in [128, 512] {
+        let mut output = vec![0.0; frames];
+        for (name, kernel) in kithara_dsp::routes::ramp::routes() {
+            group.bench_function(BenchmarkId::new(name, frames), |b| {
+                b.iter(|| kernel(black_box(&mut output), black_box(0.25), black_box(0.001)));
+            });
+        }
+    }
+    group.finish();
+}
+
+fn routed_div(c: &mut Criterion) {
+    let mut group = c.benchmark_group("div");
+    for frames in [128, 512] {
+        let input = tone(frames);
+        for (name, kernel) in kithara_dsp::routes::div::routes() {
+            group.bench_function(BenchmarkId::new(name, frames), |b| {
+                b.iter_batched_ref(
+                    || input.clone(),
+                    |samples| kernel(black_box(samples), black_box(1.25)),
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
+fn routed_mul_add(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mul_add");
+    for frames in [128, 512] {
+        let input = tone(frames);
+        let acc = vec![0.25; frames];
+        for (name, kernel) in kithara_dsp::routes::mul_add::routes() {
+            group.bench_function(BenchmarkId::new(name, frames), |b| {
+                b.iter_batched_ref(
+                    || acc.clone(),
+                    |acc| kernel(black_box(&input), black_box(&input), black_box(acc)),
+                    BatchSize::SmallInput,
+                );
+            });
         }
     }
     group.finish();
@@ -712,6 +770,9 @@ criterion_group!(
     ratio_ramp,
     narrow_f64,
     multiply_squared,
+    routed_ramp,
+    routed_div,
+    routed_mul_add,
     downmix,
     biquad,
     biquad_decay,

@@ -11,6 +11,7 @@ mod fir;
 mod interpolate;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) mod portable;
+pub(crate) mod route;
 mod simd;
 #[cfg(all(
     feature = "spectrum",
@@ -26,7 +27,7 @@ mod tests;
 pub(crate) use accelerate as platform;
 #[cfg(feature = "spectrum")]
 pub(crate) use bins::prediction_difference;
-pub(crate) use curve::fade::gains;
+pub(crate) use curve::{fade::gains, ratio::ratio_ramp};
 pub(crate) use delay::read as delay_read;
 pub(crate) use envelope::attack_release;
 pub use fir::Fir;
@@ -35,8 +36,7 @@ pub(crate) use interpolate::quadratic;
 pub(crate) use portable as platform;
 pub use simd::sanitize;
 pub(crate) use simd::{
-    crossfade_linear, div, first_quiet, mul_add, multiply_squared_in_place, ramp, ratio_ramp,
-    scale_in_place,
+    crossfade_linear, div, first_quiet, mul_add, multiply_squared_in_place, ramp, scale_in_place,
 };
 pub(crate) use strided::{gather, scatter};
 pub(crate) use svf::step as svf_step;

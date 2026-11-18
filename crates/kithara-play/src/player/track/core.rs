@@ -1,22 +1,21 @@
-use std::{cell::RefCell, marker::PhantomData};
-
 use kithara_abr::AbrHandle;
-use kithara_command::{Live, Sender, Seq, Target, When};
+use kithara_command::{Live, Seq, Target, When};
+use kithara_config::ConfigOwner;
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
+use kithara_platform::sync::Arc;
 use kithara_render::{
-    LaneCommand, LaneFrame, LaneProtocol, ServiceClass,
+    LaneFrame, LaneProtocol, ServiceClass,
     bridge::{DeckPart, Fade, Slot, SlotMark, TrackClock},
 };
 use kithara_signal::{AudioChunkInfo, FrameCount, SegmentId, SessionFrame};
-use kithara_sync::SpeedCurve;
+use kithara_stream::PlayheadRead;
 
 use super::{
     super::{
         outbox::Outbox,
-        settings::{PlayerConfig, TrackSettings, TrackSettingsChange},
+        settings::{PlayerConfig, TrackSettings},
     },
-    geometry::*,
     seat::Seat,
     segment::{Adoptions, Segment},
     state::*,
@@ -24,12 +23,11 @@ use super::{
 use crate::{PlayError, resource::LaneGeometry};
 
 /// The sole segment issuer and command producer for one track.
-pub struct PlayerImpl<S> {
+pub struct PlayerImpl {
     pub(super) item: TrackId,
     pub(super) seat: Seat,
     pub(super) class: ServiceClass,
-    pub(super) lane: Option<Sender<LaneProtocol>>,
-    pub(super) registration: Registration,
+    pub(super) lane: Lane,
     pub(super) settings: Live<TrackSettings, LaneProtocol>,
     pub(super) output: kithara_render::bridge::SlotOutputSnapshot,
     pub(super) status: TrackStatus,
@@ -37,7 +35,7 @@ pub struct PlayerImpl<S> {
     pub(super) segment: Segment,
     pub(super) issued_segment: SegmentId,
     pub(super) adoptions: Adoptions,
-    pub(super) lane_history: LaneHistory,
+    pub(super) lane_commands: LaneCommands,
     pub(super) playback_commands: Vec<PlaybackOperation>,
     pub(super) play: Option<When<SessionFrame>>,
     pub(super) repeat: bool,
@@ -52,14 +50,13 @@ pub struct PlayerImpl<S> {
     pub(super) position: Position,
     pub(super) source_basis: Option<AudioChunkInfo>,
     pub(super) observed_source: Option<AudioChunkInfo>,
-    pub(super) projected_end: RefCell<Option<ProjectedEnd>>,
     pub(super) extent: Extent,
+    pub(super) playhead: Option<Arc<dyn PlayheadRead>>,
     pub(super) abr: Option<AbrHandle>,
     pub(super) metadata: TrackMetadata,
-    pub(super) marker: PhantomData<fn() -> S>,
 }
 
-impl<S> PlayerImpl<S> {
+impl PlayerImpl {
     /// Builds an idle track for its assigned item and mixer slot.
     ///
     /// # Errors
@@ -69,8 +66,7 @@ impl<S> PlayerImpl<S> {
             item: config.item,
             seat: config.slot.map_or(Seat::Unseated, Seat::Named),
             class: ServiceClass::default(),
-            lane: None,
-            registration: Registration::None,
+            lane: Lane::None,
             settings: Live::new(config.settings)?,
             output: kithara_render::bridge::SlotOutputSnapshot::default(),
             status: TrackStatus::Idle,
@@ -78,7 +74,7 @@ impl<S> PlayerImpl<S> {
             segment: Segment::issued(SegmentId::FIRST, None, config.settings.speed()),
             issued_segment: SegmentId::FIRST,
             adoptions: Adoptions::default(),
-            lane_history: LaneHistory::default(),
+            lane_commands: LaneCommands::default(),
             playback_commands: Vec::new(),
             play: None,
             repeat: false,
@@ -91,17 +87,51 @@ impl<S> PlayerImpl<S> {
             position: Position::ZERO,
             source_basis: None,
             observed_source: None,
-            projected_end: RefCell::new(None),
             extent: Extent::default(),
+            playhead: None,
             abr: None,
             metadata: TrackMetadata::default(),
-            marker: PhantomData,
         })
     }
 
     #[must_use]
     pub fn status(&self) -> TrackStatus {
         self.status
+    }
+
+    pub(super) fn close_lane_admission(&mut self) {
+        if self.lane.sender().is_none() {
+            return;
+        }
+        self.settle_lane();
+        self.settings.abandon();
+        self.lane.retire();
+        self.playhead = None;
+        self.lane_commands.clear();
+        self.segment.ready = false;
+        self.source_basis = None;
+        self.observed_source = None;
+        self.mark = None;
+        self.resume = None;
+    }
+
+    pub(super) fn finish_lane(&mut self) {
+        self.settle_lane();
+        self.lane = Lane::None;
+    }
+
+    pub(super) fn select_segment(&mut self, segment: Segment) {
+        self.segment = segment;
+        self.lane_commands.select(self.segment.id);
+    }
+
+    pub(super) fn reset_segments(&mut self) {
+        self.select_segment(Segment::issued(
+            SegmentId::FIRST,
+            None,
+            self.settings.config().speed(),
+        ));
+        self.issued_segment = SegmentId::FIRST;
     }
 
     pub(super) fn seat(&self) -> Result<Slot, PlayError> {
@@ -151,8 +181,8 @@ impl<S> PlayerImpl<S> {
         self.segment.origin.ok_or(PlayError::Untimed)
     }
 
-    pub(super) fn observe(&mut self, out: &Outbox<'_, S>) {
-        if self.loading.is_some() {
+    pub(super) fn observe(&mut self, out: &Outbox<'_>) {
+        if self.loading.is_some() || self.seat.attached_at().is_none() {
             return;
         }
         if let Some(seat) = self.seat.slot()
@@ -166,7 +196,6 @@ impl<S> PlayerImpl<S> {
                 self.output = slot.output;
             }
             if let Some(source) = slot.source.filter(|info| info.segment == self.segment.id)
-                && self.seat.attached_at().is_some()
                 && !matches!(self.status, TrackStatus::Released)
             {
                 if self.segment.origin.is_none() {
@@ -190,7 +219,7 @@ impl<S> PlayerImpl<S> {
     pub(super) fn check_when(
         &self,
         at: When<SessionFrame>,
-        out: &Outbox<'_, S>,
+        out: &Outbox<'_>,
     ) -> Result<(), PlayError> {
         out.check_when(at)?;
         if let When::At(_) = at
@@ -204,7 +233,7 @@ impl<S> PlayerImpl<S> {
     pub(super) fn lane_when(
         &self,
         at: When<SessionFrame>,
-        out: &Outbox<'_, S>,
+        out: &Outbox<'_>,
     ) -> Result<When<LaneFrame>, PlayError> {
         match at {
             When::Next => Ok(When::Next),
@@ -228,78 +257,10 @@ impl<S> PlayerImpl<S> {
         }
     }
 
-    pub(super) fn send_lane(
-        &mut self,
-        command: LaneCommand,
-        when: When<LaneFrame>,
-    ) -> Result<Seq, PlayError> {
-        self.send_lane_batch(vec![command], when)
-    }
-
-    pub(super) fn send_lane_batch(
-        &mut self,
-        commands: Vec<LaneCommand>,
-        when: When<LaneFrame>,
-    ) -> Result<Seq, PlayError> {
-        if self.adoptions.cancelling() {
-            return Err(PlayError::NotReady);
-        }
-        let session = match when {
-            When::At(frame) => self.mark.and_then(|mark| session_at(mark, frame)),
-            When::Next | When::Deferred => None,
-        };
-        let lane = self.lane.as_mut().ok_or(PlayError::NotReady)?;
-        let seq = Outbox::<S>::lane(lane, when, commands.clone())?;
-        self.lane_history
-            .submit(commands.into_iter().map(|command| {
-                tracing::debug!(
-                    item = u64::from(self.item),
-                    seq = seq.get(),
-                    current_segment = self.segment.id.get(),
-                    requested_when = ?when,
-                    paused_resume = ?self.resume,
-                    mark = ?self.mark,
-                    command = ?command,
-                    "lane command submitted"
-                );
-                #[cfg(feature = "usdt")]
-                {
-                    let target_speed = match &command {
-                        LaneCommand::SetSpeed(
-                            SpeedCurve::Constant(speed) | SpeedCurve::Ramp { to: speed, .. },
-                        ) => Some(*speed),
-                        LaneCommand::SetSpeed(SpeedCurve::Steps(steps)) => {
-                            steps.last().map(|(_, speed)| *speed)
-                        }
-                        _ => None,
-                    };
-                    if let Some(speed) = target_speed
-                        && let Some(mark) = self.mark
-                    {
-                        kithara_test_macros::probe_event!(
-                            rate_requested,
-                            request_revision = seq.get(),
-                            target_rate_bits = speed.to_bits(),
-                            session_frame = i64::from(mark.session)
-                        );
-                    }
-                }
-                LaneOperation {
-                    seq,
-                    when,
-                    segment: self.segment.id,
-                    session,
-                    command,
-                    verdict: None,
-                }
-            }));
-        Ok(seq)
-    }
-
     pub(super) fn jump_when(
         &self,
         at: SessionFrame,
-        out: &Outbox<'_, S>,
+        out: &Outbox<'_>,
     ) -> Result<When<LaneFrame>, PlayError> {
         let start = i64::from(at)
             .checked_sub(
@@ -322,7 +283,7 @@ impl<S> PlayerImpl<S> {
     pub(super) fn pause(
         &mut self,
         at: When<SessionFrame>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         self.check_when(at, out)?;
         self.withdraw_play();
@@ -337,20 +298,5 @@ impl<S> PlayerImpl<S> {
             }],
             out,
         )
-    }
-
-    pub(super) fn set_speed(
-        &mut self,
-        mut speed: SpeedCurve,
-        at: When<SessionFrame>,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError> {
-        if let SpeedCurve::Constant(speed) = speed {
-            return self.configure(TrackSettingsChange::Speed(speed), at, out);
-        }
-        let final_speed = check_curve(&mut speed)?;
-        self.speed_admission(at, out)?;
-        let when = self.lane_when(at, out)?;
-        self.execute_speed(speed, final_speed, when, out)
     }
 }

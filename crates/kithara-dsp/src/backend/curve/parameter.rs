@@ -2,10 +2,49 @@ use std::ops::{Add, Mul, Sub};
 
 use fearless_simd::{Level, dispatch, prelude::*};
 
-use crate::curve::Progression;
+#[cfg(any(test, feature = "routes"))]
+use crate::curve::CurveShape;
+use crate::{
+    backend::route::{route, table},
+    curve::Progression,
+};
 
 pub(crate) fn interpolate(shape: Progression, positions: &mut [f64], endpoints: [f64; 2]) {
-    dispatch!(Level::new(), simd => kernel(simd, shape, positions, endpoints));
+    match shape {
+        Progression::Hold => route!(table::parameter_hold => (positions, endpoints)),
+        Progression::Linear => route!(table::parameter_linear => (positions, endpoints)),
+        Progression::Cubic { .. } => {
+            dispatch!(Level::new(), simd => kernel(simd, shape, positions, endpoints));
+        }
+    }
+}
+
+#[cfg(any(test, feature = "routes"))]
+pub(in crate::backend) fn hold(positions: &mut [f64], endpoints: [f64; 2]) {
+    CurveShape::HOLD.process(positions, endpoints);
+}
+
+#[cfg(any(test, feature = "routes"))]
+pub(in crate::backend) fn linear(positions: &mut [f64], endpoints: [f64; 2]) {
+    CurveShape::LINEAR.process(positions, endpoints);
+}
+
+#[inline(always)]
+pub(in crate::backend) fn hold_kernel<S: Simd>(
+    simd: S,
+    positions: &mut [f64],
+    endpoints: [f64; 2],
+) {
+    kernel(simd, Progression::Hold, positions, endpoints);
+}
+
+#[inline(always)]
+pub(in crate::backend) fn linear_kernel<S: Simd>(
+    simd: S,
+    positions: &mut [f64],
+    endpoints: [f64; 2],
+) {
+    kernel(simd, Progression::Linear, positions, endpoints);
 }
 
 #[inline(always)]

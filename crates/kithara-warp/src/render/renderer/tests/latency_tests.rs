@@ -14,7 +14,7 @@ use num_traits::ToPrimitive;
 
 use super::*;
 use crate::{
-    Warp, WarpRenderError,
+    Pitch, Warp, WarpRenderError,
     render::tests::fixtures::LaneFeed,
     test_pools::{pools, sample_buffer},
 };
@@ -26,7 +26,7 @@ fn prepared_renderer(backend: StretchKind) -> WarpRenderer<crate::test_pools::Te
     );
     let config = WarpConfig::builder()
         .speed(0.5)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .backend(backend)
         .build();
     Warp::new((), &config).renderer(spec, pools())
@@ -186,7 +186,7 @@ fn latency_receipt_retires_engine_without_advancing_output(#[case] backend: Stre
     let mut renderer = active_renderer(backend);
     let frontier = renderer.rendered_source_end();
     let source_meta = renderer.last_input_meta;
-    renderer.set_keylock(false);
+    renderer.set_pitch(Pitch::default());
 
     assert!(renderer.transition_pending());
     let latency = renderer
@@ -216,7 +216,7 @@ fn latency_receipt_retires_engine_without_advancing_output(#[case] backend: Stre
 fn latency_receipt_waits_for_queued_unity(#[case] backend: StretchKind) {
     let mut renderer = active_renderer(backend);
     renderer.pending_unity_meta = Some(AudioChunkInfo::default());
-    renderer.set_keylock(false);
+    renderer.set_pitch(Pitch::default());
 
     assert!(matches!(
         renderer.prepare_engine_latency(renderer.spec),
@@ -233,7 +233,7 @@ fn latency_receipt_waits_for_queued_unity(#[case] backend: StretchKind) {
 fn latency_receipt_uses_the_prepared_replacement(#[case] backend: StretchKind) {
     let mut renderer = prepared_renderer(backend);
     assert!(renderer.engine_latency().get() > 0);
-    renderer.set_keylock(false);
+    renderer.set_pitch(Pitch::default());
 
     let latency = renderer
         .prepare_engine_latency(renderer.spec)
@@ -262,7 +262,7 @@ fn keylock_off_at_unity_crossfades_the_retained_tail_by_the_linear_law(
     renderer
         .set_speed(SpeedCurve::Constant(1.0), 1)
         .expect("unity speed");
-    renderer.set_keylock(false);
+    renderer.set_pitch(Pitch::default());
     assert_eq!(
         renderer
             .prepare_engine_latency(renderer.spec)
@@ -359,5 +359,82 @@ fn keylock_off_at_unity_crossfades_the_retained_tail_by_the_linear_law(
             (f64::from(got) - f64::from(expected)).abs() <= f64::from(ulp),
             "linear law: sample={index}, got={got}, expected={expected}"
         );
+    }
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn retained_tail_crossfade_preserves_identity_and_the_linear_law(#[case] backend: StretchKind) {
+    for identical in [false, true] {
+        let mut renderer = prepared_renderer(backend);
+        let frames = 16_384;
+        let source: Vec<f32> = (0..frames)
+            .flat_map(|frame| {
+                let sample = (frame.to_f32().expect("fixture frame fits") * 0.137).sin() * 0.3;
+                [sample; 2]
+            })
+            .collect();
+        let input = AudioChunk::new(
+            AudioChunkInfo {
+                spec: renderer.spec,
+                frames: u32::try_from(frames).expect("fixture frames fit"),
+                ..AudioChunkInfo::default()
+            },
+            sample_buffer(&renderer.pools, &source),
+        );
+        assert!(!LaneFeed::default().feed(&mut renderer, input).is_empty());
+        assert!(renderer.active);
+        renderer
+            .set_speed(SpeedCurve::Constant(1.0), 1)
+            .expect("unity speed");
+        renderer.set_pitch(Pitch::default());
+        renderer
+            .prepare_engine_latency(renderer.spec)
+            .expect("retired engine supplies the replacement");
+        let channels = usize::from(renderer.spec.channels);
+        let resident = renderer.residency.as_mut().expect("retained source");
+        let replacement = resident.replacement.to_vec();
+        assert!(!replacement.is_empty());
+        assert!(
+            replacement
+                .windows(2)
+                .any(|pair| pair[0].to_bits() != pair[1].to_bits())
+        );
+        assert_eq!(resident.replacement_offset, 0);
+        let frames = replacement.len() / channels;
+        let mut samples = vec![-0.25; replacement.len() + 64 * channels];
+        if identical {
+            samples[..replacement.len()].copy_from_slice(&replacement);
+        }
+        let incoming = samples.clone();
+        resident
+            .blend_replacement(&mut samples, channels)
+            .expect("replacement blend");
+        for (index, (&got, &input)) in samples.iter().zip(&incoming).enumerate() {
+            if identical || index >= replacement.len() {
+                assert_eq!(
+                    got.to_bits(),
+                    input.to_bits(),
+                    "identity={identical}, sample={index}"
+                );
+            } else {
+                let gain = (index / channels + 1).to_f32().expect("frame fits")
+                    / frames.to_f32().expect("join fits");
+                let old = replacement[index] * (1.0 - gain);
+                let new = input * gain;
+                let expected = replacement[index].mul_add(1.0 - gain, new);
+                let larger = old.abs().max(new.abs());
+                let ulp = larger.next_up() - larger;
+                let error = (f64::from(got) - f64::from(expected)).abs();
+                assert!(
+                    error <= f64::from(ulp),
+                    "linear law: sample={index}, got={got}, expected={expected}, ulp={ulp}"
+                );
+            }
+        }
     }
 }

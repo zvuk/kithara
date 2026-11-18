@@ -146,7 +146,7 @@ impl From<Error> for SecretError {
 
 #[cfg(test)]
 mod tests {
-    use keyring_core::sample::Store;
+    use keyring_core::mock::Store;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -190,7 +190,7 @@ mod tests {
 
     #[kithara::test]
     fn an_undecodable_value_leaves_its_bytes_out_of_the_error() {
-        let store = Store::new().expect("the sample store opens");
+        let store = Store::new().expect("the mock store opens");
         let secrets = Secrets::new(Ok(Arc::clone(&store)));
         store
             .build(consts::APPLICATION, "probe", None)

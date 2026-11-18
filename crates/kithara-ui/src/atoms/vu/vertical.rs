@@ -24,7 +24,7 @@ impl VerticalVu {
     pub(crate) fn new(ticks: bool, skin: &Skin) -> Self {
         Self {
             metrics: skin.vu_vertical,
-            palette: skin.palette,
+            palette: *skin.palette,
             thumb_color: skin.rgba(skin.vu_vertical.thumb_color),
             thumb_notch_color: skin.rgba(skin.vu_vertical.thumb_notch_color),
             ticks: ticks.then(|| TickRail::new(TickAxis::Vertical, skin.vu_vertical.ticks, skin)),

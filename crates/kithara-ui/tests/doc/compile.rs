@@ -1820,7 +1820,10 @@ fn a_popover_compiles_with_its_anchor_and_its_content_subtree() {
     assert_eq!(ui.resolve(*path), "mixer/menu");
     assert_eq!(ui.resolve(open.id), "ui.menu.open");
 
-    let ExpandedNode::Pressable { path, press, child } = &**anchor else {
+    let ExpandedNode::Pressable {
+        path, press, child, ..
+    } = &**anchor
+    else {
         panic!("expected a pressable anchor");
     };
     assert_eq!(ui.resolve(*path), "mixer/burger");
@@ -2098,9 +2101,9 @@ fn one_template_carries_a_different_glyph_per_include() {
             panic!("expected a glyph, got {spec:?}");
         };
         assert_eq!(
-            (*icon, *active_icon, *style, *color, *active_color),
+            (*icon, *active_icon, *style, color.as_ref(), *active_color),
             (IconName::Monitor, Some(IconName::Disc), GlyphStyle::MenuSmall,
-                Some(ColorRole::Muted), Some(ColorRole::Accent))
+                Some(&ColorRole::Muted.into()), Some(ColorRole::Accent))
         );
         let active = active.as_ref().expect("the glyph has its active binding");
         assert_eq!(active.kind, BindingKind::Model);
@@ -2120,8 +2123,8 @@ fn one_template_carries_a_different_glyph_per_include() {
         };
         assert_eq!(label.map(|label| ui.resolve(label)), Some("INCLUDED TEXT"));
         assert_eq!(
-            (*style, *align, *color, *active_color, *font, *weight),
-            (TextStyle::Caption, TextAlign::End, Some(ColorRole::Muted),
+            (*style, *align, color.as_ref(), *active_color, *font, *weight),
+            (TextStyle::Caption, TextAlign::End, Some(&ColorRole::Muted.into()),
                 Some(ColorRole::Success), Some(FontFamily::Mono), Some(FontWeight::Bold))
         );
         let active = active.as_ref().expect("the text has its active binding");

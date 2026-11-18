@@ -611,7 +611,7 @@ impl Reads for DemoReads {
             "engine.load" => ReadValue::Scalar(consts::ENGINE_LOAD),
             "engine.latency" => ReadValue::Text(consts::LATENCY),
             "ui.set.record_time" => ReadValue::Text(consts::RECORD_TIME),
-            "deck.track.key" | "demo.key" => ReadValue::Text(consts::KEY),
+            "demo.key" => ReadValue::Text(consts::KEY),
             "deck.view.zoom" => ReadValue::Scalar(self.transport.zoom()),
             "player.output.levels" => ReadValue::Stereo(StereoLevels {
                 l: if self.showing == "vis" {

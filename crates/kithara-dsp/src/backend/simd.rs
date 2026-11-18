@@ -1,5 +1,5 @@
 use std::{
-    num::{NonZeroU64, NonZeroUsize},
+    num::NonZeroUsize,
     ops::{Add, Deref, Div, Mul, Range, Shr, Sub},
 };
 
@@ -7,6 +7,8 @@ use std::{
 use fearless_simd::f64x2;
 use fearless_simd::{Level, dispatch, prelude::*};
 use num_traits::AsPrimitive;
+
+use super::route::{route, table};
 
 /// Replaces `NaN`, ±infinity, subnormals and −0.0 with `+0.0` in place; every
 /// other value keeps its bits.
@@ -27,7 +29,7 @@ pub(super) fn sanitize_kernel<S: Simd>(simd: S, samples: &mut [f32]) {
 /// `samples[i] /= divisor`, correctly rounded, over the whole slice; returns
 /// its length.
 pub(crate) fn div(samples: &mut [f32], divisor: f32) -> usize {
-    dispatch!(Level::new(), simd => div_kernel(simd, samples, divisor))
+    route!(table::div => (samples, divisor))
 }
 
 #[inline(always)]
@@ -72,7 +74,7 @@ pub(super) fn scale_in_place_kernel<S: Simd>(simd: S, samples: &mut [f32], gain:
 /// `output[i] = start + i*step`, rounded once while `i` stays below 2^24;
 /// returns `output.len()`.
 pub(crate) fn ramp(output: &mut [f32], start: f32, step: f32) -> usize {
-    dispatch!(Level::new(), simd => ramp_kernel(simd, output, start, step))
+    route!(table::ramp => (output, start, step))
 }
 
 #[inline(always)]
@@ -95,7 +97,7 @@ pub(super) fn ramp_kernel<S: Simd>(simd: S, output: &mut [f32], start: f32, step
 /// `acc[i] += x[i]*y[i]`, rounded once, over the common prefix of the three
 /// slices; returns its length.
 pub(crate) fn mul_add(x: &[f32], y: &[f32], acc: &mut [f32]) -> usize {
-    dispatch!(Level::new(), simd => mul_add_kernel(simd, x, y, acc))
+    route!(table::mul_add => (x, y, acc))
 }
 
 #[inline(always)]
@@ -488,52 +490,6 @@ pub(super) fn first_quiet_kernel<S: Simd, P: Deref<Target = [f32]>>(
                 .all(|plane| plane.get(*frame).expect("validated frame").abs() <= limit)
         })
         .unwrap_or(range.end)
-}
-
-pub(crate) fn ratio_ramp(output: &mut [f64], first: u64, divisor: NonZeroU64) -> usize {
-    dispatch!(Level::new(), simd => ratio_kernel(simd, output, first, divisor));
-    output.len()
-}
-
-#[inline(always)]
-pub(super) fn ratio_kernel<S: Simd>(simd: S, output: &mut [f64], first: u64, divisor: NonZeroU64) {
-    let width = S::f64s::LEN;
-    let origin = S::u64s::splat(simd, first);
-    let divisor = S::f64s::splat(simd, divisor.get().as_());
-    let ratio = |offsets| S::f64s::float_from(origin.saturating_add(offsets)).div(divisor);
-    let mut offsets: [S::u64s; 4] = std::array::from_fn(|vector| {
-        S::u64s::from_fn(simd, |lane| {
-            vector.saturating_mul(width).saturating_add(lane).as_()
-        })
-    });
-    let advance = S::u64s::splat(simd, width.saturating_mul(offsets.len()).as_());
-    let mut batches = output.chunks_exact_mut(width.saturating_mul(offsets.len()));
-    for batch in &mut batches {
-        // Independent vectors overlap conversion and division latency.
-        let [a, b, c, d] = offsets.map(ratio);
-        let (out_a, rest) = batch.split_at_mut(width);
-        let (out_b, rest) = rest.split_at_mut(width);
-        let (out_c, out_d) = rest.split_at_mut(width);
-        a.store_slice(out_a);
-        b.store_slice(out_b);
-        c.store_slice(out_c);
-        d.store_slice(out_d);
-        offsets = offsets.map(|offset| offset.add(advance));
-    }
-    let [mut offset, _, _, _] = offsets;
-    let stride = S::u64s::splat(simd, width.as_());
-    let mut chunks = batches.into_remainder().chunks_exact_mut(width);
-    for chunk in &mut chunks {
-        ratio(offset).store_slice(chunk);
-        offset = offset.add(stride);
-    }
-    let tail = chunks.into_remainder();
-    if !tail.is_empty() {
-        let values = ratio(offset);
-        for (slot, value) in tail.iter_mut().zip(values.as_slice()) {
-            *slot = *value;
-        }
-    }
 }
 
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
