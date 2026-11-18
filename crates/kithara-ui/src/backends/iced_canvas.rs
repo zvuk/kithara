@@ -7,6 +7,7 @@ use iced::{
         image::{Handle, Image as IcedImage},
     },
     font::{Family, Stretch, Style, Weight},
+    gradient::ColorStop,
     widget::canvas::{
         Fill, Frame, Path, Stroke as IcedStroke, fill,
         fill::Rule,
@@ -299,8 +300,11 @@ fn style(paint: Paint) -> Option<fill::Style> {
     match paint {
         Paint::Linear { from, stops, to } => {
             let mut gradient = Linear::new(from.into(), to.into());
-            for stop in stops.as_slice() {
-                gradient = gradient.add_stop(stop.offset, Color::from(stop.color));
+            for (slot, stop) in gradient.stops.iter_mut().zip(stops.as_slice()) {
+                *slot = Some(ColorStop {
+                    offset: stop.offset,
+                    color: Color::from(stop.color),
+                });
             }
             Some(fill::Style::Gradient(Gradient::Linear(gradient)))
         }

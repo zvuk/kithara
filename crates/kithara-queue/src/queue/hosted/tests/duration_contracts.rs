@@ -66,7 +66,7 @@ impl DurationRig {
 
     fn in_pass<Value>(
         &mut self,
-        run: impl FnOnce(&mut Queue<TestPools>, &mut Outbox<'_, TestPools>) -> Value,
+        run: impl FnOnce(&mut Queue<TestPools>, &mut Outbox<'_>) -> Value,
     ) -> Value {
         let rate = NonZeroU32::new(SAMPLE_RATE).expect("nonzero sample rate");
         let shape =

@@ -6,6 +6,7 @@ pub(super) use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
+use kithara::play::TrackConfig;
 pub(super) use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
@@ -123,13 +124,11 @@ pub(super) fn resource_config(
     store: AssetStore<TestPools>,
     backend: DecoderBackend,
     hint: Option<&str>,
-    worker: PlayWorker<TestPools>,
 ) -> ResourceConfig<TestPools> {
     ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).unwrap())
         .downloader(create_test_downloader())
         .store(store)
         .maybe_hint(hint)
-        .worker(worker)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -144,8 +143,8 @@ pub(super) async fn open_resource(
     worker: PlayWorker<TestPools>,
     backend: DecoderBackend,
 ) -> Resource {
-    let config = resource_config(url, store, backend, Some("mp3"), worker);
-    kithara_integration_tests::mock::open_resource(&config)
+    let config = resource_config(url, store, backend, Some("mp3"));
+    kithara_integration_tests::mock::open_resource(&config, &worker, TrackConfig::default())
         .await
         .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
 }
@@ -179,9 +178,10 @@ pub(super) async fn warm_hls_worker(
                 .build(),
         )
         .build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
+    let mut audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
 
     let mut buf = [0.0f32; 4096];
     loop {
@@ -303,9 +303,10 @@ pub(super) async fn open_packaged_hls_audio(
                 .build(),
         )
         .build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap_or_else(|err| panic!("packaged HLS audio should open for {url}: {err}"));
+    let mut audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap_or_else(|err| panic!("packaged HLS audio should open for {url}: {err}"));
     audio.preload().expect("packaged HLS preload must succeed");
     audio
 }

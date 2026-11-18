@@ -65,31 +65,24 @@ fn is_final(grid: &BeatGridModel) -> bool {
     matches!(grid.as_raw().state, kithara_beat::BeatGridState::Final)
 }
 
-impl<P> Linked<P> {
+impl<P: Track> Linked<P> {
     /// The earliest frame a batch lands on: a sounding deck's lane lead, else
     /// the deck delivery of a silent start.
-    pub(super) fn earliest<S>(&self, out: &Outbox<'_, S>) -> Result<SessionFrame, PlayError>
-    where
-        P: Track<S>,
-    {
+    pub(super) fn earliest(&self, out: &Outbox<'_>) -> Result<SessionFrame, PlayError> {
         let pass = out.pass().ok_or(PlayError::Untimed)?;
         Ok(pass.now + self.lead(pass.delivery).unwrap_or(pass.deck_delivery))
     }
 
-    pub(super) fn planned<S>(&self, at: SessionFrame) -> Result<(Position, f64), PlayError>
-    where
-        P: Track<S>,
-    {
+    pub(super) fn planned(&self, at: SessionFrame) -> Result<(Position, f64), PlayError> {
         self.inner.planned(at, self.host.sample_rate())
     }
 
-    pub(super) fn jump_frame<S>(&self, out: &Outbox<'_, S>) -> Result<SessionFrame, PlayError>
-    where
-        P: Track<S>,
-    {
+    pub(super) fn jump_frame(&self, out: &Outbox<'_>) -> Result<SessionFrame, PlayError> {
         Ok(self.earliest(out)? + self.inner.snapshot().as_ref().declick)
     }
+}
 
+impl<P> Linked<P> {
     /// The frame a segment cued for `bound` is ready to start on.
     pub(super) fn prepared(&self, bound: SessionFrame) -> Result<SessionFrame, PlayError> {
         let rate = f64::from(self.host.sample_rate().get());
@@ -125,8 +118,8 @@ impl<P> Linked<P> {
     /// The configured plan horizon in Host frames, saturating at the largest
     /// frame count.
     pub(super) fn horizon(&self) -> u64 {
-        let frames = self.config.horizon().as_nanos() * u128::from(self.host.sample_rate().get())
-            / 1_000_000_000;
+        let frames = (self.config.horizon().as_nanos() * u128::from(self.host.sample_rate().get()))
+            .div_ceil(1_000_000_000);
         u64::try_from(frames).unwrap_or(u64::MAX)
     }
 
@@ -155,5 +148,40 @@ impl<P> Linked<P> {
                 "no host speed law: track at {track:?} BPM, host at {host} BPM, position {position:?}"
             ))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::{NonZeroU16, NonZeroU32};
+
+    use kithara_platform::time::Duration;
+    use kithara_signal::SessionFrame;
+    use kithara_test_utils::kithara;
+
+    use crate::{LinkConfig, Linked, LinkedConfig, TempoStep, TempoTrajectory};
+
+    #[kithara::test]
+    fn a_positive_subframe_horizon_plans_one_output_frame() {
+        let deck = Linked::new(
+            LinkedConfig::builder()
+                .inner(())
+                .trajectory(TempoTrajectory::new(
+                    TempoStep {
+                        frame: SessionFrame::new(0),
+                        beat: kithara_sync::SessionBeat::default(),
+                        tempo: kithara_sync::Tempo::DEFAULT,
+                    },
+                    NonZeroU16::new(4).expect("meter"),
+                    NonZeroU32::new(48_000).expect("sample rate"),
+                ))
+                .settings(
+                    LinkConfig::builder()
+                        .horizon(Duration::from_nanos(1))
+                        .build(),
+                )
+                .build(),
+        );
+        assert_eq!(deck.horizon(), 1);
     }
 }

@@ -11,7 +11,7 @@ use kithara::{
         time,
         time::{Duration, Instant},
     },
-    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -130,7 +130,6 @@ async fn flac_swallow_fixture(
                 .expect("fixture resources"),
         )
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
 
     let cfg: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
@@ -143,7 +142,6 @@ async fn flac_swallow_fixture(
                     .build(),
             )
             .initial_abr_mode(AbrMode::manual(TOP_VARIANT))
-            .worker(worker)
             .build();
 
     let mut player = OfflinePlayer::new(

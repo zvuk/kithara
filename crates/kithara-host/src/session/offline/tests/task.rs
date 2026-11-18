@@ -26,7 +26,7 @@ use crate::{
     },
 };
 
-type BaseCommand = crate::HostCommand<TestPools, dyn kithara_play::HostedDeck<TestPools>>;
+type BaseCommand = crate::HostCommand<dyn kithara_play::HostedDeck<TestPools>>;
 
 /// An offline session with no graph that holds probe decks, and the
 /// worker it runs on.

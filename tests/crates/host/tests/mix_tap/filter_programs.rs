@@ -65,7 +65,7 @@ fn bits(pcm: &[f32]) -> Vec<u32> {
 
 async fn loaded_filter_source(source: String) -> (OfflinePlayer, Underruns) {
     let options = OfflinePlayerOptions::builder()
-        .block_on_underrun(false)
+        .block_on_underrun(true)
         .output_block_frames(NonZeroU32::new(64).expect("callback"))
         .warp(
             WarpConfig::builder()
@@ -195,10 +195,10 @@ async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u
         vec![0.5; expected.len()],
         "the oracle hears the turn, the program and the takeover"
     );
-    assert_eq!(bits(&take), bits(&expected));
     assert_eq!(tap.drops(), 0);
     underruns.checkpoint(harness.metrics(), true, "Filter final complete edges");
     assert_eq!(harness.metrics().underruns(), 0);
+    assert_eq!(bits(&take), bits(&expected));
     harness.close().await;
 }
 

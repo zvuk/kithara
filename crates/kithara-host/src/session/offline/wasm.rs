@@ -122,18 +122,24 @@ mod tests {
     use std::{
         cell::Cell,
         rc::Rc,
-        sync::atomic::{AtomicBool, Ordering},
+        sync::atomic::{AtomicBool, AtomicU8, Ordering},
     };
 
-    use kithara_platform::{sync::mpsc, thread, time::Duration};
+    use kithara_platform::{
+        sync::mpsc,
+        thread,
+        time::{Duration, Instant, timeout},
+    };
     use kithara_play::PlayError;
     use kithara_test_utils::{cancel::cancel_token, kithara};
     use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
+    use wasm_bindgen_futures::JsFuture;
 
     use super::*;
     use crate::session::{
         decks::{DeckInbox, DeckMsg},
         offline::{OfflineSessionClient, task::OfflineMsg},
+        tests::bootstrap,
     };
 
     struct LocalTask {
@@ -214,18 +220,21 @@ mod tests {
     struct OwnerTask {
         owner: thread::ThreadId,
         wrong_thread: Arc<AtomicBool>,
+        ticks: Rc<Cell<usize>>,
     }
 
     impl Task for OwnerTask {
         fn tick(&mut self) -> TickResult {
             if thread::current().id() != self.owner {
                 self.wrong_thread.store(true, Ordering::Release);
+                return TickResult::Waiting;
             }
+            self.ticks.set(self.ticks.get() + 1);
             TickResult::Waiting
         }
     }
 
-    #[kithara::test(wasm, timeout(Duration::from_secs(10)))]
+    #[kithara::test(wasm, flash(false), timeout(Duration::from_secs(40)))]
     async fn a_deck_wake_on_a_worker_runs_the_task_on_its_owner() {
         let worker = Worker::new(WorkerConfig::new());
         let dispatcher = worker.dispatcher(
@@ -238,27 +247,76 @@ mod tests {
         let wrong_thread = Arc::new(AtomicBool::new(false));
         let owner = thread::current().id();
         let task_flag = wrong_thread.clone();
+        let ticks = Rc::new(Cell::new(0));
+        let task_ticks = ticks.clone();
         let _task = route
             .clone()
             .start(pending, move |_| OwnerTask {
                 owner,
                 wrong_thread: task_flag,
+                ticks: task_ticks,
             })
             .expect("start task");
         let (postbox, _mailbox) = kithara_command::mailbox::<(), PlayError>();
-        let (sender, _receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel();
         let client = Arc::new(OfflineSessionClient::new(postbox, sender, route));
         let waker = client.waker(DeckMsg::Receipts);
-        let finished = Arc::new(AtomicBool::new(false));
-        let wake_finished = finished.clone();
+        let progress = Arc::new(AtomicU8::new(0));
+        let wake_progress = progress.clone();
+        let (kickoff, begin) = mpsc::channel();
 
-        drop(thread::spawn(move || {
-            waker.wake();
-            wake_finished.store(true, Ordering::Release);
-        }));
-        while !finished.load(Ordering::Acquire) {
-            sleep(SESSION_PUMP_INTERVAL).await;
-        }
+        let started = Instant::now();
+        timeout(bootstrap::TIMEOUT, async {
+            drop(thread::spawn(move || {
+                wake_progress.store(1, Ordering::Release);
+                begin
+                    .recv()
+                    .expect("owner requests the prepared foreign wake");
+                waker.wake();
+                wake_progress.store(2, Ordering::Release);
+            }));
+            while progress.load(Ordering::Acquire) == 0 {
+                sleep(SESSION_PUMP_INTERVAL).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "foreign worker bootstrap did not complete: stage={}",
+                progress.load(Ordering::Acquire)
+            );
+        });
+        assert!(
+            started.elapsed() <= bootstrap::TIMEOUT,
+            "foreign worker bootstrap exceeded its budget: stage={}",
+            progress.load(Ordering::Acquire)
+        );
+        let millis = bootstrap::TIMEOUT
+            .as_millis()
+            .try_into()
+            .expect("bootstrap timer fits u32");
+        let lease = JsFuture::from(bootstrap::hold(millis))
+            .await
+            .expect("hold admission for unrelated worker startup");
+        let before = ticks.get();
+        let delivered = timeout(Duration::from_secs(10), async {
+            let sent = kickoff.send(());
+            while sent.is_ok() && (progress.load(Ordering::Acquire) != 2 || ticks.get() == before) {
+                sleep(SESSION_PUMP_INTERVAL).await;
+            }
+            sent
+        })
+        .await;
+        JsFuture::from(bootstrap::release(&lease, millis))
+            .await
+            .expect("release bootstrap admission before checking delivery");
+        delivered
+            .expect("foreign wake must finish while new worker startup is blocked")
+            .expect("prepared worker must receive the wake request");
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(OfflineMsg::Deck(DeckMsg::Receipts))
+        ));
 
         assert!(
             !wrong_thread.load(Ordering::Acquire),

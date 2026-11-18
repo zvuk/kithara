@@ -131,7 +131,7 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     /// The transition target, or the track navigation advances to.
     fn upcoming(&mut self) -> Option<TrackId> {
@@ -474,7 +474,9 @@ where
             return PlaybackView::default();
         };
         PlaybackView {
-            buffered: snapshot.slot.map(|slot| slot.frontier.max(slot.cached)),
+            buffered: snapshot
+                .slot
+                .map(|slot| slot.frontier.max(track.cached.as_secs_f64())),
             duration: track.duration.map(|duration| duration.as_secs_f64()),
             position: Some(track.position.as_secs_f64()),
             playing: !snapshot.deck.suspended
@@ -503,7 +505,7 @@ mod tests {
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build();
         let queue = Queue::new(QueueConfig::builder().prep(prep).build());
-        let player: PlayerImpl<TestPools> = PlayerFactory
+        let player: PlayerImpl = PlayerFactory
             .track(PlayerConfig {
                 item: TrackId::allocate(),
                 slot: Some(Slot::new(0)),
@@ -513,10 +515,10 @@ mod tests {
         let mut snapshot = (*queue.view.read()).clone();
         let mut track = player.snapshot();
         track.duration = Some(Duration::from_secs(200));
+        track.cached = Duration::from_secs_f64(cached);
         snapshot.track = Some(track);
         snapshot.slot = Some(SlotSnapshot {
             frontier,
-            cached,
             ..SlotSnapshot::default()
         });
         queue.view.publish(snapshot);
@@ -569,7 +571,7 @@ mod tests {
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build();
         let queue: Queue<TestPools> = Queue::new(QueueConfig::builder().prep(prep).build());
-        let player: PlayerImpl<TestPools> = PlayerFactory
+        let player: PlayerImpl = PlayerFactory
             .track(PlayerConfig {
                 item: TrackId::allocate(),
                 slot: Some(Slot::new(0)),

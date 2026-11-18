@@ -4,7 +4,7 @@ use bon::bon;
 use kithara_command::Seq;
 use kithara_dsp::param::SmootherConfig;
 use kithara_events::TrackId;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 
 use super::{PlayerResource, RtSink, fade::TrackFade, gate::TrackGate, output::SlotOutput};
@@ -31,7 +31,7 @@ enum StopState {
 /// A slot's packet consumer and session-time envelope.
 pub struct PlayerTrack {
     pub(super) item_id: TrackId,
-    pub(super) resource: Box<PlayerResource>,
+    pub(super) resource: PlayerResource,
     pub(super) fade: TrackFade,
     pub(super) gate: TrackGate,
     pub(super) state: SlotState,
@@ -51,13 +51,14 @@ impl PlayerTrack {
     #[builder]
     #[must_use]
     pub fn new(
-        #[builder(finish_fn)] mut resource: Box<PlayerResource>,
+        #[builder(finish_fn)] pcm: Box<crate::PcmReceiver>,
         item_id: TrackId,
         sample_rate: NonZeroU32,
         attachment: Option<Seq>,
         #[builder(default = DEFAULT_DECLICK)] declick: SmootherConfig,
         #[builder(default = SegmentId::FIRST)] segment: SegmentId,
     ) -> Self {
+        let mut resource = PlayerResource::new(pcm);
         resource.select_segment(segment);
         Self {
             item_id,
@@ -92,9 +93,8 @@ impl PlayerTrack {
 
     delegate::delegate! {
         to self.resource {
-            pub(in crate::rt) fn waits_offline(&self) -> bool;
-            #[must_use]
-            pub fn duration(&self) -> f64;
+            pub(crate) fn waits_offline(&self) -> bool;
+            pub(crate) fn refill(&mut self, budget: &mut usize) -> Option<&crate::worker::PcmReceiver>;
             #[must_use]
             pub(crate) fn source_info(&self) -> Option<kithara_signal::AudioChunkInfo>;
             #[must_use]
@@ -103,10 +103,6 @@ impl PlayerTrack {
             pub fn media_origin(&self) -> Option<Duration>;
             #[must_use]
             pub fn decoded_frontier(&self) -> f64;
-            #[must_use]
-            pub fn cached_span(&self) -> f64;
-            #[must_use]
-            pub fn src(&self) -> &Arc<str>;
             #[must_use]
             pub fn segment(&self) -> SegmentId;
             #[call(refresh_mark)]
@@ -311,8 +307,8 @@ impl PlayerTrack {
     }
 
     #[must_use]
-    pub fn into_resource(mut self) -> Box<PlayerResource> {
+    pub(crate) fn into_pcm(mut self) -> (Box<crate::PcmReceiver>, Option<crate::PcmPacket>) {
         self.resource.set_playing(false);
-        self.resource
+        (self.resource.receiver, self.resource.packet)
     }
 }

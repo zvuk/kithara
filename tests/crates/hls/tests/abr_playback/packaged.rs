@@ -16,7 +16,7 @@ use kithara::{
         time::{Duration, Instant, WallInstant},
         tokio::task::spawn_blocking,
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::{AudioCodec, Stream},
 };
 use kithara_integration_tests::{
@@ -113,13 +113,14 @@ async fn open_packaged_hls_audio(
         .maybe_events(bus.clone())
         .build();
 
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .maybe_events(bus)
             .build(),
-    )
-    .block_on_underrun(block_on_underrun)
-    .build();
+        TrackConfig::builder()
+            .block_on_underrun(block_on_underrun)
+            .build(),
+    );
 
     let mut audio = loader
         .load(config)
@@ -193,11 +194,10 @@ pub(crate) async fn abr_switch_on_production_ladder_does_not_hang(
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create audio");
@@ -389,7 +389,7 @@ pub(crate) async fn packaged_abr_switch_keeps_player_continuity(
     // full coverage regardless of which path the offline render's `auto(0)` ABR
     // then takes.
     for variant in [0usize, 1usize] {
-        let warm_config = kithara::play::TrackConfig::for_audio(
+        let warm_config = (
             AudioConfig::<Hls<TestPools>>::for_stream(
                 HlsConfig::for_url(url.clone())
                     .downloader(create_test_downloader())
@@ -400,9 +400,8 @@ pub(crate) async fn packaged_abr_switch_keeps_player_continuity(
                     .build(),
             )
             .build(),
-        )
-        .block_on_underrun(true)
-        .build();
+            TrackConfig::builder().block_on_underrun(true).build(),
+        );
         let warm_audio = loader
             .load(warm_config)
             .await
@@ -655,13 +654,12 @@ pub(crate) async fn manual_cross_codec_switch_sustains_post_switch_playback(
     // post-switch decoder stall then parks forever, the virtual clock cannot
     // pass the hang budget, and the `KITHARA_HANG_TIMEOUT_SECS=5` watchdog fires
     // — the flash-correct enforcement of the "no >5 s stall" contract.
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .events(bus.clone())
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create audio");

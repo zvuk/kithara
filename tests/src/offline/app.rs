@@ -1,4 +1,4 @@
-use keyring_core::sample::Store;
+use keyring_core::mock::Store;
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     audio::{AudioDecoderConfig, DecoderResamplerSettings},

@@ -42,7 +42,6 @@ bytes = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 futures = { workspace = true }
-humantime-serde = { workspace = true }
 serde = { workspace = true }
 thunderdome = { workspace = true }
 tracing = { workspace = true }

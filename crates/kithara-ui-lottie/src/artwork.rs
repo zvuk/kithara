@@ -1,8 +1,11 @@
 use std::sync::LazyLock;
 
 use kithara_platform::sync::Arc;
+use kithara_ui_draw::DrawListBuilder;
 use num_traits::cast::AsPrimitive;
 use velato::Composition;
+
+use crate::{ArtworkError, emit, validate};
 
 /// One artwork, read once.
 ///
@@ -19,9 +22,20 @@ impl Artwork {
     /// Parses one owned artwork for a skin or application resource catalog.
     ///
     /// # Errors
-    /// Returns the Lottie parser's error when the supplied JSON is malformed.
-    pub fn parse(bytes: &[u8]) -> Result<Self, impl std::error::Error + Send + Sync> {
-        Composition::from_slice(bytes).map(|composition| Self { composition })
+    /// Returns a typed error for malformed, excessive or unsupported artwork.
+    pub fn parse(bytes: &[u8]) -> Result<Self, ArtworkError> {
+        let artwork = Self {
+            composition: validate::parse(bytes)?,
+        };
+        // Numeric smoke checks supplement whole-document structural admission.
+        for phase in [0.0, 0.5, 0.999] {
+            emit(
+                artwork.composition(),
+                artwork.frame_at(phase, 1.0),
+                &mut DrawListBuilder::default(),
+            )?;
+        }
+        Ok(artwork)
     }
     /// Which frame of this artwork stands `seconds` into a pass of `pass`.
     ///

@@ -326,7 +326,7 @@ async fn play_retries_the_current_track_after_its_prefetch_failed(
     assert_ne!(retry_seq, failed_seq, "Play must start a new open");
     let loaded =
         crate::mock::loaded_request(&queue, &mut rig, retry_seq, FixtureSource::Synthetic).await;
-    assert_eq!(loaded.opened.pcm.src().as_ref(), source);
+    assert_eq!(loaded.opened.src.as_ref(), source);
     assert_eq!(
         loaded.opened.pcm.spec(),
         AudioSpec::new(2, mock::SAMPLE_RATE)
