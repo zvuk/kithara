@@ -304,9 +304,24 @@ fn add_repr(repr: &DurationRepr<'_>, out: &mut Duration) -> Result<(), String> {
     Ok(())
 }
 
+/// Removes whitespace inside numbers and maps token separators to ASCII space.
+fn normalize_whitespace(value: &str) -> String {
+    let is_numeric = |byte| matches!(byte, b'0'..=b'9' | b'.');
+    let mut input = String::with_capacity(value.len());
+    for part in value.split_whitespace() {
+        let joins_number = input.as_bytes().last().copied().is_some_and(is_numeric)
+            && part.as_bytes().first().copied().is_some_and(is_numeric);
+        if !input.is_empty() && !joins_number {
+            input.push(' ');
+        }
+        input.push_str(part);
+    }
+    input
+}
+
 fn parse(value: &str) -> Result<Duration, String> {
-    let trimmed = value.trim_matches(|character: char| character.is_ascii_whitespace());
-    if trimmed == "0" {
+    let input = normalize_whitespace(value);
+    if input == "0" {
         if value == "0" {
             return Ok(Duration::ZERO);
         }
@@ -317,7 +332,7 @@ fn parse(value: &str) -> Result<Duration, String> {
     // published representation parser for syntax and convert each span with the
     // checked arithmetic the previous configuration parser exposed.
     let mut out = Duration::ZERO;
-    let mut parser = &mut ReprParserMultiple::new(trimmed);
+    let mut parser = &mut ReprParserMultiple::new(&input);
     loop {
         let (repr, next) = parser
             .parse(&consts::CONFIG, &TimeUnits, None, None)
@@ -453,6 +468,30 @@ mod tests {
         let config: Config =
             serde_yaml_ng::from_str("timeout: 25ms\n").expect("an absent optional duration parses");
         assert_eq!(config.idle, None);
+    }
+
+    #[kithara::test]
+    fn duration_config_accepts_whitespace_inside_numbers() {
+        for (text, expected) in [
+            ("1 000 ms", Duration::from_secs(1)),
+            ("1.0 5s", Duration::from_millis(1_050)),
+            ("1 \u{2009}. \u{a0}5s", Duration::from_millis(1_500)),
+        ] {
+            assert_eq!(parse(text), Ok(expected), "{text:?}");
+        }
+    }
+
+    #[kithara::test]
+    fn duration_config_accepts_unicode_whitespace_between_tokens() {
+        let config: Config = serde_yaml_ng::from_str(
+            "timeout: \"\\u00a01s\\u2003\"\nidle: \"1\\u0085h\\u200930m\"\n",
+        )
+        .expect("Unicode whitespace separates duration tokens");
+        assert_eq!(config.timeout, Duration::from_secs(1));
+        assert_eq!(config.idle, Some(Duration::from_secs(5_400)));
+        for text in ["0\u{a0}", "1m\u{2009}s"] {
+            assert!(parse(text).is_err(), "{text:?}");
+        }
     }
 
     #[kithara::test]
