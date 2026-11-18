@@ -2396,7 +2396,7 @@ fn a_source_page_gesture_reaches_its_source_through_the_app_dispatch() {
 
 #[cfg(feature = "zvuk")]
 #[kithara::test(native, flash(false))]
-fn zvuk_settings_bind_the_streaming_toggle_to_its_source() {
+fn zvuk_documents_bind_search_and_streaming_to_their_source() {
     let runtime = test_fixture::runtime();
     let config = test_fixture::config(runtime.handle());
     let environment = Environment::new(
@@ -2424,6 +2424,25 @@ fn zvuk_settings_bind_the_streaming_toggle_to_its_source() {
                     "source.adaptive_streaming@source=zvuk"
                 ]
             );
+        }
+        for (suffix, binding) in [
+            ("scope-tracks", "source.scope_tracks@source=zvuk"),
+            ("scope-artists", "source.scope_artists@source=zvuk"),
+            ("scope-albums", "source.scope_albums@source=zvuk"),
+            ("suggestion-0-press", "source.suggestion_0@source=zvuk"),
+            ("back", "source.back@source=zvuk"),
+            ("load-more", "source.load_more@source=zvuk"),
+        ] {
+            let found = controls
+                .iter()
+                .filter(|(path, _)| path.contains("library/pages/zvuk/") && path.ends_with(suffix))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                found.len(),
+                1,
+                "missing or ambiguous Zvuk control `{suffix}`"
+            );
+            assert_eq!(found[0].1, [binding], "wrong binding for `{suffix}`");
         }
     }
 }

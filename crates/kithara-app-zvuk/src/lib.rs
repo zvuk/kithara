@@ -17,6 +17,8 @@ pub(crate) use crate::{
     account::{Account, Command},
     error::{Error, GraphQlError},
     media::MediaTrack,
-    model::{Playlist, PlaylistId, Track, TrackId},
-    page::TrackPage,
+    model::{
+        ArtistId, Playlist, PlaylistId, ReleaseId, SearchArtist, SearchRelease, Track, TrackId,
+    },
+    page::{SearchPage, SearchResults, SearchScope, TrackPage},
 };
