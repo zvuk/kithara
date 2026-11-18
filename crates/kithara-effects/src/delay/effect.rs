@@ -102,6 +102,7 @@ impl DeckEffect for FeedbackDelay {
             .chain(wet.iter().map(|plane| plane.len()))
             .min()
             .unwrap_or(0);
+        // The stereo prefix, line-owned taps and bounded spans satisfy the comb's shape checks.
         if self.comb.process(&input, &mut wet, 0..frames).is_err() {
             for plane in &mut wet {
                 plane.fill(0.0);
@@ -116,7 +117,9 @@ impl DeckEffect for FeedbackDelay {
     fn set(&mut self, change: FxParamChange) {
         match change.index {
             0 => {
-                if let Ok(delay) = self.comb.tap(change.value) {
+                if let Some(delay) = DelayTime::checked(change.value)
+                    .and_then(|time| self.comb.tap(f64::from(time)).ok())
+                {
                     self.comb.retime(delay);
                 }
             }

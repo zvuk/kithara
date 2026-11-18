@@ -441,7 +441,8 @@ fn nan_input_is_nonquiet_under_every_partition() {
 
 #[kithara::test]
 #[case::conjugate_pair(12_000.0, 5.0 / 6.0, 0.5)]
-#[case::real_poles(((1.0_f64 - 0.9) / (1.0 + 0.9)).atan() * 48_000.0 / std::f64::consts::PI, 0.5, 0.9)]
+#[case::repeated_real_pole(((1.0_f64 - 0.9) / (1.0 + 0.9)).atan() * 48_000.0 / std::f64::consts::PI, 0.5, 0.9)]
+#[case::distinct_real_poles(0.2_f64.atan() * 48_000.0 / std::f64::consts::PI, 0.4, 9.0 / 11.0)]
 fn decay_frames_counts_the_slowest_pole_down_to_the_level(
     #[case] cutoff: f64,
     #[case] q: f64,
@@ -451,12 +452,41 @@ fn decay_frames_counts_the_slowest_pole_down_to_the_level(
     let design = SvfDesign::new(SVF_RATE, cutoff, q, Response::LowPass).expect("design");
     let expected = (f64::ln(level) / radius.ln()).ceil();
     assert_eq!(decay_frames(design, level).to_f64(), Some(expected));
-    let memoryless = SvfDesign::new(SVF_RATE, 12_000.0, 0.5, Response::HighPass).expect("design");
-    assert_eq!(
-        decay_frames(memoryless, level),
-        1,
-        "a filter without memory counts one frame"
-    );
+}
+
+#[kithara::test]
+fn zero_poles_have_a_three_tap_impulse_response() {
+    let design = SvfDesign::new(SVF_RATE, 12_000.0, 0.5, Response::HighPass).expect("design");
+    assert_eq!(decay_frames(design, 1e-6), 1);
+    let mut impulse = [1.0_f32, 0.0, 0.0, 0.0, 0.0];
+    StateVariableFilter::<1>::new()
+        .process_fixed(&mut [&mut impulse[..]], 0..5, &design)
+        .expect("impulse fits");
+    assert_eq!(impulse[..3], [0.25, -0.5, 0.25]);
+    assert!(impulse[3..].iter().all(|sample| sample.abs() <= 1e-12));
+}
+
+#[kithara::test]
+fn repeated_pole_impulse_outlasts_the_geometric_decay_count() {
+    const DECAY_FRAME: usize = 132;
+    const FRAMES: usize = DECAY_FRAME + 1;
+    let radius = 0.9_f64;
+    let floor = 1e-6;
+    let gain = (1.0 - radius) / (1.0 + radius);
+    let cutoff = gain.atan() * f64::from(SVF_RATE.get()) / std::f64::consts::PI;
+    let design = SvfDesign::new(SVF_RATE, cutoff, 0.5, Response::LowPass).expect("design");
+    assert_eq!(decay_frames(design, floor), DECAY_FRAME);
+    let mut impulse = [0.0_f32; FRAMES];
+    impulse[0] = 1.0;
+    StateVariableFilter::<1>::new()
+        .process_fixed(&mut [&mut impulse[..]], 0..FRAMES, &design)
+        .expect("impulse fits");
+    let n = DECAY_FRAME.to_f64().expect("frame fits f64");
+    let expected = ((1.0 - radius) / 2.0).powi(2)
+        * radius.powf(n - 2.0)
+        * ((n + 1.0) * radius * radius + 2.0 * n * radius + n - 1.0);
+    assert!(expected > floor);
+    assert!((f64::from(impulse[DECAY_FRAME]) - expected).abs() <= 1e-12);
 }
 
 const SVF_RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("nonzero rate");

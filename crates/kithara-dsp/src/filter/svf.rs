@@ -74,8 +74,9 @@ impl SvfDesign {
     }
 }
 
-/// Frames until the fixed SVF's slowest pole decays under `floor`.
-/// A decay beyond the addressable frame count saturates at `usize::MAX`.
+/// Frames for unit amplitude at the largest pole radius to reach `floor` in `(0, 1)`.
+/// The geometric count excludes pole multiplicity and impulse-response scale.
+/// Returns at least one frame and saturates at `usize::MAX`.
 #[must_use]
 pub fn decay_frames(design: SvfDesign, floor: f64) -> usize {
     let SvfDesign { gain, damping, .. } = design;
