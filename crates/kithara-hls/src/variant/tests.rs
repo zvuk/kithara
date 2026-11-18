@@ -2851,17 +2851,14 @@ async fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
 /// between probes is the caller's responsibility (the worker scheduler park),
 /// so the read path never blocks on a syscall. Waking the peer downloader is
 /// the reader driver's job (`Stream::probe_read` / `read` / `prime_seek_range`,
-/// per its on-core/off-core context), not this method's. The old
-/// implementation slept 2ms per spin and looped until the 10ms budget elapsed;
-/// the probe must now return in well under that.
+/// per its on-core/off-core context), not this method's. The no-block watcher
+/// rejects an actual sleep or park independently of scheduler preemption.
 #[kithara::test(tokio)]
 async fn wait_range_probes_without_sleeping() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400], &ctx);
 
-    let started = Instant::now();
     let outcome = v.wait_range(0..1, Some(Duration::from_millis(10)));
-    let elapsed = Instant::now().saturating_duration_since(started);
 
     assert!(
         matches!(
@@ -2869,10 +2866,6 @@ async fn wait_range_probes_without_sleeping() {
             Err(StreamError::Source(SourceError::WaitBudgetExceeded))
         ),
         "not-ready range must signal WaitBudgetExceeded immediately, got {outcome:?}"
-    );
-    assert!(
-        elapsed < Duration::from_millis(2),
-        "probe must not sleep (old impl slept 2ms/spin up to the 10ms budget); took {elapsed:?}"
     );
 }
 
