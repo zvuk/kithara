@@ -626,7 +626,14 @@ where
             size: node.size,
         },
         anchor,
-        &mut |host| expanded(node.content, &content, branch, ctx, host),
+        &mut |host| {
+            let child = expanded(node.content, &content, branch, ctx, host);
+            if branch.input_owner == InputOwner::Engine {
+                host.hosted(node.content, child)
+            } else {
+                child
+            }
+        },
     )
 }
 
