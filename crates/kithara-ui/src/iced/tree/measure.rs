@@ -423,12 +423,7 @@ impl IcedWidget<Published, Theme, Renderer> for Flex<'_> {
     ) {
         operation.container(None, layout.bounds());
         operation.traverse(&mut |operation| {
-            let children = self
-                .children
-                .iter_mut()
-                .zip(&mut tree.children)
-                .zip(layout.children());
-            for ((child, state), layout) in children {
+            for (child, state, layout) in self.shown_mut(tree, layout) {
                 child
                     .as_widget_mut()
                     .operate(state, layout, renderer, operation);
@@ -776,7 +771,7 @@ mod tests {
     use iced::{
         Pixels,
         advanced::{graphics::text::font_system, layout::Limits, widget::tree::Tag},
-        widget::Space,
+        widget::{Space, container},
     };
     use iced_renderer::fallback::Renderer as FallbackRenderer;
     use iced_tiny_skia::Renderer as TinySkiaRenderer;
@@ -784,7 +779,8 @@ mod tests {
 
     use super::{
         Alignment, Band, Element, Flex, GroupMount, IcedWidget, Layout, Length, MeasureAxis,
-        Measured, Padding, Plan, Published, Renderer, Size, State, Theme, Tree,
+        Measured, Operation, Padding, Plan, Published, Rectangle, Renderer, Size, State, Theme,
+        Tree, widget,
     };
     use crate::{
         iced::fonts::{FONT_BYTES, SANS},
@@ -919,6 +915,49 @@ mod tests {
         let (_, boxes) = lay_out(&mut flex, &mut tree, 400.0);
 
         assert_eq!(boxes, vec![(0.0, 10.0), (0.0, 0.0), (14.0, 30.0)]);
+    }
+
+    #[kithara::test]
+    fn widget_operations_visit_only_laid_out_cells() {
+        #[derive(Default)]
+        struct Visit(Vec<widget::Id>);
+
+        impl Operation for Visit {
+            fn container(&mut self, id: Option<&widget::Id>, _bounds: Rectangle) {
+                self.0.extend(id.cloned());
+            }
+
+            fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+                operate(self);
+            }
+        }
+
+        let always = widget::Id::new("always");
+        let wide = widget::Id::new("wide");
+        let mut flex = Flex::row([
+            mounted(
+                container(cell(10.0)).id(always.clone()).into(),
+                Band::ALWAYS,
+            ),
+            mounted(
+                container(cell(20.0)).id(wide.clone()).into(),
+                Band::new(440.0, None),
+            ),
+        ])
+        .measure(Some(MeasureAxis::Width));
+        let mut tree = tree_for(&flex);
+        let renderer = renderer();
+
+        for (width, expected) in [(400.0, vec![always.clone()]), (500.0, vec![always, wide])] {
+            let node = flex.layout(
+                &mut tree,
+                &renderer,
+                &Limits::new(Size::ZERO, Size::new(width, 42.0)),
+            );
+            let mut visit = Visit::default();
+            flex.operate(&mut tree, Layout::new(&node), &renderer, &mut visit);
+            assert_eq!(visit.0, expected);
+        }
     }
 
     #[kithara::test]

@@ -14,6 +14,7 @@ default-features = true
 features = ["spectrum"]
 
 [features]
+routes = []
 # The real FFT and autocorrelation of `spectrum`, their planes drawn from the
 # caller's `kithara-bufpool` region. `FftLen` and `SpectrumError` are
 # available without it.
@@ -62,7 +63,7 @@ workspace = true
 [[bench]]
 name = "kernels"
 harness = false
-required-features = ["spectrum"]
+required-features = ["spectrum", "routes"]
 
 [[bench]]
 name = "delay"
