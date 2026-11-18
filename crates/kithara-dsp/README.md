@@ -62,9 +62,15 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>downmix</code></td><td>Averages the channels of each whole interleaved frame into one mono sample; two channels run the pair kernel, more channels sum the frame and scale by <code>1/N</code>, bit-identical to that scalar formula</td></tr>
 
+<tr><td><code>last_loud</code></td><td>Last sample index with magnitude above a limit, through the native SIMD backend</td></tr>
+
 <tr><td><code>sum_squares</code></td><td>Sum of the squares of a slice; an empty slice is <code>+0.0</code></td></tr>
 
 <tr><td><code>filter::Biquad</code></td><td>Biquad sections in cascade over planar channels; <code>new</code> allocates, <code>retune</code>, <code>process</code>, <code>settle</code> and <code>copy_state</code> do not, and silence resets the state</td></tr>
+
+<tr><td><code>filter::SvfDesign</code></td><td>Checked LP/HP fixed-cutoff design and its strict cutoff ceiling; <code>StateVariableFilter::process_fixed</code> runs prepared gains without carrying policy</td></tr>
+
+<tr><td><code>filter::decay_frames</code></td><td>Frames the slowest pole of a prepared SVF design takes to decay under a level</td></tr>
 
 <tr><td><code>filter::Coefficients</code></td><td>The <code>biquad</code> crate's RBJ cookbook designs (with <code>Type</code>, <code>Hertz</code> and <code>Errors</code>), re-exported as the one import path</td></tr>
 

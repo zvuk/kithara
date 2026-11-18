@@ -4,11 +4,12 @@ use std::{
 };
 
 use fearless_simd::{f64x2, prelude::*};
+use num_traits::ToPrimitive;
 
-use crate::filter::Response;
+use crate::{consts::SILENT_PEAK, filter::Response};
 
 #[inline(always)]
-pub(crate) fn step<S: Simd>(
+fn step<S: Simd>(
     simd: S,
     x: f64x2<S>,
     [s1, s2]: [f64x2<S>; 2],
@@ -28,6 +29,87 @@ pub(crate) fn step<S: Simd>(
         Response::HighPass => x.sub(damping.mul(v1)).sub(v2),
     };
     (state, output)
+}
+
+/// One channel-pair step in two-lane `f64x2`: gathers state and input, runs the
+/// TPT recurrence, scatters state and output back, and reports whether the pair
+/// stayed silent.
+#[inline(always)]
+pub(crate) fn step_pair<S: Simd>(
+    simd: S,
+    samples: &mut [Option<&mut f32>],
+    state1: &mut [f64],
+    state2: &mut [f64],
+    coefficients: [f64; 3],
+    damping: f64,
+    response: Response,
+) -> bool {
+    let s1 = f64x2::from_fn(simd, |lane| state1.get(lane).copied().unwrap_or(0.0));
+    let s2 = f64x2::from_fn(simd, |lane| state2.get(lane).copied().unwrap_or(0.0));
+    let x = f64x2::from_fn(simd, |lane| {
+        samples
+            .get(lane)
+            .and_then(Option::as_deref)
+            .copied()
+            .map_or(0.0, f64::from)
+    });
+    let ([next1, next2], output) = step(simd, x, [s1, s2], coefficients, damping, response);
+    for (state, value) in state1.iter_mut().zip(next1.as_slice()) {
+        *state = *value;
+    }
+    for (state, value) in state2.iter_mut().zip(next2.as_slice()) {
+        *state = *value;
+    }
+    let mut quiet = true;
+    for (sample, output) in samples.iter_mut().zip(output.as_slice()) {
+        if let Some(sample) = sample.as_deref_mut() {
+            let output = output.to_f32().unwrap_or(f32::NAN);
+            quiet &= sample.abs() <= SILENT_PEAK && output.abs() <= SILENT_PEAK;
+            *sample = output;
+        }
+    }
+    quiet
+}
+
+/// Scalar-`f64` channel-pair step, bit-exact with [`step_pair`]. This is the
+/// form the route selects on Apple Silicon.
+#[inline(always)]
+pub(crate) fn step_pair_scalar<S: Simd>(
+    simd: S,
+    samples: &mut [Option<&mut f32>],
+    state1: &mut [f64],
+    state2: &mut [f64],
+    coefficients: [f64; 3],
+    damping: f64,
+    response: Response,
+) -> bool {
+    let _ = simd;
+    let [a1, a2, a3] = coefficients;
+    let mut quiet = true;
+    for (sample, (s1, s2)) in samples
+        .iter_mut()
+        .zip(state1.iter_mut().zip(state2.iter_mut()))
+    {
+        let input = sample.as_deref().copied().unwrap_or(0.0);
+        let x = f64::from(input);
+        let (m1, m2) = (*s1, *s2);
+        let v3 = x - m2;
+        let v1 = a1 * m1 + a2 * v3;
+        let v2 = m2 + a2 * m1 + a3 * v3;
+        *s1 = 2.0 * v1 - m1;
+        *s2 = 2.0 * v2 - m2;
+        if let Some(sample) = sample.as_deref_mut() {
+            let output = match response {
+                Response::LowPass => v2,
+                Response::HighPass => x - damping * v1 - v2,
+            }
+            .to_f32()
+            .unwrap_or(f32::NAN);
+            quiet &= input.abs() <= SILENT_PEAK && output.abs() <= SILENT_PEAK;
+            *sample = output;
+        }
+    }
+    quiet
 }
 
 #[inline(always)]
@@ -120,5 +202,58 @@ mod tests {
             }
         }
         assert_eq!(gains[7], -7.0);
+    }
+
+    #[kithara::test]
+    fn simd_and_scalar_pair_steps_keep_the_same_state_output_and_quiet() {
+        for response in [Response::LowPass, Response::HighPass] {
+            for damping in [0.1, 1.0, 10.0] {
+                let gain = 0.4_f64;
+                let a1 = (1.0 + gain * (gain + damping)).recip();
+                let a2 = gain * a1;
+                let coefficients = [a1, a2, gain * a2];
+                let mut simd_a = 0.25_f32;
+                let mut simd_b = -0.5_f32;
+                let mut scalar_a = 0.25_f32;
+                let mut scalar_b = -0.5_f32;
+                let mut simd_samples = [Some(&mut simd_a), Some(&mut simd_b)];
+                let mut scalar_samples = [Some(&mut scalar_a), Some(&mut scalar_b)];
+                let mut simd_state1 = [1.0_f64, -1.0];
+                let mut scalar_state1 = [1.0_f64, -1.0];
+                let mut simd_state2 = [0.5_f64, 0.25];
+                let mut scalar_state2 = [0.5_f64, 0.25];
+                let mut simd_quiet = true;
+                let mut scalar_quiet = true;
+                dispatch!(Level::new(), simd => {
+                    simd_quiet = step_pair(
+                        simd,
+                        &mut simd_samples,
+                        &mut simd_state1,
+                        &mut simd_state2,
+                        coefficients,
+                        damping,
+                        response,
+                    );
+                    scalar_quiet = step_pair_scalar(
+                        simd,
+                        &mut scalar_samples,
+                        &mut scalar_state1,
+                        &mut scalar_state2,
+                        coefficients,
+                        damping,
+                        response,
+                    );
+                });
+                assert_eq!(simd_quiet, scalar_quiet);
+                for (simd, scalar) in simd_state1.iter().zip(&scalar_state1) {
+                    assert_eq!(simd.to_bits(), scalar.to_bits());
+                }
+                for (simd, scalar) in simd_state2.iter().zip(&scalar_state2) {
+                    assert_eq!(simd.to_bits(), scalar.to_bits());
+                }
+                assert_eq!(simd_a.to_bits(), scalar_a.to_bits());
+                assert_eq!(simd_b.to_bits(), scalar_b.to_bits());
+            }
+        }
     }
 }
