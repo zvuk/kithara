@@ -4,7 +4,7 @@ use kithara_events::TrackId;
 use kithara_platform::time::{Duration, Instant};
 use kithara_play::{
     CrossfadeSettings, CrossfaderGain, DeckFxChange, EqBandConfig, FilterKnob, InterruptionKind,
-    PitchStep, PlayError, Position, TrackSettingsChange, Trim,
+    LayoutRevision, PitchStep, PlayError, Position, TrackSettingsChange, Trim,
 };
 use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
@@ -289,6 +289,24 @@ where
         self.call(QueueCommand::SetEqGain { band, gain_db })
     }
 
+    /// Changes a band's kill state in the observed EQ layout at a mixer frame.
+    /// # Errors
+    /// Returns an admission refusal or a closed mailbox.
+    pub fn set_eq_kill(
+        &self,
+        at: When<SessionFrame>,
+        band: usize,
+        layout: LayoutRevision,
+        on: bool,
+    ) -> Result<(), QueueError> {
+        self.call(QueueCommand::SetEqKill {
+            at,
+            band,
+            layout,
+            on,
+        })
+    }
+
     /// Forwards an EQ layout to the host owner.
     /// # Errors
     /// Returns the host's refusal or a closed mailbox.
@@ -296,7 +314,7 @@ where
         self.call(QueueCommand::SetEqLayout(layout))
     }
 
-    /// Requests flat host EQ gains.
+    /// Requests neutral gains and clears kill in the deck's EQ layout.
     /// # Errors
     /// Returns the host's refusal or a closed mailbox.
     pub fn reset_eq(&self) -> Result<(), QueueError> {

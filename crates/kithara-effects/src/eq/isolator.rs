@@ -11,8 +11,17 @@ use num_traits::cast::AsPrimitive;
 use super::{EqBandConfig, EqConfig};
 use crate::{
     GainDb,
-    dsp::{filter::CrossoverFilters, gain::GainBank},
+    dsp::{
+        filter::CrossoverFilters,
+        gain::{GainBank, GainWrite},
+    },
 };
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RoutingOwner {
+    Gain(usize),
+    Kill,
+}
 
 /// Single-channel isolator crossover EQ.
 #[non_exhaustive]
@@ -21,8 +30,8 @@ pub struct IsolatorEq {
     gains: GainBank,
     bypass: MixDSP,
     silence: MixDSP,
-    bypass_owner: Option<usize>,
-    silence_owner: Option<usize>,
+    bypass_owner: Option<RoutingOwner>,
+    silence_owner: Option<RoutingOwner>,
 }
 
 impl IsolatorEq {
@@ -102,45 +111,56 @@ impl IsolatorEq {
 
     pub fn set_gain(&mut self, band: usize, gain_db: GainDb) {
         self.gains.set(band, gain_db);
-        self.update_mix(Some(band));
+        self.update_mix(Some(RoutingOwner::Gain(band)));
+    }
+
+    pub(super) fn set_kill(&mut self, band: usize, on: bool) {
+        if self.gains.set_kill(band, on) {
+            self.update_mix(Some(RoutingOwner::Kill));
+        }
+    }
+
+    pub(super) fn clear_kills(&mut self) {
+        if self.gains.clear_kills() {
+            self.bypass_owner = None;
+            self.silence_owner = None;
+            self.update_mix(None);
+            self.bypass.reset_to_target();
+            self.silence.reset_to_target();
+        }
     }
 
     pub(crate) fn set_explicit(&mut self, band: usize, gain_db: GainDb) {
-        let changed = self.gains.set_explicit(band, gain_db);
-        if changed {
-            self.update_mix(Some(band));
-        }
-        if changed || self.bypass_owner == Some(band) {
+        let owner = Some(RoutingOwner::Gain(band));
+        let changed = match self.gains.set_explicit(band, gain_db) {
+            GainWrite::Unchanged => false,
+            GainWrite::Applied => {
+                self.update_mix(owner);
+                true
+            }
+            GainWrite::Gliding => {
+                self.update_mix(Some(RoutingOwner::Kill));
+                return;
+            }
+            GainWrite::Masked => return,
+        };
+        if self.bypass_owner != Some(RoutingOwner::Kill) && (changed || self.bypass_owner == owner)
+        {
             self.bypass.reset_to_target();
             self.bypass_owner = None;
         }
-        if changed || self.silence_owner == Some(band) {
+        if self.silence_owner != Some(RoutingOwner::Kill)
+            && (changed || self.silence_owner == owner)
+        {
             self.silence.reset_to_target();
             self.silence_owner = None;
         }
     }
 
-    fn update_mix(&mut self, owner: Option<usize>) {
-        let all =
-            |target| (0..self.gains.len()).all(|band| self.gains.target(band) == Some(target));
-        let bypass = if all(GainDb::default()) {
-            Mix::FULLY_DRY
-        } else {
-            Mix::FULLY_WET
-        };
-        let silence = if self.gains.len() > 0 && all(GainDb::MIN) {
-            Mix::FULLY_DRY
-        } else {
-            Mix::FULLY_WET
-        };
-        if self.bypass.second_gain_target() != bypass.get() {
-            self.bypass_owner = owner;
-        }
-        if self.silence.second_gain_target() != silence.get() {
-            self.silence_owner = owner;
-        }
-        self.bypass.set_mix(bypass, FadeCurve::Linear);
-        self.silence.set_mix(silence, FadeCurve::Linear);
+    fn update_mix(&mut self, owner: Option<RoutingOwner>) {
+        let (bypass, silence) = self.gains.bypass_and_silence();
+        update_route(&mut self.bypass, &mut self.bypass_owner, bypass, owner);
+        update_route(&mut self.silence, &mut self.silence_owner, silence, owner);
     }
 
     pub fn update_sample_rate(&mut self, sample_rate: u32) {
@@ -160,8 +180,24 @@ impl IsolatorEq {
             #[must_use]
             #[call(target)]
             pub fn target_gain(&self, band: usize) -> Option<GainDb>;
+            pub(super) fn killed(&self, band: usize) -> Option<bool>;
         }
     }
+}
+
+fn update_route(
+    mix: &mut MixDSP,
+    owner: &mut Option<RoutingOwner>,
+    dry: bool,
+    change: Option<RoutingOwner>,
+) {
+    let target = if dry { Mix::FULLY_DRY } else { Mix::FULLY_WET };
+    if mix.second_gain_target() != target.get()
+        && (*owner != Some(RoutingOwner::Kill) || mix.has_settled())
+    {
+        *owner = change;
+    }
+    mix.set_mix(target, FadeCurve::Linear);
 }
 
 #[cfg(test)]
@@ -172,6 +208,86 @@ mod tests {
 
     use super::*;
     use crate::test_pools::{pools, pools_with_budget};
+
+    #[kithara::test]
+    #[case::bypass(GainDb::DEFAULT, GainDb::MAX)]
+    #[case::silence(GainDb::MIN, GainDb::DEFAULT)]
+    fn eq_kill_routing_transition_is_not_snapped_by_another_band_program(
+        #[case] initial: GainDb,
+        #[case] program: GainDb,
+    ) {
+        let mut bands = super::super::band::generate_log_spaced_bands(2);
+        bands[1].set_gain_db(initial);
+        let config = EqConfig::builder(pools()).build();
+        let mut eq = IsolatorEq::new(&config, &bands, 48_000).expect("isolator");
+        let settled = |eq: &IsolatorEq| {
+            if initial == GainDb::MIN {
+                eq.silence.has_settled()
+            } else {
+                eq.bypass.has_settled()
+            }
+        };
+        assert!(settled(&eq));
+        eq.set_kill(0, true);
+        for _ in 0..128 {
+            assert!(eq.process_sample(0.25).is_finite());
+        }
+        assert!(!settled(&eq));
+        eq.set_explicit(1, program);
+        assert!(!settled(&eq));
+        assert!(eq.process_sample(0.25).is_finite());
+    }
+
+    #[kithara::test]
+    #[case::slow(16_000, 1.0, true)]
+    #[case::steep(4_000, 12.0, false)]
+    fn eq_kill_off_regains_exact_program_tracking_after_the_smoother_settles(
+        #[case] frames: u16,
+        #[case] span: f32,
+        #[case] settles_while_running: bool,
+    ) {
+        let initial = GainDb::checked(-6.0).expect("initial gain");
+        let config = EqConfig::builder(pools()).build();
+        let band = EqBandConfig::builder().gain_db(initial).build();
+        let mut eq = IsolatorEq::new(&config, &[band], 48_000).expect("isolator");
+        eq.set_kill(0, true);
+        for _ in 0..48_000 {
+            eq.process_sample(0.25);
+        }
+        assert_eq!(eq.process_sample(0.25).to_bits(), 0);
+        eq.set_kill(0, false);
+        let mut tracked = false;
+        for frame in 0..frames {
+            let gain = GainDb::checked(-6.0 + span * f32::from(frame) / f32::from(frames))
+                .expect("program gain");
+            eq.set_explicit(0, gain);
+            let pcm = eq.process_sample(0.25);
+            let expected = 0.25 * gain.linear();
+            assert!(pcm.is_finite());
+            assert_eq!(eq.target_gain(0), Some(gain));
+            let exact = pcm.to_bits() == expected.to_bits();
+            if frame == 0 {
+                assert!(pcm > 0.0 && pcm < expected);
+            }
+            assert!(!tracked || exact);
+            tracked |= exact;
+        }
+        assert_eq!(tracked, settles_while_running);
+        let held = GainDb::checked(-6.0 + span).expect("held gain");
+        for _ in 0..48_000 {
+            eq.set_explicit(0, held);
+            eq.process_sample(0.25);
+        }
+        assert_eq!(
+            eq.process_sample(0.25).to_bits(),
+            (0.25 * held.linear()).to_bits()
+        );
+        eq.set_explicit(0, initial);
+        assert_eq!(
+            eq.process_sample(0.25).to_bits(),
+            (0.25 * initial.linear()).to_bits()
+        );
+    }
 
     #[kithara::test]
     fn a_decaying_tail_never_leaks_denormals(eq_impulse: Vec<f32>) {

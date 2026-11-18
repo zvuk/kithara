@@ -147,7 +147,9 @@ fn program_in(commands: &[DeckPart], index: usize) -> Option<&DeckProgram> {
 
 fn cancels(part: &DeckPart, index: usize) -> bool {
     let parameter = match part {
-        DeckPart::Eq(DeckEqChange::Layout(_)) => return index >= DeckParameter::EQ_START,
+        DeckPart::Eq(DeckEqChange::Layout(_) | DeckEqChange::Reset) => {
+            return index >= DeckParameter::EQ_START;
+        }
         DeckPart::Eq(DeckEqChange::Gain { band, .. }) => {
             return index == DeckParameter::eq_index(*band);
         }
@@ -167,14 +169,19 @@ impl Deck {
         commands: &[DeckPart],
     ) -> Result<(), DeckRefusal> {
         let bands = self.programs.eq_values().len();
-        let oversized = commands.iter().any(|part| match part {
-            DeckPart::Eq(DeckEqChange::Layout(layout)) => layout.band_count() > bands,
-            _ => false,
-        });
-        if oversized {
-            return Err(DeckRefusal::EqLayoutCapacity);
+        let mut layout_changes = false;
+        for part in commands {
+            if let DeckPart::Eq(DeckEqChange::Layout(layout)) = part {
+                if layout.band_count() > bands {
+                    return Err(DeckRefusal::EqLayoutCapacity);
+                }
+                layout_changes = true;
+            }
         }
         for (index, part) in commands.iter().enumerate() {
+            if let DeckPart::Eq(DeckEqChange::Kill { band, layout, .. }) = *part {
+                self.validate_eq_kill(band, layout, layout_changes)?;
+            }
             let DeckPart::Program {
                 epoch,
                 authority,
@@ -193,13 +200,7 @@ impl Deck {
                 .get(parameter.index())
                 .ok_or(DeckRefusal::ParameterUnavailable { parameter })?;
             if let DeckParameter::EqBand { band, layout } = parameter {
-                if layout != LayoutRevision::new(self.programs.scope, self.programs.layout)
-                    || commands
-                        .iter()
-                        .any(|part| matches!(part, DeckPart::Eq(DeckEqChange::Layout(_))))
-                {
-                    return Err(DeckRefusal::ParameterOutdated { parameter });
-                }
+                self.validate_eq_revision(band, layout, layout_changes)?;
                 if !self.render.accepts_eq_program(band) {
                     return Err(DeckRefusal::ParameterUnavailable { parameter });
                 }
@@ -214,6 +215,37 @@ impl Deck {
             {
                 return Err(DeckRefusal::ParameterOutdated { parameter });
             }
+        }
+        Ok(())
+    }
+
+    fn validate_eq_kill(
+        &self,
+        band: usize,
+        layout: LayoutRevision,
+        layout_changes: bool,
+    ) -> Result<(), DeckRefusal> {
+        self.validate_eq_revision(band, layout, layout_changes)?;
+        if band >= self.render.eq_bands() {
+            return Err(DeckRefusal::ParameterUnavailable {
+                parameter: DeckParameter::EqBand { band, layout },
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_eq_revision(
+        &self,
+        band: usize,
+        layout: LayoutRevision,
+        layout_changes: bool,
+    ) -> Result<(), DeckRefusal> {
+        if layout_changes
+            || layout != LayoutRevision::new(self.programs.scope, self.programs.layout)
+        {
+            return Err(DeckRefusal::ParameterOutdated {
+                parameter: DeckParameter::EqBand { band, layout },
+            });
         }
         Ok(())
     }

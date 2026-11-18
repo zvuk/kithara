@@ -284,9 +284,17 @@ impl RenderPass {
         to self.eq {
             #[call(read_gains)]
             pub(crate) fn read_eq(&self, gains: &mut [GainDb]) -> usize;
+            #[call(read_kills)]
+            pub(crate) fn read_eq_kills(&self, kills: &mut [bool]);
+            #[call(band_count)]
+            pub(crate) fn eq_bands(&self) -> usize;
             /// Ramp `band` of the deck's equaliser to `gain` from the next frame rendered.
             #[call(set_gain)]
             pub(crate) fn set_eq_gain(&mut self, band: usize, gain: GainDb);
+            #[call(set_kill)]
+            pub(crate) fn set_eq_kill(&mut self, band: usize, on: bool);
+            #[call(reset_gains)]
+            pub(crate) fn reset_eq(&mut self);
             #[call(accepts_gain_program)]
             pub(crate) fn accepts_eq_program(&self, band: usize) -> bool;
             /// Cross the deck's equaliser over to `layout`, answering the layout it displaced.

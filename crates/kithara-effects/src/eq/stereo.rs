@@ -52,6 +52,11 @@ impl EqLayout {
         self.right.set_gain(band, gain_db);
     }
 
+    fn set_kill(&mut self, band: usize, on: bool) {
+        self.left.set_kill(band, on);
+        self.right.set_kill(band, on);
+    }
+
     fn set_explicit(&mut self, band: usize, gain_db: GainDb) {
         self.left.set_explicit(band, gain_db);
         self.right.set_explicit(band, gain_db);
@@ -70,6 +75,7 @@ impl EqLayout {
             /// Number of bands prepared in this layout.
             #[must_use]
             pub fn band_count(&self) -> usize;
+            fn killed(&self, band: usize) -> Option<bool>;
             fn target_gain(&self, band: usize) -> Option<GainDb>;
         }
     }
@@ -150,6 +156,8 @@ impl StereoEq {
     /// the last crossover retired. Nothing it held is freed here.
     pub fn take_layout(&mut self, mut layout: Box<EqLayout>) -> Option<Box<EqLayout>> {
         layout.update_sample_rate(self.sample_rate);
+        layout.left.clear_kills();
+        layout.right.clear_kills();
         self.update
             .replace(LayoutUpdate::Pending(layout))
             .map(LayoutUpdate::into_inner)
@@ -158,12 +166,25 @@ impl StereoEq {
     /// Ramps `band` to `gain_db` on the layout a gain speaks of: the one waiting to be crossed
     /// over to, else the one sounding.
     pub fn set_gain(&mut self, band: usize, gain_db: GainDb) {
-        let layout = match &mut self.update {
-            Some(LayoutUpdate::Pending(layout)) => Some(layout),
-            _ => self.active.as_mut(),
-        };
-        if let Some(layout) = layout {
+        if let Some(layout) = self.target_layout_mut() {
             layout.set_gain(band, gain_db);
+        }
+    }
+
+    /// Applies a kill change to a band in the command-addressable layout.
+    pub fn set_kill(&mut self, band: usize, on: bool) {
+        if let Some(layout) = self.target_layout_mut() {
+            layout.set_kill(band, on);
+        }
+    }
+
+    /// Returns every addressed band to neutral gain with kill off.
+    pub fn reset_gains(&mut self) {
+        if let Some(layout) = self.target_layout_mut() {
+            for band in 0..layout.band_count() {
+                layout.set_gain(band, GainDb::DEFAULT);
+                layout.set_kill(band, false);
+            }
         }
     }
 
@@ -180,12 +201,34 @@ impl StereoEq {
         layout.band_count()
     }
 
+    /// Copies kill flags from the same layout as the target gains.
+    pub fn read_kills(&self, kills: &mut [bool]) {
+        if let Some(layout) = self.target_layout() {
+            for (band, killed) in kills.iter_mut().enumerate().take(layout.band_count()) {
+                *killed = layout.killed(band).unwrap_or(false);
+            }
+        }
+    }
+
+    /// The number of bands in the layout that receives commands.
+    #[must_use]
+    pub fn band_count(&self) -> usize {
+        self.target_layout().map_or(0, EqLayout::band_count)
+    }
+
     fn target_layout(&self) -> Option<&EqLayout> {
         match &self.update {
             Some(LayoutUpdate::Pending(layout)) => Some(layout),
             _ => self.active.as_ref(),
         }
         .map(Box::as_ref)
+    }
+
+    fn target_layout_mut(&mut self) -> Option<&mut EqLayout> {
+        match &mut self.update {
+            Some(LayoutUpdate::Pending(layout)) => Some(layout.as_mut()),
+            _ => self.active.as_deref_mut(),
+        }
     }
 
     /// Whether a settled sounding layout contains the requested band.
@@ -343,6 +386,67 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    #[kithara::test]
+    #[case(1)]
+    #[case(2)]
+    fn eq_kill_reaches_exact_stereo_silence_at_neutral_or_with_a_floor_band(#[case] bands: usize) {
+        let config = EqConfig::builder(crate::test_pools::pools()).build();
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let mut bands = super::super::generate_log_spaced_bands(bands);
+        if let Some(band) = bands.get_mut(1) {
+            band.set_gain_db(GainDb::MIN);
+        }
+        let layout = EqLayout::new(&config, &bands, rate).expect("layout");
+        let mut eq = StereoEq::with_layout(&config, rate, Box::new(layout));
+        eq.set_kill(0, true);
+        for _ in 0..64 {
+            let mut left = [0.25; 128];
+            let mut right = [-0.5; 128];
+            eq.process(&mut left, &mut right);
+            assert!(
+                left.iter()
+                    .chain(&right)
+                    .all(|value| *value == 0.0 || value.is_normal())
+            );
+        }
+        let mut left = [0.25; 128];
+        let mut right = [-0.5; 128];
+        eq.process(&mut left, &mut right);
+        assert!(left.iter().chain(&right).all(|value| value.to_bits() == 0));
+        eq.set_gain(0, GainDb::MAX);
+        left.fill(0.25);
+        right.fill(-0.5);
+        eq.process(&mut left, &mut right);
+        assert!(left.iter().chain(&right).all(|value| value.to_bits() == 0));
+        eq.set_kill(0, false);
+        let mut gains = [GainDb::DEFAULT; 2];
+        eq.read_gains(&mut gains);
+        assert_eq!(gains[0], GainDb::MAX);
+    }
+
+    #[kithara::test]
+    fn eq_kill_is_cleared_when_a_returned_pending_layout_is_reused() {
+        let config = EqConfig::builder(crate::test_pools::pools()).build();
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let make_layout = || {
+            Box::new(
+                EqLayout::new(&config, &[EqBandConfig::builder().build()], rate).expect("layout"),
+            )
+        };
+        let mut eq = StereoEq::with_layout(&config, rate, make_layout());
+        eq.take_layout(make_layout());
+        eq.set_kill(0, true);
+        let mut kills = [false];
+        eq.read_kills(&mut kills);
+        assert_eq!(kills, [true]);
+        let returned = eq
+            .take_layout(make_layout())
+            .expect("displaced pending layout");
+        eq.take_layout(returned);
+        eq.read_kills(&mut kills);
+        assert_eq!(kills, [false]);
+    }
 
     #[kithara::test]
     fn prepared_gain_rows_refuse_wrong_lengths_before_pcm_or_state_changes() {

@@ -11,11 +11,46 @@ use kithara::{
     signal::SessionFrame,
     warp::WarpConfig,
 };
+use kithara_command::When;
 use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions, asset_source};
 use kithara_test_fixtures::assets;
 use num_traits::ToPrimitive;
 
 use super::cases::{BLOCK_FRAMES, ROOMY_CAPACITY, SAMPLE_RATE, load_source, render_effect_window};
+
+#[kithara::test(tokio)]
+async fn public_eq_kill_uses_the_mixer_frame_and_neutral_reset() {
+    let options = OfflinePlayerOptions::builder()
+        .eq_layout(vec![EqBandConfig::builder().gain_db((-6.0).into()).build()])
+        .output_block_frames(NonZeroU32::new(64).expect("callback size"))
+        .build();
+    let harness = OfflinePlayer::with_sample_rate(options, SAMPLE_RATE).await;
+    let _ = harness.render(64).await;
+    let snapshot = harness.deck_snapshot();
+    let layout = snapshot.eq.layout().expect("layout");
+    let kill_at = SessionFrame::new(i64::from(snapshot.at) + 64);
+    harness
+        .with_queue(move |queue| queue.set_eq_kill(When::At(kill_at), 0, layout, true))
+        .await
+        .expect("timed kill");
+    let _ = harness.render(64).await;
+    assert_eq!(harness.deck_snapshot().at, kill_at);
+    assert_eq!(harness.deck_snapshot().eq.killed(0), Some(false));
+    let _ = harness.render(64).await;
+    let snapshot = harness.deck_snapshot();
+    assert_eq!(snapshot.eq.killed(0), Some(true));
+    assert_eq!(snapshot.eq.gain(0), GainDb::checked(-6.0));
+    harness
+        .with_queue(kithara::queue::QueueControl::reset_eq)
+        .await
+        .expect("revision-free reset");
+    let _ = harness.render(64).await;
+    let snapshot = harness.deck_snapshot();
+    assert_eq!(snapshot.eq.killed(0), Some(false));
+    assert_eq!(snapshot.eq.gain(0), Some(GainDb::DEFAULT));
+    assert_eq!(snapshot.eq.layout(), Some(layout));
+    harness.close().await;
+}
 
 #[kithara::test(tokio)]
 #[case::audible(false)]

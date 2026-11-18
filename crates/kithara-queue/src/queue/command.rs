@@ -4,8 +4,8 @@ use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_play::{
     CrossfaderGain, DeckEqChange, DeckFxChange, DeckMixSettingsChange, EqBandConfig, FilterKnob,
-    GainDb, InterruptionKind, Outbox, OutputSnapshot, PitchStep, PlayError, Player, Position,
-    SeekBatch, Track, TrackCommand, TrackFactory, TrackSettings, TrackSettingsChange,
+    GainDb, InterruptionKind, LayoutRevision, Outbox, OutputSnapshot, PitchStep, PlayError, Player,
+    Position, SeekBatch, Track, TrackCommand, TrackFactory, TrackSettings, TrackSettingsChange,
     TrackStatus as PlayingStatus, Trim,
 };
 use kithara_signal::{FaderValue, SessionFrame};
@@ -80,6 +80,12 @@ where
         band: usize,
         gain_db: f32,
     },
+    SetEqKill {
+        at: When<SessionFrame>,
+        band: usize,
+        layout: LayoutRevision,
+        on: bool,
+    },
     SetEqLayout(Vec<EqBandConfig>),
     ResetEq,
     Fx {
@@ -152,6 +158,7 @@ where
             | QueueCommand::SetCrossfader(_)
             | QueueCommand::SetMuted(_)
             | QueueCommand::SetEqGain { .. }
+            | QueueCommand::SetEqKill { .. }
             | QueueCommand::SetEqLayout(_)
             | QueueCommand::ResetEq) => self.apply_queue_settings(command, out),
             QueueCommand::Select { id, transition } => self.request_transition(
@@ -347,15 +354,16 @@ where
             QueueCommand::SetEqGain { band, gain_db } => {
                 self.set_eq_gain(band, gain_db, out).map_err(Into::into)
             }
-            QueueCommand::SetEqLayout(bands) => self.set_eq_layout(&bands, out).map_err(Into::into),
-            QueueCommand::ResetEq => out
-                .eq((0..self.deck.mixer.eq.bands())
-                    .map(|band| DeckEqChange::Gain {
-                        band,
-                        gain: GainDb::default(),
-                    })
-                    .collect())
+            QueueCommand::SetEqKill {
+                at,
+                band,
+                layout,
+                on,
+            } => out
+                .eq_at(at, vec![DeckEqChange::Kill { band, layout, on }])
                 .map_err(Into::into),
+            QueueCommand::SetEqLayout(bands) => self.set_eq_layout(&bands, out).map_err(Into::into),
+            QueueCommand::ResetEq => out.eq(vec![DeckEqChange::Reset]).map_err(Into::into),
             QueueCommand::ConfigureQueue(change, at) => self.configure_queue(change, at, out),
             _ => unreachable!("settings dispatch accepts only queue settings commands"),
         }

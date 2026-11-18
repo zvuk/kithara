@@ -176,7 +176,18 @@ impl<'a> Outbox<'a> {
     }
 
     pub fn eq(&mut self, parts: Vec<DeckEqChange>) -> Result<Option<Seq>, PlayError> {
-        self.deck(When::Next, parts.into_iter().map(DeckPart::Eq).collect())
+        self.eq_at(When::Next, parts)
+    }
+
+    /// Sends an atomic EQ batch for the requested mixer frame.
+    /// # Errors
+    /// Returns an admission failure when the deck cannot accept the batch.
+    pub fn eq_at(
+        &mut self,
+        at: When<SessionFrame>,
+        parts: Vec<DeckEqChange>,
+    ) -> Result<Option<Seq>, PlayError> {
+        self.deck(at, parts.into_iter().map(DeckPart::Eq).collect())
     }
 
     /// Sends channel programs as one atomic batch on the observed mixer axis.

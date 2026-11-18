@@ -65,6 +65,142 @@ fn amplitude(gain: GainDb) -> f32 {
 }
 
 #[kithara::test]
+#[case(0)]
+#[case(5)]
+fn eq_kill_is_timed_and_preserves_the_running_program_and_authority(#[case] offset: usize) {
+    let (mut mixer, mut ends) = prepared(1);
+    let command = part(&mut ends, program(0, BLOCK, BLOCK + 40, CurveShape::HOLD));
+    let seq = send(&mut ends, at(BLOCK), vec![command]);
+    let before = render_frames(&mut mixer, BLOCK, 8);
+    let gain = GainDb::checked(-12.0).expect("prepared gain");
+    assert!(
+        before
+            .iter()
+            .all(|sample| sample.to_bits() == amplitude(gain).to_bits())
+    );
+    let (layout, authority) = {
+        let snapshot = ends.deck.snapshot.read();
+        (
+            snapshot.eq.layout().expect("layout"),
+            snapshot.eq.authority(0),
+        )
+    };
+    let on = BLOCK + 8 + offset;
+    let off = on + 8;
+    let kill = |on| {
+        DeckPart::Eq(DeckEqChange::Kill {
+            band: 0,
+            layout,
+            on,
+        })
+    };
+    let killed = send(&mut ends, at(on), vec![kill(true)]);
+    let restored = send(&mut ends, at(off), vec![kill(false)]);
+    let pcm = render_frames(&mut mixer, BLOCK + 8, offset + 8);
+    assert!(
+        pcm[..offset]
+            .iter()
+            .all(|value| value.to_bits() == amplitude(gain).to_bits())
+    );
+    assert!((0.0..amplitude(gain)).contains(&pcm[offset]));
+    {
+        let snapshot = ends.deck.snapshot.read();
+        assert_eq!(snapshot.at, frame_at(off));
+        assert_eq!(snapshot.eq.killed(0), Some(true));
+        assert_eq!(snapshot.eq.gain(0), Some(gain));
+        assert_eq!(snapshot.eq.authority(0), authority);
+        assert_eq!(snapshot.eq.program(0), Some(seq));
+    }
+    let restore = render_frames(&mut mixer, off, 1);
+    assert!(restore[0] > *pcm.last().expect("last masked frame"));
+    assert!(restore[0] < amplitude(gain));
+    let snapshot = ends.deck.snapshot.read();
+    assert_eq!(snapshot.eq.killed(0), Some(false));
+    assert_eq!(snapshot.eq.gain(0), Some(gain));
+    assert_eq!(snapshot.eq.authority(0), authority);
+    assert_eq!(snapshot.eq.program(0), Some(seq));
+    let replies = receipts(&mut ends);
+    assert_applied_at(outcome_of(&replies, killed), on);
+    assert_applied_at(outcome_of(&replies, restored), off);
+}
+
+#[kithara::test]
+fn eq_kill_refuses_a_stale_layout_or_unknown_band_before_any_batch_changes() {
+    let (mut mixer, mut ends) = prepared(2);
+    let revision = ends.deck.snapshot.read().eq.layout().expect("layout");
+    let kill = |band| {
+        DeckPart::Eq(DeckEqChange::Kill {
+            band,
+            layout: revision,
+            on: true,
+        })
+    };
+    let layout = || DeckPart::Eq(DeckEqChange::Layout(eq_layout(&[GainDb::MAX])));
+    let same_batch = send(&mut ends, at(BLOCK), vec![layout(), kill(0)]);
+    let invalid = send(&mut ends, at(BLOCK + 1), vec![kill(0), kill(2)]);
+    let stale = send(&mut ends, at(BLOCK + 4), vec![kill(0)]);
+    render_frames(&mut mixer, BLOCK, 2);
+    assert_eq!(ends.deck.snapshot.read().eq.layout(), Some(revision));
+    assert_eq!(ends.deck.snapshot.read().eq.killed(0), Some(false));
+    assert_eq!(ends.deck.snapshot.read().eq.gain(0), Some(GainDb::DEFAULT));
+    let replacement = send(&mut ends, at(BLOCK + 2), vec![layout()]);
+    render_frames(&mut mixer, BLOCK + 2, 4);
+    let replies = receipts(&mut ends);
+    for seq in [same_batch, stale] {
+        assert!(matches!(
+            outcome_of(&replies, seq),
+            Outcome::Rejected(Rejection::Refused(DeckRefusal::ParameterOutdated {
+                parameter: DeckParameter::EqBand { band: 0, .. }
+            }))
+        ));
+    }
+    assert!(matches!(
+        outcome_of(&replies, invalid),
+        Outcome::Rejected(Rejection::Refused(DeckRefusal::ParameterUnavailable {
+            parameter: DeckParameter::EqBand { band: 2, .. }
+        }))
+    ));
+    assert_applied_at(outcome_of(&replies, replacement), BLOCK + 2);
+    let snapshot = ends.deck.snapshot.read();
+    assert_eq!(snapshot.eq.killed(0), Some(false));
+    assert_eq!(snapshot.eq.killed(1), None);
+}
+
+#[kithara::test]
+fn eq_kill_reset_neutralizes_the_addressed_bands_and_keeps_existing_takeover() {
+    let (mut mixer, mut ends) = prepared(2);
+    let command = part(&mut ends, program(0, BLOCK, BLOCK + 64, CurveShape::HOLD));
+    let program = send(&mut ends, at(BLOCK), vec![command]);
+    let layout = ends.deck.snapshot.read().eq.layout().expect("layout");
+    send(
+        &mut ends,
+        at(BLOCK + 1),
+        vec![DeckPart::Eq(DeckEqChange::Kill {
+            band: 0,
+            layout,
+            on: true,
+        })],
+    );
+    render_frames(&mut mixer, BLOCK, 2);
+    assert_eq!(ends.deck.snapshot.read().eq.killed(0), Some(true));
+    assert_eq!(ends.deck.snapshot.read().eq.program(0), Some(program));
+
+    let reset = send(
+        &mut ends,
+        at(BLOCK + 2),
+        vec![DeckPart::Eq(DeckEqChange::Reset)],
+    );
+    render_frames(&mut mixer, BLOCK + 2, 1);
+    let snapshot = ends.deck.snapshot.read();
+    assert_eq!(snapshot.eq.killed(0), Some(false));
+    assert_eq!(snapshot.eq.gain(0), Some(GainDb::DEFAULT));
+    assert_eq!(snapshot.eq.program(0), None);
+    assert_eq!(snapshot.eq.authority(0), Some(reset));
+    let replies = receipts(&mut ends);
+    assert_applied_at(outcome_of(&replies, reset), BLOCK + 2);
+}
+
+#[kithara::test]
 fn eq_curves_apply_each_frame_without_second_smoothing_or_partition_drift() {
     type Oracle = fn(f64) -> f64;
     let fixtures: [(CurveShape, Oracle); 3] = [

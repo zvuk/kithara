@@ -79,6 +79,14 @@ impl Deck {
                 self.render.set_eq_gain(band, gain);
                 Some(DeckPart::Eq(DeckEqChange::Gain { band, gain }))
             }
+            DeckPart::Eq(DeckEqChange::Kill { band, layout, on }) => {
+                self.render.set_eq_kill(band, on);
+                Some(DeckPart::Eq(DeckEqChange::Kill { band, layout, on }))
+            }
+            DeckPart::Eq(DeckEqChange::Reset) => {
+                self.render.reset_eq();
+                Some(DeckPart::Eq(DeckEqChange::Reset))
+            }
             DeckPart::Eq(DeckEqChange::Layout(layout)) => self
                 .render
                 .take_eq_layout(layout)

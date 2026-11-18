@@ -192,8 +192,17 @@ pub enum Returned {
 
 #[derive(Debug)]
 pub enum DeckEqChange {
-    Gain { band: usize, gain: GainDb },
+    Gain {
+        band: usize,
+        gain: GainDb,
+    },
+    Kill {
+        band: usize,
+        layout: super::LayoutRevision,
+        on: bool,
+    },
     Layout(Box<EqLayout>),
+    Reset,
 }
 
 /// An FX unit's dry/wet: `0.0` sounds its input alone, `1.0` its effect's wet

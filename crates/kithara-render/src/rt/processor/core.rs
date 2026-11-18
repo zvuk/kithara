@@ -313,6 +313,7 @@ impl<E: SessionInbox> DeckMixer<E> {
         snapshot.blocks = self.blocks;
         snapshot.metrics = self.deck.metrics.snapshot();
         let bands = self.deck.render.read_eq(snapshot.eq.gains_mut());
+        self.deck.render.read_eq_kills(snapshot.eq.kills_mut());
         snapshot.eq.set_bands(bands);
         self.deck.programs.publish(
             snapshot,

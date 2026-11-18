@@ -36,6 +36,7 @@ impl DeckSnapshot {
             eq: EqSnapshot {
                 bands: config.eq_bands(),
                 gains: vec![GainDb::default(); config.eq_bands()],
+                kills: vec![false; config.eq_bands()],
                 layout: None,
                 programs: vec![None; config.eq_bands()],
                 authorities: vec![None; config.eq_bands()],
@@ -108,6 +109,8 @@ pub struct EqSnapshot {
     bands: usize,
     #[field(get_mut, vis = "pub(crate)")]
     gains: Vec<GainDb>,
+    #[field(get_mut, vis = "pub(crate)")]
+    kills: Vec<bool>,
     layout: Option<LayoutRevision>,
     programs: Vec<Option<Seq>>,
     authorities: Vec<Option<Seq>>,
@@ -127,6 +130,12 @@ impl EqSnapshot {
     #[must_use]
     pub fn gain(&self, band: usize) -> Option<GainDb> {
         self.gains.get(band).copied().filter(|_| band < self.bands)
+    }
+
+    /// Whether kill is engaged for a band in the observed layout.
+    #[must_use]
+    pub fn killed(&self, band: usize) -> Option<bool> {
+        self.kills.get(band).copied().filter(|_| band < self.bands)
     }
 
     #[must_use]
