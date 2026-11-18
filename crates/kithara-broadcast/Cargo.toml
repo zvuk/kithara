@@ -37,7 +37,6 @@ kithara-worker = { workspace = true }
 
 bytes = { workspace = true }
 derive-where = { workspace = true }
-humantime-serde = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

@@ -17,9 +17,7 @@ publish = false
 [dependencies]
 arrayvec = { version = "0.7" }
 audioadapter-buffers = { version = "5" }
-bitflags = { version = "2", default-features = false, features = ["serde"] }
 crossbeam-utils = { version = "0.8" }
-dashmap = { version = "6", default-features = false, features = ["serde"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
 firewheel = { version = "0.14", default-features = false, features = ["cpal", "scheduled_events", "tracing"] }
 firewheel-core = { version = "0.14", default-features = false, features = ["scheduled_events", "serde", "std"] }
@@ -29,13 +27,10 @@ futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17", default-features = false, features = ["default-hasher", "inline-more"] }
 indexmap = { version = "2" }
-keyring-core = { version = "1", default-features = false, features = ["sample"] }
 memchr = { version = "2" }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
-regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 ringbuf = { version = "0.5", features = ["portable-atomic"] }
 serde = { version = "1", features = ["alloc", "derive"] }
@@ -48,15 +43,12 @@ thunderdome = { version = "0.6", default-features = false, features = ["std"] }
 tracing = { version = "0.1" }
 typenum = { version = "1", default-features = false, features = ["const-generics"] }
 url = { version = "2", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "v5"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 [build-dependencies]
 arrayvec = { version = "0.7" }
 audioadapter-buffers = { version = "5" }
-bitflags = { version = "2", default-features = false, features = ["serde"] }
 crossbeam-utils = { version = "0.8" }
-dashmap = { version = "6", default-features = false, features = ["serde"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
 firewheel = { version = "0.14", default-features = false, features = ["cpal", "scheduled_events", "tracing"] }
 firewheel-core = { version = "0.14", default-features = false, features = ["scheduled_events", "serde", "std"] }
@@ -66,13 +58,10 @@ futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17", default-features = false, features = ["default-hasher", "inline-more"] }
 indexmap = { version = "2" }
-keyring-core = { version = "1", default-features = false, features = ["sample"] }
 memchr = { version = "2" }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
-regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 ringbuf = { version = "0.5", features = ["portable-atomic"] }
 serde = { version = "1", features = ["alloc", "derive"] }
@@ -88,7 +77,6 @@ thunderdome = { version = "0.6", default-features = false, features = ["std"] }
 tracing = { version = "0.1" }
 typenum = { version = "1", default-features = false, features = ["const-generics"] }
 url = { version = "2", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "v5"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
@@ -121,7 +109,8 @@ num-complex = { version = "0.4", features = ["bytemuck"] }
 num-rational = { version = "0.4", features = ["num-bigint-std", "serde"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "system", "time"] }
 serde_core = { version = "1" }
@@ -167,7 +156,8 @@ num-complex = { version = "0.4", features = ["bytemuck"] }
 num-rational = { version = "0.4", features = ["num-bigint-std", "serde"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "system", "time"] }
 serde_core = { version = "1" }
@@ -211,7 +201,8 @@ objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSRange", "NSString", "NSThread", "NSURL", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "objc2-core-foundation", "std"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde_core = { version = "1" }
@@ -258,7 +249,8 @@ objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSRange", "NSString", "NSThread", "NSURL", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "objc2-core-foundation", "std"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde_core = { version = "1" }
@@ -303,7 +295,8 @@ objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSRange", "NSString", "NSThread", "NSURL", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "objc2-core-foundation", "std"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde_core = { version = "1" }
@@ -350,7 +343,8 @@ objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSRange", "NSString", "NSThread", "NSURL", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "objc2-core-foundation", "std"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde_core = { version = "1" }
@@ -383,6 +377,8 @@ libc = { version = "0.2" }
 objc2-foundation = { version = "0.3" }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
@@ -413,6 +409,8 @@ libc = { version = "0.2" }
 objc2-foundation = { version = "0.3" }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
@@ -450,7 +448,8 @@ ndk = { version = "0.9", features = ["audio"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
@@ -491,7 +490,8 @@ ndk = { version = "0.9", features = ["audio"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
@@ -530,7 +530,8 @@ ndk = { version = "0.9", features = ["audio"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
@@ -571,7 +572,8 @@ ndk = { version = "0.9", features = ["audio"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }

@@ -28,7 +28,6 @@ pub use event::{
     VariantDuration, VariantIndex, VariantInfo,
 };
 pub use handle::AbrHandle;
-use humantime_serde as _;
 pub use state::{AbrError, AbrState, AbrView};
 pub use types::{
     AbrDecision, AbrPeerId, AbrSettings, AbrSettingsPatch, AbrTicket, PendingAbrClaim,

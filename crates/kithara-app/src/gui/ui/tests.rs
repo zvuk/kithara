@@ -16,7 +16,7 @@ use ::kithara::ui::{
     view::{self, ViewState},
 };
 #[cfg(feature = "zvuk")]
-use keyring_core::sample::Store;
+use keyring_core::mock::Store;
 #[cfg(feature = "zvuk")]
 use kithara_app_library::{Context, Environment, Secrets};
 use kithara_app_library::{Document, Endpoint, PAGES, Registration, SourcePage};
