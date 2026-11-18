@@ -3,7 +3,7 @@
 use kithara::{
     self,
     download::Downloader,
-    events::{EventReceiver, TrackId},
+    events::{EventReceiver, TrackId, TryRecvError},
     platform::{sync::Arc, time::Duration},
     play::PlayError,
     queue::{
@@ -1701,6 +1701,7 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -1710,7 +1711,37 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     let solo = assets::constant_wav_three_0_4s();
     let id = append_loaded(&harness, &queue, &solo).await;
 
+    // Only re-arming the consumed solo track announces Pending.
+    let mut reloads: EventReceiver<QueueEvent> = queue.subscribe();
     let pcm = render_committed_queue(&queue, &harness, MAX_BLOCKS, (id, 0)).await;
+
+    loop {
+        match reloads.try_recv() {
+            Ok(envelope) => assert!(
+                !matches!(
+                    envelope.event,
+                    QueueEvent::TrackStatusChanged {
+                        id: reloaded,
+                        status: TrackStatus::Pending,
+                    } if reloaded == id
+                ),
+                "the sole autoplayed track must not re-enter Pending while playing: {:?}",
+                queue.playback_view(),
+            ),
+            Err(TryRecvError::Empty) => break,
+            Err(error) => {
+                panic!("queue event receiver failed while the queue is alive: {error:?}");
+            }
+        }
+    }
+    assert_eq!(
+        queue.mixer_metrics().underruns(),
+        0,
+        "a solo committed track must not underrun: playback={:?}, metrics={:?}, mixer_blocks={}",
+        queue.playback_view(),
+        queue.mixer_metrics(),
+        queue.mixer_blocks(),
+    );
 
     let onset =
         first_onset_frame(&pcm, 0.005).expect("the autoplayed track must produce audible samples");
