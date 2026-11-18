@@ -108,7 +108,7 @@ mod tests {
         platform::tokio::runtime::Builder,
         ui::{error::UiDocError, ids::SourceUri},
     };
-    use keyring_core::sample::Store;
+    use keyring_core::mock::Store;
     use kithara_app_library::{Cause, Secrets, SourcePage};
     use kithara_test_utils::{cancel_token, kithara};
 
