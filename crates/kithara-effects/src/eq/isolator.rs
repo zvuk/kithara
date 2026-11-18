@@ -144,13 +144,13 @@ impl IsolatorEq {
             }
             GainWrite::Masked => return,
         };
-        if self.bypass_owner != Some(RoutingOwner::Kill) && (changed || self.bypass_owner == owner)
+        if (changed || self.bypass_owner == owner) && self.bypass_owner != Some(RoutingOwner::Kill)
         {
             self.bypass.reset_to_target();
             self.bypass_owner = None;
         }
-        if self.silence_owner != Some(RoutingOwner::Kill)
-            && (changed || self.silence_owner == owner)
+        if (changed || self.silence_owner == owner)
+            && self.silence_owner != Some(RoutingOwner::Kill)
         {
             self.silence.reset_to_target();
             self.silence_owner = None;
@@ -208,6 +208,47 @@ mod tests {
 
     use super::*;
     use crate::test_pools::{pools, pools_with_budget};
+
+    #[kithara::test]
+    fn eq_kill_settled_release_preserves_program_takeover_during_a_manual_ramp() {
+        let config = EqConfig::builder(pools()).build();
+        let initial = GainDb::checked(-6.0).expect("initial gain");
+        let band = EqBandConfig::builder().gain_db(initial).build();
+        let mut released = IsolatorEq::new(&config, &[band], 48_000).expect("released band");
+        let mut reference = IsolatorEq::new(&config, &[band], 48_000).expect("reference band");
+        released.set_kill(0, true);
+        for _ in 0..48_000 {
+            released.process_sample(0.25);
+        }
+        assert_eq!(released.process_sample(0.25).to_bits(), 0);
+        released.set_kill(0, false);
+        for _ in 0..48_000 {
+            released.process_sample(0.25);
+            reference.process_sample(0.25);
+        }
+        let settled = (0.25 * initial.linear()).to_bits();
+        assert_eq!(released.process_sample(0.25).to_bits(), settled);
+        assert_eq!(reference.process_sample(0.25).to_bits(), settled);
+
+        let manual = GainDb::checked(6.0).expect("manual gain");
+        released.set_gain(0, manual);
+        reference.set_gain(0, manual);
+        for _ in 0..32 {
+            let expected = reference.process_sample(0.25).to_bits();
+            assert_ne!(expected, (0.25 * manual.linear()).to_bits());
+            assert_eq!(released.process_sample(0.25).to_bits(), expected);
+        }
+
+        released.set_explicit(0, GainDb::DEFAULT);
+        reference.set_explicit(0, GainDb::DEFAULT);
+        let expected = reference.process_sample(0.25).to_bits();
+        assert_eq!(expected, 0.25_f32.to_bits());
+        assert_eq!(
+            released.process_sample(0.25).to_bits(),
+            expected,
+            "program takeover frame"
+        );
+    }
 
     #[kithara::test]
     #[case::bypass(GainDb::DEFAULT, GainDb::MAX)]

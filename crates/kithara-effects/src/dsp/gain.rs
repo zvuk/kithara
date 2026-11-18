@@ -124,6 +124,9 @@ impl GainBank {
 
     pub(crate) fn set(&mut self, band: usize, gain_db: GainDb) {
         if let Some(gain) = self.gains.get_mut(band) {
+            if gain.kill == Kill::Releasing && gain.filter.has_settled(gain.target_linear) {
+                gain.kill = Kill::Off;
+            }
             gain.set_target(gain_db);
         }
     }
