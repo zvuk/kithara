@@ -78,9 +78,8 @@ mod tests {
         ] {
             assert!(perf_logging_target(&[binary.to_string()]));
         }
-        for other in ["/cache/deps/web_observer-fc399469e0e06114.wasm"] {
-            assert!(!perf_logging_target(&[other.to_string()]));
-        }
+        let other = "/cache/deps/web_observer-fc399469e0e06114.wasm";
+        assert!(!perf_logging_target(&[other.to_string()]));
     }
 
     #[kithara::test(native, flash(false))]
