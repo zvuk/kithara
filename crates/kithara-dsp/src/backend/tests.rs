@@ -659,7 +659,7 @@ macro_rules! handover_run {
             let half = frames.wrapping_div(2);
             for (section, coefficients) in halves[0].iter().enumerate() {
                 cascade
-                    .set_section(section, *coefficients)
+                    .set_section(section, 0..channels.get(), *coefficients)
                     .expect("section");
             }
             cascade
@@ -669,7 +669,8 @@ macro_rules! handover_run {
             cascade.process(planes, 0..half).expect("shape matches");
             twin.copy_state_from(&cascade).expect("same shape");
             for (section, coefficients) in halves[1].iter().enumerate() {
-                twin.set_section(section, *coefficients).expect("section");
+                twin.set_section(section, 0..channels.get(), *coefficients)
+                    .expect("section");
             }
             twin.process(planes, half..frames).expect("shape matches");
         }
@@ -686,7 +687,7 @@ fn portable_fallback_run(planes: &mut [Vec<f32>], halves: &[Vec<[f32; 5]>; 2]) {
     for (range, set) in [(0..half, &halves[0]), (half..frames, &halves[1])] {
         for (section, coefficients) in set.iter().enumerate() {
             cascade
-                .set_section(section, *coefficients)
+                .set_section(section, 0..channels.get(), *coefficients)
                 .expect("section");
         }
         dispatch!(Level::fallback(), simd => cascade::cascade_kernel(simd, &mut cascade, planes, range));
@@ -757,7 +758,7 @@ fn a_silent_channel_beside_a_playing_one_never_reaches_subnormals() {
     ];
     for (name, call) in runs {
         let mut cascade = cascade::Cascade::new(stride(2), stride(1)).expect("cascade");
-        cascade.set_section(0, section).expect("section");
+        cascade.set_section(0, 0..2, section).expect("section");
         assert_eq!(sine_440().len(), CALL.saturating_mul(CALLS));
         let subnormal: usize = sine_440()
             .as_chunks::<CALL>()

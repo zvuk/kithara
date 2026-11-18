@@ -71,3 +71,7 @@ harness = false
 [[bench]]
 name = "vector_fade"
 harness = false
+
+[[bench]]
+name = "biquad_planes"
+harness = false
