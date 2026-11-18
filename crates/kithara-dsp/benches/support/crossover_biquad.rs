@@ -264,6 +264,8 @@ impl<S: ScalarSection> ScalarFrame<S> {
     }
 }
 
+type SplitKernel = fn(&mut Crossover<2>, &[&[f32]; 2], &mut [[Vec<f32>; 2]]) -> usize;
+
 struct Svf {
     filter: Crossover<2>,
     bands: Vec<[Vec<f32>; 2]>,
@@ -303,10 +305,13 @@ impl Svf {
         io: &mut [Vec<f32>; 2],
         gains: &[P],
         frames: usize,
-        split: impl FnOnce(&mut Crossover<2>, &[&[f32]; 2], &mut [[Vec<f32>; 2]]) -> usize,
+        split: SplitKernel,
     ) {
         let input = io.each_ref().map(|plane| &plane[..frames]);
-        assert_eq!(split(&mut self.filter, &input, &mut self.bands), frames);
+        assert_eq!(
+            black_box(split)(&mut self.filter, &input, &mut self.bands),
+            frames
+        );
         for plane in &mut *io {
             plane[..frames].fill(0.0);
         }
