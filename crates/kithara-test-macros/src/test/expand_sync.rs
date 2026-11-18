@@ -7,9 +7,8 @@ use super::{
     expand_async::emit_async_timeout_test,
     fixture_args::Preamble,
     shared::{
-        expects_panic, finalize_body, make_ambient_stmt, make_serial_attr, make_test_setup,
-        make_wasm_serial_guard, native_sync_keeps_body_return, wrap_with_model,
-        wrap_with_sync_participation, wrap_with_timeout,
+        finalize_body, make_ambient_stmt, make_serial_attr, make_test_setup,
+        make_wasm_serial_guard, wrap_with_model, wrap_with_sync_participation, wrap_with_timeout,
     },
 };
 
@@ -51,7 +50,7 @@ pub(crate) fn emit_one_test(
             args,
             &serial_attr,
         );
-        let wasm_timeout = wrap_with_timeout(&full_held, args, true, fn_name, ret_type, false);
+        let wasm_timeout = wrap_with_timeout(&full_held, args, true, fn_name, ret_type);
         let wasm_wrapped = finalize_body(&wasm_timeout, args, fn_name, true);
         output.extend(quote! {
             #(#remaining_attrs)*
@@ -66,16 +65,8 @@ pub(crate) fn emit_one_test(
     }
 
     let modeled = wrap_with_model(&full_held, args, fn_name);
-    let should_panic = expects_panic(remaining_attrs);
-    let with_timeout = wrap_with_timeout(&modeled, args, false, fn_name, ret_type, should_panic);
+    let with_timeout = wrap_with_timeout(&modeled, args, false, fn_name, ret_type);
     let wrapped = finalize_body(&with_timeout, args, fn_name, false);
-    // `serial_test` (`#[serial]`) and `#[should_panic]` keep the body's own
-    // return type; everything else returns `ExitCode`.
-    let native_ret = if native_sync_keeps_body_return(args, should_panic) {
-        quote! { #ret_type }
-    } else {
-        quote! { -> ::std::process::ExitCode }
-    };
 
     if args.flags().contains(TestFlags::SERIAL) {
         return quote! {
@@ -83,7 +74,7 @@ pub(crate) fn emit_one_test(
             #[cfg(not(target_arch = "wasm32"))]
             #serial_attr
             #[test]
-            #vis fn #fn_name() #native_ret #wrapped
+            #vis fn #fn_name() #wrapped
 
             #(#remaining_attrs)*
             #[cfg(target_arch = "wasm32")]
@@ -100,7 +91,7 @@ pub(crate) fn emit_one_test(
         #serial_attr
         #[cfg(not(target_arch = "wasm32"))]
         #[test]
-        #vis fn #fn_name() #native_ret #wrapped
+        #vis fn #fn_name() #wrapped
 
         #(#remaining_attrs)*
         #[cfg(target_arch = "wasm32")]
@@ -137,19 +128,13 @@ pub(crate) fn emit_native_only_one(
         );
     }
     let modeled = wrap_with_model(full_held, args, name);
-    let should_panic = expects_panic(remaining_attrs);
-    let with_timeout = wrap_with_timeout(&modeled, args, false, name, ret_type, should_panic);
+    let with_timeout = wrap_with_timeout(&modeled, args, false, name, ret_type);
     let wrapped = finalize_body(&with_timeout, args, name, false);
-    let native_ret = if native_sync_keeps_body_return(args, should_panic) {
-        quote! { #ret_type }
-    } else {
-        quote! { -> ::std::process::ExitCode }
-    };
     quote! {
         #(#remaining_attrs)*
         #serial_attr
         #[cfg(not(target_arch = "wasm32"))]
         #[test]
-        #vis fn #name() #native_ret #wrapped
+        #vis fn #name() #wrapped
     }
 }

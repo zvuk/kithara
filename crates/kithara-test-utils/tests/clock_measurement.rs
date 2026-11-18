@@ -29,6 +29,37 @@ fn sync_timeout_accepts_a_non_send_error() -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+#[kithara::test(native)]
+#[cfg_attr(any(), should_panic)]
+fn sync_inactive_should_panic_accepts_a_non_send_error() -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+
+#[kithara::test(native, serial)]
+fn sync_serial_accepts_a_non_send_error() -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+
+#[kithara::test(native, soft_fail("expected"))]
+fn sync_soft_fail_keeps_a_unit_return() {}
+
+#[kithara::test(native, soft_fail("expected"))]
+fn sync_soft_fail_matched_panic_passes() {
+    panic!("expected panic");
+}
+
+#[kithara::test(native)]
+#[ignore]
+fn sync_non_send_err_is_a_failure() -> Result<(), Box<dyn std::error::Error>> {
+    Err(std::io::Error::other("expected failure").into())
+}
+
+#[kithara::test(native, soft_fail("expected"))]
+#[ignore]
+fn sync_soft_fail_unexpected_panic_fails() {
+    panic!("boom");
+}
+
 #[kithara::test(native, browser)]
 fn browser_native_sync() {
     platform::thread::sleep(STEP);
@@ -147,5 +178,22 @@ fn reports_the_actual_body_clock(#[case] name: &str, #[case] expected_mode: &str
         assert_eq!(elapsed, 0, "the original virtual clock did not advance");
     } else if name != "changed_clock" {
         assert!(elapsed >= STEP.as_nanos(), "{reports:?}");
+    }
+}
+
+#[test]
+fn sync_body_failures_report_a_failed_status() {
+    for name in [
+        "sync_non_send_err_is_a_failure",
+        "sync_soft_fail_unexpected_panic_fails",
+    ] {
+        let output = Command::new(env::current_exe().expect("clock control executable"))
+            .args(["--exact", name, "--ignored"])
+            .output()
+            .expect("run sync failure probe");
+        assert!(
+            !output.status.success(),
+            "{name} must report a failed status, got {output:?}"
+        );
     }
 }

@@ -122,7 +122,7 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
         let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
         let full = quote! { { #test_setup #scoped #preamble #ambient #(#body_stmts)* } };
-        let with_timeout = wrap_with_timeout(&full, ctx.args, true, name, ctx.ret_type, false);
+        let with_timeout = wrap_with_timeout(&full, ctx.args, true, name, ctx.ret_type);
         let wrapped = finalize_body(&with_timeout, ctx.args, name, true);
         let serial_guard = make_wasm_serial_guard(ctx.args);
         let remaining_attrs = ctx.remaining_attrs;
