@@ -20,7 +20,7 @@ const CALLBACK_FRAMES: usize = 64;
 #[kithara::test(tokio, tracing("render_refill=trace"))]
 async fn public_queue_output_cubic_reaches_the_host_at_exact_frames() {
     let options = OfflinePlayerOptions::builder()
-        .block_on_underrun(false)
+        .block_on_underrun(true)
         .output_block_frames(NonZeroU32::new(64).expect("nonzero callback size"))
         .warp(
             WarpConfig::builder()

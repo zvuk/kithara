@@ -24,11 +24,25 @@ pub fn setup() -> Result<(), JsValue> {
     crate::web::bridge::initialize()?;
 
     let _ = LogTracer::init();
-    let config = WASMLayerConfigBuilder::new()
+    let mut config = WASMLayerConfigBuilder::new();
+    config
         .set_report_logs_in_timings(false)
-        .build();
-    tracing_wasm::set_as_global_default_with_config(config);
+        .set_max_level(web_log_level());
+    tracing_wasm::set_as_global_default_with_config(config.build());
     Ok(())
+}
+
+/// Console verbosity for the web bindings. Without a ceiling every DEBUG and
+/// TRACE event from every dependency — the per-block scheduler pass, the
+/// audio-graph dump — reaches the browser console on the page and on every
+/// worker, which is what a CI lane log collects megabytes of. A verbose build
+/// opts back in at compile time.
+fn web_log_level() -> tracing::Level {
+    match option_env!("KITHARA_WEB_LOG") {
+        Some("trace") => tracing::Level::TRACE,
+        Some("debug") => tracing::Level::DEBUG,
+        _ => tracing::Level::INFO,
+    }
 }
 
 /// Build revision string: `"version git_hash build_timestamp"`.

@@ -1,4 +1,4 @@
-use std::{f64::consts::PI, num::NonZeroUsize, path::PathBuf};
+use std::{f64::consts::PI, num::NonZeroUsize};
 
 use kithara_key::{KeyEstimate, KeyEstimator};
 use kithara_test_utils::bufpool::{Pools, pools};
@@ -34,10 +34,8 @@ pub(crate) struct Golden {
 }
 
 pub(crate) fn goldens() -> Goldens {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_key.json");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-    serde_json::from_str(&text).unwrap_or_else(|error| panic!("golden_key.json: {error}"))
+    serde_json::from_str(include_str!("../fixtures/golden_key.json"))
+        .unwrap_or_else(|error| panic!("golden_key.json: {error}"))
 }
 
 pub(crate) fn rendered(name: &str) -> Vec<f32> {

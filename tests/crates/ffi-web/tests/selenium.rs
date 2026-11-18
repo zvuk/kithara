@@ -1682,7 +1682,6 @@ async fn build_webdriver(
                 "--enable-features=SharedArrayBuffer",
                 "--autoplay-policy=no-user-gesture-required",
                 "--mute-audio",
-                "--js-flags=--experimental-wasm-threads",
             ] {
                 caps.add_arg(arg)
                     .map_err(|err| format!("failed to set chrome args: {err}"))?;

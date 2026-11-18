@@ -2,8 +2,8 @@
 use std::{
     env,
     ffi::OsString,
-    fs,
-    path::PathBuf,
+    fs, io,
+    path::{Path, PathBuf},
     process::{self, Child, Command, Stdio},
 };
 
@@ -18,8 +18,12 @@ use tempfile::TempDir;
 fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
+mod config;
+
+#[cfg(not(target_arch = "wasm32"))]
 async fn run_wasm_bindgen_runner(args: &[String], runner_timeout_secs: u64) -> process::ExitStatus {
-    let runner_dir = prepare_browser_directory().expect("failed to prepare browser configuration");
+    let runner_dir =
+        prepare_browser_directory(args).expect("failed to prepare browser configuration");
     let mut runner = Command::new("wasm-bindgen-test-runner");
     runner
         .current_dir(runner_dir.path())
@@ -67,13 +71,19 @@ fn find_in_path(binary: &str) -> Option<OsString> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn prepare_browser_directory() -> Result<TempDir, std::io::Error> {
+fn prepare_browser_directory(args: &[String]) -> Result<TempDir, io::Error> {
     let dir = tempfile::tempdir()?;
-    let webdriver_config = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("webdriver.json");
+    let webdriver_config = Path::new(env!("CARGO_MANIFEST_DIR")).join("webdriver.json");
     if webdriver_config.exists() {
-        fs::copy(&webdriver_config, dir.path().join("webdriver.json"))?;
+        let mut copied = fs::read(&webdriver_config)?;
+        if config::perf_logging_target(args) && env::var_os("GECKODRIVER").is_none() {
+            let mut config = serde_json::from_slice(&copied).map_err(io::Error::other)?;
+            config::apply_perf_logging(&mut config).map_err(io::Error::other)?;
+            copied = serde_json::to_vec_pretty(&config).map_err(io::Error::other)?;
+            eprintln!("webdriver config: fixture network perf logging requested");
+        }
+        fs::write(dir.path().join("webdriver.json"), copied)?;
     }
-
     Ok(dir)
 }
 
