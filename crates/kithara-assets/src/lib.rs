@@ -24,7 +24,6 @@ pub use decorator::{
 };
 pub use error::{AssetsError, AssetsResult};
 pub use event::{AssetEvent, EvictReason};
-use humantime_serde as _;
 #[doc(hidden)]
 pub use index::pending_resource::{
     PendingResourceCleanupError, ResourceAttachment, ResourceLease, WriterEpoch, WriterHandle,

@@ -30,8 +30,6 @@ pub mod host {
     };
 }
 
-use humantime_serde as _;
-
 pub use crate::{
     client::HttpClient,
     error::{NetError, NetResult, Retryability},
