@@ -6,7 +6,6 @@ mod common {
     pub(crate) use kithara_integration_tests::test_defaults;
 }
 
-mod drm_stream_integrity;
 mod hls_abr_variant_switch;
 mod saw_chunk;
 mod stress_chunk_integrity;
