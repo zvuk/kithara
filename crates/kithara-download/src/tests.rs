@@ -1061,8 +1061,15 @@ async fn poll_next_respects_max_concurrent() {
 ///
 /// A regression that reverts to a per-Downloader client multiplies the opened
 /// connection count by `WAVES`, immediately tripping the assertion.
+///
+/// flash(false): the keep-alive reuse assertion depends on real loopback
+/// round-trips, not on virtual scheduler time.
 #[cfg(not(target_os = "android"))]
-#[kithara::test(tokio, timeout(Duration::from_secs(PORT_STRESS_TIMEOUT_SECS)))]
+#[kithara::test(
+    tokio,
+    flash(false),
+    timeout(Duration::from_secs(PORT_STRESS_TIMEOUT_SECS))
+)]
 async fn shared_client_keepalive_bounds_connection_count() {
     const PARALLEL_DLS: usize = 8;
     const WAVES: usize = 25;
@@ -1415,7 +1422,11 @@ async fn spawn_stalled_body_server() -> TestHttpServer {
         "/data",
         get(|| async {
             let first = futures::stream::iter([Ok::<_, Infallible>(Bytes::from_static(b"xx"))]);
-            Body::from_stream(first.chain(futures::stream::pending()))
+            // NSURLSession can buffer a tiny untyped prefix while sniffing its MIME type.
+            (
+                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                Body::from_stream(first.chain(futures::stream::pending())),
+            )
         }),
     );
     TestHttpServer::new(app).await

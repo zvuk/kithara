@@ -938,6 +938,10 @@ cargo.profile = "test-release"
 cargo.packages = ["kithara-net"]
 cargo.profile = "test-release"
 
+[test.lanes.download]
+cargo.packages = ["kithara-download"]
+cargo.profile = "test-release"
+
 # kithara-net's own tests with the `client-host` backend, which run against the
 # fake transport in the crate. The other packages reach real servers and have
 # no transport on the host.

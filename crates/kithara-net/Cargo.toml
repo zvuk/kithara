@@ -114,5 +114,8 @@ serde_yaml_ng = { workspace = true }
 [target.'cfg(target_os = "android")'.dev-dependencies]
 kithara-test-dylib = { workspace = true }
 
+[target.'cfg(target_vendor = "apple")'.dev-dependencies]
+kithara-net = { path = ".", default-features = false, features = ["client-apple"] }
+
 [lints]
 workspace = true
