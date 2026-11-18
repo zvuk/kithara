@@ -1,5 +1,5 @@
 use crate::{
-    expand::{Binding, SurfaceSpec},
+    expand::{Binding, ColorSpec, SurfaceSpec},
     layout::{Axis, FrameCorners, FrameSides},
     module::{MeasureAxis, TextAlign},
     size::SizeSpec,
@@ -137,6 +137,7 @@ pub struct Lit<'a> {
     pub(super) flag: &'a Binding,
     pub(super) frame_color: ColorRole,
     pub(super) background: Option<ColorRole>,
+    pub(super) background_source: Option<&'a ColorSpec>,
 }
 
 impl<'a> Lit<'a> {
@@ -144,6 +145,12 @@ impl<'a> Lit<'a> {
     #[must_use]
     pub const fn background(&self) -> Option<ColorRole> {
         self.background
+    }
+
+    /// Background colour source, when one was declared.
+    #[must_use]
+    pub const fn background_source(&self) -> Option<&'a ColorSpec> {
+        self.background_source
     }
 
     /// The flag that decides between the two faces.

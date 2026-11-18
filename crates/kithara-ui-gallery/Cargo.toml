@@ -25,6 +25,7 @@ mock = []
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-ui/perf"]
 
 [dependencies]
+kithara-key = { workspace = true }
 kithara-platform = { workspace = true }
 # The gallery photographs its own pages and compares two hosts, which is what
 # `capture` carries. A gallery that cannot answer that question has no reason

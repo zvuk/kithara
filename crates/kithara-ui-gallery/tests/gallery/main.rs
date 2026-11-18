@@ -1654,9 +1654,15 @@ mod tests {
     ) {
         match node {
             ExpandedNode::Row {
-                active, children, ..
+                active,
+                active_background,
+                children,
+                ..
             } => {
                 if let Some(binding) = active {
+                    keys.extend(endpoint_key(ui, binding));
+                }
+                if let Some(binding) = active_background.as_ref().and_then(|bg| bg.binding()) {
                     keys.extend(endpoint_key(ui, binding));
                 }
                 for child in children {
@@ -1689,16 +1695,15 @@ mod tests {
                 if let Some(binding) = read {
                     keys.extend(endpoint_key(ui, binding));
                 }
-                if let ControlSpec::Text {
-                    active: Some(binding),
-                    ..
-                }
-                | ControlSpec::Glyph {
-                    active: Some(binding),
-                    ..
-                } = spec
+                if let ControlSpec::Text { active, color, .. }
+                | ControlSpec::Glyph { active, color, .. } = spec
                 {
-                    keys.extend(endpoint_key(ui, binding));
+                    if let Some(binding) = active {
+                        keys.extend(endpoint_key(ui, binding));
+                    }
+                    if let Some(binding) = color.as_ref().and_then(|color| color.binding()) {
+                        keys.extend(endpoint_key(ui, binding));
+                    }
                 }
             }
             node => panic!("the menu walker does not know {node:?}"),

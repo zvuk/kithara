@@ -10,15 +10,16 @@ use crate::{
     draw::{DrawListBuilder, Rect, Rgba},
     hosts::model::derived,
     module::WaveStyle,
-    render::{ReadValue, Reads, Skin, WaveformView, Zoom},
+    render::{ReadValue, Reads, Skin, WaveformView, Zoom, theme::RenderPalette},
     shaping::TextContext,
-    skin::WaveSkin,
+    skin::{ColorRole, WaveSkin},
 };
 
 /// The waveform a deck shows: the track's shape, where the playhead is in it,
 /// and — on the hero wave — the panel naming what is loaded.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Wave {
+    render_palette: kithara_platform::sync::Arc<RenderPalette>,
     overlay_palette: OverlayPalette,
     background: Rgba,
     border: Rgba,
@@ -45,6 +46,7 @@ impl Wave {
     pub(crate) fn new(style: WaveStyle, skin: &Skin) -> Self {
         Self {
             style,
+            render_palette: kithara_platform::sync::Arc::clone(&skin.palette),
             background: skin.rgba(skin.wave.background),
             border: skin.rgba(skin.wave.frame.border),
             cache_strip: Rgba {
@@ -88,7 +90,12 @@ impl Wave {
                 key: &overlay.key,
                 remain: &overlay.remain,
                 badge: &overlay.badge,
-                palette: self.overlay_palette,
+                palette: OverlayPalette {
+                    key: overlay
+                        .key_color
+                        .map_or(self.overlay_palette.key, |role| self.render_palette[role]),
+                    ..self.overlay_palette
+                },
             }),
             palette: self.palette,
             progress: data.progress,
@@ -144,29 +151,40 @@ impl Drawn {
         };
         Self {
             cached: cached_extent(reads, scope, progress),
-            overlay: (style == WaveStyle::Hero).then(|| OverlayData {
-                art: read_art(reads, scope),
-                title: read_text(reads, &derived("deck.track.title", scope))
-                    .filter(|title| !title.is_empty())
-                    .unwrap_or("No track loaded")
-                    .to_owned(),
-                artist: read_text(reads, &derived("deck.track.source_kind", scope))
-                    .unwrap_or("no source")
-                    .to_owned(),
-                bpm: waveform
+            overlay: (style == WaveStyle::Hero).then(|| {
+                let bpm = waveform
                     .and_then(|view| view.bpm)
-                    .map_or_else(|| Self::EM_DASH.to_owned(), |value| format!("{value:.2}")),
-                key: read_text(reads, &derived("deck.track.key", scope))
-                    .unwrap_or(Self::EM_DASH)
-                    .to_owned(),
-                remain: read_text(reads, &derived("deck.playback.remain", scope))
-                    .unwrap_or(Self::EM_DASH)
-                    .to_owned(),
-                badge: badge.unwrap_or_default().to_owned(),
+                    .map_or_else(|| Self::EM_DASH.to_owned(), |value| format!("{value:.2}"));
+                OverlayData::read(reads, scope, bpm, badge.unwrap_or_default().to_owned())
             }),
             progress,
             waveform: waveform.map(WaveformData::from),
             zoom: zoom.into(),
+        }
+    }
+}
+
+impl OverlayData {
+    pub(crate) fn read(reads: &dyn Reads, scope: &str, bpm: String, badge: String) -> Self {
+        Self {
+            art: read_art(reads, scope),
+            title: read_text(reads, &derived("deck.track.title", scope))
+                .filter(|title| !title.is_empty())
+                .unwrap_or("No track loaded")
+                .to_owned(),
+            artist: read_text(reads, &derived("deck.track.source_kind", scope))
+                .unwrap_or("no source")
+                .to_owned(),
+            bpm,
+            key_color: track_key_color(reads, scope),
+            key: read_text(reads, &derived("deck.track.key", scope))
+                .filter(|key| !key.is_empty())
+                .unwrap_or(Drawn::EM_DASH)
+                .to_owned(),
+            remain: read_text(reads, &derived("deck.playback.remain", scope))
+                .unwrap_or(Drawn::EM_DASH)
+                .to_owned(),
+            badge,
         }
     }
 }
@@ -209,14 +227,21 @@ pub(crate) fn cached_extent(reads: &dyn Reads, scope: &str, progress: f32) -> f3
     }
 }
 
-pub(crate) fn read_text<'a>(reads: &'a dyn Reads, endpoint: &str) -> Option<&'a str> {
+fn track_key_color(reads: &dyn Reads, scope: &str) -> Option<ColorRole> {
+    match reads.get(&derived("deck.track.key_color", scope)) {
+        Some(ReadValue::Color(role)) => Some(role),
+        _ => None,
+    }
+}
+
+fn read_text<'a>(reads: &'a dyn Reads, endpoint: &str) -> Option<&'a str> {
     match reads.get(endpoint) {
         Some(ReadValue::Text(value)) => Some(value),
         _ => None,
     }
 }
 
-pub(crate) fn read_art(reads: &dyn Reads, scope: &str) -> Option<crate::draw::Image> {
+fn read_art(reads: &dyn Reads, scope: &str) -> Option<crate::draw::Image> {
     match reads.get(&derived("deck.track.artwork", scope)) {
         Some(ReadValue::Image(image)) => Some(image.clone()),
         _ => None,
@@ -296,7 +321,7 @@ pub(crate) mod tests {
                 "deck.playback.position_normalized" => Some(ReadValue::Scalar(0.3)),
                 "deck.track.title" => Some(ReadValue::Text("Track")),
                 "deck.track.source_kind" => Some(ReadValue::Text("Source")),
-                "deck.track.key" => Some(ReadValue::Text("8A")),
+                "deck.track.key" => Some(ReadValue::Text("4m")),
                 "deck.playback.remain" => Some(ReadValue::Text("-01:00")),
                 _ => None,
             }
@@ -570,5 +595,74 @@ pub(crate) mod tests {
             .expect("the patched document resolves");
 
         assert_eq!(playhead_color(&skin), skin.palette.danger);
+    }
+
+    #[kithara::test]
+    fn the_hero_strip_colours_open_key_labels_and_draws_an_empty_or_absent_key_as_a_dash() {
+        struct StripKeyReads(Option<&'static str>);
+
+        impl Reads for StripKeyReads {
+            fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+                match endpoint {
+                    "deck.track.key@deck=a" => Some(ReadValue::Text(self.0?)),
+                    "deck.track.key_color@deck=a" if self.0 == Some("11d") => {
+                        Some(ReadValue::Color(crate::skin::ColorRole::Key11d))
+                    }
+                    _ => None,
+                }
+            }
+        }
+
+        let skin = builtin::skin();
+        let painter = Wave::new(WaveStyle::Hero, skin);
+        let bounds = Rect {
+            h: 120.0,
+            w: 640.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let drawn_key = |data: &Drawn| {
+            let mut text = TextContext::from(skin.text_resources.as_ref());
+            let mut list = DrawListBuilder::default();
+            painter.paint(&mut list, &mut text, data, bounds, true);
+            list.finish()
+                .commands()
+                .iter()
+                .filter_map(|command| match command {
+                    DrawCmd::Text { content, color, .. } => Some((content.to_string(), *color)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let known = Drawn::read(
+            WaveStyle::Hero,
+            1.0,
+            Some("A"),
+            None,
+            &StripKeyReads(Some("11d")),
+            "@deck=a",
+        );
+        assert!(
+            drawn_key(&known).contains(&("11d".to_owned(), skin.palette.key_11d)),
+            "11d must paint in key_11d"
+        );
+
+        let fallback = skin.rgba(skin.wave.overlay.key_color);
+        for missing in [None, Some("")] {
+            let reads = StripKeyReads(missing);
+            let immediate = Drawn::read(WaveStyle::Hero, 1.0, Some("A"), None, &reads, "@deck=a");
+            assert_eq!(
+                immediate
+                    .overlay
+                    .as_ref()
+                    .map(|overlay| overlay.key.as_str()),
+                Some(Drawn::EM_DASH),
+            );
+            assert!(
+                drawn_key(&immediate).contains(&(Drawn::EM_DASH.to_owned(), fallback)),
+                "missing {missing:?} must paint a dash in the overlay key_color"
+            );
+        }
     }
 }

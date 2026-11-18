@@ -266,7 +266,7 @@ fn skin() -> &'static Skin {
 }
 
 fn theme(skin: &Skin) -> Theme {
-    let palette = skin.palette;
+    let palette = &skin.palette;
     Theme::custom(
         "Kithara".to_owned(),
         Palette {

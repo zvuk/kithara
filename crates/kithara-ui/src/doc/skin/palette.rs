@@ -35,6 +35,30 @@ macro_rules! color_roles {
             wave_mid => WaveMid,
             wave_high => WaveHigh,
             shadow => Shadow,
+            key_1m => Key1m,
+            key_2m => Key2m,
+            key_3m => Key3m,
+            key_4m => Key4m,
+            key_5m => Key5m,
+            key_6m => Key6m,
+            key_7m => Key7m,
+            key_8m => Key8m,
+            key_9m => Key9m,
+            key_10m => Key10m,
+            key_11m => Key11m,
+            key_12m => Key12m,
+            key_1d => Key1d,
+            key_2d => Key2d,
+            key_3d => Key3d,
+            key_4d => Key4d,
+            key_5d => Key5d,
+            key_6d => Key6d,
+            key_7d => Key7d,
+            key_8d => Key8d,
+            key_9d => Key9d,
+            key_10d => Key10d,
+            key_11d => Key11d,
+            key_12d => Key12d,
         }
     };
 }
@@ -139,7 +163,7 @@ mod tests {
             .map(|(role, _)| role)
             .collect();
 
-        assert_eq!(roles.len(), 27);
+        assert_eq!(roles.len(), 51);
         for role in &roles {
             assert_eq!(roles.iter().filter(|other| *other == role).count(), 1);
         }

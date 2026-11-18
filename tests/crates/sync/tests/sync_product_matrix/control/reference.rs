@@ -546,13 +546,13 @@ fn source_samples<const N: usize>(
     mapped_samples(position, f64::from(speed), |offset| {
         let frame = source
             .checked_add(offset)
-            .and_then(|frame| usize::try_from(frame).ok());
+            .and_then(|frame| usize::try_from(frame).ok())
+            .and_then(|frame| frame.checked_mul(usize::from(reference.channels)))
+            .and_then(|index| reference.samples.get(index..));
         let mut samples = [0.0; N];
         for (sample, channel) in samples.iter_mut().zip(channels) {
             *sample = frame
-                .and_then(|frame| frame.checked_mul(usize::from(reference.channels)))
-                .and_then(|index| index.checked_add(channel))
-                .and_then(|index| reference.samples.get(index))
+                .and_then(|frame| frame.get(channel))
                 .copied()
                 .filter(|sample| sample.is_finite())
                 .ok_or_else(|| {

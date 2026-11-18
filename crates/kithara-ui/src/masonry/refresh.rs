@@ -1,11 +1,12 @@
 use crate::{
     atoms::{
-        bar::preset::PresetData, deck::summary::Loaded, painter::ControlPainter, wave::face::Drawn,
+        bar::preset::PresetData, deck::summary::Loaded, icon::glyph::GlyphData,
+        painter::ControlPainter, wave::face::Drawn,
     },
     hosts::controls::{Draws, Reading},
     masonry::retained::{
         MasonryHost, MasonryNode,
-        mount::{Cx, NodeControl, refreshing},
+        mount::{Cx, NodeControl, painted, refreshing},
     },
     mount::{
         Preset,
@@ -13,6 +14,7 @@ use crate::{
             summary::host::{Summary, snapshot},
             wave::host::Wave,
         },
+        label::glyph::host::Glyph,
         panel::{lottie::host::Lottie, sprite::host::Sprite},
     },
     render::document::Ctx,
@@ -193,5 +195,39 @@ impl NodeControl for Sprite {
         A: std::fmt::Debug + Send + 'static,
     {
         refreshing(self, host, cx)
+    }
+}
+
+impl Refresh for Glyph<'_> {
+    fn refresh(
+        &self,
+        read: Reading<'_>,
+        _endpoint: Option<&str>,
+    ) -> Option<DataRefresh<GlyphData>> {
+        let appearance = self.appearance(read.skin)?;
+        let palette = kithara_platform::sync::Arc::clone(&read.skin.palette);
+        let color = self.color.cloned();
+        let active = self.active.cloned();
+        Some(Box::new(move |data, ctx| {
+            let next = appearance.data(
+                ctx.flag(active.as_ref()),
+                ctx.color_role(color.as_ref()),
+                &palette,
+            );
+            std::mem::replace(data, next) != *data
+        }))
+    }
+}
+
+impl NodeControl for Glyph<'_> {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        if self.active.is_some() || self.color.and_then(|color| color.binding()).is_some() {
+            refreshing(self, host, cx)
+        } else {
+            painted(self, host, cx)
+        }
     }
 }

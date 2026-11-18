@@ -23,13 +23,13 @@ use kithara_ui::{
 use url::Url;
 
 use crate::{
-    Account, Client, Config, Error, Opener, Playlist, TrackId,
+    Account, Client, Config, Error, MediaTrack, Opener, Playlist, SearchScope, TrackId,
     job::Job,
     streaming::Streaming,
     ui::{
         catalogue::Catalogue,
         consts, page,
-        request::Batch,
+        request::{Loaded, Request},
         section::{self, Section},
     },
 };
@@ -79,6 +79,8 @@ pub struct Source<N> {
     pub(super) cancel: CancelToken,
     pub(super) catalogue: Catalogue,
     pub(super) load: Load,
+    /// Autocomplete for the current query, independent of catalogue loading.
+    pub(super) suggestions: Option<Job<Result<Vec<String>, Error>>>,
     /// The Playlists node was expanded; a new token lists it again.
     pub(super) expanded: bool,
     pub(super) listing: Option<Job<Result<Vec<Playlist>, Error>>>,
@@ -95,12 +97,29 @@ pub struct Source<N> {
     not_connected: String,
 }
 
-/// The current node's page request.
+/// The current node's catalogue and stream-enrichment phases.
 pub(super) enum Load {
     Idle,
-    /// Waits until the instant to start.
-    Due(Instant),
-    Running(Job<Result<Batch, Error>>),
+    /// Waits until the instant to start this immutable request.
+    Due {
+        due: Instant,
+        request: Request,
+    },
+    Running(Job<Result<Loaded, Error>>),
+    Enriching {
+        ids: Vec<TrackId>,
+        job: Job<Result<Vec<MediaTrack>, Error>>,
+    },
+    EnrichmentFailed(Vec<TrackId>),
+}
+
+impl Load {
+    pub(super) fn is_loading(&self) -> bool {
+        matches!(
+            self,
+            Self::Due { .. } | Self::Running(_) | Self::Enriching { .. }
+        )
+    }
 }
 
 /// An operation whose failure the page shows; in the order they are shown.
@@ -108,6 +127,7 @@ pub(super) enum Load {
 pub(super) enum Operation {
     /// The current node's catalogue page and its stream batch.
     Page,
+    Suggestions,
     Playlists,
     Like,
 }
@@ -190,6 +210,7 @@ impl<N: Net + Clone + 'static> Source<N> {
             cancel,
             catalogue: Catalogue::default(),
             load: Load::Idle,
+            suggestions: None,
             expanded: false,
             listing: None,
             likes: HashMap::new(),
@@ -284,9 +305,20 @@ impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
             }
             ("query", WriteValue::Text(query)) => {
                 if self.catalogue.search(query) {
+                    self.suggestions = None;
                     self.queue(Instant::now() + Duration::from_millis(consts::DEBOUNCE_MS));
+                    self.start_suggestions();
                 }
             }
+            ("scope_tracks", WriteValue::Trigger) => self.change_scope(SearchScope::Tracks),
+            ("scope_artists", WriteValue::Trigger) => self.change_scope(SearchScope::Artists),
+            ("scope_albums", WriteValue::Trigger) => self.change_scope(SearchScope::Albums),
+            ("suggestion_0", WriteValue::Trigger) => self.choose_suggestion(0),
+            ("suggestion_1", WriteValue::Trigger) => self.choose_suggestion(1),
+            ("suggestion_2", WriteValue::Trigger) => self.choose_suggestion(2),
+            ("open_entity", WriteValue::Text(action)) => self.open_entity(action),
+            ("back", WriteValue::Trigger) => self.back(),
+            ("load_more", WriteValue::Trigger) => self.load_more(),
             ("like_track", WriteValue::Text(id)) => self.like(id),
             (endpoint, WriteValue::Trigger) => {
                 if let Some(command) = section::command(endpoint) {
@@ -326,19 +358,20 @@ impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
         let Some(changed) = self.catalogue.select(node) else {
             return;
         };
-        if matches!(self.load, Load::Idle) && self.faults.has(Operation::Page) {
+        if changed {
+            self.suggestions = None;
             self.faults.record(Operation::Page, Ok(()));
-        } else if !changed {
-            return;
+            self.queue(Instant::now());
+        } else if !self.load.is_loading() && self.faults.has(Operation::Page) {
+            self.retry_page();
         }
-        self.queue(Instant::now());
     }
 
     /// Projects the current page state without hiding errors alongside rows.
     fn status(&self) -> PageStatus<'_> {
         if !self.has_token {
             PageStatus::Unreadable(Some(&self.not_connected))
-        } else if !self.streaming.loaded() || !matches!(self.load, Load::Idle) {
+        } else if !self.streaming.loaded() || self.load.is_loading() {
             PageStatus::Loading
         } else if !self.catalogue.is_empty() {
             PageStatus::Ready

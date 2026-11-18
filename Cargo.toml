@@ -82,6 +82,7 @@ members = [
     "tests/crates/file",
     "tests/crates/harness",
     "tests/crates/hls",
+    "tests/crates/hls-keys",
     "tests/crates/host",
     "tests/crates/play",
     "tests/crates/queue",
@@ -165,6 +166,7 @@ default-members = [
     "tests/crates/file",
     "tests/crates/harness",
     "tests/crates/hls",
+    "tests/crates/hls-keys",
     "tests/crates/host",
     "tests/crates/play",
     "tests/crates/queue",
@@ -783,6 +785,9 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-hls-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-hls-keys-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-integration-tests]

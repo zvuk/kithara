@@ -4,15 +4,20 @@
 //! mount carries that declaration from the document to the recognizer, so the
 //! chip is pressed through raw pointer input and only what it publishes is read.
 
+use std::cell::Cell;
+
+use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use kithara_ui::{
-    app::{Config, Ui},
+    app::{App, Config, Ui},
+    backends::paint_color,
     builtin,
     compile::compile,
-    draw::Pt,
+    draw::{Pt, Rect},
     interact::{Input, MOUSE, PointerButton, PointerInput, PointerPhase},
     mock::player_registry,
-    render::UiEvent,
+    render::{ReadValue, Reads, Skin, UiEvent},
+    skin::ColorRole,
     source::{MemResolver, UiConfig},
     view,
 };
@@ -125,5 +130,168 @@ fn a_quick_double_press_on_the_key_lock_chip_resets_its_transpose_once(#[case] m
         immediate(module, at),
         expected,
         "the immediate host at {at:?}"
+    );
+}
+
+#[kithara::test]
+fn the_shipped_key_lock_chip_shows_key_colours_and_charges_no_gap_for_empty_runs() {
+    struct ChipState<'s> {
+        locked: &'s Cell<bool>,
+        key: &'s Cell<&'static str>,
+        transpose: &'s Cell<&'static str>,
+    }
+
+    impl Reads for ChipState<'_> {
+        fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+            match endpoint {
+                "deck.key.locked@deck=a" => Some(ReadValue::Bool(self.locked.get())),
+                "deck.key.sounding@deck=a" => Some(ReadValue::Text(self.key.get())),
+                "deck.key.color@deck=a" => match self.key.get() {
+                    "4m" => Some(ReadValue::Color(ColorRole::Key4m)),
+                    "11m" => Some(ReadValue::Color(ColorRole::Key11m)),
+                    _ => None,
+                },
+                "deck.key.sounding_hidden@deck=a" => {
+                    Some(ReadValue::Bool(self.key.get().is_empty()))
+                }
+                "deck.key.transpose_hidden@deck=a" => {
+                    Some(ReadValue::Bool(self.transpose.get().is_empty()))
+                }
+                "deck.key.transpose@deck=a" => Some(ReadValue::Text(self.transpose.get())),
+                _ => None,
+            }
+        }
+    }
+
+    impl App for ChipState<'_> {
+        fn document(&self) -> &str {
+            "menu.klayout.ron"
+        }
+
+        fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+            with(self)
+        }
+
+        fn skin(&self) -> &Skin {
+            builtin::skin()
+        }
+
+        fn update(&mut self, _event: UiEvent) {}
+    }
+
+    let (endpoints, resolver) = (player_registry(), documents("keys"));
+    let ui_doc = compile(
+        "menu.klayout.ron",
+        &resolver,
+        &endpoints,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .expect("key-lock module must compile");
+    let locked = Cell::new(true);
+    let key = Cell::new("");
+    let transpose = Cell::new("");
+    let mut ui = Ui::new(
+        ChipState {
+            locked: &locked,
+            key: &key,
+            transpose: &transpose,
+        },
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        WINDOW,
+        1.0,
+    )
+    .expect("key-lock module must mount");
+    let skin = builtin::skin();
+    let word = |role: ColorRole| {
+        paint_color(skin.palette[role])
+            .premultiply()
+            .to_rgba8()
+            .to_u32()
+    };
+
+    let left_rect = ui
+        .rect_of("keys/keylock/down-icon")
+        .expect("retained left chevron rect");
+    let right_rect = ui
+        .rect_of("keys/keylock/up-icon")
+        .expect("retained right chevron rect");
+    let chip_width = right_rect.x - (left_rect.x + left_rect.w);
+    assert_eq!(chip_width, 56.0, "the chip reserves its full width");
+    let mut imm = Immediate::mount(
+        ChipState {
+            locked: &locked,
+            key: &key,
+            transpose: &transpose,
+        },
+        &ui_doc,
+        skin,
+        WINDOW,
+    );
+    let imm_quads = imm.quads();
+    let gold_bg = iced::Background::Color(skin.palette[ColorRole::Accent].into());
+    assert!(
+        imm_quads
+            .iter()
+            .any(|(_, quad, bg)| *bg == gold_bg && Rect::from(quad.bounds).w == chip_width),
+        "immediate keyless locked chip must fill the reserved width in gold: {imm_quads:#?}"
+    );
+
+    key.set("4m");
+    ui.frame(Duration::from_millis(16));
+    let keyed_width = ui
+        .rect_of("keys/keylock/up-icon")
+        .expect("retained right chevron rect after key")
+        .x
+        - (left_rect.x + left_rect.w);
+    assert_eq!(keyed_width, chip_width);
+    assert_eq!(
+        ui.ink_of("keys/keylock/chip/key"),
+        Some(skin.palette[ColorRole::Bg])
+    );
+    let locked_words = ui
+        .scene()
+        .expect("retained scene")
+        .encoding()
+        .draw_data
+        .clone();
+    assert!(locked_words.contains(&word(ColorRole::Key4m)));
+    let mut imm_keyed = Immediate::mount(
+        ChipState {
+            locked: &locked,
+            key: &key,
+            transpose: &transpose,
+        },
+        &ui_doc,
+        skin,
+        WINDOW,
+    );
+    let key4m_bg = iced::Background::Color(skin.palette[ColorRole::Key4m].into());
+    let imm_keyed_quads = imm_keyed.quads();
+    assert!(
+        imm_keyed_quads.iter().any(|(_, quad, bg)| {
+            let width = Rect::from(quad.bounds).w;
+            *bg == key4m_bg && (width - keyed_width).abs() <= 1.0
+        }),
+        "immediate locked chip must keep ~{keyed_width}px in Key4m: {imm_keyed_quads:#?}"
+    );
+
+    locked.set(false);
+    key.set("11m");
+    transpose.set("+1");
+    ui.frame(Duration::from_millis(16));
+    assert_eq!(
+        ui.ink_of("keys/keylock/chip/key"),
+        Some(skin.palette[ColorRole::Key11m])
+    );
+    assert_eq!(
+        ui.ink_of("keys/keylock/chip/readout"),
+        Some(skin.palette[ColorRole::Accent])
     );
 }

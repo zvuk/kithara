@@ -12,6 +12,7 @@ pub enum ValueKind {
     Scalar,
     /// A point in the box of whatever reads it, in points from its corner.
     Point,
+    Color,
     Stereo,
     Text,
     Image,

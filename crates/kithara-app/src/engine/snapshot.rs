@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use kithara::{
     abr::AbrMode,
+    analysis::MusicalKey,
     effects::GainDb,
     host::{DeckId, api::Tempo},
     platform::sync::Arc,
@@ -108,6 +109,7 @@ pub(crate) struct AnalysisView {
     pub(crate) unready: Arc<[[f32; 2]]>,
     pub(crate) artifacts: Option<TrackArtifacts>,
     pub(crate) bpm: Option<f32>,
+    pub(crate) key: Option<MusicalKey>,
 }
 
 #[bon::bon]
@@ -211,6 +213,7 @@ impl AnalysisView {
                 .as_ref()
                 .and_then(TrackArtifacts::grid)
                 .map(|grid| grid.as_raw().bpm.as_()),
+            key: state.analysis.as_ref().and_then(TrackArtifacts::key),
             beats: Arc::clone(&state.beat_marks),
             downbeats: Arc::clone(&state.downbeat_marks),
             unready: Arc::clone(&state.unready_ranges),

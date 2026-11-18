@@ -217,11 +217,14 @@ fn format_tempo(speed: f32) -> String {
     format!("{:+.1}%", tenths / 10.0 + 0.0)
 }
 
-fn format_transpose(pitch: Option<Pitch>) -> String {
-    let shift = pitch.map_or(0, |(Pitch::Vinyl { shift } | Pitch::Held { shift })| {
+fn pitch_shift(pitch: Option<Pitch>) -> i8 {
+    pitch.map_or(0, |(Pitch::Vinyl { shift } | Pitch::Held { shift })| {
         i8::from(shift)
-    });
-    match shift {
+    })
+}
+
+fn format_transpose(pitch: Option<Pitch>) -> String {
+    match pitch_shift(pitch) {
         0 => String::new(),
         up if up > 0 => format!("+{up}"),
         down => format!("{}{}", consts::MINUS_SIGN, down.unsigned_abs()),

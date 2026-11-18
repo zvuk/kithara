@@ -16,6 +16,7 @@ ignored = ["hotpath"]
 default = ["client-reqwest", "tls-rustls"]
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
 usdt = ["kithara-test-utils/usdt"]
+no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = [
     "kithara-net/client-reqwest",
