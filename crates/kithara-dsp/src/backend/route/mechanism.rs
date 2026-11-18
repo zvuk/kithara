@@ -38,6 +38,17 @@ macro_rules! route {
 }
 
 macro_rules! routes {
+    (@export $($name:ident[$($generic:tt)+]($($argument:ident: $ty:ty),* $(,)?) -> $result:ty {
+        simd: $simd:path;
+        scalar: $scalar:path;
+        $(platform: $platform:path;)?
+        entry: $entry:path;
+        targets: [$apple:ident, $x86:ident, $other:ident];
+    })+) => {
+        $( $crate::backend::route::mechanism::routes! { @generic $name[$($generic)+]($($argument: $ty),*) -> $result {
+            simd: $simd; scalar: $scalar; $(platform: $platform;)? entry: $entry; targets: [$apple, $x86, $other];
+        } } )+
+    };
     (@export $($declarations:tt)+) => {
         $crate::backend::route::mechanism::routes! { $($declarations)+ }
         #[cfg(feature = "routes")]
@@ -63,6 +74,76 @@ macro_rules! routes {
             }
         }
     )+};
+    (@public $($name:ident[$($generic:tt)+]($($argument:ident: $ty:ty),* $(,)?) -> $result:ty {
+        simd: $simd:path;
+        scalar: $scalar:path;
+        $(platform: $platform:path;)?
+        entry: $entry:path;
+        targets: [$apple:ident, $x86:ident, $other:ident];
+    })+) => {};
+    (@generic $name:ident[$($generic:tt)+]($($argument:ident: $ty:ty),* $(,)?) -> $result:ty {
+        simd: $simd:path; scalar: $scalar:path; $(platform: $platform:path;)? entry: $entry:path; targets: [$apple:ident, $x86:ident, $other:ident];
+    }) => {
+        #[doc = concat!("Execution forms for `", stringify!($name), "`.")]
+        pub(crate) mod $name {
+            use $crate::backend::route::Route;
+
+            const ROUTE: Route = if cfg!(all(target_vendor = "apple", target_arch = "aarch64")) {
+                Route::$apple
+            } else if cfg!(target_arch = "x86_64") {
+                Route::$x86
+            } else {
+                Route::$other
+            };
+
+            // Unavailable selected cells fail const evaluation, before audio processing (== mono).
+            const CHECK: () = {
+                let available = $crate::backend::route::mechanism::routes!(@check_match $($platform)?);
+                assert!(available, "selected kernel form is unavailable on this target");
+            };
+
+            #[inline(always)]
+            pub(crate) fn invoke<$($generic)+>($($argument: $ty),*) -> $result {
+                let () = CHECK;
+                $crate::backend::route::mechanism::routes!(@dispatch_match ($($argument: $ty),*) ; $simd ; $scalar ; $($platform)?)
+            }
+        }
+    };
+    (@check_match $platform:path) => {
+        match ROUTE {
+            Route::Simd => true,
+            Route::Scalar => true,
+            Route::Platform => cfg!(any(target_os = "macos", target_os = "ios")),
+        }
+    };
+    (@check_match) => {
+        match ROUTE {
+            Route::Simd => true,
+            Route::Scalar => true,
+            _ => false,
+        }
+    };
+    (@dispatch_match ($($argument:ident: $ty:ty),*) ; $simd:path ; $scalar:path ; $platform:path) => {{
+        let route = ROUTE;
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if matches!(route, Route::Platform) {
+            return $platform($($argument),*);
+        }
+        if matches!(route, Route::Simd) {
+            $simd($($argument),*)
+        } else {
+            $scalar($($argument),*)
+        }
+    }};
+    (@dispatch_match ($($argument:ident: $ty:ty),*) ; $simd:path ; $scalar:path ;) => {{
+        let route = ROUTE;
+        if matches!(route, Route::Simd) {
+            $simd($($argument),*)
+        } else {
+            $scalar($($argument),*)
+        }
+    }};
+
     ($($name:ident($($argument:ident: $ty:ty),* $(,)?) -> $result:ty {
         simd: $simd:path;
         $(scalar: $scalar:path;)?
