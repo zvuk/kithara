@@ -219,6 +219,7 @@ pub(crate) fn wrap_with_timeout(
     is_async: bool,
     fn_name: &Ident,
     ret_type: &ReturnType,
+    entry_ret: &ReturnType,
 ) -> TokenStream2 {
     let fn_name_str = fn_name.to_string();
     let dur = super::timeout::resolve(args);
@@ -252,6 +253,7 @@ pub(crate) fn wrap_with_timeout(
             ReturnType::Default => quote! { () },
             ReturnType::Type(_, ty) => quote! { #ty },
         };
+        let convert = exit_code_to_ret(entry_ret);
         quote! {
             {
                 #prekill_guard
@@ -267,28 +269,25 @@ pub(crate) fn wrap_with_timeout(
                     }
                     let handle = __thread_builder
                         .spawn(move || {
-                            // The body result is handled inside the worker: a
-                            // `Result` error is printed via
-                            // `Termination::report` (needs only `Debug`, not
-                            // `Send`) and a non-success `ExitCode` becomes a
-                            // panic, so a non-`Send` error never crosses the
-                            // thread boundary and a failure is never swallowed.
+                            // The body result is reported inside the worker via
+                            // `Termination::report` (needs only `Debug` on the
+                            // error type), so a non-`Send` error never crosses
+                            // the thread boundary. A body panic stays a panic
+                            // payload; a non-success `ExitCode` stays a failure
+                            // value and is converted back by the test thread.
                             let __outcome = ::std::panic::catch_unwind(
                                 ::std::panic::AssertUnwindSafe(|| {
                                     let __result: #ret_ty = ({ __body })();
-                                    let __code = ::std::process::Termination::report(__result);
-                                    if __code == ::std::process::ExitCode::SUCCESS {
-                                    } else {
-                                        panic!("test body returned a failure exit code");
-                                    }
+                                    ::std::process::Termination::report(__result)
                                 }),
                             );
                             let _ = tx.send(__outcome);
                         })
                         .expect("kithara sync test thread");
                     match rx.recv_timeout(__timeout_dur) {
-                        Ok(Ok(())) => {
+                        Ok(Ok(__code)) => {
                             handle.join().ok();
+                            #convert
                         }
                         Ok(Err(__payload)) => {
                             handle.join().ok();
@@ -388,6 +387,93 @@ pub(crate) fn make_hard_timeout_watchdog(fn_name: &str) -> TokenStream2 {
     }
 }
 
+fn is_unit_type(ty: &syn::Type) -> bool {
+    matches!(ty, syn::Type::Tuple(t) if t.elems.is_empty())
+}
+fn is_exit_code_type(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Path(p) => p
+            .path
+            .segments
+            .last()
+            .is_some_and(|s| s.ident == "ExitCode"),
+        _ => false,
+    }
+}
+
+fn is_never_type(ty: &syn::Type) -> bool {
+    matches!(ty, syn::Type::Never(_))
+}
+
+fn result_ok_type(ty: &syn::Type) -> Option<&syn::Type> {
+    let syn::Type::Path(p) = ty else {
+        return None;
+    };
+    let seg = p.path.segments.last()?;
+    if seg.ident != "Result" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+    // `Result<T, E>` and single-argument aliases (`syn::Result<T>`,
+    // `anyhow::Result<T>`) both put the Ok type first.
+    match args.args.first()? {
+        syn::GenericArgument::Type(ok_ty) => Some(ok_ty),
+        _ => None,
+    }
+}
+
+/// The return type of a native sync entry that reports a body failure as an
+/// `ExitCode` value (used by `soft_fail`, which must not see the failure as a
+/// panic).
+pub(crate) fn exit_code_ret() -> ReturnType {
+    syn::parse_quote!(-> ::std::process::ExitCode)
+}
+
+/// Tokens converting a `Termination::report` `__code: ExitCode` back into the
+/// entry's declared return type.
+///
+/// A non-success code is a body failure, not a panic. For a `()`/`Result`
+/// entry it must become a panic here (the body error was already printed by
+/// `Termination::report`), while an `ExitCode` entry passes the code through
+/// untouched so `soft_fail` sees the failure as a value, not a panic.
+fn exit_code_to_ret(entry_ret: &ReturnType) -> TokenStream2 {
+    let fail = quote! { panic!("test body returned a failure exit code") };
+    let success = |ok: TokenStream2| {
+        quote! {
+            if __code == ::std::process::ExitCode::SUCCESS {
+                #ok
+            } else {
+                #fail
+            }
+        }
+    };
+    match entry_ret {
+        ReturnType::Default => success(quote! {}),
+        ReturnType::Type(_, ty) => {
+            if is_unit_type(ty) {
+                success(quote! {})
+            } else if is_exit_code_type(ty) {
+                quote! { __code }
+            } else if is_never_type(ty) {
+                quote! { match __code { _ => panic!("unreachable: never-returning body") } }
+            } else if let Some(ok_ty) = result_ok_type(ty) {
+                let ok_value = if is_unit_type(ok_ty) {
+                    quote! { () }
+                } else if is_exit_code_type(ok_ty) {
+                    quote! { ::std::process::ExitCode::SUCCESS }
+                } else {
+                    quote! { panic!("unsupported Ok type") }
+                };
+                success(quote! { ::std::result::Result::Ok(#ok_value) })
+            } else {
+                quote! { __code }
+            }
+        }
+    }
+}
+
 /// Wrap body in `catch_unwind`; re-panic unless the message matches a pattern.
 ///
 /// Requires `futures` crate at the call site for async tests.
@@ -399,6 +485,14 @@ pub(crate) fn wrap_with_soft_fail(
 ) -> TokenStream2 {
     let name_str = fn_name.to_string();
     let pattern_strs: Vec<_> = patterns.iter().map(|p| p.to_lowercase()).collect();
+    // A soft-fail still passes: a sync entry keeps its `ExitCode::SUCCESS`
+    // (its body is a `wrap_with_timeout` block returning `ExitCode`), while an
+    // async entry stays `()`.
+    let soft_fail_ok = if is_async {
+        quote! { () }
+    } else {
+        quote! { ::std::process::ExitCode::SUCCESS }
+    };
     let handle_panic = quote! {
         let __msg = if let Some(s) = __panic.downcast_ref::<&str>() {
             (*s).to_string()
@@ -414,6 +508,7 @@ pub(crate) fn wrap_with_soft_fail(
                 || (*p == "timeout" && __lower.contains("timed out"))
         }) {
             eprintln!("[SOFT FAIL] {}: {}", #name_str, __msg);
+            #soft_fail_ok
         } else {
             std::panic::resume_unwind(__panic);
         }
@@ -436,8 +531,11 @@ pub(crate) fn wrap_with_soft_fail(
                 let __result = std::panic::catch_unwind(
                     std::panic::AssertUnwindSafe(move || #body)
                 );
-                if let Err(__panic) = __result {
-                    #handle_panic
+                match __result {
+                    Ok(__code) => __code,
+                    Err(__panic) => {
+                        #handle_panic
+                    }
                 }
             }
         }
@@ -471,7 +569,23 @@ mod tests {
     use quote::quote;
     use syn::{Ident, ReturnType, Stmt, parse_quote};
 
-    use super::{make_clock_measurement_stmt, wrap_with_timeout};
+    use super::{exit_code_to_ret, make_clock_measurement_stmt, wrap_with_timeout};
+
+    #[test]
+    fn exit_code_to_ret_reconstructs_the_declared_return_type() {
+        let result = exit_code_to_ret(&syn::parse_quote!(-> syn::Result<()>)).to_string();
+        assert!(result.contains("Result :: Ok"), "{result}");
+        assert!(result.contains("panic !"), "{result}");
+
+        let unit = exit_code_to_ret(&ReturnType::Default).to_string();
+        assert!(!unit.contains("Result :: Ok"), "{unit}");
+        assert!(unit.contains("panic !"), "{unit}");
+
+        let exit_code =
+            exit_code_to_ret(&syn::parse_quote!(-> ::std::process::ExitCode)).to_string();
+        assert!(!exit_code.contains("Result :: Ok"), "{exit_code}");
+        assert!(!exit_code.contains("panic !"), "{exit_code}");
+    }
 
     #[test]
     fn clock_measurement_is_emitted_for_every_target() -> syn::Result<()> {
@@ -495,6 +609,7 @@ mod tests {
             false,
             &name,
             &ReturnType::Default,
+            &ReturnType::Default,
         )
         .to_string();
 
@@ -508,8 +623,15 @@ mod tests {
         let mut args = TestArgs::default();
         args.set_timeout(Some(parse_quote!(::std::time::Duration::from_secs(5))));
 
-        let expanded =
-            wrap_with_timeout(&quote!({}), &args, false, &name, &ReturnType::Default).to_string();
+        let expanded = wrap_with_timeout(
+            &quote!({}),
+            &args,
+            false,
+            &name,
+            &ReturnType::Default,
+            &ReturnType::Default,
+        )
+        .to_string();
 
         assert!(expanded.contains("record_test_hang"));
         assert!(expanded.contains("sync-timeout"));
@@ -522,8 +644,15 @@ mod tests {
         let mut args = TestArgs::default();
         args.set_timeout(Some(parse_quote!(::std::time::Duration::from_secs(5))));
 
-        let expanded =
-            wrap_with_timeout(&quote!({}), &args, true, &name, &ReturnType::Default).to_string();
+        let expanded = wrap_with_timeout(
+            &quote!({}),
+            &args,
+            true,
+            &name,
+            &ReturnType::Default,
+            &ReturnType::Default,
+        )
+        .to_string();
 
         assert!(expanded.contains("record_test_hang"));
         assert!(expanded.contains("wall-timeout"));

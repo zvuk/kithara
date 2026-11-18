@@ -1,12 +1,12 @@
 use kithara_test_args::{TestArgs, TestFlags};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Attribute, Ident};
+use syn::{Attribute, Ident, ReturnType};
 
 use super::{
     fixture_args::Preamble,
     shared::{
-        finalize_body, make_ambient_stmt, make_clock_measurement_stmt,
+        exit_code_ret, finalize_body, make_ambient_stmt, make_clock_measurement_stmt,
         make_dedicated_worker_config, make_hang_budget, make_hard_timeout_watchdog,
         make_runtime_builder, make_selenium_attrs, make_serial_attr, make_test_setup,
         make_wasm_serial_guard, wrap_with_model, wrap_with_soft_fail, wrap_with_timeout,
@@ -32,7 +32,7 @@ use super::{
 pub(crate) fn emit_async_timeout_test(
     fn_name: &Ident,
     vis: &syn::Visibility,
-    ret_type: &syn::ReturnType,
+    ret_type: &ReturnType,
     remaining_attrs: &[&Attribute],
     body: &Preamble,
     args: &TestArgs,
@@ -187,7 +187,7 @@ pub(crate) fn emit_async_timeout_test(
 pub(crate) fn emit_browser_test(
     fn_name: &Ident,
     vis: &syn::Visibility,
-    ret_type: &syn::ReturnType,
+    ret_type: &ReturnType,
     remaining_attrs: &[&Attribute],
     is_async: bool,
     preamble: &Preamble,
@@ -214,7 +214,14 @@ pub(crate) fn emit_browser_test(
         #ambient
         #(#body_stmts)*
     };
-    let wasm_with_timeout = wrap_with_timeout(&wasm_body, args, true, fn_name, ret_type);
+    let wasm_with_timeout = wrap_with_timeout(
+        &wasm_body,
+        args,
+        true,
+        fn_name,
+        ret_type,
+        &ReturnType::Default,
+    );
     let wasm_wrapped = finalize_body(&wasm_with_timeout, args, fn_name, true);
     let wasm_serial_guard = make_wasm_serial_guard(args);
     output.extend(quote! {
@@ -248,15 +255,25 @@ pub(crate) fn emit_browser_test(
             let sync_body =
                 super::shared::wrap_with_sync_participation(&quote! { #(#body_stmts)* }, args);
             let native_body_held = quote! { #test_setup #scoped #bindings #ambient #sync_body };
+            let unit_ret = ReturnType::Default;
+            let exit_ret = exit_code_ret();
+            let (entry_ret, native_ret): (&ReturnType, TokenStream2) =
+                if args.flags().contains(TestFlags::SERIAL) {
+                    (&unit_ret, quote! {})
+                } else if !args.soft_fail_patterns().is_empty() {
+                    (&exit_ret, quote! { -> ::std::process::ExitCode })
+                } else {
+                    (ret_type, quote! { #ret_type })
+                };
             let native_with_timeout =
-                wrap_with_timeout(&native_body_held, args, false, fn_name, ret_type);
+                wrap_with_timeout(&native_body_held, args, false, fn_name, ret_type, entry_ret);
             let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, false);
             output.extend(quote! {
                 #(#remaining_attrs)*
                 #serial_attr
                 #[cfg(not(target_arch = "wasm32"))]
                 #[test]
-                #vis fn #fn_name() #native_wrapped
+                #vis fn #fn_name() #native_ret #native_wrapped
             });
         }
     }

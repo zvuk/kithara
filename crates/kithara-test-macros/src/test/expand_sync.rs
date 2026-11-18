@@ -1,13 +1,13 @@
 use kithara_test_args::{TestArgs, TestFlags};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Attribute, Ident};
+use syn::{Attribute, Ident, ReturnType};
 
 use super::{
     expand_async::emit_async_timeout_test,
     fixture_args::Preamble,
     shared::{
-        finalize_body, make_ambient_stmt, make_serial_attr, make_test_setup,
+        exit_code_ret, finalize_body, make_ambient_stmt, make_serial_attr, make_test_setup,
         make_wasm_serial_guard, wrap_with_model, wrap_with_sync_participation, wrap_with_timeout,
     },
 };
@@ -16,7 +16,7 @@ use super::{
 pub(crate) fn emit_one_test(
     fn_name: &Ident,
     vis: &syn::Visibility,
-    ret_type: &syn::ReturnType,
+    ret_type: &ReturnType,
     remaining_attrs: &[&Attribute],
     is_async: bool,
     preamble: &Preamble,
@@ -50,7 +50,14 @@ pub(crate) fn emit_one_test(
             args,
             &serial_attr,
         );
-        let wasm_timeout = wrap_with_timeout(&full_held, args, true, fn_name, ret_type);
+        let wasm_timeout = wrap_with_timeout(
+            &full_held,
+            args,
+            true,
+            fn_name,
+            ret_type,
+            &ReturnType::Default,
+        );
         let wasm_wrapped = finalize_body(&wasm_timeout, args, fn_name, true);
         output.extend(quote! {
             #(#remaining_attrs)*
@@ -65,7 +72,24 @@ pub(crate) fn emit_one_test(
     }
 
     let modeled = wrap_with_model(&full_held, args, fn_name);
-    let with_timeout = wrap_with_timeout(&modeled, args, false, fn_name, ret_type);
+    let unit_ret = ReturnType::Default;
+    let exit_ret = exit_code_ret();
+    let soft_fail = !args.soft_fail_patterns().is_empty();
+    // `serial_test` (`#[serial]`) rewraps the entry and only accepts `()` or
+    // `Result`, so a serial entry keeps a bare `()` signature. `soft_fail`
+    // returns `ExitCode` so a body failure stays a value, not a panic.
+    // Everything else carries the user's own return type so the standard
+    // harness (in the consumer) rejects `Result` + `#[should_panic]` and
+    // accepts an inactive `cfg_attr(..., should_panic)`.
+    let (entry_ret, native_ret): (&ReturnType, TokenStream2) =
+        if args.flags().contains(TestFlags::SERIAL) {
+            (&unit_ret, quote! {})
+        } else if soft_fail {
+            (&exit_ret, quote! { -> ::std::process::ExitCode })
+        } else {
+            (ret_type, quote! { #ret_type })
+        };
+    let with_timeout = wrap_with_timeout(&modeled, args, false, fn_name, ret_type, entry_ret);
     let wrapped = finalize_body(&with_timeout, args, fn_name, false);
 
     if args.flags().contains(TestFlags::SERIAL) {
@@ -74,7 +98,7 @@ pub(crate) fn emit_one_test(
             #[cfg(not(target_arch = "wasm32"))]
             #serial_attr
             #[test]
-            #vis fn #fn_name() #wrapped
+            #vis fn #fn_name() #native_ret #wrapped
 
             #(#remaining_attrs)*
             #[cfg(target_arch = "wasm32")]
@@ -91,7 +115,7 @@ pub(crate) fn emit_one_test(
         #serial_attr
         #[cfg(not(target_arch = "wasm32"))]
         #[test]
-        #vis fn #fn_name() #wrapped
+        #vis fn #fn_name() #native_ret #wrapped
 
         #(#remaining_attrs)*
         #[cfg(target_arch = "wasm32")]
@@ -128,13 +152,20 @@ pub(crate) fn emit_native_only_one(
         );
     }
     let modeled = wrap_with_model(full_held, args, name);
-    let with_timeout = wrap_with_timeout(&modeled, args, false, name, ret_type);
+    let exit_ret = exit_code_ret();
+    let (entry_ret, native_ret): (&ReturnType, TokenStream2) =
+        if !args.soft_fail_patterns().is_empty() {
+            (&exit_ret, quote! { -> ::std::process::ExitCode })
+        } else {
+            (ret_type, quote! { #ret_type })
+        };
+    let with_timeout = wrap_with_timeout(&modeled, args, false, name, ret_type, entry_ret);
     let wrapped = finalize_body(&with_timeout, args, name, false);
     quote! {
         #(#remaining_attrs)*
         #serial_attr
         #[cfg(not(target_arch = "wasm32"))]
         #[test]
-        #vis fn #name() #wrapped
+        #vis fn #name() #native_ret #wrapped
     }
 }

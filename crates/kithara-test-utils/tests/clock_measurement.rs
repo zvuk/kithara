@@ -54,6 +54,18 @@ fn sync_non_send_err_is_a_failure() -> Result<(), Box<dyn std::error::Error>> {
     Err(std::io::Error::other("expected failure").into())
 }
 
+#[kithara::test(native, serial)]
+#[ignore]
+fn sync_serial_err_is_a_failure() -> Result<(), Box<dyn std::error::Error>> {
+    Err(std::io::Error::other("expected failure").into())
+}
+
+#[kithara::test(native, soft_fail("failure"))]
+#[ignore]
+fn sync_soft_fail_result_err_is_a_failure() -> Result<(), Box<dyn std::error::Error>> {
+    Err(std::io::Error::other("unexpected").into())
+}
+
 #[kithara::test(native, soft_fail("expected"))]
 #[ignore]
 fn sync_soft_fail_unexpected_panic_fails() {
@@ -185,6 +197,8 @@ fn reports_the_actual_body_clock(#[case] name: &str, #[case] expected_mode: &str
 fn sync_body_failures_report_a_failed_status() {
     for name in [
         "sync_non_send_err_is_a_failure",
+        "sync_serial_err_is_a_failure",
+        "sync_soft_fail_result_err_is_a_failure",
         "sync_soft_fail_unexpected_panic_fails",
     ] {
         let output = Command::new(env::current_exe().expect("clock control executable"))
