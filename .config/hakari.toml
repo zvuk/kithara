@@ -67,6 +67,7 @@ workspace-members = [
   "kithara-fixture-media",
   "kithara-fuzz",
   "kithara-harness-tests",
+  "kithara-hls-keys-tests",
   "kithara-hls-tests",
   "kithara-host-tests",
   "kithara-integration-tests",

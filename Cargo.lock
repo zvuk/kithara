@@ -5622,10 +5622,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "kithara-hls-tests"
+name = "kithara-hls-keys-tests"
 version = "0.0.1-alpha5"
 dependencies = [
  "bytes",
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-dylib",
+ "kithara-test-utils",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "kithara-hls-tests"
+version = "0.0.1-alpha5"
+dependencies = [
  "gloo-timers",
  "kithara",
  "kithara-integration-tests",
