@@ -144,7 +144,7 @@ mod tests {
         types::AcceptEncodingPolicy,
     };
 
-    #[kithara::test(native, tokio, flash(false))]
+    #[kithara::test(native, tokio)]
     #[case::head_empty(Method::Head, Some(0), true)]
     #[case::head_representation(Method::Head, Some(4096), true)]
     #[case::head_unknown(Method::Head, None, true)]
