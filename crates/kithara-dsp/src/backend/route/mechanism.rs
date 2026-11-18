@@ -98,46 +98,44 @@ macro_rules! routes {
 
             // Unavailable selected cells fail const evaluation, before audio processing (== mono).
             const CHECK: () = {
-                let available = $crate::backend::route::mechanism::routes!(@check_match $($platform)?);
+                let available = $crate::backend::route::mechanism::routes!(@check_form $($platform)?);
                 assert!(available, "selected kernel form is unavailable on this target");
             };
 
             #[inline(always)]
             pub(crate) fn invoke<$($generic)+>($($argument: $ty),*) -> $result {
                 let () = CHECK;
-                $crate::backend::route::mechanism::routes!(@dispatch_match ($($argument: $ty),*) ; $simd ; $scalar ; $($platform)?)
+                $crate::backend::route::mechanism::routes!(@dispatch_form ($($argument: $ty),*) ; $simd ; $scalar ; $($platform)?)
             }
         }
     };
-    (@check_match $platform:path) => {
-        match ROUTE {
-            Route::Simd => true,
-            Route::Scalar => true,
-            Route::Platform => cfg!(any(target_os = "macos", target_os = "ios")),
+    (@check_form $platform:path) => {{
+        if let Route::Platform = ROUTE {
+            cfg!(any(target_os = "macos", target_os = "ios"))
+        } else {
+            true
         }
-    };
-    (@check_match) => {
-        match ROUTE {
-            Route::Simd => true,
-            Route::Scalar => true,
-            _ => false,
+    }};
+    (@check_form) => {{
+        if let Route::Platform = ROUTE {
+            false
+        } else {
+            true
         }
-    };
-    (@dispatch_match ($($argument:ident: $ty:ty),*) ; $simd:path ; $scalar:path ; $platform:path) => {{
-        let route = ROUTE;
+    }};
+    (@dispatch_form ($($argument:ident: $ty:ty),*) ; $simd:path ; $scalar:path ; $platform:path) => {{
         #[cfg(any(target_os = "macos", target_os = "ios"))]
-        if matches!(route, Route::Platform) {
+        if let Route::Platform = ROUTE {
             return $platform($($argument),*);
         }
-        if matches!(route, Route::Simd) {
+        if let Route::Simd = ROUTE {
             $simd($($argument),*)
         } else {
             $scalar($($argument),*)
         }
     }};
-    (@dispatch_match ($($argument:ident: $ty:ty),*) ; $simd:path ; $scalar:path ;) => {{
-        let route = ROUTE;
-        if matches!(route, Route::Simd) {
+    (@dispatch_form ($($argument:ident: $ty:ty),*) ; $simd:path ; $scalar:path ;) => {{
+        if let Route::Simd = ROUTE {
             $simd($($argument),*)
         } else {
             $scalar($($argument),*)
