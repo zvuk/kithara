@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeSet,
     ffi::OsString,
+    fs,
     io::BufReader,
     path::{Path, PathBuf},
     process::Command,
@@ -9,7 +10,11 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use cargo_metadata::Message;
 
-use super::{Log, source::Target};
+use super::{
+    Log,
+    command::{PREFLIGHT_STRIP, sha256},
+    source::Target,
+};
 use crate::Ctx;
 
 pub(super) struct Binary {
@@ -23,6 +28,7 @@ pub(super) fn build(
     target: &Target,
     directory: &Path,
     ctx: &Ctx,
+    preflight: bool,
     log: &mut Log,
 ) -> Result<Binary> {
     let mut command = Command::new(ctx.config.tools.program("cargo"));
@@ -39,6 +45,9 @@ pub(super) fn build(
             "--no-run",
             "--message-format=json",
         ]);
+    if preflight {
+        command.env(PREFLIGHT_STRIP, "none");
+    }
     if !target.features.is_empty() {
         command.args(["--features", &target.features.join(",")]);
     }
@@ -105,20 +114,42 @@ impl Binary {
         command
     }
 
-    pub(super) fn ids(&self, filter: &str, data: &Path, log: &mut Log) -> Result<BTreeSet<String>> {
+    pub(super) fn ids(
+        &self,
+        filter: &str,
+        data: &Path,
+        log: &mut Log,
+    ) -> Result<(BTreeSet<String>, Vec<u8>)> {
         let output = log.output(
             self.command(data).args(["--bench", "--list", filter]),
             false,
         )?;
-        let ids: BTreeSet<_> = String::from_utf8(output.stdout)?
+        let raw = std::str::from_utf8(&output.stdout)?;
+        let mut ids = BTreeSet::new();
+        for id in raw
             .lines()
-            .filter_map(|line| line.strip_suffix(": benchmark").map(str::to_owned))
-            .collect();
+            .filter_map(|line| line.strip_suffix(": benchmark"))
+        {
+            ensure!(ids.insert(id.to_owned()), "duplicate Criterion ID {id:?}");
+        }
         ensure!(
             !ids.is_empty(),
             "benchmark filter {filter:?} selected no Criterion IDs"
         );
-        Ok(ids)
+        Ok((ids, output.stdout))
+    }
+
+    pub(super) fn test(&self, filter: &str, data: &Path, log: &mut Log) -> Result<Vec<u8>> {
+        let output = log.output(
+            self.command(data).args(["--bench", "--test", filter]),
+            false,
+        )?;
+        Ok(output.stdout)
+    }
+
+    pub(super) fn retain(&self, destination: &Path) -> Result<String> {
+        fs::copy(&self.executable, destination)?;
+        Ok(sha256(&fs::read(destination)?))
     }
 
     pub(super) fn measure(
@@ -142,4 +173,54 @@ impl Binary {
         )?;
         Ok(())
     }
+}
+
+pub(super) fn callback_ids(output: &[u8]) -> Result<BTreeSet<String>> {
+    let mut lines = std::str::from_utf8(output)?.lines();
+    let mut ids = BTreeSet::new();
+    while let Some(line) = lines.next() {
+        if line.is_empty() {
+            continue;
+        }
+        let id = line
+            .strip_prefix("Testing ")
+            .context("expected Criterion Testing line")?;
+        ensure!(
+            lines.next() == Some("Success"),
+            "Criterion callback {id:?} did not report Success"
+        );
+        ensure!(
+            ids.insert(id.to_owned()),
+            "duplicate Criterion callback {id:?}"
+        );
+    }
+    Ok(ids)
+}
+
+pub(super) fn ensure_no_criterion_results(directory: &Path) -> Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let kind = entry.file_type()?;
+        ensure!(
+            !kind.is_symlink()
+                && !matches!(
+                    name.to_str(),
+                    Some(
+                        "criterion"
+                            | "sample.json"
+                            | "estimates.json"
+                            | "benchmark.json"
+                            | "raw.csv"
+                    )
+                ),
+            "unexpected Criterion output at {}",
+            path.display()
+        );
+        if kind.is_dir() {
+            ensure_no_criterion_results(&path)?;
+        }
+    }
+    Ok(())
 }
