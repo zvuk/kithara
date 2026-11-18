@@ -229,7 +229,9 @@ impl<'a> HostStorage<'a> {
         self.prune_host_trees("vm/android/avd", Self::DAY)?;
         self.prune_abandoned_job_vms(Self::DAY);
         self.prune_host_files("logs", 14 * Self::DAY)?;
-        self.rotate_logs()?;
+        let rotation = self.rotate_logs().inspect_err(|error| {
+            warn!(error = %format_args!("{error:#}"), "continuing CI storage cleanup after log rotation failed");
+        });
         self.prune_retired_caches(7 * Self::DAY)?;
         let build_roots = self.prune_build_caches()?;
 
@@ -313,7 +315,7 @@ impl<'a> HostStorage<'a> {
                 name_holders(&holders)
             );
         }
-        Ok(())
+        rotation
     }
 
     fn prune_build_caches(&self) -> Result<Vec<PathBuf>> {
@@ -647,6 +649,10 @@ impl<'a> HostStorage<'a> {
             {
                 continue;
             }
+            let log = OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .with_context(|| format!("opening log for rotation {}", path.display()))?;
             let numbered = |number| PathBuf::from(format!("{}.{number}", path.display()));
             self.remove_path(&numbered(5))?;
             for number in (1..=4).rev() {
@@ -658,10 +664,7 @@ impl<'a> HostStorage<'a> {
             }
             fs::copy(&path, numbered(1))
                 .with_context(|| format!("copying rotated log {}", path.display()))?;
-            OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&path)
+            log.set_len(0)
                 .with_context(|| format!("truncating rotated log {}", path.display()))?;
         }
         Ok(())
@@ -1742,6 +1745,37 @@ mod tests {
         storage.cleanup().unwrap();
 
         assert!(review.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rotation_error_preserves_log_history_and_still_reclaims_idle_builds() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.build_root = Some(directory.path().join("builds"));
+        cfg.host.log_limit_bytes = 0;
+        let build = a_build_beside_a_checkout(cfg.host.build_root());
+        let logs = directory.path().join("logs");
+        fs::create_dir_all(logs.join("bridge.log")).unwrap();
+        fs::write(logs.join("bridge.log/current"), b"current log").unwrap();
+        fs::write(logs.join("bridge.log.1"), b"previous log").unwrap();
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_NORMAL,
+        ]);
+
+        let error = storage.cleanup().unwrap_err();
+
+        assert!(!build.join("debug").exists());
+        assert_eq!(
+            fs::read(logs.join("bridge.log.1")).unwrap(),
+            b"previous log"
+        );
+        assert!(error.to_string().contains("opening log for rotation"));
     }
 
     /// The hourly pass this host ran for a day: two checkouts held 88 and 95 GB
