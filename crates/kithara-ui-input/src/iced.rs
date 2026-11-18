@@ -10,8 +10,8 @@ use iced::{
 use input_method::Event as InputMethodEvent;
 
 use super::{
-    Hit, Input, InputMethod, InputMethodRequest, Key, Modifiers, PointerPhase, Scroll,
-    mouse as mouse_input,
+    Hit, Input, InputMethod, InputMethodRequest, Key, MOUSE, Modifiers, PointerButton,
+    PointerInput, PointerPhase, Scroll, mouse as mouse_input,
 };
 
 mod consts {
@@ -68,12 +68,22 @@ pub fn input(event: &Event) -> Option<Input<'_>> {
         Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => {
             Some(Input::Pointer(mouse_input(PointerPhase::Up, None)))
         }
+        Event::Mouse(mouse::Event::ButtonPressed(Button::Right)) => {
+            Some(Input::Pointer(secondary(PointerPhase::Down)))
+        }
+        Event::Mouse(mouse::Event::ButtonReleased(Button::Right)) => {
+            Some(Input::Pointer(secondary(PointerPhase::Up)))
+        }
         Event::Mouse(mouse::Event::WheelScrolled { delta }) => Some(Input::Wheel(match delta {
             ScrollDelta::Lines { x, y } => Scroll::Lines { x: *x, y: *y },
             ScrollDelta::Pixels { x, y } => Scroll::Pixels { x: *x, y: *y },
         })),
         _ => None,
     }
+}
+
+const fn secondary(phase: PointerPhase) -> PointerInput {
+    PointerInput::new(MOUSE, Some(PointerButton::Secondary), phase, None, 1)
 }
 
 fn portable_key(key: &IcedKey, physical: Physical) -> Key<'_> {

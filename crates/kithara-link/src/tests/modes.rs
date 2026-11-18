@@ -6,7 +6,7 @@ use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 
 use super::fixtures::{
-    Command, Rig, answer, deck, grid, load, loaded, position, sounding, trajectory,
+    Command, Rig, answer, deck, grid, load, loaded, position, sound, sounding, trajectory,
 };
 use crate::{LinkedPlayer, SyncStatus};
 
@@ -76,12 +76,7 @@ fn a_late_audible_alignment_replans_from_the_batch_receipt() {
 fn a_seek_completes_the_host_speed_of_a_grid_waiting_sync() {
     let (mut deck, control, mut rig, _) = loaded(grid(24_000, 24_000, None, 480_000));
     rig.run(|out| deck.retime(&trajectory(180.0, 4), &[SessionFrame::new(0)], out));
-    control.edit(|script| {
-        script.snapshot.status = TrackStatus::Playing {
-            since: SessionFrame::new(0),
-        };
-        script.snapshot.position = position(12_000);
-    });
+    sound(&control, &mut rig, 0, 12_000);
     assert_eq!(
         rig.run(|out| deck.sync(true, out)).expect("waiting sync"),
         None
@@ -131,11 +126,17 @@ fn a_grid_waiting_sync_follows_the_live_source_into_coverage() {
         rig.run(|out| deck.sync(true, out)).expect("waiting sync"),
         None
     );
-    control.edit(|script| script.snapshot.position = position(30_000));
+    assert!(control.commands().is_empty());
+    sound(&control, &mut rig, 0, 30_000);
     rig.run(|out| deck.tick(SessionFrame::new(0), out));
     let commands = control.commands();
-    assert_eq!(commands.len(), 2);
-    assert_eq!(commands[0].0, commands[1].0);
+    assert!(
+        matches!(commands.as_slice(), [
+            (speed, Command::Speed(_, When::At(at))),
+            (jump, Command::Jump(_, landing)),
+        ] if speed == jump && at == landing),
+        "the explicit SYNC resumes as one alignment: {commands:?}"
+    );
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
 }
 
@@ -288,11 +289,7 @@ fn a_beat_on_the_measured_duration_stays_inside_the_source_extent() {
     assert!((LAST_BEAT * 48_000.0).fract() > 0.0);
     let model = BeatGridModel::try_from(raw).expect("consistent grid");
     let (mut deck, control, mut rig, _) = loaded(model);
-    control.edit(|script| {
-        script.snapshot.status = TrackStatus::Playing {
-            since: SessionFrame::new(0),
-        };
-    });
+    sound(&control, &mut rig, 0, 0);
     rig.run(|out| deck.sync(true, out))
         .expect("the source grid holds its last beat");
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
@@ -462,12 +459,7 @@ fn sync_off_without_a_grid_does_not_manufacture_geometry() {
 #[kithara::test]
 fn explicit_alignment_enters_sync_and_jumps_at_one_future_frame() {
     let (mut deck, control, mut rig, _) = loaded(grid(24_000, 0, Some((4, 0)), 480_000));
-    control.edit(|script| {
-        script.snapshot.position = position(6_000);
-        script.snapshot.status = TrackStatus::Playing {
-            since: SessionFrame::new(0),
-        };
-    });
+    sound(&control, &mut rig, 0, 6_000);
     rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("alignment");
     assert_eq!(deck.snapshot().sync, SyncStatus::On);
@@ -677,11 +669,7 @@ fn disable_without_any_grid_waits_for_one() {
 #[kithara::test]
 fn align_now_enters_host_sync() {
     let (mut deck, control, mut rig, _) = loaded(grid(24_000, 0, None, 480_000));
-    control.edit(|script| {
-        script.snapshot.status = TrackStatus::Playing {
-            since: SessionFrame::new(0),
-        }
-    });
+    sound(&control, &mut rig, 0, 0);
     rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("align now");
     assert_eq!(deck.snapshot().sync, SyncStatus::On);

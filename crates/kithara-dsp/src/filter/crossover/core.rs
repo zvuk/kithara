@@ -3,7 +3,13 @@ use std::ops::{Deref, DerefMut};
 use biquad::Hertz;
 
 use super::{gain, validate};
-use crate::{backend::crossover, filter::FilterError};
+use crate::{
+    backend::{
+        crossover,
+        route::{route, table},
+    },
+    filter::FilterError,
+};
 
 /// Planar LR4 crossovers with later-frequency allpass compensation on TPT sections.
 #[non_exhaustive]
@@ -51,6 +57,37 @@ impl<const CHANNELS: usize> Crossover<CHANNELS> {
         input: &[I; CHANNELS],
         bands: &mut [[P; CHANNELS]],
     ) -> usize {
+        route!(table::crossover => (self, input, bands))
+    }
+
+    pub(crate) fn split_simd<I: Deref<Target = [f32]>, P: DerefMut<Target = [f32]>>(
+        &mut self,
+        input: &[I; CHANNELS],
+        bands: &mut [[P; CHANNELS]],
+    ) -> usize {
+        self.split_with(input, bands, crossover::process)
+    }
+
+    pub(crate) fn split_scalar<I: Deref<Target = [f32]>, P: DerefMut<Target = [f32]>>(
+        &mut self,
+        input: &[I; CHANNELS],
+        bands: &mut [[P; CHANNELS]],
+    ) -> usize {
+        self.split_with(input, bands, crossover::process_scalar)
+    }
+
+    #[inline(always)]
+    fn split_with<I: Deref<Target = [f32]>, P: DerefMut<Target = [f32]>>(
+        &mut self,
+        input: &[I; CHANNELS],
+        bands: &mut [[P; CHANNELS]],
+        process: impl FnOnce(
+            &mut [crossover::Split<CHANNELS>],
+            &[I; CHANNELS],
+            &mut [[P; CHANNELS]],
+            usize,
+        ),
+    ) -> usize {
         let Some(bands) = bands.get_mut(..self.splits.len().saturating_add(1)) else {
             return 0;
         };
@@ -59,7 +96,7 @@ impl<const CHANNELS: usize> Crossover<CHANNELS> {
             .iter()
             .flatten()
             .fold(frames, |count, plane| count.min(plane.len()));
-        crossover::process(&mut self.splits, input, bands, frames);
+        process(&mut self.splits, input, bands, frames);
         frames
     }
 

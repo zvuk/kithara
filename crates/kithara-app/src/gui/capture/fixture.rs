@@ -65,7 +65,13 @@ impl Fixture {
     }
 
     fn on(endpoint: &str) -> bool {
-        endpoint == "deck.eq.three_band"
+        matches!(
+            endpoint,
+            "deck.key.transpose_hidden"
+                | "deck.eq.three_band"
+                | "deck.stream.quality_ready"
+                | "deck.stream.error_hidden"
+        )
     }
 }
 
@@ -142,6 +148,7 @@ impl Reads for Fixture {
             return self.library.page().map(ReadValue::Text);
         }
         let value = match readable_kind(base)? {
+            ValueKind::Color => ReadValue::Color(kithara::ui::skin::ColorRole::Key4m),
             ValueKind::Bool => ReadValue::Bool(Self::on(base)),
             ValueKind::Scalar => ReadValue::Scalar(Self::SCALAR),
             ValueKind::Stereo => ReadValue::Stereo(Self::LEVELS),
@@ -177,6 +184,9 @@ impl Reads for Fixture {
 fn text(endpoint: &str) -> &'static str {
     match endpoint {
         "deck.playback.bpm" => "124.0",
+        "deck.track.key" => "4m",
+        "deck.key.sounding" => "4m",
+        "deck.key.transpose" => "",
         "source.status" => "",
         "deck.playback.remain" => "-03:42",
         "deck.playback.tempo" => "+0.0%",

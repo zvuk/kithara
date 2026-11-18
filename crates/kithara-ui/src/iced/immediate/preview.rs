@@ -11,6 +11,7 @@ use iced::{
 
 use crate::{
     compile::{CompiledNode, CompiledUi},
+    iced::immediate::cache::Cache,
     layout::Axis,
     render::{Skin, theme::RenderPalette},
     skin::LayoutPreviewSkin,
@@ -30,7 +31,7 @@ impl LayoutPreview<'_> {
         Canvas::new(Preview {
             geometry: PreviewGeometry::new(&self.ui.root),
             metrics: self.skin.layout_preview,
-            palette: self.skin.palette,
+            palette: *self.skin.palette,
         })
         .width(Length::Fill)
         .height(Length::Fixed(self.skin.layout_preview.height))
@@ -47,7 +48,7 @@ struct Preview {
 /// What the preview keeps between frames: the tessellated picture and the
 /// layout it was built from, so it is rebuilt only when the layout moves.
 struct PreviewState {
-    cache: canvas::Cache,
+    cache: Cache,
     painted: RefCell<Option<(Vec<PreviewArea>, Rectangle)>>,
 }
 
@@ -385,6 +386,9 @@ mod tests {
                     "deck.playback.reverse",
                     "deck.playback.synced",
                     "deck.stream.quality_hidden",
+                    "deck.stream.quality_ready",
+                    "deck.stream.error_hidden",
+                    "deck.stream.auto_hidden",
                 ],
                 ValueKind::Bool,
                 &["deck"],

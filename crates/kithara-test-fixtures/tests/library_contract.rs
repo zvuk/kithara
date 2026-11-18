@@ -31,7 +31,9 @@ fn analysis_of(track: &str) -> AnalysisFile {
     let asset = by_name(&name).unwrap_or_else(|| panic!("`{name}` is not registered"));
     AnalysisFile::parse(
         asset.bytes(),
-        &AnalysisFingerprint::new(Some(consts::ANALYSIS_FINGERPRINT), None),
+        &AnalysisFingerprint::builder()
+            .beat(consts::ANALYSIS_FINGERPRINT)
+            .build(),
     )
     .unwrap_or_else(|error| panic!("decode `{name}`: {error}"))
 }

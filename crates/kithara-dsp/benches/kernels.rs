@@ -138,6 +138,68 @@ fn vector(c: &mut Criterion) {
     group.finish();
 }
 
+#[cfg(feature = "routes")]
+fn routed_ramp(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ramp");
+    for frames in [128, 512] {
+        let mut output = vec![0.0; frames];
+        for (name, kernel) in kithara_dsp::routes::ramp::routes() {
+            group.bench_function(BenchmarkId::new(name, frames), |b| {
+                b.iter(|| kernel(black_box(&mut output), black_box(0.25), black_box(0.001)));
+            });
+        }
+    }
+    group.finish();
+}
+
+#[cfg(feature = "routes")]
+fn routed_div(c: &mut Criterion) {
+    let mut group = c.benchmark_group("div");
+    for frames in [128, 512] {
+        let input = tone(frames);
+        for (name, kernel) in kithara_dsp::routes::div::routes() {
+            group.bench_function(BenchmarkId::new(name, frames), |b| {
+                b.iter_batched_ref(
+                    || input.clone(),
+                    |samples| kernel(black_box(samples), black_box(1.25)),
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
+#[cfg(feature = "routes")]
+fn routed_mul_add(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mul_add");
+    for frames in [128, 512] {
+        let input = tone(frames);
+        let acc = vec![0.25; frames];
+        for (name, kernel) in kithara_dsp::routes::mul_add::routes() {
+            group.bench_function(BenchmarkId::new(name, frames), |b| {
+                b.iter_batched_ref(
+                    || acc.clone(),
+                    |acc| kernel(black_box(&input), black_box(&input), black_box(acc)),
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
+fn routed(c: &mut Criterion) {
+    #[cfg(feature = "routes")]
+    {
+        routed_ramp(c);
+        routed_div(c);
+        routed_mul_add(c);
+    }
+    #[cfg(not(feature = "routes"))]
+    let _ = c;
+}
+
 fn downmix(c: &mut Criterion) {
     let mut group = c.benchmark_group("downmix");
     for frames in consts::SIZES {
@@ -546,6 +608,7 @@ criterion_group!(
     crossfade,
     kernels,
     vector,
+    routed,
     downmix,
     biquad,
     support::crossover_biquad::bench,

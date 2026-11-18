@@ -1,0 +1,48 @@
+use super::mechanism::routes;
+
+macro_rules! vector_routes {
+    ($($mode:tt)*) => {
+        $crate::backend::route::mechanism::routes! { $($mode)*
+            ramp(output: &mut [f32], start: f32, step: f32) -> usize {
+                simd: crate::backend::simd::ramp_kernel;
+                entry: crate::ramp;
+                targets: [Simd, Simd, Simd];
+            }
+            div(samples: &mut [f32], divisor: f32) -> usize {
+                simd: crate::backend::simd::div_kernel;
+                entry: crate::div;
+                targets: [Simd, Simd, Simd];
+            }
+            mul_add(x: &[f32], y: &[f32], acc: &mut [f32]) -> usize {
+                simd: crate::backend::simd::mul_add_kernel;
+                entry: crate::mul_add;
+                targets: [Simd, Simd, Simd];
+            }
+        }
+    };
+}
+
+vector_routes!();
+
+#[cfg(feature = "routes")]
+pub mod measured {
+    vector_routes!(@public);
+
+    /// Measured execution forms for planar crossover splitting.
+    pub mod crossover {
+        pub use crate::filter::crossover_routes::{Kernel, forms};
+    }
+}
+
+routes! { @export
+    crossover[const CHANNELS: usize, I: std::ops::Deref<Target = [f32]>, P: std::ops::DerefMut<Target = [f32]>](
+        filter: &mut crate::filter::Crossover<CHANNELS>,
+        input: &[I; CHANNELS],
+        bands: &mut [[P; CHANNELS]],
+    ) -> usize {
+        simd: crate::filter::Crossover::<CHANNELS>::split_simd;
+        scalar: crate::filter::Crossover::<CHANNELS>::split_scalar;
+        entry: crate::filter::Crossover::<CHANNELS>::split;
+        targets: [Scalar, Simd, Simd];
+    }
+}

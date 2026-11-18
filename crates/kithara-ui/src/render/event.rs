@@ -8,6 +8,8 @@ use crate::{draw::Pt, validate::Gesture};
 pub enum ControlAction {
     Activate,
     SecondaryActivate,
+    /// A double click, emitted after its second press.
+    DoubleActivate,
     SetScalar(f64),
     /// Where a placement the pointer carried has come to rest, in the box of
     /// the stage that holds it.
@@ -23,6 +25,7 @@ impl ControlAction {
         match self {
             Self::Activate => Gesture::Press,
             Self::SecondaryActivate => Gesture::Secondary,
+            Self::DoubleActivate => Gesture::Double,
             Self::SetScalar(_) => Gesture::Scalar,
             Self::StepScalar(_) => Gesture::Step,
             Self::SelectIndex(_) => Gesture::Index,

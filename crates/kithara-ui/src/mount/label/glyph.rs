@@ -36,7 +36,10 @@ fn cell(side: f32) -> SizeSpec {
 pub(crate) mod host {
     use bon::Builder;
 
-    use crate::{expand::Binding, skin::ColorRole};
+    use crate::{
+        expand::{Binding, ColorSpec},
+        skin::ColorRole,
+    };
 
     #[derive(Builder)]
     pub(crate) struct Glyph<'a> {
@@ -45,56 +48,83 @@ pub(crate) mod host {
         pub(crate) active: Option<&'a Binding>,
         pub(crate) active_color: Option<ColorRole>,
         pub(crate) active_icon: Option<IconName>,
-        pub(crate) color: Option<ColorRole>,
+        pub(crate) color: Option<&'a ColorSpec>,
     }
 
     use crate::{
         atoms::icon::glyph::{Glyph as Face, GlyphData},
-        draw::Rgba,
-        hosts::controls::{Draws, Reading},
+        hosts::{
+            controls::{Draws, Reading},
+            icons::Mark,
+            skin::active_tone,
+        },
         module::{GlyphStyle, IconName},
-        render::{ReadValue, Skin},
+        render::{Skin, theme::RenderPalette},
     };
+
+    pub(crate) struct GlyphAppearance {
+        idle: Mark,
+        active: Option<Mark>,
+        idle_role: ColorRole,
+        active_role: Option<ColorRole>,
+    }
+
+    impl GlyphAppearance {
+        pub(crate) fn data(
+            &self,
+            on: bool,
+            color: Option<ColorRole>,
+            palette: &RenderPalette,
+        ) -> GlyphData {
+            let mark = if on {
+                self.active.unwrap_or(self.idle)
+            } else {
+                self.idle
+            };
+            let role = active_tone(color, self.active_role, on).unwrap_or(self.idle_role);
+            GlyphData {
+                mark,
+                color: palette[role],
+            }
+        }
+    }
+
+    impl Glyph<'_> {
+        pub(crate) fn appearance(&self, skin: &Skin) -> Option<GlyphAppearance> {
+            Some(GlyphAppearance {
+                idle: self.icon.mark()?,
+                active: self.active_icon.and_then(IconName::mark),
+                idle_role: base(self.style, skin),
+                active_role: self.active_color,
+            })
+        }
+    }
 
     impl Draws for Glyph<'_> {
         type Painter = Face;
 
-        /// A glyph is nothing but its art, so one whose art could not be read
-        /// draws nothing rather than a hole in the row.
-        ///
-        /// The flag it shows comes from an endpoint of its own rather than from
-        /// the control's value, so it is read here.
         fn data(&self, read: Reading<'_>) -> Option<GlyphData> {
-            Some(GlyphData {
-                active: self.active.is_some_and(|binding| {
-                    matches!(read.ctx.read(binding), Some(ReadValue::Bool(true)))
-                }),
-                active_mark: self.active_icon.and_then(IconName::mark),
-                mark: self.icon.mark()?,
-            })
+            Some(self.appearance(read.skin)?.data(
+                read.ctx.flag(self.active),
+                read.ctx.color_role(self.color),
+                &read.skin.palette,
+            ))
         }
 
         fn painter(&self, skin: &Skin) -> Face {
-            let base = base(self.style, skin);
-            Face::new(
-                self.color.map_or(base, |role| skin.rgba(role)),
-                self.active_color
-                    .or(self.color)
-                    .map_or(base, |role| skin.rgba(role)),
-                size(self.style, skin),
-            )
+            Face::new(size(self.style, skin))
         }
     }
 
     /// The colour a glyph takes when the document names none.
-    fn base(style: GlyphStyle, skin: &Skin) -> Rgba {
+    fn base(style: GlyphStyle, skin: &Skin) -> ColorRole {
         match style {
-            GlyphStyle::Vis => skin.rgba(skin.vis.icon_color),
-            GlyphStyle::Default => skin.rgba(skin.nav.header_icon_color),
+            GlyphStyle::Vis => skin.vis.icon_color,
+            GlyphStyle::Default => skin.nav.header_icon_color,
             GlyphStyle::Menu
             | GlyphStyle::MenuBurger
             | GlyphStyle::MenuSmall
-            | GlyphStyle::MenuCell => skin.rgba(skin.menu.icon_color),
+            | GlyphStyle::MenuCell => skin.menu.icon_color,
         }
     }
 
@@ -111,18 +141,30 @@ pub(crate) mod host {
 
     #[cfg(test)]
     mod tests {
+        use std::collections::BTreeMap;
+
         use kithara_test_utils::kithara;
 
         use super::{Face, Glyph, GlyphData, GlyphStyle, base, size};
         use crate::{
             builtin,
+            compile::CompiledNode,
             draw::{DrawList, DrawListBuilder, Rect},
-            hosts::controls::Draws,
+            expand::{Binding, BindingKind, ColorSpec},
+            hosts::controls::{Draws, Reading},
             module::IconName,
-            render::Skin,
+            render::{ReadValue, Reads, Skin, document::probe},
             shaping::TextContext,
             skin::ColorRole,
         };
+
+        struct Flag(bool);
+
+        impl Reads for Flag {
+            fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+                Some(ReadValue::Bool(self.0))
+            }
+        }
 
         mod consts {
             use super::*;
@@ -155,39 +197,47 @@ pub(crate) mod host {
         /// not draw the same picture.
         #[kithara::test]
         fn a_declared_glyph_pair_switches_on_the_active_flag() {
-            let painter = painter(Some(ColorRole::Muted), Some(ColorRole::Danger));
-
-            assert_ne!(drawn(&painter, false), drawn(&painter, true));
+            assert_ne!(
+                drawn(Some(ColorRole::Muted), Some(ColorRole::Danger), false),
+                drawn(Some(ColorRole::Muted), Some(ColorRole::Danger), true)
+            );
         }
 
         /// Naming one colour and no second one means the glyph keeps it while
         /// active rather than falling back to what its style would have given.
         #[kithara::test]
         fn an_active_glyph_naming_no_active_colour_keeps_its_base() {
-            let painter = painter(Some(ColorRole::Accent), None);
-
-            assert_eq!(drawn(&painter, false), drawn(&painter, true));
+            assert_eq!(
+                drawn(Some(ColorRole::Accent), None, false),
+                drawn(Some(ColorRole::Accent), None, true)
+            );
         }
 
         #[kithara::test]
         fn a_glyph_naming_no_colour_leaves_the_tone_to_its_style() {
             let skin = builtin::skin();
-            let tone = base(GlyphStyle::Default, skin);
-
-            assert_eq!(
-                drawn(&painter(None, None), false),
-                drawn(
-                    &Face::new(tone, tone, size(GlyphStyle::Default, skin)),
-                    false
-                )
+            let tone = skin.rgba(base(GlyphStyle::Default, skin));
+            let mut list = DrawListBuilder::default();
+            Face::new(size(GlyphStyle::Default, skin)).paint(
+                &mut list,
+                &mut TextContext::from(skin.text_resources.as_ref()),
+                &GlyphData {
+                    color: tone,
+                    mark: IconName::Play
+                        .mark()
+                        .expect("the play icon must have a mark"),
+                },
+                consts::BOUNDS,
             );
+
+            assert_eq!(drawn(None, None, false), list.finish());
         }
 
         #[kithara::test]
         fn the_vis_style_is_the_one_that_does_not_take_the_text_colour() {
             let skin = builtin::skin();
 
-            assert_eq!(base(GlyphStyle::Vis, skin), skin.rgba(skin.vis.icon_color));
+            assert_eq!(base(GlyphStyle::Vis, skin), skin.vis.icon_color);
 
             for style in [
                 GlyphStyle::Default,
@@ -196,33 +246,49 @@ pub(crate) mod host {
                 GlyphStyle::MenuSmall,
                 GlyphStyle::MenuCell,
             ] {
-                assert_eq!(base(style, skin), skin.rgba(ColorRole::Text), "{style:?}");
+                assert_eq!(base(style, skin), ColorRole::Text, "{style:?}");
             }
         }
 
-        fn painter(color: Option<ColorRole>, active_color: Option<ColorRole>) -> Face {
-            Glyph::builder()
-                .maybe_color(color)
+        fn drawn(
+            color: Option<ColorRole>,
+            active_color: Option<ColorRole>,
+            active: bool,
+        ) -> DrawList {
+            let skin: &Skin = builtin::skin();
+            let spec = color.map(ColorSpec::Role);
+            let flag = Flag(active);
+            let ctx = probe(&flag);
+            let CompiledNode::Module { instance, .. } = &ctx.ui.root else {
+                panic!("probe module")
+            };
+            let binding = Binding {
+                id: *instance,
+                key: *instance,
+                kind: BindingKind::Telemetry,
+                with: BTreeMap::new(),
+            };
+            let glyph = Glyph::builder()
+                .active(&binding)
+                .maybe_color(spec.as_ref())
                 .maybe_active_color(active_color)
                 .icon(IconName::Play)
                 .style(GlyphStyle::Default)
-                .build()
-                .painter(builtin::skin())
-        }
-
-        fn drawn(painter: &Face, active: bool) -> DrawList {
-            let skin: &Skin = builtin::skin();
+                .build();
+            let painter = glyph.painter(skin);
+            let data = glyph
+                .data(Reading {
+                    ctx,
+                    scope: "",
+                    value: None,
+                    skin,
+                })
+                .expect("play icon");
             let mut list = DrawListBuilder::default();
             painter.paint(
                 &mut list,
                 &mut TextContext::from(skin.text_resources.as_ref()),
-                &GlyphData {
-                    active,
-                    active_mark: None,
-                    mark: IconName::Play
-                        .mark()
-                        .expect("the play icon must have a mark"),
-                },
+                &data,
                 consts::BOUNDS,
             );
             list.finish()

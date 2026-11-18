@@ -14,7 +14,8 @@
 
 # kithara-analysis
 
-Progressive per-track waveform and beat analysis over decoded source audio.
+Progressive per-track waveform, beat and musical key analysis over decoded
+source audio.
 It accepts both a dedicated `AudioReader` and already-decoded chunks through
 `AudioObserver`, so playback warms the same analysis pass without decoding its
 source twice. It owns analysis state, scheduling, DSP, and pure versioned bytes;
@@ -25,9 +26,11 @@ application's job.
 
 - `AnalyzerBuilder` / `AnalysisWorkerConfig` / `AnalysisWorker` — configure
   analysis and run progressive per-track passes on a domain dispatcher.
+  `with_key()` turns on the key estimate.
 - `AnalysisProducer` — non-blocking decoded-chunk ingress for an open pass.
 - `TrackAnalysis` — self-contained published snapshot: token, revision, source
-  axis, coverage, fingerprint, waveform, and beat artifact.
+  axis, coverage, fingerprint, waveform, beat artifact, and key estimate
+  (`KeyEstimate` from `kithara-key`, final once the snapshot is settled).
 - `Waveform` / `BeatArtifact` — analysis artifacts with versioned byte codecs.
 - `BlobError` - format, corruption, and pooled restore errors from the artifact
   and composite byte codecs.

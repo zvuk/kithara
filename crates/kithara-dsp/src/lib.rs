@@ -43,6 +43,8 @@ pub mod param;
 pub mod spectrum;
 mod vector;
 
+#[cfg(feature = "routes")]
+pub use backend::route::table::measured as routes;
 pub use backend::sanitize;
 pub use layout::{
     deinterleave_channel_major, deinterleave_variable, downmix, interleave_channel_major,

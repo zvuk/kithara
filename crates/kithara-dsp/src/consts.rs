@@ -28,6 +28,3 @@ pub(crate) const SECTION_MEMORY: usize = 2;
 
 /// Reciprocal Butterworth Q, preserving the crossover design's rounding.
 pub(crate) const CROSSOVER_DAMPING: f64 = 1.0 / std::f64::consts::FRAC_1_SQRT_2;
-
-/// Frames in a crossover span before exact per-frame retirement validation.
-pub(crate) const CROSSOVER_CHUNK_FRAMES: usize = 32;

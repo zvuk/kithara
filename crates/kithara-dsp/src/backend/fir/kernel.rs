@@ -37,9 +37,13 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
         }
         let maximum = bound.reduce_max();
         self.reconstruct = maximum > threshold
-            || self.taps.iter().any(|branch| {
-                branch.iter().fold(0.0_f32, |sum, coefficient| {
-                    coefficient.abs().mul_add(maximum, sum)
+            || (0..PHASES).any(|phase| {
+                self.taps.iter().fold(0.0_f32, |sum, tap| {
+                    tap.get(phase)
+                        .copied()
+                        .unwrap_or_default()
+                        .abs()
+                        .mul_add(maximum, sum)
                 }) > threshold
             });
     }
@@ -121,11 +125,22 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
                     let mut ahead = 0.0_f32;
                     let mut behind = if *valid { *shared } else { 0.0 };
                     if ahead_active || behind_active {
-                        for phases in self.taps.chunks(f32x8::<S>::LEN) {
-                            let mut ahead_sums = f32x8::splat(simd, 0.0);
-                            let mut behind_sums = f32x8::splat(simd, 0.0);
+                        for first_phase in (0..PHASES).step_by(f32x8::<S>::LEN) {
+                            let phase_count =
+                                PHASES.saturating_sub(first_phase).min(f32x8::<S>::LEN);
+                            let zero = f32x8::splat(simd, 0.0);
+                            let active =
+                                f32x8::from_fn(
+                                    simd,
+                                    |lane| {
+                                        if lane < phase_count { 1.0 } else { 0.0 }
+                                    },
+                                )
+                                .simd_gt(zero);
+                            let mut ahead_sums = zero;
+                            let mut behind_sums = zero;
                             let mut previous = history.first().copied().unwrap_or(0.0);
-                            for tap in 0..TAPS {
+                            for (tap, row) in self.taps.iter().enumerate() {
                                 let input = if tap <= past.len() {
                                     *past.get(tap).unwrap_or(&sample)
                                 } else {
@@ -134,30 +149,32 @@ impl<const TAPS: usize, const PHASES: usize, const CHANNELS: usize, const HISTOR
                                         .copied()
                                         .unwrap_or(held)
                                 };
-                                let coefficients = f32x8::from_fn(simd, |lane| {
-                                    phases.get(lane).map_or(0.0, |branch| {
-                                        branch.get(tap).copied().unwrap_or(0.0)
-                                    })
-                                });
+                                let mut coefficients = zero;
+                                coefficients
+                                    .as_mut_slice()
+                                    .get_mut(..phase_count)
+                                    .unwrap_or_default()
+                                    .copy_from_slice(
+                                        row.get(
+                                            first_phase..first_phase.saturating_add(phase_count),
+                                        )
+                                        .unwrap_or_default(),
+                                    );
                                 if ahead_active {
-                                    let input = f32x8::from_fn(simd, |lane| {
-                                        phases.get(lane).map_or(0.0, |_| input)
-                                    });
+                                    let input = active.select(f32x8::splat(simd, input), zero);
                                     ahead_sums = coefficients.mul_add_precise(input, ahead_sums);
                                 }
                                 if behind_active {
-                                    let input = f32x8::from_fn(simd, |lane| {
-                                        phases.get(lane).map_or(0.0, |_| previous)
-                                    });
+                                    let input = active.select(f32x8::splat(simd, previous), zero);
                                     behind_sums = coefficients.mul_add_precise(input, behind_sums);
                                 }
                                 previous = input;
                             }
-                            for &sum in ahead_sums.as_slice().iter().take(phases.len()) {
+                            for &sum in ahead_sums.as_slice().iter().take(phase_count) {
                                 ahead = ahead.max(sum.abs());
                             }
                             if behind_active {
-                                for &sum in behind_sums.as_slice().iter().take(phases.len()) {
+                                for &sum in behind_sums.as_slice().iter().take(phase_count) {
                                     behind = behind.max(sum.abs());
                                 }
                             }

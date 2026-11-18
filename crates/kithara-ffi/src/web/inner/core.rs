@@ -2,7 +2,7 @@ use ::kithara::{
     platform::{
         sync::{Arc, Mutex},
         time::{Duration, Instant},
-        tokio::task::{spawn, spawn_blocking},
+        tokio::task::spawn,
     },
     play::PlayError,
     queue::{QueueCommand, QueueError},
@@ -76,22 +76,20 @@ impl WasmInner {
 }
 
 pub(super) async fn answer(ticket: Ticket<QueueError>) -> Result<(), FfiError> {
-    spawn_blocking(move || wait(ticket))
-        .await
-        .map_err(|error| FfiError::Internal {
-            description: error.to_string(),
-        })?
-        .map_err(|error| FfiError::Internal {
-            description: error.to_string(),
-        })
+    wait(ticket).await.map_err(|error| FfiError::Internal {
+        description: error.to_string(),
+    })
 }
 
 #[kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(Duration::from_secs(4)))]
-fn wait(mut ticket: Ticket<QueueError>) -> Result<(), QueueError> {
+async fn wait(mut ticket: Ticket<QueueError>) -> Result<(), QueueError> {
     let seq = ticket.seq().get();
     loop {
         let now = Instant::now();
-        match ticket.wait_until(now + __hang_detector.remaining()) {
+        match ticket
+            .wait_until_async(now + __hang_detector.remaining())
+            .await
+        {
             Ok(answer) => {
                 hang_reset!();
                 return answer.map_err(|refused| match refused {

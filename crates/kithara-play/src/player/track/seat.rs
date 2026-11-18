@@ -27,6 +27,7 @@ pub(super) enum Seat {
     /// The deck holds the consumer since `at`.
     Attached {
         slot: Slot,
+        seq: Seq,
         at: SessionFrame,
         releasing: bool,
     },
@@ -63,6 +64,13 @@ impl Seat {
         }
     }
 
+    pub(super) fn attachment(&self) -> Option<Seq> {
+        match self {
+            Self::Attached { seq, .. } => Some(*seq),
+            _ => None,
+        }
+    }
+
     /// A release asked for while a replacement was in flight: the detach goes
     /// out once the replacement lands.
     pub(super) fn releasing(&self) -> bool {
@@ -85,13 +93,14 @@ impl Seat {
     }
 
     /// The attach in flight was applied on `at`.
-    pub(super) fn land(&mut self, at: SessionFrame) {
+    pub(super) fn land(&mut self, seq: Seq, at: SessionFrame) {
         if let Self::Attaching {
             slot, releasing, ..
         } = *self
         {
             *self = Self::Attached {
                 slot,
+                seq,
                 at,
                 releasing,
             };

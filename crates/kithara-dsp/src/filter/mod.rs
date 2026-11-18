@@ -9,6 +9,8 @@ mod tests;
 /// import path the workspace uses.
 pub use ::biquad::{Coefficients, Errors, Hertz, Type};
 pub use crossover::Crossover;
+#[cfg(feature = "routes")]
+pub(crate) use crossover::measured as crossover_routes;
 pub use error::FilterError;
 
 pub use self::{

@@ -1,4 +1,4 @@
-use super::mount::NodeLayout;
+use super::mount::{NodeLayout, declared};
 use crate::{
     atoms::chrome::{ChromeChevron, ChromeLabel, footer_role},
     draw::Rgba,
@@ -13,9 +13,10 @@ use crate::{
         flex::{ChildLayout, Flex},
         leaf::Leaf,
     },
-    module::TextAlign,
+    module::{ChromeStyle, TextAlign},
     render::{ControlAction, document::Module},
     shaping::TextContext,
+    size::SizeSpec,
     skin::FrameSkin,
 };
 
@@ -140,10 +141,85 @@ where
             self.chrome_frame(metrics.header_frame),
         );
         let path = header_path(self.ctx.ui.resolve(module.instance()));
-        header.set_actions(
-            Some(self.event(move || control_event(&path, ControlAction::Activate))),
-            None,
-        );
+        header.set_primary(self.event(move || control_event(&path, ControlAction::Activate)));
         header
     }
+
+    /// One module's chrome around the content the walk already produced.
+    pub(crate) fn mount_module(
+        &self,
+        module: &mut Module<'_>,
+        content: Option<MasonryNode<Action>>,
+    ) -> MasonryNode<Action> {
+        let chrome = module.chrome();
+        let frame = Some((
+            module.frame(),
+            self.skin.rgba(self.skin.chrome.frame.border),
+            self.skin.chrome.frame.border_width,
+        ));
+        let panel = Some(self.skin.rgba(self.skin.chrome.panel_background));
+        match chrome {
+            ChromeStyle::Full if module.collapsed() => MasonryNode::chrome(
+                NodeLayout::Stack,
+                Size::new(Length::Fill, Length::Fixed(self.skin.chrome.header_height)),
+                vec![self.module_header(module)],
+                panel,
+                frame,
+            ),
+            ChromeStyle::Full => {
+                let header = self.module_header(module);
+                let first_line = furniture(
+                    self.skin.chrome.inner_line_width,
+                    Some(self.skin.rgba(self.skin.chrome.inner_line)),
+                );
+                let content =
+                    content.unwrap_or_else(|| MasonryNode::empty(declared(SizeSpec::FILL)));
+                let second_line = furniture(
+                    self.skin.chrome.inner_line_width,
+                    Some(self.skin.rgba(self.skin.chrome.inner_line)),
+                );
+                let footer = self.module_footer(module.take_footer().unwrap_or_default());
+                let children = vec![header, first_line, content, second_line, footer];
+                let layouts = children
+                    .iter()
+                    .map(|child| ChildLayout::natural(child.natural(), None))
+                    .collect();
+                MasonryNode::document(
+                    NodeLayout::Flex(Flex::new(
+                        Axis::Vertical,
+                        Length::Fill,
+                        Length::Fill,
+                        Padding::default(),
+                        0.0,
+                        Alignment::Start,
+                        layouts,
+                    )),
+                    Size::new(Length::Fill, Length::Fill),
+                    children,
+                    true,
+                    panel,
+                    frame,
+                )
+            }
+            ChromeStyle::Frame | ChromeStyle::Plain => {
+                let child = content.unwrap_or_else(|| MasonryNode::empty(declared(SizeSpec::FILL)));
+                MasonryNode::document(
+                    NodeLayout::Stack,
+                    Size::new(Length::Fill, Length::Fill),
+                    vec![child],
+                    true,
+                    (chrome == ChromeStyle::Frame).then_some(panel).flatten(),
+                    (chrome == ChromeStyle::Frame).then_some(frame).flatten(),
+                )
+            }
+        }
+    }
+}
+
+fn furniture<Action>(height: f32, background: Option<Rgba>) -> MasonryNode<Action> {
+    MasonryNode::furniture(
+        NodeLayout::Leaf(Leaf::Empty),
+        Size::new(Length::Fill, Length::Fixed(height)),
+        background,
+    )
 }

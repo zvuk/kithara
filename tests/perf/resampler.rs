@@ -80,7 +80,7 @@ fn process_stereo(
     resampler
         .process_into_buffer(&input_refs, &mut output_refs)
         .unwrap_or_else(|err| panic!("resampler process should succeed: {err}"))
-        .output_frames
+        .second()
 }
 
 #[hotpath::measure]

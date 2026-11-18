@@ -1,7 +1,9 @@
 use std::{cell::Cell, marker::PhantomData, rc::Rc};
 
+use kithara_platform::sync::Arc;
 use kithara_test_macros as kithara;
 use masonry::{
+    app::RenderRoot,
     core::{NewWidget, Widget, WidgetId, WidgetPod},
     kurbo::Rect as MasonryRect,
 };
@@ -13,7 +15,7 @@ use super::{
 use crate::{
     backends::affine,
     draw::{Pt, Rgba, Transform},
-    expand::Binding,
+    expand::{Binding, ColorSpec},
     hosts::{hosted::HostedControlPlan, solve},
     ids::InternId,
     layout::{FrameCorners, FrameSides},
@@ -27,7 +29,7 @@ use crate::{
             popover::{PopoverState, SurfaceKind},
         },
     },
-    render::{Published, Skin},
+    render::{Published, Skin, document::Ctx, theme::RenderPalette},
     size::SizeSpec,
 };
 
@@ -248,6 +250,37 @@ pub(crate) struct WindowTracker {
     pub(crate) carrying: bool,
     pub(crate) drops: bool,
 }
+pub(crate) enum ColorTarget {
+    ActiveBackground { alpha: f32 },
+    Text { active_uses_base: bool },
+}
+
+/// A document colour binding retained only by the widget that declares it.
+pub(crate) struct BoundColor {
+    source: ColorSpec,
+    flag: Option<Binding>,
+    palette: Arc<RenderPalette>,
+    target: ColorTarget,
+}
+
+impl BoundColor {
+    pub(crate) fn apply(&self, ctx: Ctx<'_, '_>, node: &mut Node) -> bool {
+        let Some(role) = ctx.color_role(Some(&self.source)) else {
+            return false;
+        };
+        let color = self.palette[role];
+        let on = ctx.flag(self.flag.as_ref());
+        match self.target {
+            ColorTarget::ActiveBackground { alpha } => {
+                node.tint_background(Rgba { a: alpha, ..color }, on)
+            }
+            ColorTarget::Text { active_uses_base } => {
+                node.tint_text(role, color, on, active_uses_base)
+            }
+        }
+    }
+}
+
 /// One mounted leaf and the document source it re-reads without rebuilding.
 pub(crate) enum Watched {
     Read {
@@ -277,6 +310,10 @@ pub(crate) enum Watched {
         id: WidgetId,
         flag: Binding,
     },
+    Color {
+        id: WidgetId,
+        appearance: Box<BoundColor>,
+    },
     /// Content the application installed at a path, repainted when the
     /// application says the state it shows changed.
     Custom {
@@ -287,6 +324,89 @@ pub(crate) enum Watched {
         id: WidgetId,
         path: String,
     },
+}
+
+impl Watched {
+    pub(crate) fn show(&self, root: &mut RenderRoot, ctx: Ctx<'_, '_>) -> bool {
+        match self {
+            Self::Read { id, binding } => show_read(root, *id, binding, ctx),
+            Self::Snapshot { id } => show_snapshot(root, *id, ctx),
+            Self::Spot { id, binding } => show_spot(root, *id, binding, ctx),
+            Self::Lit { id, flag } => show_lit(root, *id, flag, ctx),
+            Self::Color { id, appearance } => show_color(root, *id, appearance, ctx),
+            Self::Custom { .. } | Self::Placed { .. } | Self::Zone { .. } => false,
+        }
+    }
+}
+
+fn show_read(root: &mut RenderRoot, id: WidgetId, binding: &Binding, ctx: Ctx<'_, '_>) -> bool {
+    let Some(value) = ctx.read(binding) else {
+        return false;
+    };
+    root.edit_widget(id, |mut widget| {
+        let mut node = widget.downcast::<Node>();
+        let before = node.widget.text_size();
+        let shown = node.widget.show_live(&value);
+        if shown && node.widget.text_size() != before {
+            node.ctx.request_layout();
+        } else if shown {
+            node.ctx.request_paint_only();
+        }
+        shown
+    })
+}
+
+fn show_snapshot(root: &mut RenderRoot, id: WidgetId, ctx: Ctx<'_, '_>) -> bool {
+    root.edit_widget(id, |mut widget| {
+        let mut node = widget.downcast::<Node>();
+        let shown = node.widget.refresh(ctx);
+        if shown {
+            node.ctx.request_paint_only();
+        }
+        shown
+    })
+}
+
+fn show_spot(root: &mut RenderRoot, id: WidgetId, binding: &Binding, ctx: Ctx<'_, '_>) -> bool {
+    let Some(at) = ctx.point(Some(binding)) else {
+        return false;
+    };
+    root.edit_widget(id, |mut widget| {
+        let mut node = widget.downcast::<Node>();
+        let moved = node.widget.move_spot(at);
+        if moved {
+            node.ctx.request_layout();
+        }
+        moved
+    })
+}
+
+fn show_lit(root: &mut RenderRoot, id: WidgetId, flag: &Binding, ctx: Ctx<'_, '_>) -> bool {
+    let on = ctx.flag(Some(flag));
+    root.edit_widget(id, |mut widget| {
+        let mut node = widget.downcast::<Node>();
+        let lit = node.widget.light(on);
+        if lit {
+            node.ctx.request_paint_only();
+        }
+        lit
+    })
+}
+
+fn show_color(
+    root: &mut RenderRoot,
+    id: WidgetId,
+    appearance: &BoundColor,
+    ctx: Ctx<'_, '_>,
+) -> bool {
+    root.edit_widget(id, |mut widget| {
+        let mut node = widget.downcast::<Node>();
+        let changed = appearance.apply(ctx, node.widget);
+        if changed {
+            node.ctx.request_paint_only();
+        }
+        changed
+    })
 }
 /// Where one node stands, as the root reads it out of the tree.
 ///
@@ -638,14 +758,11 @@ impl<Action> MasonryNode<Action> {
 
     delegate::delegate! {
         to self.widget.widget {
-            /// What this node runs when pressed, and with the other button.
-            pub(crate) fn set_actions(
-                &mut self,
-                primary: Option<Box<dyn Fn() -> HostAction>>,
-                secondary: Option<Box<dyn Fn() -> HostAction>>,
-            );
+            /// What this node runs when it is pressed.
+            pub(crate) fn set_primary(&mut self, primary: Box<dyn Fn() -> HostAction>);
             /// The stepping surface this flow carries over itself.
             pub(crate) fn set_detent(&mut self, detent: Detent);
+            pub(crate) fn set_faces(&mut self, faces: Faces);
             /// Where this placement of a stage stands, and what carries it.
             pub(crate) fn set_spot(&mut self, spot: Spot);
         }
@@ -672,6 +789,24 @@ impl<Action> MasonryNode<Action> {
     pub(crate) fn hidden_by(&mut self, hidden: Binding, state: &Rc<BlockState>) {
         self.registrations.stands_in(state);
         self.block = Some((hidden, Rc::clone(state)));
+    }
+
+    pub(crate) fn watch_color(
+        &mut self,
+        source: &ColorSpec,
+        flag: Option<&Binding>,
+        skin: &Skin,
+        target: ColorTarget,
+    ) {
+        self.registrations.watch(Watched::Color {
+            id: self.widget.id(),
+            appearance: Box::new(BoundColor {
+                source: source.clone(),
+                flag: flag.cloned(),
+                palette: Arc::clone(&skin.palette),
+                target,
+            }),
+        });
     }
 
     pub(crate) fn lights(&mut self, flag: Binding, faces: Option<Faces>) {

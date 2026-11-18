@@ -11,6 +11,7 @@ use kithara_dsp::{
     param::{DEFAULT_GAIN_SPAN, MIN_SETTLE_RATIO, SmoothingFilter, SmoothingFilterCoeff},
 };
 use kithara_test_fixtures::portable;
+use kithara_test_utils::kithara_platform::time::Duration;
 use num_traits::AsPrimitive;
 
 const RATE: f32 = 48_000.0;
@@ -292,8 +293,20 @@ impl Svf {
         gains: &[P],
         frames: usize,
     ) {
+        self.sum_with(io, gains, frames, |filter, input, bands| {
+            filter.split(input, bands)
+        });
+    }
+
+    fn sum_with<P: Deref<Target = [f32]>>(
+        &mut self,
+        io: &mut [Vec<f32>; 2],
+        gains: &[P],
+        frames: usize,
+        split: impl FnOnce(&mut Crossover<2>, &[&[f32]; 2], &mut [[Vec<f32>; 2]]) -> usize,
+    ) {
         let input = io.each_ref().map(|plane| &plane[..frames]);
-        assert_eq!(self.filter.split(&input, &mut self.bands), frames);
+        assert_eq!(split(&mut self.filter, &input, &mut self.bands), frames);
         for plane in &mut *io {
             plane[..frames].fill(0.0);
         }
@@ -652,6 +665,17 @@ pub(crate) fn bench(c: &mut Criterion) {
             group.throughput(Throughput::Elements(
                 u64::try_from(frames).expect("stereo frames"),
             ));
+            let (samples, seconds) = if bands == 3 && frames == 512 {
+                (100, 20)
+            } else {
+                (20, 5)
+            };
+            group
+                .sample_size(samples)
+                .measurement_time(Duration::from_secs(seconds));
+            println!(
+                "crossover_sampling bands={bands} frames={frames} samples={samples} measurement_seconds={seconds}"
+            );
             let forms = input_forms(frames);
             let gains = gains(bands, frames, true);
             verify_scalar_tpt(&frequencies, frames);
@@ -664,20 +688,6 @@ pub(crate) fn bench(c: &mut Criterion) {
                 } else {
                     format!("{shape}_{bands}band")
                 };
-                let mut scalar_tpt = ScalarFrame::<TptSection>::new(&frequencies);
-                group.bench_function(
-                    BenchmarkId::new(format!("tpt_scalar_{variant}"), frames),
-                    |b| {
-                        b.iter_batched_ref(
-                            || (*input).clone(),
-                            |io| {
-                                scalar_tpt.sum(black_box(&mut *io), black_box(&gains), frames);
-                                black_box(&*io);
-                            },
-                            BatchSize::SmallInput,
-                        );
-                    },
-                );
                 let mut baseline = Frame::new(&frequencies);
                 group.bench_function(BenchmarkId::new(format!("df1_{variant}"), frames), |b| {
                     b.iter_batched_ref(
@@ -689,17 +699,36 @@ pub(crate) fn bench(c: &mut Criterion) {
                         BatchSize::SmallInput,
                     );
                 });
-                let mut svf = Svf::new(&frequencies, frames);
-                group.bench_function(BenchmarkId::new(format!("svf_{variant}"), frames), |b| {
-                    b.iter_batched_ref(
-                        || (*input).clone(),
-                        |io| {
-                            svf.sum(black_box(&mut *io), black_box(&gains), frames);
-                            black_box(&*io);
+                #[cfg(feature = "routes")]
+                let execution_forms = kithara_dsp::routes::crossover::forms::<2, Vec<f32>>();
+                #[cfg(not(feature = "routes"))]
+                let execution_forms = [(
+                    "entry",
+                    |filter: &mut Crossover<2>,
+                     input: &[&[f32]; 2],
+                     bands: &mut [[Vec<f32>; 2]]| filter.split(input, bands),
+                )];
+                for (name, kernel) in execution_forms {
+                    let mut svf = Svf::new(&frequencies, frames);
+                    group.bench_function(
+                        BenchmarkId::new(format!("{name}_{variant}"), frames),
+                        |b| {
+                            b.iter_batched_ref(
+                                || (*input).clone(),
+                                |io| {
+                                    svf.sum_with(
+                                        black_box(&mut *io),
+                                        black_box(&gains),
+                                        frames,
+                                        kernel,
+                                    );
+                                    black_box(&*io);
+                                },
+                                BatchSize::SmallInput,
+                            );
                         },
-                        BatchSize::SmallInput,
                     );
-                });
+                }
             }
             let input = &forms[0].1;
             for design in [Design::WidenedF32, Design::NativeF64] {

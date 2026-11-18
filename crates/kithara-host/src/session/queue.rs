@@ -12,7 +12,7 @@ use tracing::{error, warn};
 use super::{
     SessionError,
     dispatch::invalidate_audio_route,
-    state::SessionState,
+    state::{OutputPhase, SessionState},
     timeline::Accepted,
     transport::{TransportEvent, TransportProcessError, publish_transport_event},
 };
@@ -58,7 +58,7 @@ impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
         }
         self.settings.apply(HostSettingsChange::SampleRate(value))?;
         self.publish_root();
-        if self.stream_needs_restart {
+        if self.output_phase == OutputPhase::Starting {
             return Ok(None);
         }
         invalidate_audio_route(self, "sample rate change")

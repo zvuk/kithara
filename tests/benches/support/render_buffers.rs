@@ -15,12 +15,10 @@ use kithara::{
     audio::{AudioConfig, mock::TestPcmReader},
     file::{File, FileConfig, FileSrc},
     host::{HostCommand, HostSettingsChange},
-    platform::{sync::Arc, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig, SessionDuckingMode},
+    platform::time::Duration,
+    play::{PlayWorker, PlayWorkerConfig, SessionDuckingMode, TrackConfig},
     queue::TrackSource,
     signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame},
-    sync::SpeedCurve,
-    warp::StretchKind,
 };
 use kithara_command::{Batch, Outcome, ScopedReceipt, Seq, When};
 use kithara_dsp::param::{DEFAULT_SMOOTH_SECONDS, MIN_SETTLE_RATIO, SmoothedParam, SmootherConfig};
@@ -34,10 +32,7 @@ use kithara_render::{
     CrossfadeSettings, LaneCommand, LaneProtocol, LaneStart, LaneTask, PcmPacket, PcmReceiver,
     bridge::{CrossfaderGain, DeckMixSettings, DeckPart, Fade, Slot},
     mock::{PacketRing, TestEnds, TestMixer, TestSessionInbox, chunk, mixer_with_shape, send},
-    rt::{
-        DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context,
-        track::{PcmConsumer, PlayerResource},
-    },
+    rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
 };
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
 use num_traits::ToPrimitive;
@@ -116,7 +111,7 @@ impl DeckFixture {
         }
     }
 
-    fn pcm(&mut self, shapes: &[(SegmentId, usize, f32)]) -> Box<PlayerResource> {
+    fn pcm(&mut self, shapes: &[(SegmentId, usize, f32)]) -> Box<PcmReceiver> {
         let mut ring = PacketRing::new(spec(), Duration::from_secs(1), 8);
         for &(segment, frames, value) in shapes {
             ring.push(PcmPacket::Chunk(Box::new(chunk(
@@ -127,14 +122,9 @@ impl DeckFixture {
                 &vec![value; frames * 2],
             ))));
         }
-        let resource = PlayerResource::new(
-            PcmConsumer::new(ring.receiver.take().expect("receiver")),
-            Arc::from("render-buffer-admission"),
-            &pools(),
-        )
-        .expect("prepared resource");
+        let receiver = Box::new(ring.receiver.take().expect("receiver"));
         self._packets.push(ring);
-        Box::new(resource)
+        receiver
     }
 
     fn command(&mut self, commands: Vec<DeckPart>) -> Seq {
@@ -344,21 +334,19 @@ async fn jump_fixture() -> JumpFixture {
     )
     .hint("wav".to_owned())
     .build();
-    let config = kithara::play::TrackConfig::for_audio(audio).build();
+    let config = (audio, TrackConfig::default());
     let (mut sender, inbox) = worker.lane_channel();
-    let (mut receiver, lane, _) = worker
+    let (opened, lane, _) = worker
         .load(
-            config,
+            config.0,
+            config.1,
             Duration::ZERO,
-            LaneStart {
-                speed: SpeedCurve::Constant(1.0),
-                keylock: false,
-                backend: StretchKind::default(),
-            },
+            LaneStart::default(),
             inbox,
         )
         .await
         .expect("prepared actual worker");
+    let mut receiver = opened.receiver;
     let mut start = 0;
     while let Some(packet) = receiver.pop() {
         if let PcmPacket::Chunk(chunk) = &packet {

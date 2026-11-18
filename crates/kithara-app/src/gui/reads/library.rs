@@ -3,7 +3,7 @@ use std::{cell::OnceCell, collections::BTreeMap};
 use kithara::ui::render::{Node, ReadValue, Scope, TableCell, TableRow, TreeRow};
 
 use super::value::{Value, impl_child_node};
-use crate::gui::library::Library;
+use crate::{analysis::TrackFacts, gui::library::Library};
 
 /// Library tree, selected source id, and Add folder visibility.
 pub(super) struct LibraryNode<'a> {
@@ -52,14 +52,14 @@ impl_child_node!(AddFolderNode, |this, segment, _scope| {
 pub(super) struct SourcesNode<'a> {
     library: &'a Library,
     rows: Vec<OnceCell<Vec<TableRow<'a>>>>,
-    bpms: &'a BTreeMap<String, f64>,
+    facts: &'a BTreeMap<String, TrackFacts>,
 }
 
 impl<'a> SourcesNode<'a> {
-    pub(super) fn new(library: &'a Library, bpms: &'a BTreeMap<String, f64>) -> Self {
+    pub(super) fn new(library: &'a Library, facts: &'a BTreeMap<String, TrackFacts>) -> Self {
         Self {
             library,
-            bpms,
+            facts,
             rows: library.sources().map(|_| OnceCell::new()).collect(),
         }
     }
@@ -80,7 +80,7 @@ impl<'a, 'b: 'a> Node<'a> for &'a SourcesNode<'b> {
             "rows" => {
                 let rows: &'a [TableRow<'b>] = self.rows.get(at)?.get_or_init(|| {
                     let rows = source.rows(self.library.selected_row(at));
-                    if self.bpms.is_empty() {
+                    if self.facts.is_empty() {
                         return rows;
                     }
                     rows.into_iter()
@@ -88,11 +88,9 @@ impl<'a, 'b: 'a> Node<'a> for &'a SourcesNode<'b> {
                         .map(|(index, row)| {
                             match source
                                 .analysis_key(index)
-                                .and_then(|key| self.bpms.get(key))
+                                .and_then(|key| self.facts.get(key))
                             {
-                                Some(bpm) => {
-                                    row.with_cell(TableCell::text("bpm", format!("{bpm:.2}")))
-                                }
+                                Some(facts) => with_facts(row, facts),
                                 None => row,
                             }
                         })
@@ -104,6 +102,18 @@ impl<'a, 'b: 'a> Node<'a> for &'a SourcesNode<'b> {
             name => source.read(name)?,
         };
         Some(Box::new(Value(value)))
+    }
+}
+
+/// A row with the cells analysis knows for its track.
+fn with_facts<'a>(row: TableRow<'a>, facts: &TrackFacts) -> TableRow<'a> {
+    let row = match facts.bpm {
+        Some(bpm) => row.with_cell(TableCell::text("bpm", format!("{bpm:.2}"))),
+        None => row,
+    };
+    match facts.key {
+        Some(key) => row.with_cell(TableCell::text("key", key.open_key())),
+        None => row,
     }
 }
 

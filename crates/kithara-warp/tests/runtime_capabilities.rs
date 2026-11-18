@@ -10,7 +10,7 @@ use kithara_test_utils::{
     bufpool::{pools, sample_buffer},
     kithara,
 };
-use kithara_warp::{Warp, WarpConfig};
+use kithara_warp::{Pitch, Warp, WarpConfig};
 #[cfg(feature = "stretch-identity")]
 use {
     kithara_sync::SpeedCurve,
@@ -56,7 +56,7 @@ fn identity_preserves_pcm_and_unity_accounting_despite_live_controls() {
     let config = WarpConfig::builder()
         .speed(0.5)
         .backend(StretchKind::Identity)
-        .keylock(true)
+        .pitch(Pitch::HELD)
         .render_quantum_frames(NonZeroUsize::new(8).expect("quantum"))
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec, pools.clone());
@@ -75,15 +75,19 @@ fn identity_preserves_pcm_and_unity_accounting_despite_live_controls() {
     assert!(!renderer.requires_staging());
     assert!(renderer.accepts_input());
 
-    for (index, (speed, keylock)) in [(0.5, true), (3.75, false), (0.25, true)]
-        .into_iter()
-        .enumerate()
+    for (index, (speed, pitch)) in [
+        (0.5, Pitch::HELD),
+        (3.75, Pitch::default()),
+        (0.25, Pitch::HELD),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let revision = u64::try_from(index).expect("revision");
         renderer
             .set_speed(SpeedCurve::Constant(speed), revision)
             .expect("valid speed");
-        renderer.set_keylock(keylock);
+        renderer.set_pitch(pitch);
         renderer.prepare(spec);
         let input = AudioChunk::new(
             AudioChunkInfo {

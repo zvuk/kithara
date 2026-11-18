@@ -36,7 +36,7 @@ use crate::{
 /// Product queue on an offline Host, rendered deterministically by the test.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub struct OfflinePlayer<F: TrackFactory<TestPools> = PlayerFactory> {
+pub struct OfflinePlayer<F: TrackFactory = PlayerFactory> {
     events: Mutex<EventReceiver<TestEvent>>,
     underruns: broadcast::Sender<DeckEvent>,
     host: OfflineHostHarness<TestPools>,
@@ -127,7 +127,7 @@ impl OfflinePlayer {
 
 impl<F> OfflinePlayer<F>
 where
-    F: TrackFactory<TestPools> + Send + 'static,
+    F: TrackFactory + Send + 'static,
     F::Track: Send,
 {
     pub async fn with_factory(
@@ -143,8 +143,7 @@ where
             .map_or_else(TrackSettings::default, |warp| {
                 TrackSettings::builder()
                     .speed(warp.speed())
-                    .keylock(warp.keylock())
-                    .backend(warp.backend())
+                    .pitch(warp.pitch_control(warp.pitch()).unwrap_or_default())
                     .build()
             });
         let prep = ResourcePrep::builder()

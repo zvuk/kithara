@@ -14,7 +14,7 @@ use kithara_devtools::{
 use toml::Value;
 use tracing::warn;
 
-use super::nextest;
+use super::{bench, nextest};
 use crate::{
     ci::{cache::snapshot, config::CiPins, process::Process, run::PipelineKind},
     config::{CiLaneConfig, CiLaneStep},
@@ -99,6 +99,13 @@ pub(crate) fn run(
         let vars = step_vars(step, process, pins)?;
         let mut command = process.command(&program);
         command.args(&args).envs(&vars);
+        bench::prepare(
+            process,
+            pins,
+            tools.program("cargo"),
+            declared,
+            &mut command,
+        )?;
         if let Some(bin) = &nextest_bin {
             nextest::prepend(&mut command, bin)?;
         }

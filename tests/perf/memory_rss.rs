@@ -12,7 +12,7 @@ use kithara::{
         time::{Duration, Instant},
         tokio::task::spawn_blocking,
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
 };
 use kithara_integration_tests::{
     TestServerHelper, auto,
@@ -195,9 +195,10 @@ async fn test_hls_playback_rss_within_budget(
             .build();
         let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-        let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-            .await
-            .expect("audio creation");
+        let mut audio =
+            kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+                .await
+                .expect("audio creation");
 
         let drain = spawn_blocking(move || drain_sampling_rss(&mut audio))
             .await
@@ -271,9 +272,10 @@ async fn test_hls_playback_no_rss_leak(
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .expect("audio creation");
+    let mut audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .expect("audio creation");
 
     let drain = spawn_blocking(move || drain_sampling_rss(&mut audio))
         .await

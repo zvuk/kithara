@@ -499,10 +499,15 @@ impl Compiler<'_> {
         )?;
         let endpoints = self.endpoints;
         let kinds = &self.config.custom_kinds;
+        #[cfg(feature = "render")]
+        let artworks = &self.skin.artworks;
         let states = &mut *self.states;
         let mut visitor = |site: ControlSite<'_>, origin: &SourceUri| {
             states.note_site(site, origin);
-            validate::check_controls(site, origin, endpoints, kinds)
+            validate::check_controls(site, origin, endpoints, kinds)?;
+            #[cfg(feature = "render")]
+            validate::check_artworks(site, origin, artworks)?;
+            Ok(())
         };
         let document = set.def(&module_uri)?;
         validate::check_module_bindings(document, &module_uri, self.endpoints)?;

@@ -98,9 +98,25 @@ async fn a_reaction_confirmed_during_a_page_load_reloads_the_page() {
             .returns(Ok(stream_reply())),
     )));
     let mut source = loaded_search(net.clone()).await;
+    net.hold_reactions(true);
     source.write("like_track", &WriteValue::Text("1000".into()));
+    wait_until(
+        Duration::from_secs(2),
+        "the reaction receives its reply",
+        || net.reaction_waiting(),
+    )
+    .await
+    .expect("the ordered reaction reply must arrive before the playlist request");
     source.select("playlist:1023");
     source.tick();
+    wait_until(
+        Duration::from_secs(2),
+        "the playlist request starts",
+        || net.events().len() >= 6,
+    )
+    .await
+    .expect("the playlist must be running before the reaction completes");
+    net.hold_reactions(false);
     until(&mut *source, PageStatus::Ready).await;
     assert_eq!(reactions(&*source, "1000"), [true]);
     release(source, &net).await;

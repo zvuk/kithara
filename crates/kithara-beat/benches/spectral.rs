@@ -80,36 +80,21 @@ fn spectral_beats(c: &mut Criterion) {
         ("30s", pcm.as_slice()),
     ] {
         let expected = detector.analyze(input).expect("the analysis succeeds");
-        let mut calls = Vec::new();
         group.throughput(Throughput::Elements(
             u64::try_from(input.len()).expect("frame count fits u64"),
         ));
         group.bench_function(format!("analyze/{case}"), |b| {
             b.iter_custom(|iterations| {
                 let mut elapsed = Duration::ZERO;
-                let mut samples = Vec::with_capacity(
-                    usize::try_from(iterations).expect("iteration count fits usize"),
-                );
                 for _ in 0..iterations {
                     let start = Instant::now();
                     let result = black_box(detector.analyze(black_box(input)));
-                    let duration = start.elapsed();
-                    elapsed += duration;
-                    samples.push(duration.as_nanos());
+                    elapsed += start.elapsed();
                     assert_eq!(result.expect("the measured analysis succeeds"), expected);
                 }
-                calls.push(samples);
                 elapsed
             });
         });
-        // Batch averages cannot give tail latency; retain individual calls outside elapsed.
-        eprintln!("spectral_beats_consumer_calls_ns/{case}={calls:?}");
-        let marks: Vec<_> = expected
-            .beats
-            .iter()
-            .map(|mark| [mark.at.to_bits(), mark.confidence.to_bits()])
-            .collect();
-        eprintln!("spectral_beats_consumer_marks_bits/{case}={marks:?}");
     }
     group.finish();
 }

@@ -3,6 +3,7 @@ pub(crate) mod fixtures;
 mod hold;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod ingest;
+mod key;
 mod node;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod order;

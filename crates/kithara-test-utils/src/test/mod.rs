@@ -1,3 +1,5 @@
+#[cfg(target_arch = "wasm32")]
+mod browser_output;
 #[cfg(not(target_arch = "wasm32"))]
 mod clock_measurement;
 #[cfg(any(not(target_arch = "wasm32"), feature = "subscriber"))]
@@ -7,6 +9,8 @@ pub mod usdt;
 #[cfg(not(target_arch = "wasm32"))]
 mod wall;
 
+#[cfg(target_arch = "wasm32")]
+pub use browser_output::OutputStartupProbe;
 #[cfg(not(target_arch = "wasm32"))]
 pub use clock_measurement::ClockMeasurement;
 #[cfg(any(not(target_arch = "wasm32"), feature = "subscriber"))]

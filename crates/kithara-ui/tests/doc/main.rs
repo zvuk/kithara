@@ -1,6 +1,8 @@
 //! Documents, their compilation and the built-in presets, driven through the
 //! public API.
 
+#[cfg(feature = "render")]
+mod artwork;
 mod builtin_presets;
 mod compile;
 mod document_group;
@@ -12,6 +14,7 @@ mod envelope;
 mod expand_kind;
 mod module_doc;
 mod motion;
+mod mount;
 mod multi_deck;
 mod package;
 mod roundtrip;
