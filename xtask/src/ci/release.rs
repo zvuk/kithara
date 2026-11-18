@@ -232,12 +232,7 @@ pub(crate) fn publish(process: &Process, ctx: &Ctx, ext: &KitharaExt, channel: &
     // A channel that carries no version replaces one rolling tag with whatever
     // the branch built today, so an asset it never built is absent rather than
     // wrong.
-    for name in ext.release.assets() {
-        let path = ctx.root.join(name);
-        if profile.require_all_assets || path.is_file() {
-            verify_checksum(&path)?;
-        }
-    }
+    verify_assets(&ctx.root, profile.require_all_assets, ext.release.assets())?;
 
     let mut tagged = None;
     for step in &profile.steps {
@@ -337,6 +332,25 @@ fn write_checksum(path: &Path) -> Result<()> {
         format!("{checksum}  {name}\n").as_bytes(),
     )
     .with_context(|| format!("writing checksum for {}", path.display()))
+}
+
+fn verify_assets<'a>(
+    root: &Path,
+    require_all: bool,
+    assets: impl Iterator<Item = &'a str>,
+) -> Result<()> {
+    for name in assets {
+        // A checksum sidecar ships as an asset of its own alongside the
+        // archive it checks; it has no sidecar of its own to verify against.
+        if name.ends_with(".sha256") {
+            continue;
+        }
+        let path = root.join(name);
+        if require_all || path.is_file() {
+            verify_checksum(&path)?;
+        }
+    }
+    Ok(())
 }
 
 fn verify_checksum(path: &Path) -> Result<()> {
@@ -469,5 +483,61 @@ mod tests {
         verify_checksum(&artifact).unwrap();
         fs::write(&artifact, b"second").unwrap();
         assert!(verify_checksum(&artifact).is_err());
+    }
+
+    #[test]
+    fn checksum_sidecars_ship_without_being_verified_themselves() {
+        let directory = tempfile::tempdir().unwrap();
+        let artifact = directory.path().join("Kithara-macos-universal.zip");
+        fs::write(&artifact, b"app").unwrap();
+        write_checksum(&artifact).unwrap();
+
+        // The sidecar is an asset of its own, so publication uploads it; the
+        // loop must not ask for a checksum of the checksum.
+        verify_assets(
+            directory.path(),
+            true,
+            [
+                "Kithara-macos-universal.zip",
+                "Kithara-macos-universal.zip.sha256",
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_present_artifact_without_its_sidecar_still_stops_the_channel() {
+        let directory = tempfile::tempdir().unwrap();
+        let artifact = directory.path().join("Kithara-macos-universal.zip");
+        fs::write(&artifact, b"app").unwrap();
+
+        // The sidecar ships as its own asset, but its presence in the list
+        // must not exempt the archive it belongs to from verification.
+        let error = verify_assets(
+            directory.path(),
+            false,
+            [
+                "Kithara-macos-universal.zip",
+                "Kithara-macos-universal.zip.sha256",
+            ]
+            .into_iter(),
+        )
+        .expect_err("an artifact without its sidecar cannot publish");
+        assert!(error.to_string().contains("reading checksum"), "{error:#}");
+    }
+
+    #[test]
+    fn a_channel_that_requires_every_asset_still_rejects_an_absent_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let error = verify_assets(directory.path(), true, ["kithara.aar"].into_iter())
+            .expect_err("a required asset the build never made stops the channel");
+        assert!(error.to_string().contains("is missing"), "{error:#}");
+    }
+
+    #[test]
+    fn a_rolling_channel_skips_an_asset_the_build_never_made() {
+        let directory = tempfile::tempdir().unwrap();
+        verify_assets(directory.path(), false, ["kithara.aar"].into_iter()).unwrap();
     }
 }
