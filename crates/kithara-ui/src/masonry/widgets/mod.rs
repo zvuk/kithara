@@ -1,5 +1,6 @@
 pub(super) mod built;
 pub(super) mod chrome;
+pub(super) mod detent;
 pub(super) mod modal;
 pub(crate) mod mount;
 pub(super) mod painted;

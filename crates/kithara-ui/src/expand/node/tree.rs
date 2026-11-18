@@ -5,16 +5,19 @@ use crate::{
     ids::{InternId, SourceUri},
     layout::FrameSides,
     module::{
-        BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode, DeckSummaryStyle, FaderStyle,
-        GlyphStyle, IconName, MeasureAxis, Motion, PopoverAlign, PopoverAt, Pose, ScalarFormat,
-        TableColumn, TableFrame, TextAlign, TextStyle, Tone, ViewSet, WaveStyle,
-        WindowControlsStyle,
+        BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ColorSource, ControlNode,
+        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, MeasureAxis, Motion, PopoverAlign,
+        PopoverAt, Pose, ScalarFormat, TableColumn, TableFrame, TextAlign, TextStyle, Tone,
+        ViewSet, WaveStyle, WindowControlsStyle,
     },
     resolve::Filled,
     shader::ShaderSpec,
     size::{BlockNode, SizeSpec},
     skin::{ColorRole, FontFamily, FontWeight},
 };
+
+/// A compiled colour source: either a fixed palette role or an Open Key read.
+pub type ColorSpec = ColorSource<Binding>;
 
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -32,7 +35,7 @@ pub enum ExpandedNode {
         background: Option<ColorRole>,
         background_alpha: Option<f32>,
         active: Option<Binding>,
-        active_background: Option<ColorRole>,
+        active_background: Option<ColorSpec>,
         frame_color: Option<ColorRole>,
         active_frame_color: Option<ColorRole>,
         surface: Option<SurfaceSpec>,
@@ -174,7 +177,7 @@ pub enum ControlSpec {
     Text {
         style: TextStyle,
         label: Option<InternId>,
-        color: Option<ColorRole>,
+        color: Option<ColorSpec>,
         active_color: Option<ColorRole>,
         active: Option<Binding>,
         align: TextAlign,
@@ -185,7 +188,7 @@ pub enum ControlSpec {
         icon: IconName,
         active_icon: Option<IconName>,
         style: GlyphStyle,
-        color: Option<ColorRole>,
+        color: Option<ColorSpec>,
         active_color: Option<ColorRole>,
         active: Option<Binding>,
     },
@@ -606,6 +609,7 @@ pub(crate) struct ControlSite<'a> {
     pub(crate) columns: &'a [TableColumn],
     pub(crate) path: &'a str,
     pub(crate) active: Option<&'a BindingRef>,
+    pub(crate) color_read: Option<&'a BindingRef>,
     pub(crate) columns_state: Option<&'a BindingRef>,
     pub(crate) status: Option<&'a BindingRef>,
     pub(crate) query: Option<&'a BindingRef>,
@@ -630,6 +634,7 @@ impl<'a> ControlSite<'a> {
             path,
             columns: &[],
             active: None,
+            color_read: None,
             columns_state: None,
             status: None,
             query: None,

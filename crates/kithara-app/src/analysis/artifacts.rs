@@ -61,6 +61,10 @@ impl TrackArtifacts {
             #[expr(Self::grid_from($, &self.prepared))]
             #[call(as_ref)]
             pub(crate) fn grid(&self) -> Option<&BeatGridModel>;
+            /// The track's key: the supplied one, else the analysed one.
+            #[expr(Self::key_from($, &self.prepared))]
+            #[call(as_ref)]
+            pub(crate) fn key(&self) -> Option<MusicalKey>;
         }
     }
 

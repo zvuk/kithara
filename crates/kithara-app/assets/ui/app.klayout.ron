@@ -42,7 +42,7 @@
                         with: { "deck": "a", "letter": "A" },
                         frame: (top: false, right: true, bottom: true, left: false),
                     )),
-                    (from: 652.0, node: Optional(
+                    (from: 666.0, node: Optional(
                         id: "mixer-block",
                         hidden: Model(id: "ui.module.hidden", with: { "module": "mix" }),
                         node: Module(
@@ -52,7 +52,7 @@
                             frame: (top: false, right: true, bottom: true, left: false),
                         ),
                     )),
-                    (from: 1080.0, weight: 1.0, node: Module(
+                    (from: 1108.0, weight: 1.0, node: Module(
                         instance: "deck-b",
                         source: "modules/app-deck.kmodule.ron",
                         with: { "deck": "b", "letter": "B" },
