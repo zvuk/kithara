@@ -1,8 +1,11 @@
+use std::collections::BTreeMap;
+
 use super::{SlotWrites, machine::Context};
 use crate::{
     error::UiDocError,
     ids::NodeId,
-    module::{BindingRef, ControlNode},
+    module::{BindingRef, ColorSource, ControlNode},
+    param::Param,
     size::SizeSpec,
 };
 
@@ -17,10 +20,11 @@ pub(super) struct ControlFields<'a> {
 #[derive(Default)]
 pub(super) struct ExtraBindings {
     pub(super) active: Option<BindingRef>,
+    pub(super) color: Option<ColorSource>,
     pub(super) columns_state: Option<BindingRef>,
-    pub(super) status: Option<BindingRef>,
     pub(super) query: Option<BindingRef>,
     pub(super) scope: Option<BindingRef>,
+    pub(super) status: Option<BindingRef>,
     pub(super) zoom: Option<BindingRef>,
     pub(super) writes: ExtraWrites,
     pub(super) uniforms: Vec<(String, BindingRef)>,
@@ -29,21 +33,22 @@ pub(super) struct ExtraBindings {
 /// The owned side of [`SlotWrites`] that a control's own fields fill.
 #[derive(Default)]
 pub(super) struct ExtraWrites {
-    pub(super) zoom: Option<BindingRef>,
-    pub(super) loop_start: Option<BindingRef>,
     pub(super) loop_end: Option<BindingRef>,
+    pub(super) loop_start: Option<BindingRef>,
     pub(super) query: Option<BindingRef>,
-    pub(super) width: Option<BindingRef>,
     pub(super) toggle: Option<BindingRef>,
+    pub(super) width: Option<BindingRef>,
+    pub(super) zoom: Option<BindingRef>,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct ExtraBindingRefs<'a> {
     pub(super) active: Option<&'a BindingRef>,
     pub(super) columns_state: Option<&'a BindingRef>,
-    pub(super) status: Option<&'a BindingRef>,
+    pub(super) color_read: Option<&'a BindingRef>,
     pub(super) query: Option<&'a BindingRef>,
     pub(super) scope: Option<&'a BindingRef>,
+    pub(super) status: Option<&'a BindingRef>,
     pub(super) zoom: Option<&'a BindingRef>,
     pub(super) writes: SlotWrites<'a>,
 }
@@ -52,10 +57,12 @@ impl ExtraBindings {
     pub(super) fn as_refs(&self) -> ExtraBindingRefs<'_> {
         let writes = &self.writes;
         ExtraBindingRefs {
+            active: self.active.as_ref(),
             columns_state: self.columns_state.as_ref(),
-            status: self.status.as_ref(),
+            color_read: self.color.as_ref().and_then(ColorSource::binding),
             query: self.query.as_ref(),
             scope: self.scope.as_ref(),
+            status: self.status.as_ref(),
             zoom: self.zoom.as_ref(),
             writes: SlotWrites {
                 zoom: writes.zoom.as_ref(),
@@ -66,7 +73,6 @@ impl ExtraBindings {
                 toggle: writes.toggle.as_ref(),
                 ..SlotWrites::default()
             },
-            active: self.active.as_ref(),
         }
     }
 
@@ -75,9 +81,59 @@ impl ExtraBindings {
         control: &ControlNode,
         path: &str,
     ) -> Result<Self, UiDocError> {
-        let substitute =
-            |declared: &Option<BindingRef>| substituted(declared.as_ref(), context, path);
         let mut extra = Self::default();
+        if !extra.substitute_panel(context, control, path)? {
+            extra.substitute_display(context, control, path)?;
+        }
+        Ok(extra)
+    }
+
+    fn substitute_display(
+        &mut self,
+        context: &Context<'_>,
+        control: &ControlNode,
+        path: &str,
+    ) -> Result<(), UiDocError> {
+        match control {
+            ControlNode::Text { active, color, .. } => {
+                self.substitute_text(context, active.as_ref(), color.as_ref(), path)?;
+            }
+            ControlNode::Glyph { active, color, .. } => {
+                self.substitute_glyph(context, active.as_ref(), color.as_ref(), path)?;
+            }
+            ControlNode::Lottie { active, .. } | ControlNode::StatusDot { active, .. } => {
+                self.active = substituted(active.as_ref(), context, path)?;
+            }
+            ControlNode::Shader { uniforms, .. } => {
+                self.uniforms = substitute_uniforms(uniforms, context, path)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn substitute_glyph(
+        &mut self,
+        context: &Context<'_>,
+        active: Option<&BindingRef>,
+        color: Option<&Param<ColorSource>>,
+        path: &str,
+    ) -> Result<(), UiDocError> {
+        self.active = substituted(active, context, path)?;
+        let resolved = context.optional_param(color, path)?;
+        self.color = resolved
+            .as_ref()
+            .map(|color| substitute_color(color, context, path))
+            .transpose()?;
+        Ok(())
+    }
+
+    fn substitute_panel(
+        &mut self,
+        context: &Context<'_>,
+        control: &ControlNode,
+        path: &str,
+    ) -> Result<bool, UiDocError> {
         match control {
             ControlNode::Table {
                 columns_state,
@@ -85,9 +141,9 @@ impl ExtraBindings {
                 write_width,
                 ..
             } => {
-                extra.columns_state = substitute(columns_state)?;
-                extra.status = substitute(status)?;
-                extra.writes.width = substitute(write_width)?;
+                self.columns_state = substituted(columns_state.as_ref(), context, path)?;
+                self.status = substituted(status.as_ref(), context, path)?;
+                self.writes.width = substituted(write_width.as_ref(), context, path)?;
             }
             ControlNode::Tree {
                 query,
@@ -95,36 +151,54 @@ impl ExtraBindings {
                 toggle,
                 ..
             } => {
-                extra.query = substitute(query)?;
-                extra.writes.query = substitute(write_query)?;
-                extra.writes.toggle = substitute(toggle)?;
+                self.query = substituted(query.as_ref(), context, path)?;
+                self.writes.query = substituted(write_query.as_ref(), context, path)?;
+                self.writes.toggle = substituted(toggle.as_ref(), context, path)?;
             }
-            ControlNode::ContextBar { scope, .. } => extra.scope = substitute(scope)?,
-            ControlNode::Wave {
-                zoom,
-                write_zoom,
-                write_loop_start,
-                write_loop_end,
-                ..
-            } => {
-                extra.zoom = substitute(zoom)?;
-                extra.writes.zoom = substitute(write_zoom)?;
-                extra.writes.loop_start = substitute(write_loop_start)?;
-                extra.writes.loop_end = substitute(write_loop_end)?;
+            ControlNode::ContextBar { scope, .. } => {
+                self.scope = substituted(scope.as_ref(), context, path)?;
             }
-            ControlNode::Text { active, .. }
-            | ControlNode::Glyph { active, .. }
-            | ControlNode::Lottie { active, .. }
-            | ControlNode::StatusDot { active, .. } => extra.active = substitute(active)?,
-            ControlNode::Shader { uniforms, .. } => {
-                extra.uniforms = uniforms
-                    .iter()
-                    .map(|(name, binding)| Ok((name.clone(), context.substitute(binding, path)?)))
-                    .collect::<Result<Vec<_>, UiDocError>>()?;
-            }
-            _ => {}
+            ControlNode::Wave { .. } => return self.substitute_wave(context, control, path),
+            _ => return Ok(false),
         }
-        Ok(extra)
+        Ok(true)
+    }
+
+    fn substitute_text(
+        &mut self,
+        context: &Context<'_>,
+        active: Option<&BindingRef>,
+        color: Option<&ColorSource>,
+        path: &str,
+    ) -> Result<(), UiDocError> {
+        self.active = substituted(active, context, path)?;
+        self.color = color
+            .map(|color| substitute_color(color, context, path))
+            .transpose()?;
+        Ok(())
+    }
+
+    fn substitute_wave(
+        &mut self,
+        context: &Context<'_>,
+        control: &ControlNode,
+        path: &str,
+    ) -> Result<bool, UiDocError> {
+        let ControlNode::Wave {
+            zoom,
+            write_zoom,
+            write_loop_start,
+            write_loop_end,
+            ..
+        } = control
+        else {
+            return Ok(false);
+        };
+        self.zoom = substituted(zoom.as_ref(), context, path)?;
+        self.writes.zoom = substituted(write_zoom.as_ref(), context, path)?;
+        self.writes.loop_start = substituted(write_loop_start.as_ref(), context, path)?;
+        self.writes.loop_end = substituted(write_loop_end.as_ref(), context, path)?;
+        Ok(true)
     }
 }
 
@@ -152,4 +226,23 @@ fn substituted(
     declared
         .map(|binding| context.substitute(binding, path))
         .transpose()
+}
+
+pub(in crate::expand) fn substitute_color(
+    source: &ColorSource,
+    context: &Context<'_>,
+    path: &str,
+) -> Result<ColorSource, UiDocError> {
+    source.try_map(|read| context.substitute(read, path))
+}
+
+fn substitute_uniforms(
+    uniforms: &BTreeMap<String, BindingRef>,
+    context: &Context<'_>,
+    path: &str,
+) -> Result<Vec<(String, BindingRef)>, UiDocError> {
+    uniforms
+        .iter()
+        .map(|(name, binding)| Ok((name.clone(), context.substitute(binding, path)?)))
+        .collect()
 }

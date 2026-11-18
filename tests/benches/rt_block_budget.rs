@@ -1,11 +1,13 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    cell::LazyCell,
     hint::black_box,
     num::{NonZeroU32, NonZeroUsize},
     task::{Context, Waker},
 };
 
+use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
 use firewheel::{
     StreamInfo,
     clock::InstantSamples,
@@ -49,11 +51,12 @@ use kithara_render::{
     rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
 };
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
+use kithara_test_utils::wait_until_blocking;
 
 mod consts {
     pub(super) const BLOCK_FRAMES: u32 = 128;
     pub(super) const CHANNELS: u16 = 2;
-    /// Longer than the warm-up and measured blocks together, 22 000 blocks
+    /// Longer than each warm-up and measured window, at most 22 000 blocks
     /// of 128 frames at 48 kHz (about 58.7 s), so every measured block of
     /// the crossfade lane mixes through the fade law.
     pub(super) const CROSSFADE_SECONDS: f32 = 120.0;
@@ -109,19 +112,11 @@ impl Lane {
     fn label(self) -> String {
         match self {
             Self::Settled => "settled".to_owned(),
-            Self::Gain => "settled gain".to_owned(),
-            Self::Crossfade => "active crossfade".to_owned(),
-            Self::Automation { filter, eq } => format!("filter {filter} + eq {eq}"),
+            Self::Gain => "settled_gain".to_owned(),
+            Self::Crossfade => "active_crossfade".to_owned(),
+            Self::Automation { filter, eq } => format!("filter_{filter}_eq_{eq}"),
         }
     }
-}
-
-struct Measurement {
-    durations: Vec<Duration>,
-    lane: Lane,
-    lookahead_frames: usize,
-    peak: f32,
-    tracks: usize,
 }
 
 fn non_zero(value: u32, label: &str) -> NonZeroU32 {
@@ -131,10 +126,6 @@ fn non_zero(value: u32, label: &str) -> NonZeroU32 {
 fn block_frames() -> usize {
     usize::try_from(consts::BLOCK_FRAMES)
         .unwrap_or_else(|_| panic!("bench block frames exceed usize"))
-}
-
-fn block_budget() -> Duration {
-    Duration::from_secs_f64(f64::from(consts::BLOCK_FRAMES) / f64::from(consts::SAMPLE_RATE))
 }
 
 fn spec() -> AudioSpec {
@@ -161,12 +152,11 @@ struct BenchMixer {
     deck: DeckEnds,
     lanes: Vec<Box<dyn LaneTask + Send>>,
     _lane_senders: Vec<Sender<LaneProtocol>>,
-    _sources: Vec<PcmDeck>,
     frame: i64,
 }
 
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn processor(count: usize, lane: Lane, limiter: LimiterConfig) -> BenchMixer {
+async fn processor(sources: &[PcmDeck], lane: Lane, limiter: LimiterConfig) -> BenchMixer {
     let config = match lane {
         Lane::Automation { .. } => DeckMixerConfig::builder()
             .eq_bands(consts::EQ_BANDS)
@@ -193,7 +183,6 @@ async fn processor(count: usize, lane: Lane, limiter: LimiterConfig) -> BenchMix
     };
     let processor = DeckMixer::new(inputs, shape, &pools).expect("bench mixer pools");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    let mut sources = Vec::new();
     let mut lanes = Vec::new();
     let mut senders = Vec::new();
     let mut commands = Vec::new();
@@ -202,13 +191,8 @@ async fn processor(count: usize, lane: Lane, limiter: LimiterConfig) -> BenchMix
             CrossfaderGain::checked(0.5).expect("half is a crossfader gain"),
         )));
     }
-    for index in 0..count {
+    for (index, source) in sources.iter().enumerate() {
         hang_tick!();
-        let source = PcmDeck::new(Box::new(TestPcmReader::with_pcm(
-            spec(),
-            consts::TRACK_SECONDS,
-            benchmark_half(),
-        )));
         let TrackSource::Uri(path) = source.source() else {
             panic!("PCM deck must be a URI")
         };
@@ -253,7 +237,6 @@ async fn processor(count: usize, lane: Lane, limiter: LimiterConfig) -> BenchMix
             slot,
             fade: lane.fade(),
         });
-        sources.push(source);
         lanes.push(Box::new(task) as Box<dyn LaneTask + Send>);
         senders.push(sender);
     }
@@ -308,18 +291,59 @@ async fn processor(count: usize, lane: Lane, limiter: LimiterConfig) -> BenchMix
         deck,
         lanes,
         _lane_senders: senders,
-        _sources: sources,
         frame: 0,
     }
 }
 
-fn render_block(mixer: &mut BenchMixer, out_l: &mut [f32], out_r: &mut [f32]) -> Duration {
-    let mut context = Context::from_waker(Waker::noop());
-    for lane in &mut mixer.lanes {
-        let _ = lane.poll_commands(&mut context);
-        lane.recycle();
-        let _ = lane.tick();
+fn prepare_sources(mixer: &mut BenchMixer) {
+    if mixer.frame == 0 {
+        for lane in &mut mixer.lanes {
+            lane.warm_up();
+        }
     }
+    let required = f64::from(consts::BLOCK_FRAMES) / f64::from(consts::SAMPLE_RATE);
+    let _real_io = kithara::platform::flash::real_io();
+    wait_until_blocking(Duration::from_secs(5), "bench source not ready", || {
+        let mut context = Context::from_waker(Waker::noop());
+        for lane in &mut mixer.lanes {
+            let _ = lane.poll_commands(&mut context);
+            lane.recycle();
+            let _ = lane.tick();
+        }
+        if mixer.frame == 0 {
+            mixer.lanes.iter_mut().all(|lane| {
+                lane.preload_status()
+                    .unwrap_or_else(|error| panic!("source not ready: {error:?}"))
+            })
+        } else {
+            (0..mixer.lanes.len()).all(|index| {
+                let slot = Slot::new(u16::try_from(index).expect("bench slot"));
+                mixer.processor.track(slot).is_some_and(|track| {
+                    track.state() == SlotState::Playing
+                        && track.decoded_frontier() - track.position() >= required
+                })
+            })
+        }
+    })
+    .unwrap_or_else(|error| {
+        let sources: Vec<_> = (0..mixer.lanes.len())
+            .map(|index| {
+                let slot = Slot::new(u16::try_from(index).expect("bench slot"));
+                mixer
+                    .processor
+                    .track(slot)
+                    .map(|track| (track.position(), track.decoded_frontier()))
+            })
+            .collect();
+        panic!(
+            "source not ready for {} frames: {error}; (position, frontier)={sources:?}",
+            consts::BLOCK_FRAMES
+        );
+    });
+}
+
+fn render_block(mixer: &mut BenchMixer, out_l: &mut [f32], out_r: &mut [f32]) -> Duration {
+    prepare_sources(mixer);
     mixer
         .extra
         .store
@@ -492,9 +516,10 @@ fn every_slot_fading(mixer: &mut BenchMixer) -> bool {
         .all(|slot| slot.gain > 0.0 && slot.gain < 1.0)
 }
 
-fn measure(tracks: usize, lane: Lane, limiter: LimiterConfig) -> Measurement {
+fn measure(sources: &[PcmDeck], lane: Lane, limiter: LimiterConfig, blocks: usize) -> Duration {
+    assert!((1..=consts::MEASURED_BLOCKS).contains(&blocks));
     let runtime = tokio::runtime::Runtime::new().expect("bench runtime");
-    let mut processor = runtime.block_on(processor(tracks, lane, limiter));
+    let mut processor = runtime.block_on(processor(sources, lane, limiter));
     let _runtime = runtime.enter();
 
     let frames = block_frames();
@@ -510,10 +535,10 @@ fn measure(tracks: usize, lane: Lane, limiter: LimiterConfig) -> Measurement {
 
     let fading_before = every_slot_fading(&mut processor);
     let before = processor.deck.snapshot.read().metrics;
-    let mut durations = Vec::with_capacity(consts::MEASURED_BLOCKS);
+    let mut elapsed = Duration::ZERO;
     let mut peak = 0.0_f32;
-    for _ in 0..consts::MEASURED_BLOCKS {
-        durations.push(render_block(&mut processor, &mut out_l, &mut out_r));
+    for _ in 0..blocks {
+        elapsed += render_block(&mut processor, &mut out_l, &mut out_r);
         peak = peak.max(peak_of(&out_l));
         black_box(&out_l);
     }
@@ -533,6 +558,7 @@ fn measure(tracks: usize, lane: Lane, limiter: LimiterConfig) -> Measurement {
         .iter()
         .filter(|slot| slot.state != SlotState::Empty)
         .count();
+    let tracks = sources.len();
     assert_eq!(
         live, tracks,
         "bench measured {live} track(s), not the {tracks} it loaded"
@@ -553,53 +579,16 @@ fn measure(tracks: usize, lane: Lane, limiter: LimiterConfig) -> Measurement {
         "master limiter must bound the audible mix"
     );
 
-    durations.sort_unstable();
-    Measurement {
-        durations,
-        lane,
-        lookahead_frames: limiter.latency_frames(non_zero(consts::SAMPLE_RATE, "sample rate")),
-        peak,
-        tracks,
-    }
+    black_box(peak);
+    elapsed
 }
 
-impl Measurement {
-    fn percentile(&self, pct: usize) -> Duration {
-        let rank = (self.durations.len() * pct).div_ceil(100);
-        let idx = rank.saturating_sub(1).min(self.durations.len() - 1);
-        self.durations[idx]
-    }
-
-    fn max(&self) -> Duration {
-        self.percentile(100)
-    }
-}
-
-fn cell(elapsed: Duration, budget: Duration) -> String {
-    let micros = elapsed.as_secs_f64() * 1e6;
-    let share = elapsed.as_secs_f64() / budget.as_secs_f64() * 1e2;
-    format!("{micros:>7.2} us / {share:>5.2}%")
-}
-
-fn main() {
-    let budget = block_budget();
-    println!(
-        "DeckMixer -> master LimiterNode callback budget: {:.3} ms ({} frames @ {} Hz, {} ch)",
-        budget.as_secs_f64() * 1e3,
-        consts::BLOCK_FRAMES,
-        consts::SAMPLE_RATE,
-        consts::CHANNELS,
-    );
-    println!(
-        "{} blocks measured per lane after {} warm-up blocks",
-        consts::MEASURED_BLOCKS,
-        consts::WARMUP_BLOCKS,
-    );
-    println!(
-        "{:>16}  {:>7}  {:>9}  {:>22}  {:>22}  {:>22}",
-        "lane", "tracks", "lookahead", "p50", "p99", "max"
-    );
-
+fn bench_blocks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("rt_block_budget");
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(4));
     let automation = [(0, 0), (1, 0), (0, 16), (1, 15)]
         .map(|(filter, eq)| Lane::Automation { filter, eq })
         .into_iter()
@@ -613,16 +602,43 @@ fn main() {
         let limiter = LimiterConfig::builder()
             .lookahead_ms(LookaheadMs::try_from(lookahead).expect("bench lookahead in range"))
             .build();
-        let measurement = measure(count, lane, limiter);
-        println!(
-            "{:>16}  {:>7}  {:>9}  {:>22}  {:>22}  {:>22}",
-            measurement.lane.label(),
-            measurement.tracks,
-            measurement.lookahead_frames,
-            cell(measurement.percentile(50), budget),
-            cell(measurement.percentile(99), budget),
-            cell(measurement.max(), budget),
+        let latency = limiter.latency_frames(non_zero(consts::SAMPLE_RATE, "sample rate"));
+        let sources = LazyCell::new(|| {
+            (0..count)
+                .map(|_| {
+                    PcmDeck::new(Box::new(TestPcmReader::with_pcm(
+                        spec(),
+                        consts::TRACK_SECONDS,
+                        benchmark_half(),
+                    )))
+                })
+                .collect::<Vec<_>>()
+        });
+        group.bench_function(
+            BenchmarkId::new(lane.label(), format!("{count}tracks_L{latency}")),
+            |b| {
+                b.iter_custom(|mut blocks| {
+                    let mut elapsed = Duration::ZERO;
+                    let limit =
+                        u64::try_from(consts::MEASURED_BLOCKS).expect("window blocks fit u64");
+                    // Reset before the crossfade or automation can finish.
+                    while blocks > 0 {
+                        let batch = blocks.min(limit);
+                        elapsed += measure(
+                            &sources,
+                            lane,
+                            limiter,
+                            usize::try_from(batch).expect("bounded window fits usize"),
+                        );
+                        blocks -= batch;
+                    }
+                    elapsed
+                });
+            },
         );
-        black_box(measurement.peak);
     }
+    group.finish();
 }
+
+criterion_group!(benches, bench_blocks);
+criterion_main!(benches);

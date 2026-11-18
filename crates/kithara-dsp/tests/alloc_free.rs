@@ -108,6 +108,9 @@ fn biquad_never_allocates_after_construction() {
     assert_no_alloc(|| {
         for section in 0..four.get() {
             filter.retune(section, low_pass).expect("section in range");
+            filter
+                .retune_plane(1, section, low_pass)
+                .expect("plane in range");
             lookahead
                 .retune(section, low_pass)
                 .expect("section in range");

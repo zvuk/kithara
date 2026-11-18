@@ -5,10 +5,10 @@ use std::{
 
 use num_traits::ToPrimitive;
 
-use super::{Coefficients, FilterError};
 use crate::{
     backend::{self, platform},
     consts,
+    filter::{Coefficients, FilterError},
 };
 
 /// Cascaded biquad sections applied in place to channel planes.
@@ -18,7 +18,7 @@ use crate::{
 /// the state, so silence never decays into denormals.
 pub struct Biquad {
     cascade: platform::Cascade,
-    decay: Box<[usize]>,
+    decay: Box<[Box<[usize]>]>,
     scratch: Box<[Box<[f32]>]>,
     quiet: usize,
     reset_state: bool,
@@ -31,7 +31,9 @@ impl Biquad {
     pub fn new(channels: NonZeroUsize, sections: NonZeroUsize) -> Result<Self, FilterError> {
         Ok(Self {
             cascade: platform::Cascade::new(channels, sections)?,
-            decay: vec![1; sections.get()].into_boxed_slice(),
+            decay: (0..sections.get())
+                .map(|_| vec![1; channels.get()].into_boxed_slice())
+                .collect(),
             scratch: (0..channels.get())
                 .map(|_| vec![0.0; consts::SETTLE_CHUNK].into_boxed_slice())
                 .collect(),
@@ -51,9 +53,32 @@ impl Biquad {
         section: usize,
         coefficients: Coefficients<f64>,
     ) -> Result<(), FilterError> {
-        let slot = self.decay.get_mut(section).ok_or(FilterError::Shape)?;
+        for plane in 0..self.scratch.len() {
+            self.retune_plane(plane, section, coefficients)?;
+        }
+        Ok(())
+    }
+
+    /// Replaces one plane's section coefficients without changing its history.
+    ///
+    /// # Errors
+    /// [`FilterError::Shape`] when `plane` or `section` is out of range,
+    /// [`FilterError::Parameters`] for nonfinite or unstable coefficients.
+    /// A refusal leaves coefficients and history unchanged.
+    pub fn retune_plane(
+        &mut self,
+        plane: usize,
+        section: usize,
+        coefficients: Coefficients<f64>,
+    ) -> Result<(), FilterError> {
+        let slot = self
+            .decay
+            .get_mut(section)
+            .and_then(|section| section.get_mut(plane))
+            .ok_or(FilterError::Shape)?;
         let values = in_f32(coefficients)?;
-        self.cascade.set_section(section, values)?;
+        self.cascade
+            .set_section(section, plane..plane.saturating_add(1), values)?;
         *slot = decay(values);
         Ok(())
     }
@@ -162,10 +187,9 @@ impl Biquad {
             return Err(FilterError::Shape);
         }
         self.cascade.reset();
-        let frames = self
-            .decay
-            .iter()
-            .fold(0_usize, |sum, frames| sum.saturating_add(*frames));
+        let frames = self.decay.iter().fold(0_usize, |sum, section| {
+            sum.saturating_add(section.iter().copied().max().unwrap_or(1))
+        });
         for _ in 0..frames.div_ceil(consts::SETTLE_CHUNK).max(1) {
             for (plane, level) in self.scratch.iter_mut().zip(levels) {
                 plane.fill(*level);

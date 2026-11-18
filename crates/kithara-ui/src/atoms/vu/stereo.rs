@@ -20,7 +20,7 @@ impl StereoMeter {
     pub(crate) fn new(skin: &Skin) -> Self {
         Self {
             metrics: skin.vu_stereo,
-            palette: skin.palette,
+            palette: *skin.palette,
         }
     }
 

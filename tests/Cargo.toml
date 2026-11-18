@@ -13,10 +13,6 @@ path = "bin/test_server.rs"
 test = false
 required-features = ["all"]
 
-[[test]]
-name = "wasm_runner_config"
-path = "bin/wasm_test_runner/config.rs"
-
 [[bin]]
 name = "wasm_test_runner"
 path = "bin/wasm_test_runner/main.rs"
@@ -288,8 +284,9 @@ kithara-test-dylib = { workspace = true }
 
 criterion = { workspace = true }
 
-[lints]
-workspace = true
+[[test]]
+name = "wasm_runner_config"
+path = "bin/wasm_test_runner/config.rs"
 
 [[test]]
 name = "suite_light"
@@ -321,6 +318,9 @@ required-features = ["perf"]
 name = "memory_rss"
 path = "perf/memory_rss.rs"
 required-features = ["perf"]
+
+[lints]
+workspace = true
 
 [[bench]]
 name = "refactor_hotpaths"
