@@ -1,5 +1,5 @@
 use kithara_bufpool::HasPool;
-use kithara_signal::{AudioChunkInfo, FrameCount};
+use kithara_signal::{AudioChunkInfo, FrameCount, SourceSpan};
 use kithara_stretch::ElasticError;
 use kithara_test_macros as kithara;
 
@@ -189,10 +189,7 @@ where
     }
 
     #[kithara::hang_watchdog]
-    fn terminal_span(
-        span: kithara_signal::SourceSpan,
-        end: u64,
-    ) -> Option<kithara_signal::SourceSpan> {
+    fn terminal_span(span: SourceSpan, end: u64) -> Option<SourceSpan> {
         let mut outputs = span.output_frames();
         while outputs > 0 {
             hang_tick!();
@@ -207,8 +204,24 @@ where
     }
 
     /// Shrink a prepared source span at true EOF without sampling controls again.
-    #[kithara::hang_watchdog]
     pub fn prepare_terminal_quantum(&mut self, frames: usize) -> Option<FrameCount> {
+        self.prepare_tail(frames, Self::terminal_span)
+    }
+
+    /// Keeps only whole output intervals before a source clock changes.
+    pub fn prepare_discontinuity_quantum(&mut self, frames: usize) -> Option<FrameCount> {
+        self.prepare_tail(frames, |span, end| {
+            Self::span_until(span, end)
+                .ok()?
+                .or_else(|| span.for_output_range(0..0))
+        })
+    }
+
+    fn prepare_tail(
+        &mut self,
+        frames: usize,
+        trim: impl FnOnce(SourceSpan, u64) -> Option<SourceSpan>,
+    ) -> Option<FrameCount> {
         let mut prepared = self.prepared_quantum.take()?;
         if frames == 0 || frames > prepared.frames {
             return None;
@@ -217,7 +230,7 @@ where
             .source_start
             .checked_add(u64::try_from(frames).ok()?)?;
         self.terminal_source_end = Some(end);
-        prepared.source_span = Self::terminal_span(prepared.source_span, end)?;
+        prepared.source_span = trim(prepared.source_span, end)?;
         prepared.frames = frames;
         prepared.active_frames = source_demand(prepared.source_span, prepared.source_start)
             .ok()?

@@ -767,7 +767,7 @@ where
             && self.source.discontinuity() != self.discontinuity
         {
             let frames = self.staged_frames();
-            let Some(frames) = self.warp.prepare_terminal_quantum(frames) else {
+            let Some(frames) = self.warp.prepare_discontinuity_quantum(frames) else {
                 return self.fail(TrackFailureKind::Render);
             };
             self.prepared_frames = Some(frames.get());
