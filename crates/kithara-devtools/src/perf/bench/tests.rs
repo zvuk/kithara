@@ -58,8 +58,13 @@ fn main() {
     let args: Vec<_> = args.iter().map(String::as_str).collect();
     let ids = include_str!("../ids");
     if let ["--bench", mode, filter @ ("paired" | "head-only")] = args.as_slice() {
+        let invoked = env::args_os().next().unwrap();
+        assert_eq!(
+            fs::canonicalize(&invoked).unwrap(),
+            fs::canonicalize(env::current_exe().unwrap()).unwrap()
+        );
         let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
-        writeln!(events, "{mode}:{filter}:{}", env::current_exe().unwrap().display()).unwrap();
+        writeln!(events, "{mode}:{filter}:{}", invoked.to_str().unwrap()).unwrap();
         let mut selected: Vec<_> = ids.lines()
             .filter(|id| *filter != "paired" || !id.starts_with("forms/"))
             .collect();
