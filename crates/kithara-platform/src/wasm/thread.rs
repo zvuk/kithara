@@ -155,7 +155,7 @@ pub fn current() -> Thread {
     wasm_safe_thread::current()
 }
 
-/// Spawn a new named thread (WASM variant).
+/// Spawn a new named thread (WASM variant). The name becomes the Worker's name.
 ///
 /// # Panics
 ///
@@ -165,8 +165,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    let _name = name.into();
-    spawn(counted(f))
+    spawn_with(WasmThreadBuilder::new().name(name.into()), counted(f))
 }
 
 /// Uses the consumer-registered shim name (`set_wasm_shim_name`) when set, falling back to
@@ -176,7 +175,14 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    let mut builder = WasmThreadBuilder::new();
+    spawn_with(WasmThreadBuilder::new(), f)
+}
+
+fn spawn_with<F, T>(mut builder: WasmThreadBuilder, f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
     if let Some(shim) = wasm_shim_name().get() {
         builder = builder.shim_name(shim.clone());
     }
