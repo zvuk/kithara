@@ -196,10 +196,12 @@ mod tests {
     fn idle_pool_capacity_leaves_the_native_connection_limit_unchanged() {
         let ephemeral_default = NSURLSessionConfiguration::ephemeralSessionConfiguration()
             .HTTPMaximumConnectionsPerHost();
+        let first = shared_session(&NetOptions::builder().pool_max_idle_per_host(0).build());
 
         for idle in [0usize, 8, 40] {
             let options = NetOptions::builder().pool_max_idle_per_host(idle).build();
-            let limit = shared_session(&options)
+            let shared = shared_session(&options);
+            let limit = shared
                 .session
                 .configuration()
                 .HTTPMaximumConnectionsPerHost();
@@ -207,6 +209,11 @@ mod tests {
                 limit, ephemeral_default,
                 "pool_max_idle_per_host={idle} must not change HTTPMaximumConnectionsPerHost; \
                  URLSession owns its connection pool and exposes no idle-pool bound"
+            );
+            assert_eq!(
+                Retained::as_ptr(&shared.session),
+                Retained::as_ptr(&first.session),
+                "pool_max_idle_per_host={idle} must reuse the one NSURLSession of its TLS policy"
             );
         }
     }
@@ -220,6 +227,24 @@ mod tests {
             SharedSessionKey::from(&secure),
             SharedSessionKey::from(&insecure),
             "is_insecure must still rekey the shared URLSession"
+        );
+
+        let secure_session = shared_session(&secure);
+        let insecure_session = shared_session(&insecure);
+        assert_ne!(
+            Retained::as_ptr(&secure_session.session),
+            Retained::as_ptr(&insecure_session.session),
+            "secure and insecure options must get distinct NSURLSessions"
+        );
+        assert_eq!(
+            Retained::as_ptr(&shared_session(&secure).session),
+            Retained::as_ptr(&secure_session.session),
+            "a repeated secure lookup must reuse its NSURLSession"
+        );
+        assert_eq!(
+            Retained::as_ptr(&shared_session(&insecure).session),
+            Retained::as_ptr(&insecure_session.session),
+            "a repeated insecure lookup must reuse its NSURLSession"
         );
     }
 
