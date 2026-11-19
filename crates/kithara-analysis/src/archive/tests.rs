@@ -1,18 +1,20 @@
 use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_platform::time::Duration;
+#[cfg(feature = "analysis-waveform")]
+use kithara_resampler::NoResamplerBackend;
 #[cfg(all(feature = "beat-nn", feature = "analysis-waveform"))]
 use kithara_resampler::rubato::RubatoBackend;
 use kithara_test_utils::kithara;
 use rangemap::RangeSet;
 
 use super::{AnalysisFile, AnalysisFileError, AnalysisFileSpec, AnalysisFileUpdate};
-#[cfg(all(feature = "beat-nn", feature = "analysis-waveform"))]
-use crate::test_pools::pools;
 use crate::{
     AnalysisFingerprint, AnalysisProgress, KeyEstimate, Mode, MusicalKey, PitchClass,
     TrackAnalysis, blob::Writer, consts, progress::AnalysisResume,
 };
+#[cfg(feature = "analysis-waveform")]
+use crate::{AnalyzerBuilder, Bucket, Waveform, test_pools::pools};
 
 fn rate(value: u32) -> NonZeroU32 {
     NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
@@ -156,9 +158,9 @@ fn create_bytes(analysis: TrackAnalysis) -> Vec<u8> {
 #[cfg(all(feature = "beat-nn", feature = "analysis-waveform"))]
 #[kithara::test(native, flash(false))]
 fn effective_application_fingerprint_fits_the_fixed_header() {
-    let fingerprint = crate::AnalyzerBuilder::<RubatoBackend, _>::new(pools())
+    let fingerprint = AnalyzerBuilder::<RubatoBackend, _>::new(pools())
         .with_beat()
-        .with_waveform(2_000)
+        .with_waveform(NonZeroU32::MIN)
         .fingerprint();
     assert!(
         fingerprint.beat().is_some_and(|value| value.len() > 256),
@@ -592,5 +594,50 @@ fn parser_rejects_index_coverage_disagreement() {
     assert!(matches!(
         AnalysisFile::parse(&bytes, &fingerprint()),
         Err(AnalysisFileError::Corrupt)
+    ));
+}
+
+#[cfg(feature = "analysis-waveform")]
+#[kithara::test]
+fn a_stored_waveform_is_served_only_for_its_requested_factor() {
+    let fingerprint = |fold| {
+        AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
+            .with_waveform(fold)
+            .fingerprint()
+    };
+    let native = fingerprint(NonZeroU32::MIN);
+    let folded = fingerprint(NonZeroU32::new(4).unwrap());
+    assert_eq!(native.waveform(), Some("wave:fold1:v2"));
+    assert_eq!(folded.waveform(), Some("wave:fold4:v2"));
+    let waveform = Waveform::new(
+        vec![Bucket::new(0.5, 1.0, 0.0)],
+        NonZeroU64::new(1024).unwrap(),
+    )
+    .unwrap();
+    let snapshot = TrackAnalysis::builder()
+        .media_origin(Duration::ZERO)
+        .token("archive:test".into())
+        .revision(1)
+        .source_sample_rate(rate(48_000))
+        .extent(consts::ARCHIVE_EXTENT)
+        .fingerprint(native.clone())
+        .settled(true)
+        .waveform(waveform)
+        .build();
+    let spec = AnalysisFileSpec::new(
+        rate(48_000),
+        consts::ARCHIVE_EXTENT,
+        chunk_frames(consts::ARCHIVE_CHUNK_FRAMES),
+        native.clone(),
+    )
+    .unwrap();
+    let update = AnalysisFile::create(&spec, &default_progress(snapshot)).unwrap();
+    let mut bytes = Vec::new();
+    apply(&mut bytes, &update);
+    let served = AnalysisFile::parse(&bytes, &native).unwrap();
+    assert_eq!(served.latest().analysis().waveform().unwrap().len(), 1);
+    assert!(matches!(
+        AnalysisFile::parse(&bytes, &folded),
+        Err(AnalysisFileError::Config)
     ));
 }

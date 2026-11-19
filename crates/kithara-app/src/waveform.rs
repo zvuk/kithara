@@ -28,12 +28,12 @@ type AppBeatAnalysisConfig = BeatAnalysisConfig<PlaybackResamplerBackend>;
 type AppAnalyzerBuilder = AnalyzerBuilder<PlaybackResamplerBackend, AppPools>;
 
 #[cfg(feature = "analysis-waveform")]
-fn with_waveform(builder: AppAnalyzerBuilder, buckets: usize) -> AppAnalyzerBuilder {
-    builder.with_waveform(buckets)
+fn with_waveform(builder: AppAnalyzerBuilder, fold: NonZeroU32) -> AppAnalyzerBuilder {
+    builder.with_waveform(fold)
 }
 
 #[cfg(not(feature = "analysis-waveform"))]
-fn with_waveform(builder: AppAnalyzerBuilder, _buckets: usize) -> AppAnalyzerBuilder {
+fn with_waveform(builder: AppAnalyzerBuilder, _fold: NonZeroU32) -> AppAnalyzerBuilder {
     builder
 }
 
@@ -59,19 +59,19 @@ struct RunHandle {
 
 impl TrackAnalysisRunner {
     /// `master` must be a child of the app master cancel; the worker thread
-    /// and every run scope live under it. `buckets` caps the waveform output;
-    /// the native window count is the real resolution.
+    /// and every run scope live under it. `fold` sets the native analysis
+    /// windows per waveform bucket.
     #[must_use]
     pub fn new(
         master: &CancelToken,
         base_worker: Option<Worker>,
         chunk_seconds: NonZeroU32,
-        buckets: usize,
+        fold: NonZeroU32,
         beat_config: AppBeatAnalysisConfig,
         pools: Pools,
     ) -> Self {
         let builder = AnalyzerBuilder::new(pools.clone()).with_beat_config(beat_config);
-        let builder = with_waveform(builder, buckets).with_beat().with_key();
+        let builder = with_waveform(builder, fold).with_beat().with_key();
         let worker = Arc::new(AnalysisWorker::new(
             AnalysisWorkerConfig::for_builder(builder)
                 .cancel(master.clone())

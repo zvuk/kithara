@@ -21,8 +21,6 @@ const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zer
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
 
 mod consts {
-    // The envelope is incidental; beat analysis is the subject.
-    pub(super) const BUCKETS: usize = 2_000;
     // Allows detector drift while rejecting the nearest wrong meter ratios.
     pub(super) const KNOWN_BPM_RATIO_TOLERANCE: f64 = 0.10;
     // Allows detector quantization while requiring scalar-marker agreement.
@@ -71,7 +69,7 @@ async fn analyse(path: &str) -> TrackAnalysis {
         &CancelToken::never(),
         None,
         CHUNK_SECONDS,
-        consts::BUCKETS,
+        NonZeroU32::MIN,
         BeatAnalysisConfig::default(),
         pools,
     );

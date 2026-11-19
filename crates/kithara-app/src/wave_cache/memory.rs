@@ -192,13 +192,16 @@ pub(crate) fn token_for(key: &ResourceKey) -> AnalysisToken {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU32, ops::Range};
+    use std::{
+        num::{NonZeroU32, NonZeroU64},
+        ops::Range,
+    };
 
     use ::kithara::platform::{sync::Arc, time::Duration};
     /// The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
         analysis::{
-            AnalysisFingerprint, AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState,
+            AnalysisFingerprint, AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState, Bucket,
             FrameCoverage, RangeSet, TrackAnalysis, Waveform,
         },
         assets::{
@@ -224,7 +227,7 @@ mod tests {
     fn fp() -> AnalysisFingerprint {
         const BEAT_TAG: &str = "beat:test:v1";
 
-        fingerprint("wave:native:max1500:v1", BEAT_TAG)
+        fingerprint("wave:fold1:v2", BEAT_TAG)
     }
 
     fn rate() -> NonZeroU32 {
@@ -257,7 +260,7 @@ mod tests {
 
     fn wave() -> Waveform {
         // version 1 + one bucket of three 0.5 band heights (0.5 = 0x3F000000).
-        Waveform::try_from([1, 0, 0, 0, 0, 0, 0, 63, 0, 0, 0, 63, 0, 0, 0, 63].as_slice())
+        Waveform::new(vec![Bucket::new(0.5, 0.5, 0.5)], NonZeroU64::MIN)
             .expect("hand-built blob is valid")
     }
 

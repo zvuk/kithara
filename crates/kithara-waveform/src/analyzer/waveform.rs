@@ -1,4 +1,8 @@
-use std::{array, collections::BTreeMap, num::NonZeroUsize};
+use std::{
+    array,
+    collections::BTreeMap,
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+};
 
 use kithara_blob::{BlobError, Writer};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
@@ -12,8 +16,7 @@ use rangemap::RangeSet;
 
 use crate::{
     AnalyzerError, Band,
-    bucket::{Bucket, Waveform},
-    bucketize::bucketize,
+    bucket::{Bucket, MAX_BUCKETS, Waveform},
     params::AnalysisParams,
     resume::WaveformResume,
 };
@@ -223,11 +226,11 @@ impl WaveformAnalyzer {
     }
 
     /// Fold the band-energy series into per-bucket band heights, leaving the
-    /// pass able to accept further ranges. `extent` is the source length in
-    /// frames when it is known: it sets the window count the buckets are
-    /// spread over, so bucket boundaries stay put as coverage grows.
+    /// pass able to accept further ranges. Each bucket folds `fold` consecutive
+    /// windows, coarsened only to fit the format limit. `extent` is the source
+    /// length in frames when known and sets the window count, including gaps.
     #[must_use]
-    pub fn snapshot(&mut self, buckets: usize, extent: Option<u64>) -> Waveform {
+    pub fn snapshot(&mut self, fold: NonZeroU32, extent: Option<u64>) -> Waveform {
         if self.bands.is_empty()
             && let Some(extent) = extent
         {
@@ -244,16 +247,23 @@ impl WaveformAnalyzer {
             }
         }
 
-        let buckets = buckets.min(total);
-        let max = |a: [f32; Band::COUNT], b: [f32; Band::COUNT]| array::from_fn(|i| a[i].max(b[i]));
-        let energy = bucketize(&raw, buckets, [0.0; Band::COUNT], max);
+        let stride = (fold.get() as usize).max(total.div_ceil(MAX_BUCKETS));
+        let max =
+            |a: [f32; Band::COUNT], b: &[f32; Band::COUNT]| array::from_fn(|i| a[i].max(b[i]));
+        let energy = raw
+            .chunks(stride)
+            .map(|chunk| chunk.iter().fold([0.0; Band::COUNT], max))
+            .collect();
+        let Some(span_frames) = NonZeroU64::new(stride as u64 * self.hop()) else {
+            unreachable!("the fold factor and FFT hop are nonzero");
+        };
         let bands = normalize_bands(energy, self.params.band_gain());
 
         let out: Vec<Bucket> = bands
             .into_iter()
             .map(|b| Bucket::new(b[Band::Low.idx()], b[Band::Mid.idx()], b[Band::High.idx()]))
             .collect();
-        Waveform::analysed(out)
+        Waveform::analysed(out, span_frames)
     }
 
     pub fn write_resume(&self, out: &mut Vec<u8>) {
@@ -319,6 +329,8 @@ fn normalize_bands(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use std::num::NonZeroU32;
+
     use kithara_blob::BlobError;
     use kithara_dsp::spectrum::{FftLen, SpectrumError};
     use kithara_test_fixtures::analysis_fixtures::{
@@ -358,11 +370,14 @@ mod tests {
                 .expect("waveform buffers fit the test region");
         }
 
-        fn whole(&mut self, pcm: &[f32], channels: usize, buckets: usize) -> Vec<Bucket> {
+        fn whole(&mut self, pcm: &[f32], channels: usize, fold: u32) -> Vec<Bucket> {
             self.push(pcm, channels, 0);
             let extent = u64::try_from(pcm.len() / channels).unwrap_or(0);
             self.analyzer
-                .snapshot(buckets, Some(extent))
+                .snapshot(
+                    NonZeroU32::new(fold).expect("test fold is nonzero"),
+                    Some(extent),
+                )
                 .buckets()
                 .to_vec()
         }
@@ -432,7 +447,7 @@ mod tests {
         let stopped = interrupted_pass(&waveform_tone);
         let expected = Pass::new(flat!())
             .analyzer
-            .snapshot(0, None)
+            .snapshot(NonZeroU32::new(1).unwrap(), None)
             .buckets()
             .to_vec();
         assert!(expected.is_empty(), "a fresh pass has nothing to show");
@@ -445,8 +460,14 @@ mod tests {
         let mut stopped = stopped;
         let extent = u64::try_from(waveform_tone.len()).unwrap_or(0);
         assert_eq!(
-            resumed.analyzer.snapshot(8, Some(extent)).buckets(),
-            stopped.analyzer.snapshot(8, Some(extent)).buckets(),
+            resumed
+                .analyzer
+                .snapshot(NonZeroU32::new(8).unwrap(), Some(extent))
+                .buckets(),
+            stopped
+                .analyzer
+                .snapshot(NonZeroU32::new(8).unwrap(), Some(extent))
+                .buckets(),
             "a resumed pass stands exactly where the stopped one did"
         );
     }
@@ -581,15 +602,9 @@ mod tests {
         assert!(
             Pass::new(AnalysisParams::default())
                 .analyzer
-                .snapshot(8, None)
+                .snapshot(NonZeroU32::new(8).unwrap(), None)
                 .is_empty()
         );
-    }
-
-    #[kithara::test]
-    fn zero_buckets_snapshots_empty(waveform_half: Vec<f32>) {
-        let mut pass = Pass::new(AnalysisParams::default());
-        assert!(pass.whole(&waveform_half, 1, 0).is_empty());
     }
 
     #[kithara::test]
@@ -597,8 +612,8 @@ mod tests {
         // Broadband square wave: after shared normalization the single loudest
         // band-bucket reaches exactly 1.0.
         let pcm = waveform_square;
-        let wave = Pass::new(flat!()).whole(&pcm, 1, 10);
-        assert_eq!(wave.len(), 10);
+        let wave = Pass::new(flat!()).whole(&pcm, 1, 1);
+        assert_eq!(wave.len(), 13);
         let max = wave
             .iter()
             .map(|b| b.low().max(b.mid()).max(b.high()))
@@ -608,8 +623,8 @@ mod tests {
 
     #[kithara::test]
     fn silence_is_all_zero(analysis_silence: Vec<f32>) {
-        let wave = Pass::new(AnalysisParams::default()).whole(&analysis_silence[..16_384], 1, 8);
-        assert_eq!(wave.len(), 8);
+        let wave = Pass::new(AnalysisParams::default()).whole(&analysis_silence[..16_384], 1, 2);
+        assert_eq!(wave.len(), 7);
         for b in &wave {
             assert_eq!(*b, Bucket::default(), "silence -> all-zero bucket: {b:?}");
         }
@@ -630,22 +645,20 @@ mod tests {
     }
 
     #[kithara::test]
-    fn output_is_native_window_resolution_capped(waveform_tone: Vec<f32>) {
+    fn output_folds_native_windows(waveform_tone: Vec<f32>) {
         // Ten full FFT windows (4096 + 9 hops of 1024).
         let samples = 4096 + 1024 * 9;
         let pcm = &waveform_tone[..samples];
 
-        // Above the window count: native resolution, never fabricated.
         assert_eq!(
-            Pass::new(flat!()).whole(pcm, 1, 100_000).len(),
+            Pass::new(flat!()).whole(pcm, 1, 1).len(),
             10,
-            "large = native count"
+            "factor one keeps native windows"
         );
-        // Below it: still decimates (long-track cap).
         assert_eq!(
             Pass::new(flat!()).whole(pcm, 1, 4).len(),
-            4,
-            "small request decimates"
+            3,
+            "factor four keeps the remainder"
         );
     }
 
@@ -680,7 +693,10 @@ mod tests {
         }
         let extent = u64::try_from(pcm.len()).unwrap_or(0);
         assert_eq!(
-            split.analyzer.snapshot(12, Some(extent)).buckets(),
+            split
+                .analyzer
+                .snapshot(NonZeroU32::new(12).unwrap(), Some(extent))
+                .buckets(),
             whole,
             "a window split across blocks must reduce identically"
         );
@@ -705,7 +721,10 @@ mod tests {
         }
         let extent = u64::try_from(pcm.len()).unwrap_or(0);
         assert_eq!(
-            shuffled.analyzer.snapshot(12, Some(extent)).buckets(),
+            shuffled
+                .analyzer
+                .snapshot(NonZeroU32::new(12).unwrap(), Some(extent))
+                .buckets(),
             ascending,
             "shuffled and duplicated blocks must yield the same waveform"
         );
@@ -720,7 +739,9 @@ mod tests {
         let mut gapped = Pass::new(flat!());
         gapped.push(&pcm[..4096], 1, 0);
         gapped.push(&pcm[8192..], 1, 8192);
-        let partial = gapped.analyzer.snapshot(12, Some(extent));
+        let partial = gapped
+            .analyzer
+            .snapshot(NonZeroU32::new(12).unwrap(), Some(extent));
         assert_ne!(
             partial.buckets(),
             complete,
@@ -729,7 +750,10 @@ mod tests {
 
         gapped.push(&pcm[4096..8192], 1, 4096);
         assert_eq!(
-            gapped.analyzer.snapshot(12, Some(extent)).buckets(),
+            gapped
+                .analyzer
+                .snapshot(NonZeroU32::new(12).unwrap(), Some(extent))
+                .buckets(),
             complete,
             "filling the gap must produce the contiguous result"
         );
@@ -780,9 +804,13 @@ mod tests {
         let mut pass = Pass::new(flat!());
 
         pass.push(&pcm[..8192], 1, 0);
-        let early = pass.analyzer.snapshot(12, Some(extent));
+        let early = pass
+            .analyzer
+            .snapshot(NonZeroU32::new(12).unwrap(), Some(extent));
         pass.push(&pcm[8192..], 1, 8192);
-        let late = pass.analyzer.snapshot(12, Some(extent));
+        let late = pass
+            .analyzer
+            .snapshot(NonZeroU32::new(12).unwrap(), Some(extent));
 
         assert_eq!(early.len(), late.len(), "bucket count must not shift");
         assert_ne!(
@@ -928,7 +956,7 @@ mod tests {
             .low_mid_hz(0.0)
             .mid_high_hz(f32::MAX)
             .build();
-        let wave = Pass::new(params).whole(&waveform_mix, 1, 8);
+        let wave = Pass::new(params).whole(&waveform_mix[..11_264], 1, 1);
         assert_eq!(wave.len(), 8);
         for b in &wave {
             assert_eq!(
@@ -959,8 +987,8 @@ mod tests {
                 .build(),
         );
         assert_eq!((pass.analyzer.size(), pass.analyzer.hop()), (3072, 768));
-        let wave = pass.whole(&waveform_tone, 1, 8);
-        assert_eq!(wave.len(), 8);
+        let wave = pass.whole(&waveform_tone, 1, 3);
+        assert_eq!(wave.len(), 6);
         assert!(
             wave.iter()
                 .all(|b| [b.low(), b.mid(), b.high()].iter().all(|v| v.is_finite())),

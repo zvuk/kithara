@@ -16,7 +16,7 @@ use crate::{
 fn analyse(samples: &[f32], blocks: &[(u64, usize, usize)]) -> Artifacts {
     let pools = pools();
     let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
-        .with_waveform(consts::HOLD_BUCKETS)
+        .with_waveform(consts::HOLD_FOLD)
         .with_beat_detector(beat_detector(), GridParams::default());
     let mut beat = builder.take_detector();
     let mut extent = Extent::default();
