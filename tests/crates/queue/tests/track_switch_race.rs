@@ -817,6 +817,7 @@ async fn observe_completion_order(
         else {
             break;
         };
+        hang_reset!();
         if current != history.last().copied().flatten() {
             history.push(current);
         }
@@ -848,6 +849,11 @@ async fn observe_completion_order(
     &[1],
     consts::RACE_OBSERVE + consts::RACE_GAP,
     None
+)]
+#[case::late_fast_then_slow(
+    &[1, 0],
+    consts::RACE_OBSERVE + consts::RACE_GAP,
+    Some("slow became current after fast")
 )]
 async fn completion_observer_keeps_current_changes_in_bus_order(
     #[case] changes: &[u64],
@@ -907,11 +913,10 @@ async fn completion_observer_keeps_current_changes_in_bus_order(
 /// exclusive, so it must not.
 // The absence watch (slow must not stomp the already-current fast) follows
 // `CurrentTrackChanged` on the bus rather than polling a virtual clock, so each
-// step blocks on a real current-track change. `OBSERVE_DEADLINE` bounds the
-// wait for `fast` as a stall cap, so a slow load on a busy real-clock host is
-// not mistaken for a missing switch; `RACE_OBSERVE` then bounds the barge-in
-// watch after `fast` becomes current. The one remaining timer is `RACE_GAP` between `select(slow)`
-// and `select(fast)`: it is a deliberate race-WIDENING delay (it must land
+// step blocks on a real current-track change. `OBSERVE_DEADLINE` bounds fast's
+// arrival (load + select) as a stall cap; `RACE_OBSERVE` then bounds the
+// barge-in watch after `fast` becomes current. The one remaining timer is
+// `RACE_GAP` between `select(slow)` and `select(fast)`: it is a deliberate race-WIDENING delay (it must land
 // `select(fast)` mid-flight, around slow's loader-completion `select_item`), not
 // a wait for a settled state — synchronising on slow reaching `Loaded` would
 // order the completion before the select and dissolve the contended window this
