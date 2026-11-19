@@ -237,8 +237,10 @@ mod tests {
     };
 
     use kithara_test_utils::kithara;
+    use wasm_bindgen::JsCast;
+    use web_sys::DedicatedWorkerGlobalScope;
 
-    use super::spawn;
+    use super::{spawn, spawn_named};
     use crate::time::{Duration, sleep};
 
     mod consts {
@@ -248,6 +250,21 @@ mod tests {
         /// several concurrent module loads drops a thread on most runs.
         pub(super) const WORKERS: usize = 8;
         pub(super) const TICK: Duration = Duration::from_millis(10);
+        pub(super) const NAME: &str = "kithara-named-worker";
+    }
+
+    fn worker_name() -> String {
+        js_sys::global()
+            .unchecked_into::<DedicatedWorkerGlobalScope>()
+            .name()
+    }
+
+    #[kithara::test(wasm, timeout(Duration::from_secs(10)))]
+    async fn spawn_named_names_the_worker() {
+        let named = spawn_named(consts::NAME, worker_name).join_async().await;
+        let unnamed = spawn(worker_name).join_async().await;
+        assert_eq!(named, Ok(consts::NAME.to_owned()));
+        assert!(unnamed.is_ok_and(|name| name != consts::NAME));
     }
 
     #[kithara::test(wasm, flash(false), timeout(Duration::from_secs(10)))]
