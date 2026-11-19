@@ -206,14 +206,39 @@ impl CiLaneStep {
     }
 }
 
-/// What a lane leaves for a human or a later lane to read.
+/// What a lane leaves for a human or a later lane to read: a `path` in the
+/// checkout, or a `report` the executor writes for this job alone.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CiLaneArtifact {
     pub(crate) name: String,
-    pub(crate) path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) path: Option<String>,
+    /// `ci lane` captures this report in a fresh directory of the build it
+    /// holds and copies it into the job's own storage before releasing that
+    /// build, so a job reusing the build cannot replace it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) report: Option<LaneReport>,
     #[serde(default)]
     pub(crate) when: ArtifactWhen,
+}
+
+impl CiLaneArtifact {
+    /// Whether a lane that ended this way leaves the artifact.
+    pub(crate) fn wanted(&self, failed: bool) -> bool {
+        match self.when {
+            ArtifactWhen::Always => true,
+            ArtifactWhen::Failure => failed,
+        }
+    }
+}
+
+/// A report only the executor can capture for one job.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum LaneReport {
+    /// The ChromeDriver log and the wrapper's NetLog files.
+    Chromium,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
@@ -313,6 +338,9 @@ impl CiProjectConfig {
                     bail!("ext.ci.lanes.{name}.checks must name a tool");
                 }
             }
+            if let Some(artifact) = &lane.artifact {
+                validate_artifact(name, lane, artifact)?;
+            }
             if !lane.left_behind.is_empty() && lane.left_behind_by.is_empty() {
                 bail!("ext.ci.lanes.{name} must name the job its left_behind paths come from");
             }
@@ -381,6 +409,20 @@ impl CiProjectConfig {
             );
         }
         Ok(())
+    }
+}
+
+/// An artifact comes from one place. A report is captured by `ci lane`, which
+/// only GitHub runs; GitLab's `ci run` would run the lane without it.
+fn validate_artifact(name: &str, lane: &CiLaneConfig, artifact: &CiLaneArtifact) -> Result<()> {
+    match (&artifact.path, artifact.report) {
+        (Some(path), None) if !path.is_empty() => Ok(()),
+        (None, Some(_)) if lane.kinds.is_empty() => Ok(()),
+        (None, Some(_)) => bail!(
+            "ext.ci.lanes.{name}.artifact.report is captured by `ci lane`, which GitLab does not run; \
+             the lane must leave `kinds` empty"
+        ),
+        _ => bail!("ext.ci.lanes.{name}.artifact must name either a non-empty path or a report"),
     }
 }
 
@@ -934,6 +976,58 @@ timeout_minutes = 30
         .expect_err("freshness is no lane's choice");
 
         assert!(format!("{error:#}").contains("freshness"), "{error:#}");
+    }
+
+    /// An artifact comes from a checkout path or from a report `ci lane`
+    /// captures, never both or neither, and GitLab runs no lane with a report.
+    #[test]
+    fn an_artifact_names_one_source_and_a_report_stays_off_gitlab() {
+        let validate = |keys: &str| {
+            KitharaExt::from_ctx(&lane_config(
+                keys,
+                r#"{ args = ["test", "wasm"], label = "suite" }"#,
+            ))
+            .expect("parse kithara extension")
+            .ci
+            .validate()
+        };
+        let parsed = KitharaExt::from_ctx(&lane_config(
+            r#"artifact = { name = "driver", report = "chromium", when = "failure" }"#,
+            r#"{ args = ["test", "wasm"], label = "suite" }"#,
+        ))
+        .expect("parse kithara extension");
+        let artifact = parsed.ci.lanes["suite"]
+            .artifact
+            .as_ref()
+            .expect("the lane names its artifact");
+        assert_eq!(artifact.report, Some(super::LaneReport::Chromium));
+        assert_eq!(artifact.path, None);
+
+        validate(r#"artifact = { name = "driver", report = "chromium", when = "failure" }"#)
+            .expect("a GitHub-only lane captures a report");
+        validate(r#"artifact = { name = "log", path = "target/log" }"#)
+            .expect("a checkout path is an artifact");
+        for (keys, refusal) in [
+            (
+                r#"artifact = { name = "driver", path = "target/log", report = "chromium" }"#,
+                "either a non-empty path or a report",
+            ),
+            (
+                r#"artifact = { name = "driver" }"#,
+                "either a non-empty path or a report",
+            ),
+            (
+                r#"artifact = { name = "driver", path = "" }"#,
+                "either a non-empty path or a report",
+            ),
+            (
+                "kinds = [\"main\"]\nartifact = { name = \"driver\", report = \"chromium\" }",
+                "GitLab does not run",
+            ),
+        ] {
+            let error = validate(keys).expect_err(keys);
+            assert!(format!("{error:#}").contains(refusal), "{keys}: {error:#}");
+        }
     }
 
     /// A rebuild check repeats a `just test run` step building only; any other

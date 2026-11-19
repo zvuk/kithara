@@ -639,6 +639,10 @@ pub(crate) const TEST_SERVER_PORT: u16 = 3444;
 /// job's own temporary copy, told only when that build wrote one.
 pub(crate) const LANE_TIMINGS_ENV: &str = "KITHARA_LANE_TIMINGS";
 
+/// Where `ci lane` tells the job's later steps its copy of a lane's report
+/// is, told only once every file of it is copied.
+pub(crate) const LANE_REPORT_ENV: &str = "KITHARA_LANE_REPORT";
+
 /// Cargo's timing reports at the top of each target directory.
 pub(crate) const CARGO_TIMINGS_DIR: &str = "cargo-timings";
 

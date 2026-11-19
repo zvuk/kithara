@@ -2661,6 +2661,58 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
     );
 }
 
+/// A report lane's executor names its job's copy only once it is copied, so
+/// the upload reads that copy alone, and a wanted report it did not name fails
+/// its own step instead of being skipped or read from the shared build.
+#[test]
+fn a_report_lane_uploads_its_job_copy_and_fails_a_missing_one() {
+    let workflow = github_workflow("lane.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "run");
+
+    let check = named_step(job, "Check the lane's report");
+    assert_eq!(
+        mapping_field(check, "if").as_str(),
+        Some(
+            "${{ always() && inputs.artifact-report != '' && (inputs.artifact-when == 'always' || failure()) && env.KITHARA_LANE_REPORT == '' }}"
+        )
+    );
+    assert!(
+        mapping_field(check, "run")
+            .as_str()
+            .is_some_and(|run| run.contains("exit 1")),
+        "a missing report fails its step"
+    );
+
+    let upload = named_step(job, "Upload the lane's report");
+    assert_eq!(
+        mapping_field(upload, "if").as_str(),
+        Some(
+            "${{ always() && (inputs.artifact-when == 'always' || failure()) && ((inputs.artifact-report != '' && env.KITHARA_LANE_REPORT != '') || (inputs.artifact-report == '' && inputs.artifact-path != '')) }}"
+        )
+    );
+    let with = mapping_field(upload, "with")
+        .as_mapping()
+        .expect("the lane upload has inputs");
+    assert_eq!(
+        mapping_field(with, "path").as_str(),
+        Some(
+            "${{ inputs.artifact-report != '' && env.KITHARA_LANE_REPORT || inputs.artifact-path }}"
+        )
+    );
+    assert_eq!(
+        mapping_field(with, "if-no-files-found").as_str(),
+        Some("error")
+    );
+    assert!(
+        step_position(job, "Check the lane's report")
+            < step_position(job, "Upload the lane's report")
+    );
+    assert!(
+        !github_workflow_text("lane.yml").contains("web-chromium"),
+        "the executor picks a report by the catalog's field, not by a lane's name"
+    );
+}
+
 #[test]
 fn external_git_fetches_use_scoped_checkout_token() {
     let workflow = github_workflow("lane.yml");
@@ -2869,6 +2921,11 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         assert!(
             with.get("isolated-target").is_none(),
             "the fan-out still decides where a lane builds"
+        );
+        assert_eq!(
+            mapping_field(with, "artifact-report").as_str(),
+            Some("${{ matrix.artifact.report || '' }}"),
+            "the fan-out loses the lane's report"
         );
     }
     assert_eq!(

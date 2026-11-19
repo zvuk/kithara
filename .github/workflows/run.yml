@@ -137,6 +137,7 @@ jobs:
       history: ${{ matrix.history }}
       artifact-name: ${{ matrix.artifact.name || '' }}
       artifact-path: ${{ matrix.artifact.path || '' }}
+      artifact-report: ${{ matrix.artifact.report || '' }}
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
@@ -169,6 +170,7 @@ jobs:
       download: ${{ join(matrix.download, '|') }}
       artifact-name: ${{ matrix.artifact.name || '' }}
       artifact-path: ${{ matrix.artifact.path || '' }}
+      artifact-report: ${{ matrix.artifact.report || '' }}
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}

@@ -51,6 +51,12 @@ on:
         description: Path the artifact is collected from. Empty uploads nothing.
         default: ""
         type: string
+      artifact-report:
+        description: >-
+          The report `ci lane` captures for this job in place of a path, such
+          as `chromium`. Empty when the artifact is a path.
+        default: ""
+        type: string
       artifact-when:
         description: >-
           `always` uploads the artifact regardless of the lane's result;
@@ -202,10 +208,23 @@ jobs:
       # that expect it: a declared artifact is the lane's own claim that it
       # will produce that file, and an upload that finds nothing is that
       # claim broken, not a reason to warn and move on.
+      #
+      # A report lane's `ci lane` names its job's copy in KITHARA_LANE_REPORT
+      # only once every file is copied, so a wanted report it did not name is
+      # missing or partial: this step fails it on its own, beside the lane's
+      # own result, instead of skipping the upload.
+      - name: Check the lane's report
+        if: ${{ always() && inputs.artifact-report != '' && (inputs.artifact-when == 'always' || failure()) && env.KITHARA_LANE_REPORT == '' }}
+        env:
+          REPORT: ${{ inputs.artifact-report }}
+        run: |
+          echo "::error title=Lane report::the lane named no copy of its $REPORT report; the lane's log says why"
+          exit 1
+
       - name: Upload the lane's report
-        if: ${{ always() && inputs.artifact-path != '' && (inputs.artifact-when == 'always' || failure()) }}
+        if: ${{ always() && (inputs.artifact-when == 'always' || failure()) && ((inputs.artifact-report != '' && env.KITHARA_LANE_REPORT != '') || (inputs.artifact-report == '' && inputs.artifact-path != '')) }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ inputs.artifact-path }}
+          path: ${{ inputs.artifact-report != '' && env.KITHARA_LANE_REPORT || inputs.artifact-path }}
           if-no-files-found: error
