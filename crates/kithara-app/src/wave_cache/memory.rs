@@ -259,9 +259,8 @@ mod tests {
     }
 
     fn wave() -> Waveform {
-        // version 1 + one bucket of three 0.5 band heights (0.5 = 0x3F000000).
         Waveform::new(vec![Bucket::new(0.5, 0.5, 0.5)], NonZeroU64::MIN)
-            .expect("hand-built blob is valid")
+            .expect("hand-built buckets are valid")
     }
 
     fn grid() -> BeatArtifact {
