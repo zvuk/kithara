@@ -7,7 +7,7 @@ use super::{
 };
 #[cfg(feature = "stretch-glide")]
 use crate::WarpCapabilities;
-use crate::{Pitch, WarpConfig, consts};
+use crate::{Pitch, WarpConfig, WarpControls, consts};
 
 #[cfg(feature = "stretch-glide")]
 #[kithara::test]
@@ -15,7 +15,7 @@ fn glide_masks_unsupported_keylock_from_its_prepared_engine() {
     let renderer = renderer(
         &WarpConfig::builder()
             .backend(StretchKind::Glide)
-            .pitch(Pitch::HELD)
+            .controls(WarpControls::builder().pitch(Pitch::HELD).build())
             .speed(0.5)
             .build(),
     );

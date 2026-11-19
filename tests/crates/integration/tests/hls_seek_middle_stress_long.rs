@@ -16,7 +16,9 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio::{sync::broadcast::error::RecvError, task, task::yield_now},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerEvent, ResourceConfig, ResourceSrc},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerEvent, ResourceConfig, ResourceSrc, TrackSettingsChange,
+    },
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -120,7 +122,7 @@ async fn churn_rates(queue: QueueControl<TestPools>, seed: u64, stop: CancelToke
         let random_byte = rng.next_u64().to_le_bytes()[0];
         let rate = consts::RATE_PATTERN[usize::from(random_byte) % consts::RATE_PATTERN.len()];
         let control = queue.clone();
-        task::spawn_blocking(move || control.set_rate(rate))
+        task::spawn_blocking(move || control.configure_track(TrackSettingsChange::Speed(rate)))
             .await
             .expect("rate change")
             .expect("a finite rate is accepted");

@@ -165,7 +165,10 @@ impl DeckCache {
             runtime,
         );
         self.tempo = format_tempo(deck.speed);
-        self.transpose = format_transpose(deck.pitch);
+        self.transpose = format_transpose(
+            deck.warp_controls_available
+                .then(|| deck.settings.controls().pitch()),
+        );
         self.bpm = format_bpm(deck.analysis.bpm, deck.speed);
         self.remain = format_remain(deck);
         self.subtitle = track_subtitle(deck);
@@ -260,6 +263,7 @@ mod tests {
             time::Duration,
             tokio::{sync::watch, task},
         },
+        play::TrackSettings,
     };
     use kithara_test_utils::kithara;
 
@@ -385,7 +389,8 @@ mod tests {
             .eq_bands(Vec::new())
             .tempo(TempoPercent::DEFAULT)
             .synced(false)
-            .pitch(Pitch::default())
+            .settings(TrackSettings::default())
+            .warp_controls_available(true)
             .state(ui)
             .maybe_catalogue(catalogue)
             .build()
