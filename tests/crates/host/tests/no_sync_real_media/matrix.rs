@@ -8,13 +8,14 @@ use kithara::{
     host::{HostConfig, HostSettings, Tap},
     platform::time::{self, Duration},
     play::{
-        CrossfadeSettings, CrossfaderGain, PlayWorker, PlayWorkerConfig, ResourcePrep,
-        TrackSettings,
+        CrossfadeSettings, CrossfaderGain, DeckMixSettingsChange, PlayWorker, PlayWorkerConfig,
+        ResourcePrep, TrackSettings, WarpControls,
     },
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     signal::{SessionFrame, TransportRevision},
     warp::{Pitch, StretchKind, WarpConfig},
 };
+use kithara_command::When;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, fixture_protocol::PackagedSignal,
     hls_fixture::create_test_downloader, memory_asset_store, offline::OfflineHostHarness,
@@ -1110,8 +1111,11 @@ async fn set_levels(
         .collect();
     host.run(move || {
         players.iter().zip(levels).try_for_each(|(player, level)| {
-            player.set_crossfader(
-                CrossfaderGain::checked(level).expect("matrix levels are crossfader gains"),
+            player.mix(
+                When::Next,
+                DeckMixSettingsChange::Crossfader(
+                    CrossfaderGain::checked(level).expect("matrix levels are crossfader gains"),
+                ),
             )
         })
     })
@@ -1147,7 +1151,7 @@ async fn prepare_deck(
         .warp(
             WarpConfig::builder()
                 .backend(StretchKind::Signalsmith)
-                .pitch(Pitch::HELD)
+                .controls(WarpControls::builder().pitch(Pitch::HELD).build())
                 .build(),
         )
         .block_on_underrun(true)
@@ -1163,7 +1167,11 @@ async fn prepare_deck(
         QueueConfig::builder()
             .prep(prep)
             .store(store)
-            .track(TrackSettings::builder().pitch(Pitch::HELD).build())
+            .track(
+                TrackSettings::builder()
+                    .controls(WarpControls::builder().pitch(Pitch::HELD).build())
+                    .build(),
+            )
             .settings(
                 QueueSettings::builder()
                     .crossfade(CrossfadeSettings {

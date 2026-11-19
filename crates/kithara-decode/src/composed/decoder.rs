@@ -358,7 +358,13 @@ where
                     landed_at,
                     preroll,
                     landed_frame: self.frame_offset,
-                    clock: crate::LandingClock::Kept,
+                    clock: if self.codec.spec().sample_rate.get()
+                        == self.demuxer.track_info().sample_rate
+                    {
+                        crate::LandingClock::Kept
+                    } else {
+                        crate::LandingClock::Restarted
+                    },
                 }
             }
             DemuxSeekOutcome::PastEof { duration } => {

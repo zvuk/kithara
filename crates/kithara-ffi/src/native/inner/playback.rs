@@ -1,4 +1,9 @@
-use kithara::{platform::sync::Arc, play::InterruptionKind, queue::Transition};
+use kithara::{
+    platform::sync::Arc,
+    play::{DeckMixSettingsChange, InterruptionKind, TrackSettingsChange},
+    queue::Transition,
+};
+use kithara_command::When;
 
 use super::NativeInner;
 use crate::{
@@ -54,8 +59,8 @@ impl NativeInner {
             duration: view.duration,
             rate: self.queue.rate(),
             playing_rate: self.queue.default_rate(),
-            volume: self.queue.volume(),
-            is_muted: self.queue.is_muted(),
+            volume: f32::from(self.queue.mix_settings().volume()),
+            is_muted: self.queue.mix_settings().muted(),
         }
     }
 
@@ -75,7 +80,6 @@ impl NativeInner {
             #[expr($.unwrap_or(0.0))]
             #[call(position_seconds)]
             pub(crate) fn current_time(&self) -> f64;
-            pub(crate) fn is_muted(&self) -> bool;
             pub(crate) fn pause(&self);
             pub(crate) fn play(&self);
             #[call(default_rate)]
@@ -85,14 +89,30 @@ impl NativeInner {
             pub(crate) fn repeat_mode(&self) -> FfiRepeatMode;
             #[expr($.map_err(FfiError::from))]
             pub(crate) fn reset_eq(&self) -> Result<(), FfiError>;
-            #[expr($.map_err(FfiError::from))]
-            pub(crate) fn set_muted(&self, muted: bool) -> Result<(), FfiError>;
-            #[call(set_default_rate)]
-            #[expr($.map_err(FfiError::from))]
-            pub(crate) fn set_playing_rate(&self, rate: f32) -> Result<(), FfiError>;
-            #[expr($.map_err(FfiError::from))]
-            pub(crate) fn set_volume(&self, volume: f32) -> Result<(), FfiError>;
+        }
+        to self.queue.mix_settings() {
+            #[call(muted)]
+            pub(crate) fn is_muted(&self) -> bool;
+            #[expr(f32::from($))]
             pub(crate) fn volume(&self) -> f32;
         }
+    }
+
+    pub(crate) fn set_muted(&self, muted: bool) -> Result<(), FfiError> {
+        self.queue
+            .mix(When::Next, DeckMixSettingsChange::Muted(muted))
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn set_volume(&self, volume: f32) -> Result<(), FfiError> {
+        self.queue
+            .mix(When::Next, DeckMixSettingsChange::Volume(volume.into()))
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn set_playing_rate(&self, rate: f32) -> Result<(), FfiError> {
+        self.queue
+            .configure_track(TrackSettingsChange::Speed(rate))
+            .map_err(Into::into)
     }
 }
