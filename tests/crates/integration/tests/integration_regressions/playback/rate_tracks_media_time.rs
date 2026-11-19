@@ -5,7 +5,7 @@ use std::{future::Future, path::Path};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     platform::time::{self, Duration},
-    play::{PlayerEvent, ResourceConfig, ResourceSrc},
+    play::{PlayerEvent, ResourceConfig, ResourceSrc, TrackSettingsChange},
 };
 use kithara_integration_tests::{
     bufpool_ext::TestPools,
@@ -100,9 +100,11 @@ async fn blocks_until_end(drain_tone: &'static [u8], temp_dir: &TestTempDir, rat
     )
     .await;
     completed(harness.load_and_fadein(resource)).await;
-    completed(harness.with_queue(move |player| player.set_default_rate(rate)))
-        .await
-        .expect("a finite rate is accepted");
+    completed(
+        harness.with_queue(move |player| player.configure_track(TrackSettingsChange::Speed(rate))),
+    )
+    .await
+    .expect("a finite rate is accepted");
 
     let mut blocks = 0usize;
     let mut ended_at = None;
@@ -156,9 +158,13 @@ async fn media_time_advances_with_the_playing_rate(tone_mp3: &'static [u8], temp
         "precondition: media time must advance at rate 1.0, got {baseline}s"
     );
 
-    completed(harness.with_queue(move |player| player.set_default_rate(FAST_RATE)))
-        .await
-        .expect("a finite rate is accepted");
+    completed(
+        harness.with_queue(move |player| {
+            player.configure_track(TrackSettingsChange::Speed(FAST_RATE))
+        }),
+    )
+    .await
+    .expect("a finite rate is accepted");
     render_blocks(&harness, SETTLE_BLOCKS).await;
     let accelerated = media_advance(&harness, MEASURE_BLOCKS).await;
 

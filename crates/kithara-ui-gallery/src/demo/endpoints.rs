@@ -73,6 +73,11 @@ fn insert_deck_endpoints(registry: &mut MapEndpoints) {
         ("deck.track.title", ValueKind::Text),
         ("deck.track.source_kind", ValueKind::Text),
         ("deck.track.key", ValueKind::Text),
+        ("deck.key.sounding", ValueKind::Text),
+        ("deck.key.color", ValueKind::Color),
+        ("deck.track.key_color", ValueKind::Color),
+        ("deck.key.sounding_hidden", ValueKind::Bool),
+        ("deck.key.transpose_hidden", ValueKind::Bool),
         ("deck.focused", ValueKind::Bool),
     ] {
         registry.insert(

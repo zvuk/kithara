@@ -9,7 +9,7 @@ use std::{
 use kithara::{
     host::HostOwned,
     platform::time::{self, Duration},
-    play::{PlayError, ResourceConfig, ResourceSrc},
+    play::{PlayError, ResourceConfig, ResourceSrc, TrackSettingsChange},
     queue::{Queue, QueueConfig, QueueError, Transition},
     stretch::ElasticBackendConfig,
     warp::{StretchKind, WarpConfig},
@@ -134,8 +134,12 @@ async fn send_target_rate(
     let refused = harness
         .run(queue.control(), move |q| {
             (0..case.burst).find_map(|command| {
-                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 })
-                    .err()
+                q.configure_track(TrackSettingsChange::Speed(if command.is_multiple_of(2) {
+                    4.0
+                } else {
+                    0.5
+                }))
+                .err()
             })
         })
         .await;
@@ -148,7 +152,9 @@ async fn send_target_rate(
     }
     let command_frame = samples.len() / usize::from(CHANNELS);
     harness
-        .run(queue.control(), move |q| q.set_rate(case.target_rate))
+        .run(queue.control(), move |q| {
+            q.configure_track(TrackSettingsChange::Speed(case.target_rate))
+        })
         .await
         .expect("the deck has room for the target rate");
     command_frame
@@ -263,7 +269,7 @@ async fn playing_queue(
     let queue = harness.insert(queue).await;
     harness
         .run(queue.control(), move |q| {
-            q.set_default_rate(case.initial_rate)
+            q.configure_track(TrackSettingsChange::Speed(case.initial_rate))
                 .expect("a finite rate is accepted");
         })
         .await;
@@ -745,7 +751,9 @@ async fn rate_multiplier_step_is_ramped_across_blocks(
     let before_smoothed = trace.events_of("rate_smoothed").len();
     let before_applied = trace.events_of("rate_applied").len();
     harness
-        .run(queue.control(), move |q| q.set_rate(case.target_rate))
+        .run(queue.control(), move |q| {
+            q.configure_track(TrackSettingsChange::Speed(case.target_rate))
+        })
         .await
         .expect("a finite rate is accepted");
     samples.extend(capture_frames(&harness, case.smooth_frames * 12, case.callback_frames).await);

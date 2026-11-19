@@ -34,7 +34,7 @@ if let Some(estimate) = estimator.estimate() {
 
 ## Key Types
 
-- `MusicalKey` - one of the 24 keys, a tonic and a mode.
+- `MusicalKey` - one of the 24 keys, a tonic and a mode, with semitone transposition and Open Key notation (`1d`..`12d`, `1m`..`12m`).
 - `KeyEstimate` - a key and its strength, as the estimator reports it.
 - `RawKey` - a key document as received. `MusicalKey` reads and writes JSON
   only through it, and a document of another schema version or with a tonic

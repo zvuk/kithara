@@ -13,10 +13,14 @@ use kithara::{
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{CrossfaderGain, DeckMixerConfig, ResourceConfig, ResourceSrc, Settled},
+    play::{
+        CrossfaderGain, DeckMixSettingsChange, DeckMixerConfig, ResourceConfig, ResourceSrc,
+        Settled,
+    },
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     warp::WarpConfig,
 };
+use kithara_command::When;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     event::TestEvent,
@@ -863,7 +867,12 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
     .await;
     let queue = harness.player().clone();
     harness
-        .run(&queue, |control| control.set_crossfader(provenance_level()))
+        .run(&queue, |control| {
+            control.mix(
+                When::Next,
+                DeckMixSettingsChange::Crossfader(provenance_level()),
+            )
+        })
         .await
         .expect("set the mix level");
     let first = append_source_loaded(
@@ -1434,7 +1443,12 @@ async fn setup_queue_with_sample_rate(
         ))
         .await;
     harness
-        .run(&queue, |control| control.set_crossfader(provenance_level()))
+        .run(&queue, |control| {
+            control.mix(
+                When::Next,
+                DeckMixSettingsChange::Crossfader(provenance_level()),
+            )
+        })
         .await
         .expect("set the mix level");
 
@@ -1475,7 +1489,12 @@ async fn setup_multivariant_flac_queue(sources: &[Url; 2], temp_dir: &TestTempDi
         ))
         .await;
     harness
-        .run(&queue, |control| control.set_crossfader(provenance_level()))
+        .run(&queue, |control| {
+            control.mix(
+                When::Next,
+                DeckMixSettingsChange::Crossfader(provenance_level()),
+            )
+        })
         .await
         .expect("set the mix level");
 
@@ -1515,7 +1534,12 @@ async fn setup_flac_queue_with_player_config(
         ))
         .await;
     harness
-        .run(&queue, |control| control.set_crossfader(provenance_level()))
+        .run(&queue, |control| {
+            control.mix(
+                When::Next,
+                DeckMixSettingsChange::Crossfader(provenance_level()),
+            )
+        })
         .await
         .expect("set the mix level");
     let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
@@ -1554,7 +1578,12 @@ async fn setup_sine_aac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> Que
         ))
         .await;
     harness
-        .run(&queue, |control| control.set_crossfader(provenance_level()))
+        .run(&queue, |control| {
+            control.mix(
+                When::Next,
+                DeckMixSettingsChange::Crossfader(provenance_level()),
+            )
+        })
         .await
         .expect("set the mix level");
 

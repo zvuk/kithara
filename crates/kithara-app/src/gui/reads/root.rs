@@ -106,16 +106,20 @@ impl<'a, 'b: 'a> Node<'a> for &'a ReadRoot<'b> {
 
 #[cfg(test)]
 mod tests {
-    use std::mem;
+    use std::{mem, num::NonZeroU32};
 
     use ::kithara::{
         abr::AbrMode,
-        analysis::{Mode, MusicalKey, PitchClass},
+        analysis::{KeyEstimate, Mode, MusicalKey, PitchClass, TrackAnalysis},
         effects::GainDb,
-        platform::tokio::runtime::Handle,
-        play::Pitch,
+        platform::{time::Duration, tokio::runtime::Handle},
+        play::{Pitch, TrackSettings},
         prelude::TrackMetadata,
-        ui::render::{ReadValue, Reads, TableCell, Walk},
+        ui::{
+            render::{ReadValue, Reads, TableCell, Walk},
+            skin::ColorRole,
+        },
+        warp::{Semitones, WarpControls},
     };
     use iced::Size;
     use image::ImageFormat;
@@ -230,7 +234,8 @@ mod tests {
                         .eq_bands(eq_bands.clone())
                         .tempo(TempoPercent::DEFAULT)
                         .synced(false)
-                        .pitch(Pitch::default())
+                        .settings(TrackSettings::default())
+                        .warp_controls_available(true)
                         .state(ui)
                         .build()
                 })
@@ -458,7 +463,11 @@ mod tests {
         let mut unowned: Vec<String> = documented.chain(synthesized).collect();
         for mut fixture in [covered, fixture_in(EqMode::FourBand)] {
             fixture.library.set_column_width("startup", "artist", 200.0);
-            let shown = fixture.shown();
+            let mut shown = fixture.shown();
+            shown.decks[0].analysis.key = Some(MusicalKey {
+                mode: Mode::Minor,
+                tonic: PitchClass::A,
+            });
             let root = fixture.root(&shown);
             let walk = Walk::new(&root);
             unowned.retain(|key| walk.get(key).is_none());
@@ -513,7 +522,7 @@ mod tests {
     fn the_key_lock_hides_on_a_deck_that_cannot_hold_the_pitch() {
         let fixture = Fixture::new(["+0.0%", "+0.0%"]);
         let mut shown = fixture.shown();
-        shown.decks[0].pitch = None;
+        shown.decks[0].warp_controls_available = false;
         let root = fixture.root(&shown);
         let walk = Walk::new(&root);
 
@@ -739,6 +748,187 @@ mod tests {
                 .find(|cell| cell.id() == "key")
                 .map(TableCell::value),
             Some(&::kithara::ui::render::TableValue::Text("1m".into()))
+        );
+    }
+
+    #[kithara::test]
+    fn sounding_key_follows_effective_pitch() {
+        let fixture = Fixture::new(["+0.0%", "+0.0%"]);
+        for (speed_shift, pitch, expected, color) in [
+            (1.0_f32, Some(Pitch::default()), "8d", ColorRole::Key8d),
+            (-1.0, Some(Pitch::default()), "6d", ColorRole::Key6d),
+            (1.0, Some(Pitch::HELD), "1d", ColorRole::Key1d),
+            (0.49, Some(Pitch::default()), "1d", ColorRole::Key1d),
+            (0.51, Some(Pitch::default()), "8d", ColorRole::Key8d),
+            (1.0, None, "8d", ColorRole::Key8d),
+            (0.0, None, "1d", ColorRole::Key1d),
+            (144.0, Some(Pitch::default()), "1d", ColorRole::Key1d),
+            (
+                1.0,
+                Some(Pitch::Vinyl {
+                    shift: Semitones::DEFAULT.step_up(),
+                }),
+                "3d",
+                ColorRole::Key3d,
+            ),
+        ] {
+            let mut shown = fixture.shown();
+            shown.decks[0].analysis.key = Some(MusicalKey {
+                tonic: PitchClass::C,
+                mode: Mode::Major,
+            });
+            shown.decks[0].warp_controls_available = pitch.is_some();
+            shown.decks[0].settings = TrackSettings::builder()
+                .controls(
+                    WarpControls::builder()
+                        .pitch(pitch.unwrap_or(Pitch::HELD))
+                        .build(),
+                )
+                .build();
+            shown.decks[0].speed = (speed_shift / 12.0).exp2();
+            let root = fixture.root(&shown);
+            let walk = Walk::new(&root);
+
+            assert_eq!(
+                walk.get("deck.key.sounding@deck=a"),
+                Some(ReadValue::Text(expected))
+            );
+            assert_eq!(
+                walk.get("deck.key.color@deck=a"),
+                Some(ReadValue::Color(color))
+            );
+            assert_eq!(
+                walk.get("deck.track.key@deck=a"),
+                Some(ReadValue::Text("1d"))
+            );
+            assert_eq!(
+                walk.get("deck.track.key_color@deck=a"),
+                Some(ReadValue::Color(ColorRole::Key1d))
+            );
+        }
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn strip_keeps_track_key_chip_sounds_transposed_library_stays_source() {
+        let a_minor = MusicalKey {
+            tonic: PitchClass::A,
+            mode: Mode::Minor,
+        };
+        let c_major = MusicalKey {
+            tonic: PitchClass::C,
+            mode: Mode::Major,
+        };
+        let artefacts = |key: MusicalKey| -> crate::analysis::TrackArtifacts {
+            TrackAnalysis::builder()
+                .media_origin(Duration::ZERO)
+                .token("fixture".into())
+                .revision(1)
+                .source_sample_rate(NonZeroU32::new(44_100).expect("non-zero"))
+                .key(KeyEstimate::new(key, 0.9).expect("valid strength"))
+                .build()
+                .into()
+        };
+
+        let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
+        fixture.facts.insert(
+            "dropped.mp3".to_owned(),
+            TrackFacts {
+                bpm: None,
+                key: Some(a_minor),
+            },
+        );
+        let shown = fixture.shown();
+        {
+            let root = fixture.root(&shown);
+            let walk = Walk::new(&root);
+            assert_eq!(
+                walk.get("deck.track.key@deck=a"),
+                Some(ReadValue::Text("")),
+                "no key publishes empty text on the strip"
+            );
+            assert_eq!(
+                walk.get("deck.key.sounding@deck=a"),
+                Some(ReadValue::Text("")),
+                "no key publishes empty text on the chip"
+            );
+        }
+
+        fixture.decks[0].0.set_analysis(Some(artefacts(a_minor)));
+        let shown = fixture.shown();
+        assert_eq!(
+            Walk::new(&fixture.root(&shown)).get("deck.track.key@deck=a"),
+            Some(ReadValue::Text("1m")),
+        );
+        assert_eq!(
+            Walk::new(&fixture.root(&shown)).get("deck.key.sounding@deck=a"),
+            Some(ReadValue::Text("1m")),
+        );
+
+        fixture.decks[0].0.speed = 1.08;
+        let mut unlocked = fixture.shown();
+        unlocked.decks[0].settings = TrackSettings::builder()
+            .controls(
+                WarpControls::builder()
+                    .pitch(Pitch::Vinyl {
+                        shift: Semitones::DEFAULT,
+                    })
+                    .build(),
+            )
+            .build();
+        assert_eq!(
+            Walk::new(&fixture.root(&unlocked)).get("deck.track.key@deck=a"),
+            Some(ReadValue::Text("1m")),
+            "+8% tempo with KEY LOCK off leaves the track key alone"
+        );
+        assert_eq!(
+            Walk::new(&fixture.root(&unlocked)).get("deck.key.sounding@deck=a"),
+            Some(ReadValue::Text("8m")),
+            "+8% tempo with KEY LOCK off rounds the sounding key up one semitone"
+        );
+
+        fixture.decks[0].0.set_analysis(Some(artefacts(c_major)));
+        let mut transposed = fixture.shown();
+        transposed.decks[0].settings = TrackSettings::builder()
+            .controls(
+                WarpControls::builder()
+                    .pitch(Pitch::Held {
+                        shift: Semitones::DEFAULT.step_up(),
+                    })
+                    .build(),
+            )
+            .build();
+        let root = fixture.root(&transposed);
+        let walk = Walk::new(&root);
+        assert_eq!(
+            walk.get("deck.track.key@deck=a"),
+            Some(ReadValue::Text("1d")),
+            "strip keeps C major as 1d"
+        );
+        assert_eq!(
+            walk.get("deck.key.sounding@deck=a"),
+            Some(ReadValue::Text("8d")),
+            "chip sounds C major at +1 as 8d"
+        );
+        assert_eq!(
+            walk.get("deck.track.key_color@deck=a"),
+            Some(ReadValue::Color(::kithara::ui::skin::ColorRole::Key1d))
+        );
+        assert_eq!(
+            walk.get("deck.key.color@deck=a"),
+            Some(ReadValue::Color(::kithara::ui::skin::ColorRole::Key8d))
+        );
+
+        let Some(ReadValue::Table(rows)) = walk.get("source.rows@source=startup") else {
+            panic!("startup rows are readable");
+        };
+        assert_eq!(
+            rows[0]
+                .cells()
+                .iter()
+                .find(|cell| cell.id() == "key")
+                .map(TableCell::value),
+            Some(&::kithara::ui::render::TableValue::Text("1m".into())),
+            "library keeps the untransposed key"
         );
     }
 }

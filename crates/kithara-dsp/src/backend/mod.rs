@@ -11,6 +11,7 @@ mod fir;
 mod interpolate;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) mod portable;
+pub(crate) mod route;
 mod simd;
 #[cfg(all(
     feature = "spectrum",

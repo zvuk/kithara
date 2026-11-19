@@ -9,7 +9,7 @@ use kithara::{
         flash::real_io,
         time::{self, Duration},
     },
-    play::{PlayerEvent, ResourceConfig, ResourceSrc},
+    play::{PlayerEvent, ResourceConfig, ResourceSrc, TrackSettingsChange},
     queue::{QueueEvent, TrackSource, TrackStatus},
     warp::{StretchKind, WarpConfig},
 };
@@ -190,7 +190,7 @@ async fn offline_harness_glide_varispeed(drain_tone: &'static [u8], temp_dir: Te
         })
         .await;
     harness
-        .with_queue(move |player| player.set_default_rate(GLIDE_RATE))
+        .with_queue(move |player| player.configure_track(TrackSettingsChange::Speed(GLIDE_RATE)))
         .await
         .expect("a finite rate is accepted");
 

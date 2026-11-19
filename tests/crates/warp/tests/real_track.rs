@@ -5,6 +5,7 @@
 use std::num::{NonZero, NonZeroU32};
 
 use kithara::{
+    play::WarpControls,
     signal::{AudioSpec, FrameCount, InterleavedView, SessionEpoch, SessionFrame},
     stretch::StretchKind,
     sync::{SessionAnchor, SessionBeat},
@@ -347,7 +348,7 @@ fn render(
     let mut rendered = render_configured_grid_with_updates(
         WarpConfig::builder()
             .speed(1.0)
-            .pitch(Pitch::HELD)
+            .controls(WarpControls::builder().pitch(Pitch::HELD).build())
             .backend(backend)
             .render_quantum_frames(NonZero::new(64).expect("quantum"))
             .build(),

@@ -3,6 +3,7 @@
 use cochlea_features::{Audio as CochleaAudio, SegmentOpts, segment_timeline};
 use kithara::{
     platform::time::{Duration, WallInstant},
+    play::TrackSettingsChange,
     queue::TrackSource,
     warp::{StretchKind, WarpConfig},
 };
@@ -37,7 +38,7 @@ async fn render_tempo_control(
         .with_queue(move |player| {
             if !live_rate {
                 player
-                    .set_default_rate((played_bpm / 120.0).as_())
+                    .configure_track(TrackSettingsChange::Speed((played_bpm / 120.0).as_()))
                     .expect("control playback rate");
             }
             let id = player.append(deck).expect("append tempo control");
@@ -57,7 +58,9 @@ async fn render_tempo_control(
         .await;
     if live_rate {
         harness
-            .with_queue(move |player| player.set_default_rate((played_bpm / 120.0).as_()))
+            .with_queue(move |player| {
+                player.configure_track(TrackSettingsChange::Speed((played_bpm / 120.0).as_()))
+            })
             .await
             .expect("live playback rate");
     }

@@ -317,6 +317,7 @@ fn finish_control(
             scope: extra.scope,
             zoom: extra.zoom,
             active: extra.active,
+            color_read: extra.color_read,
             writes: extra.writes,
             ..ControlSite::new(control, path)
         },

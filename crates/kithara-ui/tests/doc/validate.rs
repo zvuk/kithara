@@ -40,6 +40,11 @@ fn registry() -> MapEndpoints {
         ),
         (
             EndpointCategory::Model,
+            "ui.tint",
+            EndpointDesc::new(ValueKind::Color),
+        ),
+        (
+            EndpointCategory::Model,
             "library.visible_tracks",
             EndpointDesc::new(ValueKind::Table),
         ),
@@ -851,6 +856,40 @@ fn a_node_the_hosts_draw_outside_the_flow_is_refused_inside_a_modal() {
         assert!(
             matches!(&error, UiDocError::InvalidId { id: path, .. } if *path == format!("demo/{id}")),
             "{id}: {error:?}"
+        );
+    }
+}
+
+#[kithara::test]
+fn a_bound_colour_requires_a_palette_role() {
+    accepted(module_root(
+        r#"Text(id: "sample", label: "Sample", color: FromRead(read: Model(id: "ui.tint"), base: Accent))"#,
+    ));
+    for node in [
+        r#"Text(
+            id: "key",
+            label: "4m",
+            color: FromRead(read: Model(id: "ui.measure"), base: Accent),
+        )"#,
+        r#"Glyph(
+            id: "icon",
+            icon: Music2,
+            color: FromRead(read: Model(id: "ui.measure"), base: Accent),
+        )"#,
+        r#"Row(
+            id: "chip",
+            active_background: FromRead(read: Model(id: "ui.measure"), base: Accent),
+            children: [],
+        )"#,
+    ] {
+        let error = refused(module_root(node));
+        assert!(
+            matches!(
+                &error,
+                UiDocError::BindingType { expected, got, .. }
+                    if expected == "Color" && got == "Scalar"
+            ),
+            "{node}: {error:?}"
         );
     }
 }

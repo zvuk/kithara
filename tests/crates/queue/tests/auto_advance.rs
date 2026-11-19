@@ -5,12 +5,13 @@ use kithara::{
     download::Downloader,
     events::{EventReceiver, TrackId},
     platform::{sync::Arc, time::Duration},
-    play::PlayError,
+    play::{DeckMixSettingsChange, PlayError, TrackSettingsChange},
     queue::{
         ActionAtItemEnd, AdvanceReason, Queue, QueueConfig, QueueControl, QueueError, QueueEvent,
         RepeatMode, TrackStatus, Transition,
     },
 };
+use kithara_command::When;
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     event::TestEvent,
@@ -694,7 +695,12 @@ async fn a_successor_the_deck_had_no_room_for_reloads_and_meets_its_predecessor(
              before A ends"
         );
         let refused = harness
-            .run(&queue, |q| (0..FLOOD).find_map(|_| q.set_volume(1.0).err()))
+            .run(&queue, |q| {
+                (0..FLOOD).find_map(|_| {
+                    q.mix(When::Next, DeckMixSettingsChange::Volume(1.0.into()))
+                        .err()
+                })
+            })
             .await;
         assert!(
             matches!(refused, Some(QueueError::Play(PlayError::Full(_)))),
@@ -1138,7 +1144,9 @@ async fn a_crossfade_at_double_speed_starts_its_duration_before_the_outgoing_end
         .await;
 
     harness
-        .run(&queue, |q| q.set_default_rate(SPEED))
+        .run(&queue, |q| {
+            q.configure_track(TrackSettingsChange::Speed(SPEED))
+        })
         .await
         .expect("a finite rate is accepted");
 
@@ -1285,7 +1293,9 @@ async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() 
     let queue = harness.insert_control(Queue::new(config)).await;
 
     harness
-        .run(&queue, move |q| q.set_default_rate(SPEED))
+        .run(&queue, move |q| {
+            q.configure_track(TrackSettingsChange::Speed(SPEED))
+        })
         .await
         .expect("a finite rate is accepted");
 

@@ -2,10 +2,11 @@ use std::collections::BTreeMap;
 
 use kithara::{
     abr::AbrMode,
+    analysis::MusicalKey,
     effects::GainDb,
     host::{DeckId, api::Tempo},
     platform::sync::Arc,
-    play::Pitch,
+    play::TrackSettings,
     prelude::EngineLoadSnapshot,
     queue::TrackEntry,
 };
@@ -82,7 +83,8 @@ pub(crate) struct DeckSnapshot {
     pub(crate) tempo: TempoPercent,
     pub(crate) speed: f32,
     pub(crate) synced: bool,
-    pub(crate) pitch: Option<Pitch>,
+    pub(crate) settings: TrackSettings,
+    pub(crate) warp_controls_available: bool,
     pub(crate) playing: bool,
     pub(crate) duration: f64,
     pub(crate) position: f64,
@@ -107,6 +109,7 @@ pub(crate) struct AnalysisView {
     pub(crate) unready: Arc<[[f32; 2]]>,
     pub(crate) artifacts: Option<TrackArtifacts>,
     pub(crate) bpm: Option<f32>,
+    pub(crate) key: Option<MusicalKey>,
 }
 
 #[bon::bon]
@@ -119,7 +122,8 @@ impl DeckSnapshot {
         eq_bands: Vec<GainDb>,
         tempo: TempoPercent,
         synced: bool,
-        pitch: Option<Pitch>,
+        settings: TrackSettings,
+        #[builder(default)] warp_controls_available: bool,
         state: &UiState,
         catalogue: Option<&kithara_app_library::Playable>,
     ) -> Self {
@@ -136,7 +140,8 @@ impl DeckSnapshot {
             tempo,
             speed: state.speed,
             synced,
-            pitch,
+            settings,
+            warp_controls_available,
             current_track_index: state.current_track_index,
             duration: state.duration,
             position: state.position,
@@ -208,6 +213,7 @@ impl AnalysisView {
                 .as_ref()
                 .and_then(TrackArtifacts::grid)
                 .map(|grid| grid.as_raw().bpm.as_()),
+            key: state.analysis.as_ref().and_then(TrackArtifacts::key),
             beats: Arc::clone(&state.beat_marks),
             downbeats: Arc::clone(&state.downbeat_marks),
             unready: Arc::clone(&state.unready_ranges),

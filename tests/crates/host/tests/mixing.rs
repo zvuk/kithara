@@ -10,7 +10,8 @@ use kithara::{
     },
     platform::time::{self, Duration},
     play::{
-        CrossfaderGain, PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep, SessionDuckingMode,
+        CrossfaderGain, DeckMixSettingsChange, PlayError, PlayWorker, PlayWorkerConfig,
+        ResourcePrep, SessionDuckingMode,
     },
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     signal::SessionFrame,
@@ -291,10 +292,12 @@ impl MixHarness {
         let levels = levels.to_vec();
         self.host
             .run(move || {
-                players
-                    .iter()
-                    .zip(levels)
-                    .try_for_each(|(player, level)| player.set_crossfader(crossfader(level)))
+                players.iter().zip(levels).try_for_each(|(player, level)| {
+                    player.mix(
+                        When::Next,
+                        DeckMixSettingsChange::Crossfader(crossfader(level)),
+                    )
+                })
             })
             .await
     }
@@ -388,15 +391,19 @@ async fn a_deck_mix_shows_once_its_mixer_applies_it() {
     harness
         .host
         .run(move || {
-            control.set_volume(0.5).expect("send volume");
-            control.set_muted(true).expect("send mute");
+            control
+                .mix(When::Next, DeckMixSettingsChange::Volume(0.5.into()))
+                .expect("send volume");
+            control
+                .mix(When::Next, DeckMixSettingsChange::Muted(true))
+                .expect("send mute");
         })
         .await;
-    assert_eq!(player.volume(), 1.0);
-    assert!(!player.is_muted());
+    assert_eq!(f32::from(player.mix_settings().volume()), 1.0);
+    assert!(!player.mix_settings().muted());
     harness.render_block().await;
-    assert_eq!(player.volume(), 0.5);
-    assert!(player.is_muted());
+    assert_eq!(f32::from(player.mix_settings().volume()), 0.5);
+    assert!(player.mix_settings().muted());
     assert!(matches!(
         events.try_recv().expect("volume event").event,
         kithara::play::PlayerEvent::VolumeChanged { volume: 0.5 }
@@ -697,7 +704,7 @@ async fn session_mix_does_not_mirror_player_content_volume(constant_four: Asset)
     harness.apply(&[0.5]).await.expect("apply mix");
 
     assert_eq!(
-        harness.players[0].volume(),
+        f32::from(harness.players[0].mix_settings().volume()),
         1.0,
         "session mix must not mirror player content volume"
     );

@@ -13,6 +13,7 @@ mod counts;
 mod lifecycle;
 mod reaction_commands;
 mod reactions;
+mod search;
 mod support;
 
 use support::{

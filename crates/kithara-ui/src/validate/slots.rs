@@ -126,6 +126,7 @@ pub(super) fn read_slots(
     [
         (site.status, Some(ValueKind::Text)),
         (site.query, Some(ValueKind::Text)),
+        (site.color_read, Some(ValueKind::Color)),
         (site.scope, Some(ValueKind::Scalar)),
         (site.zoom, Some(ValueKind::Scalar)),
         (site.active, Some(ValueKind::Bool)),
