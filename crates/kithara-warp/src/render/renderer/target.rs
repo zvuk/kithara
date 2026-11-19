@@ -10,6 +10,7 @@ use num_traits::ToPrimitive;
 use tracing::warn;
 
 use super::{core::WarpRenderer, residency::SourceResidency};
+use crate::WarpControls;
 
 #[derive(Default)]
 pub(in crate::render) struct PreparedTarget {
@@ -68,7 +69,7 @@ where
         reusable: PreparedTarget,
         measure_capabilities: bool,
     ) -> Result<PreparedTarget, ElasticError> {
-        let (kind, pitch_engine) = Self::stretch_for(config.backend(), config.pitch());
+        let (kind, pitch_engine) = Self::stretch_for(config.backend(), config.controls().pitch());
         let source_block_frames = config.source_block_frames();
         let PreparedTarget {
             projection: reusable_projection,
@@ -388,7 +389,7 @@ where
         }
         let config = crate::WarpConfig::builder()
             .backend(kind)
-            .pitch(self.requested_pitch)
+            .controls(WarpControls::builder().pitch(self.requested_pitch).build())
             .backends(self.backends)
             .source_block_frames(self.source_block_frames)
             .maybe_render_quantum_frames(self.render_quantum_frames)

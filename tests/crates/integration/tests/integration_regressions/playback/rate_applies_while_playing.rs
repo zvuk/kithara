@@ -5,7 +5,7 @@ use std::future::Future;
 use kithara::{
     events::TrackId,
     platform::time::{self, Duration, WallInstant},
-    play::PlayerEvent,
+    play::{PlayerEvent, TrackSettingsChange},
     signal::AudioChunkInfo,
 };
 use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
@@ -37,9 +37,13 @@ async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity() {
     assert_eq!(paused_rates, [0.0]);
     assert_eq!(oracle.player().rate(), 0.0);
 
-    completed(oracle.with_queue(move |player| player.set_default_rate(FAST_RATE)))
-        .await
-        .expect("a finite rate is accepted");
+    completed(
+        oracle.with_queue(move |player| {
+            player.configure_track(TrackSettingsChange::Speed(FAST_RATE))
+        }),
+    )
+    .await
+    .expect("a finite rate is accepted");
     wait_for_default_rate(&oracle).await;
     assert_eq!(oracle.player().default_rate(), FAST_RATE);
     hang_reset!();
@@ -139,7 +143,9 @@ async fn loaded_harness(rate: f32) -> OfflinePlayer {
         .expect("UTF-8 fixture path")
         .to_owned();
     let deck_id = completed(harness.with_queue(move |player| {
-        player.set_default_rate(rate).expect("initial lane speed");
+        player
+            .configure_track(TrackSettingsChange::Speed(rate))
+            .expect("initial lane speed");
         let deck_id = TrackId::allocate();
         player
             .append_with_id(deck_id, deck_source)

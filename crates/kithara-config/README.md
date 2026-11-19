@@ -71,6 +71,10 @@ errors.
   change, `settings()` returns the configuration as last applied. The derive
   adds `<Name>Control` (getters and `set_<field>`) and `<Name>Exec`.
 
+For `#[config(nested, live)]`, import the nested configuration and its generated
+`<Name>Change` together, or use the configuration's qualified module path. The
+parent converts from the concrete nested change enum, including across crates.
+
 A rejected change leaves the accepted configuration intact.
 
 See the [workspace architecture](https://github.com/zvuk/kithara/wiki/kithara)

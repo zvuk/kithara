@@ -127,6 +127,7 @@ kithara = { workspace = true, default-features = false, features = [
     "stream",
 ] }
 kithara-audio = { workspace = true }
+kithara-command = { workspace = true }
 kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["mirror"] }
 kithara-events = { workspace = true }
@@ -178,7 +179,6 @@ kithara = { workspace = true, default-features = false, features = [
     "symphonia",
     "webcodecs",
 ] }
-kithara-command = { workspace = true }
 kithara-test-utils = { workspace = true }
 
 # `resample-rubato` is in `kithara-play`'s default set, so turning defaults off

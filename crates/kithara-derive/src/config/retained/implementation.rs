@@ -1061,9 +1061,7 @@ mod tests {
             "pub enum RigChange { Level (u8) , \
              Gauge (< Gauge as :: kithara_config :: LiveConfig > :: Change) , Rate (u32) , }"
         ));
-        assert!(expanded.contains(
-            "impl :: core :: convert :: From < < Gauge as :: kithara_config :: LiveConfig > :: Change > for RigChange"
-        ));
+        assert!(expanded.contains("impl :: core :: convert :: From < GaugeChange > for RigChange"));
         assert!(expanded.contains(
             "const _ : () = :: core :: assert ! (! < Gauge as :: kithara_config :: LiveConfig > :: OWNER_FIELDS"
         ));
@@ -1087,5 +1085,18 @@ mod tests {
             !expanded.contains("Limit ("),
             "a field without live has no variant"
         );
+    }
+    #[kithara::test(native)]
+    fn a_nested_live_conversion_names_the_foreign_change_enum() {
+        let expanded = expansion(quote! {
+            #[config(fields(value))]
+            struct Outer {
+                #[config(nested, live)]
+                controls: external::Controls,
+            }
+        });
+        assert!(expanded.contains(
+            "impl :: core :: convert :: From < external :: ControlsChange > for OuterChange"
+        ));
     }
 }
