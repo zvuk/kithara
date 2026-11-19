@@ -87,8 +87,8 @@ fn prepare_browser_directory(args: &[String]) -> Result<TempDir, io::Error> {
             eprintln!("webdriver config: fixture network perf logging requested");
             // The CI lane that owns the directory names it; without it no capture is chosen.
             if let Some(dir) = env::var_os(NET_LOG_DIR) {
-                let file = config::net_log_file(Path::new(&dir), stem).map_err(io::Error::other)?;
-                config::apply_net_log(&mut config, &file).map_err(io::Error::other)?;
+                let file = config::net_log_file(&mut config, Path::new(&dir), stem)
+                    .map_err(io::Error::other)?;
                 eprintln!(
                     "webdriver config: fixture NetLog capture requested at {}",
                     file.display()

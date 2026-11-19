@@ -42,10 +42,15 @@ pub(crate) enum NetLogError {
     },
 }
 
-/// Names this invocation's Chrome network log in the CI-owned directory. A file a
-/// previous run of the same binary left there is removed, so a file present
-/// after the run was written by this run's browser.
-pub(crate) fn net_log_file(dir: &Path, stem: &str) -> Result<PathBuf, NetLogError> {
+/// Names this invocation's Chrome network log in the CI-owned directory and adds
+/// its switches to `config`. Only once the configuration is accepted is a file a
+/// previous run of the same binary left there removed, so a file present after
+/// the run was written by this run's browser.
+pub(crate) fn net_log_file(
+    config: &mut serde_json::Value,
+    dir: &Path,
+    stem: &str,
+) -> Result<PathBuf, NetLogError> {
     if !dir.is_absolute() || dir.to_str().is_none() {
         return Err(NetLogError::Dir(dir.to_path_buf()));
     }
@@ -58,6 +63,7 @@ pub(crate) fn net_log_file(dir: &Path, stem: &str) -> Result<PathBuf, NetLogErro
         return Err(unusable(dir, io::ErrorKind::NotADirectory.into()));
     }
     let file = dir.join(format!("{stem}.jsonl"));
+    apply_net_log(config, &file)?;
     match fs::remove_file(&file) {
         Err(source) if source.kind() != io::ErrorKind::NotFound => Err(unusable(&file, source)),
         _ => Ok(file),
@@ -281,7 +287,11 @@ mod tests {
         }
         for dir in ["", "relative/netlog"] {
             assert!(matches!(
-                net_log_file(Path::new(dir), "web_analysis-3b2b9b5370fa3bf7"),
+                net_log_file(
+                    &mut config(),
+                    Path::new(dir),
+                    "web_analysis-3b2b9b5370fa3bf7"
+                ),
                 Err(NetLogError::Dir(_))
             ));
         }
@@ -296,7 +306,10 @@ mod tests {
         fs::write(&own, "stale").expect("stale own leaf");
         fs::write(&foreign, "other binary").expect("foreign leaf");
 
-        assert_eq!(net_log_file(dir.path(), stem).expect("usable dir"), own);
+        assert_eq!(
+            net_log_file(&mut config(), dir.path(), stem).expect("usable dir"),
+            own
+        );
         assert!(
             !own.exists(),
             "a stale same-stem file is never kept as current"
@@ -305,9 +318,30 @@ mod tests {
 
         let missing = dir.path().join("missing");
         assert!(matches!(
-            net_log_file(&missing, stem),
+            net_log_file(&mut config(), &missing, stem),
             Err(NetLogError::Io { .. })
         ));
         assert!(!missing.exists(), "the directory belongs to the CI owner");
+    }
+
+    #[kithara::test(native)]
+    fn net_log_rejected_config_keeps_the_existing_leaf() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let stem = "web_bootstrap-8f845460d7dd326c";
+        let own = dir.path().join(format!("{stem}.jsonl"));
+        fs::write(&own, "previous run").expect("existing own leaf");
+        let mut conflicting = json!({
+            "goog:chromeOptions": { "args": ["--net-log-capture-mode=IncludeSensitive"] }
+        });
+
+        assert!(matches!(
+            net_log_file(&mut conflicting, dir.path(), stem),
+            Err(NetLogError::Conflict(_))
+        ));
+        assert_eq!(
+            fs::read_to_string(&own).expect("leaf kept"),
+            "previous run",
+            "a refused configuration aborts before the leaf is touched"
+        );
     }
 }
