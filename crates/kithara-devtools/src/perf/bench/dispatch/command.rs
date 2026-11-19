@@ -116,16 +116,16 @@ fn resolve(ctx: &Ctx, repository: &str, source: &str) -> Result<String> {
 }
 
 pub(in crate::perf::bench) fn run(args: &DispatchArgs, ctx: &Ctx) -> Result<()> {
-    ensure!(
-        args.preflight.is_none() || matches!(args.host, Host::Linux),
-        "benchmark preflight dispatch requires Linux"
-    );
     let input = args
         .preflight
         .as_ref()
         .map(fs::read_to_string)
         .transpose()?;
     if let Some(raw) = &input {
+        ensure!(
+            !matches!(args.host, Host::Macos) || !raw.contains('$'),
+            "native preflight declaration cannot contain a dollar sign"
+        );
         Preflight::parse(&args.request, raw, false)?;
         println!("preflight declaration SHA-256 {}", sha256(raw.as_bytes()));
     }
@@ -168,7 +168,7 @@ pub(in crate::perf::bench) fn run(args: &DispatchArgs, ctx: &Ctx) -> Result<()> 
             println!("https://github.com/{repository}/actions/workflows/dispatch.yml");
             Ok(())
         }
-        Host::Macos => macos::run(ctx, &config, &request),
+        Host::Macos => macos::run(ctx, &config, &request, input.as_deref()),
     }
 }
 
@@ -249,21 +249,33 @@ mod tests {
     }
 
     #[test]
-    fn bench_mac_preflight_is_refused_before_loading_or_running_anything() {
+    fn bench_mac_preflight_rejects_invalid_declarations_before_dispatch() {
         let root = tempfile::tempdir().unwrap();
         let manifest = root.path().join("Cargo.toml");
         fs::write(&manifest, "[workspace]\n").unwrap();
         let ctx = Ctx::load_from_manifest(&manifest).unwrap();
+        let file = root.path().join("declaration.json");
         let args = DispatchArgs {
             host: Host::Macos,
-            preflight: Some(root.path().join("absent.json")),
-            request: Request::default(),
+            preflight: Some(file.clone()),
+            request: Request {
+                target: "package:bench".into(),
+                base: "a".repeat(40),
+                head: "b".repeat(40),
+                ..Request::default()
+            },
         };
-        let error = run(&args, &ctx).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "benchmark preflight dispatch requires Linux"
-        );
+        for (raw, error) in [
+            ("{", "parse preflight declaration"),
+            (
+                "{\"filter\":\"$NAME\"}",
+                "declaration cannot contain a dollar",
+            ),
+        ] {
+            fs::write(&file, raw).unwrap();
+            let actual = run(&args, &ctx).unwrap_err();
+            assert!(actual.to_string().contains(error), "{actual:#}");
+        }
     }
 
     #[test]

@@ -70,6 +70,16 @@ impl Request {
 
 const PREFLIGHT_ENV: &str = "BENCH_PREFLIGHT";
 pub(super) const PREFLIGHT_STRIP: &str = "CARGO_PROFILE_BENCH_STRIP";
+const PREFLIGHT_BINARY_DIR: &str = if cfg!(target_os = "macos") {
+    "mach-o"
+} else {
+    "elf"
+};
+const PREFLIGHT_BINARY_FORMAT: &str = if cfg!(target_os = "macos") {
+    "Mach-O"
+} else {
+    "ELF"
+};
 
 #[derive(Deserialize)]
 pub(super) struct Preflight {
@@ -89,6 +99,10 @@ impl Preflight {
         ensure!(
             !measure,
             "preflight cannot run with benchmark timing enabled"
+        );
+        ensure!(
+            std::env::var_os("CRITERION_DEBUG").is_none(),
+            "benchmark preflight requires CRITERION_DEBUG to be unset"
         );
         target_parts(&request.target)?;
         ensure!(
@@ -121,7 +135,9 @@ impl Preflight {
                     && components.next().is_none()
                     && !name.contains(['/', '\\', ':'])
                     && !name.chars().any(char::is_control)
-                    && !matches!(name.as_str(), "elf" | "provenance.txt"),
+                    && !["elf", "mach-o", "provenance.txt"]
+                        .iter()
+                        .any(|reserved| name.eq_ignore_ascii_case(reserved)),
                 "preflight collection name must be one safe path component"
             );
             ensure!(
@@ -157,14 +173,9 @@ impl Preflight {
         sources: &Sources,
         binaries: [&Binary; 2],
         digest: &str,
+        results: &Path,
         log: &mut Log,
     ) -> Result<()> {
-        let parent = ctx.root.join("bench-results");
-        fs::create_dir_all(&parent)?;
-        let results = Builder::new()
-            .prefix("preflight-")
-            .tempdir_in(parent)?
-            .keep();
         let mut checks = Vec::new();
         let mut collections: Vec<_> = self.collections.iter().collect();
         collections.sort_by_key(|(_, collection)| collection.expected_base_ids.is_none());
@@ -180,7 +191,7 @@ impl Preflight {
                 )));
             for (arm, expected, binary) in arms {
                 let directory = results.join(name).join(arm);
-                fs::create_dir_all(&directory)?;
+                fs::create_dir(&directory)?;
                 let (listed, output) = binary.ids(&collection.filter, &directory, log)?;
                 fs::write(directory.join("list.txt"), output)?;
                 let expected = expected.iter().cloned().collect();
@@ -210,12 +221,11 @@ impl Preflight {
             ensure_no_criterion_results(&directory)?;
         }
 
-        let elf = results.join("elf");
-        fs::create_dir(&elf)?;
+        let binary_dir = results.join(PREFLIGHT_BINARY_DIR);
         let mut provenance = build_provenance(ctx, sources, digest, log)?;
         for (arm, binary) in ["base", "head"].into_iter().zip(binaries) {
-            let hash = binary.retain(&elf.join(arm))?;
-            writeln!(provenance, "{arm} ELF SHA-256 {hash}")?;
+            let hash = binary.retain(&binary_dir.join(arm))?;
+            writeln!(provenance, "{arm} {PREFLIGHT_BINARY_FORMAT} SHA-256 {hash}")?;
         }
         log.line(provenance.trim_end())?;
         fs::write(results.join("provenance.txt"), provenance)?;
@@ -280,8 +290,8 @@ pub(crate) fn run(args: &BenchArgs, ctx: &Ctx) -> Result<()> {
         .map(|value| value.to_str().context("BENCH_PREFLIGHT must be UTF-8"))
         .transpose()?;
     ensure!(
-        preflight.is_none() || cfg!(target_os = "linux"),
-        "benchmark preflight requires Linux"
+        preflight.is_none() || cfg!(any(target_os = "linux", target_os = "macos")),
+        "benchmark preflight requires Linux or macOS"
     );
     execute(ctx, request, measure, preflight)
 }
@@ -426,6 +436,35 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool, input: Option<&str>) -> 
             )
         );
     }
+    let preflight = preflight
+        .map(|(declaration, digest)| -> Result<_> {
+            ensure!(
+                head.len() == 1 && base.is_some(),
+                "preflight requires one target built for both arms"
+            );
+            let parent = ctx.root.join("bench-results");
+            fs::create_dir_all(&parent)?;
+            let results = Builder::new()
+                .prefix("preflight-")
+                .tempdir_in(parent)?
+                .keep();
+            fs::create_dir(results.join(PREFLIGHT_BINARY_DIR))?;
+            for name in declaration.collections.keys() {
+                let directory = results.join(name);
+                fs::create_dir(&directory).with_context(|| {
+                    format!("create preflight collection {}", directory.display())
+                })?;
+            }
+            Ok((declaration, digest, results))
+        })
+        .transpose()?;
+    let cargo_json = |arm: &str| {
+        preflight.as_ref().map(|(_, _, results)| {
+            results
+                .join(PREFLIGHT_BINARY_DIR)
+                .join(format!("{arm}.cargo.json"))
+        })
+    };
     let mut binaries = Vec::new();
     for (index, target) in head.iter().enumerate() {
         let base = if let Some(root) = &sources.base {
@@ -434,7 +473,7 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool, input: Option<&str>) -> 
                 target,
                 &sources.scratch.path().join(format!("base-build-{index}")),
                 ctx,
-                preflight.is_some(),
+                cargo_json("base").as_deref(),
                 &mut log,
             )?)
         } else {
@@ -445,16 +484,16 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool, input: Option<&str>) -> 
             target,
             &sources.scratch.path().join(format!("head-build-{index}")),
             ctx,
-            preflight.is_some(),
+            cargo_json("head").as_deref(),
             &mut log,
         )?;
         binaries.push((base, head));
     }
-    if let Some((declaration, digest)) = preflight {
+    if let Some((declaration, digest, results)) = preflight {
         let [(Some(base), head)] = binaries.as_slice() else {
             anyhow::bail!("preflight requires one target built for both arms");
         };
-        return declaration.collect(ctx, &sources, [base, head], &digest, &mut log);
+        return declaration.collect(ctx, &sources, [base, head], &digest, &results, &mut log);
     }
     if !measure {
         return log

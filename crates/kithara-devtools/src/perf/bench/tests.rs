@@ -368,6 +368,7 @@ fn assert_builds_before_measurements(log: &str, builds: usize) {
         "builds need distinct owned directories"
     );
     assert_eq!(log.matches("\"--no-run\"").count(), builds);
+    assert!(!before_measurement.contains("\"-v\""));
     assert_eq!(before_measurement.matches("\"--no-run\"").count(), builds);
 }
 
@@ -530,6 +531,7 @@ fn bench_preflight_builds_lists_then_executes_only_untimed_callbacks() {
     for build in builds {
         assert!(build.contains("CARGO_PROFILE_BENCH_STRIP=\"none\""));
         assert!(build.contains("CARGO_TARGET_DIR="));
+        assert!(build.contains("\"-v\""));
     }
     for marker in [
         "--sample-size",
@@ -553,11 +555,41 @@ fn bench_preflight_builds_lists_then_executes_only_untimed_callbacks() {
     let proof = fs::read_to_string(results.join("provenance.txt")).unwrap();
     assert!(proof.contains(&format!("parent {base}")));
     assert!(proof.contains("CARGO_PROFILE_BENCH_STRIP=none"));
-    for arm in ["base", "head"] {
-        let digest = sha256(&fs::read(results.join("elf").join(arm)).unwrap());
-        assert!(proof.contains(&format!("{arm} ELF SHA-256 {digest}")));
+    for (arm, call) in [("base", 0), ("head", 1)] {
+        let binary_dir = results.join(PREFLIGHT_BINARY_DIR);
+        let digest = sha256(&fs::read(binary_dir.join(arm)).unwrap());
+        let cargo_json = fs::read_to_string(binary_dir.join(format!("{arm}.cargo.json"))).unwrap();
+        assert!(cargo_json.lines().any(|line| {
+            let entry: Value = serde_json::from_str(line).unwrap();
+            entry["reason"] == "compiler-artifact" && entry["executable"] == executable(call)
+        }));
+        assert!(proof.contains(&format!("{arm} {PREFLIGHT_BINARY_FORMAT} SHA-256 {digest}")));
         assert!(log.contains(&digest));
     }
+}
+
+#[test]
+fn bench_preflight_rejects_inherited_criterion_debug() {
+    if std::env::var_os("CRITERION_DEBUG").is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("bench_preflight_rejects_inherited_criterion_debug")
+            .arg("--nocapture")
+            .env("CRITERION_DEBUG", "")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&[output.stdout, output.stderr].concat())
+        );
+        return;
+    }
+    let (temp, ctx, base) = fixture("group/a", "group/a\nforms/b");
+    let (request, declaration) = preflight_request(&ctx, &base, "group/a");
+    let actual = execute(&ctx, &request, false, Some(&declaration.to_string())).unwrap_err();
+    assert!(actual.to_string().contains("CRITERION_DEBUG"), "{actual:#}");
+    assert!(!ctx.root.join("bench-results.txt").exists());
+    assert!(!temp.path().join("events").exists());
 }
 
 #[test]
@@ -642,6 +674,8 @@ fn bench_preflight_rejects_invalid_requests_before_children() {
         "a\\b",
         "x:\n",
         "elf",
+        "Mach-O",
+        "PROVENANCE.TXT",
         "provenance.txt",
     ] {
         let mut invalid = declaration.clone();
@@ -654,6 +688,28 @@ fn bench_preflight_rejects_invalid_requests_before_children() {
     }
     assert!(!ctx.root.join("bench-results.txt").exists());
     assert!(!temp.path().join("events").exists());
+}
+
+#[test]
+fn bench_preflight_collection_directories_are_distinct_on_the_host() {
+    let (temp, ctx, base) = fixture("group/a", "group/a");
+    let (request, mut declaration) = preflight_request(&ctx, &base, "group/a");
+    let paired = declaration["collections"]["z-paired"].clone();
+    declaration["collections"] = json!({"Paired": paired, "paired": paired});
+    fs::create_dir(temp.path().join("CaseProbe")).unwrap();
+    let aliases = temp.path().join("caseprobe").exists();
+    let outcome = execute(&ctx, &request, false, Some(&declaration.to_string()));
+    if aliases {
+        let error = outcome.unwrap_err();
+        assert!(error.to_string().contains("create preflight collection"));
+        assert!(!temp.path().join("events").exists());
+        let log = fs::read_to_string(ctx.root.join("bench-results.txt")).unwrap();
+        assert!(!log.contains("\"--no-run\""));
+    } else {
+        outcome.unwrap();
+        let events = fs::read_to_string(temp.path().join("events")).unwrap();
+        assert_eq!(events.lines().count(), 8);
+    }
 }
 
 #[test]
