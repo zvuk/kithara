@@ -237,7 +237,7 @@ impl CiLaneArtifact {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum LaneReport {
-    /// The ChromeDriver log and the wrapper's NetLog files.
+    /// The `chromedriver` log and the wrapper's network logs.
     Chromium,
 }
 

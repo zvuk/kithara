@@ -183,7 +183,9 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
 fn held_build(target: &Target, root: &Path) -> PathBuf {
     match target {
         Target::Alias { build, .. } => build.path().to_path_buf(),
-        Target::Named(dir) => root.join(dir.as_deref().unwrap_or(Path::new("target"))),
+        Target::Named(dir) => dir
+            .as_ref()
+            .map_or_else(|| root.join("target"), |dir| root.join(dir)),
     }
 }
 
@@ -262,11 +264,11 @@ fn announce(env_file: &Path, name: &str, dir: &Path) -> io::Result<()> {
     writeln!(file, "{name}={dir}")
 }
 
-/// The ChromeDriver log in a Chromium report.
+/// The `chromedriver` log in a Chromium report.
 const CHROMIUM_DRIVER_LOG: &str = "web-chromium.log";
-/// The wrapper's NetLog directory in a Chromium report.
+/// The wrapper's network log directory in a Chromium report.
 const CHROMIUM_NETLOG_DIR: &str = "web-chromium-netlog";
-/// Where the test wrapper writes its NetLog files; without it, it writes none.
+/// Where the test wrapper writes its network logs; without it, it writes none.
 const CHROMIUM_NETLOG_ENV: &str = "KITHARA_WEB_NETLOG_DIR";
 
 /// One lane's Chromium report: captured in a fresh directory of the build the
@@ -343,8 +345,8 @@ impl ChromiumReport {
         })
     }
 
-    /// What the lane's steps are told: ChromeDriver's log path and the
-    /// wrapper's NetLog directory.
+    /// What the lane's steps are told: the `chromedriver` log path and the
+    /// wrapper's network log directory.
     fn env(&self) -> [(OsString, OsString); 2] {
         let mut driver = OsString::from("--verbose --log-path=");
         driver.push(self.capture.path().join(CHROMIUM_DRIVER_LOG));
@@ -364,7 +366,7 @@ impl ChromiumReport {
     /// stopped part way, or lacks the driver's log, is not told, so the job's
     /// check fails beside the lane's own result instead of uploading part of
     /// a report. Each file holds what its writer had written when copied;
-    /// nothing here judges whether a NetLog ended.
+    /// nothing here judges whether a network log ended.
     fn hand_over(self) {
         match self.destination {
             ReportDestination::Job { copy, env_file } => {
@@ -389,7 +391,7 @@ impl ChromiumReport {
     }
 }
 
-/// Copies the driver's log, which every report has, and each NetLog file the
+/// Copies the driver's log, which every report has, and each network log the
 /// wrapper wrote. Links and empty files are not reports.
 fn copy_chromium_report(capture: &Path, copy: &Path) -> Result<()> {
     ensure!(
@@ -1001,7 +1003,7 @@ label = "run"
             .collect()
     }
 
-    /// A failed lane's job uploads the driver log and the NetLog files its own
+    /// A failed lane's job uploads the driver log and the network logs its own
     /// run wrote, copied out before its build is released: the next job on
     /// the same build writes elsewhere and cannot replace them, and a link
     /// the wrapper's directory holds uploads nothing.
@@ -1122,7 +1124,7 @@ label = "run"
         assert_eq!(fs::read_dir(runner_temp.path()).unwrap().count(), 0);
     }
 
-    /// A NetLog directory the run replaced with a link is not the one the
+    /// A network log directory the run replaced with a link is not the one the
     /// wrapper was given, so the report is not told.
     #[cfg(unix)]
     #[test]
