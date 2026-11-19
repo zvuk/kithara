@@ -2154,10 +2154,10 @@ mod answered {
             rig.ui.refresh();
         }
 
-        if let (Some(letter), Some(slot)) = (
-            deck,
-            scope.get("variant").and_then(|slot| slot.parse().ok()),
-        ) {
+        if let (Some(letter), "deck.stream.select_variant", Some(variant)) =
+            (deck, id, scope.get("variant"))
+        {
+            let slot = variant.parse::<usize>().unwrap_or(0);
             rig.shows(letter, |shown| {
                 shown.abr_variants = (0..=slot)
                     .map(|index| AbrVariant {

@@ -6,9 +6,9 @@ use kithara::{
     effects::GainDb,
     host::{DeckId, api::Tempo},
     platform::sync::Arc,
-    play::TrackSettings,
+    play::{ResourceSrc, SourceType, TrackSettings},
     prelude::EngineLoadSnapshot,
-    queue::TrackEntry,
+    queue::{TrackEntry, TrackStatus},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -98,6 +98,7 @@ pub(crate) struct StreamView {
     pub(crate) is_auto: bool,
     pub(crate) current_label: Option<String>,
     pub(crate) auto_available: bool,
+    pub(crate) awaiting_ladder: bool,
     pub(crate) busy: bool,
     pub(crate) failed: bool,
 }
@@ -165,7 +166,8 @@ impl StreamView {
             variants: state.abr_variants.clone(),
             is_auto: selected.is_none(),
             current_label: None,
-            auto_available: true,
+            auto_available: !state.abr_variants.is_empty(),
+            awaiting_ladder: false,
             busy: current.is_some_and(|track| track.source_changing),
             failed: current.is_some_and(|track| track.source_failed),
         };
@@ -200,8 +202,19 @@ impl StreamView {
                 })
                 .collect();
         }
+        stream.awaiting_ladder = stream.variants.is_empty() && current.is_some_and(loading_hls);
         stream
     }
+}
+
+fn loading_hls(track: &TrackEntry) -> bool {
+    matches!(track.status, TrackStatus::Loading | TrackStatus::Slow)
+        && track
+            .url
+            .as_deref()
+            .and_then(|url| ResourceSrc::parse(url).ok())
+            .and_then(|source| SourceType::detect(&source).ok())
+            .is_some_and(|source| matches!(source, SourceType::HlsStream(_)))
 }
 
 impl AnalysisView {
