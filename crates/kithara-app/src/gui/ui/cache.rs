@@ -313,8 +313,7 @@ mod tests {
         host.close().await;
     }
 
-    fn wave_of(height: u8) -> Waveform {
-        let height = f32::from_bits(u32::from(height) << 24);
+    fn wave_of(height: f32) -> Waveform {
         Waveform::new(vec![Bucket::new(height, height, height)], NonZeroU64::MIN)
             .expect("hand-built buckets are valid")
     }
@@ -333,7 +332,7 @@ mod tests {
     #[kithara::test]
     fn the_deck_names_the_run_of_buckets_it_just_wrote() {
         let mut cache = DeckCache::default();
-        let quiet = revision(1, wave_of(62));
+        let quiet = revision(1, wave_of(0.125));
 
         cache.refresh_wave(Some(&quiet));
         let named = cache.wave_revision;
@@ -341,7 +340,7 @@ mod tests {
         cache.refresh_wave(Some(&quiet));
         assert_eq!(cache.wave_revision, named, "nothing was written");
 
-        cache.refresh_wave(Some(&revision(2, wave_of(63))));
+        cache.refresh_wave(Some(&revision(2, wave_of(0.5))));
         assert_ne!(
             cache.wave_revision, named,
             "a new run of buckets was written"
@@ -351,7 +350,7 @@ mod tests {
     #[kithara::test]
     fn the_deck_cache_follows_the_revision_not_the_bucket_address() {
         let mut cache = DeckCache::default();
-        let wave = wave_of(62);
+        let wave = wave_of(0.125);
 
         cache.refresh_wave(Some(&revision(1, wave.clone())));
         let named = cache.wave_revision;
@@ -372,7 +371,7 @@ mod tests {
     #[kithara::test]
     fn dropping_the_track_names_the_empty_run() {
         let mut cache = DeckCache::default();
-        cache.refresh_wave(Some(&revision(1, wave_of(63))));
+        cache.refresh_wave(Some(&revision(1, wave_of(0.5))));
         let named = cache.wave_revision;
 
         cache.refresh_wave(None);

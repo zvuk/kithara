@@ -6,7 +6,7 @@ use kithara_platform::sync::Arc;
 use crate::Band;
 
 /// Wire/disk format version for the [`Waveform`] blob. Bump when the encoding,
-/// the analysis parameters, or the caller's bucket resolution changes.
+/// or the analysis parameters change.
 pub const WAVEFORM_BYTES_VERSION: u32 = 2;
 
 /// Most buckets a waveform may carry. The analyzer coarsens its fold factor
@@ -293,10 +293,6 @@ mod bytes_tests {
         };
 
         assert!(corrupt(vec![0, 0]), "shorter than the version header");
-
-        let mut zero_span = to_bytes(&sample());
-        zero_span[4..12].fill(0);
-        assert!(corrupt(zero_span), "zero span cannot place buckets");
 
         let mut zero_span = to_bytes(&sample());
         zero_span[4..12].fill(0);

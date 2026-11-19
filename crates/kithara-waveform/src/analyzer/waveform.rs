@@ -8,7 +8,7 @@ use kithara_blob::{BlobError, Writer};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_dsp::{
     downmix,
-    spectrum::{Fft, Spectrum},
+    spectrum::{Fft, Spectrum, SpectrumError},
 };
 use kithara_signal::CoverageWrite;
 use num_traits::cast::ToPrimitive;
@@ -48,7 +48,7 @@ pub struct WaveformAnalyzer {
     pub(super) opened: u64,
     pub(super) low_mid_bin: usize,
     pub(super) mid_high_bin: usize,
-    pub(super) window_hop: usize,
+    pub(super) window_hop: NonZeroU64,
 }
 
 impl WaveformAnalyzer {
@@ -71,6 +71,10 @@ impl WaveformAnalyzer {
         S: HasPool<f32>,
     {
         let fft_size = params.fft_size();
+        let window_hop = u64::try_from(fft_size.get() / consts::HOP_DIVISOR)
+            .ok()
+            .and_then(NonZeroU64::new)
+            .ok_or(SpectrumError::Length)?;
         let fft = Fft::new(fft_size)?;
         let spectrum = fft.spectrum(pools)?;
         let bins = fft_size.bins();
@@ -97,7 +101,7 @@ impl WaveformAnalyzer {
             opened: 0,
             low_mid_bin,
             mid_high_bin,
-            window_hop: fft_size.get() / consts::HOP_DIVISOR,
+            window_hop,
         })
     }
 
@@ -247,16 +251,16 @@ impl WaveformAnalyzer {
             }
         }
 
-        let stride = (fold.get() as usize).max(total.div_ceil(MAX_BUCKETS));
+        let fold = NonZeroU64::from(fold);
+        let stride = NonZeroU64::new(total.div_ceil(MAX_BUCKETS) as u64)
+            .map_or(fold, |least| fold.max(least));
         let max =
             |a: [f32; Band::COUNT], b: &[f32; Band::COUNT]| array::from_fn(|i| a[i].max(b[i]));
         let energy = raw
-            .chunks(stride)
+            .chunks(usize::try_from(stride.get()).unwrap_or(usize::MAX))
             .map(|chunk| chunk.iter().fold([0.0; Band::COUNT], max))
             .collect();
-        let Some(span_frames) = NonZeroU64::new(stride as u64 * self.hop()) else {
-            unreachable!("the fold factor and FFT hop are nonzero");
-        };
+        let span_frames = stride.saturating_mul(self.window_hop);
         let bands = normalize_bands(energy, self.params.band_gain());
 
         let out: Vec<Bucket> = bands

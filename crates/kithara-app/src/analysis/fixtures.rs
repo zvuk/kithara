@@ -79,11 +79,10 @@ pub(crate) fn progress(analysis: TrackAnalysis) -> AnalysisProgress {
     AnalysisProgress::try_from(analysis).expect("settled fixture is valid progress")
 }
 
-/// The blob encodes version 1 followed by one bucket of three 0.5 band heights, where 0.5 is the
-/// little-endian float bytes `0x3F000000`.
+/// One bucket of three 0.5 band heights.
 pub(crate) fn one_bucket_wave() -> Waveform {
     Waveform::new(vec![Bucket::new(0.5, 0.5, 0.5)], NonZeroU64::MIN)
-        .expect("hand-built blob is valid")
+        .expect("hand-built buckets are valid")
 }
 
 pub(crate) fn grid() -> BeatSnapshot {
