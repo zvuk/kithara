@@ -60,7 +60,12 @@ fn main() {
     if let ["--bench", mode, filter @ ("paired" | "head-only")] = args.as_slice() {
         let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
         writeln!(events, "{mode}:{filter}:{}", env::current_exe().unwrap().display()).unwrap();
-        let selected = ids.lines().filter(|id| *filter != "paired" || !id.starts_with("forms/"));
+        let mut selected: Vec<_> = ids.lines()
+            .filter(|id| *filter != "paired" || !id.starts_with("forms/"))
+            .collect();
+        if *mode == "--test" && selected.contains(&"group/reverse") {
+            selected.reverse();
+        }
         for id in selected {
             match *mode {
                 "--list" => println!("{id}: benchmark"),
@@ -490,7 +495,7 @@ fn preflight_request(ctx: &Ctx, base: &str, id: &str) -> (Request, Value) {
 
 #[test]
 fn bench_preflight_builds_lists_then_executes_only_untimed_callbacks() {
-    let (temp, ctx, base) = fixture("group/a", "group/a\nforms/b");
+    let (temp, ctx, base) = fixture("group/a", "forms/b\ngroup/a");
     let (request, declaration) = preflight_request(&ctx, &base, "group/a");
     let raw = format!("{declaration}\n");
     execute(&ctx, &request, false, Some(&raw)).unwrap();
@@ -542,7 +547,7 @@ fn bench_preflight_builds_lists_then_executes_only_untimed_callbacks() {
         .path();
     assert_eq!(
         fs::read_to_string(results.join("a-forms/head/test.txt")).unwrap(),
-        "Testing group/a\nSuccess\nTesting forms/b\nSuccess\n"
+        "Testing forms/b\nSuccess\nTesting group/a\nSuccess\n"
     );
     ensure_no_criterion_results(&results).unwrap();
     let proof = fs::read_to_string(results.join("provenance.txt")).unwrap();
@@ -553,6 +558,29 @@ fn bench_preflight_builds_lists_then_executes_only_untimed_callbacks() {
         assert!(proof.contains(&format!("{arm} ELF SHA-256 {digest}")));
         assert!(log.contains(&digest));
     }
+}
+
+#[test]
+fn bench_preflight_rejects_callback_reordering_for_the_same_binary() {
+    let (temp, ctx, base) = fixture("group/reverse\ngroup/a", "group/reverse\ngroup/a");
+    let (request, mut declaration) = preflight_request(&ctx, &base, "group/a");
+    let cases = json!(["group/a", "group/reverse"]);
+    declaration["collections"] = json!({"paired": {
+        "filter": "paired",
+        "expected_base_ids": cases,
+        "expected_head_ids": cases,
+    }});
+    let actual = execute(&ctx, &request, false, Some(&declaration.to_string())).unwrap_err();
+    assert!(
+        actual.to_string().contains("differ from inventory order"),
+        "{actual:#}"
+    );
+    let events = fs::read_to_string(temp.path().join("events")).unwrap();
+    let modes: Vec<_> = events
+        .lines()
+        .map(|line| line.split_once(':').unwrap().0)
+        .collect();
+    assert_eq!(modes, ["--list", "--list", "--test"]);
 }
 
 #[test]
@@ -685,5 +713,56 @@ fn bench_preflight_requires_successful_callbacks_without_criterion_files() {
         );
         let log = fs::read_to_string(ctx.root.join("bench-results.txt")).unwrap();
         assert!(!log.contains("Untimed benchmark preflight evidence:"));
+    }
+}
+
+#[test]
+fn bench_preflight_callback_parser_accepts_diagnostics_between_records() {
+    let recorded = concat!(
+        "crossover_geometry rate=48000 channels=2 bands=3 frequencies=[249.70744, 4325.059] backend=portable target=x86_64\n",
+        "Testing crossover_df1_svf/df1_3band/128\n",
+        "Success\n",
+        "crossover_delta bands=3 block=512 candidate=svf case=retirement_bits moving=true finite_pairs=8 max_abs_finite=1.0141204801825835e31 bit_differences=5 nonfinite_df1=16398 nonfinite_candidate=16398 subnormal_df1=0 subnormal_candidate=0 last_nonzero_df1=Some(8202) last_nonzero_candidate=Some(8202)\n",
+        "Testing crossover_df1_svf/df1_3band/512\n",
+        "Success\n",
+    );
+    assert_eq!(
+        callback_ids(recorded.as_bytes()).unwrap(),
+        [
+            "crossover_df1_svf/df1_3band/128",
+            "crossover_df1_svf/df1_3band/512",
+        ],
+    );
+}
+
+#[test]
+fn bench_preflight_callback_parser_rejects_malformed_records() {
+    for (malformed, expected) in [
+        ("diagnostic only\n", "no Criterion callbacks were reported"),
+        ("Success\n", "unexpected Criterion callback record"),
+        ("Testing\n", "unexpected Criterion callback record"),
+        (
+            "Testing\tcase\nSuccess\n",
+            "unexpected Criterion callback record",
+        ),
+        ("Testing \nSuccess\n", "Criterion callback needs an ID"),
+        (
+            "Testing case\ndiagnostic\nSuccess\n",
+            "did not report Success",
+        ),
+        (
+            "Testing case\nSuccess\nSuccess extra\n",
+            "unexpected Criterion callback record",
+        ),
+        (
+            "Testing case\nSuccess\nTesting case\nSuccess\n",
+            "duplicate Criterion callback",
+        ),
+    ] {
+        let actual = callback_ids(malformed.as_bytes()).unwrap_err();
+        assert!(
+            actual.to_string().contains(expected),
+            "{malformed:?}: {actual:#}"
+        );
     }
 }

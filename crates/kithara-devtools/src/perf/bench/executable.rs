@@ -119,18 +119,20 @@ impl Binary {
         filter: &str,
         data: &Path,
         log: &mut Log,
-    ) -> Result<(BTreeSet<String>, Vec<u8>)> {
+    ) -> Result<(Vec<String>, Vec<u8>)> {
         let output = log.output(
             self.command(data).args(["--bench", "--list", filter]),
             false,
         )?;
         let raw = std::str::from_utf8(&output.stdout)?;
-        let mut ids = BTreeSet::new();
+        let mut seen = BTreeSet::new();
+        let mut ids = Vec::new();
         for id in raw
             .lines()
             .filter_map(|line| line.strip_suffix(": benchmark"))
         {
-            ensure!(ids.insert(id.to_owned()), "duplicate Criterion ID {id:?}");
+            ensure!(seen.insert(id), "duplicate Criterion ID {id:?}");
+            ids.push(id.to_owned());
         }
         ensure!(
             !ids.is_empty(),
@@ -175,25 +177,30 @@ impl Binary {
     }
 }
 
-pub(super) fn callback_ids(output: &[u8]) -> Result<BTreeSet<String>> {
+pub(super) fn callback_ids(output: &[u8]) -> Result<Vec<String>> {
     let mut lines = std::str::from_utf8(output)?.lines();
-    let mut ids = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    let mut ids = Vec::new();
     while let Some(line) = lines.next() {
-        if line.is_empty() {
+        let Some(id) = line.strip_prefix("Testing ") else {
+            ensure!(
+                !matches!(
+                    line.split_ascii_whitespace().next(),
+                    Some("Testing" | "Success")
+                ),
+                "unexpected Criterion callback record {line:?}"
+            );
             continue;
-        }
-        let id = line
-            .strip_prefix("Testing ")
-            .context("expected Criterion Testing line")?;
+        };
+        ensure!(!id.trim().is_empty(), "Criterion callback needs an ID");
         ensure!(
             lines.next() == Some("Success"),
             "Criterion callback {id:?} did not report Success"
         );
-        ensure!(
-            ids.insert(id.to_owned()),
-            "duplicate Criterion callback {id:?}"
-        );
+        ensure!(seen.insert(id), "duplicate Criterion callback {id:?}");
+        ids.push(id.to_owned());
     }
+    ensure!(!ids.is_empty(), "no Criterion callbacks were reported");
     Ok(ids)
 }
 

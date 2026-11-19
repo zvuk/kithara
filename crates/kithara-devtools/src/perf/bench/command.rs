@@ -194,14 +194,19 @@ impl Preflight {
             }
         }
         for (_, directory, _, expected, listed) in &checks {
-            check_ids(expected, listed)
+            check_ids(expected, &listed.iter().cloned().collect())
                 .with_context(|| format!("preflight inventory {}", directory.display()))?;
         }
         for (filter, directory, binary, _, listed) in checks {
             let output = binary.test(filter, &directory, log)?;
             fs::write(directory.join("test.txt"), &output)?;
-            check_ids(&listed, &callback_ids(&output)?)
+            let callbacks = callback_ids(&output)
                 .with_context(|| format!("preflight callbacks {}", directory.display()))?;
+            ensure!(
+                listed == callbacks,
+                "preflight callbacks {} differ from inventory order; listed {listed:?}, ran {callbacks:?}",
+                directory.display()
+            );
             ensure_no_criterion_results(&directory)?;
         }
 
@@ -469,6 +474,8 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool, input: Option<&str>) -> 
         let (ids, _) = head.ids(&request.filter, &data, &mut log)?;
         if let Some(base) = base {
             let (base_ids, _) = base.ids(&request.filter, &data, &mut log)?;
+            let ids = ids.into_iter().collect();
+            let base_ids = base_ids.into_iter().collect();
             ensure!(
                 base_ids == ids,
                 "base/head Criterion IDs do not match; {}",
