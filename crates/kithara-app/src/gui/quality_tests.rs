@@ -280,3 +280,172 @@ async fn a_progressive_initial_load_keeps_the_quality_menu_hidden() {
     .await;
     rig.close().await;
 }
+
+enum QualityCheck {
+    Extent,
+    Position,
+    Pause,
+}
+
+#[kithara::test(native, tokio, flash(false))]
+#[case::logical_duration(QualityCheck::Extent)]
+#[case::playhead(QualityCheck::Position)]
+#[case::pause_during_preparation(QualityCheck::Pause)]
+async fn catalogue_quality_switch_preserves_the_sounding_track(#[case] check: QualityCheck) {
+    let server = PrivateTestServer::start().await;
+    let helper = server.helper();
+    let init = Arc::new(
+        assets::rhythm_fmp4_init_deck_a_120bpm_48k()
+            .bytes()
+            .to_vec(),
+    );
+    let media = Arc::new(
+        assets::rhythm_fmp4_media_deck_a_120bpm_48k()
+            .bytes()
+            .to_vec(),
+    );
+    let adaptive = helper
+        .create_hls(
+            kithara_integration_tests::HlsFixtureBuilder::new()
+                .variant_count(3)
+                .segments_per_variant(1)
+                .segment_duration_secs(12.0)
+                .segment_size(media.len())
+                .codecs("fLaC".to_owned())
+                .init_data_per_variant(vec![init; 3])
+                .custom_data(media),
+        )
+        .await
+        .expect("register the rhythmic HLS version")
+        .master_url();
+    let gate = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(assets::rhythm_mp3_deck_a_120bpm_48k().bytes().to_vec()),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::Gated { after_bytes: 0 },
+    });
+    let first = gate.child_url("manual.mp3");
+    let second = helper
+        .register_behavior(FixtureBehavior {
+            content: Content::StaticBytes {
+                bytes: Arc::new(assets::rhythm_wav_deck_a_120bpm_48k().bytes().to_vec()),
+                content_type: Some("audio/wav"),
+            },
+            delivery: Delivery::Range,
+        })
+        .child_url("lossless.wav");
+    let mut playable = Playable::new(adaptive.to_string());
+    playable.identity = Some("test:rhythmic-track".to_owned());
+    playable.choices = [
+        (adaptive.clone(), "Auto", true),
+        (first.clone(), "MP3", false),
+        (second.clone(), "Lossless", false),
+    ]
+    .into_iter()
+    .map(|(source, label, adaptive)| PlaybackChoice {
+        source,
+        label: label.to_owned(),
+        adaptive,
+    })
+    .collect();
+
+    let rig = OffThread::spawn("app-host", || Ok::<_, Infallible>(Rig::playback()))
+        .await
+        .expect("the offline rig starts");
+    rig.call(move |rig| {
+        drop_track(rig, playable);
+        let track = playing_track(rig);
+        let queue = rig.queues[0].clone();
+        let mut position = rig.scalar(POSITION);
+        let requested_at = position;
+        let duration = queue
+            .playback_view()
+            .duration
+            .expect("the HLS extent is known");
+        let expected_controls = queue.warp_controls();
+        let expected_rate = queue.default_rate();
+
+        select(rig, "variant-0");
+        rig.until(
+            "the original source plays while replacement bytes are withheld",
+            Rig::DEADLINE,
+            Rig::frame,
+            |rig| {
+                presentation(rig, track, &mut position);
+                position >= requested_at + 0.2 && gate.body_pending() > 0
+            },
+        );
+        let before_release = position;
+        if matches!(check, QualityCheck::Pause) {
+            queue.pause();
+            rig.until(
+                "the pause keeps the accepted source and cancels its pending replacement",
+                Rig::DEADLINE,
+                Rig::frame,
+                |rig| {
+                    let current = queue.current().expect("the paused track remains current");
+                    assert_eq!(current.id, track);
+                    assert_eq!(current.url.as_deref(), Some(adaptive.as_str()));
+                    !current.source_changing && !rig.flag(PLAYING)
+                },
+            );
+            assert!(rig.scalar(POSITION) >= before_release);
+            let paused_at = rig.scalar(POSITION);
+            gate.release_body();
+            rig.pump();
+            rig.frame();
+            assert_eq!(rig.scalar(POSITION), paused_at);
+            assert_eq!(
+                queue.current().unwrap().url.as_deref(),
+                Some(adaptive.as_str())
+            );
+            return;
+        }
+        gate.release_body();
+        let extent_only = matches!(check, QualityCheck::Extent);
+        for (row, expected) in [
+            ("variant-0", first),
+            ("variant-1", second),
+            ("auto", adaptive),
+        ] {
+            if row != "variant-0" {
+                select(rig, row);
+            }
+            rig.until(
+                "the named source is accepted on the same playing track",
+                Rig::DEADLINE,
+                Rig::frame,
+                |rig| {
+                    let current = queue.current().expect("the logical track stays current");
+                    let view = queue.playback_view();
+                    if extent_only {
+                        assert_eq!(current.id, track);
+                        assert!(view.playing && rig.flag(PLAYING));
+                        assert!(
+                            view.duration.is_some(),
+                            "known logical duration disappeared at {current:?}, position={:?}",
+                            view.position,
+                        );
+                    } else {
+                        presentation(rig, track, &mut position);
+                    }
+                    assert_eq!(queue.warp_controls(), expected_controls);
+                    assert_eq!(queue.default_rate(), expected_rate);
+                    current.url.as_deref() == Some(expected.as_str())
+                        && !current.source_changing
+                        && rig.flag(&format!(
+                            "deck.stream.variant_active@deck=a,variant={}",
+                            row.strip_prefix("variant-").unwrap_or(row)
+                        ))
+                },
+            );
+        }
+        assert!(
+            extent_only || (position > before_release && position < duration),
+            "the rendered track advances through all three accepted sources"
+        );
+    })
+    .await;
+    rig.close().await;
+}

@@ -252,7 +252,7 @@ impl PlayerResource {
         Some(self.failed.map_or(ReadOutcome::Eof, ReadOutcome::Failed))
     }
 
-    pub(super) fn refresh_mark(&mut self, budget: &mut usize) {
+    pub(in crate::rt) fn refresh_mark(&mut self, budget: &mut usize) {
         self.recycle_obsolete(budget);
         let (next, offset) = match self.packet.as_ref() {
             Some(packet) => (Some(packet), self.offset),

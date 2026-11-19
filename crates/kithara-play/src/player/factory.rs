@@ -49,6 +49,20 @@ pub trait Track: Player<Command = TrackCommand, Snapshot: AsRef<TrackSnapshot>> 
         out: &mut super::Outbox<'_>,
     ) -> Result<bool, PlayError>;
 
+    /// Prepares a linked equivalent-source entry without selecting a new beat.
+    ///
+    /// # Errors
+    /// Returns the silent entry's preparation refusal.
+    fn prepare_source_continuation(
+        &mut self,
+        at: SessionFrame,
+        _position: Position,
+        _speed: f64,
+        out: &mut super::Outbox<'_>,
+    ) -> Result<bool, PlayError> {
+        self.prepare_entry(at, out)
+    }
+
     /// Projects media position and instantaneous speed on the output frame.
     ///
     /// # Errors

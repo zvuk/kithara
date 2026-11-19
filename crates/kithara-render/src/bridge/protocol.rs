@@ -6,7 +6,7 @@ use kithara_derive::Ranged;
 use kithara_effects::{DeckEffect, FxParamChange, GainDb, eq::EqLayout};
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
-use kithara_signal::{SegmentId, SessionFrame};
+use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 
 use super::{
     DeckMixSettingsChange, EqBinding, EqGainProgram, FilterBinding, FilterProgram, SlotBinding,
@@ -65,6 +65,18 @@ pub enum DeckRefusal {
         slot: Slot,
     },
     Deferral,
+    /// The timed batch cannot continue this source.
+    SourceContinuation {
+        slot: Slot,
+    },
+    /// The staged source does not cover the sounding media coordinate.
+    SourceRange {
+        slot: Slot,
+    },
+    /// Retained PCM does not support the sounding track's advance across the cut.
+    SourceMotion {
+        slot: Slot,
+    },
     AxisRestarted,
     /// A part names an FX unit the deck was not built with.
     MissingFxUnit {
@@ -151,6 +163,12 @@ pub enum DeckPart {
         from: Slot,
         to: Slot,
     },
+    /// Aligns an equivalent source to the sounding one before the batch starts it.
+    ContinueSource {
+        from: Slot,
+        to: Slot,
+        window: FrameCount,
+    },
     /// Sets the clock of the track seated in `slot`; an empty slot ignores it.
     Clock {
         slot: Slot,
@@ -187,6 +205,11 @@ pub enum Returned {
         packet: Option<PcmPacket>,
     },
     Eq(Box<EqLayout>),
+    SourceContinued {
+        to: Slot,
+        mark: SlotMark,
+        media_origin: Duration,
+    },
     Stopped {
         slot: Slot,
         resume: Option<SlotMark>,
@@ -332,6 +355,12 @@ impl fmt::Debug for DeckPart {
                 .field("from", from)
                 .field("to", to)
                 .finish(),
+            Self::ContinueSource { from, to, window } => formatter
+                .debug_struct("ContinueSource")
+                .field("from", from)
+                .field("to", to)
+                .field("window", window)
+                .finish(),
             Self::Clock { slot, clock } => formatter
                 .debug_struct("Clock")
                 .field("slot", slot)
@@ -387,6 +416,16 @@ impl fmt::Debug for Returned {
                 .field("held_packet", &packet.is_some())
                 .finish(),
             Self::Eq(_) => formatter.write_str("Eq"),
+            Self::SourceContinued {
+                to,
+                mark,
+                media_origin,
+            } => formatter
+                .debug_struct("SourceContinued")
+                .field("to", to)
+                .field("mark", mark)
+                .field("media_origin", media_origin)
+                .finish(),
             Self::Stopped { slot, resume } => formatter
                 .debug_struct("Stopped")
                 .field("slot", slot)

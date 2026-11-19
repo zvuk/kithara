@@ -677,9 +677,19 @@ impl Rig {
         seq: Seq,
         outcome: &Outcome<DeckProtocol>,
     ) -> Settled {
+        self.settle_parts(deck, seq, outcome, Vec::new())
+    }
+
+    pub(super) fn settle_parts(
+        &mut self,
+        deck: &mut Deck,
+        seq: Seq,
+        outcome: &Outcome<DeckProtocol>,
+        commands: Vec<DeckPart>,
+    ) -> Settled {
         let mut batch = Batch {
             basis: vec![(Slot::new(0), None)],
-            commands: Vec::new(),
+            commands,
         };
         self.run(|out| {
             Player::settle(

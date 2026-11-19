@@ -1,5 +1,7 @@
 use kithara_bufpool::HasPool;
 use kithara_command::{Batch, Outcome, Rejection, Seq};
+use kithara_events::TrackId;
+use kithara_platform::time::Duration;
 use kithara_play::{
     Bound, DeckPart, DeckProtocol, FadeDir, Outbox, PlayError, Player, Settled, TrackFactory,
     TrackStatus as PlayingStatus,
@@ -49,6 +51,7 @@ where
             .target
             .is_some_and(|target| target.to == id && !target.auto && target.stale == Some(seq));
         if self.target.is_none_or(|target| target.to != id) || withdrawn {
+            let duration = self.replacement_duration(id);
             if let Some(current) = self.active_current_index() {
                 self.active
                     .get_mut(current)
@@ -60,7 +63,7 @@ where
                 .ok_or(PlayError::NoActiveSlot)?
                 .role = Role::Current;
             self.active.activate_replacement(index);
-            let source_changed = self.tracks.commit_source(id);
+            let source_changed = self.tracks.commit_source(id, duration);
             if !source_changed {
                 self.navigation
                     .commit(self.current, id, pending.reason, &self.track_ids());
@@ -253,6 +256,7 @@ where
             let changing = self.tracks.is_changing_source(id);
             self.cancel_target(out).map_err(play_error)?;
             if changing {
+                tracing::debug!(?id, ?reason, "source continuation rejected by the deck");
                 self.tracks.fail_source(id);
             }
             Ok(())
@@ -266,6 +270,7 @@ where
         reason: AdvanceReason,
     ) -> Result<(), PlayError> {
         let target = self.target.ok_or(PlayError::NotReady)?;
+        let duration = self.replacement_duration(target.to);
         let outgoing = self.active_current_index();
         let incoming_slot = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.slot;
         let crossfading = outgoing
@@ -291,7 +296,7 @@ where
             .ok_or(PlayError::NoActiveSlot)?
             .role = Role::Current;
         self.active.activate_replacement(index);
-        let source_changed = self.tracks.commit_source(target.to);
+        let source_changed = self.tracks.commit_source(target.to, duration);
         if !source_changed {
             self.navigation
                 .commit(self.current, target.to, reason, &self.track_ids());
@@ -312,6 +317,16 @@ where
         }
         self.tracks.set_status(target.to, TrackStatus::Consumed);
         Ok(())
+    }
+
+    fn replacement_duration(&self, id: TrackId) -> Option<Duration> {
+        if !self.tracks.is_changing_source(id) {
+            return None;
+        }
+        self.active_current_index()
+            .and_then(|index| self.active.get(index))
+            .filter(|outgoing| outgoing.item == id)
+            .and_then(|outgoing| outgoing.track.snapshot().as_ref().duration)
     }
 }
 

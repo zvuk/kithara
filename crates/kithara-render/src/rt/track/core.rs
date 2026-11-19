@@ -77,6 +77,20 @@ impl PlayerTrack {
         }
     }
 
+    pub(in crate::rt) fn sounding_source(&self, at: SessionFrame) -> Option<(TrackId, Duration)> {
+        if self.state != SlotState::Playing || !matches!(self.stop, StopState::Idle) {
+            return None;
+        }
+        let mark = self.mark(at)?;
+        let info = self.resource.source_info()?;
+        let position = info.spec.elapsed_since(info.media_origin?, mark.position);
+        Some((self.item_id, position))
+    }
+
+    pub(in crate::rt) fn stages_item(&self, item: TrackId) -> bool {
+        self.state == SlotState::Stopped && self.item_id == item
+    }
+
     #[must_use]
     pub const fn state(&self) -> SlotState {
         self.state
@@ -93,6 +107,9 @@ impl PlayerTrack {
 
     delegate::delegate! {
         to self.resource {
+            pub(in crate::rt) fn packets(&self) -> impl Iterator<Item = (&crate::PcmPacket, usize)>;
+            pub(in crate::rt) fn trim_cut(&mut self, frames: usize, budget: &mut usize) -> bool;
+            pub(in crate::rt) fn cut_closed(&self) -> bool;
             pub(crate) fn waits_offline(&self) -> bool;
             pub(crate) fn refill(&mut self, budget: &mut usize) -> Option<&crate::worker::PcmReceiver>;
             #[must_use]

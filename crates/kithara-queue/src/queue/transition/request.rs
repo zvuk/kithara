@@ -490,6 +490,11 @@ where
     ) -> Result<Option<SessionFrame>, PlayError> {
         let earliest = self.earliest()?;
         let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
+        if self.tracks.is_changing_source(active.item)
+            && let Bound::AtOrAfter(frame) = bound
+        {
+            return Ok(Some(frame.max(earliest)));
+        }
         let Some(frame) = active.track.entry(bound) else {
             return Ok(None);
         };

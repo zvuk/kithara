@@ -273,6 +273,15 @@ impl PlayerImpl {
                     self.status = TrackStatus::Playing { since: at };
                     self.resume = None;
                 }
+                DeckPart::Returned(Returned::SourceContinued {
+                    to,
+                    mark,
+                    media_origin,
+                }) if Some(*to) == self.seat.slot() && mark.lane.segment == self.segment.id => {
+                    self.mark = Some(*mark);
+                    self.position = mark.position.saturating_sub(*media_origin);
+                    self.observe(out);
+                }
                 DeckPart::Returned(Returned::Stopped { slot, resume })
                     if Some(*slot) == self.seat.slot() && transport_current =>
                 {

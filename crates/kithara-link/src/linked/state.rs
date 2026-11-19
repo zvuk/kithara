@@ -6,7 +6,7 @@ use kithara_play::{
     Outbox, PlayError, Player, Position, SeekBatch, Settled, Track, TrackClock, TrackCommand,
     TrackSnapshot,
 };
-use kithara_render::bridge::SlotMark;
+use kithara_render::bridge::{Slot, SlotMark};
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 use kithara_sync::Coverage;
 
@@ -182,12 +182,27 @@ pub struct Linked<P> {
     pub(super) plan_end: Option<SessionFrame>,
     pub(super) speeds: Vec<(Seq, SpeedOperation)>,
     pub(super) start: Option<Seq>,
+    pub(super) continuation: Option<SourceContinuation>,
     pub(super) start_caller: Option<Seq>,
     pub(super) withdrawn: Vec<Seq>,
     pub(super) cue: Option<Cue>,
     pub(super) relocation: Option<Relocation>,
     /// A pause holds a deck that sounded since its Load, and no Seek has moved it since.
     pub(super) paused_in_place: bool,
+}
+
+pub(super) struct SourceContinuation {
+    pub(super) cue: Seq,
+    pub(super) frames: FrameCount,
+    pub(super) coverage: Coverage,
+    pub(super) admission: ContinuationAdmission,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ContinuationAdmission {
+    Preparing,
+    Staged(Slot),
+    Submitted { to: Slot, seq: Seq },
 }
 
 /// The latest accepted seek and the native batch that represents it.
@@ -300,6 +315,7 @@ impl<P> Linked<P> {
             plan_end: None,
             speeds: Vec::new(),
             start: None,
+            continuation: None,
             start_caller: None,
             relocation: None,
             withdrawn: Vec::new(),

@@ -4,7 +4,7 @@ use kithara_audio::{AudioObserver, AudioObserverSlot};
 use kithara_bufpool::HasPool;
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_play::{Position, ResourceConfig, ResourceSrc};
 use tracing::debug;
 
@@ -117,6 +117,7 @@ where
     pub(crate) source: TrackSource<S>,
     source_change: Option<SourceChange<S>>,
     source_failed: bool,
+    logical_duration: Option<Duration>,
     pub(crate) initial_position: Position,
     pub(crate) status: TrackStatus,
     observer: AudioObserverSlot,
@@ -141,6 +142,7 @@ where
             source,
             source_change: None,
             source_failed: false,
+            logical_duration: None,
             initial_position,
             load: None,
             observer: AudioObserverSlot::default(),
@@ -248,6 +250,9 @@ where
             #[expr($.is_some_and(|record| record.source_change.is_some()))]
             #[call(find)]
             pub(crate) fn is_changing_source(&self, id: TrackId) -> bool;
+            #[expr($.and_then(|record| record.logical_duration))]
+            #[call(find)]
+            pub(crate) fn logical_duration(&self, id: TrackId) -> Option<Duration>;
             #[expr($.map(|record| &record.status))]
             #[call(find)]
             pub(crate) fn status(&self, id: TrackId) -> Option<&TrackStatus>;
@@ -289,7 +294,7 @@ where
         }
     }
 
-    pub(crate) fn commit_source(&mut self, id: TrackId) -> bool {
+    pub(crate) fn commit_source(&mut self, id: TrackId, duration: Option<Duration>) -> bool {
         let Some(record) = self.record_mut(id) else {
             return false;
         };
@@ -298,6 +303,7 @@ where
         };
         record.url = change.source.uri().map(str::to_owned);
         record.source = change.source;
+        record.logical_duration = duration.or(record.logical_duration);
         true
     }
 
