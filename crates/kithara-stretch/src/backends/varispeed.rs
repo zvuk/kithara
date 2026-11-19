@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_resampler::{
-    ResamplerBackend, ResamplerMode, ResamplerOptions, ResamplerSettings,
+    Resampler, ResamplerBackend, ResamplerMode, ResamplerOptions, ResamplerSettings,
     glide::{GlideBackend, GlideResampler},
 };
 use smallvec::SmallVec;
@@ -142,7 +142,6 @@ impl ElasticEngine for VarispeedElastic {
     }
 
     fn reset(&mut self) -> Result<(), ElasticError> {
-        use kithara_resampler::Resampler;
         self.resampler.reset();
         Ok(())
     }

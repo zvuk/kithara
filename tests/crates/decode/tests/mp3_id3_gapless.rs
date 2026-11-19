@@ -36,7 +36,7 @@ fn id3(version: u8, footer: bool, payload: &[u8]) -> Vec<u8> {
 
 fn sync_payload(length: usize) -> Vec<u8> {
     let mut payload = vec![0; length];
-    payload[..4].copy_from_slice(&[0xFF, 0xFB, 0x90, 0x64]);
+    payload[..4].copy_from_slice(&[0xff, 0xfb, 0x90, 0x64]);
     payload
 }
 

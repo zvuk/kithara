@@ -149,7 +149,7 @@ mod tests {
         data[7] = ((len >> 14) & 0x7f) as u8;
         data[8] = ((len >> 7) & 0x7f) as u8;
         data[9] = (len & 0x7f) as u8;
-        data.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x00]);
+        data.extend_from_slice(&[0xff, 0xfb, 0x90, 0x00]);
         data
     }
 
@@ -175,6 +175,6 @@ mod tests {
         let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
 
         assert_eq!(buffer.first().copied(), Some(b'I'));
-        assert_eq!(buffer.get(tag_bytes).copied(), Some(0xFF));
+        assert_eq!(buffer.get(tag_bytes).copied(), Some(0xff));
     }
 }

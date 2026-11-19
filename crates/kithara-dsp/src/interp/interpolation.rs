@@ -1,3 +1,5 @@
+use std::f64::consts::PI;
+
 use num_traits::ToPrimitive;
 
 use super::InterpError;
@@ -73,8 +75,6 @@ pub fn quadratic(taps: [f32; 3], fraction: f64) -> f32 {
 /// on x86 without the FMA target feature.
 #[inline(never)]
 pub fn sinc_hann_weights(first: f64, cutoff: f64, window_radius: f64, weights: &mut [f64]) {
-    use std::f64::consts::PI;
-
     let (mut sine, mut cosine) = (PI * first * cutoff).sin_cos();
     let (step_sine, step_cosine) = (PI * cutoff).sin_cos();
     let (mut window_sine, mut window_cosine) = (PI * first / window_radius).sin_cos();
