@@ -1,6 +1,6 @@
 //! What the shipped document promises the application, end to end.
 
-use std::{fs, path::PathBuf};
+use std::{fs, num::NonZeroU32, path::PathBuf};
 
 use kithara::{platform::tokio::runtime::Handle, play::ResourcePrep};
 use kithara_app::{config::AppConfig, document::Config, pools};
@@ -74,14 +74,14 @@ fn the_app_section_reaches_the_config_patch() {
     let dir = tempdir();
     let path = write(
         &dir,
-        &format!("{NEUTRAL_DRM}app:\n  eq_bands: 5\n  waveform_max_buckets: 1000\n"),
+        &format!("{NEUTRAL_DRM}app:\n  eq_bands: 5\n  waveform_fold: 4\n"),
     );
 
     let config = Config::load(Some(&path), None).expect("the overlay loads");
 
     let app = config.app();
     assert_eq!(app.eq_bands, Some(5));
-    assert_eq!(app.waveform_max_buckets, Some(1000));
+    assert_eq!(app.waveform_fold, NonZeroU32::new(4));
     assert_eq!(
         app.analysis_chunk_seconds, None,
         "a knob the document never names stays unset, so the built value stands"
@@ -116,6 +116,11 @@ async fn the_document_reaches_the_stretch_backend_geometry() {
         .runtime(Handle::current())
         .call()
         .expect("assemble document settings");
+    assert_eq!(
+        app.waveform_fold,
+        NonZeroU32::MIN,
+        "the default keeps native windows"
+    );
     let prep = ResourcePrep::builder()
         .worker(app.worker.clone())
         .warp(app.warp.clone())
@@ -150,4 +155,11 @@ fn an_unknown_app_knob_is_refused() {
     let error = Config::load(Some(&path), None).expect_err("a typo must not pass silently");
 
     assert!(error.to_string().contains("eq_band"), "{error}");
+}
+
+#[kithara::test(native, flash(false))]
+fn a_zero_waveform_fold_is_rejected() {
+    let dir = tempdir();
+    let path = write(&dir, &format!("{NEUTRAL_DRM}app:\n  waveform_fold: 0\n"));
+    assert!(Config::load(Some(&path), None).is_err());
 }

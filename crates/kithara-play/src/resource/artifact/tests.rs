@@ -1,4 +1,9 @@
-use std::{convert::Infallible, fs, num::NonZeroU16, path::PathBuf};
+use std::{
+    convert::Infallible,
+    fs,
+    num::{NonZeroU16, NonZeroU64},
+    path::PathBuf,
+};
 
 use axum::{Router, body::Body, routing::get};
 use futures::stream;
@@ -44,7 +49,8 @@ fn grid() -> RawBeatGrid {
 }
 
 fn waveform() -> Waveform {
-    Waveform::try_from(vec![Bucket::new(0.25, 0.5, 0.75)]).expect("BUG: bands are in range")
+    Waveform::new(vec![Bucket::new(0.25, 0.5, 0.75)], NonZeroU64::MIN)
+        .expect("BUG: bands are in range")
 }
 
 fn downloader() -> Downloader {

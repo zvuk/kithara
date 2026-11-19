@@ -1,6 +1,6 @@
 use std::{
     convert::Infallible,
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
 };
 
 use ::kithara::{
@@ -82,7 +82,7 @@ pub(crate) fn progress(analysis: TrackAnalysis) -> AnalysisProgress {
 /// The blob encodes version 1 followed by one bucket of three 0.5 band heights, where 0.5 is the
 /// little-endian float bytes `0x3F000000`.
 pub(crate) fn one_bucket_wave() -> Waveform {
-    Waveform::try_from([1, 0, 0, 0, 0, 0, 0, 63, 0, 0, 0, 63, 0, 0, 0, 63].as_slice())
+    Waveform::new(vec![Bucket::new(0.5, 0.5, 0.5)], NonZeroU64::MIN)
         .expect("hand-built blob is valid")
 }
 
@@ -240,7 +240,8 @@ pub(crate) fn served_grid() -> BeatGridModel {
 
 /// A waveform the caller hands over.
 pub(crate) fn served_waveform() -> Waveform {
-    Waveform::try_from(vec![Bucket::new(0.25, 0.5, 0.75); 8]).expect("fixture bands are in range")
+    Waveform::new(vec![Bucket::new(0.25, 0.5, 0.75); 8], NonZeroU64::MIN)
+        .expect("fixture bands are in range")
 }
 
 /// A key the caller hands over.

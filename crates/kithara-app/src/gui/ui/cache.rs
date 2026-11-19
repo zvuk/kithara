@@ -253,10 +253,11 @@ fn waveform_buckets(wave: &Waveform) -> impl Iterator<Item = WaveBucket> + '_ {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::num::{NonZeroU32, NonZeroU64};
 
     use ::kithara::{
         abr::AbrMode,
+        analysis::Bucket,
         platform::{
             CancelToken,
             sync::{Arc, Mutex},
@@ -313,10 +314,9 @@ mod tests {
     }
 
     fn wave_of(height: u8) -> Waveform {
-        let blob = [
-            1, 0, 0, 0, 0, 0, 0, height, 0, 0, 0, height, 0, 0, 0, height,
-        ];
-        Waveform::try_from(blob.as_slice()).expect("hand-built blob is valid")
+        let height = f32::from_bits(u32::from(height) << 24);
+        Waveform::new(vec![Bucket::new(height, height, height)], NonZeroU64::MIN)
+            .expect("hand-built buckets are valid")
     }
 
     fn revision(revision: u64, wave: Waveform) -> TrackArtifacts {

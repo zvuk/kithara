@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_resampler::rubato::RubatoBackend;
 use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
 use kithara_test_utils::kithara;
@@ -16,7 +18,7 @@ use crate::{
 
 fn builder(pools: &Pools) -> AnalyzerBuilder<RubatoBackend, TestPools> {
     AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
-        .with_waveform(64)
+        .with_waveform(NonZeroU32::MIN)
         .with_beat_config(
             BeatAnalysisConfig::builder()
                 .resampler_backend(RubatoBackend::default())

@@ -71,7 +71,7 @@ impl AnalysisService {
             &cancel,
             config.base_worker.clone(),
             config.analysis_chunk_seconds,
-            config.waveform_max_buckets,
+            config.waveform_fold,
             config.beat_analysis.clone(),
             config.worker.pools().clone(),
         );
