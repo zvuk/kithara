@@ -71,16 +71,30 @@ fn find_in_path(binary: &str) -> Option<OsString> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+const NET_LOG_DIR: &str = "KITHARA_WEB_NETLOG_DIR";
+
+#[cfg(not(target_arch = "wasm32"))]
 fn prepare_browser_directory(args: &[String]) -> Result<TempDir, io::Error> {
     let dir = tempfile::tempdir()?;
     let webdriver_config = Path::new(env!("CARGO_MANIFEST_DIR")).join("webdriver.json");
     if webdriver_config.exists() {
         let mut copied = fs::read(&webdriver_config)?;
-        if config::perf_logging_target(args) && env::var_os("GECKODRIVER").is_none() {
+        if let Some(stem) = config::perf_logging_target(args)
+            && env::var_os("GECKODRIVER").is_none()
+        {
             let mut config = serde_json::from_slice(&copied).map_err(io::Error::other)?;
             config::apply_perf_logging(&mut config).map_err(io::Error::other)?;
-            copied = serde_json::to_vec_pretty(&config).map_err(io::Error::other)?;
             eprintln!("webdriver config: fixture network perf logging requested");
+            // The CI lane that owns the directory names it; without it no capture is chosen.
+            if let Some(dir) = env::var_os(NET_LOG_DIR) {
+                let file = config::net_log_file(Path::new(&dir), stem).map_err(io::Error::other)?;
+                config::apply_net_log(&mut config, &file).map_err(io::Error::other)?;
+                eprintln!(
+                    "webdriver config: fixture NetLog capture requested at {}",
+                    file.display()
+                );
+            }
+            copied = serde_json::to_vec_pretty(&config).map_err(io::Error::other)?;
         }
         fs::write(dir.path().join("webdriver.json"), copied)?;
     }
