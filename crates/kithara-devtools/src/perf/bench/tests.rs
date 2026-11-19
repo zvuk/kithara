@@ -577,10 +577,11 @@ fn bench_preflight_rejects_inherited_criterion_debug() {
             .env("CRITERION_DEBUG", "")
             .output()
             .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&[output.stdout, output.stderr].concat())
+            output.status.success() && stdout.contains("test result: ok. 1 passed;"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
         );
         return;
     }
