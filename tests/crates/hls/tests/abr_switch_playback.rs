@@ -1,5 +1,7 @@
 use kithara::{decode::DecoderBackend, platform::time::Duration};
-use kithara_integration_tests::{TestServerHelper, mixed_encrypted, mixed_plain, served_mp3};
+use kithara_integration_tests::{
+    TestServerHelper, mixed_encrypted, mixed_plain, mixed_plain_url, served_mp3,
+};
 use kithara_test_utils::{TestTempDir, temp_dir};
 use packaged::create_packaged_abr_fixture;
 use url::Url;
@@ -9,8 +11,9 @@ use super::abr_playback::{packaged, seek};
 #[kithara::test(tokio, native, serial, hang_timeout_secs(3))]
 async fn abr_switch_on_production_ladder_does_not_hang(
     temp_dir: TestTempDir,
-    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+    #[by_ref] mixed_plain_url: &Url,
 ) {
+    let mixed_plain = (TestServerHelper::new().await, mixed_plain_url.clone());
     packaged::abr_switch_on_production_ladder_does_not_hang(temp_dir, mixed_plain).await;
 }
 
@@ -39,8 +42,9 @@ async fn packaged_abr_switch_keeps_player_continuity(
 )]
 async fn manual_cross_codec_switch_sustains_post_switch_playback(
     temp_dir: TestTempDir,
-    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+    #[by_ref] mixed_plain_url: &Url,
 ) {
+    let mixed_plain = (TestServerHelper::new().await, mixed_plain_url.clone());
     packaged::manual_cross_codec_switch_sustains_post_switch_playback(temp_dir, mixed_plain).await;
 }
 
@@ -88,8 +92,9 @@ async fn stream_continues_after_seek(
 #[kithara::test(tokio, native, serial, hang_timeout_secs(3))]
 async fn fixed_variant_on_production_ladder_plays_without_hang(
     temp_dir: TestTempDir,
-    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+    #[by_ref] mixed_plain_url: &Url,
 ) {
+    let mixed_plain = (TestServerHelper::new().await, mixed_plain_url.clone());
     seek::fixed_variant_on_production_ladder_plays_without_hang(temp_dir, mixed_plain).await;
 }
 

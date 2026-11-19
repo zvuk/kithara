@@ -27,7 +27,7 @@ use crate::{
 /// ```
 pub struct HlsStreamBuilder {
     initial_abr_mode: AbrMode,
-    store_subdir: Option<&'static str>,
+    memory_store: bool,
     max_assets: Option<usize>,
     max_bytes: Option<u64>,
 }
@@ -36,7 +36,7 @@ impl HlsStreamBuilder {
     pub const fn new() -> Self {
         Self {
             initial_abr_mode: AbrMode::Manual(VariantIndex::new(0)),
-            store_subdir: None,
+            memory_store: false,
             max_assets: None,
             max_bytes: None,
         }
@@ -54,9 +54,10 @@ impl HlsStreamBuilder {
         self
     }
 
-    /// Use a subdirectory under `temp_dir` for the asset store.
-    pub const fn store_subdir(mut self, subdir: &'static str) -> Self {
-        self.store_subdir = Some(subdir);
+    /// Keep assets in a memory store instead of the default disk store under
+    /// `temp_dir`. Each build gets its own store.
+    pub const fn memory_store(mut self) -> Self {
+        self.memory_store = true;
         self
     }
 
@@ -81,13 +82,16 @@ impl HlsStreamBuilder {
     ) -> Stream<Hls<TestPools>> {
         let pools = pools();
 
-        let store_path = match self.store_subdir {
-            Some(sub) => temp_path.join(sub),
-            None => temp_path.to_path_buf(),
+        let backend = if self.memory_store {
+            StorageBackend::Memory
+        } else {
+            StorageBackend::Disk {
+                root: temp_path.to_path_buf(),
+            }
         };
 
         let store_opts = AssetStore::builder(pools.clone())
-            .backend(StorageBackend::Disk { root: store_path })
+            .backend(backend)
             .maybe_max_assets(self.max_assets)
             .maybe_max_bytes(self.max_bytes)
             .build();

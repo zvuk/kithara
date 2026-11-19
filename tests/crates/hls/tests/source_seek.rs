@@ -121,13 +121,13 @@ async fn hls_seek_different_variants_return_different_data(
 
     let mut stream_v0 = HlsStreamBuilder::new()
         .variant(0)
-        .store_subdir("v0")
+        .memory_store()
         .build(hls.master_url(), temp_dir.path(), cancel_token.clone())
         .await;
 
     let mut stream_v1 = HlsStreamBuilder::new()
         .variant(1)
-        .store_subdir("v1")
+        .memory_store()
         .build(hls.master_url(), temp_dir.path(), cancel_token)
         .await;
 
