@@ -6,7 +6,7 @@ use kithara_stretch::ElasticError;
 use kithara_test_macros as kithara;
 use tracing::warn;
 
-use super::core::{PreparedQuantum, WarpRenderer};
+use super::core::{CarriedPhase, PreparedQuantum, WarpRenderer};
 
 fn copy_cached_tail(
     mapped_render: bool,
@@ -640,6 +640,14 @@ where
     /// Discard renderer state after a source discontinuity.
     pub fn reset(&mut self) {
         self.withdraw_speed_ahead();
+        self.carried_phase = self
+            .carried_phase
+            .take()
+            .filter(|carried| !carried.armed)
+            .map(|carried| CarriedPhase {
+                armed: true,
+                ..carried
+            });
         self.terminal_error = None;
         self.reset_pending = true;
         self.clear_render_state();

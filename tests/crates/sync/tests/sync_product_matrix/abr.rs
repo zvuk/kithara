@@ -221,7 +221,7 @@ async fn a_synced_aac_to_flac_promotion_keeps_native_pcm_time(#[case] switch_at:
             let frames = READ_FRAMES_AFTER_SEEK;
             let samples = frames * channels;
             let mut anchor = None;
-            let _ = check_against_previous(
+            let reference = check_against_previous(
                 &mut anchor,
                 0.0,
                 &tail[tail.len() - samples..],
@@ -229,16 +229,23 @@ async fn a_synced_aac_to_flac_promotion_keeps_native_pcm_time(#[case] switch_at:
                 SinePhaseSpec::default_440(),
                 "decoded outgoing PCM",
             );
+            assert!(
+                reference.is_none() && anchor.is_some(),
+                "decoded outgoing PCM measures the reference phase: {outgoing:?}"
+            );
+            let seconds = frames.to_f64().expect("bounded phase window") / f64::from(SAMPLE_RATE);
             let native_drift = check_against_previous(
                 &mut anchor,
-                frames.to_f64().expect("bounded phase window") / f64::from(SAMPLE_RATE),
+                seconds,
                 &head[..samples],
                 channels,
                 SinePhaseSpec::default_440(),
                 "decoded incoming PCM",
             );
-            eprintln!(
-                "native boundary before Warp: outgoing={outgoing:?} incoming={incoming:?} phase={native_drift:?}"
+            assert!(
+                native_drift.is_none() && anchor.is_some_and(|(at, _)| at == seconds),
+                "decoders meet at one phase before Warp: outgoing={outgoing:?} \
+                 incoming={incoming:?} drift={native_drift:?}"
             );
             drop(decoded);
         }

@@ -4,7 +4,8 @@ use kithara_stretch::ElasticError;
 use kithara_test_macros as kithara;
 
 use super::{
-    core::{PreparedQuantum, WarpRenderer},
+    super::trajectory::Fraction,
+    core::{CarriedPhase, PreparedQuantum, WarpRenderer},
     mapping::source_demand,
 };
 use crate::Semitones;
@@ -40,10 +41,32 @@ where
         if self.rebase_source(meta) || self.transition_pending() || self.engine_outdated() {
             return Err(crate::WarpRenderError::NeedsService);
         }
+        self.apply_carried_phase(meta)?;
         self.terminal_source_end = None;
         let prepared = self.prepare_active_quantum(meta, remaining, output_limit)?;
         self.prepared_quantum = Some(prepared);
         Ok(FrameCount::new(prepared.frames))
+    }
+
+    /// Starts `meta` at the phase a tail carried across a source clock change.
+    fn apply_carried_phase(&mut self, meta: AudioChunkInfo) -> Result<(), crate::WarpRenderError> {
+        let Some(carried) = self.carried_phase.take().filter(|carried| carried.armed) else {
+            return Ok(());
+        };
+        let residual = carried.residual;
+        let position = residual
+            .numerator
+            .checked_mul(u128::from(meta.spec.sample_rate.get()))
+            .zip(
+                residual
+                    .denominator
+                    .get()
+                    .checked_mul(u128::from(carried.rate.get())),
+            )
+            .and_then(|(numerator, denominator)| Fraction::new(numerator, denominator))
+            .and_then(|residual| residual.add(Fraction::new(u128::from(meta.frame_offset), 1)?))
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        self.reanchor_source(meta, (position.numerator, position.denominator))
     }
 
     fn prepared_source_window(
@@ -208,13 +231,20 @@ where
         self.prepare_tail(frames, Self::terminal_span)
     }
 
-    /// Keeps only whole output intervals before a source clock changes.
+    /// Shrink a prepared source span before a source clock changes, keeping
+    /// the phase past its end for the next source window.
     pub fn prepare_discontinuity_quantum(&mut self, frames: usize) -> Option<FrameCount> {
-        self.prepare_tail(frames, |span, end| {
-            Self::span_until(span, end)
-                .ok()?
-                .or_else(|| span.for_output_range(0..0))
-        })
+        let frames = self.prepare_tail(frames, Self::terminal_span)?;
+        let span = self.prepared_quantum?.source_span;
+        let (numerator, denominator) = span.source_ratio_at(span.output_frames())?;
+        let residual = Fraction::new(numerator, denominator.get())?
+            .sub(Fraction::new(u128::from(self.terminal_source_end?), 1)?)?;
+        self.carried_phase = Some(CarriedPhase {
+            residual,
+            rate: self.spec.sample_rate,
+            armed: false,
+        });
+        Some(frames)
     }
 
     fn prepare_tail(
