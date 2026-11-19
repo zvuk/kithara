@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use tempfile::TempDir;
@@ -109,6 +109,150 @@ fn main() {
     );
     let ctx = Ctx::load_from_manifest(&root.join("Cargo.toml")).unwrap();
     (temp, ctx, base)
+}
+
+// A child that writes to stdout and stderr before exiting, used to prove the
+// bench build path streams stderr while keeping stdout as parseable JSON.
+#[cfg(unix)]
+fn stream_fixture(root: &Path, exit_code: i32) -> PathBuf {
+    let source = root.join("stream_child.rs");
+    fs::write(
+        &source,
+        r#"
+use std::io::Write;
+fn main() {
+    if let Some(pid_file) = std::env::args_os().nth(1) {
+        std::fs::write(pid_file, std::process::id().to_string()).unwrap();
+    }
+    std::io::stdout().write_all(b"{\"json\":true}").unwrap();
+    std::io::stderr().write_all(b"stderr-before-exit\n").unwrap();
+    std::process::exit(EXIT_CODE);
+}
+"#
+        .replace("EXIT_CODE", &exit_code.to_string()),
+    )
+    .unwrap();
+    let binary = root.join("stream_child");
+    command(
+        root,
+        "rustc",
+        &[source.to_str().unwrap(), "-o", binary.to_str().unwrap()],
+    );
+    binary
+}
+
+#[cfg(unix)]
+#[test]
+fn bench_output_streams_stderr_and_keeps_stdout_json() {
+    let temp = tempfile::tempdir().unwrap();
+    let log_path = temp.path().join("bench-results.txt");
+    let mut log = Log(File::create(&log_path).unwrap());
+    for exit_code in [0, 1] {
+        let child = stream_fixture(temp.path(), exit_code);
+        let mut command = Command::new(&child);
+        let result = log.output(&mut command, true);
+        assert_eq!(
+            result.is_ok(),
+            exit_code == 0,
+            "exit {exit_code} must propagate as failure"
+        );
+        if let Ok(output) = result {
+            // stdout stays intact JSON even though stderr was streamed.
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                r#"{"json":true}"#
+            );
+        }
+    }
+    // stderr reached the bench-results log file exactly once per run.
+    let log = fs::read_to_string(&log_path).unwrap();
+    assert_eq!(log.matches("stderr-before-exit").count(), 2);
+}
+
+// A child that fills stdout beyond the pipe buffer while writing a stderr
+// marker first. Proves the parent drains both pipes concurrently: a
+// sequential stderr-then-stdout reader would block on the full stdout pipe and
+// deadlock unless stdout is drained concurrently.
+#[cfg(unix)]
+fn pipe_pressure_fixture(root: &Path) -> PathBuf {
+    let source = root.join("pipe_pressure_child.rs");
+    fs::write(
+        &source,
+        r#"
+use std::io::Write;
+fn main() {
+    std::io::stderr().write_all(b"pressure-stderr-before-exit\n").unwrap();
+    let mut stdout = std::io::stdout().lock();
+    // 8 MiB > any OS pipe buffer, so the child blocks unless the parent drains
+    // stdout concurrently. Line-delimited JSON stays parseable.
+    for index in 0..8 * 1024 * 1024 / 13 {
+        writeln!(stdout, "{{\"i\":{index}}}").unwrap();
+    }
+}
+"#,
+    )
+    .unwrap();
+    let binary = root.join("pipe_pressure_child");
+    command(
+        root,
+        "rustc",
+        &[source.to_str().unwrap(), "-o", binary.to_str().unwrap()],
+    );
+    binary
+}
+
+#[cfg(unix)]
+#[test]
+fn bench_output_drains_full_stdout_pipe_without_deadlock() {
+    let temp = tempfile::tempdir().unwrap();
+    let log_path = temp.path().join("bench-results.txt");
+    let mut log = Log(File::create(&log_path).unwrap());
+    let child = pipe_pressure_fixture(temp.path());
+    let mut command = Command::new(&child);
+    let output = log.output(&mut command, true).unwrap();
+    // stdout is fully drained (more than any OS pipe buffer) and stays
+    // line-delimited JSON.
+    assert!(
+        output.stdout.len() >= 1024 * 1024,
+        "expected stdout well beyond the pipe buffer, got {}",
+        output.stdout.len()
+    );
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        assert!(line.starts_with('{') && line.ends_with('}'), "{line:?}");
+    }
+    // stderr marker reached the log file even though stdout filled the pipe.
+    assert!(
+        fs::read_to_string(&log_path)
+            .unwrap()
+            .contains("pressure-stderr-before-exit")
+    );
+}
+
+// A read-only file yields EBADF on write, exercising the helper's error path.
+// The helper must return the write error while still reaping the child, so the
+// child is not left running (its drop neither kills nor reaps).
+#[cfg(unix)]
+#[test]
+fn bench_output_preserves_error_and_reaps_child() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut read_only = File::open(temp.path()).unwrap();
+    let child = stream_fixture(temp.path(), 0);
+    let pid_file = temp.path().join("stream-child.pid");
+    let mut command = Command::new(&child);
+    command.arg(&pid_file);
+    let error = stream_output(&mut command, &mut read_only).unwrap_err();
+    assert!(
+        error.to_string().contains("Bad file descriptor"),
+        "expected EBADF, got {error}"
+    );
+    let pid = fs::read_to_string(pid_file).unwrap();
+    let child_state = Command::new("ps")
+        .args(["-p", pid.trim(), "-o", "ppid="])
+        .output()
+        .unwrap();
+    assert!(child_state.status.success() || child_state.status.code() == Some(1));
+    let parent = String::from_utf8(child_state.stdout).unwrap();
+    assert_ne!(parent.trim(), std::process::id().to_string());
 }
 
 fn request(base: &str) -> Request {
