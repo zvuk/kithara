@@ -80,7 +80,9 @@ fn structural_body(statements: &[Stmt]) -> bool {
     match expression {
         Expr::Struct(value) => value.rest.is_none() && value.fields.iter().all(same_named_field),
         Expr::Match(value) => {
-            matches!(&*value.expr, Expr::Path(_)) && value.arms.iter().all(structural_arm)
+            matches!(&*value.expr, Expr::Path(_))
+                && !value.arms.is_empty()
+                && value.arms.iter().all(structural_arm)
         }
         _ => false,
     }
@@ -218,6 +220,16 @@ impl From<SourceKind> for TargetKind { fn from(value: SourceKind) -> Self { matc
 impl From<Source> for Target { fn from(value: Source) -> Self { Self { value: value.compute() } } }
 impl From<SourceKind> for TargetKind { fn from(value: SourceKind) -> Self { match value { SourceKind::A => Self::A, _ => Self::Unknown } } }
 impl From<Policy> for Output { fn from(value: Policy) -> Self { match value { Policy::Enabled => Self::On, Policy::Disabled => Self::Off } } }
+"#;
+        assert!(check_source(source).is_empty());
+    }
+    #[test]
+    fn ignores_empty_matches_for_uninhabited_sources() {
+        let source = r#"
+enum Empty {}
+enum Target { Ready }
+impl From<Empty> for Target { fn from(value: Empty) -> Self { match value {} } }
+impl From<core::convert::Infallible> for Output { fn from(value: core::convert::Infallible) -> Self { match value {} } }
 "#;
         assert!(check_source(source).is_empty());
     }

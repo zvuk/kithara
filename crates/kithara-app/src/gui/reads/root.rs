@@ -114,12 +114,12 @@ mod tests {
         decode::TrackMetadata,
         effects::GainDb,
         platform::{time::Duration, tokio::runtime::Handle},
-        play::Pitch,
+        play::{Pitch, TrackSettings},
         ui::{
             render::{ReadValue, Reads, TableCell, Walk},
             skin::ColorRole,
         },
-        warp::Semitones,
+        warp::{Semitones, WarpControls},
     };
     use iced::Size;
     use image::ImageFormat;
@@ -234,7 +234,8 @@ mod tests {
                         .eq_bands(eq_bands.clone())
                         .tempo(TempoPercent::DEFAULT)
                         .synced(false)
-                        .pitch(Pitch::default())
+                        .settings(TrackSettings::default())
+                        .warp_controls_available(true)
                         .state(ui)
                         .build()
                 })
@@ -517,7 +518,7 @@ mod tests {
     fn the_key_lock_hides_on_a_deck_that_cannot_hold_the_pitch() {
         let fixture = Fixture::new(["+0.0%", "+0.0%"]);
         let mut shown = fixture.shown();
-        shown.decks[0].pitch = None;
+        shown.decks[0].warp_controls_available = false;
         let root = fixture.root(&shown);
         let walk = Walk::new(&root);
 
@@ -772,7 +773,14 @@ mod tests {
                 tonic: PitchClass::C,
                 mode: Mode::Major,
             });
-            shown.decks[0].pitch = pitch;
+            shown.decks[0].warp_controls_available = pitch.is_some();
+            shown.decks[0].settings = TrackSettings::builder()
+                .controls(
+                    WarpControls::builder()
+                        .pitch(pitch.unwrap_or(Pitch::HELD))
+                        .build(),
+                )
+                .build();
             shown.decks[0].speed = (speed_shift / 12.0).exp2();
             let root = fixture.root(&shown);
             let walk = Walk::new(&root);
@@ -854,9 +862,15 @@ mod tests {
 
         fixture.decks[0].0.speed = 1.08;
         let mut unlocked = fixture.shown();
-        unlocked.decks[0].pitch = Some(Pitch::Vinyl {
-            shift: Semitones::DEFAULT,
-        });
+        unlocked.decks[0].settings = TrackSettings::builder()
+            .controls(
+                WarpControls::builder()
+                    .pitch(Pitch::Vinyl {
+                        shift: Semitones::DEFAULT,
+                    })
+                    .build(),
+            )
+            .build();
         assert_eq!(
             Walk::new(&fixture.root(&unlocked)).get("deck.track.key@deck=a"),
             Some(ReadValue::Text("1m")),
@@ -870,9 +884,15 @@ mod tests {
 
         fixture.decks[0].0.set_analysis(Some(artefacts(c_major)));
         let mut transposed = fixture.shown();
-        transposed.decks[0].pitch = Some(Pitch::Held {
-            shift: Semitones::DEFAULT.step_up(),
-        });
+        transposed.decks[0].settings = TrackSettings::builder()
+            .controls(
+                WarpControls::builder()
+                    .pitch(Pitch::Held {
+                        shift: Semitones::DEFAULT.step_up(),
+                    })
+                    .build(),
+            )
+            .build();
         let root = fixture.root(&transposed);
         let walk = Walk::new(&root);
         assert_eq!(

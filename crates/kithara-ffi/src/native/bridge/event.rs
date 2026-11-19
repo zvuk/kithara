@@ -312,7 +312,9 @@ mod tests {
             sync::{Arc, Mutex},
             tokio::task::spawn_blocking,
         },
-        play::{ItemRole, PlayWorkerConfig, PlaybackFault, ResourcePrep, TrackRef},
+        play::{
+            ItemRole, PlayWorkerConfig, PlaybackFault, ResourcePrep, TrackRef, TrackSettingsChange,
+        },
         queue::{AdvanceReason, QueueConfig, QueueEvent, QueueRepeatMode, TrackStatus, Transition},
     };
     use kithara_file::{FileError, FileEvent};
@@ -974,7 +976,9 @@ mod tests {
         let queue = owner.control().clone();
         let mut events = queue.subscribe();
         queue.set_repeat(kithara::queue::RepeatMode::One);
-        queue.set_rate(1.0).expect("a finite rate is accepted");
+        queue
+            .configure_track(TrackSettingsChange::Speed(1.0))
+            .expect("a finite rate is accepted");
         let track = assets::sine_wav_a440_100_frames()
             .path()
             .expect("the short decoder WAV lives on disk");
@@ -1059,7 +1063,9 @@ mod tests {
         let setup = queue.clone();
         let id = completed(spawn_blocking(move || {
             setup.set_repeat(kithara::queue::RepeatMode::One);
-            setup.set_rate(1.0).expect("a finite rate is accepted");
+            setup
+                .configure_track(TrackSettingsChange::Speed(1.0))
+                .expect("a finite rate is accepted");
             let id = setup.append(track.to_string_lossy().into_owned())?;
             setup.select(id, Transition::None)?;
             Ok::<_, kithara::queue::QueueError>(id)

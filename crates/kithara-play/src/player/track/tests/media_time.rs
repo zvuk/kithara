@@ -1,5 +1,6 @@
 use kithara_config::ConfigOwner;
 use kithara_stream::PlayheadRead;
+use kithara_warp::WarpControlsChange;
 
 use super::*;
 
@@ -472,15 +473,18 @@ fn an_alignment_replaces_older_future_speeds_without_cancelling_keylock() {
     command_at_zero(
         &mut track,
         &mut rig,
-        TrackCommand::Configure(TrackSettingsChange::Pitch(Pitch::HELD), When::Next),
+        TrackCommand::Configure(
+            TrackSettingsChange::Controls(WarpControlsChange::Pitch(Pitch::HELD)),
+            When::Next,
+        ),
     )
     .expect("initial keylock sequence");
     assert!(matches!(
         lane_commands(&mut inbox).as_slice(),
-        [LaneCommand::SetPitch(Pitch::HELD)]
+        [LaneCommand::Warp(WarpControlsChange::Pitch(Pitch::HELD))]
     ));
     track.settle_lane();
-    assert_eq!(track.settings.config().pitch(), Pitch::HELD);
+    assert_eq!(track.settings.config().controls().pitch(), Pitch::HELD);
     let obsolete = in_pass(&mut rig, frame(0), |out| {
         track.apply(
             TrackCommand::SetSpeed {
@@ -495,7 +499,7 @@ fn an_alignment_replaces_older_future_speeds_without_cancelling_keylock() {
     let keylock = in_pass(&mut rig, frame(0), |out| {
         track.apply(
             TrackCommand::Configure(
-                TrackSettingsChange::Pitch(Pitch::default()),
+                TrackSettingsChange::Controls(WarpControlsChange::Pitch(Pitch::default())),
                 When::At(frame(18_000)),
             ),
             out,
@@ -558,7 +562,9 @@ fn an_alignment_replaces_older_future_speeds_without_cancelling_keylock() {
         )
         .expect("keylock remains scheduled");
     assert_eq!(due.seq(), keylock);
-    assert!(matches!(due.commands(), [LaneCommand::SetPitch(pitch)] if *pitch == Pitch::default()));
+    assert!(
+        matches!(due.commands(), [LaneCommand::Warp(WarpControlsChange::Pitch(pitch))] if *pitch == Pitch::default())
+    );
     due.apply(kithara_render::LaneApplied {
         source_basis: None,
         engine_latency: FrameCount::new(0),
@@ -577,7 +583,7 @@ fn an_alignment_replaces_older_future_speeds_without_cancelling_keylock() {
     );
     track.settle_lane();
     assert_eq!(track.settings.config().speed(), 1.25);
-    assert_eq!(track.settings.config().pitch(), Pitch::default());
+    assert_eq!(track.settings.config().controls().pitch(), Pitch::default());
     inbox.drain();
     let due = inbox
         .next_due(
