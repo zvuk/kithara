@@ -1,6 +1,6 @@
 use std::path::Path;
 
-// Limit network traces to the four known stall fixtures: the worklet-import pair and both lib-test binaries.
+// Limit network traces to the five known stall fixtures: the worklet-import pair, the observer suite and both lib-test binaries.
 pub(crate) fn perf_logging_target(args: &[String]) -> bool {
     args.iter().any(|arg| {
         let name = Path::new(arg)
@@ -12,7 +12,8 @@ pub(crate) fn perf_logging_target(args: &[String]) -> bool {
                 if (name.starts_with("web_bootstrap-")
                     || name.starts_with("web_analysis-")
                     || name.starts_with("kithara_ffi-")
-                    || name.starts_with("kithara_host-"))
+                    || name.starts_with("kithara_host-")
+                    || name.starts_with("web_observer-"))
                     && name.ends_with(".wasm")
         )
     })
@@ -75,10 +76,11 @@ mod tests {
             "/cache/deps/web_analysis-3b2b9b5370fa3bf7.wasm",
             "/cache/deps/kithara_ffi-ec784db4d0559dc9.wasm",
             "/cache/deps/kithara_host-260fbe53033cc5d3.wasm",
+            "/cache/deps/web_observer-894faf148f0e514e.wasm",
         ] {
             assert!(perf_logging_target(&[binary.to_string()]));
         }
-        let other = "/cache/deps/web_observer-fc399469e0e06114.wasm";
+        let other = "/cache/deps/kithara_platform-5f7e0acd8e3ff6b5.wasm";
         assert!(!perf_logging_target(&[other.to_string()]));
     }
 
