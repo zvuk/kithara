@@ -33,7 +33,7 @@ fn stress_seeks_preserve_timeline_integrity(stress_wav: &'static [u8]) {
     };
     let total_secs = total_duration.as_secs_f64();
 
-    let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
+    let mut rng = Xorshift64::new(0xdead_beef_cafe_1337);
     let mut successful_seeks = 0u64;
 
     for i in 0..SEEK_ITERATIONS {

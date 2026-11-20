@@ -162,7 +162,7 @@ mod tests {
 
     fn unit() -> EncodedAccessUnit {
         EncodedAccessUnit {
-            bytes: vec![0x5A; consts::SEGMENT_PAYLOAD],
+            bytes: vec![0x5a; consts::SEGMENT_PAYLOAD],
             is_sync: true,
             duration: consts::UNIT_DURATION,
             dts: 0,

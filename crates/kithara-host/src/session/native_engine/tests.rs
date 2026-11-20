@@ -1,7 +1,19 @@
+use std::num::NonZeroU32;
+#[cfg(feature = "offline")]
+use std::task::Waker;
+
+#[cfg(feature = "offline")]
+use kithara_command::{Live, mailbox};
 #[cfg(feature = "offline")]
 use kithara_command::{Seq, When};
 #[cfg(feature = "offline")]
 use kithara_effects::LimiterConfig;
+#[cfg(feature = "offline")]
+use kithara_platform::{
+    sync::{Arc, Mutex, mpsc},
+    thread::spawn_named,
+    time::Instant,
+};
 #[cfg(feature = "offline")]
 use kithara_platform::{thread::JoinHandle, time::Duration};
 #[cfg(feature = "offline")]
@@ -18,7 +30,17 @@ use kithara_test_utils::{
 use kithara_warp::BeatGridState;
 
 #[cfg(feature = "offline")]
-use super::*;
+use super::super::protocol::HostDispatcher;
+use super::config::cpal_config;
+#[cfg(feature = "offline")]
+use super::{
+    super::{
+        decks::DeckInbox,
+        state::{RootView, SessionBufferConfig, SessionState},
+    },
+    SessionClient,
+    engine::{SessionWake, engine_thread},
+};
 #[cfg(feature = "offline")]
 use crate::{
     DeckId, HostCommand, HostSettingsChange, HostSettingsExec, HostSettled, MetronomeConfigChange,
@@ -30,6 +52,8 @@ use crate::{
         },
     },
 };
+#[cfg(feature = "offline")]
+use crate::{HostCore, HostOwner, HostSettings, PlayError, consts, rt::SessionOutput};
 
 #[cfg(feature = "offline")]
 type BaseCommand = HostCommand<dyn HostedDeck<TestPools>>;
@@ -322,8 +346,6 @@ fn a_woken_deck_drains_on_the_session_thread() {
 
 #[kithara::test]
 fn output_block_override_preserves_the_backend_default_or_sets_128() {
-    use super::{NonZeroU32, cpal_config};
-
     let inherited = cpal_config(44_100, None);
     assert_eq!(
         inherited.output.desired_block_frames,

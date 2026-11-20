@@ -15,7 +15,7 @@ use symphonia_core::{
         prelude::*,
         probe::{ProbeFormatData, ProbeableFormat, Score, Scoreable},
     },
-    io::*,
+    io::{FiniteStream, MediaSource, MediaSourceStream, ReadBytes, ScopedStream, SeekBuffered},
     meta::{Metadata, MetadataLog},
     packet::PacketRef,
     support_format,

@@ -1,0 +1,14 @@
+id: style.no-prelude-module
+message: |
+  A `prelude` module. A prelude invites glob imports and hides where each name
+  comes from. Callers import the items they use from the module that owns
+  them.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  kind: mod_item
+  has:
+    field: name
+    regex: '^prelude$'

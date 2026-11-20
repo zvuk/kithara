@@ -250,7 +250,7 @@ async fn stress_random_seek_read_synthetic_wav(#[future(awt)] wav_file: NamedTem
     info!(chunk_duration_secs, chunk_samples, "Read chunk size");
 
     let result = spawn_blocking(move || {
-        let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
+        let mut rng = Xorshift64::new(0xdead_beef_cafe_1337);
         let mut buf = vec![0.0f32; chunk_samples];
 
         let max_seek_secs = total_secs - chunk_duration_secs;

@@ -533,7 +533,7 @@ mod tests {
         let key = ResourceKey::relative("asset", "segments/0001.bin");
         let path = dir.path().join("asset").join("segments").join("0001.bin");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, vec![0xEEu8; 4096]).unwrap();
+        fs::write(&path, vec![0xeeu8; 4096]).unwrap();
 
         let acquired = store.acquire_resource(&key, None).unwrap();
 
@@ -616,7 +616,7 @@ mod tests {
             .join("0001.bin.tmp");
         let reserved = fs::metadata(&tmp).unwrap().len();
 
-        let chunk = vec![0xABu8; 16 * 1024];
+        let chunk = vec![0xabu8; 16 * 1024];
         for i in 0..12u64 {
             writer.write_at(i * chunk.len() as u64, &chunk).unwrap();
         }
@@ -636,7 +636,7 @@ mod tests {
         let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
             panic!("a fresh segment key must acquire a writer");
         };
-        let payload = vec![0xCDu8; 100_000];
+        let payload = vec![0xcdu8; 100_000];
         writer.write_at(0, &payload).unwrap();
 
         drop(writer.commit(Some(payload.len() as u64)).unwrap());
