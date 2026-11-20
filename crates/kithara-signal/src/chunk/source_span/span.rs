@@ -97,21 +97,34 @@ impl SourceSpan {
         Some(Duration::new(seconds, nanos))
     }
 
+    /// Source time from `origin` to an output boundary on this span's source
+    /// frame grid, as [`AudioSpec::elapsed_since`](crate::AudioSpec::elapsed_since)
+    /// measures it: a boundary on a whole source frame keeps its exact frame
+    /// difference instead of the difference of two truncated timestamps.
+    #[must_use]
+    pub fn elapsed_at(self, output_frame: u64, origin: Duration) -> Option<Duration> {
+        Some(crate::time::elapsed_since(
+            self.sample_rate,
+            origin,
+            self.position_at(output_frame)?,
+        ))
+    }
+
     /// The last output frame in `[from, output_frames)` whose
-    /// [`position_at`](Self::position_at) does not pass `position`.
+    /// [`elapsed_at`](Self::elapsed_at) `origin` does not pass `elapsed`.
     ///
     /// Every validated mapping is non-decreasing, so this inverts nonlinear
-    /// spans too. A `position` before `from`, an empty range and
+    /// spans too. An `elapsed` before `from`, an empty range and
     /// unrepresentable positions return `None`.
     #[must_use]
-    pub fn output_floor_at(self, from: u64, position: Duration) -> Option<u64> {
-        if from >= self.output_frames || self.position_at(from)? > position {
+    pub fn output_floor_since(self, from: u64, origin: Duration, elapsed: Duration) -> Option<u64> {
+        if from >= self.output_frames || self.elapsed_at(from, origin)? > elapsed {
             return None;
         }
         let (mut floor, mut past) = (from, self.output_frames);
         while past - floor > 1 {
             let mid = floor + (past - floor) / 2;
-            if self.position_at(mid)? <= position {
+            if self.elapsed_at(mid, origin)? <= elapsed {
                 floor = mid;
             } else {
                 past = mid;
@@ -753,20 +766,25 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::affine(SourceSpan::try_from((3, 2, NonZeroU128::new(3).expect("denominator"), NonZeroU32::new(44_100).expect("rate"), 64)).expect("affine"))]
-    #[case::ramp(SourceSpan::try_from((0, 1, 1, NonZeroU128::MIN, NonZeroU32::new(48_000).expect("rate"), 64)).expect("ramp"))]
-    #[case::approach(SourceSpan::approaching(0, NonZeroU128::MIN, ExponentialApproach::new(1.0, 0.5, 16.0).expect("curve"), 0, NonZeroU32::new(48_000).expect("rate"), 64).expect("approach"))]
-    #[case::still(SourceSpan::try_from((5, 0, NonZeroU128::MIN, NonZeroU32::new(48_000).expect("rate"), 8)).expect("still"))]
-    fn output_floor_matches_the_last_frame_at_or_before_a_position(#[case] span: SourceSpan) {
+    #[case::affine(SourceSpan::try_from((3, 2, NonZeroU128::new(3).expect("denominator"), NonZeroU32::new(44_100).expect("rate"), 64)).expect("affine"), Duration::ZERO)]
+    #[case::ramp(SourceSpan::try_from((0, 1, 1, NonZeroU128::MIN, NonZeroU32::new(48_000).expect("rate"), 64)).expect("ramp"), Duration::ZERO)]
+    #[case::approach(SourceSpan::approaching(0, NonZeroU128::MIN, ExponentialApproach::new(1.0, 0.5, 16.0).expect("curve"), 0, NonZeroU32::new(48_000).expect("rate"), 64).expect("approach"), Duration::ZERO)]
+    #[case::still(SourceSpan::try_from((5, 0, NonZeroU128::MIN, NonZeroU32::new(48_000).expect("rate"), 8)).expect("still"), Duration::ZERO)]
+    #[case::whole_frame_origin(SourceSpan::new(49_025, 49_155, NonZeroU32::new(48_000).expect("rate"), 130).expect("affine"), Duration::from_nanos(21_333_333))]
+    #[case::fractional_origin(SourceSpan::try_from((3, 2, NonZeroU128::new(3).expect("denominator"), NonZeroU32::new(44_100).expect("rate"), 64)).expect("affine"), Duration::from_nanos(7))]
+    fn output_floor_matches_the_last_frame_at_or_before_an_elapsed_time(
+        #[case] span: SourceSpan,
+        #[case] origin: Duration,
+    ) {
         let frames = span.output_frames();
-        let positions = (0..=frames)
-            .map(|frame| span.position_at(frame).expect("position"))
+        let elapsed = (0..=frames)
+            .map(|frame| span.elapsed_at(frame, origin).expect("elapsed"))
             .collect::<Vec<_>>();
-        let probes = positions.iter().flat_map(|&position| {
+        let probes = elapsed.iter().flat_map(|&time| {
             [
-                position.checked_sub(Duration::from_nanos(1)),
-                Some(position),
-                position.checked_add(Duration::from_nanos(1)),
+                time.checked_sub(Duration::from_nanos(1)),
+                Some(time),
+                time.checked_add(Duration::from_nanos(1)),
             ]
             .into_iter()
             .flatten()
@@ -774,16 +792,29 @@ mod tests {
         for probe in probes {
             for from in 0..frames {
                 let expected = (from..frames)
-                    .take_while(|&frame| positions[usize::try_from(frame).expect("frame")] <= probe)
+                    .take_while(|&frame| elapsed[usize::try_from(frame).expect("frame")] <= probe)
                     .last();
                 assert_eq!(
-                    span.output_floor_at(from, probe),
+                    span.output_floor_since(from, origin, probe),
                     expected,
-                    "from {from}, position {probe:?}"
+                    "from {from}, elapsed {probe:?}"
                 );
             }
         }
-        assert_eq!(span.output_floor_at(frames, positions[0]), None);
+        assert_eq!(span.output_floor_since(frames, origin, elapsed[0]), None);
+    }
+
+    #[kithara::test]
+    fn an_origin_relative_floor_keeps_an_exact_whole_frame_match() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let span = SourceSpan::new(49_025, 49_155, rate, 130).expect("affine");
+        let origin = crate::time::duration_for(rate, 1_024).expect("origin");
+        let consumed = crate::time::duration_for(rate, 48_002).expect("consumed");
+        assert!(
+            origin + consumed < span.position_at(1).expect("boundary"),
+            "the truncated sum falls one nanosecond short of the exact boundary"
+        );
+        assert_eq!(span.output_floor_since(0, origin, consumed), Some(1));
     }
 
     #[kithara::test]

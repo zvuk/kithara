@@ -156,19 +156,16 @@ pub(in crate::rt) fn scan_cut<'a>(
         let offset_u64 = u64::try_from(offset).map_err(|_| ())?;
         let (span, boundary) = CutPrefix::checked_packet(chunk, segment, offset_u64, plan.prefix)?;
         let origin = info.media_origin.ok_or(())?;
-        let raw = origin.checked_add(logical).ok_or(())?;
-        let start = span.position_at(offset_u64).ok_or(())?;
-        let end = boundary.raw_end;
-        if raw < start {
+        if logical < span.elapsed_at(offset_u64, origin).ok_or(())? {
             return Ok(plan);
         }
-        if raw < end {
+        if logical < span.elapsed_at(span.output_frames(), origin).ok_or(())? {
             plan.point = Some(cut_point(
                 span,
                 segment,
                 info.lane_frame,
                 offset_u64,
-                raw,
+                logical,
                 origin,
             )?);
             return Ok(plan);
@@ -188,10 +185,10 @@ fn cut_point(
     segment: SegmentId,
     lane_frame: u64,
     start: u64,
-    raw: Duration,
+    logical: Duration,
     origin: Duration,
 ) -> Result<CutPoint, ()> {
-    let lo = span.output_floor_at(start, raw).ok_or(())?;
+    let lo = span.output_floor_since(start, origin, logical).ok_or(())?;
     Ok(CutPoint {
         offset: usize::try_from(lo).map_err(|_| ())?,
         advance: usize::try_from(lo - start).map_err(|_| ())?,
@@ -202,4 +199,40 @@ fn cut_point(
         position: span.position_at(lo).ok_or(())?,
         origin,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_signal::{AudioSpec, SegmentId};
+    use kithara_test_utils::kithara;
+
+    use super::scan_cut;
+    use crate::{PcmPacket, worker::packet_tests::chunk};
+
+    #[kithara::test]
+    fn an_exact_incoming_boundary_is_cut_on_its_own_frame() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("rate"));
+        let mut packet = chunk(spec, SegmentId::FIRST, 0, 49_025, &[0.25; 2 * 130]);
+        packet.meta.media_origin = Some(spec.duration_for(1_024).expect("origin"));
+        let packet = PcmPacket::Chunk(Box::new(packet));
+        let logical = spec.duration_for(48_002).expect("consumed position");
+
+        let plan = scan_cut(
+            [(&packet, 0)].into_iter(),
+            SegmentId::FIRST,
+            logical,
+            None,
+            1,
+        )
+        .expect("an admitted packet");
+
+        let point = plan.point.expect("the boundary is inside the packet");
+        assert_eq!(
+            point.lane.frame, 1,
+            "source frame 49_026 is the exact match"
+        );
+        assert_eq!(point.position, spec.duration_for(49_026).expect("boundary"));
+    }
 }
