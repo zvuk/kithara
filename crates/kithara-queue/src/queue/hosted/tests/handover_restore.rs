@@ -4460,3 +4460,110 @@ async fn a_rejected_current_reselect_pause_retires_its_actual_sequence(
     rig.assert_no_pending_load();
     rig.finish().await;
 }
+
+#[kithara::test(tokio)]
+#[case::paused(false, false)]
+#[case::played(true, false)]
+#[case::played_then_paused(true, true)]
+#[kithara::hang_watchdog]
+async fn a_seated_paused_replacement_owns_its_slot_until_its_receipt(
+    #[by_ref] worker_owner: &WorkerOwner,
+    #[case] played: bool,
+    #[case] repaused: bool,
+) {
+    let config = DeckMixerConfig::builder()
+        .slots(std::num::NonZeroUsize::new(1).expect("one mixer slot"))
+        .build();
+    let mut rig = HandoverRig::playing_with_config(
+        &worker_owner.0,
+        ["item-1.wav", "item-2.wav", "item-3.wav"],
+        config,
+    )
+    .await;
+    let id = rig.ids[0];
+    let slot = rig.slot(0);
+    rig.apply(QueueCommand::Pause { at: When::Next })
+        .expect("pause");
+    let paused = rig
+        .deck
+        .block(SessionFrame::new(256), 0.0)
+        .expect("pause block");
+    rig.settle(paused);
+    rig.queue.deck.mixer.slots[usize::from(slot.get())].state = SlotState::Stopped;
+    rig.queue.clock = Some((SessionFrame::new(384), FrameCount::new(128)));
+    let alternate = fixture_uri(rig.dir.path(), "alternate.wav");
+    seed_fixture(
+        rig.queue.config.store.as_ref().expect("fixture store"),
+        &alternate,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
+    );
+    rig.apply(QueueCommand::ReplaceSource {
+        id,
+        source: alternate.clone().into(),
+    })
+    .expect("source change");
+    rig.load(0, 64.295).await;
+    let seat = rig
+        .deck
+        .block(SessionFrame::new(512), 0.0)
+        .expect("seat block");
+    assert!(
+        seat.iter().any(|receipt| {
+            matches!(receipt.outcome(), Outcome::Applied { .. })
+                && receipt
+                    .batch()
+                    .commands
+                    .iter()
+                    .any(|part| matches!(part, DeckPart::Returned(Returned::Pcm { slot: seated, .. }) if *seated == slot))
+        }),
+        "the executor seats the replacement before its receipt settles"
+    );
+    if played {
+        rig.apply(QueueCommand::Play { at: When::Next })
+            .expect("play");
+    }
+    if repaused {
+        rig.apply(QueueCommand::Pause { at: When::Next })
+            .expect("pause again");
+    }
+
+    let seek = rig.apply(QueueCommand::Seek { to: Position::ZERO });
+    assert!(
+        matches!(seek, Err(PlayError::NotReady)),
+        "a seek waits for the seated replacement: {seek:?}"
+    );
+    assert!(rig.queue.target.is_some_and(|target| target.to == id));
+    assert!(rig.queue.tracks.is_changing_source(id));
+
+    rig.settle(seat);
+    assert_eq!(
+        rig.queue.control().track(id).and_then(|track| track.url),
+        Some(alternate)
+    );
+    assert!(!rig.queue.tracks.is_changing_source(id));
+    assert_eq!(rig.queue.current, Some(id));
+    assert!(rig.queue.target.is_none());
+    let after = rig
+        .deck
+        .block(SessionFrame::new(640), 0.0)
+        .expect("after the seat");
+    rig.settle(after);
+    let current = rig
+        .queue
+        .current_track()
+        .expect("the seated replacement owns the slot");
+    assert_eq!(
+        matches!(
+            current.snapshot().as_ref().status,
+            PlayingStatus::Playing { .. }
+        ),
+        played && !repaused,
+        "the seated replacement takes the requested play state"
+    );
+    assert_eq!(rig.deck.mixer.held(slot), Some(id));
+    assert!(matches!(
+        rig.apply(QueueCommand::Seek { to: Position::ZERO }),
+        Ok(Some(_))
+    ));
+    rig.finish().await;
+}

@@ -1102,8 +1102,8 @@ enum ContinuationOutcome {
     Closed,
     Axis,
     Owed,
-    OwedFailed,
-    OwedClosed,
+    OwedFailed { behind: bool },
+    OwedClosed { behind: bool },
     FadeIn,
     GainRamp,
 }
@@ -1120,9 +1120,13 @@ enum ContinuationOutcome {
 #[case::refuses_a_private_receiver_closed_while_parked(true, ContinuationOutcome::Closed)]
 #[case::refuses_an_axis_restart_while_parked(false, ContinuationOutcome::Axis)]
 #[case::waits_for_a_session_dropout_to_be_repaid(false, ContinuationOutcome::Owed)]
-#[case::refuses_a_failed_private_head_while_owed(true, ContinuationOutcome::OwedFailed)]
-#[case::refuses_a_failed_staged_head_while_owed(false, ContinuationOutcome::OwedFailed)]
-#[case::refuses_a_private_receiver_closed_while_owed(true, ContinuationOutcome::OwedClosed)]
+#[case::refuses_a_failed_private_head_while_owed(true, ContinuationOutcome::OwedFailed { behind: false })]
+#[case::refuses_a_failed_staged_head_while_owed(false, ContinuationOutcome::OwedFailed { behind: false })]
+#[case::refuses_a_private_receiver_closed_while_owed(true, ContinuationOutcome::OwedClosed { behind: false })]
+#[case::refuses_a_private_failure_behind_stale_pcm_while_owed(true, ContinuationOutcome::OwedFailed { behind: true })]
+#[case::refuses_a_staged_failure_behind_stale_pcm_while_owed(false, ContinuationOutcome::OwedFailed { behind: true })]
+#[case::refuses_a_private_close_behind_stale_pcm_while_owed(true, ContinuationOutcome::OwedClosed { behind: true })]
+#[case::refuses_a_staged_close_behind_stale_pcm_while_owed(false, ContinuationOutcome::OwedClosed { behind: true })]
 #[case::replace_keeps_a_running_fade_in(true, ContinuationOutcome::FadeIn)]
 #[case::replace_keeps_a_running_gain_program(true, ContinuationOutcome::GainRamp)]
 fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
@@ -1155,8 +1159,8 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
     let owed = matches!(
         expected,
         ContinuationOutcome::Owed
-            | ContinuationOutcome::OwedFailed
-            | ContinuationOutcome::OwedClosed
+            | ContinuationOutcome::OwedFailed { .. }
+            | ContinuationOutcome::OwedClosed { .. }
     );
     let delivered = if owed {
         u64::try_from(BLOCK).unwrap()
@@ -1278,19 +1282,23 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
     );
     assert!(enveloped || held.iter().all(|sample| (*sample - missed).abs() < 1e-6));
     let premature = receipts(&mut ends);
+    let foreign = matches!(expected, ContinuationOutcome::GainRamp).then_some(owner);
     assert!(
-        premature.iter().all(|(seq, ..)| *seq != transition),
+        premature.iter().all(|(seq, ..)| Some(*seq) == foreign),
         "the incomplete cut retains its owned batch: {premature:?}"
     );
     assert_eq!(mixer.track(A).unwrap().state(), SlotState::Playing);
 
     let applied_at = BLOCK + 128;
-    if matches!(
-        expected,
-        ContinuationOutcome::OwedFailed | ContinuationOutcome::OwedClosed
-    ) {
+    if let ContinuationOutcome::OwedFailed { behind } | ContinuationOutcome::OwedClosed { behind } =
+        expected
+    {
         // The outgoing source stays open and starved, so its debt never clears.
-        let failed = matches!(expected, ContinuationOutcome::OwedFailed);
+        let failed = matches!(expected, ContinuationOutcome::OwedFailed { .. });
+        if behind {
+            // Wholly behind the frozen logical position, so never a cut.
+            incoming.push(packet(128, 2048, 64, -0.25, incoming_spec, 2));
+        }
         if failed {
             incoming.push(PcmPacket::Failed {
                 segment: SegmentId::FIRST,

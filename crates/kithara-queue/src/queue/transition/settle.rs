@@ -1,10 +1,10 @@
 use kithara_bufpool::HasPool;
-use kithara_command::{Batch, Outcome, Rejection, Seq};
+use kithara_command::{Batch, Outcome, Rejection, Seq, When};
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_play::{
-    Bound, DeckPart, DeckProtocol, FadeDir, Outbox, PlayError, Player, Settled, TrackFactory,
-    TrackStatus as PlayingStatus,
+    Bound, DeckPart, DeckProtocol, FadeDir, Outbox, PlayError, Player, Settled, TrackCommand,
+    TrackFactory, TrackStatus as PlayingStatus,
 };
 use kithara_signal::SessionFrame;
 
@@ -12,7 +12,7 @@ use super::super::{
     Queue,
     command::play_error,
     slots::Role,
-    types::{Continuation, SeekPosition},
+    types::{Continuation, SeekPosition, Target},
 };
 use crate::{AdvanceReason, QueueEvent, TrackStatus};
 
@@ -414,6 +414,19 @@ where
         Ok(())
     }
 
+    fn continuation_rejected(
+        &mut self,
+        index: usize,
+        reason: &Rejection<PlayError>,
+        out: &mut Outbox<'_>,
+    ) -> Result<(), PlayError> {
+        if retries(reason, self.active.is_replacement(index)) {
+            Ok(())
+        } else {
+            self.cancel_target(out).map_err(play_error)
+        }
+    }
+
     fn pause_settled(
         &mut self,
         index: usize,
@@ -423,42 +436,48 @@ where
         out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
         let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
-        let continued_pause = active.role == Role::Incoming
-            && self.target.is_some_and(|target| {
-                !target.playing
-                    && target.to == active.item
-                    && target.continued == Some(Continuation::Pause(seq))
-            });
-        let replacement = self.active.is_replacement(index);
-        let paused = held_paused(
-            &active.track.snapshot().as_ref().status,
-            continued_pause && replacement,
-        );
-        if continued_pause {
+        let Some(target) = self
+            .target
+            .filter(|target| active.role == Role::Incoming && target.to == active.item)
+        else {
+            return Ok(());
+        };
+        let continued = settled_continuation(target, seq);
+        let seated = matches!(continued, Some(Continuation::Seat(_)));
+        let paused = held_paused(&active.track.snapshot().as_ref().status, seated);
+        if continued.is_some() {
             self.target.as_mut().ok_or(PlayError::NotReady)?.continued = None;
             if let Settled::Rejected { reason, .. } = settled {
-                return if retries(reason, replacement) {
-                    Ok(())
-                } else {
-                    self.cancel_target(out).map_err(play_error)
-                };
+                return self.continuation_rejected(index, reason, out);
             }
         }
-        if applied
-            && self.target.is_some_and(|target| {
-                !target.playing
-                    && target.to == active.item
-                    && (target.stale.is_some() || continued_pause)
-            })
-            && active.role == Role::Incoming
-            && paused
-        {
-            self.target.as_mut().ok_or(PlayError::NotReady)?.stale = None;
-            let reason = self.target.ok_or(PlayError::NotReady)?.reason;
-            return self.enter_target(index, self.earliest()?, reason);
+        if !applied || !paused || !enters(target, continued) {
+            return Ok(());
+        }
+        self.target.as_mut().ok_or(PlayError::NotReady)?.stale = None;
+        self.enter_target(index, self.earliest()?, target.reason)?;
+        if target.playing {
+            self.transport(TrackCommand::Play { at: When::Next }, out)?;
         }
         Ok(())
     }
+}
+
+/// The continuation a pause receipt `seq` settles: a seat settles whatever
+/// transport arrived since, a pause only while the target still wants it
+/// paused.
+fn settled_continuation(target: Target, seq: Seq) -> Option<Continuation> {
+    match target.continued {
+        Some(seat @ Continuation::Seat(owner)) if owner == seq => Some(seat),
+        Some(pause @ Continuation::Pause(owner)) if owner == seq && !target.playing => Some(pause),
+        _ => None,
+    }
+}
+
+/// Whether an applied, held receipt enters the target: its own settled
+/// continuation does, and a paused target recomputing after a stale receipt.
+fn enters(target: Target, continued: Option<Continuation>) -> bool {
+    continued.is_some() || !target.playing && target.stale.is_some()
 }
 
 /// Whether `status` holds the paused frame a paused target waits for; a

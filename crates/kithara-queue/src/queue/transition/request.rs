@@ -321,7 +321,7 @@ where
                 && target.repeat.is_none()
                 && !matches!(
                     target.continued,
-                    Some(Continuation::Removal { applied: false, .. })
+                    Some(Continuation::Removal { applied: false, .. } | Continuation::Seat(_))
                 )
         }) else {
             return Ok(None);
@@ -479,7 +479,8 @@ where
         }
         // A replacement takes over its slot seated and stopped; the paused
         // source it replaces stands on the same frame until then.
-        let command = if self.active.is_replacement(index) {
+        let replacement = self.active.is_replacement(index);
+        let command = if replacement {
             TrackCommand::Seat {
                 slot: self.active.get(index).ok_or(PlayError::NoActiveSlot)?.slot,
                 at: When::At(self.earliest()?),
@@ -494,8 +495,11 @@ where
             .track
             .apply(command, out)?;
         if let Some(seq) = sent {
-            self.target.as_mut().ok_or(PlayError::NotReady)?.continued =
-                Some(Continuation::Pause(seq));
+            self.target.as_mut().ok_or(PlayError::NotReady)?.continued = Some(if replacement {
+                Continuation::Seat(seq)
+            } else {
+                Continuation::Pause(seq)
+            });
         } else {
             self.enter_target(index, self.earliest()?, target.reason)?;
         }

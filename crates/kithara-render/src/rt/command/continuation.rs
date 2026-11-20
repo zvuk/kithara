@@ -92,7 +92,12 @@ impl Continuation {
     ) -> Result<CutPlan, DeckRefusal> {
         let mut plan = scan_cut(packets(), segment, logical, prefix, limit)
             .map_err(|()| DeckRefusal::SourceRange { slot: self.to })?;
-        if let Some(point) = plan.point
+        if old.owed() > 0 {
+            // The outgoing reader skips its dropout before it plays again, so
+            // its mark on this frame is behind what it will sound: only PCM
+            // wholly behind that mark retires, and no cut is placed yet.
+            plan.point = None;
+        } else if let Some(point) = plan.point
             && !same_motion(
                 old.packets(),
                 from_cut(packets(), plan.retire_packets, point),
@@ -164,24 +169,6 @@ impl Continuation {
         Ok(plan)
     }
 
-    /// No cut is placed while the outgoing source owes a dropout, but an
-    /// incoming receiver that can never supply one refuses now.
-    fn await_debt(
-        &self,
-        head: Option<&PcmPacket>,
-        closed: bool,
-        prefix: Option<CutPrefix>,
-    ) -> Result<Preparation, DeckRefusal> {
-        match head {
-            Some(PcmPacket::Failed { .. }) => Err(DeckRefusal::SourceRange { slot: self.to }),
-            None if closed => Err(self.refusal()),
-            _ => Ok(Preparation::Pending {
-                from: self.from,
-                prefix,
-            }),
-        }
-    }
-
     fn refusal(&self) -> DeckRefusal {
         DeckRefusal::SourceContinuation { slot: self.to }
     }
@@ -205,24 +192,6 @@ impl Deck {
         let old = self.tracks.at(from).ok_or(refusal)?;
         let (item, logical) = old.sounding_source(due.at()).ok_or(refusal)?;
         let incoming = receiver(due.commands_mut(), from, to, item).ok_or(refusal)?;
-        if old.owed() > 0 {
-            // The outgoing reader skips the dropout before it plays again, so
-            // its mark on this frame is behind what it will sound.
-            let (head, closed) = if let Some((pcm, _)) = &incoming {
-                (pcm.packets().next(), pcm.is_closed())
-            } else {
-                let staged = self
-                    .tracks
-                    .at(to)
-                    .filter(|track| track.stages_item(item))
-                    .ok_or(refusal)?;
-                (
-                    staged.packets().next().map(|(packet, _)| packet),
-                    staged.cut_closed(),
-                )
-            };
-            return entry.await_debt(head, closed, prefix);
-        }
         let budget = self.recycle.get_mut(to.index()).ok_or(refusal)?;
         let (plan, private) = match incoming {
             Some((pcm, segment)) => (

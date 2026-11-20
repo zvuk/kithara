@@ -1265,7 +1265,7 @@ fn a_seek_waits_for_a_submitted_paused_replacement_seat(#[case] submitted: bool)
         playing: false,
         auto: false,
         stale: None,
-        continued: submitted.then(|| Continuation::Pause(fixture_seq())),
+        continued: submitted.then(|| Continuation::Seat(fixture_seq())),
         repeat: None,
         chained: false,
     });
