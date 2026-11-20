@@ -2256,106 +2256,106 @@
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / branch
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --draft --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --draft --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / platforms
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / main
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / nightly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / weekly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / release
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-simulated-clock / bench
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2364,7 +2364,7 @@
   <require tools> cargo just sccache kache
   just test run --draft --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2373,7 +2373,7 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2382,7 +2382,7 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2391,7 +2391,7 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2400,7 +2400,7 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2409,7 +2409,7 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2418,7 +2418,7 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2427,7 +2427,7 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2

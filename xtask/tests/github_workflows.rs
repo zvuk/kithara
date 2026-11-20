@@ -3164,6 +3164,161 @@ fn windows_runner_context_is_bound_only_after_runner_assignment() {
     }
 }
 
+const HANG_DUMP_DIR: &str = "KITHARA_HANG_DUMP_DIR";
+const HANG_PREKILL: &str = "KITHARA_HANG_PREKILL_SECS";
+
+/// Why a Linux lane would lose its hang dumps or mix in another job's.
+///
+/// A step that names a dump directory, or arms the pre-kill dump, writes
+/// dumps. They belong in the job's own checkout and in the lane's artifact.
+/// The checkout's `target` is a link into a lane slot that the job releases
+/// before its artifacts upload and that later jobs of the lane reuse.
+fn hang_dump_violations(name: &str, lane: &toml::Value) -> Vec<String> {
+    let uploaded: Vec<&Path> = lane
+        .get("artifact")
+        .and_then(|artifact| artifact.get("path"))
+        .and_then(toml::Value::as_str)
+        .into_iter()
+        .flat_map(str::lines)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(Path::new)
+        .collect();
+    let mut violations = Vec::new();
+    for env in lane
+        .get("steps")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|step| step.get("env"))
+    {
+        let Some(dir) = env.get(HANG_DUMP_DIR).and_then(toml::Value::as_str) else {
+            if env.get(HANG_PREKILL).is_some() {
+                violations.push(format!(
+                    "`{name}` arms the pre-kill dump without {HANG_DUMP_DIR}"
+                ));
+            }
+            continue;
+        };
+        let Some(relative) = dir.strip_prefix("{root}/").map(Path::new) else {
+            violations.push(format!(
+                "`{name}` writes hang dumps outside its checkout: {dir}"
+            ));
+            continue;
+        };
+        if relative.starts_with("target") {
+            violations.push(format!(
+                "`{name}` writes hang dumps into the shared build slot: {dir}"
+            ));
+        }
+        if !uploaded.iter().any(|path| relative.starts_with(path)) {
+            violations.push(format!(
+                "`{name}` does not upload its hang dumps from {}",
+                relative.display()
+            ));
+        }
+    }
+    violations
+}
+
+fn runs_on_linux(lane: &toml::Value) -> bool {
+    match lane.get("os") {
+        Some(toml::Value::String(os)) => os == "linux",
+        Some(toml::Value::Array(os)) => os.iter().any(|os| os.as_str() == Some("linux")),
+        _ => false,
+    }
+}
+
+#[test]
+fn every_linux_lane_uploads_its_own_hang_dumps() {
+    let root = workspace_root();
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let lanes = config["ext"]["ci"]["lanes"]
+        .as_table()
+        .expect("the catalog is a table");
+
+    let mut writers = BTreeSet::new();
+    let mut violations = Vec::new();
+    for (name, lane) in lanes.iter().filter(|(_, lane)| runs_on_linux(lane)) {
+        let writes = lane
+            .get("steps")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|step| step.get("env"))
+            .any(|env| env.get(HANG_DUMP_DIR).is_some() || env.get(HANG_PREKILL).is_some());
+        if writes {
+            writers.insert(name.as_str());
+        }
+        violations.extend(hang_dump_violations(name, lane));
+    }
+
+    assert!(!writers.is_empty(), "no Linux lane writes hang dumps");
+    assert!(violations.is_empty(), "{violations:#?}");
+}
+
+#[test]
+fn a_linux_lane_that_loses_or_mixes_its_hang_dumps_is_named() {
+    for (lane, expected) in [
+        (
+            r#"
+            artifact = { name = "dumps", path = ".ci-artifacts/hang", when = "failure" }
+            steps = [{ args = ["test", "run"], env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang", KITHARA_HANG_PREKILL_SECS = "110" } }]
+            "#,
+            None,
+        ),
+        (
+            r#"
+            artifact = { name = "dumps", path = ".ci-artifacts/hang", when = "failure" }
+            steps = [{ args = ["test", "run"], env = { KITHARA_HANG_PREKILL_SECS = "110" } }]
+            "#,
+            Some("arms the pre-kill dump without KITHARA_HANG_DUMP_DIR"),
+        ),
+        (
+            r#"
+            artifact = { name = "dumps", path = "target/hang", when = "failure" }
+            steps = [{ args = ["test", "run"], env = { KITHARA_HANG_DUMP_DIR = "{root}/target/hang" } }]
+            "#,
+            Some("writes hang dumps into the shared build slot"),
+        ),
+        (
+            r#"
+            artifact = { name = "dumps", path = ".ci-artifacts/hang", when = "failure" }
+            steps = [{ args = ["test", "run"], env = { KITHARA_HANG_DUMP_DIR = "/tmp/hang" } }]
+            "#,
+            Some("writes hang dumps outside its checkout"),
+        ),
+        (
+            r#"
+            artifact = { name = "dumps", path = ".ci-artifacts/junit", when = "failure" }
+            steps = [{ args = ["test", "run"], env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } }]
+            "#,
+            Some("does not upload its hang dumps"),
+        ),
+        (
+            r#"
+            steps = [{ args = ["test", "run"], env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } }]
+            "#,
+            Some("does not upload its hang dumps"),
+        ),
+    ] {
+        let lane: toml::Value = toml::from_str(lane).expect("the case is valid TOML");
+        let violations = hang_dump_violations("case", &lane);
+        match expected {
+            None => assert!(violations.is_empty(), "{violations:#?}"),
+            Some(expected) => assert!(
+                violations
+                    .iter()
+                    .any(|violation| violation.contains(expected)),
+                "expected `{expected}` in {violations:#?}"
+            ),
+        }
+    }
+}
+
 #[test]
 fn windows_filtered_probes_route_lane_load_and_repetitions_to_the_harness() {
     let workflow = github_workflow("windows.yml");

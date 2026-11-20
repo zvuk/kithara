@@ -2141,7 +2141,7 @@ program = "just"
 # The pre-kill timer runs on the real clock that a flash wedge cannot stop, so
 # a snapshot of the flash state, the wait graph and the threads at 110s still
 # reaches this artifact.
-artifact = { name = "hang-dumps-simulated-clock", path = "target/hang", when = "failure" }
+artifact = { name = "hang-dumps-simulated-clock", path = ".ci-artifacts/hang", when = "failure" }
 steps = [
   { args = [
     "test",
@@ -2150,7 +2150,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
   { args = [
     "test",
     "test-utils",
@@ -2444,7 +2444,7 @@ label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
-artifact = { name = "hang-dumps-real-clock", path = "target/hang", when = "failure" }
+artifact = { name = "hang-dumps-real-clock", path = ".ci-artifacts/hang", when = "failure" }
 steps = [
   { args = [
     "test",
@@ -2453,7 +2453,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "real-clock suite", rebuild_check = true, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ], label = "real-clock suite", rebuild_check = true, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
