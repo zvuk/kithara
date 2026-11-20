@@ -419,7 +419,7 @@ fn random_seek_cycles(audio: &mut HlsAudio, buf: &mut [f32], channels: usize, ma
     );
 
     check_fractional_saw_controls();
-    let mut rng = Xorshift64::new(0xAB25_5017_C400_0000);
+    let mut rng = Xorshift64::new(0xab25_5017_c400_0000);
     let mut tally = SeekTally::default();
 
     for i in 0..consts::SEEK_ITERATIONS {

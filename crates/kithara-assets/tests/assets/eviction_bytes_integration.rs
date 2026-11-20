@@ -63,7 +63,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             panic!("fresh acquire must be Pending");
         };
 
-        let data_a = Bytes::from(vec![0xAAu8; bytes_a]);
+        let data_a = Bytes::from(vec![0xaau8; bytes_a]);
         writer_a.write_at(0, &data_a).unwrap();
         writer_a.commit(Some(data_a.len() as u64)).unwrap();
     }
@@ -81,7 +81,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             panic!("fresh acquire must be Pending");
         };
 
-        let data_b = Bytes::from(vec![0xBBu8; bytes_b]);
+        let data_b = Bytes::from(vec![0xbbu8; bytes_b]);
         writer_b.write_at(0, &data_b).unwrap();
         writer_b.commit(Some(data_b.len() as u64)).unwrap();
     }
@@ -179,7 +179,7 @@ fn eviction_corner_cases_different_byte_limits(
         else {
             panic!("fresh acquire must be Pending");
         };
-        let trigger_data = Bytes::from(vec![0xFF; new_asset_size]);
+        let trigger_data = Bytes::from(vec![0xff; new_asset_size]);
         writer.write_at(0, &trigger_data).unwrap();
         writer.commit(Some(trigger_data.len() as u64)).unwrap();
     }

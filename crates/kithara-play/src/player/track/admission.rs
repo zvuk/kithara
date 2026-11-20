@@ -22,9 +22,9 @@ use super::{
         settings::{TrackSettings, TrackSettingsChange},
     },
     core::PlayerImpl,
-    geometry::*,
+    geometry::{curve_area, curve_speed},
     seat::Seat,
-    state::*,
+    state::{EndPlan, Lane, LaneOperation, PlannedChange, Position, TrackStatus},
 };
 use crate::{Bound, PlayError, Player};
 

@@ -25,8 +25,7 @@ use ::kithara::{
             task,
         },
     },
-    play::{PlayWorkerConfig, ResourcePrep, policy::DomainKeyPolicy},
-    prelude::{ArtifactSource, ResourceSrc},
+    play::{ArtifactSource, PlayWorkerConfig, ResourcePrep, ResourceSrc, policy::DomainKeyPolicy},
     queue::QueueConfig,
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
 };

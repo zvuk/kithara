@@ -58,8 +58,8 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn debug_redacts_key_material() {
-        let key = [0xAB; 16];
-        let iv = [0xCD; 16];
+        let key = [0xab; 16];
+        let iv = [0xcd; 16];
         let processor = DecryptProcessor::new(DecryptContext::new(key, iv));
         let dbg = format!("{processor:?}");
         assert!(dbg.contains("<redacted>"), "expected redaction, got: {dbg}");
@@ -69,8 +69,8 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn identity_is_key_followed_by_iv() {
-        let key = [0xAB; 16];
-        let iv = [0xCD; 16];
+        let key = [0xab; 16];
+        let iv = [0xcd; 16];
         let processor = DecryptProcessor::new(DecryptContext::new(key, iv));
 
         assert_eq!(&processor.identity()[..key.len()], &key);

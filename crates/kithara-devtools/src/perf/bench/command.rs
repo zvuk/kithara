@@ -1,8 +1,9 @@
 use std::{
     collections::BTreeSet,
     fs::{self, File},
-    io::{self, Write},
-    process::{Command, Output},
+    io::{self, Read, Write},
+    process::{Command, Output, Stdio},
+    thread,
 };
 
 use anyhow::{Context, Result, ensure};
@@ -113,13 +114,11 @@ impl Log {
 
     pub(super) fn output(&mut self, command: &mut Command, json: bool) -> Result<Output> {
         self.line(&format!("$ {command:?}"))?;
-        let output = command.output().context("start benchmark command")?;
+        let output = stream_output(command, &mut self.0).context("start benchmark command")?;
         if !json || !output.status.success() {
             io::stdout().write_all(&output.stdout)?;
             self.0.write_all(&output.stdout)?;
         }
-        io::stderr().write_all(&output.stderr)?;
-        self.0.write_all(&output.stderr)?;
         if !output.status.success() {
             return Err(ChildFailure::inherited(
                 "benchmark command".into(),
@@ -128,6 +127,79 @@ impl Log {
         }
         Ok(output)
     }
+}
+
+/// Runs `command` while teeing its stderr to this process's stderr and the
+/// benchmark log as it is read, so a long build is observable before it exits
+/// and a killed build still leaves its diagnostics in the log. Stdout is
+/// drained concurrently on its own thread and stays captured untouched, so a
+/// child that fills the stdout pipe cannot deadlock the parent and
+/// `--message-format=json` remains parseable.
+///
+/// Wait for the child and join the stdout reader before returning an I/O error.
+/// Preserve the first error when cleanup also fails.
+fn stream_output(command: &mut Command, log: &mut File) -> io::Result<Output> {
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let mut stdout = child.stdout.take().expect("benchmark stdout is piped");
+    let mut child_stderr = child.stderr.take().expect("benchmark stderr is piped");
+    // Drain stdout on its own thread so the child is never blocked on a full
+    // stdout pipe while we read stderr.
+    let stdout_thread = thread::spawn(move || {
+        let mut collected = Vec::new();
+        stdout.read_to_end(&mut collected).map(|_| collected)
+    });
+
+    // Tee stderr, preserving the first I/O error instead of returning early,
+    // so the child is still reaped and the reader joined on every exit.
+    let mut stderr_collected = Vec::new();
+    let mut primary_error = None;
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = match child_stderr.read(&mut buffer) {
+            Ok(read) => read,
+            Err(error) => {
+                primary_error = primary_error.or(Some(error));
+                break;
+            }
+        };
+        if read == 0 {
+            break;
+        }
+        let bytes = &buffer[..read];
+        if let Err(error) = io::stderr().write_all(bytes) {
+            primary_error = primary_error.or(Some(error));
+            break;
+        }
+        if let Err(error) = log.write_all(bytes) {
+            primary_error = primary_error.or(Some(error));
+            break;
+        }
+        stderr_collected.extend_from_slice(bytes);
+    }
+    drop(child_stderr);
+    let (stdout_collected, join_error) = match stdout_thread.join() {
+        Ok(Ok(stdout)) => (stdout, None),
+        Ok(Err(error)) => (Vec::new(), Some(error)),
+        Err(_) => (
+            Vec::new(),
+            Some(io::Error::other("benchmark stdout reader panicked")),
+        ),
+    };
+    let (status, wait_error) = match child.wait() {
+        Ok(status) => (Some(status), None),
+        Err(error) => (None, Some(error)),
+    };
+    if let Some(error) = primary_error.or(join_error).or(wait_error) {
+        return Err(error);
+    }
+    Ok(Output {
+        status: status.expect("status present when no error"),
+        stdout: stdout_collected,
+        stderr: stderr_collected,
+    })
 }
 
 fn execute(ctx: &Ctx, request: &Request, measure: bool) -> Result<()> {
