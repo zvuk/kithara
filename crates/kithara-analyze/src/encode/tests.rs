@@ -193,7 +193,12 @@ async fn silence_has_a_null_key_and_the_key_fingerprint() {
     .expect("args");
     let batch = Batch::try_new(args, Cursor::new("")).expect("input");
     let scope = CancelScope::new(None);
-    let engine = Engine::try_new(&batch.args, scope.token()).expect("engine");
+    let engine = Engine::try_new(
+        &batch.args,
+        crate::analysis::jobs(&batch.args).expect("jobs"),
+        scope.token(),
+    )
+    .expect("engine");
     let result = engine.analyze(&batch.tracks[0]).await;
     let record: Value =
         serde_json::from_slice(&encode(&batch.tracks[0], &result).expect("encode")).expect("json");

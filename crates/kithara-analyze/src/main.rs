@@ -1,7 +1,7 @@
 use std::{io, io::Error, process::ExitCode};
 
 use clap::Parser;
-use kithara::platform::{CancelScope, sync::Arc, thread, tokio::runtime::Builder};
+use kithara::platform::{CancelScope, thread, tokio::runtime::Builder};
 use kithara_analyze::{Args, Batch, RunError};
 use signal_hook::{consts::SIGINT, iterator::Signals};
 use tracing::{Level, error};
@@ -28,13 +28,13 @@ fn run() -> Result<ExitCode, RunError> {
         Err(error) => error.exit(),
     };
     let runtime = Builder::new_multi_thread().enable_all().build()?;
-    let scope = Arc::new(CancelScope::new(None));
+    let scope = CancelScope::new(None);
     let mut signals = Signals::new([SIGINT])?;
     let shutdown = signals.handle();
-    let signal_scope = Arc::clone(&scope);
+    let interrupt = scope.token();
     let signal_thread = thread::spawn_named("analyze-sigint", move || {
         if signals.forever().next().is_some() {
-            signal_scope.cancel();
+            interrupt.cancel();
         }
     });
     let result = runtime.block_on(batch.run(scope.token(), io::stdout()));
