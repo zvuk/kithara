@@ -3,8 +3,17 @@ use std::{
     ops::{DerefMut, Range},
 };
 
+use fearless_simd::{Level, dispatch, prelude::*};
+use num_traits::ToPrimitive;
+
 use super::FilterError;
-use crate::backend::svf;
+use crate::{
+    backend::{
+        platform,
+        route::{route, table},
+    },
+    consts,
+};
 
 /// Frames one [`StateVariableFilter::process`] pass computes cutoff gains for;
 /// callers that build per-frame cutoffs size their stack scratch to it.
@@ -16,6 +25,88 @@ pub enum Response {
     LowPass,
     HighPass,
     AllPass,
+}
+
+/// A checked LP/HP design for a fixed-cutoff state-variable filter.
+#[derive(Clone, Copy, Debug)]
+pub struct SvfDesign {
+    response: Response,
+    coefficients: [f64; 3],
+    damping: f64,
+    gain: f64,
+}
+
+impl SvfDesign {
+    /// Largest cutoff accepted by [`Self::new`] at `rate`, in Hz.
+    #[must_use]
+    pub fn max_cutoff(rate: NonZeroU32) -> f64 {
+        (f64::from(rate.get()) / 2.0).next_down()
+    }
+
+    /// Prepares the cutoff once, without allocating or carrying filter state.
+    ///
+    /// # Errors
+    /// [`FilterError::Parameters`] for a nonpositive/nonfinite Q, an
+    /// unrepresentable damping, or a cutoff outside `(0, rate / 2)`.
+    pub fn new(
+        rate: NonZeroU32,
+        cutoff: f64,
+        q: f64,
+        response: Response,
+    ) -> Result<Self, FilterError> {
+        let damping = q.recip();
+        if !(q.is_finite()
+            && q > 0.0
+            && damping.is_finite()
+            && cutoff > 0.0
+            && cutoff <= Self::max_cutoff(rate))
+        {
+            return Err(FilterError::Parameters);
+        }
+        let mut gain = [0.0];
+        dispatch!(Level::new(), simd => platform::svf_gains(simd, &[cutoff], f64::from(rate.get()), &mut gain));
+        let [gain] = gain;
+        Ok(Self {
+            response,
+            damping,
+            gain,
+            coefficients: coefficients(gain, damping),
+        })
+    }
+}
+
+/// Frames for unit amplitude at the largest pole radius to reach `floor` in `(0, 1)`.
+/// The geometric count excludes pole multiplicity and impulse-response scale.
+/// Returns at least one frame and saturates at `usize::MAX`.
+#[must_use]
+pub fn decay_frames(design: SvfDesign, floor: f64) -> usize {
+    let SvfDesign { gain, damping, .. } = design;
+    let log_radius = if damping < 2.0 {
+        0.5 * (-2.0 * damping * gain / (1.0 + gain * (gain + damping))).ln_1p()
+    } else {
+        let pole = (damping + (damping * damping - 4.0).sqrt()) * 0.5;
+        [gain * pole, gain / pole]
+            .into_iter()
+            .map(|value| {
+                let loss = if value <= 1.0 {
+                    2.0 * value / (1.0 + value)
+                } else {
+                    2.0 / (1.0 + value)
+                };
+                (-loss).ln_1p()
+            })
+            .fold(f64::NEG_INFINITY, f64::max)
+    };
+    (floor.ln() / log_radius)
+        .ceil()
+        .to_usize()
+        .map_or(usize::MAX, |frames| frames.max(1))
+}
+
+pub(crate) fn coefficients(gain: f64, damping: f64) -> [f64; 3] {
+    let a1 = (1.0 + gain * (gain + damping)).recip();
+    let a2 = gain * a1;
+    [a1, a2, gain * a2]
 }
 
 /// Second-order TPT state-variable filter applied in place to channel planes.
@@ -36,9 +127,9 @@ pub enum Response {
 /// consecutive frames whose input and output both stay at or below `1e-9`
 /// reset the state, so silence never decays into denormals.
 pub struct StateVariableFilter<const CHANNELS: usize> {
-    pub(crate) state: [[f64; CHANNELS]; 2],
-    pub(crate) quiet: usize,
-    pub(crate) reset_state: bool,
+    state: [[f64; CHANNELS]; 2],
+    quiet: usize,
+    reset_state: bool,
 }
 
 impl<const CHANNELS: usize> Default for StateVariableFilter<CHANNELS> {
@@ -82,23 +173,116 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
         {
             return Err(FilterError::Shape);
         }
+        let maximum = SvfDesign::max_cutoff(rate);
         let rate = f64::from(rate.get());
-        let nyquist = rate / 2.0;
         if !(q.is_finite() && q > 0.0)
             || !cutoffs
                 .iter()
-                .all(|cutoff| *cutoff > 0.0 && *cutoff < nyquist)
+                .all(|cutoff| *cutoff > 0.0 && *cutoff <= maximum)
         {
             return Err(FilterError::Parameters);
         }
         let mut planes = planes.iter_mut();
-        let ranges: [Option<&mut [f32]>; CHANNELS] =
+        let mut ranges: [Option<&mut [f32]>; CHANNELS] =
             std::array::from_fn(|_| planes.next().and_then(|plane| plane.get_mut(range.clone())));
         if ranges.iter().any(Option::is_none) {
             return Err(FilterError::Shape);
         }
-        svf::process(self, ranges, cutoffs, rate, q.recip(), response);
+        let damping = q.recip();
+        dispatch!(Level::new(), simd => {
+            let mut gains = [0.0; SVF_CHUNK_FRAMES];
+            let mut planes = ranges.each_mut().map(|range| {
+                range.as_deref_mut().unwrap_or_default().chunks_mut(SVF_CHUNK_FRAMES)
+            });
+            for chunk in cutoffs.chunks(SVF_CHUNK_FRAMES) {
+                platform::svf_gains(simd, chunk, rate, &mut gains);
+                let mut frames = planes.each_mut().map(|plane| {
+                    plane.next().unwrap_or_default().iter_mut()
+                });
+                for gain in gains.iter().take(chunk.len()) {
+                    let mut samples = frames.each_mut().map(Iterator::next);
+                    self.frame_samples(simd, &mut samples, || coefficients(*gain, damping), damping, response);
+                }
+            }
+        });
         Ok(())
+    }
+
+    /// Runs one prepared design, preserving the same state and quiet law.
+    ///
+    /// # Errors
+    /// [`FilterError::Shape`] if plane count or range coverage differs from the prepared shape.
+    pub fn process_fixed<P: DerefMut<Target = [f32]>>(
+        &mut self,
+        planes: &mut [P],
+        range: Range<usize>,
+        design: &SvfDesign,
+    ) -> Result<(), FilterError> {
+        if planes.len() != CHANNELS
+            || planes
+                .iter()
+                .any(|plane| plane.get(range.clone()).is_none())
+        {
+            return Err(FilterError::Shape);
+        }
+        let mut planes = planes.iter_mut();
+        let mut ranges: [Option<&mut [f32]>; CHANNELS] =
+            std::array::from_fn(|_| planes.next().and_then(|plane| plane.get_mut(range.clone())));
+        if ranges.iter().any(Option::is_none) {
+            return Err(FilterError::Shape);
+        }
+        dispatch!(Level::new(), simd => {
+            let mut frames = ranges.each_mut().map(|range| range.as_deref_mut().unwrap_or_default().iter_mut());
+            for _ in range {
+                let mut samples = frames.each_mut().map(Iterator::next);
+                self.frame_samples(simd, &mut samples, || design.coefficients, design.damping, design.response);
+            }
+        });
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn frame_samples<S: Simd>(
+        &mut self,
+        simd: S,
+        samples: &mut [Option<&mut f32>],
+        coefficients: impl FnOnce() -> [f64; 3],
+        damping: f64,
+        response: Response,
+    ) {
+        if self.reset_state
+            && samples
+                .iter()
+                .all(|sample| sample.as_deref().is_none_or(|sample| sample.to_bits() == 0))
+        {
+            self.count(true);
+            return;
+        }
+        let [a1, a2, a3] = coefficients();
+        let mut frame_quiet = true;
+        let [memory1, memory2] = &mut self.state;
+        for ((samples, memory1), memory2) in samples
+            .chunks_mut(2)
+            .zip(memory1.chunks_mut(2))
+            .zip(memory2.chunks_mut(2))
+        {
+            frame_quiet &= route!(table::svf_pair => (
+                simd, samples, memory1, memory2, [a1, a2, a3], damping, response,
+            ));
+        }
+        self.reset_state = false;
+        self.count(frame_quiet);
+    }
+
+    fn count(&mut self, frame_quiet: bool) {
+        self.quiet = if frame_quiet {
+            self.quiet.saturating_add(1).min(consts::SECTION_MEMORY)
+        } else {
+            0
+        };
+        if self.quiet == consts::SECTION_MEMORY {
+            self.clear();
+        }
     }
 
     /// Whether construction, reset or quiet retirement left no residual history.
@@ -113,8 +297,223 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
         self.clear();
     }
 
-    pub(crate) fn clear(&mut self) {
+    fn clear(&mut self) {
         self.state.fill([0.0; CHANNELS]);
         self.reset_state = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{f64::consts::FRAC_1_SQRT_2, num::NonZeroU32, ops::DerefMut};
+
+    use fearless_simd::{Level, Simd, dispatch};
+    use kithara_test_utils::kithara;
+    use num_traits::ToPrimitive;
+
+    use super::{FilterError, Response, StateVariableFilter, SvfDesign};
+    use crate::consts;
+
+    #[kithara::test]
+    fn state_variable_design_ceiling_is_the_last_strict_cutoff() {
+        for rate in [1, 8000, 32_000, 48_000, 768_000, u32::MAX] {
+            let rate = NonZeroU32::new(rate).expect("rate");
+            let maximum = SvfDesign::max_cutoff(rate);
+            assert_eq!(maximum.next_up(), f64::from(rate.get()) / 2.0);
+            assert!(SvfDesign::new(rate, maximum, FRAC_1_SQRT_2, Response::HighPass).is_ok());
+            for cutoff in [maximum.next_up(), f64::INFINITY, f64::NAN] {
+                assert!(matches!(
+                    SvfDesign::new(rate, cutoff, FRAC_1_SQRT_2, Response::HighPass),
+                    Err(FilterError::Parameters)
+                ));
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn state_variable_design_has_no_holes_below_nyquist() {
+        const STEPS: u32 = 65_536;
+        for rate in [
+            384_000, 768_000, 352_800, 705_600, 44_100, 48_000, 96_000, 192_000, 8_000, 326_461,
+            326_462,
+        ] {
+            let rate = NonZeroU32::new(rate).expect("host rate");
+            for step in 0..=STEPS {
+                let cutoff = (20.0 * 1000.0_f64.powf(f64::from(step) / f64::from(STEPS)))
+                    .to_f32()
+                    .expect("cutoff fits f32");
+                if f64::from(cutoff) < f64::from(rate.get()) / 2.0 {
+                    assert!(
+                        SvfDesign::new(rate, f64::from(cutoff), FRAC_1_SQRT_2, Response::HighPass)
+                            .is_ok(),
+                        "cutoff {cutoff} below Nyquist at {rate}"
+                    );
+                }
+            }
+        }
+    }
+
+    trait Frame {
+        fn frame<S: Simd, P: DerefMut<Target = [f32]>>(
+            &mut self,
+            simd: S,
+            planes: &mut [P],
+            frame: usize,
+            gain: f64,
+            damping: f64,
+            response: Response,
+        );
+    }
+
+    impl<const CHANNELS: usize> Frame for StateVariableFilter<CHANNELS> {
+        fn frame<S: Simd, P: DerefMut<Target = [f32]>>(
+            &mut self,
+            simd: S,
+            planes: &mut [P],
+            frame: usize,
+            gain: f64,
+            damping: f64,
+            response: Response,
+        ) {
+            let mut planes = planes.iter_mut();
+            let mut samples: [Option<&mut f32>; CHANNELS] =
+                std::array::from_fn(|_| planes.next().and_then(|plane| plane.get_mut(frame)));
+            self.frame_samples(
+                simd,
+                &mut samples,
+                || super::coefficients(gain, damping),
+                damping,
+                response,
+            );
+        }
+    }
+
+    struct Scalar<const CHANNELS: usize> {
+        state: [[f64; 2]; CHANNELS],
+        quiet: usize,
+        reset: bool,
+    }
+
+    impl<const CHANNELS: usize> Scalar<CHANNELS> {
+        fn frame(
+            &mut self,
+            planes: &mut [Vec<f32>],
+            frame: usize,
+            gain: f64,
+            damping: f64,
+            response: Response,
+        ) {
+            let mut quiet = true;
+            if !(self.reset
+                && planes
+                    .iter()
+                    .all(|plane| plane.get(frame).expect("oracle frame").to_bits() == 0))
+            {
+                let a1 = (1.0 + gain * (gain + damping)).recip();
+                let a2 = gain * a1;
+                let a3 = gain * a2;
+                for (plane, state) in planes.iter_mut().zip(self.state.iter_mut()) {
+                    let sample = plane.get_mut(frame).expect("oracle frame");
+                    let input = *sample;
+                    let x = f64::from(input);
+                    let [s1, s2] = *state;
+                    let v3 = x - s2;
+                    let v1 = a1 * s1 + a2 * v3;
+                    let v2 = s2 + a2 * s1 + a3 * v3;
+                    *state = [2.0 * v1 - s1, 2.0 * v2 - s2];
+                    let output = match response {
+                        Response::LowPass => v2,
+                        Response::HighPass => x - damping * v1 - v2,
+                        Response::AllPass => x - 2.0 * damping * v1,
+                    }
+                    .to_f32()
+                    .unwrap_or(f32::NAN);
+                    quiet &=
+                        input.abs() <= consts::SILENT_PEAK && output.abs() <= consts::SILENT_PEAK;
+                    *sample = output;
+                }
+                self.reset = false;
+            }
+            self.quiet = if quiet {
+                self.quiet.saturating_add(1).min(consts::SECTION_MEMORY)
+            } else {
+                0
+            };
+            if self.quiet == consts::SECTION_MEMORY {
+                self.state.fill([0.0; 2]);
+                self.reset = true;
+            }
+        }
+    }
+
+    fn ordered_recurrence<const CHANNELS: usize>(response: Response, damping: f64) {
+        for level in [Level::fallback(), Level::new()] {
+            let mut actual: Vec<Vec<f32>> = (0..CHANNELS)
+                .map(|channel| {
+                    let mut plane: Vec<_> = [0.0, -0.0, 0.75, -0.25, 1e-10, 0.0, 0.0]
+                        .into_iter()
+                        .cycle()
+                        .take(513)
+                        .collect();
+                    if channel == 0 {
+                        *plane.get_mut(257).expect("NaN witness frame") = f32::NAN;
+                    }
+                    plane
+                })
+                .collect();
+            let mut expected = actual.clone();
+            let mut filter = StateVariableFilter::<CHANNELS>::new();
+            let mut scalar = Scalar {
+                state: [[0.0; 2]; CHANNELS],
+                quiet: 0,
+                reset: true,
+            };
+            dispatch!(level, simd => {
+                for (frame, gain) in [0.0, 1e-310, 0.01, 0.2, 1.0, 1e16]
+                    .into_iter()
+                    .cycle()
+                    .take(513)
+                    .enumerate()
+                {
+                    scalar.frame(&mut expected, frame, gain, damping, response);
+                    filter.frame(simd, &mut actual, frame, gain, damping, response);
+                    for (actual, expected) in actual.iter().zip(&expected) {
+                        let (actual, expected) = (
+                            actual.get(frame).expect("actual frame"),
+                            expected.get(frame).expect("expected frame"),
+                        );
+                        if expected.is_nan() {
+                            assert!(actual.is_nan(), "{response:?} at {frame}");
+                        } else {
+                            assert_eq!(actual.to_bits(), expected.to_bits(), "{response:?} at {frame}");
+                        }
+                    }
+                    for (channel, expected) in scalar.state.iter().enumerate() {
+                        for (actual, expected) in filter.state.iter().map(|plane| plane.get(channel).expect("state channel")).zip(expected) {
+                            if expected.is_nan() {
+                                assert!(actual.is_nan());
+                            } else {
+                                assert_eq!(actual.to_bits(), expected.to_bits());
+                            }
+                        }
+                    }
+                    assert_eq!(filter.quiet, scalar.quiet);
+                    assert_eq!(filter.is_reset(), scalar.reset);
+                }
+            });
+        }
+    }
+
+    #[kithara::test]
+    #[case(Response::LowPass)]
+    #[case(Response::HighPass)]
+    #[case(Response::AllPass)]
+    fn simd_recurrence_keeps_scalar_order_history_and_quiet_state(#[case] response: Response) {
+        for damping in [0.1, 1.0, 10.0, f64::INFINITY] {
+            ordered_recurrence::<1>(response, damping);
+            ordered_recurrence::<2>(response, damping);
+            ordered_recurrence::<3>(response, damping);
+            ordered_recurrence::<6>(response, damping);
+        }
     }
 }

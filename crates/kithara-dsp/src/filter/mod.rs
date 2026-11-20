@@ -1,7 +1,7 @@
 mod biquad;
 mod crossover;
 mod error;
-mod svf;
+pub(crate) mod svf;
 #[cfg(test)]
 mod tests;
 
@@ -15,6 +15,6 @@ pub use error::FilterError;
 
 pub use self::{
     biquad::Biquad,
-    svf::{Response, SVF_CHUNK_FRAMES, StateVariableFilter},
+    svf::{Response, SVF_CHUNK_FRAMES, StateVariableFilter, SvfDesign, decay_frames},
 };
 pub use crate::backend::Fir;

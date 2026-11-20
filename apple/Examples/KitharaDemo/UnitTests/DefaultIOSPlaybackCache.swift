@@ -118,7 +118,7 @@ extension IntegrationRegressionsIOS {
         var committed: [URL] = []
         for file in try defaultCacheEntries(under: root) {
             let path = file.standardizedFileURL.path
-            guard !baselinePaths.contains(path) else {
+            guard !baselinePaths.contains(path), !file.pathComponents.contains("_index") else {
                 continue
             }
             let values = try file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
@@ -126,8 +126,7 @@ extension IntegrationRegressionsIOS {
                 values.isRegularFile == true,
                 let size = values.fileSize,
                 size > 0,
-                !file.lastPathComponent.hasSuffix(".tmp"),
-                !file.pathComponents.contains("_index")
+                !file.lastPathComponent.hasSuffix(".tmp")
             else {
                 continue
             }

@@ -71,7 +71,7 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     );
 
     let result = spawn_blocking(move || {
-        let mut rng = Xorshift64::new(0xA11C_EE55_D00D_BA5E);
+        let mut rng = Xorshift64::new(0xa11c_ee55_d00d_ba5e);
         let max_seek = total_bytes - consts::PROBE_SIZE as u64;
         let mut probe = [0u8; consts::PROBE_SIZE];
 

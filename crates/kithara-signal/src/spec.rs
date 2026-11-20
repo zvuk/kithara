@@ -114,7 +114,31 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{consts, rescale_frame_ceil};
+    use crate::{consts, rescale_frame_ceil, rescale_frame_round};
+
+    #[kithara::test]
+    #[case::zero(0, 44_100, 48_000, Some(0))]
+    #[case::up(1024, 44_100, 48_000, Some(1115))]
+    #[case::down(1024, 48_000, 44_100, Some(941))]
+    #[case::tie(1, 2, 1, Some(1))]
+    #[case::below_tie(1, 3, 1, Some(0))]
+    #[case::maximum(u64::MAX, u32::MAX, u32::MAX, Some(u64::MAX))]
+    #[case::overflow(u64::MAX, 1, 2, None)]
+    fn frame_rescaling_rounds_without_duration_quantization(
+        #[case] frames: u64,
+        #[case] source_rate: u32,
+        #[case] target_rate: u32,
+        #[case] expected: Option<u64>,
+    ) {
+        assert_eq!(
+            rescale_frame_round(
+                frames,
+                NonZeroU32::new(source_rate).expect("source rate"),
+                NonZeroU32::new(target_rate).expect("target rate"),
+            ),
+            expected,
+        );
+    }
 
     #[kithara::test]
     fn checked_shape_and_time_math() {

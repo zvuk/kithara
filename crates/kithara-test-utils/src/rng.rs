@@ -4,7 +4,7 @@
 pub struct Xorshift64(u64);
 
 /// Bit pattern of `1.0_f64`.
-const ONE_BITS: u64 = 0x3FF0_0000_0000_0000;
+const ONE_BITS: u64 = 0x3ff0_0000_0000_0000;
 
 impl Xorshift64 {
     #[must_use]

@@ -15,7 +15,7 @@ use super::{
     super::trajectory::{Fraction, Trajectory},
     target::PreparedTarget,
 };
-use crate::{Pitch, Semitones, WarpConfig, WarpRenderError};
+use crate::{Pitch, Semitones, WarpConfig, WarpControlsChange, WarpRenderError};
 
 /// The speed a renderer renders at and the revision that set it.
 #[derive(Clone, Copy, Debug)]
@@ -153,7 +153,7 @@ where
     pub(in crate::render) const MAX_OUTPUT_FRAMES: usize = 163_840;
     /// Build the slot at the source `spec` from the construction values of `config`.
     pub(crate) fn new(config: &WarpConfig, spec: AudioSpec, pools: PoolRegion<S>) -> Self {
-        let requested_pitch = config.pitch();
+        let requested_pitch = config.controls().pitch();
         let (current_kind, current_pitch_engine) =
             Self::stretch_for(config.backend(), requested_pitch);
         let speed = config.speed();
@@ -554,11 +554,16 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.rebuild_pending = true;
     }
 
-    /// Render from the next prepared quantum on at `pitch`, as far as the
-    /// backend honours it. A change of engine retires the running one's tail
+    /// Applies renderer controls from the next prepared quantum. A change of engine retires the running one's tail
     /// into a crossfade and the new engine re-primes from the source history on
     /// this frame.
-    pub fn set_pitch(&mut self, pitch: Pitch) {
+    pub fn apply(&mut self, change: WarpControlsChange) {
+        match change {
+            WarpControlsChange::Pitch(pitch) => self.set_pitch(pitch),
+        }
+    }
+
+    fn set_pitch(&mut self, pitch: Pitch) {
         let layout = self.pitch_layout();
         self.requested_pitch = pitch;
         self.retarget_pitch(layout);

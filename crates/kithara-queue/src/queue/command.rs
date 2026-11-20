@@ -3,12 +3,12 @@ use kithara_command::{Mailbox, Postbox, Seq, When};
 use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_play::{
-    CrossfaderGain, DeckEqChange, DeckFxChange, DeckMixSettingsChange, EqBandConfig, FilterKnob,
-    GainDb, InterruptionKind, Outbox, OutputSnapshot, PitchStep, PlayError, Player, Position,
-    SeekBatch, Track, TrackCommand, TrackFactory, TrackSettings, TrackSettingsChange,
-    TrackStatus as PlayingStatus, Trim,
+    DeckEqChange, DeckFxChange, DeckMixSettingsChange, EqBandConfig, GainDb, InterruptionKind,
+    Outbox, OutputSnapshot, PitchStep, PlayError, Player, Position, SeekBatch, Track, TrackCommand,
+    TrackFactory, TrackSettings, TrackSettingsChange, TrackStatus as PlayingStatus,
+    WarpControlsChange,
 };
-use kithara_signal::{FaderValue, SessionFrame};
+use kithara_signal::SessionFrame;
 
 use super::{
     Queue, Transition,
@@ -73,10 +73,7 @@ where
     SetActionAtItemEnd(ActionAtItemEnd),
     SetPlaybackOrder(PlaybackOrder),
     SetRepeat(RepeatMode),
-    SetVolume(f32),
-    SetTrim(Trim),
-    SetCrossfader(CrossfaderGain),
-    SetMuted(bool),
+    Mix(DeckMixSettingsChange, When<SessionFrame>),
     SetEqGain {
         band: usize,
         gain_db: f32,
@@ -86,10 +83,6 @@ where
     Fx {
         at: When<SessionFrame>,
         changes: Vec<DeckFxChange>,
-    },
-    Filter {
-        at: When<SessionFrame>,
-        knob: FilterKnob,
     },
     NotifyInterruption(InterruptionKind),
     Tick,
@@ -148,10 +141,7 @@ where
             | QueueCommand::SetActionAtItemEnd(_)
             | QueueCommand::SetPlaybackOrder(_)
             | QueueCommand::SetRepeat(_)
-            | QueueCommand::SetVolume(_)
-            | QueueCommand::SetTrim(_)
-            | QueueCommand::SetCrossfader(_)
-            | QueueCommand::SetMuted(_)
+            | QueueCommand::Mix(..)
             | QueueCommand::SetEqGain { .. }
             | QueueCommand::SetEqLayout(_)
             | QueueCommand::ResetEq) => self.apply_queue_settings(command, out),
@@ -199,10 +189,6 @@ where
             QueueCommand::ConfigureTrack(change, at) => self.configure_tracks(change, at, out),
             QueueCommand::StepPitch(step) => self.step_pitch(step, out),
             QueueCommand::Fx { at, changes } => out.fx(at, changes).map_err(Into::into),
-            QueueCommand::Filter { at, knob } => out
-                .mix(at, DeckMixSettingsChange::Filter(knob))
-                .map(Some)
-                .map_err(Into::into),
             QueueCommand::GainProgram { item, program } => {
                 let index = self
                     .active
@@ -329,25 +315,7 @@ where
                 Ok(None)
             }
             QueueCommand::SetRepeat(mode) => self.set_repeat_mode(mode, out),
-            QueueCommand::SetVolume(volume) => out
-                .mix(
-                    When::Next,
-                    DeckMixSettingsChange::Volume(FaderValue::from(volume)),
-                )
-                .map(Some)
-                .map_err(Into::into),
-            QueueCommand::SetTrim(trim) => out
-                .mix(When::Next, DeckMixSettingsChange::Trim(trim))
-                .map(Some)
-                .map_err(Into::into),
-            QueueCommand::SetCrossfader(gain) => out
-                .mix(When::Next, DeckMixSettingsChange::Crossfader(gain))
-                .map(Some)
-                .map_err(Into::into),
-            QueueCommand::SetMuted(muted) => out
-                .mix(When::Next, DeckMixSettingsChange::Muted(muted))
-                .map(Some)
-                .map_err(Into::into),
+            QueueCommand::Mix(change, at) => out.mix(at, change).map(Some).map_err(Into::into),
             QueueCommand::SetEqGain { band, gain_db } => {
                 self.set_eq_gain(band, gain_db, out).map_err(Into::into)
             }
@@ -512,14 +480,15 @@ where
         step: PitchStep,
         out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
-        let Some(pitch) = self.config.pitch() else {
+        let Some(controls) = self.config.warp_controls() else {
             return Ok(None);
         };
+        let pitch = controls.pitch();
         let stepped = pitch.step(step);
         if stepped == pitch {
             return Ok(None);
         }
-        self.configure_tracks(TrackSettingsChange::Pitch(stepped), When::Next, out)
+        self.configure_tracks(WarpControlsChange::Pitch(stepped).into(), When::Next, out)
     }
 
     fn configure_tracks(

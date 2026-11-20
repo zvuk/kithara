@@ -3,7 +3,11 @@ use std::ops::{Deref, DerefMut};
 use fearless_simd::{Level, dispatch, f64x2, prelude::*};
 use num_traits::{AsPrimitive, ToPrimitive};
 
-use crate::{backend::svf, consts, filter::Response};
+use crate::{
+    backend::svf,
+    consts,
+    filter::{Response, svf::coefficients},
+};
 
 struct Section<const CHANNELS: usize> {
     state: [[f64; CHANNELS]; 2],
@@ -17,7 +21,7 @@ impl<const CHANNELS: usize> Section<CHANNELS> {
         Self {
             state: [[0.0; CHANNELS]; 2],
             quiet: [0; CHANNELS],
-            coefficients: svf::coefficients(gain, consts::CROSSOVER_DAMPING),
+            coefficients: coefficients(gain, consts::CROSSOVER_DAMPING),
             response,
         }
     }
@@ -149,10 +153,10 @@ impl<const CHANNELS: usize> Split<CHANNELS> {
 
     pub(crate) fn retune(&mut self, gain: f64, later: impl Iterator<Item = f64>) {
         for section in self.lowpass.iter_mut().chain(&mut self.highpass) {
-            section.coefficients = svf::coefficients(gain, consts::CROSSOVER_DAMPING);
+            section.coefficients = coefficients(gain, consts::CROSSOVER_DAMPING);
         }
         for (section, gain) in self.allpass.iter_mut().zip(later) {
-            section.coefficients = svf::coefficients(gain, consts::CROSSOVER_DAMPING);
+            section.coefficients = coefficients(gain, consts::CROSSOVER_DAMPING);
         }
         self.reset();
     }

@@ -1,0 +1,25 @@
+id: style.descriptive-type-lifetimes
+message: |
+  A single-letter lifetime on a type, trait or type alias. Name it after what
+  it borrows (`'buf`, `'src`, `'state`) so its role reads at every use of the
+  type. A short `'a` stays fine on a method.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  all:
+    - kind: lifetime
+    - regex: "^'[a-z]$"
+    - inside:
+        kind: type_parameters
+        stopBy: end
+        inside:
+          any:
+            - kind: struct_item
+            - kind: enum_item
+            - kind: union_item
+            - kind: trait_item
+            - kind: type_item
+    - inside:
+        kind: lifetime_parameter

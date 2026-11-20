@@ -1,7 +1,6 @@
 use kithara::{
     analysis::{Mode, MusicalKey},
     effects::GainDb,
-    play::Pitch,
     ui::{
         builtin::{MAJOR_KEY_COLORS, MINOR_KEY_COLORS},
         render::{Node, ReadValue, Scope, WaveformView},
@@ -196,7 +195,11 @@ impl KeyNode<'_> {
     fn sounding(&self) -> Option<MusicalKey> {
         self.shown.analysis.key.map(|key| {
             let speed = f64::from(self.shown.speed);
-            let factor = self.shown.pitch.map_or(speed, |pitch| pitch.factor(speed));
+            let factor = if self.shown.warp_controls_available {
+                self.shown.settings.controls().pitch().factor(speed)
+            } else {
+                speed
+            };
             let shift = (12.0 * factor.log2()).round().rem_euclid(12.0).as_();
             key.transposed(shift)
         })
@@ -206,8 +209,11 @@ impl KeyNode<'_> {
 impl<'a> Node<'a> for KeyNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
-            "locked" => ReadValue::Bool(self.shown.pitch.is_some_and(Pitch::keylock)),
-            "lock_hidden" => ReadValue::Bool(self.shown.pitch.is_none()),
+            "locked" => ReadValue::Bool(
+                self.shown.warp_controls_available
+                    && self.shown.settings.controls().pitch().keylock(),
+            ),
+            "lock_hidden" => ReadValue::Bool(!self.shown.warp_controls_available),
             "sounding" => ReadValue::Text(self.sounding().map_or("", MusicalKey::open_key)),
             "color" => ReadValue::Color(key_color(self.sounding()?)),
             "sounding_hidden" => ReadValue::Bool(self.shown.analysis.key.is_none()),

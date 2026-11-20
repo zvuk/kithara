@@ -31,6 +31,6 @@ pub use revision::Revision;
 pub use sample::sanitize_sample;
 pub use session::{Bound, OutputContext, SessionEpoch, SessionFrame, TransportRevision};
 pub use spec::AudioSpec;
-pub use time::rescale_frame_ceil;
+pub use time::{rescale_frame_ceil, rescale_frame_round};
 pub use units::{Count, FrameCount, Frames, SampleCount, Samples};
 mod consts;

@@ -1,5 +1,9 @@
+#[cfg(target_arch = "wasm32")]
+use std::io::ErrorKind;
 use std::{path::Path, rc::Rc};
 
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::ui::source::FileResolver;
 use kithara::ui::{
     builtin,
     error::UiDocError,
@@ -108,8 +112,6 @@ impl Package {
         pages: SourceAdditions,
         limits: &Limits,
     ) -> Result<Rc<Self>, UiDocError> {
-        use kithara::ui::source::FileResolver;
-
         if !root.exists() {
             return Self::read(embedded(), pages, limits);
         }
@@ -127,8 +129,6 @@ impl Package {
         _pages: SourceAdditions,
         _limits: &Limits,
     ) -> Result<Rc<Self>, UiDocError> {
-        use std::io::ErrorKind;
-
         Err(UiDocError::Unreadable {
             origin: SourceUri(root.display().to_string()),
             rel: String::new(),

@@ -2,7 +2,7 @@ use std::future::Future;
 
 use kithara_apple::foundation::{
     ns::{
-        NSInteger, NSOperationQueue, NSUInteger, NSURLSession, NSURLSessionConfiguration,
+        NSOperationQueue, NSUInteger, NSURLSession, NSURLSessionConfiguration,
         NSURLSessionDataTask, NSURLSessionTask,
     },
     objc::rc::Retained,
@@ -32,8 +32,6 @@ pub(super) type TaskId = NSUInteger;
 #[mirror(from_ref = NetOptions)]
 struct SharedSessionKey {
     is_insecure: bool,
-    #[mirror(rename = pool_max_idle_per_host)]
-    max_connections_per_host: usize,
 }
 
 #[derive(Clone)]
@@ -129,12 +127,6 @@ impl SharedSession {
         let events = AppleSessionEvents::new(key.is_insecure);
         let delegate = make_delegate(&events);
         let configuration = NSURLSessionConfiguration::ephemeralSessionConfiguration();
-        if let Ok(max_connections) = NSInteger::try_from(key.max_connections_per_host)
-            && max_connections > 0
-        {
-            configuration.setHTTPMaximumConnectionsPerHost(max_connections);
-        }
-
         let queue = NSOperationQueue::new();
         queue.setMaxConcurrentOperationCount(1);
         let session = urlsession::session_with_delegate(&configuration, &delegate, &queue);
@@ -199,6 +191,62 @@ mod tests {
 
     use super::{super::response::copy_data, *};
     use crate::NetError;
+
+    #[kithara::test(native, flash(false))]
+    fn idle_pool_capacity_leaves_the_native_connection_limit_unchanged() {
+        let ephemeral_default = NSURLSessionConfiguration::ephemeralSessionConfiguration()
+            .HTTPMaximumConnectionsPerHost();
+        let first = shared_session(&NetOptions::builder().pool_max_idle_per_host(0).build());
+
+        for idle in [0usize, 8, 40] {
+            let options = NetOptions::builder().pool_max_idle_per_host(idle).build();
+            let shared = shared_session(&options);
+            let limit = shared
+                .session
+                .configuration()
+                .HTTPMaximumConnectionsPerHost();
+            assert_eq!(
+                limit, ephemeral_default,
+                "pool_max_idle_per_host={idle} must not change HTTPMaximumConnectionsPerHost; \
+                 URLSession owns its connection pool and exposes no idle-pool bound"
+            );
+            assert_eq!(
+                Retained::as_ptr(&shared.session),
+                Retained::as_ptr(&first.session),
+                "pool_max_idle_per_host={idle} must reuse the one NSURLSession of its TLS policy"
+            );
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn secure_and_insecure_options_rekey_the_shared_session() {
+        let secure = NetOptions::default();
+        let insecure = NetOptions::builder().is_insecure(true).build();
+
+        assert_ne!(
+            SharedSessionKey::from(&secure),
+            SharedSessionKey::from(&insecure),
+            "is_insecure must still rekey the shared URLSession"
+        );
+
+        let secure_session = shared_session(&secure);
+        let insecure_session = shared_session(&insecure);
+        assert_ne!(
+            Retained::as_ptr(&secure_session.session),
+            Retained::as_ptr(&insecure_session.session),
+            "secure and insecure options must get distinct NSURLSessions"
+        );
+        assert_eq!(
+            Retained::as_ptr(&shared_session(&secure).session),
+            Retained::as_ptr(&secure_session.session),
+            "a repeated secure lookup must reuse its NSURLSession"
+        );
+        assert_eq!(
+            Retained::as_ptr(&shared_session(&insecure).session),
+            Retained::as_ptr(&insecure_session.session),
+            "a repeated insecure lookup must reuse its NSURLSession"
+        );
+    }
 
     #[kithara::test(native, flash(false))]
     fn configured_byte_pool_reaches_response_copy_path() {

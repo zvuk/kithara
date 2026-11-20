@@ -1,8 +1,8 @@
-use std::sync::atomic::Ordering;
+use std::{num::NonZeroU32, sync::atomic::Ordering};
 
 use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, rescale_frame_round};
 use kithara_stream::{
     AudioCodec, NotReadyCause, PendingReason, ReaderChunkSignal, ReaderSeekSignal,
 };
@@ -358,7 +358,13 @@ where
                     landed_at,
                     preroll,
                     landed_frame: self.frame_offset,
-                    clock: crate::LandingClock::Kept,
+                    clock: if self.codec.spec().sample_rate.get()
+                        == self.demuxer.track_info().sample_rate
+                    {
+                        crate::LandingClock::Kept
+                    } else {
+                        crate::LandingClock::Restarted
+                    },
                 }
             }
             DemuxSeekOutcome::PastEof { duration } => {
@@ -539,11 +545,18 @@ where
         }
     }
 
+    fn default_priming_frames(&self, codec: AudioCodec) -> u64 {
+        let source_frames = AudioCodec::encoder_priming_frames(codec)
+            .saturating_add(self.codec.decoder_algo_delay(codec));
+        NonZeroU32::new(self.demuxer.track_info().sample_rate)
+            .and_then(|source_rate| {
+                rescale_frame_round(source_frames, source_rate, self.spec.sample_rate)
+            })
+            .unwrap_or(u64::MAX)
+    }
+
     delegate::delegate! {
         to self.codec {
-            #[expr(AudioCodec::encoder_priming_frames(codec).saturating_add($))]
-            #[call(decoder_algo_delay)]
-            fn default_priming_frames(&self, codec: AudioCodec) -> u64;
             fn track_info(&self) -> crate::DecoderTrackInfo;
         }
     }

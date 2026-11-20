@@ -20,7 +20,7 @@ mod simd;
 ))]
 mod spectrum;
 mod strided;
-pub(crate) mod svf;
+mod svf;
 #[cfg(test)]
 mod tests;
 
@@ -36,5 +36,7 @@ pub(crate) use interpolate::quadratic;
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use portable as platform;
 pub use simd::sanitize;
-pub(crate) use simd::{crossfade_linear, div, first_quiet, mul_add, ramp, scale_in_place};
+pub(crate) use simd::{
+    crossfade_linear, div, first_quiet, last_loud, mul_add, ramp, scale_in_place,
+};
 pub(crate) use strided::{gather, scatter};
