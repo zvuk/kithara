@@ -214,9 +214,10 @@ pub(crate) struct CiLaneArtifact {
     pub(crate) name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) path: Option<String>,
-    /// `ci lane` captures this report in a fresh directory of the build it
-    /// holds and copies it into the job's own storage before releasing that
-    /// build, so a job reusing the build cannot replace it.
+    /// The lane's executor captures this report in a fresh directory of the
+    /// build it holds and, in a GitHub job, copies it into the job's own
+    /// storage before releasing that build, so a job reusing the build cannot
+    /// replace it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) report: Option<LaneReport>,
     #[serde(default)]
@@ -239,6 +240,15 @@ impl CiLaneArtifact {
 pub(crate) enum LaneReport {
     /// The `chromedriver` log and the wrapper's network logs.
     Chromium,
+}
+
+impl LaneReport {
+    /// The name the catalog and the workflow call this report by.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Chromium => "chromium",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
@@ -412,15 +422,15 @@ impl CiProjectConfig {
     }
 }
 
-/// An artifact comes from one place. A report is captured by `ci lane`, which
-/// only GitHub runs; GitLab's `ci run` would run the lane without it.
+/// An artifact comes from one place. Only a GitHub job hands a captured
+/// report to a later step; a GitLab pipeline would run the lane and lose it.
 fn validate_artifact(name: &str, lane: &CiLaneConfig, artifact: &CiLaneArtifact) -> Result<()> {
     match (&artifact.path, artifact.report) {
         (Some(path), None) if !path.is_empty() => Ok(()),
         (None, Some(_)) if lane.kinds.is_empty() => Ok(()),
         (None, Some(_)) => bail!(
-            "ext.ci.lanes.{name}.artifact.report is captured by `ci lane`, which GitLab does not run; \
-             the lane must leave `kinds` empty"
+            "ext.ci.lanes.{name}.artifact.report reaches a later step only in a GitHub job, and \
+             GitLab does not run one; the lane must leave `kinds` empty"
         ),
         _ => bail!("ext.ci.lanes.{name}.artifact must name either a non-empty path or a report"),
     }
@@ -1002,6 +1012,11 @@ timeout_minutes = 30
             .expect("the lane names its artifact");
         assert_eq!(artifact.report, Some(super::LaneReport::Chromium));
         assert_eq!(artifact.path, None);
+        assert_eq!(
+            serde_json::to_value(super::LaneReport::Chromium).expect("serialize a report"),
+            super::LaneReport::Chromium.name(),
+            "the matrix carries a report under the name its executor ends a copy with"
+        );
 
         validate(r#"artifact = { name = "driver", report = "chromium", when = "failure" }"#)
             .expect("a GitHub-only lane captures a report");

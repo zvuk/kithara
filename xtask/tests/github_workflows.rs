@@ -2664,53 +2664,144 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
 /// A report lane's executor names its job's copy only once it is copied, so
 /// the upload reads that copy alone, and a wanted report it did not name fails
 /// its own step instead of being skipped or read from the shared build.
+/// Whether the report is wanted is the lane step's own outcome, and only a
+/// value ending as the copy's name does names the copy.
+#[cfg(unix)]
 #[test]
-fn a_report_lane_uploads_its_job_copy_and_fails_a_missing_one() {
+fn a_report_lane_uploads_its_job_copy_and_fails_a_missing_one() -> anyhow::Result<()> {
     let workflow = github_workflow("lane.yml");
     let job = workflow_job(workflow_jobs(&workflow), "run");
-
-    let check = named_step(job, "Check the lane's report");
     assert_eq!(
-        mapping_field(check, "if").as_str(),
-        Some(
-            "${{ always() && inputs.artifact-report != '' && (inputs.artifact-when == 'always' || failure()) && env.KITHARA_LANE_REPORT == '' }}"
-        )
+        mapping_field(named_step(job, "Run the lane"), "id").as_str(),
+        Some("lane")
     );
+    let check = named_step(job, "Check the lane's report");
     assert!(
         mapping_field(check, "run")
             .as_str()
             .is_some_and(|run| run.contains("exit 1")),
         "a missing report fails its step"
     );
-
     let upload = named_step(job, "Upload the lane's report");
-    assert_eq!(
-        mapping_field(upload, "if").as_str(),
-        Some(
-            "${{ always() && (inputs.artifact-when == 'always' || failure()) && ((inputs.artifact-report != '' && env.KITHARA_LANE_REPORT != '') || (inputs.artifact-report == '' && inputs.artifact-path != '')) }}"
-        )
-    );
     let with = mapping_field(upload, "with")
         .as_mapping()
         .expect("the lane upload has inputs");
-    assert_eq!(
-        mapping_field(with, "path").as_str(),
-        Some(
-            "${{ inputs.artifact-report != '' && env.KITHARA_LANE_REPORT || inputs.artifact-path }}"
-        )
-    );
     assert_eq!(
         mapping_field(with, "if-no-files-found").as_str(),
         Some("error")
     );
     assert!(
-        step_position(job, "Check the lane's report")
-            < step_position(job, "Upload the lane's report")
+        step_position(job, "Run the lane") < step_position(job, "Check the lane's report")
+            && step_position(job, "Check the lane's report")
+                < step_position(job, "Upload the lane's report")
     );
     assert!(
         !github_workflow_text("lane.yml").contains("web-chromium"),
         "the executor picks a report by the catalog's field, not by a lane's name"
     );
+
+    let copy = "/runner/temp/web-chromium-report-a1B2c3.chromium";
+    let mut cases = Vec::new();
+    for (outcome, when, failure, named, check, uploaded) in [
+        // A failed lane wants its report and uploads only its whole copy.
+        ("failure", "failure", true, "", true, None),
+        ("failure", "failure", true, copy, false, Some(copy)),
+        // A write cut short leaves part of the path, maybe its parent.
+        (
+            "failure",
+            "failure",
+            true,
+            "/runner/temp/web-chromium-rep",
+            true,
+            None,
+        ),
+        ("failure", "failure", true, "/runner/temp", true, None),
+        // A passing lane discarded the report, even when a later upload failed.
+        ("success", "failure", false, "", false, None),
+        ("success", "failure", true, "", false, None),
+        // A lane that never ran wrote nothing.
+        ("skipped", "failure", true, "", false, None),
+        ("cancelled", "always", true, "", false, None),
+        // A report wanted always is wanted from a passing lane too.
+        ("success", "always", false, copy, false, Some(copy)),
+        ("success", "always", true, "", true, None),
+        ("failure", "always", true, copy, false, Some(copy)),
+    ] {
+        cases.push(serde_json::json!({
+            "context": {
+                "steps.lane.outcome": outcome,
+                "inputs.artifact-when": when,
+                "inputs.artifact-report": "chromium",
+                "inputs.artifact-path": "",
+                "env.KITHARA_LANE_REPORT": named,
+            },
+            "failure": failure,
+            "check": check,
+            "uploaded": uploaded,
+        }));
+    }
+    // A path artifact keeps the job's failure as its signal.
+    for (outcome, when, failure, uploaded) in [
+        ("success", "failure", false, None),
+        ("failure", "failure", true, Some("target/log")),
+        ("success", "always", false, Some("target/log")),
+    ] {
+        cases.push(serde_json::json!({
+            "context": {
+                "steps.lane.outcome": outcome,
+                "inputs.artifact-when": when,
+                "inputs.artifact-report": "",
+                "inputs.artifact-path": "target/log",
+                "env.KITHARA_LANE_REPORT": "",
+            },
+            "failure": failure,
+            "check": false,
+            "uploaded": uploaded,
+        }));
+    }
+    let expression = |step: &Mapping, key: &str| {
+        mapping_field(step, key)
+            .as_str()
+            .expect("a workflow expression")
+            .trim_start_matches("${{ ")
+            .trim_end_matches(" }}")
+            .to_owned()
+    };
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            r#"import json
+import os
+
+for case in json.loads(os.environ["CASES"]):
+    functions = {
+        "always": lambda: True,
+        "failure": lambda: case["failure"],
+        "endsWith": lambda text, end: text.lower().endswith(end.lower()),
+        "format": lambda text, value: text.replace("{0}", value),
+    }
+
+    def evaluate(expression):
+        for name, value in case["context"].items():
+            expression = expression.replace(name, repr(value))
+        expression = expression.replace("!endsWith(", " not endsWith(")
+        expression = expression.replace("&&", " and ").replace("||", " or ")
+        return eval(expression, {"__builtins__": {}, **functions})
+
+    assert bool(evaluate(os.environ["CHECK"])) == case["check"], case
+    uploads = bool(evaluate(os.environ["UPLOAD"]))
+    assert uploads == (case["uploaded"] is not None), case
+    if uploads:
+        assert evaluate(os.environ["UPLOAD_PATH"]) == case["uploaded"], case
+"#,
+        ])
+        .env("CHECK", expression(check, "if"))
+        .env("UPLOAD", expression(upload, "if"))
+        .env("UPLOAD_PATH", expression(with, "path"))
+        .env("CASES", serde_json::to_string(&cases)?)
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    Ok(())
 }
 
 #[test]

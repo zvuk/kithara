@@ -1711,7 +1711,7 @@ role = "gate"
 kinds = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
-# `ci lane` captures the ChromeDriver log and the wrapper's NetLog files in
+# The executor captures the ChromeDriver log and the wrapper's NetLog files in
 # the build it holds and hands the job its own copy.
 artifact = { name = "web-chromium-driver", report = "chromium", when = "failure" }
 

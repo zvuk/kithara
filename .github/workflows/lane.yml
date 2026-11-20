@@ -146,6 +146,7 @@ jobs:
           pattern: ${{ format('@({0})-{1}-{2}', inputs.download, github.run_id, github.run_attempt) }}
 
       - name: Run the lane
+        id: lane
         env:
           GITHUB_FETCH_TOKEN: ${{ github.token }}
           # A filterset is shell syntax, so it reaches the script as data.
@@ -212,9 +213,13 @@ jobs:
       # A report lane's `ci lane` names its job's copy in KITHARA_LANE_REPORT
       # only once every file is copied, so a wanted report it did not name is
       # missing or partial: this step fails it on its own, beside the lane's
-      # own result, instead of skipping the upload.
+      # own result, instead of skipping the upload. Whether the report is
+      # wanted is the lane step's own outcome: another step failing after a
+      # passing lane is no reason to expect a report the lane discarded. The
+      # copy's name ends with the report's, so a value cut short by a failed
+      # write, which could name the copy's parent, is not the copy.
       - name: Check the lane's report
-        if: ${{ always() && inputs.artifact-report != '' && (inputs.artifact-when == 'always' || failure()) && env.KITHARA_LANE_REPORT == '' }}
+        if: ${{ always() && inputs.artifact-report != '' && (steps.lane.outcome == 'failure' || (inputs.artifact-when == 'always' && steps.lane.outcome == 'success')) && !endsWith(env.KITHARA_LANE_REPORT, format('.{0}', inputs.artifact-report)) }}
         env:
           REPORT: ${{ inputs.artifact-report }}
         run: |
@@ -222,7 +227,7 @@ jobs:
           exit 1
 
       - name: Upload the lane's report
-        if: ${{ always() && (inputs.artifact-when == 'always' || failure()) && ((inputs.artifact-report != '' && env.KITHARA_LANE_REPORT != '') || (inputs.artifact-report == '' && inputs.artifact-path != '')) }}
+        if: ${{ always() && ((inputs.artifact-report != '' && (steps.lane.outcome == 'failure' || (inputs.artifact-when == 'always' && steps.lane.outcome == 'success')) && endsWith(env.KITHARA_LANE_REPORT, format('.{0}', inputs.artifact-report))) || (inputs.artifact-report == '' && inputs.artifact-path != '' && (inputs.artifact-when == 'always' || failure()))) }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}

@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     env,
+    ffi::OsString,
     path::{Path, PathBuf},
     process::Output,
 };
@@ -14,11 +15,12 @@ use kithara_devtools::{
 use tracing::{info, warn};
 
 use super::{
-    build_dir::LaneTarget,
+    build_dir::{LaneTarget, Target},
     cache::evidence,
     config::CiConfig,
-    environment::CiEnvironment,
+    environment::{CiEnvironment, process_var},
     kache::KacheJob,
+    lane::report::Capture,
     process::{Process, Recording},
     verdict,
 };
@@ -495,16 +497,6 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     );
     let swiftpm_cache = environment.swiftpm_cache.clone();
     let temp = environment.temp.clone();
-    let vars = environment.vars();
-    let process = Process::new(&ctx.root, vars);
-    // sccache is a daemon, and a running one keeps the cache directory it was
-    // started with — a client inherits the server's configuration, not its
-    // own. An executor that outlives a job therefore carries the previous
-    // job's cache location into this one, and a stale location that no longer
-    // exists fails every compilation while reporting only that a C compiler
-    // exited 254. Retire the server so it restarts with what this job asked
-    // for; the cache on disk is untouched. Shared-host Unix sockets need one
-    // explicit start before Cargo's parallel compilers can race to start it.
     if args.dry_run {
         return report_lane(
             &lane,
@@ -516,7 +508,27 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             &ext.ci.lanes,
         );
     }
-    execute_lane(
+    let report = declared_report(
+        &lane,
+        &ext.ci.lanes,
+        environment.target(),
+        &ctx.root,
+        &process_var,
+    )?;
+    let mut vars = environment.vars();
+    if let Some(report) = &report {
+        vars.extend(report.env());
+    }
+    let process = Process::new(&ctx.root, vars);
+    // sccache is a daemon, and a running one keeps the cache directory it was
+    // started with — a client inherits the server's configuration, not its
+    // own. An executor that outlives a job therefore carries the previous
+    // job's cache location into this one, and a stale location that no longer
+    // exists fails every compilation while reporting only that a C compiler
+    // exited 254. Retire the server so it restarts with what this job asked
+    // for; the cache on disk is untouched. Shared-host Unix sockets need one
+    // explicit start before Cargo's parallel compilers can race to start it.
+    let outcome = execute_lane(
         &process,
         &ctx.config.tools,
         Some(environment.kache()),
@@ -545,7 +557,28 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
                 &ext.ci.lanes,
             ),
         },
-    )
+    );
+    // Handed over before the environment, and with it the build, is released.
+    if let Some(report) = report {
+        report.finish(outcome.is_err());
+    }
+    outcome
+}
+
+/// The report a declared lane captures, in the build this run holds.
+fn declared_report(
+    lane: &Lane,
+    lanes: &BTreeMap<String, CiLaneConfig>,
+    target: &Target,
+    root: &Path,
+    var: &dyn Fn(&str) -> Option<OsString>,
+) -> Result<Option<Capture>> {
+    let Lane::Declared { name, .. } = lane else {
+        return Ok(None);
+    };
+    lanes.get(name).map_or(Ok(None), |declared| {
+        Capture::for_lane(declared, target, root, var)
+    })
 }
 
 /// What the lane would ask of the executor, without asking. Answers "what does
@@ -650,12 +683,13 @@ mod tests {
 
     use super::{
         super::{config::fixture, kache::KacheJob, process::Step},
-        CacheGroup, CompilerCache, Lane, PipelineKind, command_lane, compiler_cache_note, evidence,
-        execute_lane, executor_replies, kache_note, sccache_server_is_stopped,
+        CacheGroup, CompilerCache, Lane, PipelineKind, command_lane, compiler_cache_note,
+        declared_report, evidence, execute_lane, executor_replies, kache_note,
+        sccache_server_is_stopped,
     };
     use crate::{
         Cli,
-        ci::process::Process,
+        ci::{build_dir::Target, process::Process},
         config::{CiLaneConfig, KitharaExt},
         consts,
     };
@@ -1634,5 +1668,79 @@ mod tests {
                  GitHub pipeline kind, and it is not named as reachable by name alone"
             );
         }
+    }
+
+    /// A named `ci run` of a lane with a Chromium report tells its steps
+    /// where to write through the same owner as `ci lane`, and outside a
+    /// GitHub job a failed lane keeps the report in the target it named.
+    #[cfg(unix)]
+    #[test]
+    fn a_named_run_of_a_report_lane_keeps_a_failed_report_where_it_built() {
+        let checkout = tempfile::tempdir().expect("create a checkout");
+        let root = checkout.path();
+        crate::ci::build_dir::fixture::git(root, &["init", "-q"]);
+        let target = root.join("named");
+        let os = env::consts::OS;
+        let ctx = kithara_devtools::Ctx::new(
+            root.to_path_buf(),
+            toml::from_str(&format!(
+                r#"
+[ext.ci]
+pins = "ci-pins.toml"
+
+[ext.ci.lanes.web]
+artifact = {{ name = "web-chromium-driver", report = "chromium", when = "failure" }}
+cache_group = "host"
+label = "fixture"
+os = "{os}"
+program = "sh"
+role = "gate"
+timeout_minutes = 1
+
+[[ext.ci.lanes.web.steps]]
+label = "run"
+args = ['-c', 'echo driver > "$(echo $CHROMEDRIVER_ARGS | cut -d= -f2)"; echo net > "$KITHARA_WEB_NETLOG_DIR/web_observer.jsonl"; exit 1']
+"#
+            ))
+            .expect("parse the fixture lane"),
+        );
+        let ext = KitharaExt::from_ctx(&ctx).expect("parse the kithara extension");
+        let lane = Lane::parse("web", &ext.ci.lanes).expect("the lane is declared");
+
+        let report = declared_report(
+            &lane,
+            &ext.ci.lanes,
+            &Target::Named(Some(target.clone())),
+            root,
+            &|_| None,
+        )
+        .expect("a named run captures its report")
+        .expect("the lane declares a report");
+        let process = Process::new(root, report.env().into_iter().collect());
+        let outcome = command_lane(
+            &lane,
+            PipelineKind::Branch,
+            &process,
+            &fixture(),
+            &ctx.config,
+            &root.join("target/swiftpm"),
+            &ext.ci.lanes,
+        );
+        report.finish(outcome.is_err());
+        outcome.expect_err("the lane fails");
+
+        let captures = fs::read_dir(&target)
+            .expect("list the named target")
+            .map(|entry| entry.expect("read a target entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(captures.len(), 1, "{captures:?}");
+        assert_eq!(
+            fs::read_to_string(captures[0].join("web-chromium.log")).unwrap(),
+            "driver\n"
+        );
+        assert_eq!(
+            fs::read_to_string(captures[0].join("web-chromium-netlog/web_observer.jsonl")).unwrap(),
+            "net\n"
+        );
     }
 }

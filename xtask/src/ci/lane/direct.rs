@@ -1,18 +1,18 @@
 use std::{
     collections::BTreeMap,
-    ffi::{OsStr, OsString},
-    fs::{self, OpenOptions},
-    io::{self, Write},
+    ffi::OsString,
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Result, bail};
 use clap::Args;
 use kithara_devtools::Ctx;
-use tempfile::{Builder, TempDir};
 use tracing::{info, warn};
 
-use super::declared;
+use super::{
+    declared,
+    report::{Capture, announce},
+};
 use crate::{
     ci::{
         build_cache,
@@ -23,7 +23,7 @@ use crate::{
         process::Process,
         run::PipelineKind,
     },
-    config::{CiLaneConfig, KitharaExt, LaneReport},
+    config::{CiLaneConfig, KitharaExt},
     consts,
 };
 
@@ -132,13 +132,7 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
     } else {
         None
     };
-    let report = match lane.artifact.as_ref().and_then(|artifact| artifact.report) {
-        Some(LaneReport::Chromium) => Some(
-            ChromiumReport::prepare(&held_build(&target, &ctx.root), var)
-                .context("preparing this job's Chromium report")?,
-        ),
-        None => None,
-    };
+    let report = Capture::for_lane(lane, &target, &ctx.root, var)?;
     let mut vars = executor_vars(target.cargo_dir(), args.kind);
     if let Some(kache) = &kache {
         vars.extend(
@@ -167,26 +161,13 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
         }
         result
     });
-    if let (Some(report), Some(artifact)) = (report, &lane.artifact)
-        && artifact.wanted(result.is_err())
-    {
-        report.hand_over();
+    if let Some(report) = report {
+        report.finish(result.is_err());
     }
     if let Target::Alias { build, .. } = &target {
         publish_timings(build, var);
     }
     result
-}
-
-/// The build this lane holds: a slot by its own path, not by the alias the
-/// next job taking the slot re-points.
-fn held_build(target: &Target, root: &Path) -> PathBuf {
-    match target {
-        Target::Alias { build, .. } => build.path().to_path_buf(),
-        Target::Named(dir) => dir
-            .as_ref()
-            .map_or_else(|| root.join("target"), |dir| root.join(dir)),
-    }
 }
 
 /// Admits this job once the volume it builds on has the room the executor
@@ -248,194 +229,6 @@ fn publish_timings(build: &BuildDir, var: &dyn Fn(&str) -> Option<OsString>) {
     }
 }
 
-/// Tells later steps, through `GITHUB_ENV`, that `name` is this job's copy in
-/// `dir`. A job cancelled before telling tells nothing.
-fn announce(env_file: &Path, name: &str, dir: &Path) -> io::Result<()> {
-    let dir = dir
-        .to_str()
-        .filter(|dir| !dir.contains(['\r', '\n']))
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "the copy's path is not one line",
-            )
-        })?;
-    let mut file = OpenOptions::new().append(true).open(env_file)?;
-    writeln!(file, "{name}={dir}")
-}
-
-/// The `chromedriver` log in a Chromium report.
-const CHROMIUM_DRIVER_LOG: &str = "web-chromium.log";
-/// The wrapper's network log directory in a Chromium report.
-const CHROMIUM_NETLOG_DIR: &str = "web-chromium-netlog";
-/// Where the test wrapper writes its network logs; without it, it writes none.
-const CHROMIUM_NETLOG_ENV: &str = "KITHARA_WEB_NETLOG_DIR";
-
-/// One lane's Chromium report: captured in a fresh directory of the build the
-/// lane holds, so a job reusing that build later writes elsewhere.
-struct ChromiumReport {
-    capture: TempDir,
-    destination: ReportDestination,
-}
-
-/// Where a wanted report goes once the lane ends.
-enum ReportDestination {
-    /// A GitHub job: a copy in the job's own `RUNNER_TEMP`, which no other
-    /// job taking the released build can reach, told to later steps only once
-    /// every file is copied.
-    Job { copy: TempDir, env_file: PathBuf },
-    /// Anywhere else: the capture stays in the build and the log names it.
-    InPlace,
-}
-
-impl ChromiumReport {
-    /// Makes the capture directory in `build` and, in a GitHub job, the job's
-    /// copy. A GitHub job without its storage fails here, before the browser
-    /// runs, rather than running without a report.
-    fn prepare(build: &Path, var: &dyn Fn(&str) -> Option<OsString>) -> Result<Self> {
-        fs::create_dir_all(build).with_context(|| format!("creating {}", build.display()))?;
-        let build =
-            fs::canonicalize(build).with_context(|| format!("resolving {}", build.display()))?;
-        let capture = Builder::new()
-            .prefix("web-chromium-report-")
-            .tempdir_in(&build)
-            .with_context(|| format!("creating a capture directory in {}", build.display()))?;
-        ensure!(
-            capture
-                .path()
-                .to_str()
-                .is_some_and(|path| !path.contains(char::is_whitespace)),
-            "ChromeDriver cannot take {} as one argument",
-            capture.path().display()
-        );
-        fs::create_dir(capture.path().join(CHROMIUM_NETLOG_DIR)).with_context(|| {
-            format!(
-                "creating the NetLog directory in {}",
-                capture.path().display()
-            )
-        })?;
-        let text = |name: &str| var(name).and_then(|value| value.into_string().ok());
-        let destination = if crate::job::github_in(&text) {
-            let (Some(env_file), Some(temp)) = (var("GITHUB_ENV"), var("RUNNER_TEMP")) else {
-                bail!("a GitHub job names GITHUB_ENV and RUNNER_TEMP");
-            };
-            let temp = fs::canonicalize(&temp)
-                .with_context(|| format!("resolving RUNNER_TEMP {}", Path::new(&temp).display()))?;
-            let builds = build.parent().unwrap_or(&build);
-            ensure!(
-                !temp.starts_with(builds),
-                "RUNNER_TEMP {} is inside the builds other jobs take, {}",
-                temp.display(),
-                builds.display()
-            );
-            let copy = Builder::new()
-                .prefix("web-chromium-report-")
-                .tempdir_in(&temp)
-                .with_context(|| format!("creating this job's copy in {}", temp.display()))?;
-            ReportDestination::Job {
-                copy,
-                env_file: PathBuf::from(env_file),
-            }
-        } else {
-            ReportDestination::InPlace
-        };
-        Ok(Self {
-            capture,
-            destination,
-        })
-    }
-
-    /// What the lane's steps are told: the `chromedriver` log path and the
-    /// wrapper's network log directory.
-    fn env(&self) -> [(OsString, OsString); 2] {
-        let mut driver = OsString::from("--verbose --log-path=");
-        driver.push(self.capture.path().join(CHROMIUM_DRIVER_LOG));
-        [
-            (OsString::from("CHROMEDRIVER_ARGS"), driver),
-            (
-                OsString::from(CHROMIUM_NETLOG_ENV),
-                self.capture
-                    .path()
-                    .join(CHROMIUM_NETLOG_DIR)
-                    .into_os_string(),
-            ),
-        ]
-    }
-
-    /// Hands a wanted report over before the build is released. A copy that
-    /// stopped part way, or lacks the driver's log, is not told, so the job's
-    /// check fails beside the lane's own result instead of uploading part of
-    /// a report. Each file holds what its writer had written when copied;
-    /// nothing here judges whether a network log ended.
-    fn hand_over(self) {
-        match self.destination {
-            ReportDestination::Job { copy, env_file } => {
-                let handed =
-                    copy_chromium_report(self.capture.path(), copy.path()).and_then(|()| {
-                        announce(&env_file, consts::LANE_REPORT_ENV, copy.path())
-                            .with_context(|| format!("writing {}", env_file.display()))
-                    });
-                match handed {
-                    Ok(()) => {
-                        let _ = copy.keep();
-                    }
-                    Err(error) => warn!("this job's Chromium report is not uploaded: {error:#}"),
-                }
-            }
-            ReportDestination::InPlace => {
-                // Kept before logging: a disabled level skips its arguments.
-                let kept = self.capture.keep();
-                info!("this run's Chromium report is in {}", kept.display());
-            }
-        }
-    }
-}
-
-/// Copies the driver's log, which every report has, and each network log the
-/// wrapper wrote. Links and empty files are not reports.
-fn copy_chromium_report(capture: &Path, copy: &Path) -> Result<()> {
-    ensure!(
-        copy_log(
-            &capture.join(CHROMIUM_DRIVER_LOG),
-            &copy.join(CHROMIUM_DRIVER_LOG)
-        )?,
-        "ChromeDriver wrote no log"
-    );
-    let netlog = capture.join(CHROMIUM_NETLOG_DIR);
-    ensure!(
-        netlog
-            .symlink_metadata()
-            .is_ok_and(|metadata| metadata.is_dir()),
-        "{} is no longer the directory the wrapper was given",
-        netlog.display()
-    );
-    let netlog_copy = copy.join(CHROMIUM_NETLOG_DIR);
-    fs::create_dir(&netlog_copy).with_context(|| format!("creating {}", netlog_copy.display()))?;
-    for entry in fs::read_dir(&netlog).with_context(|| format!("listing {}", netlog.display()))? {
-        let entry = entry.with_context(|| format!("listing {}", netlog.display()))?;
-        let name = entry.file_name();
-        if Path::new(&name).extension() == Some(OsStr::new("jsonl")) {
-            copy_log(&entry.path(), &netlog_copy.join(&name))?;
-        }
-    }
-    Ok(())
-}
-
-/// Copies `source` when it is a regular file with content; says whether it did.
-fn copy_log(source: &Path, destination: &Path) -> Result<bool> {
-    match source.symlink_metadata() {
-        Ok(metadata) if metadata.is_file() && metadata.len() > 0 => {
-            fs::copy(source, destination).with_context(|| {
-                format!("copying {} to {}", source.display(), destination.display())
-            })?;
-            Ok(true)
-        }
-        Ok(_) => Ok(false),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error).with_context(|| format!("reading {}", source.display())),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{env, ffi::OsStr, fs, path::Path};
@@ -443,6 +236,10 @@ mod tests {
     use kithara_devtools::{common::project::TestCommandConfig, lease};
 
     use super::*;
+    #[cfg(unix)]
+    use crate::ci::lane::report::chromium::consts::{
+        CHROMIUM_DRIVER_LOG, CHROMIUM_NETLOG_DIR, CHROMIUM_NETLOG_ENV,
+    };
     use crate::{
         ci::{build_dir::fixture::git, config::fixture},
         testing::workspace::root as workspace_root,
@@ -1005,8 +802,9 @@ label = "run"
 
     /// A failed lane's job uploads the driver log and the network logs its own
     /// run wrote, copied out before its build is released: the next job on
-    /// the same build writes elsewhere and cannot replace them, and a link
-    /// the wrapper's directory holds uploads nothing.
+    /// the same build writes elsewhere and cannot replace them, and a link or
+    /// a second name for another file the wrapper's directory holds uploads
+    /// nothing. The copy's name ends as its report does.
     #[cfg(unix)]
     #[test]
     fn a_failed_lane_hands_its_job_only_its_own_chromium_report() {
@@ -1022,8 +820,8 @@ label = "run"
         let (ctx_a, args_a) = chromium_lane(
             checkout_a.path(),
             &format!(
-                "echo driver A > {DRIVER_LOG}; echo net A > \"${CHROMIUM_NETLOG_ENV}/web_observer-a.jsonl\"; ln -s {} \"${CHROMIUM_NETLOG_ENV}/foreign.jsonl\"; exit 1",
-                stale.display()
+                "echo driver A > {DRIVER_LOG}; echo net A > \"${CHROMIUM_NETLOG_ENV}/web_observer-a.jsonl\"; ln -s {stale} \"${CHROMIUM_NETLOG_ENV}/foreign.jsonl\"; ln {stale} \"${CHROMIUM_NETLOG_ENV}/linked.jsonl\"; exit 1",
+                stale = stale.display()
             ),
         );
 
@@ -1041,6 +839,13 @@ label = "run"
         assert!(
             upload.starts_with(fs::canonicalize(runner_temp_a.path()).unwrap()),
             "the job owns its upload outside the builds: {}",
+            upload.display()
+        );
+        assert!(
+            upload
+                .to_str()
+                .is_some_and(|upload| upload.ends_with(".chromium")),
+            "{}",
             upload.display()
         );
         let slot = builds.join("trivial-0");
@@ -1124,47 +929,189 @@ label = "run"
         assert_eq!(fs::read_dir(runner_temp.path()).unwrap().count(), 0);
     }
 
-    /// A network log directory the run replaced with a link is not the one the
-    /// wrapper was given, so the report is not told.
+    /// Runs a Chromium report lane whose step runs `script` in a GitHub job
+    /// building in `checkout/builds` and keeping its storage at `github_env`
+    /// and `runner_temp`.
     #[cfg(unix)]
-    #[test]
-    fn a_chromium_report_whose_netlog_directory_was_replaced_is_not_announced() {
-        let temp = tempfile::tempdir().expect("create fixture workspace");
-        let builds = temp.path().join("builds");
-        let foreign = temp.path().join("foreign");
-        let ran = temp.path().join("ran");
-        fs::create_dir(&foreign).expect("create a foreign NetLog directory");
-        fs::write(foreign.join("web_observer-a.jsonl"), "foreign\n")
-            .expect("write a foreign NetLog");
-        let runner_temp = tempfile::tempdir_in(temp.path()).expect("create the job's RUNNER_TEMP");
-        let github_env = temp.path().join("github-env");
-        fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
-        let (ctx, args) = chromium_lane(
-            temp.path(),
-            &format!(
-                "echo driver > {DRIVER_LOG}; rmdir \"${CHROMIUM_NETLOG_ENV}\"; ln -s {} \"${CHROMIUM_NETLOG_ENV}\"; touch {}; exit 1",
-                foreign.display(),
-                ran.display()
-            ),
-        );
-
+    fn run_github_job(
+        checkout: &Path,
+        script: &str,
+        github_env: &Path,
+        runner_temp: &Path,
+    ) -> Result<()> {
+        let builds = checkout.join("builds");
+        let (ctx, args) = chromium_lane(checkout, script);
         run_in(
             &args,
             &ctx,
             &environment(&github_job(
                 builds.to_str().expect("a UTF-8 build root"),
                 github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
-                runner_temp.path().to_str().expect("a UTF-8 RUNNER_TEMP"),
+                runner_temp.to_str().expect("a UTF-8 RUNNER_TEMP"),
             )),
+        )
+    }
+
+    /// A capture whose directories the run pointed elsewhere - its network
+    /// log directory replaced by a link or by another directory, or the whole
+    /// capture replaced by a link - is not the one the steps were given. The
+    /// report is not told, and what took its place is neither uploaded nor
+    /// removed.
+    #[cfg(unix)]
+    #[test]
+    fn a_chromium_report_whose_directories_were_replaced_is_neither_told_nor_removed() {
+        let netlog = format!("\"${CHROMIUM_NETLOG_ENV}\"");
+        for (replace, moved_in) in [
+            (format!("rm -rf {netlog}; ln -s FOREIGN {netlog}"), false),
+            (format!("rm -rf {netlog}; mv FOREIGN {netlog}"), true),
+            (
+                format!(
+                    "capture=$(dirname {netlog}); rm -rf \"$capture\"; ln -s FOREIGN_ROOT \"$capture\""
+                ),
+                false,
+            ),
+        ] {
+            let temp = tempfile::tempdir().expect("create fixture workspace");
+            let foreign_root = temp.path().join("foreign-root");
+            let foreign = foreign_root.join(CHROMIUM_NETLOG_DIR);
+            fs::create_dir_all(&foreign).expect("create a foreign network log directory");
+            fs::write(foreign_root.join(CHROMIUM_DRIVER_LOG), "foreign\n")
+                .expect("write a foreign driver log");
+            fs::write(foreign.join("web_observer-a.jsonl"), "foreign\n")
+                .expect("write a foreign network log");
+            let ran = temp.path().join("ran");
+            let runner_temp =
+                tempfile::tempdir_in(temp.path()).expect("create the job's RUNNER_TEMP");
+            let github_env = temp.path().join("github-env");
+            fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
+            let replace = replace
+                .replace("FOREIGN_ROOT", &foreign_root.display().to_string())
+                .replace("FOREIGN", &foreign.display().to_string());
+
+            run_github_job(
+                temp.path(),
+                &format!(
+                    "echo driver > {DRIVER_LOG}; echo own > \"${CHROMIUM_NETLOG_ENV}/web_observer-a.jsonl\"; {replace}; touch {}; exit 1",
+                    ran.display()
+                ),
+                &github_env,
+                runner_temp.path(),
+            )
+            .expect_err("the lane fails");
+
+            assert!(ran.exists(), "the step ran past `{replace}`");
+            assert_eq!(fs::read_to_string(&github_env).unwrap(), "", "{replace}");
+            assert_eq!(
+                fs::read_dir(runner_temp.path()).unwrap().count(),
+                0,
+                "{replace}"
+            );
+            let left = if moved_in {
+                let captures = captures_in(&temp.path().join("builds/trivial-0"));
+                assert_eq!(captures.len(), 1, "{replace}: {captures:?}");
+                captures[0].join(CHROMIUM_NETLOG_DIR)
+            } else {
+                foreign.clone()
+            };
+            assert_eq!(
+                fs::read_to_string(left.join("web_observer-a.jsonl")).unwrap(),
+                "foreign\n",
+                "{replace}: what took the report's place stays"
+            );
+            assert_eq!(
+                fs::read_to_string(foreign_root.join(CHROMIUM_DRIVER_LOG)).unwrap(),
+                "foreign\n",
+                "{replace}"
+            );
+        }
+    }
+
+    /// A copy that fails part way, here because its network log directory
+    /// cannot be made once the driver's log is copied, is not told and is
+    /// not kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_chromium_report_copied_only_in_part_is_neither_told_nor_kept() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let runner_temp = tempfile::tempdir_in(temp.path()).expect("create the job's RUNNER_TEMP");
+        let github_env = temp.path().join("github-env");
+        fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
+        let blocked = temp.path().join("blocked");
+
+        run_github_job(
+            temp.path(),
+            &format!(
+                "echo driver > {DRIVER_LOG}; for copy in {}/web-chromium-report-*; do touch \"$copy/{CHROMIUM_NETLOG_DIR}\" && touch {}; done; exit 1",
+                runner_temp.path().display(),
+                blocked.display()
+            ),
+            &github_env,
+            runner_temp.path(),
         )
         .expect_err("the lane fails");
 
-        assert!(
-            ran.exists(),
-            "the lane's step ran past replacing the directory"
-        );
+        assert!(blocked.exists(), "the step blocked the job's copy");
         assert_eq!(fs::read_to_string(&github_env).unwrap(), "");
         assert_eq!(fs::read_dir(runner_temp.path()).unwrap().count(), 0);
+    }
+
+    /// A job whose `GITHUB_ENV` cannot be written tells nothing and keeps no
+    /// copy, so its check fails instead of uploading something untold.
+    #[cfg(unix)]
+    #[test]
+    fn a_chromium_report_the_job_cannot_be_told_of_is_not_kept() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let runner_temp = tempfile::tempdir_in(temp.path()).expect("create the job's RUNNER_TEMP");
+        let github_env = temp.path().join("missing/github-env");
+
+        run_github_job(
+            temp.path(),
+            &format!("echo driver > {DRIVER_LOG}; exit 1"),
+            &github_env,
+            runner_temp.path(),
+        )
+        .expect_err("the lane fails");
+
+        assert!(!github_env.exists());
+        assert_eq!(fs::read_dir(runner_temp.path()).unwrap().count(), 0);
+    }
+
+    /// A GitHub job that names no build root holds no build, so it refuses a
+    /// report before the browser runs instead of capturing it in a target
+    /// another run may share.
+    #[cfg(unix)]
+    #[test]
+    fn a_github_job_holding_no_build_fails_before_the_browser_runs() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let checkout = tempfile::tempdir_in(temp.path()).expect("create the job's checkout");
+        let marker = temp.path().join("ran");
+        let runner_temp = tempfile::tempdir_in(temp.path()).expect("create the job's RUNNER_TEMP");
+        let github_env = temp.path().join("github-env");
+        fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
+        let (ctx, args) = chromium_lane(checkout.path(), &format!("touch {}", marker.display()));
+
+        let error = run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                ("CI", "true"),
+                ("GITHUB_ACTIONS", "true"),
+                (consts::JOB_ROOM_BYTES_ENV, "0"),
+                (consts::JOB_ROOM_WAIT_ENV, "0"),
+                (
+                    "GITHUB_ENV",
+                    github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
+                ),
+                (
+                    "RUNNER_TEMP",
+                    runner_temp.path().to_str().expect("a UTF-8 RUNNER_TEMP"),
+                ),
+            ]),
+        )
+        .expect_err("the job holds no build to capture a report in");
+
+        assert!(format!("{error:#}").contains("holds none"), "{error:#}");
+        assert!(!marker.exists(), "the lane's step did not run");
     }
 
     /// A GitHub job that does not name its own storage fails before the
