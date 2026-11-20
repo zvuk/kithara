@@ -29,16 +29,12 @@ pub(crate) fn diffuse_kernel<S: Simd>(
         d.mul_add_precise(gains, x).store_slice(output);
         d.sub(x).store_slice(input);
     }
-    let input = inputs.into_remainder();
-    if input.is_empty() {
-        return len;
-    }
-    let history = delayed.remainder();
-    let output = outputs.into_remainder();
-    for ((x, d), w) in input.iter_mut().zip(history).zip(output) {
-        *w = d.mul_add(gain, *x);
-        *x = *d - *x;
-    }
+    diffuse_scalar(
+        inputs.into_remainder(),
+        delayed.remainder(),
+        gain,
+        outputs.into_remainder(),
+    );
     len
 }
 
@@ -66,17 +62,16 @@ pub(crate) fn blend_kernel<S: Simd>(
         let b = f32x16::from_slice(simd, older);
         fractions.mul_add_precise(b.sub(a), a).store_slice(output);
     }
-    let output = outputs.into_remainder();
-    if output.is_empty() {
-        return len;
-    }
-    for ((a, b), output) in newer.remainder().iter().zip(older.remainder()).zip(output) {
-        *output = fraction.mul_add(b - a, *a);
-    }
+    blend_scalar(
+        newer.remainder(),
+        older.remainder(),
+        fraction,
+        outputs.into_remainder(),
+    );
     len
 }
 
-/// Scalar form of [`diffuse_kernel`]: `w = d·g + x`, `y = d - x`.
+/// Scalar form of [`diffuse_kernel`] and its tail: `w = d·g + x`, `y = d - x`.
 pub(crate) fn diffuse_scalar(
     samples: &mut [f32],
     history: &[f32],
@@ -91,7 +86,7 @@ pub(crate) fn diffuse_scalar(
     len
 }
 
-/// Scalar form of [`blend_kernel`]: `y = f·(o - n) + n`.
+/// Scalar form of [`blend_kernel`] and its tail: `y = f·(o - n) + n`.
 pub(crate) fn blend_scalar(
     newer: &[f32],
     older: &[f32],
