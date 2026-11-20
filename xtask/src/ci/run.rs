@@ -451,15 +451,14 @@ fn compiler_cache_note(stats: &str) -> (CompilerCache, String) {
 }
 
 pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
-    let lane_name = args.lane.clone();
-    verdict::clear(&ctx.root, &lane_name)?;
-    let outcome = execute(args, ctx);
-    // A lane that fell over before it reached its own work — no host profile,
-    // no room on the cache volume — is still a lane that failed, and the
-    // verdict has to hear about it. Collecting only after a dispatched lane
-    // let exactly that go unrecorded on the first live run.
-    if let Err(error) = verdict::gather(&ctx.root, &lane_name, outcome.is_err()) {
-        warn!(%error, lane = %lane_name, "could not collect this lane's test report");
+    if args.dry_run {
+        return execute(args, ctx);
+    }
+    let outcome = verdict::clear(&ctx.root, &args.lane).and_then(|()| execute(args, ctx));
+    if outcome.is_err()
+        && let Err(error) = verdict::mark_failed(&ctx.root, &args.lane)
+    {
+        warn!(%error, lane = %args.lane, "could not mark this lane's failure");
     }
     outcome
 }
@@ -516,36 +515,50 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             &ext.ci.lanes,
         );
     }
-    execute_lane(
-        &process,
-        &ctx.config.tools,
-        Some(environment.kache()),
-        &args.lane,
-        || match lane {
-            Lane::ReleaseXcframework => {
-                super::release::xcframework(&process, ctx, &ext, &temp, &args.package, args.kind)
-            }
-            Lane::ReleaseDocs => super::release::docs(&process, ctx, &ext),
-            Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
-            Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
-            Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, &args.channel),
-            Lane::Verdict => verdict::lane(
-                &ctx.root,
-                environment.shared_root(),
-                args.kind,
-                &ext.ci.verdict.id_aliases,
-            ),
-            ref lane => command_lane(
-                lane,
-                args.kind,
-                &process,
-                &ci_config,
-                &ctx.config,
-                &swiftpm_cache,
-                &ext.ci.lanes,
-            ),
-        },
-    )
+    let dispatch = || {
+        execute_lane(
+            &process,
+            &ctx.config.tools,
+            Some(environment.kache()),
+            &args.lane,
+            || match lane {
+                Lane::ReleaseXcframework => super::release::xcframework(
+                    &process,
+                    ctx,
+                    &ext,
+                    &temp,
+                    &args.package,
+                    args.kind,
+                ),
+                Lane::ReleaseDocs => super::release::docs(&process, ctx, &ext),
+                Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
+                Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
+                Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, &args.channel),
+                Lane::Verdict => verdict::lane(
+                    &ctx.root,
+                    environment.shared_root(),
+                    args.kind,
+                    &ext.ci,
+                    &ctx.config.test,
+                ),
+                ref lane => command_lane(
+                    lane,
+                    args.kind,
+                    &process,
+                    &ci_config,
+                    &ctx.config,
+                    &swiftpm_cache,
+                    &ext.ci.lanes,
+                ),
+            },
+        )
+    };
+    if let Some(report) = verdict::produced_report(&args.lane) {
+        let target = environment.report_target(&ctx.root)?;
+        verdict::with_report(&ctx.root, &args.lane, &target.join(report), dispatch)
+    } else {
+        dispatch()
+    }
 }
 
 /// What the lane would ask of the executor, without asking. Answers "what does
@@ -1432,6 +1445,7 @@ mod tests {
             reports,
             [
                 ".ci-artifacts/junit/apple-ios-test.xml",
+                ".ci-artifacts/junit/apple-net-units.xml",
                 ".ci-artifacts/junit/apple-swift-test.xml",
                 ".ci-artifacts/junit/apple-test-flash-off.xml",
                 ".ci-artifacts/junit/apple-test.xml",

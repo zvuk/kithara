@@ -18,7 +18,9 @@ mod tests;
 pub use census::CensusArgs;
 pub(crate) use census::run as census;
 pub(crate) use command::run;
-pub use command::{NextestAction, TestArgs, nextest_command_for_lane, selects_any_lane};
+pub use command::{
+    NextestAction, TestArgs, nextest_command_for_lane, selection_receipt, selects_any_lane,
+};
 pub use draft::{PR_TESTS_ENV, validate_pr_tests};
 #[cfg(test)]
 pub(crate) use inventory::validate_inventory_case_count;
