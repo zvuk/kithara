@@ -75,3 +75,32 @@ pub(crate) fn blend_kernel<S: Simd>(
     }
     len
 }
+
+/// Scalar form of [`diffuse_kernel`]: `w = d·g + x`, `y = d - x`.
+pub(crate) fn diffuse_scalar(
+    samples: &mut [f32],
+    history: &[f32],
+    gain: f32,
+    writes: &mut [f32],
+) -> usize {
+    let len = samples.len().min(history.len()).min(writes.len());
+    for ((x, d), w) in samples.iter_mut().zip(history).zip(writes) {
+        *w = d.mul_add(gain, *x);
+        *x = *d - *x;
+    }
+    len
+}
+
+/// Scalar form of [`blend_kernel`]: `y = f·(o - n) + n`.
+pub(crate) fn blend_scalar(
+    newer: &[f32],
+    older: &[f32],
+    fraction: f32,
+    output: &mut [f32],
+) -> usize {
+    let len = output.len().min(newer.len()).min(older.len());
+    for ((n, o), y) in newer.iter().zip(older).zip(output) {
+        *y = fraction.mul_add(o - n, *n);
+    }
+    len
+}

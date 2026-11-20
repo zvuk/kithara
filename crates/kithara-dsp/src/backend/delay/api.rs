@@ -1,6 +1,4 @@
-use fearless_simd::{Level, dispatch};
-
-use super::{blend_kernel, diffuse_kernel};
+use crate::backend::route::{route, table};
 
 pub(crate) fn diffuse(
     samples: &mut [f32],
@@ -8,11 +6,11 @@ pub(crate) fn diffuse(
     gain: f32,
     writes: &mut [f32],
 ) -> usize {
-    dispatch!(Level::new(), simd => diffuse_kernel(simd, samples, history, gain, writes))
+    route!(table::delay_diffuse => (samples, history, gain, writes))
 }
 
-fn blend(newer: &[f32], older: &[f32], fraction: f32, output: &mut [f32]) -> usize {
-    dispatch!(Level::new(), simd => blend_kernel(simd, newer, older, fraction, output))
+pub(crate) fn blend(newer: &[f32], older: &[f32], fraction: f32, output: &mut [f32]) -> usize {
+    route!(table::delay_blend => (newer, older, fraction, output))
 }
 
 /// Pairs contiguous spans on either side of the two read cursors' wraps.

@@ -1,8 +1,6 @@
 use std::{hint::black_box, num::NonZeroUsize};
 
-use criterion::{
-    BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput, measurement::WallTime,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
 use kithara_dsp::{
     delay::{DelayDiffuser, DelayLine},
     filter::OnePoleLowPass,
@@ -24,113 +22,58 @@ fn assert_bits(actual: &[f32], expected: &[f32]) {
     );
 }
 
-fn scalar_diffuse(samples: &mut [f32], history: &mut [f32], gain: f32) {
-    for (sample, delayed) in samples.iter_mut().zip(history) {
-        let d = *delayed;
-        *delayed = gain.mul_add(d, *sample);
-        *sample = d - *sample;
-    }
-}
-
-fn scalar_blend(newer: &[f32], older: &[f32], fraction: f32, output: &mut [f32]) {
-    for ((newer, older), output) in newer.iter().zip(older).zip(output) {
-        *output = fraction.mul_add(older - newer, *newer);
-    }
-}
-
-fn diffuse(group: &mut BenchmarkGroup<'_, WallTime>, frames: usize) {
-    let input = tone(frames);
-    let mut history = input.clone();
-    history.rotate_left(3);
-    let region = pools();
-    let mut line = DelayLine::new(
-        NonZeroUsize::MIN,
-        NonZeroUsize::new(frames).expect("block capacity"),
-        &region,
-    )
-    .expect("history");
-    line.write(&[history.as_slice()], 0..frames)
-        .expect("fill history");
-    let mut diffuser = DelayDiffuser::<1>::new(line, 0.5).expect("diffuser");
-    let mut actual = input.clone();
-    let mut expected = input.clone();
-    diffuser
-        .process(&mut [actual.as_mut_slice()], 0..frames)
-        .expect("shape");
-    scalar_diffuse(&mut expected, &mut history, 0.5);
-    assert_bits(&actual, &expected);
-    group.bench_function(BenchmarkId::new("diffuse/native", frames), |b| {
-        b.iter_batched_ref(
-            || input.clone(),
-            |samples| {
-                diffuser
-                    .process(&mut [black_box(samples.as_mut_slice())], 0..frames)
-                    .expect("shape");
-                black_box(samples);
-            },
-            BatchSize::NumIterations(64),
-        );
-    });
-    group.bench_function(BenchmarkId::new("diffuse/scalar", frames), |b| {
-        b.iter_batched_ref(
-            || input.clone(),
-            |samples| {
-                scalar_diffuse(black_box(samples.as_mut_slice()), &mut history, 0.5);
-                black_box(samples);
-            },
-            BatchSize::NumIterations(64),
-        );
-    });
-}
-
-fn blend(group: &mut BenchmarkGroup<'_, WallTime>, frames: usize) {
-    let history = tone(2048);
-    let region = pools();
-    let mut line = DelayLine::new(
-        NonZeroUsize::MIN,
-        NonZeroUsize::new(history.len()).expect("capacity"),
-        &region,
-    )
-    .expect("line");
-    line.write(&[history.as_slice()], 0..history.len())
-        .expect("fill history");
-    let fraction = 0.37;
-    let tap = line.tap(1024.0 + f64::from(fraction)).expect("tap");
-    let newer = history.get(1024..1024 + frames).expect("newer span");
-    let older = history.get(1023..1023 + frames).expect("older span");
-    let mut output = vec![0.0; frames];
-    let mut expected = output.clone();
-    line.read(0, tap, &mut output).expect("read span");
-    scalar_blend(newer, older, fraction, &mut expected);
-    assert_bits(&output, &expected);
-    group.bench_function(BenchmarkId::new("delay_blend/native", frames), |b| {
-        b.iter(|| {
-            line.read(0, tap, black_box(&mut output))
-                .expect("read span");
-            black_box(&output);
-        });
-    });
-    group.bench_function(BenchmarkId::new("delay_blend/scalar", frames), |b| {
-        b.iter(|| {
-            scalar_blend(
-                black_box(newer),
-                black_box(older),
-                fraction,
-                black_box(&mut output),
-            );
-            black_box(&output);
-        });
-    });
-}
-
-fn kernels(c: &mut Criterion) {
-    let mut group = c.benchmark_group("reverb_kernels");
+fn routed_diffuse(c: &mut Criterion) {
+    let mut group = c.benchmark_group("routes/delay_diffuse");
     for frames in [128, 512] {
         group.throughput(Throughput::Elements(
             u64::try_from(frames).expect("bench frames"),
         ));
-        diffuse(&mut group, frames);
-        blend(&mut group, frames);
+        let input = tone(frames);
+        let mut history = input.clone();
+        history.rotate_left(3);
+        let mut writes = vec![0.0; frames];
+        for (name, kernel) in kithara_dsp::routes::delay_diffuse::routes() {
+            group.bench_function(BenchmarkId::new(name, frames), |b| {
+                b.iter_batched_ref(
+                    || input.clone(),
+                    |samples| {
+                        kernel(
+                            black_box(samples),
+                            black_box(&history),
+                            black_box(0.5),
+                            black_box(&mut writes),
+                        )
+                    },
+                    BatchSize::NumIterations(64),
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
+fn routed_blend(c: &mut Criterion) {
+    let mut group = c.benchmark_group("routes/delay_blend");
+    for frames in [128, 512] {
+        group.throughput(Throughput::Elements(
+            u64::try_from(frames).expect("bench frames"),
+        ));
+        let newer = tone(frames);
+        let mut older = newer.clone();
+        older.rotate_left(1);
+        let mut output = vec![0.0; frames];
+        for (name, kernel) in kithara_dsp::routes::delay_blend::routes() {
+            group.bench_function(BenchmarkId::new(name, frames), |b| {
+                b.iter(|| {
+                    kernel(
+                        black_box(&newer),
+                        black_box(&older),
+                        black_box(0.37),
+                        black_box(&mut output),
+                    )
+                });
+            });
+        }
     }
     group.finish();
 }
@@ -256,7 +199,8 @@ fn blocks(c: &mut Criterion) {
 }
 
 pub(crate) fn benchmarks(c: &mut Criterion) {
-    kernels(c);
+    routed_diffuse(c);
+    routed_blend(c);
     blocks(c);
     one_pole::<2>(c);
     one_pole::<8>(c);
