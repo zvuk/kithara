@@ -195,21 +195,22 @@ allowed_files = [
 # Parameter smoothing has one primitive (firewheel `SmoothedParam`, composed
 # as `MixDSP` for A-to-B transitions). A hand-rolled one-pole or a direct
 # `SmoothingFilter` is sanctioned only in the biquad gain bank; the
-# `kithara_dsp::param` facade re-exports the primitive. The one-pole patterns
-# match definitions, so the audio-rate one-pole low-pass that kithara-dsp owns
-# stays usable from effects while a hand-rolled one-pole elsewhere is denied.
-patterns = [
-  "SmoothingFilter",
-  "fn one_pole",
-  "struct OnePole",
-  "smoothing_coeff",
-]
+# `kithara_dsp::param` facade re-exports the primitive. `patterns` names the
+# primitive and its coefficient helper; a hand-rolled one-pole is found by its
+# shape (a state stepping toward a scalar target), not by its name.
+patterns = ["SmoothingFilter", "smoothing_coeff"]
 allowed_files = [
   "crates/kithara-effects/src/dsp/gain.rs",
-  "crates/kithara-dsp/src/filter/one_pole.rs",
   "crates/kithara-dsp/src/param.rs",
 ]
-exempt_crates = ["kithara-test-utils", "kithara-test-macros", "xtask"]
+exempt_crates = [
+  "kithara-test-utils",
+  "kithara-test-macros",
+  "xtask",
+  # kithara-abr: network bandwidth statistics (weighted EWMA with bias
+  # correction), no audio parameters.
+  "kithara-abr",
+]
 
 [firewheel_dsp_facade]
 modules = [

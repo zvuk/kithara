@@ -53,11 +53,24 @@ fn kithara_ownership_policy_keeps_its_declared_subjects() {
         (
             "smoothing_primitive_sites",
             "patterns",
+            vec!["SmoothingFilter", "smoothing_coeff"],
+        ),
+        (
+            "smoothing_primitive_sites",
+            "allowed_files",
             vec![
-                "SmoothingFilter",
-                "fn one_pole",
-                "struct OnePole",
-                "smoothing_coeff",
+                "crates/kithara-effects/src/dsp/gain.rs",
+                "crates/kithara-dsp/src/param.rs",
+            ],
+        ),
+        (
+            "smoothing_primitive_sites",
+            "exempt_crates",
+            vec![
+                "kithara-test-utils",
+                "kithara-test-macros",
+                "xtask",
+                "kithara-abr",
             ],
         ),
         (
