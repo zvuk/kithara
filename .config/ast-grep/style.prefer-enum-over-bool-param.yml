@@ -1,0 +1,27 @@
+id: style.prefer-enum-over-bool-param
+message: |
+  A `bool` parameter on a public function. At the call site `open(path, true)`
+  does not say what `true` means. Take a two-variant enum instead
+  (`open(path, Create::IfMissing)`). A `set_*` setter whose bool is the
+  property itself is not reported.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  all:
+    - kind: function_item
+    - has:
+        kind: visibility_modifier
+        regex: '^pub$'
+    - not:
+        has:
+          field: name
+          regex: '^set_'
+    - has:
+        field: parameters
+        has:
+          kind: parameter
+          has:
+            field: type
+            regex: '^bool$'

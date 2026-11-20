@@ -42,7 +42,7 @@ macro_rules! define_skin {
         #[non_exhaustive]
         #[fieldwork(opt_in, get)]
         pub struct Skin {
-            pub palette: RenderPalette,
+            pub palette: Arc<RenderPalette>,
             pub crossfader_labels: CrossfaderLabels,
             pub table_footer_rows: String,
             pub tree_search_placeholder: String,
@@ -90,7 +90,7 @@ macro_rules! define_skin {
                 let base = Self {
                     custom: Arc::new(CustomSkins::resolve(&document.custom, &palette, origin)?),
                     pictures: Arc::new(Pictures::load(&document.pictures, &document.artworks, origin, resolver)?),
-                    palette,
+                    palette: Arc::new(palette),
                     crossfader_labels: CrossfaderLabels {
                         left: text_field(catalog, "crossfader.left_label", origin)?,
                         center: text_field(catalog, "crossfader.center_label", origin)?,

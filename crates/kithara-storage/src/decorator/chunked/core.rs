@@ -252,6 +252,35 @@ impl<D: DriverIo> AtomicChunked<D> {
         }
     }
 
+    /// Reactivate the inner, reclaiming a failed atomic write's temporary file.
+    ///
+    /// # Errors
+    /// Returns the claim, factory, cancellation, or backend reactivation error.
+    pub fn reactivate(&self) -> StorageResult<()> {
+        let mut claim = self.claim.lock();
+        let inner = self.inner.load();
+        if claim.is_none()
+            && matches!(inner.status(), ResourceStatus::Failed(_))
+            && let Some(factory) = &self.factory
+        {
+            let tmp = make_tmp_path(&self.canonical_path).ok_or_else(|| {
+                StorageError::Failed(format!(
+                    "AtomicChunked: cannot derive tmp path from {:?}",
+                    self.canonical_path
+                ))
+            })?;
+            let next_claim = TmpClaim::take(tmp)?;
+            let next = factory(&next_claim.path, OpenIntent::Fresh)?;
+            next.reactivate_in_place()?;
+            let _handover = self.handover.write();
+            self.inner.store(Arc::new(next));
+            *claim = Some(next_claim);
+            return Ok(());
+        }
+        drop(claim);
+        inner.reactivate_in_place()
+    }
+
     /// Committed length, if known.
     #[must_use]
     pub fn len(&self) -> Option<u64> {
@@ -408,12 +437,6 @@ impl<D: DriverIo> AtomicChunked<D> {
             pub fn is_empty(&self) -> bool;
         }
         to self.inner.load() {
-            /// Reactivate the inner for continued writing.
-            ///
-            /// # Errors
-            /// Returns error if the resource is cancelled or the backend cannot reopen.
-            #[call(reactivate_in_place)]
-            pub fn reactivate(&self) -> StorageResult<()>;
             /// Mint a cheap read-only view without holding the inner lock during
             /// subsequent (possibly blocking) reads.
             #[call(reader)]

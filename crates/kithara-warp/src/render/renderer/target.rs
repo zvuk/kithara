@@ -10,6 +10,7 @@ use num_traits::ToPrimitive;
 use tracing::warn;
 
 use super::{core::WarpRenderer, residency::SourceResidency};
+use crate::WarpControls;
 
 #[derive(Default)]
 pub(in crate::render) struct PreparedTarget {
@@ -68,13 +69,8 @@ where
         reusable: PreparedTarget,
         measure_capabilities: bool,
     ) -> Result<PreparedTarget, ElasticError> {
-        let (kind, keylock) = Self::stretch_for(config.backend(), config.keylock());
+        let (kind, pitch_engine) = Self::stretch_for(config.backend(), config.controls().pitch());
         let source_block_frames = config.source_block_frames();
-        if keylock && !kind.capabilities().contains(BackendCapabilities::KEYLOCK) {
-            return Err(ElasticError::EnginePreparation(
-                "selected backend does not support keylock",
-            ));
-        }
         let PreparedTarget {
             projection: reusable_projection,
             residency: reusable_residency,
@@ -134,7 +130,7 @@ where
         measured
             .and_then(|()| Self::config_for(kind, config, spec, pools))
             .and_then(|config| {
-                if keylock || !kind.capabilities().contains(BackendCapabilities::RATE) {
+                if pitch_engine || !kind.capabilities().contains(BackendCapabilities::RATE) {
                     build_engine(config)
                 } else {
                     build_varispeed_engine(config)
@@ -188,7 +184,7 @@ where
                     replacement_frames,
                     channels,
                 )?;
-                let projection = keylock
+                let projection = pitch_engine
                     .then(|| Self::prepare_projection(kind, config, spec, pools, projection_frames))
                     .transpose()?;
                 Ok(PreparedTarget {
@@ -315,21 +311,22 @@ where
             self.service_scratch();
             return;
         }
-        let (kind, keylock) = self.stretch_target();
+        let (kind, pitch_engine) = self.stretch_target();
         let entering_unity =
             self.holds_stream_at(spec) && self.unity_passthrough(self.rate.speed());
         if entering_unity {
             self.service_scratch();
             return;
         }
-        let backend_changed = kind != self.current_kind || keylock != self.current_keylock;
+        let backend_changed =
+            kind != self.current_kind || pitch_engine != self.current_pitch_engine;
         if backend_changed && self.holds_stream_at(spec) {
             self.backend_transition_pending = true;
             self.service_scratch();
             return;
         }
         if backend_changed || spec != self.spec || self.rebuild_pending {
-            self.rebuild_target(spec, kind, keylock);
+            self.rebuild_target(spec, kind, pitch_engine);
             return;
         }
 
@@ -360,7 +357,7 @@ where
         spec == self.spec && self.active
     }
 
-    fn rebuild_target(&mut self, spec: AudioSpec, kind: StretchKind, keylock: bool) {
+    fn rebuild_target(&mut self, spec: AudioSpec, kind: StretchKind, pitch_engine: bool) {
         #[cfg(not(target_arch = "wasm32"))]
         let started = {
             let started = tracing::enabled!(target: "warp_target_cost", tracing::Level::DEBUG)
@@ -370,7 +367,7 @@ where
                 phase = "begin",
                 rate = spec.sample_rate.get(),
                 backend = %kind,
-                keylock,
+                pitch_engine,
             );
             started
         };
@@ -392,7 +389,7 @@ where
         }
         let config = crate::WarpConfig::builder()
             .backend(kind)
-            .keylock(keylock)
+            .controls(WarpControls::builder().pitch(self.requested_pitch).build())
             .backends(self.backends)
             .source_block_frames(self.source_block_frames)
             .maybe_render_quantum_frames(self.render_quantum_frames)
@@ -409,7 +406,7 @@ where
         self.pending_source = target.pending_source;
         self.scratch = target.scratch;
         self.current_kind = kind;
-        self.current_keylock = keylock;
+        self.current_pitch_engine = pitch_engine;
         self.applied_pitch = f64::NAN;
         self.spec = spec;
         self.reset_pending = false;
@@ -421,7 +418,7 @@ where
                 phase = "end",
                 rate = spec.sample_rate.get(),
                 backend = %kind,
-                keylock,
+                pitch_engine,
                 wall_us = wall.elapsed().as_micros(),
                 cpu_us = cpu.as_ref().ok().map(Duration::as_micros),
                 cpu_error = ?cpu.err(),

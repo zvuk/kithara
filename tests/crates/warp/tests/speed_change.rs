@@ -9,9 +9,9 @@ use kithara::{
         HostConfig, HostSettings, HostSettingsControl, MetronomeConfig, MetronomeConfigControl, Tap,
     },
     platform::time::{self, Duration, Instant},
-    play::{ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc, TrackSettingsChange, WarpControls},
     queue::Transition,
-    warp::{StretchKind, WarpConfig},
+    warp::{Pitch, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     audio_artifact::{AudioArtifactTap, artifact_label},
@@ -107,7 +107,10 @@ async fn playing_deck(
                 WarpConfig::builder()
                     .speed(START_SPEED)
                     .backend(backend)
-                    .keylock(keylock)
+                    .maybe_controls(
+                        (keylock.then_some(Pitch::HELD))
+                            .map(|pitch| WarpControls::builder().pitch(pitch).build()),
+                    )
                     .build(),
             )
             .build(),
@@ -116,7 +119,9 @@ async fn playing_deck(
     .await;
     let queue = harness.player();
     harness
-        .run(queue, |q| q.set_default_rate(START_SPEED))
+        .run(queue, |q| {
+            q.configure_track(TrackSettingsChange::Speed(START_SPEED))
+        })
         .await
         .expect("a finite rate is accepted");
     let path = rhythm_wav_deck_b_120bpm_48k()
@@ -181,7 +186,9 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
         if let Some((_, speed)) = CHANGES.iter().find(|(at, _)| *at == block) {
             let speed = *speed;
             harness
-                .run(queue, move |q| q.set_rate(speed))
+                .run(queue, move |q| {
+                    q.configure_track(TrackSettingsChange::Speed(speed))
+                })
                 .await
                 .expect("a finite rate is accepted");
             if let Some(recording) = recording.as_mut() {

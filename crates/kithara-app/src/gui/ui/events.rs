@@ -1,6 +1,7 @@
 use kithara::{
     effects::GainDb,
     host::api::Tempo,
+    play::PitchStep,
     ui::render::{
         DEFAULT_ZOOM, Scope, UiEvent, WindowCommand, WriteValue, Zoom, zoom_in, zoom_out,
     },
@@ -66,7 +67,10 @@ fn deck_write(
         }
         ("deck.transport.toggle_play", WriteValue::Trigger) => DeckMsg::TogglePlayPause,
         ("deck.transport.toggle_sync", WriteValue::Trigger) => DeckMsg::ToggleSync,
-        ("deck.key.toggle_lock", WriteValue::Trigger) => DeckMsg::ToggleKeylock,
+        ("deck.key.toggle_lock", WriteValue::Trigger) => DeckMsg::Pitch(PitchStep::ToggleKeylock),
+        ("deck.key.transpose_up", WriteValue::Trigger) => DeckMsg::Pitch(PitchStep::Up),
+        ("deck.key.transpose_down", WriteValue::Trigger) => DeckMsg::Pitch(PitchStep::Down),
+        ("deck.key.transpose_reset", WriteValue::Trigger) => DeckMsg::Pitch(PitchStep::Reset),
         ("deck.transport.prev", WriteValue::Trigger) => DeckMsg::Prev,
         ("deck.transport.next", WriteValue::Trigger) => DeckMsg::Next,
         ("deck.transport.seek_normalized", WriteValue::Scalar(position)) => {
@@ -109,7 +113,10 @@ fn deck_view_write(
             let track = Playable::try_from(record).ok()?;
             let deck = state.snapshot.lettered(letter)?.id;
             state.ui.cache.focus(letter);
-            state.send(Command::LoadOntoDeck { deck, track });
+            state.send(Command::LoadOntoDeck {
+                deck,
+                track: Box::new(track),
+            });
             None
         }
         ("deck.eq.mode", WriteValue::Trigger) => {
@@ -130,18 +137,16 @@ fn eq_band(state: &Kithara, name: &str, knob: f64) -> Option<DeckMsg> {
 }
 
 fn quality_msg(state: &Kithara, letter: &str, variant: &str) -> Option<DeckMsg> {
+    let stream = &state.snapshot.lettered(letter)?.stream;
+    if stream.busy {
+        return None;
+    }
     if variant == "auto" {
-        return Some(DeckMsg::SetQuality(None));
+        return stream.auto_available.then_some(DeckMsg::SetQuality(None));
     }
 
     let slot: usize = variant.parse().ok()?;
-    let rung = state
-        .snapshot
-        .lettered(letter)?
-        .stream
-        .variants
-        .get(slot)?
-        .index;
+    let rung = stream.variants.get(slot)?.index;
 
     Some(DeckMsg::SetQuality(Some(rung)))
 }
@@ -523,6 +528,22 @@ mod tests {
                 press(state, "deck.stream.select_variant@deck=a,variant=auto"),
                 Some(Message::Deck(id, DeckMsg::SetQuality(None))) if id == a
             ));
+            ::kithara::platform::sync::Arc::make_mut(&mut state.snapshot)
+                .decks
+                .iter_mut()
+                .find(|deck| deck.id == a)
+                .unwrap()
+                .stream
+                .auto_available = false;
+            assert!(press(state, "deck.stream.select_variant@deck=a,variant=auto").is_none());
+            ::kithara::platform::sync::Arc::make_mut(&mut state.snapshot)
+                .decks
+                .iter_mut()
+                .find(|deck| deck.id == a)
+                .unwrap()
+                .stream
+                .busy = true;
+            assert!(press(state, "deck.stream.select_variant@deck=a,variant=0").is_none());
         }
 
         #[kithara::test(native, flash(false))]

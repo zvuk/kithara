@@ -97,6 +97,7 @@ kithara-effects = { workspace = true }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
+kithara-key = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-render = { workspace = true }
@@ -146,12 +147,12 @@ kithara-bufpool = { workspace = true }
 kithara-dsp = { workspace = true }
 kithara-play = { path = ".", default-features = false, features = ["mock", "usdt"] }
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang"] }
 kithara-worker = { workspace = true, features = ["mock"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["http-server", "temp-dir"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "http-server", "temp-dir"] }
 
 assert_no_alloc = { workspace = true }
 axum = { workspace = true }

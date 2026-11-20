@@ -1,6 +1,7 @@
 use kithara::{
     play::{
-        CrossfadeSettings, DeckMixSettings, DeckMixerConfig, TrackSettings, TrackSettingsChange,
+        CrossfadeSettings, DeckMixSettings, DeckMixSettingsChange, DeckMixerConfig, TrackSettings,
+        TrackSettingsChange,
     },
     queue::{ActionAtItemEnd, PlaybackOrder, QueueCommand, QueueSettingsChange, RepeatMode},
 };
@@ -44,7 +45,10 @@ impl WasmInner {
     }
 
     pub(crate) fn set_muted(&self, muted: bool) -> Result<(), FfiError> {
-        self.submit(QueueCommand::SetMuted(muted))
+        self.submit(QueueCommand::Mix(
+            DeckMixSettingsChange::Muted(muted),
+            When::Next,
+        ))
     }
 
     pub(crate) fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
@@ -71,7 +75,10 @@ impl WasmInner {
     }
 
     pub(crate) fn set_volume(&self, volume: f32) -> Result<(), FfiError> {
-        self.submit(QueueCommand::SetVolume(volume))
+        self.submit(QueueCommand::Mix(
+            DeckMixSettingsChange::Volume(volume.into()),
+            When::Next,
+        ))
     }
 
     pub(crate) fn action_at_item_end(&self) -> FfiActionAtItemEnd {
@@ -113,7 +120,9 @@ impl WasmInner {
     }
 
     pub(crate) fn is_muted(&self) -> bool {
-        self.bridge.queue().is_some_and(FfiQueueControl::is_muted)
+        self.bridge
+            .queue()
+            .is_some_and(|queue| queue.mix_settings().muted())
     }
 
     pub(crate) fn playback_order(&self) -> FfiPlaybackOrder {
@@ -140,7 +149,7 @@ impl WasmInner {
     pub(crate) fn volume(&self) -> f32 {
         self.bridge.queue().map_or_else(
             || f32::from(DeckMixSettings::default().volume()),
-            FfiQueueControl::volume,
+            |queue| f32::from(queue.mix_settings().volume()),
         )
     }
 }

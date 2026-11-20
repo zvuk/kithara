@@ -117,7 +117,7 @@ async fn seek_beyond_head_total_within_actual_total(
         let n = stream.read(&mut buf).unwrap();
         assert!(n > 0, "Should read data after seek to {}", seek_target);
 
-        assert_eq!(&buf[..n], &vec![0xFF; n][..], "Expected padding bytes");
+        assert_eq!(&buf[..n], &vec![0xff; n][..], "Expected padding bytes");
     })
     .await
     .unwrap();

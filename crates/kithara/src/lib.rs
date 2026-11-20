@@ -183,8 +183,10 @@ pub mod storage {
 }
 
 pub use kithara_test_macros::{
-    allow_block, fixture, mock, no_block, rtsan_forbid_blocking, test, test_utils_flash as flash,
+    allow_block, mock, no_block, rtsan_forbid_blocking, test_utils_flash as flash,
 };
+#[cfg(feature = "test")]
+pub use kithara_test_macros::{fixture, test};
 #[cfg(feature = "warp")]
 pub use kithara_warp::StretchKind;
 
@@ -198,59 +200,6 @@ pub mod mock {
     pub use kithara_play::mock::*;
     #[cfg(feature = "stream")]
     pub use kithara_stream::mock::*;
-    #[cfg(feature = "beat")]
-    pub use {
-        kithara_beat::{BeatGridModel, BeatGridState},
-        kithara_sync::Meter,
-    };
-}
-
-/// Prelude — flat imports for common types.
-pub mod prelude {
-    #[cfg(feature = "abr")]
-    pub use kithara_abr::AbrMode;
-    #[cfg(feature = "analysis")]
-    pub use kithara_analysis::{
-        AnalysisDemand, AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, TrackAnalysis,
-    };
-    #[cfg(feature = "assets")]
-    pub use kithara_assets::{AssetStore, StorageBackend};
-    #[cfg(feature = "audio")]
-    pub use kithara_audio::{
-        Audio, AudioConfig, AudioControl, AudioEvent, AudioRead, AudioReader, AudioSession,
-        ResamplerQuality,
-    };
-    #[cfg(feature = "decode")]
-    pub use kithara_decode::{DecodeError, DecodeResult, DecoderTrackInfo, TrackMetadata};
-    #[cfg(feature = "download")]
-    pub use kithara_download::{Downloader, DownloaderConfig};
-    #[cfg(feature = "events")]
-    pub use kithara_events::{BusScope, Event, EventBus, EventReceiver};
-    #[cfg(feature = "file")]
-    pub use kithara_file::{File, FileConfig, FileEvent, FileReaderEvent};
-    #[cfg(feature = "hls")]
-    pub use kithara_hls::{Hls, HlsConfig, HlsEvent};
-    #[cfg(feature = "host")]
-    pub use kithara_host::{Host, HostConfig, TransportEvent};
-    #[cfg(feature = "play")]
-    pub use kithara_play::{
-        ArtifactSource, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend,
-        PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc, ServiceClass, SourceType,
-    };
-    #[cfg(feature = "queue")]
-    pub use kithara_queue::{Queue, QueueConfig, QueueEvent, TrackEntry, TrackSource};
-    #[cfg(feature = "signal")]
-    pub use kithara_signal::{AudioChunkInfo, AudioSpec};
-    #[cfg(feature = "storage")]
-    pub use kithara_storage::{OpenMode, StorageError, StorageResource};
-    #[cfg(feature = "stream")]
-    pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};
-    #[cfg(feature = "stretch")]
-    pub use kithara_stretch::{ElasticConfig, ElasticEngine, StretchKind as StretchEngineKind};
-    #[cfg(feature = "warp")]
-    pub use kithara_warp::StretchKind;
-    #[cfg(feature = "waveform")]
-    pub use kithara_waveform::{Bucket, Waveform};
     #[cfg(feature = "beat")]
     pub use {
         kithara_beat::{BeatGridModel, BeatGridState},

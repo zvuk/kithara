@@ -2,8 +2,8 @@ use kithara_stream::id3v2_tag_len;
 
 pub(super) mod consts {
     pub(super) const MPEG_HEADER_LEN: usize = 4;
-    pub(super) const SYNC_MASK: u32 = 0xFFE0_0000;
-    pub(super) const SYNC_VALUE: u32 = 0xFFE0_0000;
+    pub(super) const SYNC_MASK: u32 = 0xffe0_0000;
+    pub(super) const SYNC_VALUE: u32 = 0xffe0_0000;
     pub(in crate::gapless) const LAME_TRIM_SPAN: usize = MPEG_HEADER_LEN + 32 + 120 + 24;
 }
 
@@ -28,7 +28,7 @@ pub(crate) fn read_lame_trim(data: &[u8]) -> Option<LameTrim> {
     }
     let trim_word = u32::from_be_bytes([0, lame[21], lame[22], lame[23]]);
     let enc_delay = trim_word >> 12;
-    let enc_padding = trim_word & 0xFFF;
+    let enc_padding = trim_word & 0xfff;
     Some(LameTrim {
         enc_delay,
         enc_padding,
@@ -151,22 +151,22 @@ mod tests {
 
     fn build_mpeg1_stereo_xing(enc_delay: u32, enc_padding: u32) -> Vec<u8> {
         let mut buf = vec![0u8; 384];
-        buf[0] = 0xFF;
-        buf[1] = 0xFB;
+        buf[0] = 0xff;
+        buf[1] = 0xfb;
         buf[2] = 0x90;
         buf[3] = 0x00;
         let tag_off = 36;
         buf[tag_off..tag_off + 4].copy_from_slice(b"Xing");
-        buf[tag_off + 4..tag_off + 8].copy_from_slice(&0x0000_000Fu32.to_be_bytes());
+        buf[tag_off + 4..tag_off + 8].copy_from_slice(&0x0000_000fu32.to_be_bytes());
         buf[tag_off + 8..tag_off + 12].copy_from_slice(&100u32.to_be_bytes());
         buf[tag_off + 12..tag_off + 16].copy_from_slice(&38400u32.to_be_bytes());
         buf[tag_off + 116..tag_off + 120].copy_from_slice(&0u32.to_be_bytes());
         let lame_off = tag_off + 120;
         buf[lame_off..lame_off + 4].copy_from_slice(b"LAME");
-        let trim = (enc_delay << 12) | (enc_padding & 0xFFF);
-        buf[lame_off + 21] = ((trim >> 16) & 0xFF) as u8;
-        buf[lame_off + 22] = ((trim >> 8) & 0xFF) as u8;
-        buf[lame_off + 23] = (trim & 0xFF) as u8;
+        let trim = (enc_delay << 12) | (enc_padding & 0xfff);
+        buf[lame_off + 21] = ((trim >> 16) & 0xff) as u8;
+        buf[lame_off + 22] = ((trim >> 8) & 0xff) as u8;
+        buf[lame_off + 23] = (trim & 0xff) as u8;
         buf
     }
 
@@ -180,7 +180,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn returns_none_when_tag_missing() {
-        let buf = vec![0xFF, 0xFB, 0x90, 0x00, 0, 0, 0, 0];
+        let buf = vec![0xff, 0xfb, 0x90, 0x00, 0, 0, 0, 0];
         assert!(read_lame_trim(&buf).is_none());
     }
 }

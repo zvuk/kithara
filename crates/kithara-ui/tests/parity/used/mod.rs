@@ -12,6 +12,7 @@ mod blocks;
 mod extension;
 mod fill;
 mod hand;
+mod key_lock;
 mod modal;
 mod press;
 mod run;

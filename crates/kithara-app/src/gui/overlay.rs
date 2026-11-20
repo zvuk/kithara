@@ -30,8 +30,7 @@ impl Overlay {
             Command::Mix(cmd) => Edit::Mix(*cmd),
             Command::Deck {
                 deck,
-                cmd:
-                    cmd @ (DeckCmd::SetEqGain { .. } | DeckCmd::SetQuality(_) | DeckCmd::SetTempo(_)),
+                cmd: cmd @ (DeckCmd::SetEqGain { .. } | DeckCmd::SetTempo(_)),
             } => Edit::Deck(*deck, *cmd),
             Command::Deck { .. } | Command::LoadOntoDeck { .. } | Command::App(_) => return,
         };
@@ -62,10 +61,6 @@ fn lay_deck(id: DeckId, cmd: DeckCmd, drawn: &mut EngineSnapshot) {
             if let Some(slot) = deck.eq_bands.get_mut(band) {
                 *slot = gain;
             }
-        }
-        DeckCmd::SetQuality(variant) => {
-            deck.stream.selected = variant;
-            deck.stream.is_auto = variant.is_none();
         }
         DeckCmd::SetTempo(tempo) => deck.tempo = tempo,
         _ => {}

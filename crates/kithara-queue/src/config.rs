@@ -9,7 +9,7 @@ use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle as Ru
 use kithara_play::{
     CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError, DeckMixerConfig,
     DeckMixerConfigPatch, DeckMixerConfigPatchError, PlayerFactory, ResourcePrep, TrackFactory,
-    TrackSettings, TrackSettingsPatch, TrackSettingsPatchError,
+    TrackSettings, TrackSettingsPatch, TrackSettingsPatchError, WarpControls,
 };
 
 use crate::{ActionAtItemEnd, PlaybackOrder, consts};
@@ -41,7 +41,7 @@ pub struct QueueSettings {
 pub struct QueueConfig<S, F = PlayerFactory>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     /// Builds every track this queue plays.
     #[config(
@@ -67,7 +67,7 @@ where
     pub(crate) preload_lead: Duration,
 
     /// The settings a new track starts with; a track change moves them.
-    #[config(builder(default), patch(nested, fallible), debug(skip))]
+    #[config(builder(default), patch(nested, fallible), debug(skip), get(copy))]
     pub(crate) track: TrackSettings,
 
     /// What every track the queue loads opens with: the worker and playback policy.
@@ -125,6 +125,18 @@ where
     /// to the queue.
     #[config(sdk, builder(default))]
     pub(crate) action_at_item_end: ActionAtItemEnd,
+}
+
+impl<S, F> QueueConfig<S, F>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+    F: TrackFactory,
+{
+    /// The deck's renderer controls, absent on a backend without keylock.
+    pub(crate) fn warp_controls(&self) -> Option<WarpControls> {
+        let prep = self.prep.as_ref()?;
+        prep.warp.available_controls(self.track.controls())
+    }
 }
 
 impl<S> QueueConfig<S, PlayerFactory>

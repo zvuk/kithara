@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     binding::BindingRef,
+    color::ColorSource,
     measure::{Measure, MeasureAxis},
     motion::{Motion, Pose},
     style::{
@@ -68,7 +69,7 @@ pub enum ControlNode {
         #[serde(default)]
         active: Option<BindingRef>,
         #[serde(default)]
-        active_background: Option<ColorRole>,
+        active_background: Option<ColorSource>,
         #[serde(default)]
         frame_color: Option<ColorRole>,
         #[serde(default)]
@@ -196,6 +197,9 @@ pub enum ControlNode {
         /// Written by a secondary press.
         #[serde(default)]
         secondary: Option<BindingRef>,
+        /// Written by a double click, after the two presses it is made of.
+        #[serde(default)]
+        double: Option<BindingRef>,
         child: Box<Self>,
     },
     /// Offsets its child from wherever its container placed it.
@@ -381,7 +385,7 @@ pub enum ControlNode {
         #[serde(default)]
         align: TextAlign,
         #[serde(default)]
-        color: Option<ColorRole>,
+        color: Option<ColorSource>,
         #[serde(default)]
         active_color: Option<ColorRole>,
         #[serde(default)]
@@ -406,7 +410,7 @@ pub enum ControlNode {
         #[serde(default)]
         style: GlyphStyle,
         #[serde(default)]
-        color: Option<Param<ColorRole>>,
+        color: Option<Param<ColorSource>>,
         #[serde(default)]
         active_color: Option<Param<ColorRole>>,
         #[serde(default)]

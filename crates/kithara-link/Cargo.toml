@@ -73,7 +73,7 @@ kithara-assets = { workspace = true }
 kithara-audio = { workspace = true }
 kithara-decode = { workspace = true, default-features = false }
 kithara-play = { workspace = true, features = ["mock", "symphonia", "stretch-identity"] }
-kithara-test-utils = { workspace = true, features = ["temp-dir"] }
+kithara-test-utils = { workspace = true, features = ["test", "temp-dir"] }
 kithara-warp = { workspace = true }
 
 futures = { workspace = true }

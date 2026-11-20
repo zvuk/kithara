@@ -1,5 +1,5 @@
 pub(crate) use kithara_effects::node::LimiterNode;
-pub(crate) use kithara_render::rt::PlayerNode;
+pub(crate) use kithara_render::PlayerNode;
 
 mod master;
 mod metronome;

@@ -1,3 +1,5 @@
+use std::convert::Infallible;
+
 use kithara_audio::TrackFailureKind;
 use kithara_bufpool::PoolError;
 use kithara_platform::time::Duration;
@@ -141,5 +143,11 @@ impl From<InvalidCrossfade> for PlayError {
             name: name.into(),
             value,
         }
+    }
+}
+
+impl From<Infallible> for PlayError {
+    fn from(error: Infallible) -> Self {
+        match error {}
     }
 }

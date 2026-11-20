@@ -4,12 +4,43 @@ use std::sync::LazyLock;
 use crate::render::Skin;
 use crate::{
     ids::SourceUri,
-    skin::{SkinDoc, load_skin},
+    skin::{ColorRole, SkinDoc, load_skin},
     source::{Limits, MemResolver},
     text::{TextDoc, parse_text},
 };
 
 include!(concat!(env!("OUT_DIR"), "/builtin_assets.rs"));
+
+/// Minor-key palette tokens in Open Key wheel order.
+pub const MINOR_KEY_COLORS: [ColorRole; 12] = [
+    ColorRole::Key1m,
+    ColorRole::Key2m,
+    ColorRole::Key3m,
+    ColorRole::Key4m,
+    ColorRole::Key5m,
+    ColorRole::Key6m,
+    ColorRole::Key7m,
+    ColorRole::Key8m,
+    ColorRole::Key9m,
+    ColorRole::Key10m,
+    ColorRole::Key11m,
+    ColorRole::Key12m,
+];
+/// Major-key palette tokens in Open Key wheel order.
+pub const MAJOR_KEY_COLORS: [ColorRole; 12] = [
+    ColorRole::Key1d,
+    ColorRole::Key2d,
+    ColorRole::Key3d,
+    ColorRole::Key4d,
+    ColorRole::Key5d,
+    ColorRole::Key6d,
+    ColorRole::Key7d,
+    ColorRole::Key8d,
+    ColorRole::Key9d,
+    ColorRole::Key10d,
+    ColorRole::Key11d,
+    ColorRole::Key12d,
+];
 
 pub const MICRO_PRESET: &str = "micro.klayout.ron";
 pub const PLAYER_PRESET: &str = "player.klayout.ron";

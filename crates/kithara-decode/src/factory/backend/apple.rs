@@ -10,7 +10,13 @@ use super::super::{
     probe::wav_container_end,
     segment::{build_fmp4_segment_decoder, should_use_segment_aware},
 };
-use crate::{DecodeError, DecodeResult, Decoder, DecoderConfig, GaplessInfo, traits::BoxedSource};
+use crate::{
+    DecodeError, DecodeResult, Decoder, DecoderConfig, GaplessInfo,
+    apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode},
+    demuxer::Demuxer,
+    gapless::scoped_probe,
+    traits::BoxedSource,
+};
 
 pub(in crate::factory) fn create<B, S>(
     source: BoxedSource,
@@ -22,8 +28,6 @@ where
     B: ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    use crate::apple::AppleCodec;
-
     #[cfg(feature = "ape")]
     if codec == AudioCodec::Ape {
         return create_ape(source, config);
@@ -58,8 +62,6 @@ where
         let target_output_rate = decoder_embedded_target_output_rate(&config);
         let gapless = config.gapless;
         return build_mpeg_decoder(source, container, config, |demuxer| {
-            use crate::demuxer::Demuxer;
-
             let output_track =
                 track_with_output_domain_gapless(demuxer.track_info(), target_output_rate)?;
             if output_track.gapless.is_some() {
@@ -69,7 +71,7 @@ where
         });
     }
 
-    if crate::apple::AppleAudioFileDemuxer::supports(codec, container) {
+    if AppleAudioFileDemuxer::supports(codec, container) {
         tracing::debug!(
             ?codec,
             ?container,
@@ -91,11 +93,6 @@ where
     B: ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    use crate::{
-        apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode},
-        demuxer::Demuxer,
-        gapless::scoped_probe,
-    };
     let probed_gapless = if config.gapless {
         scoped_probe(&mut *source, codec, &config.pools)?
     } else {

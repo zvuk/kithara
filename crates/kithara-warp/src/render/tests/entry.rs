@@ -6,8 +6,12 @@ use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::{WarpRenderer, chunk, spec};
-use crate::{Warp, WarpConfig, consts, test_pools::pools};
+use super::{
+    WarpRenderer, chunk,
+    fixtures::{LaneFeed, samples},
+    spec,
+};
+use crate::{Pitch, Warp, WarpConfig, WarpControls, WarpControlsChange, consts, test_pools::pools};
 
 const CUE_BEAT: f64 = 4.0;
 
@@ -19,7 +23,7 @@ fn entered_renderer(
 ) -> (WarpRenderer, u64, u64) {
     let config = WarpConfig::builder()
         .backend(backend)
-        .keylock(keylock)
+        .maybe_controls(keylock.then_some(WarpControls::builder().pitch(Pitch::HELD).build()))
         .build();
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
     renderer.prepare(spec());
@@ -196,4 +200,32 @@ fn an_entered_plan_refuses_a_landing_after_its_activation_source(
         .expect("a landing after the cue can never present its first frame");
     assert_eq!(refused.meta.frame_offset, cue + 1);
     assert_eq!(refused.frames(), frames);
+}
+
+#[kithara::test]
+fn starting_controls_and_live_controls_render_the_same_samples() {
+    for backend in StretchKind::all() {
+        for pitch in [
+            Pitch::HELD,
+            Pitch::Vinyl {
+                shift: crate::Semitones::MAX,
+            },
+        ] {
+            let controls = WarpControls::builder().pitch(pitch).build();
+            let config = WarpConfig::builder().backend(*backend).speed(0.8).build();
+            let mut started =
+                Warp::new((), &config.starting_at(0.8, controls)).renderer(spec(), pools());
+            let mut changed = Warp::new((), &config).renderer(spec(), pools());
+            changed.apply(WarpControlsChange::Pitch(pitch));
+            let mut started_feed = LaneFeed::default();
+            let mut changed_feed = LaneFeed::default();
+            let frames = 32_768;
+            let initial = started_feed.feed(&mut started, source_span(&changed, 0, frames));
+            let updated = changed_feed.feed(&mut changed, source_span(&started, 0, frames));
+            let initial = samples(&initial);
+            let updated = samples(&updated);
+            assert!(!initial.is_empty(), "{backend:?}: fixture renders audio");
+            assert_eq!(initial, updated, "{backend:?}: {pitch:?}");
+        }
+    }
 }

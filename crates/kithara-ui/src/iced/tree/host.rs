@@ -15,7 +15,7 @@ use kithara_platform::time::Instant;
 
 use super::geometry::HostedLayout;
 use crate::{
-    engine::{Engine, Target},
+    engine::{Engine, Presses, Target},
     expand::ExpandedNode,
     iced::{
         controls::sync_tree_scroll,
@@ -45,6 +45,18 @@ pub(super) fn module_host<'a>(
         child,
         layout: HostedLayout::module(spec),
         outline: spec.drop.unwrap_or_default(),
+    })
+}
+
+pub(super) fn pressable<'a>(
+    child: Element<'a, Published>,
+    path: &str,
+    presses: Presses,
+) -> Element<'a, Published> {
+    Element::new(Host {
+        child,
+        layout: HostedLayout::pressable(path, presses),
+        outline: Border::default(),
     })
 }
 
@@ -430,7 +442,25 @@ impl IcedWidget<Published, Theme, Renderer> for Host<'_> {
         let item_was_pressed = state.engine.has_pressed_item();
         let picker_before = self.layout.picker_snapshots(&state.engine);
         let text_before = state.engine.text_input_snapshots();
-        let captured = self.route_input(&mut state.engine, input, layout, cursor, shell);
+        let child_first = matches!(self.layout, HostedLayout::Pressable { child: None, .. });
+        if child_first {
+            self.child.as_widget_mut().update(
+                &mut tree.children[0],
+                event,
+                layout,
+                cursor,
+                renderer,
+                clipboard,
+                shell,
+                viewport,
+            );
+        }
+        let state = tree.state.downcast_mut::<State>();
+        let captured = if child_first && shell.is_event_captured() {
+            Captured::default()
+        } else {
+            self.route_input(&mut state.engine, input, layout, cursor, shell)
+        };
         if state.engine.focused_path().is_some()
             && focus_before.as_deref() != state.engine.focused_path()
         {
@@ -442,7 +472,7 @@ impl IcedWidget<Published, Theme, Renderer> for Host<'_> {
                 &mut unfocus,
             );
         }
-        if !captured.event {
+        if !captured.event && !child_first {
             self.child.as_widget_mut().update(
                 &mut tree.children[0],
                 event,
@@ -727,7 +757,7 @@ mod tests {
                 InputOwner, Published, Skin,
                 document::{
                     Ctx, Group, GroupMount, Host, Measured, Modal, Module, PlacedMount, Popover,
-                    SplitMount, StageMount, render,
+                    Presses, SplitMount, StageMount, render,
                 },
             },
             size::SizeSpec,
@@ -830,6 +860,8 @@ mod tests {
                     fn pressable(
                         &mut self,
                         path: InternId,
+                        presses: Presses,
+                        owner: InputOwner,
                         child: Self::Output,
                         size: Option<SizeSpec>,
                     ) -> Self::Output;
@@ -2471,6 +2503,7 @@ mod tests {
                 HostedLayout::Control(Some(HostedControl::mounted(
                     crate::hosts::hosted::HostedControlPlan::Activation {
                         path: "hosted/button".to_owned(),
+                        presses: Presses::default(),
                     },
                 ))),
                 mouse::Interaction::Pointer,
@@ -4491,6 +4524,61 @@ mod tests {
         );
     }
 
+    #[kithara::test]
+    fn presses_in_a_hosted_popover_reach_its_rows() {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "layout.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "popover-host",
+                root: Module(instance: "deck-a", source: "deck.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "deck.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "app-deck", chrome: Plain,
+                root: Popover(id: "quality", open: Model(id: "demo.toggle.on"),
+                    anchor: Spacer(id: "anchor", size: Some((w: Fixed(120.0), h: Fixed(24.0)))),
+                    content: Column(id: "choices", gap: 0.0, pad: 0.0, children: [
+                        Pressable(id: "high", press: Command(id: "eq-menu-toggle"),
+                            child: Spacer(id: "high-face", size: Some((w: Fixed(120.0), h: Fixed(30.0))))),
+                        Pressable(id: "auto", press: Command(id: "eq-menu-toggle"),
+                            child: Spacer(id: "auto-face", size: Some((w: Fixed(120.0), h: Fixed(30.0))))),
+                    ])))"#,
+        );
+        let ui = compile(
+            "layout.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            &UiConfig::default(),
+            &view::EMPTY,
+        )
+        .expect("hosted popover fixture compiles");
+        let reads = FixtureReads::default();
+        let renderer = headless_renderer();
+        let viewport = Size::new(300.0, 200.0);
+        let mut element = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+
+        for (y, path) in [(12.0, "deck-a/high"), (42.0, "deck-a/auto")] {
+            let (messages, _) = dispatch(
+                &mut element,
+                &mut tree,
+                &node,
+                &renderer,
+                viewport,
+                &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+                Point::new(42.0, y),
+            );
+            assert_eq!(messages, [control_event(path, ControlAction::Activate)]);
+        }
+    }
+
     /// Mounts one compiled fixture in a window and hands the caller the mounted
     /// tree. Every press in these tests goes through the host the window runs,
     /// rather than through the target list alone, because what is under test is
@@ -5005,10 +5093,12 @@ mod tests {
         let descriptors = hosted.descriptors();
         let targets = hosted.targets_with_engine(Layout::new(&node), Cursor::Unavailable, None);
         let expected_paths = [
+            "mixer/a/eq-menu-anchor",
             "mixer/a/high",
             "mixer/a/mid",
             "mixer/a/low",
             "mixer/a/volume",
+            "mixer/b/eq-menu-anchor",
             "mixer/b/high",
             "mixer/b/mid",
             "mixer/b/low",
@@ -5030,7 +5120,9 @@ mod tests {
                 .all(|target| target.hit.area().w > 0.0 && target.hit.area().h > 0.0),
             "every retained component must resolve to its paint-only canvas bounds",
         );
-        for target in targets.iter().filter(|target| target.path != "mixer/xfade") {
+        for target in targets.iter().filter(|target| {
+            target.path != "mixer/xfade" && !target.path.ends_with("/eq-menu-anchor")
+        }) {
             let area = target.hit.area();
             if target.path.ends_with("/volume") {
                 assert_eq!(area.w, 38.0, "the VU target must be its declared canvas");

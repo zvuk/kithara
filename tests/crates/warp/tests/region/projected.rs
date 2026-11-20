@@ -1,3 +1,5 @@
+use ::kithara::warp::{Pitch, WarpControls};
+
 use super::*;
 
 #[kithara::test]
@@ -16,7 +18,7 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
     #[case] backend: StretchKind,
     warp_nominal_clicks: Vec<f32>,
 ) {
-    use kithara::warp::{BeatGridId, BeatGridRevision, BeatGridSnapshot};
+    use ::kithara::warp::{BeatGridId, BeatGridRevision, BeatGridSnapshot};
 
     let source_clicks = click_positions(&mono(&warp_nominal_clicks));
     assert_eq!(
@@ -54,7 +56,10 @@ fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
             for quantum in [64, 257] {
                 let config = WarpConfig::builder()
                     .speed(2.0)
-                    .keylock(keylock)
+                    .maybe_controls(
+                        (keylock.then_some(Pitch::HELD))
+                            .map(|pitch| WarpControls::builder().pitch(pitch).build()),
+                    )
                     .backend(backend)
                     .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
                     .build();

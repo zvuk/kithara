@@ -21,11 +21,14 @@ impl Ledger {
 
     /// Records `seq` as the last batch to shift each target of `basis`.
     pub(super) fn record<T: Target>(&mut self, basis: &[(T, Option<Seq>)], seq: Seq) {
-        self.last
+        let shifted = self
+            .last
             .iter_mut()
             .enumerate()
-            .filter(|&(index, _)| basis.iter().any(|&(target, _)| target.index() == index))
-            .for_each(|(_, last)| *last = Some(seq));
+            .filter(|&(index, _)| basis.iter().any(|&(target, _)| target.index() == index));
+        for (_, last) in shifted {
+            *last = Some(seq);
+        }
     }
 
     pub(super) fn reset(&mut self) {

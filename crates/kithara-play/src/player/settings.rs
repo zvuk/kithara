@@ -3,11 +3,12 @@ use kithara_derive::Patch;
 use kithara_events::TrackId;
 use kithara_render::{LaneCommand, LaneStart, bridge::Slot};
 use kithara_sync::{MIN_SPEED, SpeedCurve};
-use kithara_warp::{StretchKind, WarpConfig};
+use kithara_warp::{WarpConfig, WarpControls, WarpControlsChange};
 
 use crate::PlayError;
 
-/// What a track plays with that changes while it plays.
+/// The speed and pitch a track plays at, both changing while it plays; its
+/// deck decides whether its pitch can move, from the deck's backend.
 ///
 /// A change of one field goes to the track's render lane as one lane command;
 /// the lane's receipt moves it into the settings the track's owner reads. The
@@ -18,31 +19,23 @@ pub struct TrackSettings {
     /// How fast the track plays, 1.0 at its own tempo.
     #[config(live(owner), check = check_speed, builder(default = 1.0))]
     speed: f32,
-    /// Whether the pitch stays put at any speed; only a backend with keylock
-    /// keeps it.
-    #[config(live, builder(default = false))]
-    keylock: bool,
-    /// The time-stretch backend that renders the track.
-    #[config(builder(default))]
-    backend: StretchKind,
+    /// Controls executed by the renderer.
+    #[config(nested, live, builder(default), patch(skip))]
+    controls: WarpControls,
 }
 
 impl TrackSettings {
     /// The applied settings a newly opened lane starts with.
     #[must_use]
     pub fn lane_start(self) -> LaneStart {
-        LaneStart {
-            speed: SpeedCurve::Constant(self.speed),
-            keylock: self.keylock,
-            backend: self.backend,
-        }
+        LaneStart::new(self.speed, self.controls)
     }
 
     /// `base` for the renderer of a track that starts where these settings
     /// stand.
     #[must_use]
     pub fn warp(self, base: &WarpConfig) -> WarpConfig {
-        base.starting_at(self.speed, self.keylock, self.backend)
+        base.starting_at(self.speed, self.controls)
     }
 }
 
@@ -62,7 +55,7 @@ impl From<TrackSettingsChange> for LaneCommand {
     fn from(change: TrackSettingsChange) -> Self {
         match change {
             TrackSettingsChange::Speed(speed) => Self::SetSpeed(SpeedCurve::Constant(speed)),
-            TrackSettingsChange::Keylock(on) => Self::SetKeylock(on),
+            TrackSettingsChange::Controls(change) => Self::Warp(change),
         }
     }
 }
@@ -96,24 +89,21 @@ mod tests {
     use kithara_signal::{FrameCount, SegmentId};
     use kithara_sync::SpeedCurve;
     use kithara_test_utils::kithara;
-    use kithara_warp::{StretchKind, WarpConfig};
+    use kithara_warp::{Pitch, Semitones, WarpConfig, WarpControls, WarpControlsChange};
 
     use super::{PlayerConfigPatch, TrackSettings, TrackSettingsChange};
     use crate::PlayError;
+
+    fn semitones(value: i8) -> Semitones {
+        Semitones::checked(value).expect("fixture shift is in range")
+    }
 
     fn lane() -> (Sender<LaneProtocol>, Inbox<LaneProtocol>) {
         channel(ChannelConfig::builder().build())
     }
 
     fn settings() -> Live<TrackSettings, LaneProtocol> {
-        Live::new(
-            TrackSettings::builder()
-                .speed(1.0)
-                .keylock(false)
-                .backend(StretchKind::default())
-                .build(),
-        )
-        .expect("unity speed is a valid track speed")
+        Live::new(TrackSettings::default()).expect("unity speed is a valid track speed")
     }
 
     /// Plays the lane at `frame`: applies every batch due there and returns
@@ -148,24 +138,32 @@ mod tests {
         live.send(
             &mut sender,
             when,
-            TrackSettingsChange::Keylock(true),
+            WarpControlsChange::Pitch(Pitch::HELD).into(),
             LaneCommand::from,
         )
         .expect("the lane has room for one batch");
-        assert!(
-            !live.config().keylock(),
+        assert_eq!(
+            live.config().controls().pitch(),
+            Pitch::default(),
             "a sent change waits for its receipt"
         );
 
         let commands = execute(&mut inbox, frame);
         assert!(
-            matches!(commands.as_slice(), [LaneCommand::SetKeylock(true)]),
+            matches!(
+                commands.as_slice(),
+                [LaneCommand::Warp(WarpControlsChange::Pitch(Pitch::HELD))]
+            ),
             "the lane executes the change as its own command: {commands:?}"
         );
         for receipt in sender.receipts() {
             live.settle(&receipt);
         }
-        assert!(live.config().keylock(), "the applied change shows");
+        assert_eq!(
+            live.config().controls().pitch(),
+            Pitch::HELD,
+            "the applied change shows"
+        );
     }
 
     #[kithara::test]
@@ -175,31 +173,41 @@ mod tests {
             LaneCommand::SetSpeed(SpeedCurve::Constant(speed)) if speed == 1.07
         ));
         assert!(matches!(
-            LaneCommand::from(TrackSettingsChange::Keylock(true)),
-            LaneCommand::SetKeylock(true)
+            LaneCommand::from(TrackSettingsChange::Controls(WarpControlsChange::Pitch(
+                Pitch::HELD
+            ))),
+            LaneCommand::Warp(WarpControlsChange::Pitch(Pitch::HELD))
         ));
+    }
+
+    #[kithara::test(native)]
+    fn the_deck_owned_pitch_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<PlayerConfigPatch>("settings:\n  pitch: 2\n")
+            .expect_err("a track's pitch is its deck's, not a document's");
+        assert!(error.to_string().contains("pitch"), "{error}");
     }
 
     #[kithara::test]
     fn a_track_starts_with_live_warp_settings() {
+        let pitch = Pitch::Held {
+            shift: semitones(-5),
+        };
         let quantum = NonZeroUsize::new(64).expect("fixture quantum is non-zero");
         let base = WarpConfig::builder()
             .speed(1.25)
             .render_quantum_frames(quantum)
             .build();
-        let backend = StretchKind::default();
         let settings = TrackSettings::builder()
             .speed(0.8)
-            .keylock(true)
-            .backend(backend)
+            .controls(WarpControls::builder().pitch(pitch).build())
             .build();
 
         let warp = settings.warp(&base);
 
         assert!((warp.speed() - 0.8).abs() < f32::EPSILON);
-        assert!(warp.keylock());
-        assert_eq!(warp.backend(), backend);
+        assert_eq!(warp.controls().pitch(), pitch);
         assert_eq!(warp.render_quantum_frames(), Some(quantum));
+        assert_eq!(settings.lane_start().controls.pitch(), pitch);
     }
 
     #[kithara::test]

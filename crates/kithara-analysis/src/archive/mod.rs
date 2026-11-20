@@ -10,7 +10,7 @@ mod update;
 ))]
 mod resume_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use error::AnalysisFileError;
 pub use file::{AnalysisFile, AnalysisFileSpec};

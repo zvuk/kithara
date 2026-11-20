@@ -1,7 +1,7 @@
 use kithara::ui::render::{Node, ReadValue};
 
 macro_rules! impl_child_node {
-    ($node:ty, |$this:ident, $segment:ident, $scope:ident| $body:block) => {
+    ($node:ty, | $this:ident, $segment:ident, $scope:ident | $body:block) => {
         impl<'a> Node<'a> for $node {
             fn child(
                 &self,

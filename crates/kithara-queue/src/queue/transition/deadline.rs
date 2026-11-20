@@ -21,13 +21,13 @@ use crate::{
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(in crate::queue) fn tick_deadlines(
         &mut self,
         now: SessionFrame,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), QueueError> {
         if self.shutdown.is_cancelled() {
             return Ok(());
@@ -48,7 +48,7 @@ where
         &mut self,
         target: Target,
         now: SessionFrame,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), QueueError> {
         let Some(end) = self.current_end() else {
             return Ok(());
@@ -118,7 +118,7 @@ where
         &mut self,
         now: SessionFrame,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), QueueError> {
         let ids = self.selectable_ids();
         let wrap = self.navigation.repeat_mode() == RepeatMode::All;
@@ -180,7 +180,7 @@ where
         &mut self,
         id: TrackId,
         output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<(), QueueError> {
         if let Err(error) = self.load_track(id, Role::Preloaded, output, out) {
             if matches!(error, QueueError::Play(PlayError::Full("deck"))) {

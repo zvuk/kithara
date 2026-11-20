@@ -74,6 +74,24 @@ pub(crate) fn check_controls(
     Ok(())
 }
 
+#[cfg(feature = "render")]
+pub(crate) fn check_artworks(
+    site: ControlSite<'_>,
+    origin: &SourceUri,
+    declared: &BTreeMap<String, String>,
+) -> Result<(), UiDocError> {
+    for name in site.artworks.into_iter().flatten() {
+        if !declared.contains_key(name) && crate::lottie::builtin_artwork(name).is_none() {
+            return Err(UiDocError::UnknownArtwork {
+                origin: origin.clone(),
+                name: name.to_owned(),
+                path: site.path.to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Refuses a document that names an extension the application never
 /// registered, so the kind a host resolves at mount is one it already has.
 fn check_custom_kind(

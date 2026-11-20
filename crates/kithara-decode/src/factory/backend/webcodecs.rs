@@ -3,7 +3,11 @@ use kithara_resampler::ResamplerBackend;
 use kithara_stream::{AudioCodec, ContainerFormat};
 
 use super::super::segment::{build_fmp4_segment_decoder, should_use_segment_aware};
-use crate::{DecodeResult, Decoder, DecoderConfig, traits::BoxedSource};
+use crate::{
+    DecodeResult, Decoder, DecoderConfig,
+    traits::BoxedSource,
+    webcodecs::codec::{WebCodecsCodec, supports as webcodecs_supports},
+};
 
 pub(in crate::factory) fn create<B, S>(
     source: BoxedSource,
@@ -15,8 +19,6 @@ where
     B: ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    use crate::webcodecs::codec::{WebCodecsCodec, supports as webcodecs_supports};
-
     if should_use_segment_aware(codec, container, &config)
         && let Some(layout) = config.byte_map.clone()
     {
@@ -40,7 +42,7 @@ where
 #[cfg(feature = "symphonia")]
 mod standalone {
     use super::*;
-    use crate::factory::build::finish;
+    use crate::{demuxer::Demuxer, factory::build::finish, webcodecs::codec::WebCodecsCodec};
 
     pub(super) fn create<B, S>(
         source: BoxedSource,
@@ -52,8 +54,6 @@ mod standalone {
         B: ResamplerBackend,
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
-        use crate::{demuxer::Demuxer, webcodecs::codec::WebCodecsCodec};
-
         if !crate::webcodecs::codec::supports(codec) {
             return super::super::software::create(source, codec, container, config);
         }

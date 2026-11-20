@@ -1,3 +1,5 @@
+use ::kithara::warp::{Pitch, WarpControls};
+
 use super::*;
 
 pub(super) const SR: u32 = 44_100;
@@ -68,7 +70,7 @@ pub(super) fn i64_of(x: usize) -> i64 {
 
 #[kithara::test]
 pub(super) fn activation_keeps_the_absolute_host_frame_rounding_phase() {
-    use kithara::warp::{
+    use ::kithara::warp::{
         Beat, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, MapPoint, MapPosition,
     };
 
@@ -132,7 +134,7 @@ pub(super) fn render_on_grid(
 ) -> Vec<f32> {
     let config = WarpConfig::builder()
         .speed(speed)
-        .keylock(true)
+        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
         .backend(backend)
         .build();
     render_configured_grid(config, plan, source, swap)
@@ -245,7 +247,7 @@ pub(crate) fn render_configured_grid_with_updates(
                     "source quantum at {} with {remaining} remaining, backend {:?}, keylock={}: {error:?}",
                     meta.frame_offset,
                     config.backend(),
-                    config.keylock()
+                    config.controls().pitch().keylock()
                 ),
             };
             let start = usize::try_from(meta.frame_offset).expect("fixture source frame");

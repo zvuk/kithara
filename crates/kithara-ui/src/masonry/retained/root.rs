@@ -886,59 +886,7 @@ where
     fn show_values(&mut self, ctx: Ctx<'_, '_>) -> bool {
         let mut moved = false;
         for watched in self.watched.iter().filter(|watched| watched.within.shown()) {
-            match &watched.item {
-                Watched::Read { id, binding } => {
-                    let Some(value) = ctx.read(binding) else {
-                        continue;
-                    };
-                    moved |= self.root.edit_widget(*id, |mut widget| {
-                        let mut node = widget.downcast::<Node>();
-                        let before = node.widget.text_size();
-                        let shown = node.widget.show_live(&value);
-                        if shown && node.widget.text_size() != before {
-                            node.ctx.request_layout();
-                        } else if shown {
-                            node.ctx.request_paint_only();
-                        }
-                        shown
-                    });
-                }
-                Watched::Snapshot { id } => {
-                    moved |= self.root.edit_widget(*id, |mut widget| {
-                        let mut node = widget.downcast::<Node>();
-                        let shown = node.widget.refresh(ctx);
-                        if shown {
-                            node.ctx.request_paint_only();
-                        }
-                        shown
-                    });
-                }
-                Watched::Spot { id, binding } => {
-                    let Some(at) = ctx.point(Some(binding)) else {
-                        continue;
-                    };
-                    moved |= self.root.edit_widget(*id, |mut widget| {
-                        let mut node = widget.downcast::<Node>();
-                        let moved = node.widget.move_spot(at);
-                        if moved {
-                            node.ctx.request_layout();
-                        }
-                        moved
-                    });
-                }
-                Watched::Lit { id, flag } => {
-                    let on = ctx.flag(Some(flag));
-                    moved |= self.root.edit_widget(*id, |mut widget| {
-                        let mut node = widget.downcast::<Node>();
-                        let lit = node.widget.light(on);
-                        if lit {
-                            node.ctx.request_paint_only();
-                        }
-                        lit
-                    });
-                }
-                Watched::Custom { .. } | Watched::Placed { .. } | Watched::Zone { .. } => {}
-            }
+            moved |= watched.item.show(&mut self.root, ctx);
         }
         moved
     }
@@ -953,8 +901,6 @@ where
         if changed.is_empty() {
             return;
         }
-        // Editing a flow immediately runs composition, which reads its controls.
-        // Publish visibility to their engines before exposing the new layout.
         self.stand_engines();
         for flow in changed {
             self.root.edit_widget(flow, |mut flow| {

@@ -1,0 +1,25 @@
+id: style.prefer-named-fields
+message: |
+  A tuple struct with several positional fields. Name the fields: `.0` and
+  `.1` say nothing at the use site. A single-field newtype stays a tuple
+  struct.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  kind: struct_item
+  has:
+    kind: ordered_field_declaration_list
+    has:
+      nthChild:
+        position: 2
+        ofRule:
+          not:
+            any:
+              - kind: visibility_modifier
+              - kind: attribute_item
+      not:
+        any:
+          - kind: visibility_modifier
+          - kind: attribute_item

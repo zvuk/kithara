@@ -10,9 +10,12 @@ use kithara::{
         CancelToken, time,
         time::{Duration, Instant, timeout},
     },
-    play::{PlayError, PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+    play::{
+        DeckMixSettingsChange, PlayError, PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc,
+    },
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
+use kithara_command::When;
 use kithara_integration_tests::{event::TestEvent, kithara, offline::QueueTicker};
 use kithara_test_utils::{off_thread::OffThread, temp_dir};
 
@@ -122,7 +125,12 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     .await
     .expect("create playback host");
     owner
-        .call(|(queue, _)| queue.set_volume(kithara_integration_tests::e2e::volume()))
+        .call(|(queue, _)| {
+            queue.mix(
+                When::Next,
+                DeckMixSettingsChange::Volume(kithara_integration_tests::e2e::volume().into()),
+            )
+        })
         .await
         .expect("the player takes the volume");
     let queue = owner.call(|(queue, _)| queue.control().clone()).await;

@@ -1,4 +1,4 @@
-use Control::{Curve, Keylock, Speed};
+use Control::{Curve, Speed, ToggleKeylock};
 use kithara_signal::ExponentialApproach;
 use kithara_stretch::{BackendCapabilities, StretchKind};
 use kithara_sync::SpeedCurve;
@@ -10,7 +10,7 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{exact::mapped_signal, renderer, spec};
-use crate::WarpConfig;
+use crate::{Pitch, PitchStep, WarpConfig, WarpControls, WarpControlsChange};
 
 /// Output frames at which a script presses.
 const PRESSES: [usize; 2] = [22_050, 66_150];
@@ -27,7 +27,7 @@ const IN_FADE: usize = 512;
 /// A lane control a press applies.
 #[derive(Clone, Copy, Debug)]
 enum Control {
-    Keylock(bool),
+    ToggleKeylock,
     Speed(f32),
     Curve(ExponentialApproach),
 }
@@ -62,7 +62,10 @@ impl Scenario {
 fn config(backend: StretchKind, keylock: bool, speed: f32) -> WarpConfig {
     WarpConfig::builder()
         .backend(backend)
-        .keylock(keylock)
+        .maybe_controls(
+            (keylock.then_some(Pitch::HELD))
+                .map(|pitch| WarpControls::builder().pitch(pitch).build()),
+        )
         .speed(speed)
         .build()
 }
@@ -81,7 +84,11 @@ fn render(config: &WarpConfig, presses: &[Press], frames: usize, tone: &[f32]) -
         while let Some(press) = presses.next_if(|press| press.frame == mono.len()) {
             for control in &press.batch {
                 match *control {
-                    Keylock(on) => fx.set_keylock(on),
+                    ToggleKeylock => {
+                        fx.apply(WarpControlsChange::Pitch(
+                            fx.requested_pitch.step(PitchStep::ToggleKeylock),
+                        ));
+                    }
                     Speed(speed) => fx
                         .set_speed(SpeedCurve::Constant(speed), fx.render_revision() + 1)
                         .expect("valid speed"),
@@ -127,7 +134,7 @@ fn assert_continuous(tone: &[f32], scenario: &Scenario) {
                 add_speed(curve.initial().to_f32().expect("initial speed fits f32"));
                 add_speed(curve.target().to_f32().expect("target speed fits f32"));
             }
-            Keylock(_) => {}
+            ToggleKeylock => {}
         }
     }
     let sides: Vec<WarpConfig> = speeds
@@ -145,7 +152,7 @@ fn assert_continuous(tone: &[f32], scenario: &Scenario) {
         .fold(0.0, f32::max);
     let fade = sides
         .iter()
-        .filter(|side| side.keylock())
+        .filter(|side| side.controls().pitch().keylock())
         .map(|side| {
             renderer(side)
                 .prepare_engine_latency(spec())
@@ -398,8 +405,8 @@ fn retirement_scripts(backend: StretchKind) -> Vec<Scenario> {
         for keylock in [false, true] {
             for back in [PRESSES[1], PRESSES[0] + IN_FADE] {
                 let presses = vec![
-                    press(PRESSES[0], &[Keylock(!keylock)]),
-                    press(back, &[Keylock(keylock)]),
+                    press(PRESSES[0], &[ToggleKeylock]),
+                    press(back, &[ToggleKeylock]),
                 ];
                 scenarios.push(script(keylock, speed, presses));
             }
@@ -411,14 +418,14 @@ fn retirement_scripts(backend: StretchKind) -> Vec<Scenario> {
             1.08,
             vec![
                 press(PRESSES[0] - IN_FADE, &[Speed(1.5)]),
-                press(PRESSES[0], &[Keylock(false)]),
+                press(PRESSES[0], &[ToggleKeylock]),
             ],
         ),
         script(
             false,
             1.0,
             vec![
-                press(PRESSES[0], &[Keylock(true)]),
+                press(PRESSES[0], &[ToggleKeylock]),
                 press(PRESSES[1], &[Speed(1.08)]),
             ],
         ),
@@ -426,7 +433,7 @@ fn retirement_scripts(backend: StretchKind) -> Vec<Scenario> {
         script(
             false,
             1.0,
-            vec![press(PRESSES[0], &[Keylock(true), Speed(1.08)])],
+            vec![press(PRESSES[0], &[ToggleKeylock, Speed(1.08)])],
         ),
     ]);
     scenarios
@@ -452,7 +459,7 @@ fn batches_before_a_render_sound_as_their_net_batch(warp_sine: Vec<f32>) {
                 })
                 .collect(),
         };
-        let (on, tempo) = (Keylock(true), Speed(1.08));
+        let (on, tempo) = (ToggleKeylock, Speed(1.08));
         for (batches, net) in [
             (
                 at_press(true, 1.08, &[&[Speed(1.0)], &[tempo]]),

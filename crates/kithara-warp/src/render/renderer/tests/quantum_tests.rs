@@ -4,7 +4,7 @@ use kithara_test_utils::kithara;
 
 use super::*;
 use crate::{
-    Warp,
+    Pitch, Warp, WarpControls,
     test_pools::{TestPools, pools},
 };
 
@@ -129,7 +129,7 @@ fn keylocked_output_preparation_retains_native_priming_capacity(#[case] backend:
     );
     let config = WarpConfig::builder()
         .backend(backend)
-        .keylock(true)
+        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
         .render_quantum_frames(NonZeroUsize::MIN)
         .build();
     let renderer = Warp::new((), &config).renderer(spec, pools());

@@ -2,7 +2,7 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     atoms::wave::{
-        face::{Drawn, cached_extent, read_art, read_text},
+        face::{Drawn, cached_extent},
         snapshot::{OverlayData, WaveformData},
     },
     hosts::model::derived,
@@ -27,24 +27,7 @@ impl Drawn {
         changed |= std::mem::replace(&mut self.cached, cached) != cached;
         changed |= std::mem::replace(&mut self.zoom, zoom) != zoom;
         if let Some(overlay) = &mut self.overlay {
-            let next = OverlayData {
-                art: read_art(reads, scope),
-                title: read_text(reads, &derived("deck.track.title", scope))
-                    .filter(|title| !title.is_empty())
-                    .unwrap_or("No track loaded")
-                    .to_owned(),
-                artist: read_text(reads, &derived("deck.track.source_kind", scope))
-                    .unwrap_or("no source")
-                    .to_owned(),
-                bpm: overlay.bpm.clone(),
-                key: read_text(reads, &derived("deck.track.key", scope))
-                    .unwrap_or(Self::EM_DASH)
-                    .to_owned(),
-                remain: read_text(reads, &derived("deck.playback.remain", scope))
-                    .unwrap_or(Self::EM_DASH)
-                    .to_owned(),
-                badge: overlay.badge.clone(),
-            };
+            let next = OverlayData::read(reads, scope, overlay.bpm.clone(), overlay.badge.clone());
             changed |= std::mem::replace(overlay, next) != *overlay;
         }
         changed
@@ -170,7 +153,7 @@ mod tests {
             match endpoint {
                 "deck.playback.position_normalized@deck=a" => Some(ReadValue::Scalar(0.75)),
                 "deck.playback.remain@deck=a" => Some(ReadValue::Text("-00:15")),
-                "deck.track.key@deck=a" => Some(ReadValue::Text("9A")),
+                "deck.track.key@deck=a" => Some(ReadValue::Text("9m")),
                 "deck.track.source_kind@deck=a" => Some(ReadValue::Text("file")),
                 "deck.track.title@deck=a" => Some(ReadValue::Text("Updated")),
                 "deck.waveform.zoom@deck=a" => Some(ReadValue::Scalar(2.0)),
@@ -194,10 +177,24 @@ mod tests {
             .expect("a hero wave must keep its naming panel");
         assert_eq!(overlay.title, "Updated");
         assert_eq!(overlay.artist, "file");
-        assert_eq!(overlay.key, "9A");
+        assert_eq!(overlay.key, "9m");
         assert_eq!(overlay.remain, "-00:15");
         assert_eq!(data.progress, 0.75);
         assert_eq!(f32::from(data.zoom), 0.5);
+
+        struct EmptyKeyReads;
+
+        impl Reads for EmptyKeyReads {
+            fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+                (endpoint == "deck.track.key@deck=a").then_some(ReadValue::Text(""))
+            }
+        }
+
+        assert!(data.refresh(&EmptyKeyReads, "@deck=a", None));
+        assert_eq!(
+            data.overlay.as_ref().map(|overlay| overlay.key.as_str()),
+            Some(Drawn::EM_DASH)
+        );
     }
 
     #[kithara::test]

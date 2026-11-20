@@ -1,3 +1,5 @@
+#[cfg(target_arch = "wasm32")]
+pub(super) mod bootstrap;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod deck_probe;
 #[cfg(all(feature = "offline", not(target_arch = "wasm32")))]

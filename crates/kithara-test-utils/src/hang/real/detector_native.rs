@@ -236,9 +236,24 @@ impl<C: HangDump> HangDetector<C> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::time::Duration;
+    use kithara_platform::time::{Duration, Instant};
 
     use super::{HangDetector, WallInstant};
+
+    #[test]
+    fn reset_extends_deadline() {
+        let timeout = Duration::from_millis(50);
+        let mut detector: HangDetector = HangDetector::new("test", timeout);
+        detector.deadline = Some(Instant::now() - timeout);
+
+        let earliest = Instant::now() + timeout;
+        detector.reset();
+        let latest = Instant::now() + timeout;
+
+        let deadline = detector.deadline.expect("reset arms the deadline");
+        assert!(deadline >= earliest);
+        assert!(deadline <= latest);
+    }
 
     #[test]
     fn a_budget_no_real_time_paid_for_is_reported_as_a_leap() {

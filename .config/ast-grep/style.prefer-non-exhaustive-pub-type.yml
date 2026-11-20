@@ -1,0 +1,30 @@
+id: style.prefer-non-exhaustive-pub-type
+message: |
+  A public enum or named-field struct without `#[non_exhaustive]`. Mark it,
+  so a new variant or field is not a breaking change for other crates. A small
+  type whose direct construction is part of its contract may stay exhaustive.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  all:
+    - any:
+        - kind: enum_item
+        - all:
+            - kind: struct_item
+            - has:
+                kind: field_declaration_list
+    - has:
+        kind: visibility_modifier
+        regex: '^pub$'
+    - not:
+        follows:
+          kind: attribute_item
+          regex: '\bnon_exhaustive\b'
+          stopBy:
+            not:
+              any:
+                - kind: attribute_item
+                - kind: line_comment
+                - kind: block_comment

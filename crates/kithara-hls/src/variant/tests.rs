@@ -453,7 +453,64 @@ async fn segment_aware_seek_descriptors_keep_the_readers_coordinates_after_prefi
             .byte_range,
         descriptor.byte_range
     );
+    assert_eq!(
+        variant.segment_byte_offset(2),
+        Some(200),
+        "a prefix probe is deferred until the byte frame resets"
+    );
+    variant.reset_for_seek();
     assert_eq!(variant.segment_byte_offset(2), Some(300));
+}
+
+#[kithara::test(tokio)]
+#[case::aac(AudioCodec::AacLc)]
+#[case::flac(AudioCodec::Flac)]
+async fn late_prefix_size_probe_keeps_preroll_reads_on_their_resource(#[case] codec: AudioCodec) {
+    let ctx = test_ctx(3);
+    let variant = VariantParts {
+        init: None,
+        segments: (0..3)
+            .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
+            .collect(),
+        codec: Some(codec),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    for idx in [1_u32, 2] {
+        let key = variant.segments()[idx as usize].resource_id().clone();
+        let AcquisitionResult::Pending(writer) = ctx
+            .scope
+            .store()
+            .acquire_resource(&key, None)
+            .expect("acquire segment")
+        else {
+            panic!("fresh segment must acquire a writer");
+        };
+        let value = u8::try_from(idx).expect("fixture value");
+        writer.write_at(0, &[value; 100]).expect("write segment");
+        drop(writer.commit(Some(100)).expect("commit segment"));
+        settle_seg(&variant, &ctx, idx, 100);
+    }
+    let anchor = variant
+        .prepare_seek_time_anchor(Duration::from_secs(4))
+        .expect("seek anchor")
+        .expect("target segment");
+    assert_eq!(anchor.byte_offset, 200);
+    let session = active_session(&variant, &ctx, anchor.byte_offset);
+    assert!(variant.apply_resolved_size(SizeDemand::Segment(0), 200));
+
+    let preroll = variant.descriptor(1).expect("preroll descriptor");
+    session.seek_to_byte(preroll.byte_range.start);
+    let mut bytes = [0_u8; 4];
+    assert!(matches!(
+        variant
+            .read_at(session.position(), &mut bytes)
+            .expect("preroll read"),
+        ReadOutcome::Bytes(_)
+    ));
+    assert_eq!(bytes, [1; 4], "preroll bytes must not come from the target");
+    variant.reset_for_seek();
+    assert_eq!(variant.segment_byte_offset(1), Some(200));
 }
 
 #[kithara::test(tokio)]
@@ -1921,7 +1978,10 @@ fn exact_seek_probe_urls(
     .into_variant(0, &ctx);
     let anchor = EXACT_SEEK_SEGMENT_BYTES * u64::from(consts::EXACT_SEEK_LANDING);
     v.set_prefetch_anchor(anchor);
-    v.set_exact_seek_demand(anchor, consts::EXACT_SEEK_LANDING);
+    v.layout.with_metadata_update(|| {
+        v.set_exact_seek_demand_locked(anchor, consts::EXACT_SEEK_LANDING);
+    });
+    v.complete_exact_seek_if_ready();
     let session = active_session(&v, &ctx, anchor);
 
     session
@@ -2038,7 +2098,9 @@ fn exact_seek_session() -> (Arc<HlsVariant>, HlsSession, u64) {
     v.set_prefetch_anchor(stale_anchor);
     v.set_seek_alias(stale_anchor, 2);
     v.rebuild(&ctx, 2);
-    v.set_exact_seek_demand(stale_anchor, 2);
+    v.layout
+        .with_metadata_update(|| v.set_exact_seek_demand_locked(stale_anchor, 2));
+    v.complete_exact_seek_if_ready();
     let session = HlsSession::active(
         CancelToken::never(),
         ctx.signal,
@@ -2163,7 +2225,9 @@ async fn late_rebuild_at_time_does_not_reopen_consumed_exact_seek_projection() {
     let stale_anchor = 512;
     v.set_prefetch_anchor(stale_anchor);
     v.set_seek_alias(stale_anchor, 2);
-    v.set_exact_seek_demand(stale_anchor, 2);
+    v.layout
+        .with_metadata_update(|| v.set_exact_seek_demand_locked(stale_anchor, 2));
+    v.complete_exact_seek_if_ready();
     let session = HlsSession::active(
         CancelToken::never(),
         ctx.signal.clone(),
@@ -2787,17 +2851,14 @@ async fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
 /// between probes is the caller's responsibility (the worker scheduler park),
 /// so the read path never blocks on a syscall. Waking the peer downloader is
 /// the reader driver's job (`Stream::probe_read` / `read` / `prime_seek_range`,
-/// per its on-core/off-core context), not this method's. The old
-/// implementation slept 2ms per spin and looped until the 10ms budget elapsed;
-/// the probe must now return in well under that.
+/// per its on-core/off-core context), not this method's. The no-block watcher
+/// rejects an actual sleep or park independently of scheduler preemption.
 #[kithara::test(tokio)]
 async fn wait_range_probes_without_sleeping() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400], &ctx);
 
-    let started = Instant::now();
     let outcome = v.wait_range(0..1, Some(Duration::from_millis(10)));
-    let elapsed = Instant::now().saturating_duration_since(started);
 
     assert!(
         matches!(
@@ -2805,10 +2866,6 @@ async fn wait_range_probes_without_sleeping() {
             Err(StreamError::Source(SourceError::WaitBudgetExceeded))
         ),
         "not-ready range must signal WaitBudgetExceeded immediately, got {outcome:?}"
-    );
-    assert!(
-        elapsed < Duration::from_millis(2),
-        "probe must not sleep (old impl slept 2ms/spin up to the 10ms budget); took {elapsed:?}"
     );
 }
 

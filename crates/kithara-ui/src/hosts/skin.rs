@@ -31,6 +31,15 @@ pub(crate) const fn tone_color(tone: Tone, tones: ToneColors) -> ColorRole {
 }
 
 impl Skin {
+    pub(crate) fn active_text_color(
+        &self,
+        style: TextStyle,
+        active_color: Option<ColorRole>,
+    ) -> Option<ColorRole> {
+        active_color
+            .or_else(|| (style == TextStyle::DeckLetter).then_some(self.text.deck_letter_active))
+    }
+
     pub(crate) fn rgba(&self, role: ColorRole) -> Rgba {
         self.palette[role]
     }
@@ -50,9 +59,9 @@ impl Skin {
         active: bool,
     ) -> TextRoleSkin {
         let role = self.text.role(style);
-        let skin_active = (style == TextStyle::DeckLetter).then_some(self.text.deck_letter_active);
+        let active_role = self.active_text_color(style, active_color);
         TextRoleSkin {
-            color: active_tone(color, active_color.or(skin_active), active).unwrap_or(role.color),
+            color: active_tone(color, active_role, active).unwrap_or(role.color),
             ..role
         }
     }

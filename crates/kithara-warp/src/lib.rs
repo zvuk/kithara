@@ -3,6 +3,7 @@
 //! Beat-grid geometry, projection, and warp rendering.
 
 mod beat_grid;
+mod controls;
 mod coordinate;
 #[cfg(feature = "render")]
 mod render;
@@ -11,6 +12,7 @@ mod segment;
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
+mod pitch;
 mod warp;
 
 pub use beat_grid::{
@@ -18,6 +20,7 @@ pub use beat_grid::{
     BeatGridQuery, BeatGridRegion, BeatGridRevision, BeatGridSnapshot, BeatGridSnapshotError,
     BeatGridStamp, BeatGridState, BeatGridUnavailable, BeatGridView, GridProjectionError,
 };
+pub use controls::{WarpControls, WarpControlsChange, WarpControlsPatch};
 pub(crate) use coordinate::AxisKind;
 pub use coordinate::{
     AssetAxis, AssetExtent, AssetFrame, Beat, BeatAlignment, BeatOrdinal, FrameUncertainty,
@@ -26,6 +29,7 @@ pub use coordinate::{
 pub(crate) use kithara_signal::{SessionEpoch, SessionFrame};
 #[cfg(feature = "render")]
 pub use kithara_stretch::{BackendCapabilities as WarpCapabilities, StretchKind};
+pub use pitch::{Pitch, PitchStep, Semitones};
 #[cfg(feature = "render")]
 pub use render::{SourceTrajectory, WarpRenderError, WarpRenderer};
 pub use segment::{

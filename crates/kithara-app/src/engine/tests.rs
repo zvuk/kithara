@@ -9,6 +9,7 @@ use ::kithara::{
         HostSettingsControl,
         api::{SESSION_BEATS_PER_BAR, Tempo},
     },
+    link::LinkConfig,
     output::{RenderSink, RenderSinkError},
     platform::{
         sync::Arc,
@@ -18,6 +19,7 @@ use ::kithara::{
             task::{self, JoinHandle},
         },
     },
+    play::TrackSettingsChange,
     queue::{TrackId, TrackStatus, Transition},
     signal::SessionFrame,
     ui::render::ControlAction,
@@ -65,6 +67,7 @@ mod consts {
     pub(super) const SILENCE_SHARE: f32 = 0.01;
     pub(super) const SILENT_RUN: Duration = Duration::from_millis(1);
     pub(super) const STEPPED_BPM: f64 = 122.0;
+    pub(super) const SEMITONE: f64 = 1.059_463_094_359_295_3;
     pub(super) const SYNC_BPM: f64 = 126.0;
     pub(super) const TONE_HZ: f64 = 440.0;
     pub(super) const TRACK_BEATS: i64 = 23;
@@ -603,7 +606,9 @@ async fn a_refused_sync_leaves_a_later_track_free(rhythm_a_wav: String, rhythm_b
         );
         let _ = capture(rig, consts::SETTLE);
         assert!(
-            rig.queues[0].set_rate(1.0).is_ok(),
+            rig.queues[0]
+                .configure_track(TrackSettingsChange::Speed(1.0))
+                .is_ok(),
             "the later track inherits the SYNC the host refused"
         );
     })
@@ -612,11 +617,10 @@ async fn a_refused_sync_leaves_a_later_track_free(rhythm_a_wav: String, rhythm_b
     served.abort();
 }
 
-/// A refusal after SYNC was accepted turns the indicator off and frees the
-/// tempo fader, which steps from the played speed; a grid that arrives later
-/// puts the track back on the host at the tempo the host holds by then.
+/// A late grid restores SYNC with continuous speed correction; a seek then
+/// aligns immediately to the tempo the host holds by then.
 #[kithara::test(native, tokio)]
-async fn a_ready_grid_after_a_refusal_turns_sync_back_on_at_the_host_tempo(rhythm_a_wav: String) {
+async fn a_ready_grid_recovers_sync_smoothly_until_a_seek_aligns_it(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 126.0).await;
     let analysis = served.await.expect("the analysis fixture serves");
     rig.call(|rig| {
@@ -661,13 +665,30 @@ async fn a_ready_grid_after_a_refusal_turns_sync_back_on_at_the_host_tempo(rhyth
     .await;
     analysis.send_replace(Some(fixtures::supplied(rhythm_grid())));
     rig.call(|rig| {
+        let from = rig.queues[0].rate();
+        assert_revision_keeps_playback(rig);
+        rig.frame();
+        assert!(
+            rig.flag("deck.playback.synced@deck=a"),
+            "the usable grid restores SYNC during continuous playback"
+        );
+        let target = 124.0 / consts::TRACK_BPM;
+        let corrected = f64::from(rig.queues[0].rate());
+        assert!(
+            (target..f64::from(from)).contains(&corrected),
+            "recovery approaches the latest host tempo continuously: {from} -> {corrected}, target {target}"
+        );
+
+        rig.send("deck-a/wave", ControlAction::SetScalar(0.25));
+        rig.pump();
         rig.until(
-            "the grid restores SYNC at the host tempo",
+            "the seek aligns to the latest host tempo",
             Rig::DEADLINE,
             Rig::frame,
             |rig| {
                 rig.flag("deck.playback.synced@deck=a")
                     && rig.text("deck.playback.tempo@deck=a").as_deref() == Some("+3.3%")
+                    && rig.text("deck.playback.bpm@deck=a").as_deref() == Some("124.0")
             },
         );
     })
@@ -835,10 +856,47 @@ async fn crossfade_into_the_next_track(first: String, second: String, ready: boo
     served.abort();
 }
 
-/// A synced deck sounding on a grid with its bars two beats late hears the
-/// rhythm track on the host beats and bars soon after the true grid replaces it.
+fn assert_revision_keeps_playback(rig: &mut Rig) {
+    let mut position = rig.queues[0]
+        .position_seconds()
+        .expect("the sounding deck has a position");
+    let mut speed = f64::from(rig.queues[0].rate());
+    assert!(speed > 0.0, "the revision starts on a playing track");
+    let rate = f64::from(mock::host(rig).sample_rate().get());
+    let epsilon = f64::from(LinkConfig::default().epsilon());
+    let observation = AsPrimitive::<f64>::as_(consts::BLOCK_FRAMES) / rate;
+    let pulses = consts::REVISION_ANSWER.as_nanos() / consts::PULSE.as_nanos();
+    for _ in 0..pulses {
+        let _ = capture(rig, consts::PULSE);
+        let next = rig.queues[0]
+            .position_seconds()
+            .expect("the deck keeps playing through the revision");
+        let next_speed = f64::from(rig.queues[0].rate());
+        assert!(next_speed > 0.0);
+        let low = speed.min(next_speed);
+        let high = speed.max(next_speed);
+        let roundoff = f64::from(f32::EPSILON) * high;
+        assert!(
+            (next_speed - speed).abs() <= epsilon + roundoff,
+            "analysis changes the applied speed by a bounded step: {speed} -> {next_speed}"
+        );
+        let elapsed = consts::PULSE.as_secs_f64();
+        let advance = next - position;
+        let budget = observation * high;
+        assert!(advance > 0.0, "analysis keeps playback moving forward");
+        assert!(
+            (elapsed * low - budget..=elapsed * high + budget).contains(&advance),
+            "analysis must preserve media continuity at its applied speed: {position} -> {next}, speed {speed} -> {next_speed}"
+        );
+        position = next;
+        speed = next_speed;
+    }
+}
+
+/// Revising the bar keeps playback continuous; a manual seek then lands on
+/// the revised host beat and downbeat.
 #[kithara::test(native, tokio)]
-async fn a_revision_of_the_bar_lands_on_the_host_downbeat(rhythm_a_wav: String) {
+async fn a_bar_revision_keeps_playing_and_a_seek_lands_on_the_host_downbeat(rhythm_a_wav: String) {
     let early = grid_two_beats_off_the_bar();
     let revised = watch::channel(Some(fixtures::supplied(early))).0;
     let served_grid = revised.clone();
@@ -852,7 +910,10 @@ async fn a_revision_of_the_bar_lands_on_the_host_downbeat(rhythm_a_wav: String) 
         });
         let _ = capture(rig, consts::SETTLE);
         revised.send_replace(Some(fixtures::supplied(rhythm_grid())));
-        let _ = capture(rig, consts::REVISION_ANSWER);
+        assert_revision_keeps_playback(rig);
+        rig.send("deck-a/wave", ControlAction::SetScalar(0.25));
+        rig.pump();
+        let _ = capture(rig, consts::SETTLE);
         assert_on_host_beats(rig, 124.0, consts::INCOMING_BEATS);
     })
     .await;
@@ -860,10 +921,10 @@ async fn a_revision_of_the_bar_lands_on_the_host_downbeat(rhythm_a_wav: String) 
     served.abort();
 }
 
-/// A synced deck changes to a track the analysis has heard only roughly, and
-/// the true grid arrives once that track sounds.
+/// A late grid keeps the incoming track playing continuously; a manual seek
+/// then puts its real clicks on the host beats and downbeats.
 #[kithara::test(native, tokio)]
-async fn a_track_change_into_a_track_analysed_late_ends_on_the_host_beat(
+async fn a_late_grid_keeps_the_incoming_track_playing_until_a_seek_aligns_it(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
 ) {
@@ -886,10 +947,13 @@ async fn a_track_change_into_a_track_analysed_late_ends_on_the_host_beat(
             "deck A crossfades into its next track",
             Rig::playout(bar(124.0)),
             Rig::frame,
-            |rig| rig.queues[0].current_index() == Some(1),
+            |rig| rig.queues[0].current_index() == Some(1) && rig.queues[0].is_playing(),
         );
         next.send_replace(Some(fixtures::supplied(rhythm_grid())));
-        let _ = capture(rig, consts::REVISION_ANSWER);
+        assert_revision_keeps_playback(rig);
+        rig.send("deck-a/wave", ControlAction::SetScalar(0.25));
+        rig.pump();
+        let _ = capture(rig, consts::SETTLE);
         assert_on_host_beats(rig, 124.0, consts::INCOMING_BEATS);
     })
     .await;
@@ -1277,7 +1341,7 @@ fn longest_silence(pcm: &[f32], floor: f32) -> usize {
 }
 
 fn press_keylock(rig: &mut Rig) -> bool {
-    rig.send("deck-a/keylock/toggle", ControlAction::Activate);
+    rig.send("deck-a/keylock/chip/toggle", ControlAction::Activate);
     rig.apply();
     rig.engine.publish();
     rig.frame();
@@ -1326,7 +1390,7 @@ async fn the_keylock_chip_holds_the_pitch_of_a_playing_deck(long_wav: String) {
             rig.queues[0].is_playing()
         });
         rig.queues[0]
-            .set_rate(consts::KEYLOCK_SPEED)
+            .configure_track(TrackSettingsChange::Speed(consts::KEYLOCK_SPEED))
             .expect("deck A takes +8%");
         rig.pump();
         let _ = capture(rig, consts::SETTLE);
@@ -1347,31 +1411,19 @@ async fn the_keylock_chip_holds_the_pitch_of_a_playing_deck(long_wav: String) {
     rig.close().await;
 }
 
-/// Every deck starts with keylock on and its chip shown, unless the
-/// document's queue section sets the track keylock.
+/// Every deck starts with keylock on and its chip shown.
 #[kithara::test(native, tokio, flash(false))]
-#[case::shipped("{}", true)]
-#[case::document_turns_it_off("track:\n  keylock: false\n", false)]
-async fn a_deck_starts_with_keylock_on_unless_the_document_sets_it(
-    #[case] document: &'static str,
-    #[case] locked: bool,
-) {
-    let rig = OffThread::spawn("engine", move || {
-        Ok::<_, Infallible>(Rig::offline_with(|config| {
-            config.queue =
-                serde_yaml_ng::from_str(document).expect("the document parses as a queue");
-        }))
-    })
-    .await
-    .expect("rig fixture is infallible");
-    rig.call(move |rig| {
+async fn a_deck_starts_with_keylock_on() {
+    let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
+        .await
+        .expect("rig fixture is infallible");
+    rig.call(|rig| {
         rig.pump();
         rig.frame();
         for deck in ["a", "b"] {
-            assert_eq!(
+            assert!(
                 rig.flag(&format!("deck.key.locked@deck={deck}")),
-                locked,
-                "deck {deck} with the document {document:?}"
+                "deck {deck} starts with keylock on"
             );
             assert!(
                 !rig.flag(&format!("deck.key.lock_hidden@deck={deck}")),
@@ -1471,4 +1523,120 @@ async fn a_synced_tone_plays_on_without_a_gap_across_a_tempo_step_and_a_keylock_
     .await;
     rig.close().await;
     drop(served);
+}
+
+/// Presses one of deck A's transpose steps, `up` or `down`, and shows the
+/// engine's answer.
+fn step_transpose(rig: &mut Rig, step: &str) {
+    rig.send(&format!("deck-a/keylock/{step}"), ControlAction::Activate);
+    rig.apply();
+    rig.engine.publish();
+    rig.frame();
+}
+
+/// The two clicks of a double click on the chip toggle KEY LOCK twice and
+/// its reset clears the transpose, all in one batch the way a host sends
+/// them: KEY LOCK ends as it was.
+#[kithara::test(native, tokio, flash(false))]
+async fn a_double_click_on_the_key_lock_chip_resets_the_transpose_and_keeps_key_lock() {
+    let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
+        .await
+        .expect("rig fixture is infallible");
+    rig.call(|rig| {
+        rig.pump();
+        rig.frame();
+        for _ in 0..3 {
+            step_transpose(rig, "up");
+        }
+        assert_eq!(rig.text("deck.key.transpose@deck=a").as_deref(), Some("+3"));
+        let locked = rig.flag("deck.key.locked@deck=a");
+        for action in [
+            ControlAction::Activate,
+            ControlAction::Activate,
+            ControlAction::DoubleActivate,
+        ] {
+            rig.send("deck-a/keylock/chip/toggle", action);
+        }
+        rig.apply();
+        rig.engine.publish();
+        rig.frame();
+        assert_eq!(rig.flag("deck.key.locked@deck=a"), locked, "KEY LOCK");
+        assert_eq!(rig.text("deck.key.transpose@deck=a").as_deref(), Some(""));
+    })
+    .await;
+    rig.close().await;
+}
+
+/// Plays deck A's tone at `speed` and settles it.
+fn tone_at(rig: &mut Rig, url: &str, speed: f32) {
+    rig.queues[0].append(url).expect("deck A takes the tone");
+    rig.send("deck-a/play", ControlAction::Activate);
+    rig.pump();
+    rig.until("deck A plays the tone", Rig::DEADLINE, Rig::frame, |rig| {
+        rig.queues[0].is_playing()
+    });
+    rig.queues[0]
+        .configure_track(TrackSettingsChange::Speed(speed))
+        .expect("deck A takes the speed");
+    rig.pump();
+    let _ = capture(rig, consts::SETTLE);
+}
+
+/// Presses `up` on deck A and measures its tone once it settles.
+fn stepped_up(rig: &mut Rig) -> f64 {
+    step_transpose(rig, "up");
+    let _ = capture(rig, consts::SETTLE);
+    let measured = capture(rig, consts::PITCH_MEASURE);
+    pitch(rig, &measured.pcm)
+}
+
+/// Two presses of the chip's up step raise a 440 Hz tone two semitones with
+/// KEY LOCK on; with KEY LOCK off at +8% each press raises the tone's
+/// tempo-following pitch by a semitone. The chip reads the shift as `+N` or
+/// with a minus sign, nothing at 0, and the steps stop at an octave down.
+#[kithara::test(native, tokio)]
+#[case::locked(true, 1.0)]
+#[case::unlocked(false, consts::KEYLOCK_SPEED)]
+async fn the_transpose_steps_raise_a_playing_tone_a_semitone_a_press(
+    long_wav: String,
+    #[case] locked: bool,
+    #[case] speed: f32,
+) {
+    let rig = OffThread::spawn("engine", || {
+        Ok::<_, Infallible>(Rig::playback().on_device())
+    })
+    .await
+    .expect("rig fixture is infallible");
+    rig.call(move |rig| {
+        tone_at(rig, &long_wav, speed);
+        if !locked {
+            assert!(!press_keylock(rig), "the press turns keylock off");
+        }
+        let readout = |rig: &Rig| rig.text("deck.key.transpose@deck=a");
+        assert_eq!(readout(rig).as_deref(), Some(""), "no shift reads nothing");
+        let followed = consts::TONE_HZ * if locked { 1.0 } else { f64::from(speed) };
+        let once = stepped_up(rig);
+        assert_pitch(once, followed * consts::SEMITONE, "one press up");
+        let twice = stepped_up(rig);
+        assert_pitch(
+            twice,
+            followed * consts::SEMITONE * consts::SEMITONE,
+            "two presses up",
+        );
+        assert_eq!(readout(rig).as_deref(), Some("+2"));
+        for _ in 0..3 {
+            step_transpose(rig, "down");
+        }
+        assert_eq!(readout(rig).as_deref(), Some("\u{2212}1"));
+        for _ in 0..12 {
+            step_transpose(rig, "down");
+        }
+        assert_eq!(
+            readout(rig).as_deref(),
+            Some("\u{2212}12"),
+            "the steps stop at an octave down"
+        );
+    })
+    .await;
+    rig.close().await;
 }

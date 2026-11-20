@@ -143,8 +143,33 @@ async fn mp3_stream_continues_after_seek(
     serial,
     timeout(Duration::from_secs(20)),
     hang_timeout_secs(3),
-    tracing("kithara_audio=info,kithara_hls=info")
+    tracing("kithara_abr=debug,kithara_abr_seek=debug,kithara_audio=info,kithara_hls=info")
 )]
 async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
-    seek::abr_frozen_during_seek_resumes_after(temp_dir).await;
+    seek::abr_frozen_during_seek_resumes_after(temp_dir, false).await;
+}
+
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(20)),
+    hang_timeout_secs(3),
+    tracing("kithara_abr=debug,kithara_abr_seek=debug,kithara_audio=info,kithara_hls=info")
+)]
+async fn abr_seek_reads_stay_live_while_real_work_delays_pacing(temp_dir: TestTempDir) {
+    seek::abr_frozen_during_seek_resumes_after(temp_dir, true).await;
+}
+
+#[kithara::test(
+    native,
+    flash(false),
+    timeout(Duration::from_secs(20)),
+    hang_timeout_secs(3)
+)]
+#[should_panic(expected = "no progress for 1s")]
+fn abr_pcm_read_budget_rejects_a_late_return() {
+    seek::read_abr_chunk("deliberately late PCM read".to_owned(), || {
+        kithara_test_utils::test::wall_sleep(Duration::from_millis(1100));
+    });
 }

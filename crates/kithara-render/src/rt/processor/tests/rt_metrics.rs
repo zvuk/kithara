@@ -46,7 +46,7 @@ fn processor() -> (TestMixer, Control) {
     legacy_fixture::processor(DeckMixerConfig::default(), BLOCK_FRAMES, spec().sample_rate)
 }
 
-fn faulty_track(src: &str, failed: bool) -> Resource {
+fn faulty_track(failed: bool) -> Resource {
     let mut packets = PacketRing::new(spec(), Duration::from_secs(60), 8);
     if failed {
         packets.push(PcmPacket::Failed {
@@ -56,11 +56,11 @@ fn faulty_track(src: &str, failed: bool) -> Resource {
             },
         });
     }
-    legacy_fixture::from_packets(src, packets)
+    legacy_fixture::from_packets(packets)
 }
 
-fn healthy_track(input: &'static [u8], src: &str) -> Resource {
-    legacy_fixture::resource(input, src, 60.0, spec())
+fn healthy_track(input: &'static [u8]) -> Resource {
+    legacy_fixture::resource(input, 60.0, spec())
 }
 
 fn pump(processor: &mut TestMixer, blocks: usize) -> Vec<f32> {
@@ -99,7 +99,7 @@ fn metrics(processor: &TestMixer) -> RtMetricsSnapshot {
 
 #[kithara::test]
 fn decode_error_is_counted_not_logged() {
-    let (processor, _control, _) = render_loaded_blocks(faulty_track("broken.mp3", true), 1);
+    let (processor, _control, _) = render_loaded_blocks(faulty_track(true), 1);
     assert!(
         metrics(&processor).decode_errors() > 0,
         "a decode error inside process() must land in the counters"
@@ -108,8 +108,7 @@ fn decode_error_is_counted_not_logged() {
 
 #[kithara::test]
 fn source_with_nothing_ready_renders_silence_and_counts_an_underrun() {
-    let (processor, _control, rendered) =
-        render_loaded_blocks(faulty_track("stalled.mp3", false), 4);
+    let (processor, _control, rendered) = render_loaded_blocks(faulty_track(false), 4);
     assert!(
         metrics(&processor).underruns() > 0,
         "a zero-filled block short of EOF is an underrun"
@@ -125,7 +124,7 @@ fn source_with_nothing_ready_renders_silence_and_counts_an_underrun() {
 fn repeated_pcm_starvation_recovers_without_reloading_or_playing_again() {
     let spec = AudioSpec::new(2, super::shape().sample_rate);
     let packets = PacketRing::new(spec, Duration::from_secs(60), 2);
-    let resource = legacy_fixture::from_packets("late-producer", packets);
+    let resource = legacy_fixture::from_packets(packets);
     let (mut processor, mut control) =
         legacy_fixture::processor(DeckMixerConfig::default(), BLOCK_FRAMES, spec.sample_rate);
     let slot = Slot::new(0);
@@ -197,12 +196,7 @@ fn repeated_pcm_starvation_recovers_without_reloading_or_playing_again() {
 fn a_crossfade_into_a_stalled_track_underruns_instead_of_waiting(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let outgoing = Slot::new(0);
-    attach(
-        &mut control,
-        outgoing,
-        healthy_track(constant_half, "outgoing.mp3"),
-        false,
-    );
+    attach(&mut control, outgoing, healthy_track(constant_half), false);
     push(
         &mut control,
         DeckPart::Start {
@@ -217,12 +211,7 @@ fn a_crossfade_into_a_stalled_track_underruns_instead_of_waiting(constant_half: 
         "the outgoing track plays at full level before the crossfade ({before})"
     );
     let incoming = Slot::new(1);
-    attach(
-        &mut control,
-        incoming,
-        faulty_track("incoming.mp3", false),
-        false,
-    );
+    attach(&mut control, incoming, faulty_track(false), false);
     push(
         &mut control,
         DeckPart::Start {
@@ -244,7 +233,7 @@ fn a_crossfade_into_a_stalled_track_underruns_instead_of_waiting(constant_half: 
 
 #[kithara::test]
 fn a_healthy_track_reports_no_trouble(constant_half: &'static [u8]) {
-    let (processor, _control, _) = render_loaded_blocks(healthy_track(constant_half, "ok.mp3"), 1);
+    let (processor, _control, _) = render_loaded_blocks(healthy_track(constant_half), 1);
     assert_eq!(metrics(&processor), RtMetricsSnapshot::default());
 }
 
@@ -296,12 +285,7 @@ fn evicting_an_audible_track_is_counted(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     for index in 0..DeckMixerConfig::default().slots().get() {
         let slot = Slot::new(u16::try_from(index).expect("configured slot"));
-        attach(
-            &mut control,
-            slot,
-            healthy_track(constant_half, &format!("track-{index}.mp3")),
-            false,
-        );
+        attach(&mut control, slot, healthy_track(constant_half), false);
         push(
             &mut control,
             DeckPart::Start {
@@ -314,7 +298,7 @@ fn evicting_an_audible_track_is_counted(constant_half: &'static [u8]) {
     attach(
         &mut control,
         Slot::new(0),
-        healthy_track(constant_half, "newcomer.mp3"),
+        healthy_track(constant_half),
         true,
     );
     pump(&mut processor, 1);
@@ -328,12 +312,7 @@ fn evicting_an_audible_track_is_counted(constant_half: &'static [u8]) {
 fn a_block_larger_than_declared_is_clamped_not_grown(constant_half: &'static [u8]) {
     let (mut processor, mut control) = processor();
     let slot = Slot::new(0);
-    attach(
-        &mut control,
-        slot,
-        healthy_track(constant_half, "ok.mp3"),
-        false,
-    );
+    attach(&mut control, slot, healthy_track(constant_half), false);
     push(
         &mut control,
         DeckPart::Start {

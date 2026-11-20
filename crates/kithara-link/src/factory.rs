@@ -44,7 +44,7 @@ impl<F> LinkedFactory<F> {
     }
 }
 
-impl<S, F: TrackFactory<S>> TrackFactory<S> for LinkedFactory<F> {
+impl<F: TrackFactory> TrackFactory for LinkedFactory<F> {
     type Track = Linked<F::Track>;
 
     fn track(&self, config: PlayerConfig) -> Result<Self::Track, PlayError> {

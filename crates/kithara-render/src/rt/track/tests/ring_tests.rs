@@ -1,14 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 use kithara_audio::{DecodeErrorKind, FailureSource, TrackFailureKind};
-use kithara_platform::sync::Arc;
 use kithara_signal::{SegmentId, SessionFrame};
 use kithara_test_fixtures::mock_fixtures::ring_pcm;
 use kithara_test_utils::kithara;
 
-use super::super::{PcmConsumer, PlayerResource, ReadOutcome};
+use super::super::{PlayerResource, ReadOutcome};
 use crate::{
     mock::pcm_fixture::{PcmFixture, chunk},
-    test_pools::pools,
     worker::PcmPacket,
 };
 struct RingFixture {
@@ -20,8 +18,7 @@ impl RingFixture {
         let mut transport = PcmFixture::new(8, false).await;
         let receiver = transport.receiver.take().expect("receiver");
         Self {
-            resource: PlayerResource::new(PcmConsumer::new(receiver), Arc::from("moved"), &pools())
-                .expect("resource"),
+            resource: PlayerResource::new(Box::new(receiver)),
             transport,
         }
     }
@@ -91,7 +88,7 @@ async fn a_prime_takes_a_delivered_chunk(ring_pcm: Vec<f32>) {
 async fn consumer_phase_starts_buffering() {
     let mut fixture = RingFixture::new().await;
     assert!(fixture.resource.mark(SessionFrame::new(0)).is_none());
-    assert_eq!(fixture.resource.poll_end(&mut 8, false), None);
+    assert_eq!(fixture.resource.poll_end(&mut 8), None);
 }
 
 #[kithara::test(native, tokio)]
@@ -142,10 +139,7 @@ async fn seek_drain_preserves_new_epoch_eof_after_stale_chunks(ring_pcm: Vec<f32
     fixture.eof(current);
     fixture.resource.select_segment(current);
     assert_eq!(fixture.read().0, ReadOutcome::Eof);
-    assert_eq!(
-        fixture.resource.poll_end(&mut 8, false),
-        Some(ReadOutcome::Eof)
-    );
+    assert_eq!(fixture.resource.poll_end(&mut 8), Some(ReadOutcome::Eof));
 }
 
 #[kithara::test(native, tokio)]
@@ -153,20 +147,14 @@ async fn consumer_phase_eof_terminates() {
     let mut fixture = RingFixture::new().await;
     fixture.eof(SegmentId::FIRST);
     assert_eq!(fixture.read().0, ReadOutcome::Eof);
-    assert_eq!(
-        fixture.resource.poll_end(&mut 8, false),
-        Some(ReadOutcome::Eof)
-    );
+    assert_eq!(fixture.resource.poll_end(&mut 8), Some(ReadOutcome::Eof));
 }
 
 #[kithara::test(native, tokio)]
 async fn consumer_does_not_park_in_terminal_phase() {
     let mut fixture = RingFixture::new().await;
     fixture.eof(SegmentId::FIRST);
-    assert_eq!(
-        fixture.resource.poll_end(&mut 8, false),
-        Some(ReadOutcome::Eof)
-    );
+    assert_eq!(fixture.resource.poll_end(&mut 8), Some(ReadOutcome::Eof));
     assert_eq!(fixture.read().0, ReadOutcome::Eof);
 }
 
@@ -195,7 +183,7 @@ async fn a_stale_producer_failure_survives_a_new_seek_epoch() {
     fixture.failure(SegmentId::FIRST);
     fixture.resource.select_segment(SegmentId::FIRST.next());
     assert_eq!(
-        fixture.resource.poll_end(&mut 8, false),
+        fixture.resource.poll_end(&mut 8),
         Some(ReadOutcome::Failed(FailureSource::ProducerAfterSeek {
             failure: TrackFailureKind::Decode {
                 kind: DecodeErrorKind::InvalidData
@@ -209,7 +197,7 @@ async fn a_stale_natural_eof_does_not_terminate_a_new_seek_epoch() {
     let mut fixture = RingFixture::new().await;
     fixture.eof(SegmentId::FIRST);
     fixture.resource.select_segment(SegmentId::FIRST.next());
-    assert_eq!(fixture.resource.poll_end(&mut 8, false), None);
+    assert_eq!(fixture.resource.poll_end(&mut 8), None);
 }
 
 #[kithara::test(native, tokio)]
@@ -220,7 +208,7 @@ async fn a_stale_producer_failure_terminates_the_consumer() {
         .resource
         .select_segment(SegmentId::FIRST.next().next().next());
     assert_eq!(
-        fixture.resource.poll_end(&mut 8, false),
+        fixture.resource.poll_end(&mut 8),
         Some(ReadOutcome::Failed(FailureSource::ProducerAfterSeek {
             failure: TrackFailureKind::Decode {
                 kind: DecodeErrorKind::InvalidData

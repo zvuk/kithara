@@ -1,5 +1,5 @@
 use kithara::{
-    analysis::{AnalysisDemand, AnalysisFingerprint, AnalysisProgress, BeatGridModel},
+    analysis::{AnalysisDemand, AnalysisFingerprint, AnalysisProgress, BeatGridModel, MusicalKey},
     platform::sync::Arc,
     play::{ArtifactLoadError, ArtifactSource},
     waveform::Waveform,
@@ -67,6 +67,7 @@ impl<T> From<Result<Arc<T>, ArtifactLoadError>> for Supply<T> {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Prepared {
     pub(crate) beat_grid: Supply<BeatGridModel>,
+    pub(crate) key: Supply<MusicalKey>,
     pub(crate) waveform: Supply<Waveform>,
 }
 
@@ -84,24 +85,30 @@ impl Prepared {
             AnalysisDemand::WAVEFORM,
             fingerprint.waveform().is_some() && self.waveform.is_missing(),
         );
+        demand.set(
+            AnalysisDemand::KEY,
+            fingerprint.key().is_some() && self.key.is_missing(),
+        );
         demand
     }
 
     pub(crate) fn for_config(config: &AppResourceConfig) -> Self {
         Self {
             beat_grid: config.beat_grid().into(),
+            key: config.key().into(),
             waveform: config.waveform().into(),
         }
     }
 
     /// Whether the track was opened with nothing prepared.
     pub(crate) const fn is_empty(&self) -> bool {
-        self.beat_grid.is_missing() && self.waveform.is_missing()
+        self.beat_grid.is_missing() && self.key.is_missing() && self.waveform.is_missing()
     }
 
     /// Whether the track needs nothing further: the pass ran its course and
     /// every artifact this runtime offers is either prepared or published.
-    /// A prepared artifact excuses the pass from producing it.
+    /// A prepared artifact excuses the pass from producing it. An analysed key
+    /// is published once the snapshot carries its tag, with or without a key.
     pub(crate) fn settled_for(
         &self,
         progress: &AnalysisProgress,
@@ -114,6 +121,9 @@ impl Prepared {
         let waveform = !self.waveform.is_missing()
             || fingerprint.waveform().is_none()
             || analysis.waveform().is_some();
-        analysis.is_settled() && beat && waveform
+        let key = !self.key.is_missing()
+            || fingerprint.key().is_none()
+            || analysis.fingerprint().key().is_some();
+        analysis.is_settled() && beat && waveform && key
     }
 }

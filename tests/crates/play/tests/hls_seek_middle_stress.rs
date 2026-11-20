@@ -6,7 +6,7 @@ use kithara::{
     decode::DecoderBackend,
     host::{HostConfig, HostSettings},
     platform::time::Duration,
-    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     TestServerHelper, fixture_protocol::DelayRule, hls_fixture::create_test_downloader,
@@ -76,7 +76,6 @@ async fn hls_seek_middle_repeated_seeks_stress(
 
     let cfg: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .downloader(downloader.clone())
             .discriminator("t0")
             .store(store)

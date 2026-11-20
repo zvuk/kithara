@@ -27,8 +27,12 @@ where
     /// commit shifts offsets.
     fn all_sizes_complete(&self) -> bool {
         self.layout
-            .try_published(|| Some(self.sizes_complete() && self.exact_init_complete()))
+            .try_published(|| Some(self.metadata_complete()))
             .unwrap_or(false)
+    }
+
+    fn metadata_complete(&self) -> bool {
+        self.sizes_complete() && self.exact_init_complete()
     }
 
     /// RT-reachable: a lock-free, alloc-free store of the none sentinel.
@@ -228,9 +232,9 @@ where
     /// Skips registering an exact-size demand when the container resolves ranges by segment index,
     /// or every served size and the init are already exact, avoiding an unnecessary O(prefix)
     /// re-scan.
-    pub(in crate::variant) fn set_exact_seek_demand(&self, anchor: u64, segment: u32) {
+    pub(in crate::variant) fn set_exact_seek_demand_locked(&self, anchor: u64, segment: u32) {
         if !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
-            || self.all_sizes_complete()
+            || self.metadata_complete()
         {
             self.clear_exact_seek();
             return;

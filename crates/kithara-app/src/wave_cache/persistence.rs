@@ -491,7 +491,7 @@ mod tests {
             time::Duration,
             tokio::runtime::{Builder as RuntimeBuilder, Handle},
         },
-        prelude::ResourceSrc,
+        play::ResourceSrc,
         worker::{DispatcherConfig, TaskConfig, WorkerConfig},
     };
     use kithara_test_utils::kithara;
@@ -517,8 +517,12 @@ mod tests {
             .extent(consts::EXTENT)
             .settled(true)
             .coverage(coverage)
-            .fingerprint(AnalysisFingerprint::default())
+            .fingerprint(fingerprint())
             .build()
+    }
+
+    fn fingerprint() -> AnalysisFingerprint {
+        AnalysisFingerprint::builder().key("key:test:v1").build()
     }
 
     async fn round_trip(backend: StorageBackend) {
@@ -579,7 +583,7 @@ mod tests {
         reader
             .read_into(&mut bytes)
             .expect("committed analysis reads");
-        let file = AnalysisFile::parse(&bytes, &AnalysisFingerprint::default())
+        let file = AnalysisFile::parse(&bytes, &fingerprint())
             .expect("replacement prefix and payload form a valid file");
         assert_eq!(file.latest().analysis().revision(), 2);
         assert_eq!(

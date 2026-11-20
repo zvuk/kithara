@@ -771,7 +771,14 @@ fn seek_trim_lands_first_chunk_on_exact_target_frame(
     };
     let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
 
-    let _ = decoder.seek(target).expect("BUG: seek");
+    let landing = decoder.seek(target).expect("BUG: seek");
+    assert!(matches!(
+        landing,
+        DecoderSeekOutcome::Landed {
+            clock: crate::LandingClock::Kept,
+            ..
+        }
+    ));
     let outcome = decoder.next_chunk().expect("BUG: next_chunk");
     let DecoderChunkOutcome::Chunk(chunk) = outcome else {
         panic!("expected Chunk, got {outcome:?}");
@@ -840,7 +847,14 @@ fn seek_trim_uses_codec_output_rate_for_resampled_chunks(
     };
     let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
 
-    let _ = decoder.seek(target).expect("BUG: seek");
+    let landing = decoder.seek(target).expect("BUG: seek");
+    assert!(matches!(
+        landing,
+        DecoderSeekOutcome::Landed {
+            clock: crate::LandingClock::Restarted,
+            ..
+        }
+    ));
     let outcome = decoder.next_chunk().expect("BUG: next_chunk");
     let DecoderChunkOutcome::Chunk(chunk) = outcome else {
         panic!("expected Chunk, got {outcome:?}");
