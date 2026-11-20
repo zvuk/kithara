@@ -376,7 +376,7 @@ mod tests {
             .beat_grid(ArtifactSource::from(grid.clone()))
             .key(ArtifactSource::from(key.clone()))
             .waveform(ArtifactSource::Value(Arc::new(
-                Waveform::new(Vec::new(), NonZeroU64::MIN).expect("empty waveform is valid"),
+                Waveform::try_new(Vec::new(), NonZeroU64::MIN).expect("empty waveform is valid"),
             )))
             .build();
         let (returned, _load) = loader

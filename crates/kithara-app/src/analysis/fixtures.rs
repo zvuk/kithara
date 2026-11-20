@@ -81,7 +81,7 @@ pub(crate) fn progress(analysis: TrackAnalysis) -> AnalysisProgress {
 
 /// One bucket of three 0.5 band heights.
 pub(crate) fn one_bucket_wave() -> Waveform {
-    Waveform::new(vec![Bucket::new(0.5, 0.5, 0.5)], NonZeroU64::MIN)
+    Waveform::try_new(vec![Bucket::new(0.5, 0.5, 0.5)], NonZeroU64::MIN)
         .expect("hand-built buckets are valid")
 }
 
@@ -239,7 +239,7 @@ pub(crate) fn served_grid() -> BeatGridModel {
 
 /// A waveform the caller hands over.
 pub(crate) fn served_waveform() -> Waveform {
-    Waveform::new(vec![Bucket::new(0.25, 0.5, 0.75); 8], NonZeroU64::MIN)
+    Waveform::try_new(vec![Bucket::new(0.25, 0.5, 0.75); 8], NonZeroU64::MIN)
         .expect("fixture bands are in range")
 }
 

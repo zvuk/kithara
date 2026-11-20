@@ -94,14 +94,14 @@ impl WaveformAnalyzer {
             params,
             fft,
             spectrum,
-            bands: BTreeMap::new(),
-            partial: BTreeMap::new(),
-            downmix: pools.get::<f32>(),
             band_bin_inv,
-            opened: 0,
             low_mid_bin,
             mid_high_bin,
             window_hop,
+            bands: BTreeMap::new(),
+            partial: BTreeMap::new(),
+            downmix: pools.get::<f32>(),
+            opened: 0,
         })
     }
 

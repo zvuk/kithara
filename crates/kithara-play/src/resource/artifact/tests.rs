@@ -49,7 +49,7 @@ fn grid() -> RawBeatGrid {
 }
 
 fn waveform() -> Waveform {
-    Waveform::new(vec![Bucket::new(0.25, 0.5, 0.75)], NonZeroU64::MIN)
+    Waveform::try_new(vec![Bucket::new(0.25, 0.5, 0.75)], NonZeroU64::MIN)
         .expect("BUG: bands are in range")
 }
 

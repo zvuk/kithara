@@ -314,7 +314,7 @@ mod tests {
     }
 
     fn wave_of(height: f32) -> Waveform {
-        Waveform::new(vec![Bucket::new(height, height, height)], NonZeroU64::MIN)
+        Waveform::try_new(vec![Bucket::new(height, height, height)], NonZeroU64::MIN)
             .expect("hand-built buckets are valid")
     }
 
