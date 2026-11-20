@@ -8,7 +8,12 @@ use kithara_play::{
 };
 use kithara_signal::SessionFrame;
 
-use super::super::{Queue, command::play_error, slots::Role, types::Continuation};
+use super::super::{
+    Queue,
+    command::play_error,
+    slots::Role,
+    types::{Continuation, SeekPosition},
+};
 use crate::{AdvanceReason, QueueEvent, TrackStatus};
 
 impl<S, F> Queue<S, F>
@@ -63,7 +68,7 @@ where
                 .ok_or(PlayError::NoActiveSlot)?
                 .role = Role::Current;
             self.active.activate_replacement(index);
-            let source_changed = self.tracks.commit_source(id, duration);
+            let source_changed = self.commit_source(id, duration);
             if !source_changed {
                 self.navigation
                     .commit(self.current, id, pending.reason, &self.track_ids());
@@ -296,7 +301,7 @@ where
             .ok_or(PlayError::NoActiveSlot)?
             .role = Role::Current;
         self.active.activate_replacement(index);
-        let source_changed = self.tracks.commit_source(target.to, duration);
+        let source_changed = self.commit_source(target.to, duration);
         if !source_changed {
             self.navigation
                 .commit(self.current, target.to, reason, &self.track_ids());
@@ -317,6 +322,18 @@ where
         }
         self.tracks.set_status(target.to, TrackStatus::Consumed);
         Ok(())
+    }
+
+    /// Commits `id`'s staged source. The replacement opened at the seek
+    /// target the outgoing receiver still holds pending, so that seek is done.
+    fn commit_source(&mut self, id: TrackId, duration: Option<Duration>) -> bool {
+        let changed = self.tracks.commit_source(id, duration);
+        if changed
+            && matches!(self.held_position, Some(SeekPosition::Pending { item, .. }) if item == id)
+        {
+            self.held_position = None;
+        }
+        changed
     }
 
     fn replacement_duration(&self, id: TrackId) -> Option<Duration> {
@@ -412,14 +429,15 @@ where
                     && target.to == active.item
                     && target.continued == Some(Continuation::Pause(seq))
             });
-        let paused = matches!(
-            active.track.snapshot().as_ref().status,
-            PlayingStatus::Paused { .. }
+        let replacement = self.active.is_replacement(index);
+        let paused = held_paused(
+            &active.track.snapshot().as_ref().status,
+            continued_pause && replacement,
         );
         if continued_pause {
             self.target.as_mut().ok_or(PlayError::NotReady)?.continued = None;
             if let Settled::Rejected { reason, .. } = settled {
-                return if matches!(reason, Rejection::Late | Rejection::Stale) {
+                return if retries(reason, replacement) {
                     Ok(())
                 } else {
                     self.cancel_target(out).map_err(play_error)
@@ -441,4 +459,20 @@ where
         }
         Ok(())
     }
+}
+
+/// Whether `status` holds the paused frame a paused target waits for; a
+/// `seated` replacement lands loaded without a start.
+fn held_paused(status: &PlayingStatus, seated: bool) -> bool {
+    match status {
+        PlayingStatus::Paused { .. } => true,
+        PlayingStatus::Loaded => seated,
+        _ => false,
+    }
+}
+
+/// Whether a paused target outlives the rejection of its continuation; a
+/// refused seat releases the replacement, so it cannot retry.
+fn retries<R>(reason: &Rejection<R>, replacement: bool) -> bool {
+    matches!(reason, Rejection::Late | Rejection::Stale) && !replacement
 }

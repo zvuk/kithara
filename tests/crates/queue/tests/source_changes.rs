@@ -21,16 +21,24 @@ use url::Url;
 use crate::bufpool_ext::pools;
 
 #[kithara::test(tokio, flash(false))]
-#[case(false)]
-#[case(true)]
+#[case::paused(false, None)]
+#[case::playing(true, None)]
+#[case::paused_in_one_slot(false, Some(1))]
+#[case::playing_in_one_slot(true, Some(1))]
 async fn changing_a_current_source_preserves_identity_position_and_play_state(
     #[future(awt)] served_mp3: (TestServerHelper, Url),
     #[case] playing: bool,
+    #[case] slots: Option<usize>,
 ) {
     let (_server, url) = served_mp3;
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let region = pools();
+    let mixer = slots.map_or_else(kithara::play::DeckMixerConfig::default, |slots| {
+        kithara::play::DeckMixerConfig::builder()
+            .slots(std::num::NonZeroUsize::new(slots).expect("a slot"))
+            .build()
+    });
     let queue = OfflineQueue::paced(
         HostConfig::offline(region.clone()).build(),
         Queue::new(
@@ -41,6 +49,7 @@ async fn changing_a_current_source_preserves_identity_position_and_play_state(
                         .build(),
                 )
                 .store(store.clone())
+                .mixer(mixer)
                 .build(),
         ),
         RENDER_PACE,
@@ -128,6 +137,10 @@ async fn changing_a_current_source_preserves_identity_position_and_play_state(
             .unwrap();
     } else {
         assert_eq!(after, before, "a paused source retains its exact position");
+        queue.run(kithara::queue::QueueControl::play).await;
+        wait_for_position_at_least(&queue, after + 0.1, Duration::from_secs(10))
+            .await
+            .unwrap();
     }
     while let Ok(event) = events.try_recv() {
         assert!(!matches!(
