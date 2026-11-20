@@ -14,7 +14,7 @@ use super::{
     Queue, Transition,
     slots::{LoadState, Role},
     transition::TransitionRequest,
-    types::{Placement, SeekPosition},
+    types::{Continuation, Placement, SeekPosition},
 };
 use crate::{
     ActionAtItemEnd, AdvanceReason, PlaybackOrder, QueueError, QueueEvent, QueueRepeatMode,
@@ -647,7 +647,15 @@ where
             .current
             .filter(|id| self.tracks.is_changing_source(*id))
         {
-            if self.pending_handover.is_some() {
+            // A submitted replacement seat has already exchanged the slot's
+            // receiver; only its own receipt settles that ownership.
+            let seating = self.target.is_some_and(|target| {
+                matches!(target.continued, Some(Continuation::Pause(_)))
+                    && self
+                        .incoming_index(target.to)
+                        .is_some_and(|index| self.active.is_replacement(index))
+            });
+            if self.pending_handover.is_some() || seating {
                 return Err(QueueError::NotReady(id));
             }
             self.cancel_target(out)?;

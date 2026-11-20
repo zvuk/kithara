@@ -1213,3 +1213,78 @@ fn only_a_failed_private_receiver_ends_its_source_change(#[case] fault: Option<P
         assert_eq!((after.id, after.url), (current, accepted));
     }
 }
+
+#[kithara::test]
+#[case::submitted_seat(true)]
+#[case::unsubmitted(false)]
+fn a_seek_waits_for_a_submitted_paused_replacement_seat(#[case] submitted: bool) {
+    use super::super::super::types::{Continuation, Target};
+
+    let (mut queue, first, current) = selected_second();
+    for id in [first, current] {
+        let index = queue
+            .active
+            .position(|active| active.item == id)
+            .expect("seated");
+        queue.active.get_mut(index).expect("seated").track.0.status = PlayerTrackStatus::Paused {
+            at: Duration::from_secs(1),
+        };
+    }
+    queue
+        .tracks
+        .stage_source(
+            current,
+            TrackSource::from("https://example.com/alternate.mp3"),
+            kithara_play::Position::from_secs(1),
+        )
+        .expect("staged source");
+    let slot = Slot::new(0);
+    let mut track = queue
+        .config
+        .factory
+        .track(PlayerConfig {
+            item: current,
+            slot: Some(slot),
+            settings: TrackSettings::default(),
+        })
+        .expect("snapshot track");
+    track.0.status = PlayerTrackStatus::Loaded;
+    queue.active.stage(Active {
+        item: current,
+        slot,
+        track,
+        role: Role::Incoming,
+        load: None,
+    });
+    queue.target = Some(Target {
+        to: current,
+        bound: None,
+        settings: CrossfadeSettings::default(),
+        transition: Transition::None,
+        reason: crate::AdvanceReason::UserSelect,
+        playing: false,
+        auto: false,
+        stale: None,
+        continued: submitted.then(|| Continuation::Pause(fixture_seq())),
+        repeat: None,
+        chained: false,
+    });
+    let (mut deck, _deck_inbox) = channel(ChannelConfig::builder().build());
+    let (mut dispatcher, _dispatcher_inbox) = channel(ChannelConfig::builder().build());
+
+    let result = queue.seek_to(
+        Duration::from_secs(5),
+        &mut Outbox::new(&mut deck, &mut dispatcher),
+    );
+
+    assert_eq!(
+        (
+            matches!(result, Err(QueueError::NotReady(id)) if id == current),
+            queue.target.is_some(),
+            queue.tracks.is_changing_source(current),
+            queue.incoming_index(current).is_some(),
+        ),
+        (submitted, submitted, submitted, submitted),
+        "only an unsubmitted replacement yields to the seek: {result:?}"
+    );
+}
