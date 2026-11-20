@@ -1000,6 +1000,16 @@ fn ramped_handover(k: u128) -> (u128, u128) {
 #[kithara::test]
 #[case::varispeed(false, SpeedCurve::Constant(1.0), None)]
 #[case::keylock(true, SpeedCurve::Constant(1.0), None)]
+#[case::varispeed_steps(
+    false,
+    SpeedCurve::Steps(vec![(0, 1.125), (8, 1.0)].into()),
+    Some(stepped_handover as Handover)
+)]
+#[case::varispeed_ramp(
+    false,
+    SpeedCurve::Ramp { to: 1.0, frames: NonZeroU64::new(8).expect("ramp") },
+    Some(ramped_handover as Handover)
+)]
 #[case::keylock_steps(
     true,
     SpeedCurve::Steps(vec![(0, 1.125), (8, 1.0)].into()),
