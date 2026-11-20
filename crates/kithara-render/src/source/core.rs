@@ -728,6 +728,9 @@ where
             DrainState::Cut => {}
             DrainState::LiveWarp | DrainState::Warp | DrainState::Exhausted => return None,
         }
+        if self.quantum_failed {
+            return Some(self.fail(TrackFailureKind::Render));
+        }
         let limit = self.lane.output_limit();
         if limit == 0 {
             return Some(TrackStep::StateChanged);
@@ -880,7 +883,9 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn decoder_discontinuity_drains_the_staged_outgoing_quantum() {
+    #[case::drained(false)]
+    #[case::failed_during_the_cut(true)]
+    fn decoder_discontinuity_drains_the_staged_outgoing_quantum(#[case] failed: bool) {
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("sample rate"));
         let next = SourceDiscontinuity::new(1, spec);
@@ -924,6 +929,18 @@ mod tests {
         assert!(data.samples.iter().all(|sample| *sample == 0.25));
         assert_eq!(source.discontinuity.expect("outgoing stamp").revision(), 0);
         assert!(!source.sync_discontinuity());
+        if failed {
+            source.quantum_failed = true;
+            assert!(matches!(
+                source.step_track(),
+                TrackStep::Failed(TrackFailureKind::Render)
+            ));
+            assert!(matches!(
+                source.step_track(),
+                TrackStep::Failed(TrackFailureKind::Render)
+            ));
+            return;
+        }
         assert!(source.step_cut().is_none());
         assert_eq!(source.discontinuity, Some(next));
     }

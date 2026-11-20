@@ -3,6 +3,8 @@
 //! A source command during or after that cut starts the incoming source on
 //! its own entry; a control change keeps the phase.
 
+use std::num::NonZeroU64;
+
 use kithara_audio::WaitingReason;
 use kithara_bufpool::PoolRegion;
 use kithara_command::Sender;
@@ -778,6 +780,52 @@ fn a_source_command_supersedes_a_cut_and_a_control_keeps_its_phase(
 }
 
 #[kithara::test]
+#[case::faster(12)]
+#[case::unity(8)]
+fn a_control_between_tail_packets_keeps_the_outgoing_format_of_a_faster_clock(#[case] step: u8) {
+    let pools = pools();
+    let (mut lane, end) = outgoing_lane(
+        &pools,
+        (1.25, true, QUANTUM),
+        Staged::ShortOf(3),
+        Tail::Ramp,
+    );
+    let end = u128::try_from(end).expect("end") * SCALE;
+    lane.publish(2, stereo_at(FASTER_RATE));
+    lane.send_at(
+        MID_DRAIN,
+        LaneCommand::SetSpeed(SpeedCurve::Constant(f32::from(step) / 8.0)),
+    );
+    let cut = run(&mut lane);
+    lane.push(pcm(
+        &pools,
+        (2, stereo_at(FASTER_RATE)),
+        NEXT,
+        u64::from(INCOMING_FRAMES),
+        |frame| -ramp_value(frame) - 1.0,
+    ));
+    let outcome = cut.and_then(|()| run(&mut lane));
+
+    let at = usize::try_from(MID_DRAIN).expect("frame");
+    let from = u128::try_from(at).expect("frame") * 10;
+    let step = u128::from(step);
+    let mut expected = walk(0, 10, Some(end), at);
+    let tail = walk(from, step, Some(end), usize::MAX);
+    let residual = tail.last().map_or(from, |last| last + step) - end;
+    let mut expected = expected
+        .drain(..)
+        .chain(tail)
+        .map(|position| reduced(position, SCALE))
+        .collect::<Vec<_>>();
+    let scale = SCALE * u128::from(RATE);
+    expected.push(reduced(
+        u128::from(NEXT) * scale + residual * u128::from(FASTER_RATE),
+        scale,
+    ));
+    assert_law(&lane, outcome, &expected);
+}
+
+#[kithara::test]
 #[case::above_then_below_half(298)]
 #[case::above_then_whole(301)]
 fn repeated_clock_changes_carry_each_tail_phase(#[case] second: u64) {
@@ -932,5 +980,63 @@ fn an_approach_cut_crosses_its_segment_boundary_into_a_faster_clock(#[case] stag
     );
     let mut expected = terminal;
     expected.push(first);
+    assert_law(&lane, outcome, &expected);
+}
+
+/// Exact source position of output `k` of a handover.
+type Handover = fn(u128) -> (u128, u128);
+
+/// Source position of output `k` of a 1.25 → 1.0 handover over 8 outputs
+/// from source frame 160: a step at 1.125, or a linear ramp whose position
+/// is `160 + 1.25 k - k² / 64`.
+fn stepped_handover(k: u128) -> (u128, u128) {
+    reduced(160 * SCALE + 9 * k, SCALE)
+}
+
+fn ramped_handover(k: u128) -> (u128, u128) {
+    reduced(160 * 64 + 80 * k - k * k, 64)
+}
+
+#[kithara::test]
+#[case::varispeed(false, SpeedCurve::Constant(1.0), None)]
+#[case::keylock(true, SpeedCurve::Constant(1.0), None)]
+#[case::keylock_steps(
+    true,
+    SpeedCurve::Steps(vec![(0, 1.125), (8, 1.0)].into()),
+    Some(stepped_handover as Handover)
+)]
+#[case::keylock_ramp(
+    true,
+    SpeedCurve::Ramp { to: 1.0, frames: NonZeroU64::new(8).expect("ramp") },
+    Some(ramped_handover as Handover)
+)]
+fn a_unity_handover_inside_a_cut_drains_the_outgoing_tail(
+    #[case] keylock: bool,
+    #[case] curve: SpeedCurve,
+    #[case] handover: Option<Handover>,
+) {
+    let pools = pools();
+    let mut lane = Lane::new(&pools, 1.25, keylock, QUANTUM);
+    let at = u64::try_from(QUANTUM).expect("frame");
+    lane.send_at(at, LaneCommand::SetSpeed(curve));
+    let frames = 200;
+    lane.push(ramp(&pools, 1, 0, frames));
+    let outgoing = run(&mut lane);
+    lane.change_clock(&pools, 2, NEXT);
+    let outcome = outgoing.and_then(|()| run(&mut lane));
+
+    let entry = handover.map_or_else(Vec::new, |position| (0..8).map(position).collect());
+    let unity = u128::from(at) * 10 + if handover.is_some() { 72 } else { 0 };
+    let expected = walk(0, 10, None, QUANTUM)
+        .into_iter()
+        .map(|position| reduced(position, SCALE))
+        .chain(entry)
+        .chain(
+            walk(unity, 8, Some(u128::from(frames) * SCALE), usize::MAX)
+                .into_iter()
+                .chain(walk(u128::from(NEXT) * SCALE, 8, None, QUANTUM))
+                .map(|position| reduced(position, SCALE)),
+        )
+        .collect::<Vec<_>>();
     assert_law(&lane, outcome, &expected);
 }
