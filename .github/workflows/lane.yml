@@ -236,21 +236,26 @@ jobs:
             chromium) driver=web-chromium.log netlog=web-chromium-netlog ;;
             *) echo "::error title=Lane report::no shape is known for a $REPORT report"; exit 1 ;;
           esac
-          copy=$KITHARA_LANE_REPORT
-          temp=$(cd "$RUNNER_TEMP" && pwd -P)
-          name=${copy##*/}
-          whole() {
-            [ -n "$copy" ] && [ "${copy%/*}" = "$temp" ] && [[ $name =~ ^[^./]+\.${REPORT}$ ]] \
-              && [ -d "$copy" ] && [ ! -L "$copy" ] \
-              && [ -f "$copy/$driver" ] && [ ! -L "$copy/$driver" ] && [ -s "$copy/$driver" ] \
-              && [ -d "$copy/$netlog" ] && [ ! -L "$copy/$netlog" ] \
-              && [ -z "$(find "$copy" -mindepth 1 ! -path "$copy/$driver" ! -path "$copy/$netlog" \
-                ! \( -path "$copy/$netlog/*.jsonl" ! -path "$copy/$netlog/*/*" -type f -size +0c \) -print -quit)" ]
-          }
-          if ! whole; then
-            echo "::error title=Lane report::the lane named no whole copy of its $REPORT report in this job's RUNNER_TEMP; the lane's log says why"
+          fail() {
+            echo "::error title=Lane report::the lane named no whole copy of its $REPORT report in this job's RUNNER_TEMP; $1"
             exit 1
-          fi
+          }
+          copy=$KITHARA_LANE_REPORT
+          temp=$(cd -- "$RUNNER_TEMP" && pwd -P) || fail "RUNNER_TEMP does not resolve"
+          name=${copy##*/}
+          [ -n "$copy" ] && [ "${copy%/*}" = "$temp" ] && [[ $name =~ ^[^./]+\.${REPORT}$ ]] \
+            || fail "the lane's log says why"
+          [ -d "$copy" ] && [ ! -L "$copy" ] \
+            && [ -f "$copy/$driver" ] && [ ! -L "$copy/$driver" ] && [ -s "$copy/$driver" ] \
+            && [ -d "$copy/$netlog" ] && [ ! -L "$copy/$netlog" ] \
+            || fail "it does not hold the report's shape"
+          # Relative to the copy, so no character of RUNNER_TEMP is read as a
+          # pattern, and a walk that cannot finish fails rather than reading
+          # as a walk that found nothing.
+          extra=$(cd -- "$copy" && find . -mindepth 1 ! -path "./$driver" ! -path "./$netlog" \
+            ! \( -path "./$netlog/*.jsonl" ! -path "./$netlog/*/*" -type f -size +0c \) -print -quit) \
+            || fail "its files could not all be read"
+          [ -z "$extra" ] || fail "it holds files outside the report's shape"
           echo "path=$copy" >> "$GITHUB_OUTPUT"
 
       - name: Upload the lane's report

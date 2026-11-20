@@ -25,12 +25,14 @@ pub(crate) struct Capture {
 }
 
 impl Capture {
-    /// Prepares the report `lane` declares, in the build `target` holds.
+    /// Prepares the report `lane` declares for a run in the build `target`
+    /// holds.
     ///
-    /// A GitHub job hands its report to later steps, so it captures one only
-    /// in a build it holds: a target named by path is shared with whatever
-    /// else names that path. Anywhere else the report stays where it was
-    /// written, and a named target is where that is.
+    /// A GitHub job captures the report in its own `RUNNER_TEMP` and runs the
+    /// lane only in a build it holds, so the build is not released before the
+    /// report is handed to later steps: a target named by path is shared with
+    /// whatever else names that path. Anywhere else the report stays in the
+    /// build it was written in, and a named target is where that is.
     ///
     /// # Errors
     ///
@@ -53,7 +55,7 @@ impl Capture {
         let build = match target {
             Target::Alias { build, .. } => build.path().to_path_buf(),
             Target::Named(_) if github => bail!(
-                "a GitHub job captures its {} report in the build it holds, and it holds none: CARGO_TARGET_DIR names no build root",
+                "a GitHub job runs a lane with a {} report only in a build it holds, and it holds none: CARGO_TARGET_DIR names no build root",
                 report.name()
             ),
             Target::Named(dir) => dir
@@ -76,8 +78,8 @@ impl Capture {
     }
 
     /// Hands the report over when a lane that ended this way wants it, and
-    /// removes it otherwise. Failing to hand it over never fails the lane:
-    /// the job's own check reports a missing copy.
+    /// leaves it where it was captured otherwise. Failing to hand it over
+    /// never fails the lane: the job's own check reports a missing copy.
     pub(crate) fn finish(self, failed: bool) {
         if self.artifact.wanted(failed) {
             self.report.hand_over();

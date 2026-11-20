@@ -786,18 +786,31 @@ label = "run"
         ]
     }
 
-    /// The Chromium capture directories left in `build`.
+    /// The Chromium report directories in `dir` whose names `keep` takes.
     #[cfg(unix)]
-    fn captures_in(build: &Path) -> Vec<PathBuf> {
-        fs::read_dir(build)
-            .expect("list the build")
-            .map(|entry| entry.expect("read a build entry").path())
+    fn reports_in(dir: &Path, keep: fn(&str) -> bool) -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .expect("list the directory")
+            .map(|entry| entry.expect("read a directory entry").path())
             .filter(|path| {
                 path.file_name()
                     .and_then(OsStr::to_str)
-                    .is_some_and(|name| name.starts_with("web-chromium-report-"))
+                    .and_then(|name| name.strip_prefix("web-chromium-report-"))
+                    .is_some_and(keep)
             })
             .collect()
+    }
+
+    /// The Chromium capture directories left in `dir`.
+    #[cfg(unix)]
+    fn captures_in(dir: &Path) -> Vec<PathBuf> {
+        reports_in(dir, |name| !name.ends_with(".chromium"))
+    }
+
+    /// The job's copies of a Chromium report kept in `runner_temp`.
+    #[cfg(unix)]
+    fn copies_in(runner_temp: &Path) -> Vec<PathBuf> {
+        reports_in(runner_temp, |name| name.ends_with(".chromium"))
     }
 
     /// A failed lane's job uploads the driver log and the network logs its own
@@ -850,9 +863,14 @@ label = "run"
         );
         let slot = builds.join("trivial-0");
         assert_eq!(
-            captures_in(&slot).len(),
+            captures_in(&slot),
+            Vec::<PathBuf>::new(),
+            "nothing in the build"
+        );
+        assert_eq!(
+            captures_in(runner_temp_a.path()).len(),
             1,
-            "job A's capture stays in its build for the build's lifecycle"
+            "job A's capture stays in its own RUNNER_TEMP"
         );
 
         let checkout_b = tempfile::tempdir_in(temp.path()).expect("create job B's checkout");
@@ -897,11 +915,61 @@ label = "run"
             "job B's driver wrote no log, so its report is not told"
         );
         assert_eq!(
-            fs::read_dir(runner_temp_b.path()).unwrap().count(),
-            0,
+            copies_in(runner_temp_b.path()),
+            Vec::<PathBuf>::new(),
             "job B keeps no part of a report"
         );
         assert_eq!(fs::read_to_string(&stale).unwrap(), "stale\n");
+    }
+
+    /// A GitHub job's steps are told to write its report in the job's own
+    /// `RUNNER_TEMP`, so a writer that drops files into the capture
+    /// directories of the build slot other jobs reuse adds nothing to it.
+    #[cfg(unix)]
+    #[test]
+    fn a_github_job_writes_its_chromium_report_outside_the_build_slot() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let runner_temp = tempfile::tempdir_in(temp.path()).expect("create the job's RUNNER_TEMP");
+        let github_env = temp.path().join("github-env");
+        fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
+        let told = temp.path().join("told");
+        let slot = temp.path().join("builds/trivial-0");
+
+        run_github_job(
+            temp.path(),
+            &format!(
+                "printf \"%s\\n%s\\n\" \"${CHROMIUM_NETLOG_ENV}\" {DRIVER_LOG} > {told}; for netlog in {slot}/web-chromium-report-*/{CHROMIUM_NETLOG_DIR}; do [ -d \"$netlog\" ] && echo foreign > \"$netlog/foreign.jsonl\"; done; echo driver > {DRIVER_LOG}; echo own > \"${CHROMIUM_NETLOG_ENV}/web_observer-a.jsonl\"; exit 1",
+                told = told.display(),
+                slot = slot.display()
+            ),
+            &github_env,
+            runner_temp.path(),
+        )
+        .expect_err("the lane fails");
+
+        assert_eq!(
+            reports(&announced(&github_env, consts::LANE_REPORT_ENV)),
+            BTreeMap::from([
+                (CHROMIUM_DRIVER_LOG.to_owned(), "driver\n".to_owned()),
+                (
+                    format!("{CHROMIUM_NETLOG_DIR}/web_observer-a.jsonl"),
+                    "own\n".to_owned(),
+                ),
+            ]),
+            "nothing written into the build slot is uploaded"
+        );
+        let job = fs::canonicalize(runner_temp.path()).unwrap();
+        let told = fs::read_to_string(&told).expect("read what the step was told");
+        let paths: Vec<_> = told.lines().map(Path::new).collect();
+        assert_eq!(paths.len(), 2, "{told}");
+        for path in paths {
+            assert!(
+                path.starts_with(&job),
+                "{} is not in {}",
+                path.display(),
+                job.display()
+            );
+        }
     }
 
     /// A failed lane whose run wrote no report tells the job nothing, so its
@@ -930,7 +998,7 @@ label = "run"
 
         assert!(ran.exists(), "the lane's step ran");
         assert_eq!(fs::read_to_string(&github_env).unwrap(), "");
-        assert_eq!(fs::read_dir(runner_temp.path()).unwrap().count(), 0);
+        assert_eq!(copies_in(runner_temp.path()), Vec::<PathBuf>::new());
     }
 
     /// Runs a Chromium report lane whose step runs `script` in a GitHub job
@@ -1019,12 +1087,12 @@ label = "run"
             assert!(ran.exists(), "the step ran past `{replace}`");
             assert_eq!(fs::read_to_string(&github_env).unwrap(), "", "{replace}");
             assert_eq!(
-                fs::read_dir(runner_temp.path()).unwrap().count(),
-                0,
+                copies_in(runner_temp.path()),
+                Vec::<PathBuf>::new(),
                 "{replace}"
             );
             let capture = || {
-                let captures = captures_in(&temp.path().join("builds/trivial-0"));
+                let captures = captures_in(runner_temp.path());
                 assert_eq!(captures.len(), 1, "{replace}: {captures:?}");
                 captures[0].clone()
             };
@@ -1061,7 +1129,7 @@ label = "run"
         run_github_job(
             temp.path(),
             &format!(
-                "echo driver > {DRIVER_LOG}; for copy in {}/web-chromium-report-*; do touch \"$copy/{CHROMIUM_NETLOG_DIR}\" && touch {}; done; exit 1",
+                "echo driver > {DRIVER_LOG}; for copy in {}/web-chromium-report-*.chromium; do touch \"$copy/{CHROMIUM_NETLOG_DIR}\" && touch {}; done; exit 1",
                 runner_temp.path().display(),
                 blocked.display()
             ),
@@ -1072,7 +1140,7 @@ label = "run"
 
         assert!(blocked.exists(), "the step blocked the job's copy");
         assert_eq!(fs::read_to_string(&github_env).unwrap(), "");
-        assert_eq!(fs::read_dir(runner_temp.path()).unwrap().count(), 0);
+        assert_eq!(copies_in(runner_temp.path()), Vec::<PathBuf>::new());
     }
 
     /// A job whose `GITHUB_ENV` cannot be written tells nothing and keeps no
@@ -1093,7 +1161,7 @@ label = "run"
         .expect_err("the lane fails");
 
         assert!(!github_env.exists());
-        assert_eq!(fs::read_dir(runner_temp.path()).unwrap().count(), 0);
+        assert_eq!(copies_in(runner_temp.path()), Vec::<PathBuf>::new());
     }
 
     /// A GitHub job that names no build root holds no build, so it refuses a
@@ -1168,7 +1236,7 @@ label = "run"
     }
 
     /// A report wanted only on failure is neither copied nor told when the
-    /// lane passes; its capture stays in the build for the build's lifecycle.
+    /// lane passes; its capture stays in the job's `RUNNER_TEMP`.
     #[cfg(unix)]
     #[test]
     fn a_passing_lane_neither_copies_nor_tells_its_chromium_report() {
@@ -1191,8 +1259,12 @@ label = "run"
         .expect("the lane passes");
 
         assert_eq!(fs::read_to_string(&github_env).unwrap(), "");
-        assert_eq!(fs::read_dir(runner_temp.path()).unwrap().count(), 0);
-        assert_eq!(captures_in(&builds.join("trivial-0")).len(), 1);
+        assert_eq!(copies_in(runner_temp.path()), Vec::<PathBuf>::new());
+        assert_eq!(captures_in(runner_temp.path()).len(), 1);
+        assert_eq!(
+            captures_in(&builds.join("trivial-0")),
+            Vec::<PathBuf>::new()
+        );
     }
 
     /// Outside a GitHub job there is no job storage, so a failed lane keeps

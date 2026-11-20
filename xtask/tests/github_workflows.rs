@@ -2798,10 +2798,14 @@ for case in json.loads(os.environ["CASES"]):
 /// The report check passes only the whole copy the lane made in this job's
 /// `RUNNER_TEMP`, and tells the upload that path alone. The job's storage sits
 /// under directories whose names end as a report's does, so a value cut short
-/// at an ancestor ends that way too.
+/// at an ancestor ends that way too. A copy the check cannot read through is
+/// not whole, and a `RUNNER_TEMP` whose name reads as a pattern still holds
+/// a whole copy.
 #[cfg(unix)]
 #[test]
 fn a_report_check_passes_only_the_whole_copy_in_the_jobs_storage() -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
     let workflow = github_workflow("lane.yml");
     let job = workflow_job(workflow_jobs(&workflow), "run");
     let check = named_step(job, "Check the lane's report");
@@ -2864,8 +2868,26 @@ fn a_report_check_passes_only_the_whole_copy_in_the_jobs_storage() -> anyhow::Re
         .join("web-chromium-report-j0K1l2.chromium");
     fs::create_dir(&foreign)?;
     fs::write(foreign.join("web-chromium.log"), "foreign")?;
+    // Unreadable to the check, though it holds a whole network log.
+    let unreadable = shaped(
+        "web-chromium-report-b8C9d0.chromium",
+        &[
+            ("web-chromium.log", "driver"),
+            ("web-chromium-netlog/web_observer.jsonl", "net"),
+        ],
+    )?;
+    let locked = Path::new(&unreadable).join("web-chromium-netlog");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))?;
+    let patterned = root.path().canonicalize()?.join("temp[1]");
+    let in_patterned = patterned.join("web-chromium-report-e1F2g3.chromium");
+    fs::create_dir_all(in_patterned.join("web-chromium-netlog"))?;
+    fs::write(in_patterned.join("web-chromium.log"), "driver")?;
+    fs::write(
+        in_patterned.join("web-chromium-netlog/web_observer.jsonl"),
+        "net",
+    )?;
     let whole_text = whole.to_str().expect("a UTF-8 path").to_owned();
-    for (named, passes) in [
+    let cases = [
         (whole_text.clone(), true),
         (String::new(), false),
         (
@@ -2884,33 +2906,50 @@ fn a_report_check_passes_only_the_whole_copy_in_the_jobs_storage() -> anyhow::Re
         (empty_driver, false),
         (extra, false),
         (empty_netlog, false),
-    ] {
-        let github_output = root.path().join("output");
-        fs::write(&github_output, "")?;
-        let status = Command::new("bash")
-            .args([
-                "--noprofile",
-                "--norc",
-                "-e",
-                "-o",
-                "pipefail",
-                "-c",
-                script,
-            ])
-            .env("REPORT", "chromium")
-            .env("RUNNER_TEMP", &temp)
-            .env("GITHUB_OUTPUT", &github_output)
-            .env("KITHARA_LANE_REPORT", &named)
-            .output()?;
-        assert_eq!(status.status.success(), passes, "{named}: {status:?}");
-        let told = fs::read_to_string(&github_output)?;
-        let expected = if passes {
-            format!("path={named}\n")
-        } else {
-            String::new()
-        };
-        assert_eq!(told, expected, "{named}");
-    }
+        (unreadable, false),
+    ]
+    .map(|(named, passes)| (temp.clone(), named, passes))
+    .into_iter()
+    .chain([(patterned.clone(), in_patterned.display().to_string(), true)]);
+    let github_output = root.path().join("output");
+    let checked = cases
+        .map(|(runner_temp, named, passes)| {
+            fs::write(&github_output, "")?;
+            let status = Command::new("bash")
+                .args([
+                    "--noprofile",
+                    "--norc",
+                    "-e",
+                    "-o",
+                    "pipefail",
+                    "-c",
+                    script,
+                ])
+                .env("REPORT", "chromium")
+                .env("RUNNER_TEMP", &runner_temp)
+                .env("GITHUB_OUTPUT", &github_output)
+                .env("KITHARA_LANE_REPORT", &named)
+                .output()?;
+            Ok((named, passes, status, fs::read_to_string(&github_output)?))
+        })
+        .collect::<anyhow::Result<Vec<_>>>();
+    // Readable again before any case is judged, so the fixture can go.
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755))?;
+    let wrong: Vec<_> = checked?
+        .into_iter()
+        .filter(|(named, passes, status, told)| {
+            let expected = if *passes {
+                format!("path={named}\n")
+            } else {
+                String::new()
+            };
+            status.status.success() != *passes || *told != expected
+        })
+        .map(|(named, passes, status, told)| {
+            format!("{named}: should pass {passes}, told {told:?}, {status:?}")
+        })
+        .collect();
+    assert!(wrong.is_empty(), "judged wrongly:\n{}", wrong.join("\n"));
     Ok(())
 }
 

@@ -50,8 +50,10 @@ pub(in crate::ci::lane) mod consts {
         .union(OFlag::O_CLOEXEC);
 }
 
-/// One run's Chromium report: captured in a fresh directory of the build the
-/// run holds, so a job reusing that build later writes elsewhere.
+/// One run's Chromium report, captured in a fresh directory: in a GitHub job
+/// under the job's own `RUNNER_TEMP`, outside the build slot other jobs and
+/// their writers reuse; anywhere else in the build the run holds, as a local
+/// diagnostic.
 pub(super) struct ChromiumReport {
     capture: PathBuf,
     directories: Directories,
@@ -62,10 +64,10 @@ pub(super) struct ChromiumReport {
 /// What the report copies is read through these, so a name pointed elsewhere
 /// during the run cannot make another directory this run's report.
 ///
-/// Each was empty when it was opened, so nothing written before this run is
-/// in the report; what its steps' paths receive afterwards, from whichever
-/// writer, is what the report holds. Nothing here removes anything from
-/// either: a capture stays in the build for the build's own lifecycle.
+/// Each was empty when it was opened. That says what they held then, not who
+/// wrote what they hold later: the report is whatever reached them through
+/// its steps' paths, from any writer that can reach those paths. Nothing here
+/// removes anything from either; a capture stays where it was made.
 struct Directories {
     capture: File,
     netlog: File,
@@ -82,9 +84,10 @@ enum Destination {
 }
 
 impl ChromiumReport {
-    /// Makes the capture directory in `build` and, in a GitHub job, the job's
-    /// copy. A GitHub job without its storage fails here, before the browser
-    /// runs, rather than running without a report.
+    /// Makes the capture directory and, in a GitHub job, the job's copy, both
+    /// in the job's `RUNNER_TEMP`; anywhere else the capture is made in
+    /// `build`. A GitHub job without its storage fails here, before the
+    /// browser runs, rather than running without a report.
     pub(super) fn prepare(
         build: &Path,
         github: bool,
@@ -93,19 +96,50 @@ impl ChromiumReport {
         fs::create_dir_all(build).with_context(|| format!("creating {}", build.display()))?;
         let build =
             fs::canonicalize(build).with_context(|| format!("resolving {}", build.display()))?;
-        let parent = open_directory(fcntl::AT_FDCWD, &build)
-            .with_context(|| format!("opening {}", build.display()))?;
-        // Made and opened relative to the build's descriptor, and nothing
+        // A GitHub job captures in its own RUNNER_TEMP, outside the build slot
+        // later jobs reuse; anywhere else the capture stays in the build, a
+        // local diagnostic.
+        let (home, destination) = if github {
+            let (Some(env_file), Some(temp)) = (var("GITHUB_ENV"), var("RUNNER_TEMP")) else {
+                bail!("a GitHub job names GITHUB_ENV and RUNNER_TEMP");
+            };
+            let temp = fs::canonicalize(&temp)
+                .with_context(|| format!("resolving RUNNER_TEMP {}", Path::new(&temp).display()))?;
+            let builds = build.parent().unwrap_or(&build);
+            ensure!(
+                !temp.starts_with(builds),
+                "RUNNER_TEMP {} is inside the builds other jobs take, {}",
+                temp.display(),
+                builds.display()
+            );
+            // The name ends as the report does, which is how a reader tells
+            // this whole path from a fragment a short write left behind.
+            let copy = Builder::new()
+                .prefix(consts::REPORT_PREFIX)
+                .suffix(&format!(".{}", LaneReport::Chromium.name()))
+                .tempdir_in(&temp)
+                .with_context(|| format!("creating this job's copy in {}", temp.display()))?;
+            let destination = Destination::Job {
+                copy,
+                env_file: PathBuf::from(env_file),
+            };
+            (temp, destination)
+        } else {
+            (build, Destination::InPlace)
+        };
+        let parent = open_directory(fcntl::AT_FDCWD, &home)
+            .with_context(|| format!("opening {}", home.display()))?;
+        // Made and opened relative to its parent's descriptor, and nothing
         // removes it by name: a run that ends without its report leaves it.
         let (held, capture) = Builder::new()
             .prefix(consts::REPORT_PREFIX)
-            .make_in(&build, |path| {
+            .make_in(&home, |path| {
                 let name = Path::new(path.file_name().unwrap_or(path.as_os_str()));
                 stat::mkdirat(&parent, name, Mode::S_IRWXU)?;
                 Ok(open_directory(&parent, name)?)
             })
             .and_then(|made| made.keep().map_err(|error| error.error))
-            .with_context(|| format!("creating a capture directory in {}", build.display()))?;
+            .with_context(|| format!("creating a capture directory in {}", home.display()))?;
         ensure!(
             capture
                 .to_str()
@@ -134,33 +168,6 @@ impl ChromiumReport {
             "the network log directory in {} held something before this run wrote to it",
             capture.display()
         );
-        let destination = if github {
-            let (Some(env_file), Some(temp)) = (var("GITHUB_ENV"), var("RUNNER_TEMP")) else {
-                bail!("a GitHub job names GITHUB_ENV and RUNNER_TEMP");
-            };
-            let temp = fs::canonicalize(&temp)
-                .with_context(|| format!("resolving RUNNER_TEMP {}", Path::new(&temp).display()))?;
-            let builds = build.parent().unwrap_or(&build);
-            ensure!(
-                !temp.starts_with(builds),
-                "RUNNER_TEMP {} is inside the builds other jobs take, {}",
-                temp.display(),
-                builds.display()
-            );
-            // The name ends as the report does, which is how a reader tells
-            // this whole path from a fragment a short write left behind.
-            let copy = Builder::new()
-                .prefix(consts::REPORT_PREFIX)
-                .suffix(&format!(".{}", LaneReport::Chromium.name()))
-                .tempdir_in(&temp)
-                .with_context(|| format!("creating this job's copy in {}", temp.display()))?;
-            Destination::Job {
-                copy,
-                env_file: PathBuf::from(env_file),
-            }
-        } else {
-            Destination::InPlace
-        };
         Ok(Self {
             capture,
             directories: Directories {
@@ -316,9 +323,9 @@ fn is_named(held: &File, path: &Path) -> io::Result<bool> {
 }
 
 /// Copies `name` in `dir` to `destination`, up to the length it had when it
-/// was opened, and says how many bytes that was. A file this run did not
-/// write alone - missing, a link, not a regular file, shared with another
-/// name - or an empty one is not copied.
+/// was opened, and says how many bytes that was. A name that is missing, a
+/// link, not a regular file, a file with another name, or empty is not
+/// copied; what is copied is not thereby shown to be this run's own.
 fn copy_leaf(dir: &File, name: &OsStr, destination: &Path) -> Result<Option<u64>> {
     let file = match fcntl::openat(dir, name, consts::LEAF, Mode::empty()) {
         Ok(file) => File::from(file),
