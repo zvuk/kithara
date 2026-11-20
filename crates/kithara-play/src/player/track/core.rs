@@ -146,11 +146,15 @@ impl PlayerImpl {
     /// Content position of a raw source time. A raw time read from the
     /// source keeps the observed source's frame grid across the subtraction.
     pub(super) fn content_position(&self, raw: Position) -> Option<Position> {
-        let origin = self.extent.media_origin?;
-        Some(self.observed_source.map_or_else(
+        Some(self.content_position_from(self.extent.media_origin?, raw))
+    }
+
+    /// Content position of a raw source time measured from `origin`.
+    pub(super) fn content_position_from(&self, origin: Position, raw: Position) -> Position {
+        self.observed_source.map_or_else(
             || raw.saturating_sub(origin),
             |source| source.spec.elapsed_since(origin, raw),
-        ))
+        )
     }
 
     pub(super) fn content_mark_position(&self, mark: SlotMark) -> Option<Position> {

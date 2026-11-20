@@ -97,6 +97,29 @@ impl SourceSpan {
         Some(Duration::new(seconds, nanos))
     }
 
+    /// The last output frame in `[from, output_frames)` whose
+    /// [`position_at`](Self::position_at) does not pass `position`.
+    ///
+    /// Every validated mapping is non-decreasing, so this inverts nonlinear
+    /// spans too. A `position` before `from`, an empty range and
+    /// unrepresentable positions return `None`.
+    #[must_use]
+    pub fn output_floor_at(self, from: u64, position: Duration) -> Option<u64> {
+        if from >= self.output_frames || self.position_at(from)? > position {
+            return None;
+        }
+        let (mut floor, mut past) = (from, self.output_frames);
+        while past - floor > 1 {
+            let mid = floor + (past - floor) / 2;
+            if self.position_at(mid)? <= position {
+                floor = mid;
+            } else {
+                past = mid;
+            }
+        }
+        Some(floor)
+    }
+
     /// Maps an original exponential source basis over a nonempty output span.
     ///
     /// Rates are source frames per output frame; elapsed and the time constant
@@ -712,6 +735,40 @@ mod tests {
                 None,
             );
         }
+    }
+
+    #[kithara::test]
+    #[case::affine(SourceSpan::try_from((3, 2, NonZeroU128::new(3).expect("denominator"), NonZeroU32::new(44_100).expect("rate"), 64)).expect("affine"))]
+    #[case::ramp(SourceSpan::try_from((0, 1, 1, NonZeroU128::MIN, NonZeroU32::new(48_000).expect("rate"), 64)).expect("ramp"))]
+    #[case::approach(SourceSpan::approaching(0, NonZeroU128::MIN, ExponentialApproach::new(1.0, 0.5, 16.0).expect("curve"), 0, NonZeroU32::new(48_000).expect("rate"), 64).expect("approach"))]
+    #[case::still(SourceSpan::try_from((5, 0, NonZeroU128::MIN, NonZeroU32::new(48_000).expect("rate"), 8)).expect("still"))]
+    fn output_floor_matches_the_last_frame_at_or_before_a_position(#[case] span: SourceSpan) {
+        let frames = span.output_frames();
+        let positions = (0..=frames)
+            .map(|frame| span.position_at(frame).expect("position"))
+            .collect::<Vec<_>>();
+        let probes = positions.iter().flat_map(|&position| {
+            [
+                position.checked_sub(Duration::from_nanos(1)),
+                Some(position),
+                position.checked_add(Duration::from_nanos(1)),
+            ]
+            .into_iter()
+            .flatten()
+        });
+        for probe in probes {
+            for from in 0..frames {
+                let expected = (from..frames)
+                    .take_while(|&frame| positions[usize::try_from(frame).expect("frame")] <= probe)
+                    .last();
+                assert_eq!(
+                    span.output_floor_at(from, probe),
+                    expected,
+                    "from {from}, position {probe:?}"
+                );
+            }
+        }
+        assert_eq!(span.output_floor_at(frames, positions[0]), None);
     }
 
     #[kithara::test]

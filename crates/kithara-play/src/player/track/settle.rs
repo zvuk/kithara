@@ -279,7 +279,7 @@ impl PlayerImpl {
                     media_origin,
                 }) if Some(*to) == self.seat.slot() && mark.lane.segment == self.segment.id => {
                     self.mark = Some(*mark);
-                    self.position = mark.position.saturating_sub(*media_origin);
+                    self.position = self.content_position_from(*media_origin, mark.position);
                     self.observe(out);
                 }
                 DeckPart::Returned(Returned::Stopped { slot, resume })

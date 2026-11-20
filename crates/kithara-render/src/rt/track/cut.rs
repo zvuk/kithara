@@ -189,16 +189,7 @@ fn cut_point(
     raw: Duration,
     origin: Duration,
 ) -> Result<CutPoint, ()> {
-    let mut lo = start;
-    let mut hi = span.output_frames();
-    while hi - lo > 1 {
-        let mid = lo + (hi - lo) / 2;
-        if span.position_at(mid).ok_or(())? <= raw {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
+    let lo = span.output_floor_at(start, raw).ok_or(())?;
     Ok(CutPoint {
         offset: usize::try_from(lo).map_err(|_| ())?,
         advance: usize::try_from(lo - start).map_err(|_| ())?,
