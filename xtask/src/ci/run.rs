@@ -565,7 +565,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     outcome
 }
 
-/// The report a declared lane captures, in the build this run holds.
+/// The report a declared lane captures for a run in the build it holds.
 fn declared_report(
     lane: &Lane,
     lanes: &BTreeMap<String, CiLaneConfig>,
@@ -1697,7 +1697,7 @@ timeout_minutes = 1
 
 [[ext.ci.lanes.web.steps]]
 label = "run"
-args = ['-c', 'echo driver > "$(echo $CHROMEDRIVER_ARGS | cut -d= -f2)"; echo net > "$KITHARA_WEB_NETLOG_DIR/web_observer.jsonl"; exit 1']
+args = ['-c', 'echo driver > "$(eval "set -- $CHROMEDRIVER_ARGS"; echo "$2" | cut -d= -f2-)"; echo net > "$KITHARA_WEB_NETLOG_DIR/web_observer.jsonl"; exit 1']
 "#
             ))
             .expect("parse the fixture lane"),

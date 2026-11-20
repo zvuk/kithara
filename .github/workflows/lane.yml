@@ -224,8 +224,9 @@ jobs:
       # only the whole path passes. What it holds is the report's own shape,
       # as `ci lane` copies it: a Chromium report is the driver's non-empty
       # log and a network log directory of non-empty JSONL files, and nothing
-      # else. The upload takes the path this step checked, and only when it
-      # passed.
+      # else. The upload takes the path this step checked, escaped for the
+      # upload's glob, and only when it passed. An ordinary artifact path
+      # stays a glob as written.
       - name: Check the lane's report
         id: report
         if: ${{ always() && inputs.artifact-report != '' && (steps.lane.outcome == 'failure' || (inputs.artifact-when == 'always' && steps.lane.outcome == 'success')) }}
@@ -256,7 +257,20 @@ jobs:
             ! \( -path "./$netlog/*.jsonl" ! -path "./$netlog/*/*" -type f -size +0c \) -print -quit) \
             || fail "its files could not all be read"
           [ -z "$extra" ] || fail "it holds files outside the report's shape"
-          echo "path=$copy" >> "$GITHUB_OUTPUT"
+          # The upload reads its path as a glob, where a backslash escapes and
+          # `[`, `?` and `*` match other names; each is escaped the way that
+          # glob reads back as the character itself, so the upload takes this
+          # copy and no sibling the bare path would also match.
+          glob=
+          for ((i = 0; i < ${#copy}; i++)); do
+            c=${copy:i:1}
+            case $c in
+              \\) glob+='\\' ;;
+              \[ | \? | \*) glob+="[$c]" ;;
+              *) glob+=$c ;;
+            esac
+          done
+          echo "path=$glob" >> "$GITHUB_OUTPUT"
 
       - name: Upload the lane's report
         if: ${{ always() && ((inputs.artifact-report != '' && steps.report.outcome == 'success') || (inputs.artifact-report == '' && inputs.artifact-path != '' && (inputs.artifact-when == 'always' || failure()))) }}

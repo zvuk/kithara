@@ -751,10 +751,11 @@ label = "run"
         );
     }
 
-    /// The driver log path a step reads from `CHROMEDRIVER_ARGS`; a lane step
-    /// may not spell braces.
+    /// The driver log path a step reads from `CHROMEDRIVER_ARGS`, split as a
+    /// shell splits it; a lane step may not spell braces.
     #[cfg(unix)]
-    const DRIVER_LOG: &str = "\"$(echo $CHROMEDRIVER_ARGS | cut -d= -f2)\"";
+    const DRIVER_LOG: &str =
+        "\"$(eval \"set -- $CHROMEDRIVER_ARGS\"; echo \"$2\" | cut -d= -f2-)\"";
 
     /// A lane whose artifact is a Chromium report, whose one step runs `script`.
     #[cfg(unix)]
@@ -970,6 +971,45 @@ label = "run"
                 job.display()
             );
         }
+    }
+
+    /// A job whose `RUNNER_TEMP` is spelled with a space still tells its
+    /// driver one log path and hands over the report written there.
+    #[cfg(unix)]
+    #[test]
+    fn a_github_job_with_a_spaced_runner_temp_hands_over_its_chromium_report() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let runner_temp = temp.path().join("job temp");
+        fs::create_dir(&runner_temp).expect("create the job's RUNNER_TEMP");
+        let github_env = temp.path().join("github-env");
+        fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
+
+        run_github_job(
+            temp.path(),
+            &format!(
+                "echo driver > {DRIVER_LOG}; echo own > \"${CHROMIUM_NETLOG_ENV}/web_observer-a.jsonl\"; exit 1"
+            ),
+            &github_env,
+            &runner_temp,
+        )
+        .expect_err("the lane fails");
+
+        let upload = announced(&github_env, consts::LANE_REPORT_ENV);
+        assert!(
+            upload.starts_with(fs::canonicalize(&runner_temp).unwrap()),
+            "{}",
+            upload.display()
+        );
+        assert_eq!(
+            reports(&upload),
+            BTreeMap::from([
+                (CHROMIUM_DRIVER_LOG.to_owned(), "driver\n".to_owned()),
+                (
+                    format!("{CHROMIUM_NETLOG_DIR}/web_observer-a.jsonl"),
+                    "own\n".to_owned(),
+                ),
+            ])
+        );
     }
 
     /// A failed lane whose run wrote no report tells the job nothing, so its

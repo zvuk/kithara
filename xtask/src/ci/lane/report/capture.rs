@@ -17,8 +17,8 @@ use crate::{
 /// A declared lane's report, captured for the run that writes it.
 ///
 /// `ci lane` and `ci run` both take a declared lane through here, so either
-/// way in its steps are told where to write, and a wanted report is handed
-/// over while the build it was written in is still held.
+/// way its steps are told where to write, and a wanted report is handed over
+/// while the build the lane ran in is still held.
 pub(crate) struct Capture {
     report: ChromiumReport,
     artifact: CiLaneArtifact,

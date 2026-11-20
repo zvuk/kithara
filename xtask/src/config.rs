@@ -214,10 +214,10 @@ pub(crate) struct CiLaneArtifact {
     pub(crate) name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) path: Option<String>,
-    /// The lane's executor captures this report in a fresh directory of the
-    /// build it holds and, in a GitHub job, copies it into the job's own
-    /// storage before releasing that build, so a job reusing the build cannot
-    /// replace it.
+    /// The lane's executor captures this report in a fresh directory: in a
+    /// GitHub job under the job's `RUNNER_TEMP`, where the job's own copy is
+    /// made before the build the lane ran in is released; anywhere else in
+    /// that build.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) report: Option<LaneReport>,
     #[serde(default)]

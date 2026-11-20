@@ -2800,7 +2800,7 @@ for case in json.loads(os.environ["CASES"]):
 /// under directories whose names end as a report's does, so a value cut short
 /// at an ancestor ends that way too. A copy the check cannot read through is
 /// not whole, and a `RUNNER_TEMP` whose name reads as a pattern still holds
-/// a whole copy.
+/// a whole copy, told to the upload escaped for its glob.
 #[cfg(unix)]
 #[test]
 fn a_report_check_passes_only_the_whole_copy_in_the_jobs_storage() -> anyhow::Result<()> {
@@ -2878,14 +2878,20 @@ fn a_report_check_passes_only_the_whole_copy_in_the_jobs_storage() -> anyhow::Re
     )?;
     let locked = Path::new(&unreadable).join("web-chromium-netlog");
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))?;
-    let patterned = root.path().canonicalize()?.join("temp[1]");
-    let in_patterned = patterned.join("web-chromium-report-e1F2g3.chromium");
-    fs::create_dir_all(in_patterned.join("web-chromium-netlog"))?;
-    fs::write(in_patterned.join("web-chromium.log"), "driver")?;
-    fs::write(
-        in_patterned.join("web-chromium-netlog/web_observer.jsonl"),
-        "net",
-    )?;
+    // A whole copy in a RUNNER_TEMP whose name the upload's glob would read
+    // as a pattern, told escaped so the glob reads it back as written.
+    let patterned = |name: &str, escaped: &str| -> anyhow::Result<_> {
+        let runner_temp = root.path().canonicalize()?.join(name);
+        let copy = runner_temp.join("web-chromium-report-e1F2g3.chromium");
+        fs::create_dir_all(copy.join("web-chromium-netlog"))?;
+        fs::write(copy.join("web-chromium.log"), "driver")?;
+        fs::write(copy.join("web-chromium-netlog/web_observer.jsonl"), "net")?;
+        let glob = format!(
+            "path={}/{escaped}/web-chromium-report-e1F2g3.chromium\n",
+            root.path().canonicalize()?.display()
+        );
+        Ok((runner_temp, copy.display().to_string(), Some(glob)))
+    };
     let whole_text = whole.to_str().expect("a UTF-8 path").to_owned();
     let cases = [
         (whole_text.clone(), true),
@@ -2908,12 +2914,18 @@ fn a_report_check_passes_only_the_whole_copy_in_the_jobs_storage() -> anyhow::Re
         (empty_netlog, false),
         (unreadable, false),
     ]
-    .map(|(named, passes)| (temp.clone(), named, passes))
+    .map(|(named, passes)| {
+        let told = passes.then(|| format!("path={named}\n"));
+        (temp.clone(), named, told)
+    })
     .into_iter()
-    .chain([(patterned.clone(), in_patterned.display().to_string(), true)]);
+    .chain([
+        patterned("temp[1]", "temp[[]1]")?,
+        patterned(r"t*e?m\p[x] y", r"t[*]e[?]m\\p[[]x] y")?,
+    ]);
     let github_output = root.path().join("output");
     let checked = cases
-        .map(|(runner_temp, named, passes)| {
+        .map(|(runner_temp, named, expected)| {
             fs::write(&github_output, "")?;
             let status = Command::new("bash")
                 .args([
@@ -2930,23 +2942,19 @@ fn a_report_check_passes_only_the_whole_copy_in_the_jobs_storage() -> anyhow::Re
                 .env("GITHUB_OUTPUT", &github_output)
                 .env("KITHARA_LANE_REPORT", &named)
                 .output()?;
-            Ok((named, passes, status, fs::read_to_string(&github_output)?))
+            Ok((named, expected, status, fs::read_to_string(&github_output)?))
         })
         .collect::<anyhow::Result<Vec<_>>>();
     // Readable again before any case is judged, so the fixture can go.
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755))?;
     let wrong: Vec<_> = checked?
         .into_iter()
-        .filter(|(named, passes, status, told)| {
-            let expected = if *passes {
-                format!("path={named}\n")
-            } else {
-                String::new()
-            };
-            status.status.success() != *passes || *told != expected
+        .filter(|(_, expected, status, told)| {
+            status.status.success() != expected.is_some()
+                || told != expected.as_deref().unwrap_or_default()
         })
-        .map(|(named, passes, status, told)| {
-            format!("{named}: should pass {passes}, told {told:?}, {status:?}")
+        .map(|(named, expected, status, told)| {
+            format!("{named}: should tell {expected:?}, told {told:?}, {status:?}")
         })
         .collect();
     assert!(wrong.is_empty(), "judged wrongly:\n{}", wrong.join("\n"));

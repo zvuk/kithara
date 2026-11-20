@@ -56,15 +56,19 @@ pub(in crate::ci::lane) mod consts {
 /// diagnostic.
 pub(super) struct ChromiumReport {
     capture: PathBuf,
+    /// What `CHROMEDRIVER_ARGS` holds: the driver's log path as one word.
+    driver_args: String,
     directories: Directories,
     destination: Destination,
 }
 
-/// The capture and network log directories, held open from their creation.
-/// What the report copies is read through these, so a name pointed elsewhere
-/// during the run cannot make another directory this run's report.
+/// The capture and network log directories, each opened by its parent's
+/// descriptor once it is made. What the report copies is read through these,
+/// so a name pointed elsewhere during the run cannot make another directory
+/// this run's report.
 ///
-/// Each was empty when it was opened. That says what they held then, not who
+/// Making and opening are two steps, and each was found empty after it was
+/// opened and before the lane ran. That says what they held then, not who
 /// wrote what they hold later: the report is whatever reached them through
 /// its steps' paths, from any writer that can reach those paths. Nothing here
 /// removes anything from either; a capture stays where it was made.
@@ -140,14 +144,18 @@ impl ChromiumReport {
             })
             .and_then(|made| made.keep().map_err(|error| error.error))
             .with_context(|| format!("creating a capture directory in {}", home.display()))?;
-        ensure!(
-            capture
-                .to_str()
-                .is_some_and(|path| !path.contains(char::is_whitespace)),
-            "chromedriver cannot take {} as one argument",
-            capture.display()
-        );
-        // What was opened is what was made only while nothing is in it yet.
+        // wasm-bindgen-test-runner reads CHROMEDRIVER_ARGS as UTF-8, taking
+        // no arguments from a value that is not, and splits it as a shell
+        // does, so the log path goes in single-quoted to stay one word.
+        let Some(log) = capture
+            .join(consts::CHROMIUM_DRIVER_LOG)
+            .to_str()
+            .map(single_quoted)
+        else {
+            bail!("chromedriver cannot be told {} as UTF-8", capture.display());
+        };
+        // Made, then opened: found empty after the opening and before the lane
+        // runs, which says nothing was in it then, not who writes to it later.
         ensure!(
             names_in(&held)?.is_empty(),
             "{} held something before this run wrote to it",
@@ -170,6 +178,7 @@ impl ChromiumReport {
         );
         Ok(Self {
             capture,
+            driver_args: format!("--verbose --log-path={log}"),
             directories: Directories {
                 capture: held,
                 netlog,
@@ -181,10 +190,11 @@ impl ChromiumReport {
     /// What the lane's steps are told: the `chromedriver` log path and the
     /// wrapper's network log directory.
     pub(super) fn env(&self) -> [(OsString, OsString); 2] {
-        let mut driver = OsString::from("--verbose --log-path=");
-        driver.push(self.capture.join(consts::CHROMIUM_DRIVER_LOG));
         [
-            (OsString::from("CHROMEDRIVER_ARGS"), driver),
+            (
+                OsString::from("CHROMEDRIVER_ARGS"),
+                OsString::from(&self.driver_args),
+            ),
             (
                 OsString::from(consts::CHROMIUM_NETLOG_ENV),
                 self.capture
@@ -322,6 +332,12 @@ fn is_named(held: &File, path: &Path) -> io::Result<bool> {
     Ok(named.dev() == held.dev() && named.ino() == held.ino())
 }
 
+/// `text` as one shell word: single-quoted, each quote in it closed, escaped
+/// and reopened.
+fn single_quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
 /// Copies `name` in `dir` to `destination`, up to the length it had when it
 /// was opened, and says how many bytes that was. A name that is missing, a
 /// link, not a regular file, a file with another name, or empty is not
@@ -367,9 +383,40 @@ fn copy_opened(file: &File, len: u64, destination: &Path) -> Result<Option<u64>>
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{self, File};
+    use std::{
+        fs::{self, File},
+        process::Command,
+    };
 
     use super::{ChromiumReport, consts, copy_opened};
+
+    /// The driver's log path reaches the driver as one argument however its
+    /// directory is spelled, split as a shell splits `CHROMEDRIVER_ARGS`.
+    #[test]
+    fn the_driver_is_told_its_log_path_as_one_argument() {
+        let root = tempfile::tempdir().expect("create a directory");
+        let build = root.path().join("job's temp");
+        let report = ChromiumReport::prepare(&build, false, &|_| None)
+            .expect("prepare a report in a spaced, quoted directory");
+        let [(name, value), _] = report.env();
+
+        let split = Command::new("sh")
+            .args([
+                "-c",
+                r#"eval "set -- $CHROMEDRIVER_ARGS"; printf '%s\n' "$@""#,
+            ])
+            .env(name, value)
+            .output()
+            .expect("run sh");
+
+        assert!(split.status.success(), "{split:?}");
+        let log = report.capture.join(consts::CHROMIUM_DRIVER_LOG);
+        assert_eq!(
+            String::from_utf8(split.stdout).expect("UTF-8 arguments"),
+            format!("--verbose\n--log-path={}\n", log.display())
+        );
+        report.discard();
+    }
 
     /// A report nobody wants removes nothing from its directories: a file
     /// another writer put in them, under a name its steps also write, stays
