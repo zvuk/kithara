@@ -5405,6 +5405,7 @@ dependencies = [
  "js-sys",
  "kithara",
  "kithara-ffi",
+ "kithara-test-utils",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "web-sys",
