@@ -5,8 +5,10 @@ use kithara::{
     queue::QueueEvent,
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, cochlea::synchronization_failures, grid::Start, kithara,
-    memory_asset_store,
+    Content, Delivery, FixtureBehavior,
+    cochlea::{marked_rhythm_markers, synchronization_failures},
+    grid::Start,
+    kithara, memory_asset_store,
 };
 use kithara_test_fixtures::assets::rhythm_wav_deck_a_120bpm_48k;
 
@@ -141,21 +143,35 @@ async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase(#[case] temp
         captures.push(pcm);
     }
     let frames = (positions[1] - positions[0]).abs() * f64::from(case.sample_rate);
-    if tempo.is_some() {
-        assert!(
-            frames <= 1.0,
-            "playheads={positions:?}, difference={frames} frames"
-        );
-        return;
-    }
     let stems: Vec<_> = captures.iter().map(Vec::as_slice).collect();
-    let failures = synchronization_failures(
-        "fixed HLS versus catalogue source continuation",
-        &stems,
-        CHANNELS,
-        case.sample_rate,
-        START_BPM,
-    );
+    let failures = if tempo.is_some() {
+        // A slewing tempo has no constant beat period: every fixture beat
+        // marker of the continued stem must land on the frame of the same
+        // marker in the uninterrupted stem, through the slew itself.
+        let slew = 3 * second;
+        let [outgoing, continued] = [stems[0], stems[1]]
+            .map(|stem| marked_rhythm_markers(stem, CHANNELS, case.sample_rate).0);
+        let mut failures = Vec::new();
+        if !outgoing.iter().any(|&marker| marker >= slew) {
+            failures.push(format!(
+                "no beat marker after the tempo command at frame {slew}"
+            ));
+        }
+        if outgoing != continued {
+            failures.push(format!(
+                "beat markers differ: outgoing={outgoing:?}, continued={continued:?}"
+            ));
+        }
+        failures
+    } else {
+        synchronization_failures(
+            "fixed HLS versus catalogue source continuation",
+            &stems,
+            CHANNELS,
+            case.sample_rate,
+            START_BPM,
+        )
+    };
     assert!(
         failures.is_empty() && frames <= 1.0,
         "PCM: {failures:?}, playheads={positions:?}, difference={frames} frames"
