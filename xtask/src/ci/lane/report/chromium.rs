@@ -18,10 +18,9 @@ use nix::{
     errno::Errno,
     fcntl,
     sys::stat::{self, Mode},
-    unistd::{self, UnlinkatFlags},
 };
 use tempfile::{Builder, TempDir};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::announce;
 use crate::{config::LaneReport, consts::LANE_REPORT_ENV};
@@ -60,9 +59,13 @@ pub(super) struct ChromiumReport {
 }
 
 /// The capture and network log directories, held open from their creation.
-/// What the report copies, and what emptying it unlinks, is reached through
-/// these, so a name pointed elsewhere during the run cannot make another
-/// directory this run's report or the one emptying it reaches.
+/// What the report copies is read through these, so a name pointed elsewhere
+/// during the run cannot make another directory this run's report.
+///
+/// Each was empty when it was opened, so nothing written before this run is
+/// in the report; what its steps' paths receive afterwards, from whichever
+/// writer, is what the report holds. Nothing here removes anything from
+/// either: a capture stays in the build for the build's own lifecycle.
 struct Directories {
     capture: File,
     netlog: File,
@@ -126,6 +129,11 @@ impl ChromiumReport {
             open_directory(&held, Path::new(consts::CHROMIUM_NETLOG_DIR)).with_context(|| {
                 format!("opening the network log directory in {}", capture.display())
             })?;
+        ensure!(
+            names_in(&netlog)?.is_empty(),
+            "the network log directory in {} held something before this run wrote to it",
+            capture.display()
+        );
         let destination = if github {
             let (Some(env_file), Some(temp)) = (var("GITHUB_ENV"), var("RUNNER_TEMP")) else {
                 bail!("a GitHub job names GITHUB_ENV and RUNNER_TEMP");
@@ -200,7 +208,6 @@ impl ChromiumReport {
                     }
                     Err(error) => warn!("this job's Chromium report is not uploaded: {error:#}"),
                 }
-                report.directories.empty(&report.capture);
             }
             Destination::InPlace => {
                 info!(
@@ -211,16 +218,18 @@ impl ChromiumReport {
         }
     }
 
-    /// Empties a report nobody wants.
+    /// Leaves a report nobody wants where it was captured, neither told nor
+    /// copied.
     pub(super) fn discard(self) {
-        if let Some(report) = self.still_named() {
-            report.directories.empty(&report.capture);
-        }
+        debug!(
+            "this run's unwanted Chromium report stays in {}",
+            self.capture.display()
+        );
     }
 
     /// This report, while its capture directory still names the directories
     /// the steps were given. Otherwise it is left as it stands: whatever took
-    /// their place is not this run's to upload or to remove.
+    /// their place is not this run's to upload.
     fn still_named(self) -> Option<Self> {
         let problem = match self.directories.named_by(&self.capture) {
             Ok(true) => return Some(self),
@@ -232,7 +241,7 @@ impl ChromiumReport {
             }
         };
         warn!(
-            "{} {problem}; nothing in it is uploaded or removed",
+            "{} {problem}; nothing in it is uploaded",
             self.capture.display()
         );
         None
@@ -272,36 +281,6 @@ impl Directories {
             }
         }
         Ok(())
-    }
-
-    /// Unlinks every file in the network log directory and in the capture,
-    /// through the descriptors held since they were made. A name is unlinked
-    /// only inside these directories and never as a directory, so whatever
-    /// took either directory's name, and any directory put in them, stays;
-    /// the emptied directories stay too, for the build's own lifecycle.
-    fn empty(&self, capture: &Path) {
-        for dir in [&self.netlog, &self.capture] {
-            let names = match names_in(dir) {
-                Ok(names) => names,
-                Err(error) => {
-                    warn!(
-                        "this run's Chromium capture in {} stays: {error:#}",
-                        capture.display()
-                    );
-                    continue;
-                }
-            };
-            for name in names {
-                match unistd::unlinkat(dir, name.as_os_str(), UnlinkatFlags::NoRemoveDir) {
-                    Ok(()) | Err(Errno::ENOENT | Errno::EISDIR | Errno::EPERM) => {}
-                    Err(error) => warn!(
-                        "{} stays in this run's Chromium capture in {}: {error}",
-                        Path::new(&name).display(),
-                        capture.display()
-                    ),
-                }
-            }
-        }
     }
 }
 
@@ -354,68 +333,94 @@ fn copy_leaf(dir: &File, name: &OsStr, destination: &Path) -> Result<Option<u64>
     if !metadata.is_file() || metadata.nlink() != 1 || metadata.len() == 0 {
         return Ok(None);
     }
+    copy_opened(&file, metadata.len(), destination)
+        .with_context(|| format!("copying {}", Path::new(name).display()))
+}
+
+/// Copies at most `len` bytes of `file`, as it was opened, to a new
+/// `destination`, and says how many bytes that was. A file that shrank since
+/// gives fewer: a positive count is a prefix of what was written, and none
+/// leaves no destination behind.
+fn copy_opened(file: &File, len: u64, destination: &Path) -> Result<Option<u64>> {
     let mut copy = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(destination)
         .with_context(|| format!("creating {}", destination.display()))?;
-    io::copy(&mut (&file).take(metadata.len()), &mut copy)
-        .map(Some)
-        .with_context(|| {
-            format!(
-                "copying {} to {}",
-                Path::new(name).display(),
-                destination.display()
-            )
-        })
+    let copied = io::copy(&mut file.take(len), &mut copy)
+        .with_context(|| format!("copying to {}", destination.display()))?;
+    if copied == 0 {
+        drop(copy);
+        fs::remove_file(destination)
+            .with_context(|| format!("removing the empty {}", destination.display()))?;
+        return Ok(None);
+    }
+    Ok(Some(copied))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::fs::{self, File};
 
-    use super::{ChromiumReport, consts};
+    use super::{ChromiumReport, consts, copy_opened};
 
-    /// Emptying a report reaches only the directories it made, whatever
-    /// their names point at by then: here both were moved aside and foreign
-    /// ones took their names after the report was admitted. The foreign bytes
-    /// stay, and the moved capture loses its files but stays as a directory.
+    /// A report nobody wants removes nothing from its directories: a file
+    /// another writer put in them, under a name its steps also write, stays
+    /// as it was.
     #[test]
-    fn emptying_a_report_leaves_whatever_took_its_names() {
+    fn an_unwanted_report_removes_nothing_from_its_directories() {
         let build = tempfile::tempdir().expect("create a build");
         let report = ChromiumReport::prepare(build.path(), false, &|_| None)
             .expect("prepare a report outside a job");
         let capture = report.capture.clone();
-        let netlog = capture.join(consts::CHROMIUM_NETLOG_DIR);
-        fs::write(capture.join(consts::CHROMIUM_DRIVER_LOG), "own").expect("write the driver log");
-        fs::write(netlog.join("own.jsonl"), "own").expect("write a network log");
+        let driver = capture.join(consts::CHROMIUM_DRIVER_LOG);
+        let foreign = capture
+            .join(consts::CHROMIUM_NETLOG_DIR)
+            .join("foreign.jsonl");
+        fs::write(&driver, "own").expect("write the driver log");
+        fs::write(&foreign, "foreign").expect("write a foreign network log");
 
-        let aside = build.path().join("aside");
-        fs::rename(&capture, &aside).expect("move the capture aside");
-        fs::create_dir_all(&netlog).expect("put a foreign capture in its place");
-        fs::write(capture.join(consts::CHROMIUM_DRIVER_LOG), "foreign")
-            .expect("write a foreign driver log");
-        fs::write(netlog.join("own.jsonl"), "foreign").expect("write a foreign network log");
+        report.discard();
 
-        report.directories.empty(&report.capture);
+        assert_eq!(fs::read_to_string(&driver).unwrap(), "own");
+        assert_eq!(fs::read_to_string(&foreign).unwrap(), "foreign");
+    }
 
-        for foreign in [
-            capture.join(consts::CHROMIUM_DRIVER_LOG),
-            netlog.join("own.jsonl"),
-        ] {
-            assert_eq!(
-                fs::read_to_string(&foreign).unwrap(),
-                "foreign",
-                "{}",
-                foreign.display()
-            );
-        }
-        assert!(!aside.join(consts::CHROMIUM_DRIVER_LOG).exists());
+    /// A file that held bytes when it was opened and none by the time it is
+    /// copied leaves no copy: an empty file is never part of a report.
+    #[test]
+    fn a_file_emptied_after_it_was_opened_leaves_no_copy() {
+        let dir = tempfile::tempdir().expect("create a directory");
+        let source = dir.path().join("web_observer.jsonl");
+        fs::write(&source, "net").expect("write a network log");
+        let file = File::open(&source).expect("open the network log");
+        let len = file.metadata().expect("read its length").len();
+        File::create(&source).expect("empty the network log");
+        let destination = dir.path().join("copy.jsonl");
+
         assert_eq!(
-            fs::read_dir(aside.join(consts::CHROMIUM_NETLOG_DIR))
-                .unwrap()
-                .count(),
-            0
+            copy_opened(&file, len, &destination).expect("copy what is left"),
+            None
         );
+        assert!(!destination.exists());
+    }
+
+    /// A file that shrank after it was opened gives what is left of it, a
+    /// prefix of what was written.
+    #[test]
+    fn a_file_shrunk_after_it_was_opened_gives_its_prefix() {
+        let dir = tempfile::tempdir().expect("create a directory");
+        let source = dir.path().join("web_observer.jsonl");
+        fs::write(&source, "network").expect("write a network log");
+        let file = File::open(&source).expect("open the network log");
+        let len = file.metadata().expect("read its length").len();
+        fs::write(&source, "net").expect("shrink the network log");
+        let destination = dir.path().join("copy.jsonl");
+
+        assert_eq!(
+            copy_opened(&file, len, &destination).expect("copy what is left"),
+            Some(3)
+        );
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "net");
     }
 }

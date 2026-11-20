@@ -2690,10 +2690,14 @@ fn a_report_lane_uploads_its_job_copy_and_fails_a_missing_one() -> anyhow::Resul
             && step_position(job, "Check the lane's report")
                 < step_position(job, "Upload the lane's report")
     );
-    assert!(
-        !github_workflow_text("lane.yml").contains("web-chromium"),
-        "the executor picks a report by the catalog's field, not by a lane's name"
-    );
+    for step in [check, upload] {
+        assert!(
+            !mapping_field(step, "if")
+                .as_str()
+                .is_some_and(|condition| condition.contains("inputs.lane")),
+            "the executor picks a report by the catalog's field, not by a lane's name"
+        );
+    }
 
     let copy = "/runner/temp/web-chromium-report-a1B2c3.chromium";
     let mut cases = Vec::new();
@@ -2810,6 +2814,45 @@ fn a_report_check_passes_only_the_whole_copy_in_the_jobs_storage() -> anyhow::Re
     let whole = temp.join("web-chromium-report-a1B2c3.chromium");
     fs::create_dir_all(whole.join("web-chromium-netlog"))?;
     fs::write(whole.join("web-chromium.log"), "driver")?;
+    fs::write(whole.join("web-chromium-netlog/web_observer.jsonl"), "net")?;
+    // In the job's own storage, named as a copy is, yet not a whole report.
+    let shaped = |name: &str, files: &[(&str, &str)]| -> anyhow::Result<String> {
+        let dir = temp.join(name);
+        fs::create_dir(&dir)?;
+        for (file, bytes) in files {
+            let path = dir.join(file);
+            fs::create_dir_all(path.parent().expect("a file in the copy"))?;
+            fs::write(path, bytes)?;
+        }
+        Ok(dir.display().to_string())
+    };
+    let unrelated = shaped("unrelated.chromium", &[("payload.txt", "payload")])?;
+    let no_driver = shaped(
+        "web-chromium-report-p6Q7r8.chromium",
+        &[("web-chromium-netlog/web_observer.jsonl", "net")],
+    )?;
+    let empty_driver = shaped(
+        "web-chromium-report-s9T0u1.chromium",
+        &[
+            ("web-chromium.log", ""),
+            ("web-chromium-netlog/web_observer.jsonl", "net"),
+        ],
+    )?;
+    let extra = shaped(
+        "web-chromium-report-v2W3x4.chromium",
+        &[
+            ("web-chromium.log", "driver"),
+            ("web-chromium-netlog/web_observer.jsonl", "net"),
+            ("payload.txt", "payload"),
+        ],
+    )?;
+    let empty_netlog = shaped(
+        "web-chromium-report-y5Z6a7.chromium",
+        &[
+            ("web-chromium.log", "driver"),
+            ("web-chromium-netlog/web_observer.jsonl", ""),
+        ],
+    )?;
     let empty = temp.join("web-chromium-report-d4E5f6.chromium");
     fs::create_dir(&empty)?;
     let linked = temp.join("web-chromium-report-g7H8i9.chromium");
@@ -2836,6 +2879,11 @@ fn a_report_check_passes_only_the_whole_copy_in_the_jobs_storage() -> anyhow::Re
         (missing.display().to_string(), false),
         (linked.display().to_string(), false),
         (foreign.display().to_string(), false),
+        (unrelated, false),
+        (no_driver, false),
+        (empty_driver, false),
+        (extra, false),
+        (empty_netlog, false),
     ] {
         let github_output = root.path().join("output");
         fs::write(&github_output, "")?;

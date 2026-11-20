@@ -800,29 +800,6 @@ label = "run"
             .collect()
     }
 
-    /// The files left in the Chromium captures in `build`: an emptied capture
-    /// stays for the build's own lifecycle, and holds none.
-    #[cfg(unix)]
-    fn captured_files(build: &Path) -> Vec<PathBuf> {
-        let mut files = Vec::new();
-        let mut dirs = captures_in(build);
-        while let Some(dir) = dirs.pop() {
-            for entry in fs::read_dir(&dir).expect("list a capture") {
-                let path = entry.expect("read a capture entry").path();
-                if path
-                    .symlink_metadata()
-                    .expect("read a capture entry")
-                    .is_dir()
-                {
-                    dirs.push(path);
-                } else {
-                    files.push(path);
-                }
-            }
-        }
-        files
-    }
-
     /// A failed lane's job uploads the driver log and the network logs its own
     /// run wrote, copied out before its build is released: the next job on
     /// the same build writes elsewhere and cannot replace them, and a link or
@@ -872,7 +849,11 @@ label = "run"
             upload.display()
         );
         let slot = builds.join("trivial-0");
-        assert_eq!(captured_files(&slot), Vec::<PathBuf>::new());
+        assert_eq!(
+            captures_in(&slot).len(),
+            1,
+            "job A's capture stays in its build for the build's lifecycle"
+        );
 
         let checkout_b = tempfile::tempdir_in(temp.path()).expect("create job B's checkout");
         let runner_temp_b = tempfile::tempdir_in(temp.path()).expect("create job B's RUNNER_TEMP");
@@ -1186,11 +1167,11 @@ label = "run"
         assert!(!marker.exists(), "the lane's step did not run");
     }
 
-    /// A report wanted only on failure is neither kept nor told when the lane
-    /// passes.
+    /// A report wanted only on failure is neither copied nor told when the
+    /// lane passes; its capture stays in the build for the build's lifecycle.
     #[cfg(unix)]
     #[test]
-    fn a_passing_lane_leaves_no_chromium_report() {
+    fn a_passing_lane_neither_copies_nor_tells_its_chromium_report() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let builds = temp.path().join("builds");
         let runner_temp = tempfile::tempdir_in(temp.path()).expect("create the job's RUNNER_TEMP");
@@ -1211,10 +1192,7 @@ label = "run"
 
         assert_eq!(fs::read_to_string(&github_env).unwrap(), "");
         assert_eq!(fs::read_dir(runner_temp.path()).unwrap().count(), 0);
-        assert_eq!(
-            captured_files(&builds.join("trivial-0")),
-            Vec::<PathBuf>::new()
-        );
+        assert_eq!(captures_in(&builds.join("trivial-0")).len(), 1);
     }
 
     /// Outside a GitHub job there is no job storage, so a failed lane keeps

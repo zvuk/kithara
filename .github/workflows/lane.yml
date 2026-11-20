@@ -221,19 +221,33 @@ jobs:
       # one dot in its name, before the report's own name. A value cut short
       # by a failed write names that directory's parent or a prefix of its
       # name, never both a child of RUNNER_TEMP and a name ending that way, so
-      # only the whole path passes. The upload takes the path this step
-      # checked, and only when it passed.
+      # only the whole path passes. What it holds is the report's own shape,
+      # as `ci lane` copies it: a Chromium report is the driver's non-empty
+      # log and a network log directory of non-empty JSONL files, and nothing
+      # else. The upload takes the path this step checked, and only when it
+      # passed.
       - name: Check the lane's report
         id: report
         if: ${{ always() && inputs.artifact-report != '' && (steps.lane.outcome == 'failure' || (inputs.artifact-when == 'always' && steps.lane.outcome == 'success')) }}
         env:
           REPORT: ${{ inputs.artifact-report }}
         run: |
+          case $REPORT in
+            chromium) driver=web-chromium.log netlog=web-chromium-netlog ;;
+            *) echo "::error title=Lane report::no shape is known for a $REPORT report"; exit 1 ;;
+          esac
           copy=$KITHARA_LANE_REPORT
           temp=$(cd "$RUNNER_TEMP" && pwd -P)
           name=${copy##*/}
-          if [ -z "$copy" ] || [ "${copy%/*}" != "$temp" ] || [[ ! $name =~ ^[^./]+\.${REPORT}$ ]] \
-            || [ ! -d "$copy" ] || [ -L "$copy" ] || [ -z "$(find "$copy" -type f -size +0c -print -quit)" ]; then
+          whole() {
+            [ -n "$copy" ] && [ "${copy%/*}" = "$temp" ] && [[ $name =~ ^[^./]+\.${REPORT}$ ]] \
+              && [ -d "$copy" ] && [ ! -L "$copy" ] \
+              && [ -f "$copy/$driver" ] && [ ! -L "$copy/$driver" ] && [ -s "$copy/$driver" ] \
+              && [ -d "$copy/$netlog" ] && [ ! -L "$copy/$netlog" ] \
+              && [ -z "$(find "$copy" -mindepth 1 ! -path "$copy/$driver" ! -path "$copy/$netlog" \
+                ! \( -path "$copy/$netlog/*.jsonl" ! -path "$copy/$netlog/*/*" -type f -size +0c \) -print -quit)" ]
+          }
+          if ! whole; then
             echo "::error title=Lane report::the lane named no whole copy of its $REPORT report in this job's RUNNER_TEMP; the lane's log says why"
             exit 1
           fi
