@@ -87,10 +87,6 @@ fn analyze(reader: PcmReader) -> (Option<BeatArtifact>, u64) {
         outcome => panic!("production rhythm analysis did not settle: {outcome:?}"),
     };
     let analysis = progress.analysis();
-    assert!(
-        analysis.is_settled(),
-        "rhythm analysis must cover the source"
-    );
     let frames = analysis
         .extent()
         .expect("settled rhythm analysis has a source extent");
