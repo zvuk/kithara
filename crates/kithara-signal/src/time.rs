@@ -17,6 +17,20 @@ pub fn rescale_frame_ceil(
     u64::try_from(numerator.div_ceil(u128::from(source_rate.get()))).ok()
 }
 
+/// Rescale a frame count to the nearest target frame, rounding ties upward.
+///
+/// Returns `None` when the target count exceeds `u64::MAX`.
+#[must_use]
+pub fn rescale_frame_round(
+    frames: u64,
+    source_rate: NonZeroU32,
+    target_rate: NonZeroU32,
+) -> Option<u64> {
+    let numerator =
+        u128::from(frames) * u128::from(target_rate.get()) + u128::from(source_rate.get() / 2);
+    u64::try_from(numerator / u128::from(source_rate.get())).ok()
+}
+
 /// Elapsed time on the `sample_rate` frame grid, saturating at zero.
 /// Endpoints within nanosecond precision of whole frames use their frame difference.
 /// Fractional or unrepresentable endpoints retain their time difference.

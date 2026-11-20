@@ -1,0 +1,15 @@
+id: style.no-closure-in-for-header
+message: |
+  A closure in a `for` loop header. Bind the iterator chain to a named `let`
+  before the loop, or move the filter into the body, so the header says what
+  is iterated.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  kind: for_expression
+  has:
+    field: value
+    stopBy: end
+    kind: closure_expression

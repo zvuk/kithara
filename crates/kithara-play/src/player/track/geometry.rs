@@ -3,11 +3,10 @@ use kithara_signal::ExponentialApproach;
 use kithara_sync::SpeedCurve;
 use num_traits::ToPrimitive;
 
+use super::super::settings::check_speed;
 use crate::PlayError;
 
 pub(super) fn check_curve(curve: &mut SpeedCurve) -> Result<f32, PlayError> {
-    use super::super::settings::check_speed;
-
     match curve {
         SpeedCurve::Constant(speed) | SpeedCurve::Ramp { to: speed, .. } => {
             *speed = check_speed(*speed)?;
@@ -43,8 +42,6 @@ pub(super) fn check_curve(curve: &mut SpeedCurve) -> Result<f32, PlayError> {
 }
 
 fn check_approach(approach: ExponentialApproach) -> Result<f32, PlayError> {
-    use super::super::settings::check_speed;
-
     for rate in [approach.initial(), approach.target()] {
         if !(f64::from(kithara_sync::MIN_SPEED)..=4.0).contains(&rate) {
             return Err(PlayError::InvalidParameter {

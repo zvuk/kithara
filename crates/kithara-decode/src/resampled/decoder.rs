@@ -8,6 +8,7 @@ use kithara_resampler::{
 };
 use kithara_signal::{
     AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView, PlanarBuffer,
+    rescale_frame_round,
 };
 use kithara_stream::{AudioCodec, PendingReason};
 use kithara_test_utils::kithara;
@@ -706,21 +707,13 @@ pub(super) fn round_scaled_frames(
     source_rate: u32,
     target_rate: u32,
 ) -> DecodeResult<u64> {
-    if source_rate == 0 {
-        return Err(DecodeError::InvalidSampleRate {
-            resource: "decoder.resampler.source",
-        });
-    }
-    if target_rate == 0 {
-        return Err(DecodeError::InvalidSampleRate {
-            resource: "decoder.resampler.target",
-        });
-    }
-    let numerator = u128::from(count)
-        .saturating_mul(u128::from(target_rate))
-        .saturating_add(u128::from(source_rate / 2));
-    let scaled = numerator / u128::from(source_rate);
-    u64::try_from(scaled).map_err(|_| DecodeError::InvalidData {
+    let source_rate = NonZeroU32::new(source_rate).ok_or(DecodeError::InvalidSampleRate {
+        resource: "decoder.resampler.source",
+    })?;
+    let target_rate = NonZeroU32::new(target_rate).ok_or(DecodeError::InvalidSampleRate {
+        resource: "decoder.resampler.target",
+    })?;
+    rescale_frame_round(count, source_rate, target_rate).ok_or(DecodeError::InvalidData {
         detail: "decoder resampler frame count overflow",
     })
 }

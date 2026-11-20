@@ -402,7 +402,7 @@ impl TryFrom<&[u8]> for AudioCodec {
             b if b.len() < 4 => Err(CodecMagicError::TooShort { got: b.len() }),
             [b'f', b'L', b'a', b'C', ..] => Ok(Self::Flac),
             [b'M', b'A', b'C', b' ', ..] => Ok(Self::Ape),
-            [0xFF, b1, ..] if (b1 & 0xE0) == 0xE0 => match (b1 >> 1) & 0b11 {
+            [0xff, b1, ..] if (b1 & 0xe0) == 0xe0 => match (b1 >> 1) & 0b11 {
                 0b00 => Ok(Self::AacLc),
                 _ => Ok(Self::Mp3),
             },

@@ -229,7 +229,9 @@ impl<'a> HostStorage<'a> {
         self.prune_host_trees("vm/android/avd", Self::DAY)?;
         self.prune_abandoned_job_vms(Self::DAY);
         self.prune_host_files("logs", 14 * Self::DAY)?;
-        self.rotate_logs()?;
+        let rotation = self.rotate_logs().inspect_err(|error| {
+            warn!(error = %format_args!("{error:#}"), "continuing CI storage cleanup after log rotation failed");
+        });
         self.prune_retired_caches(7 * Self::DAY)?;
         let build_roots = self.prune_build_caches()?;
 
@@ -313,7 +315,7 @@ impl<'a> HostStorage<'a> {
                 name_holders(&holders)
             );
         }
-        Ok(())
+        rotation
     }
 
     fn prune_build_caches(&self) -> Result<Vec<PathBuf>> {
@@ -647,6 +649,10 @@ impl<'a> HostStorage<'a> {
             {
                 continue;
             }
+            let log = OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .with_context(|| format!("opening log for rotation {}", path.display()))?;
             let numbered = |number| PathBuf::from(format!("{}.{number}", path.display()));
             self.remove_path(&numbered(5))?;
             for number in (1..=4).rev() {
@@ -658,10 +664,7 @@ impl<'a> HostStorage<'a> {
             }
             fs::copy(&path, numbered(1))
                 .with_context(|| format!("copying rotated log {}", path.display()))?;
-            OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&path)
+            log.set_len(0)
                 .with_context(|| format!("truncating rotated log {}", path.display()))?;
         }
         Ok(())
@@ -903,9 +906,11 @@ impl<'a> HostStorage<'a> {
         let label = "measure the largest CI trees";
         info!(step = label, "starting");
         let started = Instant::now();
-        let mut command = self.process.command("du");
-        command.args(["-k", "-d", "2"]).args(&roots);
-        let output = crate::child::output(&mut command, None, consts::CONTROL_TIMEOUT);
+        let output = self.process.resolve_program("du").and_then(|du| {
+            let mut command = self.process.command(du);
+            command.args(["-k", "-d", "2"]).args(&roots);
+            crate::child::output(&mut command, None, consts::CONTROL_TIMEOUT)
+        });
         info!(
             step = label,
             seconds = started.elapsed().as_secs_f64(),
@@ -1101,7 +1106,7 @@ mod tests {
 
     use super::*;
     #[cfg(unix)]
-    use crate::testing::install_script;
+    use crate::testing::{install_script, install_scripted_double};
     use crate::{
         ci::{config::fixture, previous_layout::previous_layout},
         testing::install_double,
@@ -1744,6 +1749,37 @@ mod tests {
         assert!(review.is_dir());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_rotation_error_preserves_log_history_and_still_reclaims_idle_builds() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.build_root = Some(directory.path().join("builds"));
+        cfg.host.log_limit_bytes = 0;
+        let build = a_build_beside_a_checkout(cfg.host.build_root());
+        let logs = directory.path().join("logs");
+        fs::create_dir_all(logs.join("bridge.log")).unwrap();
+        fs::write(logs.join("bridge.log/current"), b"current log").unwrap();
+        fs::write(logs.join("bridge.log.1"), b"previous log").unwrap();
+        let process = Process::recording(directory.path(), Recording::default());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_NORMAL,
+        ]);
+
+        let error = storage.cleanup().unwrap_err();
+
+        assert!(!build.join("debug").exists());
+        assert_eq!(
+            fs::read(logs.join("bridge.log.1")).unwrap(),
+            b"previous log"
+        );
+        assert!(error.to_string().contains("opening log for rotation"));
+    }
+
     /// The hourly pass this host ran for a day: two checkouts held 88 and 95 GB
     /// under a 100 GB ceiling, so enforcing the budget freed nothing on every
     /// pass while the volume they share sat below the floor and jobs were
@@ -1926,17 +1962,17 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         let bin = root.join("bin");
-        fs::create_dir_all(&bin).unwrap();
         let asked = root.join("du-asked");
         let listing = format!(
             "1\t{r}/logs/bridge\n4\t{r}/logs\n500\t{r}/home/kithara-ci\n502\t{r}/home\n7\t{r}/vm\n\
              513\t{r}\n",
             r = root.display()
         );
-        install_script(
-            &bin.join("du"),
+        install_scripted_double(
+            &bin,
+            "du",
             &format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{asked}'\nprintf '%s' '{listing}'\n\
+                "printf '%s\\n' \"$@\" > '{asked}'\nprintf '%s' '{listing}'\n\
                  echo 'du: gone: No such file or directory' >&2\nexit 1\n",
                 asked = asked.display()
             ),
@@ -1991,13 +2027,15 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         let bin = root.join("bin");
-        fs::create_dir_all(&bin).unwrap();
         let pid_file = root.join("du.pid");
-        install_script(
-            &bin.join("du"),
+        install_scripted_double(
+            &bin,
+            "du",
             &format!(
-                "#!/bin/sh\necho $$ > '{}'\nexec sleep 30\n",
-                pid_file.display()
+                "if [ ! -f '{pid}' ]; then\n  echo $$ > '{pid}'\n  exec sleep 30\nfi\n\
+                 printf '1\\t{root}/logs/bridge\\n'\n",
+                pid = pid_file.display(),
+                root = root.display(),
             ),
         );
         let mut cfg = config(root);
@@ -2026,13 +2064,6 @@ mod tests {
             Err(Errno::ECHILD)
         );
 
-        install_script(
-            &bin.join("du"),
-            &format!(
-                "#!/bin/sh\nprintf '1\\t{}/logs/bridge\\n'\n",
-                root.display()
-            ),
-        );
         storage.set_available_sequence([consts::FREE_AGGRESSIVE; 4]);
         let error = storage.cleanup().unwrap_err().to_string();
         assert!(

@@ -15,6 +15,7 @@ use crate::{
         ids::ThreadKey,
         join::Join,
         sync::{Condvar, Mutex},
+        system::credit::{self, DedicatedSlot, PoolParticipant},
     },
     sync::Arc,
 };
@@ -183,7 +184,7 @@ where
 {
     let ambient = crate::flash::ambient_snapshot();
     let active = crate::flash::flash_enabled();
-    let slot = ambient.then(|| crate::flash::system::credit::DedicatedSlot::reserve(origin));
+    let slot = ambient.then(|| DedicatedSlot::reserve(origin));
     move || {
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         let _flash = crate::flash::enter_dynamic(active);
@@ -216,8 +217,6 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    use crate::flash::system::credit::{self, DedicatedSlot, PoolParticipant};
-
     let origin = Location::caller();
     let ambient = crate::flash::ambient_snapshot();
     let slot = ambient.then(|| DedicatedSlot::reserve(origin).joined(join.clone()));
@@ -300,11 +299,11 @@ where
     T: Send + 'static,
 {
     let ambient = crate::flash::ambient_snapshot();
-    let slot = crate::flash::system::credit::DedicatedSlot::reserve_named(origin);
+    let slot = DedicatedSlot::reserve_named(origin);
     move || {
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         let _flash = crate::flash::enter_dynamic(true);
-        crate::flash::system::credit::reset_credit();
+        credit::reset_credit();
         let _participant = slot.claim_dedicated();
         f()
     }

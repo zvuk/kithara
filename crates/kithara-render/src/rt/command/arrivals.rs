@@ -6,7 +6,7 @@ use super::{
         processor::Deck,
         track::{PlayerTrack, ReadPcm},
     },
-    state::*,
+    state::{Armed, EndAction, shifted_slot},
 };
 use crate::bridge::{DeckFxChange, DeckPart, DeckProtocol, DeckRefusal, Slot};
 

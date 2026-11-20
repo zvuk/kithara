@@ -159,7 +159,7 @@ mod runs {
             sync::Arc,
             tokio::{self, sync::watch, task::spawn as task_spawn},
         },
-        prelude::{PlaybackResamplerBackend, Resource},
+        play::{PlaybackResamplerBackend, Resource},
         queue::TrackId,
     };
     use web_sys::BroadcastChannel;
