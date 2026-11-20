@@ -1,12 +1,15 @@
 use std::{mem, num::NonZeroUsize, ops::ControlFlow};
 
 use kithara_bufpool::{HasPool, SampleBuffer};
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SampleCount};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SampleCount, SourceSpan};
 use kithara_stretch::ElasticError;
 use kithara_test_macros as kithara;
 use tracing::warn;
 
-use super::core::{CarriedPhase, PreparedQuantum, WarpRenderer};
+use super::{
+    super::trajectory::Fraction,
+    core::{CarriedPhase, PreparedQuantum, WarpRenderer},
+};
 
 fn copy_cached_tail(
     mapped_render: bool,
@@ -362,6 +365,26 @@ where
         let Some(meta) = self.last_input_meta else {
             return Ok(None);
         };
+        let (_, span) = self.terminal_window(meta, output_limit)?;
+        if span.output_frames() == 0 {
+            self.active = false;
+            self.reset_pending = true;
+            self.prepared_quantum = None;
+            self.clear_pending_source();
+            self.trajectory.reset();
+            return Ok(None);
+        }
+        self.render_mapped(span)?;
+        self.emit_mapped_drain(span).map(Some)
+    }
+
+    /// The next bounded output window of the fed source under its mapping law,
+    /// and its prefix of outputs that start before the source's physical end.
+    fn terminal_window(
+        &mut self,
+        meta: AudioChunkInfo,
+        output_limit: usize,
+    ) -> Result<(SourceSpan, SourceSpan), ElasticError> {
         let end = meta
             .frame_offset
             .checked_add(u64::from(meta.frames))
@@ -379,36 +402,71 @@ where
             .min(output_limit)
             .min(self.source_block_frames.get())
             .min(capability);
-        let span = self.mapping_span(meta.frame_offset, meta.spec.sample_rate, quantum)?;
-        let mut outputs = span.output_frames();
-        while outputs > 0 {
-            let (numerator, denominator) = span
-                .source_ratio_at(outputs - 1)
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            if numerator / denominator.get() < u128::from(end) {
-                break;
-            }
-            outputs -= 1;
-        }
-        if outputs == 0 {
-            self.active = false;
-            self.reset_pending = true;
-            self.prepared_quantum = None;
-            self.clear_pending_source();
-            self.trajectory.reset();
-            return Ok(None);
-        }
-        let span = span
-            .for_output_range(0..outputs)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        self.render_mapped(span)?;
-        self.emit_mapped_drain(span).map(Some)
+        let window = self.mapping_span(meta.frame_offset, meta.spec.sample_rate, quantum)?;
+        let span = Self::terminal_span(window, end).ok_or(ElasticError::SampleCountOverflow)?;
+        Ok((window, span))
     }
 
-    fn emit_mapped_drain(
+    /// Drain one bounded output chunk of the outgoing source before its decoder
+    /// changes the source clock to `revision`: the outputs that start before
+    /// the physical end of the fed source. `None` means none is left; the
+    /// renderer is then reset, and the first window of `revision` starts at the
+    /// phase the next output leaves past that end.
+    ///
+    /// # Errors
+    /// Returns a service request when the engine needs re-priming, an empty
+    /// output error for a zero `output_limit`, or the error of the bounded render.
+    pub fn drain_source_cut(
         &mut self,
-        span: kithara_signal::SourceSpan,
-    ) -> Result<AudioChunk, ElasticError> {
+        output_limit: usize,
+        revision: u64,
+    ) -> Result<Option<AudioChunk>, crate::WarpRenderError> {
+        if self.terminal_error.is_some() {
+            return Err(crate::WarpRenderError::Terminated);
+        }
+        let output_limit = self.trajectory.output_limit(output_limit);
+        if output_limit == 0 {
+            return Err(ElasticError::EmptyOutput.into());
+        }
+        let Some(meta) = self.last_input_meta else {
+            self.reset();
+            return Ok(None);
+        };
+        let mut window = self.terminal_window(meta, output_limit)?;
+        if window.1.output_frames() > 0 && self.unity_retirement_pending() {
+            self.retire_for_reprime()?;
+            self.prepare(self.spec);
+            window = self.terminal_window(meta, output_limit)?;
+        }
+        if self.transition_pending() {
+            return Err(crate::WarpRenderError::NeedsService);
+        }
+        let (window, span) = window;
+        if span.output_frames() > 0 {
+            self.render_mapped(span)?;
+            return Ok(Some(self.emit_mapped_drain(span)?));
+        }
+        let (numerator, denominator) = window
+            .source_ratio_at(0)
+            .ok_or(crate::WarpRenderError::InvalidSourceGeometry)?;
+        let end = self
+            .terminal_source_end
+            .ok_or(crate::WarpRenderError::InvalidSourceGeometry)?;
+        let residual = Fraction::new(numerator, denominator.get())
+            .zip(Fraction::new(u128::from(end), 1))
+            .and_then(|(next, end)| next.sub(end))
+            .ok_or(crate::WarpRenderError::InvalidSourceGeometry)?;
+        let rate = meta.spec.sample_rate;
+        self.reset();
+        self.carried_phase = Some(CarriedPhase {
+            residual,
+            rate,
+            revision,
+        });
+        Ok(None)
+    }
+
+    fn emit_mapped_drain(&mut self, span: SourceSpan) -> Result<AudioChunk, ElasticError> {
         let channels = usize::from(self.spec.channels);
         self.residency
             .as_mut()
@@ -536,11 +594,7 @@ where
         output
     }
 
-    fn render_mapped_chunk(
-        &mut self,
-        chunk: AudioChunk,
-        span: kithara_signal::SourceSpan,
-    ) -> Option<AudioChunk> {
+    fn render_mapped_chunk(&mut self, chunk: AudioChunk, span: SourceSpan) -> Option<AudioChunk> {
         self.mapped_render = true;
         let channels = usize::from(self.spec.channels);
         if span.output_frames() == 0 {
@@ -586,11 +640,7 @@ where
         }
     }
 
-    fn render_manual(
-        &mut self,
-        chunk: AudioChunk,
-        span: kithara_signal::SourceSpan,
-    ) -> Option<AudioChunk> {
+    fn render_manual(&mut self, chunk: AudioChunk, span: SourceSpan) -> Option<AudioChunk> {
         if let Some(residency) = self.residency.as_mut()
             && let Err(error) = residency.retain_manual(
                 chunk.meta,
@@ -640,14 +690,7 @@ where
     /// Discard renderer state after a source discontinuity.
     pub fn reset(&mut self) {
         self.withdraw_speed_ahead();
-        self.carried_phase = self
-            .carried_phase
-            .take()
-            .filter(|carried| !carried.armed)
-            .map(|carried| CarriedPhase {
-                armed: true,
-                ..carried
-            });
+        self.carried_phase = None;
         self.terminal_error = None;
         self.reset_pending = true;
         self.clear_render_state();

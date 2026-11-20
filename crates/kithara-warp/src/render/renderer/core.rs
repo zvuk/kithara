@@ -63,14 +63,16 @@ struct PitchLayout {
     passthrough: bool,
 }
 
-/// Source phase a tail left past its end when the source clock changed.
+/// Source phase an outgoing source left past its physical end when its
+/// decoder changed the source clock.
 #[derive(Clone, Copy)]
 pub(in crate::render) struct CarriedPhase {
-    /// Outgoing source frames between the tail end and its next output boundary.
+    /// Outgoing source frames from the physical end to the next output start.
     pub(in crate::render) residual: Fraction,
+    /// Decoded sample rate of the outgoing source.
     pub(in crate::render) rate: NonZeroU32,
-    /// Set by the reset that applies the clock change; a later reset drops it.
-    pub(in crate::render) armed: bool,
+    /// Decoder revision whose first window starts at this phase.
+    pub(in crate::render) revision: u64,
 }
 
 #[derive(Clone, Copy)]
