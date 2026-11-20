@@ -44,6 +44,12 @@ pub(super) struct PatternSite {
     pub(super) pattern: String,
 }
 
+/// A production source file: workspace-relative path and its text.
+pub(super) struct Source {
+    pub(super) path: String,
+    pub(super) content: String,
+}
+
 impl Check for CancelRootSites {
     fn id(&self) -> &'static str {
         consts::ID
@@ -78,9 +84,30 @@ pub(super) fn configured_pattern_sites(
     allowed_files: &[String],
     exempt_crates: &[String],
 ) -> Result<Vec<PatternSite>> {
+    let mut sites = Vec::new();
+    for source in production_sources(ctx, allowed_files, exempt_crates)? {
+        sites.extend(
+            scan_source(&source.content, patterns)
+                .into_iter()
+                .map(|(line, pattern)| PatternSite {
+                    pattern,
+                    location: format!("{}:{line}", source.path),
+                }),
+        );
+    }
+    Ok(sites)
+}
+
+/// Production sources in scope: test and bench paths, `tests.rs`, exempt
+/// crates and allowed files are skipped.
+pub(super) fn production_sources(
+    ctx: &Context<'_>,
+    allowed_files: &[String],
+    exempt_crates: &[String],
+) -> Result<Vec<Source>> {
     let exempt: BTreeSet<&str> = exempt_crates.iter().map(String::as_str).collect();
     let allowed: BTreeSet<&str> = allowed_files.iter().map(String::as_str).collect();
-    let mut sites = Vec::new();
+    let mut sources = Vec::new();
 
     for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
         let rel = relative_to(ctx.workspace_root, &path);
@@ -93,25 +120,19 @@ pub(super) fn configured_pattern_sites(
         {
             continue;
         }
-
-        let content = fs::read_to_string(&path)?;
-        sites.extend(
-            scan_source(&content, patterns)
-                .into_iter()
-                .map(|(line, pattern)| PatternSite {
-                    pattern,
-                    location: format!("{rel_str}:{line}"),
-                }),
-        );
+        sources.push(Source {
+            content: fs::read_to_string(&path)?,
+            path: rel_str,
+        });
     }
-    Ok(sites)
+    Ok(sources)
 }
 
 /// Pure core: the (1-based line, matched pattern) of every root-minting call in
 /// `content` that sits in production code (outside `#[cfg(test)]` ranges and
 /// line comments). Path-level allowlist / exempt-crate / test-path skips are
 /// applied by [`CancelRootSites::run`] before this is called.
-fn scan_source(content: &str, patterns: &[String]) -> Vec<(usize, String)> {
+pub(super) fn scan_source(content: &str, patterns: &[String]) -> Vec<(usize, String)> {
     if !patterns
         .iter()
         .any(|pattern| content.contains(pattern.as_str()))
@@ -166,7 +187,7 @@ fn collect_test_ranges(items: &[Item], out: &mut Vec<(usize, usize)>) {
     }
 }
 
-fn attrs_indicate_test(attrs: &[Attribute]) -> bool {
+pub(super) fn attrs_indicate_test(attrs: &[Attribute]) -> bool {
     for attr in attrs {
         if attr.path().is_ident("cfg") {
             let mut found = false;
