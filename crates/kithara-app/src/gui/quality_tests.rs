@@ -1,7 +1,10 @@
 use std::convert::Infallible;
 
 use ::kithara::{
-    abr::AbrMode, events::TrackId, platform::sync::Arc, queue::TrackStatus,
+    abr::AbrMode,
+    events::TrackId,
+    platform::sync::Arc,
+    queue::{QueueConfigPatch, TrackStatus},
     ui::render::ControlAction,
 };
 use kithara_app_library::{Playable, PlaybackChoice};
@@ -287,11 +290,22 @@ enum QualityCheck {
     Pause,
 }
 
+/// Whether the catalogue track enters a free mixer or crossfades in from an
+/// earlier track, so both of the deck's two slots sound.
+enum Mixer {
+    Free,
+    Crossfading,
+}
+
 #[kithara::test(native, tokio, flash(false))]
-#[case::logical_duration(QualityCheck::Extent)]
-#[case::playhead(QualityCheck::Position)]
-#[case::pause_during_preparation(QualityCheck::Pause)]
-async fn catalogue_quality_switch_preserves_the_sounding_track(#[case] check: QualityCheck) {
+#[case::logical_duration(QualityCheck::Extent, Mixer::Free)]
+#[case::playhead(QualityCheck::Position, Mixer::Free)]
+#[case::pause_during_preparation(QualityCheck::Pause, Mixer::Free)]
+#[case::playhead_on_a_full_mixer(QualityCheck::Position, Mixer::Crossfading)]
+async fn catalogue_quality_switch_preserves_the_sounding_track(
+    #[case] check: QualityCheck,
+    #[case] mixer: Mixer,
+) {
     let server = PrivateTestServer::start().await;
     let helper = server.helper();
     let init = Arc::new(
@@ -350,10 +364,44 @@ async fn catalogue_quality_switch_preserves_the_sounding_track(#[case] check: Qu
     })
     .collect();
 
-    let rig = OffThread::spawn("app-host", || Ok::<_, Infallible>(Rig::playback()))
-        .await
-        .expect("the offline rig starts");
+    let (queue, lead) = match mixer {
+        Mixer::Free => (QueueConfigPatch::default(), None),
+        Mixer::Crossfading => (
+            serde_yaml_ng::from_str(
+                "mixer:\n  slots: 2\nsettings:\n  crossfade:\n    duration: 8.0\n",
+            )
+            .expect("a two-slot crossfading queue"),
+            Some(Playable::new(
+                helper
+                    .register_behavior(FixtureBehavior {
+                        content: Content::StaticBytes {
+                            bytes: Arc::new(
+                                assets::rhythm_wav_deck_a_120bpm_48k().bytes().to_vec(),
+                            ),
+                            content_type: Some("audio/wav"),
+                        },
+                        delivery: Delivery::Range,
+                    })
+                    .child_url("earlier.wav")
+                    .to_string(),
+            )),
+        ),
+    };
+    let rig = OffThread::spawn("app-host", move || {
+        Ok::<_, Infallible>(Rig::playback_on(queue))
+    })
+    .await
+    .expect("the offline rig starts");
     rig.call(move |rig| {
+        if let Some(lead) = lead {
+            drop_track(rig, lead);
+            rig.until(
+                "the earlier track plays before the catalogue track crossfades in",
+                Rig::DEADLINE,
+                Rig::frame,
+                |rig| rig.flag(PLAYING),
+            );
+        }
         drop_track(rig, playable);
         let track = playing_track(rig);
         let queue = rig.queues[0].clone();
