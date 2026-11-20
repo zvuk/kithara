@@ -1102,6 +1102,8 @@ enum ContinuationOutcome {
     Closed,
     Axis,
     Owed,
+    OwedFailed,
+    OwedClosed,
 }
 
 #[kithara::test]
@@ -1116,6 +1118,9 @@ enum ContinuationOutcome {
 #[case::refuses_a_private_receiver_closed_while_parked(true, ContinuationOutcome::Closed)]
 #[case::refuses_an_axis_restart_while_parked(false, ContinuationOutcome::Axis)]
 #[case::waits_for_a_session_dropout_to_be_repaid(false, ContinuationOutcome::Owed)]
+#[case::refuses_a_failed_private_head_while_owed(true, ContinuationOutcome::OwedFailed)]
+#[case::refuses_a_failed_staged_head_while_owed(false, ContinuationOutcome::OwedFailed)]
+#[case::refuses_a_private_receiver_closed_while_owed(true, ContinuationOutcome::OwedClosed)]
 fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
     #[case] replace: bool,
     #[case] expected: ContinuationOutcome,
@@ -1143,7 +1148,12 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
         );
         PcmPacket::Chunk(Box::new(packet))
     };
-    let owed = matches!(expected, ContinuationOutcome::Owed);
+    let owed = matches!(
+        expected,
+        ContinuationOutcome::Owed
+            | ContinuationOutcome::OwedFailed
+            | ContinuationOutcome::OwedClosed
+    );
     let delivered = if owed {
         u64::try_from(BLOCK).unwrap()
     } else {
@@ -1236,6 +1246,37 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
     assert_eq!(mixer.track(A).unwrap().state(), SlotState::Playing);
 
     let applied_at = BLOCK + 128;
+    if matches!(
+        expected,
+        ContinuationOutcome::OwedFailed | ContinuationOutcome::OwedClosed
+    ) {
+        // The outgoing source stays open and starved, so its debt never clears.
+        let failed = matches!(expected, ContinuationOutcome::OwedFailed);
+        if failed {
+            incoming.push(PcmPacket::Failed {
+                segment: SegmentId::FIRST,
+                failure: kithara_audio::TrackFailureKind::SourceCancelled,
+            });
+        } else {
+            drop(incoming);
+        }
+        let _ = render_frames(&mut mixer, applied_at, 1);
+        let replies = receipts(&mut ends);
+        let expected = if failed {
+            DeckRefusal::SourceRange { slot: to }
+        } else {
+            DeckRefusal::SourceContinuation { slot: to }
+        };
+        assert!(
+            matches!(
+                outcome_of(&replies, transition),
+                Outcome::Rejected(Rejection::Refused(refusal)) if *refusal == expected
+            ),
+            "a terminal incoming head refuses the parked cut: {replies:?}"
+        );
+        assert_eq!(mixer.track(A).unwrap().state(), SlotState::Playing);
+        return;
+    }
     if matches!(expected, ContinuationOutcome::Pause) {
         let pause = send_on(
             &mut ends,
