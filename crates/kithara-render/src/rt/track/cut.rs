@@ -213,7 +213,7 @@ mod tests {
     use crate::{PcmPacket, worker::packet_tests::chunk};
 
     /// Both sides follow one `step / denominator` law; the outgoing source
-    /// starts at zero and the incoming one at origin frame 1_024, so the
+    /// starts at zero and the incoming one at origin frame 1024, so the
     /// boundary after `incoming_start` is the outgoing `consumed` boundary.
     #[kithara::test]
     #[case::whole_frame(1, 1, 48_002, 49_025)]

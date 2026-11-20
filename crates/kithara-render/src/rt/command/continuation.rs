@@ -208,19 +208,18 @@ impl Deck {
         if old.owed() > 0 {
             // The outgoing reader skips the dropout before it plays again, so
             // its mark on this frame is behind what it will sound.
-            let (head, closed) = match &incoming {
-                Some((pcm, _)) => (pcm.packets().next(), pcm.is_closed()),
-                None => {
-                    let staged = self
-                        .tracks
-                        .at(to)
-                        .filter(|track| track.stages_item(item))
-                        .ok_or(refusal)?;
-                    (
-                        staged.packets().next().map(|(packet, _)| packet),
-                        staged.cut_closed(),
-                    )
-                }
+            let (head, closed) = if let Some((pcm, _)) = &incoming {
+                (pcm.packets().next(), pcm.is_closed())
+            } else {
+                let staged = self
+                    .tracks
+                    .at(to)
+                    .filter(|track| track.stages_item(item))
+                    .ok_or(refusal)?;
+                (
+                    staged.packets().next().map(|(packet, _)| packet),
+                    staged.cut_closed(),
+                )
             };
             return entry.await_debt(head, closed, prefix);
         }
