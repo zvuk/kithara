@@ -27,6 +27,7 @@ impl Deck {
         cut: Option<super::continuation::SourceCut>,
     ) -> Option<DeckPart> {
         self.interrupt_underrun(&part, at);
+        let carried = cut.is_some_and(|cut| cut.carries(&part));
         match part {
             DeckPart::Attach {
                 slot,
@@ -39,7 +40,7 @@ impl Deck {
             }
             DeckPart::Detach { slot } => self.detach(slot, context_valid, read_pcm),
             DeckPart::Start { slot, fade } => {
-                if let Some(track) = self.tracks.at_mut(slot) {
+                if !carried && let Some(track) = self.tracks.at_mut(slot) {
                     track.start(fade);
                 }
                 Some(DeckPart::Start { slot, fade })
@@ -69,7 +70,7 @@ impl Deck {
                 segment,
             } => {
                 let track = self.source_track(slot, pcm, segment, item_id, seq, cut);
-                Some(if cut.is_some_and(|cut| cut.continues_in(slot)) {
+                Some(if carried {
                     self.continue_track(slot, track)
                 } else {
                     self.replace_track(slot, track, context_valid, read_pcm)

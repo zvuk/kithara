@@ -111,7 +111,9 @@ impl Deck {
             let part = due.commands_mut().remove(0);
             self.interrupt_eq(&mut due, &part);
             self.interrupt_filter(&mut due, &part);
-            self.interrupt_output(&mut due, &part);
+            if !cut.is_some_and(|cut| cut.carries(&part)) {
+                self.interrupt_output(&mut due, &part);
+            }
             if let Some(slot) = shifted_slot(&part) {
                 self.interrupt_stop(&mut due, slot, remaining);
             }

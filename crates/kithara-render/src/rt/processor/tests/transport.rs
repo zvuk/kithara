@@ -1104,6 +1104,8 @@ enum ContinuationOutcome {
     Owed,
     OwedFailed,
     OwedClosed,
+    FadeIn,
+    GainRamp,
 }
 
 #[kithara::test]
@@ -1121,6 +1123,8 @@ enum ContinuationOutcome {
 #[case::refuses_a_failed_private_head_while_owed(true, ContinuationOutcome::OwedFailed)]
 #[case::refuses_a_failed_staged_head_while_owed(false, ContinuationOutcome::OwedFailed)]
 #[case::refuses_a_private_receiver_closed_while_owed(true, ContinuationOutcome::OwedClosed)]
+#[case::replace_keeps_a_running_fade_in(true, ContinuationOutcome::FadeIn)]
+#[case::replace_keeps_a_running_gain_program(true, ContinuationOutcome::GainRamp)]
 fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
     #[case] replace: bool,
     #[case] expected: ContinuationOutcome,
@@ -1177,7 +1181,15 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
         },
         DeckPart::Start {
             slot: A,
-            fade: Fade::Declick,
+            fade: if matches!(expected, ContinuationOutcome::FadeIn) {
+                Fade::Crossfade(CrossfadeSettings {
+                    duration: 1.0,
+                    curve: CrossfadeCurve::Linear,
+                    ..Default::default()
+                })
+            } else {
+                Fade::Declick
+            },
         },
     ];
     if owed {
@@ -1202,10 +1214,33 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
     let initial = send_on(&mut ends, When::Next, &initial_basis, initial);
     let _ = render(&mut mixer, 0);
     drop(receipts(&mut ends));
+    let mut owner = initial;
+    if matches!(expected, ContinuationOutcome::GainRamp) {
+        let observed = ends.deck.snapshot.read().slots[0];
+        let knot = |frame, value, shape| {
+            crate::bridge::ParameterKnot::new(frame_at(frame), value, shape).unwrap()
+        };
+        let program = crate::bridge::SlotGainProgram::new(vec![
+            knot(BLOCK, 1.0, crate::bridge::CurveShape::LINEAR),
+            knot(BLOCK + 4096, 0.0, crate::bridge::CurveShape::HOLD),
+        ])
+        .unwrap();
+        owner = send_on(
+            &mut ends,
+            at(BLOCK),
+            &[(A, Some(initial))],
+            vec![DeckPart::GainProgram {
+                slot: A,
+                binding: observed.binding.unwrap(),
+                authority: observed.output.authority(),
+                program,
+            }],
+        );
+    }
     let basis = if replace {
-        vec![(A, Some(initial))]
+        vec![(A, Some(owner))]
     } else {
-        vec![(A, Some(initial)), (B, Some(initial))]
+        vec![(A, Some(owner)), (B, Some(initial))]
     };
     let mut parts = vec![DeckPart::ContinueSource {
         from: A,
@@ -1237,10 +1272,14 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
 
     let held = render_frames(&mut mixer, BLOCK, 128);
     let missed = if owed { 0.0 } else { 0.125 };
-    assert!(held.iter().all(|sample| (*sample - missed).abs() < 1e-6));
+    let enveloped = matches!(
+        expected,
+        ContinuationOutcome::FadeIn | ContinuationOutcome::GainRamp
+    );
+    assert!(enveloped || held.iter().all(|sample| (*sample - missed).abs() < 1e-6));
     let premature = receipts(&mut ends);
     assert!(
-        premature.is_empty(),
+        premature.iter().all(|(seq, ..)| *seq != transition),
         "the incomplete cut retains its owned batch: {premature:?}"
     );
     assert_eq!(mixer.track(A).unwrap().state(), SlotState::Playing);
@@ -1391,6 +1430,27 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
         incoming.push(packet(640, 2048, 128, 0.375, incoming_spec, 2));
     }
     let first = render_frames(&mut mixer, applied_at, 2);
+    if enveloped {
+        let gains = [
+            held[126] / 0.125,
+            held[127] / 0.125,
+            first[0] / 0.375,
+            first[1] / 0.375,
+        ];
+        let steps = gains
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .collect::<Vec<_>>();
+        assert!(steps[0].abs() > 1e-5, "the envelope is moving: {gains:?}");
+        assert!(
+            steps.iter().all(|step| (step - steps[0]).abs() < 1e-6),
+            "the continued slot keeps its running envelope: {gains:?}"
+        );
+        let replies = receipts(&mut ends);
+        let (_, result, _) = replies.iter().find(|(seq, ..)| *seq == transition).unwrap();
+        assert_applied_at(result, applied_at);
+        return;
+    }
     assert!(
         first.iter().all(|sample| (*sample - 0.375).abs() < 1e-6),
         "the continued slot sounds its aligned signal once: {first:?}"

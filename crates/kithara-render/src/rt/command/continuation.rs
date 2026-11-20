@@ -23,10 +23,14 @@ pub(super) struct SourceCut {
 }
 
 impl SourceCut {
-    /// The private receiver replaces the source's own slot: one logical slot
-    /// changes its receiver on the cut frame.
-    pub(super) fn continues_in(self, slot: Slot) -> bool {
-        self.from == slot && self.private == Some(slot)
+    /// The seat and start of a private receiver that replaces the source's own
+    /// slot: one logical slot changes its receiver on the cut frame, so its
+    /// running output program and envelope sound on instead of restarting.
+    pub(super) fn carries(self, part: &DeckPart) -> bool {
+        let (DeckPart::Replace { slot, .. } | DeckPart::Start { slot, .. }) = part else {
+            return false;
+        };
+        self.from == *slot && self.private == Some(*slot)
     }
 }
 
