@@ -2664,8 +2664,8 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
 /// A report lane's executor names its job's copy only once it is copied, so
 /// the upload reads that copy alone, and a wanted report it did not name fails
 /// its own step instead of being skipped or read from the shared build.
-/// Whether the report is wanted is the lane step's own outcome, and only a
-/// value ending as the copy's name does names the copy.
+/// Whether the report is wanted is the lane step's own outcome, and the upload
+/// takes only the path the check step passed.
 #[cfg(unix)]
 #[test]
 fn a_report_lane_uploads_its_job_copy_and_fails_a_missing_one() -> anyhow::Result<()> {
@@ -2676,12 +2676,7 @@ fn a_report_lane_uploads_its_job_copy_and_fails_a_missing_one() -> anyhow::Resul
         Some("lane")
     );
     let check = named_step(job, "Check the lane's report");
-    assert!(
-        mapping_field(check, "run")
-            .as_str()
-            .is_some_and(|run| run.contains("exit 1")),
-        "a missing report fails its step"
-    );
+    assert_eq!(mapping_field(check, "id").as_str(), Some("report"));
     let upload = named_step(job, "Upload the lane's report");
     let with = mapping_field(upload, "with")
         .as_mapping()
@@ -2702,41 +2697,32 @@ fn a_report_lane_uploads_its_job_copy_and_fails_a_missing_one() -> anyhow::Resul
 
     let copy = "/runner/temp/web-chromium-report-a1B2c3.chromium";
     let mut cases = Vec::new();
-    for (outcome, when, failure, named, check, uploaded) in [
-        // A failed lane wants its report and uploads only its whole copy.
-        ("failure", "failure", true, "", true, None),
-        ("failure", "failure", true, copy, false, Some(copy)),
-        // A write cut short leaves part of the path, maybe its parent.
-        (
-            "failure",
-            "failure",
-            true,
-            "/runner/temp/web-chromium-rep",
-            true,
-            None,
-        ),
-        ("failure", "failure", true, "/runner/temp", true, None),
+    for (outcome, when, failure, checked, report, uploaded) in [
+        // A failed lane wants its report and uploads only a copy that passed.
+        ("failure", "failure", true, true, "success", Some(copy)),
+        ("failure", "failure", true, true, "failure", None),
         // A passing lane discarded the report, even when a later upload failed.
-        ("success", "failure", false, "", false, None),
-        ("success", "failure", true, "", false, None),
+        ("success", "failure", false, false, "skipped", None),
+        ("success", "failure", true, false, "skipped", None),
         // A lane that never ran wrote nothing.
-        ("skipped", "failure", true, "", false, None),
-        ("cancelled", "always", true, "", false, None),
+        ("skipped", "failure", true, false, "skipped", None),
+        ("cancelled", "always", true, false, "skipped", None),
         // A report wanted always is wanted from a passing lane too.
-        ("success", "always", false, copy, false, Some(copy)),
-        ("success", "always", true, "", true, None),
-        ("failure", "always", true, copy, false, Some(copy)),
+        ("success", "always", false, true, "success", Some(copy)),
+        ("success", "always", false, true, "failure", None),
+        ("failure", "always", true, true, "success", Some(copy)),
     ] {
         cases.push(serde_json::json!({
             "context": {
                 "steps.lane.outcome": outcome,
+                "steps.report.outcome": report,
+                "steps.report.outputs.path": if report == "success" { copy } else { "" },
                 "inputs.artifact-when": when,
                 "inputs.artifact-report": "chromium",
                 "inputs.artifact-path": "",
-                "env.KITHARA_LANE_REPORT": named,
             },
             "failure": failure,
-            "check": check,
+            "check": checked,
             "uploaded": uploaded,
         }));
     }
@@ -2749,10 +2735,11 @@ fn a_report_lane_uploads_its_job_copy_and_fails_a_missing_one() -> anyhow::Resul
         cases.push(serde_json::json!({
             "context": {
                 "steps.lane.outcome": outcome,
+                "steps.report.outcome": "skipped",
+                "steps.report.outputs.path": "",
                 "inputs.artifact-when": when,
                 "inputs.artifact-report": "",
                 "inputs.artifact-path": "target/log",
-                "env.KITHARA_LANE_REPORT": "",
             },
             "failure": failure,
             "check": false,
@@ -2777,14 +2764,11 @@ for case in json.loads(os.environ["CASES"]):
     functions = {
         "always": lambda: True,
         "failure": lambda: case["failure"],
-        "endsWith": lambda text, end: text.lower().endswith(end.lower()),
-        "format": lambda text, value: text.replace("{0}", value),
     }
 
     def evaluate(expression):
         for name, value in case["context"].items():
             expression = expression.replace(name, repr(value))
-        expression = expression.replace("!endsWith(", " not endsWith(")
         expression = expression.replace("&&", " and ").replace("||", " or ")
         return eval(expression, {"__builtins__": {}, **functions})
 
@@ -2801,6 +2785,79 @@ for case in json.loads(os.environ["CASES"]):
         .env("CASES", serde_json::to_string(&cases)?)
         .output()?;
     assert!(output.status.success(), "{output:?}");
+    Ok(())
+}
+
+/// The report check passes only the whole copy the lane made in this job's
+/// `RUNNER_TEMP`, and tells the upload that path alone. The job's storage sits
+/// under directories whose names end as a report's does, so a value cut short
+/// at an ancestor ends that way too.
+#[cfg(unix)]
+#[test]
+fn a_report_check_passes_only_the_whole_copy_in_the_jobs_storage() -> anyhow::Result<()> {
+    let workflow = github_workflow("lane.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "run");
+    let check = named_step(job, "Check the lane's report");
+    let script = mapping_field(check, "run")
+        .as_str()
+        .expect("the report check runs a script");
+    let root = tempfile::tempdir()?;
+    let job_root = root.path().canonicalize()?.join("job.chromium");
+    let temp = job_root.join("temp.chromium");
+    let whole = temp.join("web-chromium-report-a1B2c3.chromium");
+    fs::create_dir_all(whole.join("web-chromium-netlog"))?;
+    fs::write(whole.join("web-chromium.log"), "driver")?;
+    let empty = temp.join("web-chromium-report-d4E5f6.chromium");
+    fs::create_dir(&empty)?;
+    let linked = temp.join("web-chromium-report-g7H8i9.chromium");
+    std::os::unix::fs::symlink(&whole, &linked)?;
+    let foreign = root
+        .path()
+        .canonicalize()?
+        .join("web-chromium-report-j0K1l2.chromium");
+    fs::create_dir(&foreign)?;
+    fs::write(foreign.join("web-chromium.log"), "foreign")?;
+    let whole_text = whole.to_str().expect("a UTF-8 path").to_owned();
+    for (named, passes) in [
+        (whole_text.clone(), true),
+        (String::new(), false),
+        (
+            whole_text[..whole_text.len() - ".chromium".len()].to_owned(),
+            false,
+        ),
+        (whole_text[..whole_text.len() - 3].to_owned(), false),
+        (temp.display().to_string(), false),
+        (job_root.display().to_string(), false),
+        (empty.display().to_string(), false),
+        (linked.display().to_string(), false),
+        (foreign.display().to_string(), false),
+    ] {
+        let github_output = root.path().join("output");
+        fs::write(&github_output, "")?;
+        let status = Command::new("bash")
+            .args([
+                "--noprofile",
+                "--norc",
+                "-e",
+                "-o",
+                "pipefail",
+                "-c",
+                script,
+            ])
+            .env("REPORT", "chromium")
+            .env("RUNNER_TEMP", &temp)
+            .env("GITHUB_OUTPUT", &github_output)
+            .env("KITHARA_LANE_REPORT", &named)
+            .output()?;
+        assert_eq!(status.status.success(), passes, "{named}: {status:?}");
+        let told = fs::read_to_string(&github_output)?;
+        let expected = if passes {
+            format!("path={named}\n")
+        } else {
+            String::new()
+        };
+        assert_eq!(told, expected, "{named}");
+    }
     Ok(())
 }
 

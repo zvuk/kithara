@@ -215,21 +215,34 @@ jobs:
       # missing or partial: this step fails it on its own, beside the lane's
       # own result, instead of skipping the upload. Whether the report is
       # wanted is the lane step's own outcome: another step failing after a
-      # passing lane is no reason to expect a report the lane discarded. The
-      # copy's name ends with the report's, so a value cut short by a failed
-      # write, which could name the copy's parent, is not the copy.
+      # passing lane is no reason to expect a report the lane discarded.
+      #
+      # The copy is a directory made directly in this job's RUNNER_TEMP, with
+      # one dot in its name, before the report's own name. A value cut short
+      # by a failed write names that directory's parent or a prefix of its
+      # name, never both a child of RUNNER_TEMP and a name ending that way, so
+      # only the whole path passes. The upload takes the path this step
+      # checked, and only when it passed.
       - name: Check the lane's report
-        if: ${{ always() && inputs.artifact-report != '' && (steps.lane.outcome == 'failure' || (inputs.artifact-when == 'always' && steps.lane.outcome == 'success')) && !endsWith(env.KITHARA_LANE_REPORT, format('.{0}', inputs.artifact-report)) }}
+        id: report
+        if: ${{ always() && inputs.artifact-report != '' && (steps.lane.outcome == 'failure' || (inputs.artifact-when == 'always' && steps.lane.outcome == 'success')) }}
         env:
           REPORT: ${{ inputs.artifact-report }}
         run: |
-          echo "::error title=Lane report::the lane named no copy of its $REPORT report; the lane's log says why"
-          exit 1
+          copy=$KITHARA_LANE_REPORT
+          temp=$(cd "$RUNNER_TEMP" && pwd -P)
+          name=${copy##*/}
+          if [ -z "$copy" ] || [ "${copy%/*}" != "$temp" ] || [[ ! $name =~ ^[^./]+\.${REPORT}$ ]] \
+            || [ ! -d "$copy" ] || [ -L "$copy" ] || [ -z "$(find "$copy" -type f -size +0c -print -quit)" ]; then
+            echo "::error title=Lane report::the lane named no whole copy of its $REPORT report in this job's RUNNER_TEMP; the lane's log says why"
+            exit 1
+          fi
+          echo "path=$copy" >> "$GITHUB_OUTPUT"
 
       - name: Upload the lane's report
-        if: ${{ always() && ((inputs.artifact-report != '' && (steps.lane.outcome == 'failure' || (inputs.artifact-when == 'always' && steps.lane.outcome == 'success')) && endsWith(env.KITHARA_LANE_REPORT, format('.{0}', inputs.artifact-report))) || (inputs.artifact-report == '' && inputs.artifact-path != '' && (inputs.artifact-when == 'always' || failure()))) }}
+        if: ${{ always() && ((inputs.artifact-report != '' && steps.report.outcome == 'success') || (inputs.artifact-report == '' && inputs.artifact-path != '' && (inputs.artifact-when == 'always' || failure()))) }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ inputs.artifact-report != '' && env.KITHARA_LANE_REPORT || inputs.artifact-path }}
+          path: ${{ inputs.artifact-report != '' && steps.report.outputs.path || inputs.artifact-path }}
           if-no-files-found: error

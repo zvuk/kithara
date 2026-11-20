@@ -80,8 +80,12 @@ impl ChromiumReport {
         fs::create_dir_all(build).with_context(|| format!("creating {}", build.display()))?;
         let build =
             fs::canonicalize(build).with_context(|| format!("resolving {}", build.display()))?;
+        // Removed only by `discard`, once it is still the capture: a run that
+        // unwinds before then leaves it in the build rather than removing
+        // whatever its name points at by then.
         let capture = Builder::new()
             .prefix(consts::REPORT_PREFIX)
+            .disable_cleanup(true)
             .tempdir_in(&build)
             .with_context(|| format!("creating a capture directory in {}", build.display()))?;
         ensure!(
@@ -182,6 +186,7 @@ impl ChromiumReport {
                     }
                     Err(error) => warn!("this job's Chromium report is not uploaded: {error:#}"),
                 }
+                remove(report.capture.path());
             }
             Destination::InPlace => {
                 // Kept before logging: a disabled level skips its arguments.
@@ -193,7 +198,9 @@ impl ChromiumReport {
 
     /// Removes a report nobody wants.
     pub(super) fn discard(self) {
-        drop(self.still_named());
+        if let Some(report) = self.still_named() {
+            remove(report.capture.path());
+        }
     }
 
     /// This report, while its capture directory still names the directories
@@ -251,6 +258,16 @@ impl Directories {
             }
         }
         Ok(())
+    }
+}
+
+/// Removes a capture that `still_named` found to be this run's.
+fn remove(capture: &Path) {
+    if let Err(error) = fs::remove_dir_all(capture) {
+        warn!(
+            "this run's Chromium capture stays in {}: {error}",
+            capture.display()
+        );
     }
 }
 

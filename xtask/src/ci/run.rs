@@ -1670,16 +1670,11 @@ mod tests {
         }
     }
 
-    /// A named `ci run` of a lane with a Chromium report tells its steps
-    /// where to write through the same owner as `ci lane`, and outside a
-    /// GitHub job a failed lane keeps the report in the target it named.
+    /// A checkout declaring a `web` lane with a Chromium report wanted on
+    /// failure, whose one step writes both logs and fails.
     #[cfg(unix)]
-    #[test]
-    fn a_named_run_of_a_report_lane_keeps_a_failed_report_where_it_built() {
-        let checkout = tempfile::tempdir().expect("create a checkout");
-        let root = checkout.path();
+    fn report_lane(root: &Path) -> (kithara_devtools::Ctx, KitharaExt, Lane) {
         crate::ci::build_dir::fixture::git(root, &["init", "-q"]);
-        let target = root.join("named");
         let os = env::consts::OS;
         let ctx = kithara_devtools::Ctx::new(
             root.to_path_buf(),
@@ -1706,6 +1701,56 @@ args = ['-c', 'echo driver > "$(echo $CHROMEDRIVER_ARGS | cut -d= -f2)"; echo ne
         );
         let ext = KitharaExt::from_ctx(&ctx).expect("parse the kithara extension");
         let lane = Lane::parse("web", &ext.ci.lanes).expect("the lane is declared");
+        (ctx, ext, lane)
+    }
+
+    /// A run that ends without finishing its report, as an unwinding one
+    /// does, removes nothing: whatever its capture's name points at by then
+    /// need not be the capture.
+    #[cfg(unix)]
+    #[test]
+    fn a_report_left_unfinished_removes_nothing_its_name_points_at() {
+        let checkout = tempfile::tempdir().expect("create a checkout");
+        let root = checkout.path();
+        let target = root.join("named");
+        let (_ctx, ext, lane) = report_lane(root);
+        let report = declared_report(
+            &lane,
+            &ext.ci.lanes,
+            &Target::Named(Some(target.clone())),
+            root,
+            &|_| None,
+        )
+        .expect("a named run captures its report")
+        .expect("the lane declares a report");
+        let capture = fs::read_dir(&target)
+            .expect("list the named target")
+            .next()
+            .expect("the capture is made")
+            .expect("read a target entry")
+            .path();
+        fs::remove_dir_all(&capture).expect("remove the capture");
+        fs::create_dir(&capture).expect("put a foreign directory in its place");
+        fs::write(capture.join("foreign"), "foreign").expect("write a foreign file");
+
+        drop(report);
+
+        assert_eq!(
+            fs::read_to_string(capture.join("foreign")).expect("the foreign file stays"),
+            "foreign"
+        );
+    }
+
+    /// A named `ci run` of a lane with a Chromium report tells its steps
+    /// where to write through the same owner as `ci lane`, and outside a
+    /// GitHub job a failed lane keeps the report in the target it named.
+    #[cfg(unix)]
+    #[test]
+    fn a_named_run_of_a_report_lane_keeps_a_failed_report_where_it_built() {
+        let checkout = tempfile::tempdir().expect("create a checkout");
+        let root = checkout.path();
+        let target = root.join("named");
+        let (ctx, ext, lane) = report_lane(root);
 
         let report = declared_report(
             &lane,
