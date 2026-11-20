@@ -1,9 +1,9 @@
 id: style.no-local-use-in-prod-functions
 message: |
-  Move `use` imports to file top. A target-gated function may keep its import
-  local so the same `target_arch` / `target_os` condition is not duplicated at
-  module scope.
-severity: warning
+  A `use` inside a function body. Declare every import at module scope, so a
+  file's dependencies read from its head. An import that only a `cfg`-gated
+  function needs moves to module scope under the same `cfg`.
+severity: error
 language: Rust
 files:
   - crates/**/*.rs
@@ -26,17 +26,6 @@ rule:
             - follows:
                 kind: attribute_item
                 regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b'
-                stopBy:
-                  not:
-                    kind: attribute_item
-          stopBy: end
-    - not:
-        inside:
-          all:
-            - kind: function_item
-            - follows:
-                kind: attribute_item
-                regex: "target_(arch|os)"
                 stopBy:
                   not:
                     kind: attribute_item

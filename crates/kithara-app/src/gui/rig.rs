@@ -1,5 +1,7 @@
 use arc_swap::ArcSwap;
 use iced::window::Id;
+#[cfg(feature = "broadcast")]
+use kithara::worker::{Worker, WorkerConfig};
 use kithara::{
     host::{HostConfig, HostOwned},
     platform::{
@@ -421,8 +423,6 @@ impl Rig {
 
 #[cfg(feature = "broadcast")]
 fn idle_broadcast(config: &AppConfig) -> AppBroadcastConfig {
-    use kithara::worker::{Worker, WorkerConfig};
-
     AppBroadcastConfig::builder(
         Worker::new(WorkerConfig::new()),
         config.worker.pools().clone(),

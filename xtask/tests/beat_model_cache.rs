@@ -160,6 +160,16 @@ impl Fixture {
             .expect("fixture directory")
             .join("cargo-fixture");
         fs::create_dir_all(root.join("src")).expect("Cargo fixture source directory");
+        // Host Cargo configuration can name a compiler wrapper. These builds
+        // compile with the pinned rustc alone, so a configured wrapper must
+        // never run: one that does names a missing program and fails the build.
+        let missing = toml::Value::String(root.join("no-compiler-wrapper").display().to_string());
+        fs::create_dir_all(root.join(".cargo")).expect("Cargo fixture configuration directory");
+        fs::write(
+            root.join(".cargo/config.toml"),
+            format!("[build]\nrustc-wrapper = {missing}\nrustc-workspace-wrapper = {missing}\n"),
+        )
+        .expect("Cargo fixture configuration");
         fs::write(
             root.join("Cargo.toml"),
             format!(
@@ -240,12 +250,17 @@ fn main() {{
             .env_remove("CARGO_FEATURE_EMBED_SMALL_MODEL")
             .env_remove("CARGO_FEATURE_EMBED_FULL_MODEL")
             .env_remove("CARGO_FEATURE_EMBED_FULL_INT8_MODEL")
-            .env_remove("RUSTC_WRAPPER")
-            .env_remove("RUSTC_WORKSPACE_WRAPPER")
+            // An empty wrapper overrides one named by Cargo configuration;
+            // removing the variable would let the configuration's wrapper run.
+            .env("RUSTC_WRAPPER", "")
+            .env("RUSTC_WORKSPACE_WRAPPER", "")
             .env("TMPDIR", &self.temporary)
             .env("TMP", &self.temporary)
             .env("TEMP", &self.temporary)
             .stdin(Stdio::null())
+            // Stdout carries the JSON messages; stderr streams Cargo's
+            // progress so a stalled build shows the step it stopped in.
+            .stderr(Stdio::inherit())
             .output()
             .expect("actual checksum Cargo build");
         stdout(output)

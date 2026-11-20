@@ -25,7 +25,7 @@ const STRIDES: [usize; 5] = [1, 2, 3, 6, 9];
 const RATE: u32 = 48_000;
 const UNWRITTEN: f32 = -1.0;
 /// A signaling `NaN`: a plain copy keeps its quiet bit clear.
-const SIGNALING_NAN: u32 = 0x7F80_0001;
+const SIGNALING_NAN: u32 = 0x7f80_0001;
 const SPECIALS: [f32; 9] = [
     0.0,
     -0.0,

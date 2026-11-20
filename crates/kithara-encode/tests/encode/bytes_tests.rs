@@ -95,7 +95,7 @@ fn assert_container_marker(target: BytesEncodeTarget, bytes: &[u8]) {
     match target {
         BytesEncodeTarget::Mp3 => assert!(
             bytes.starts_with(b"ID3")
-                || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0),
+                || (bytes.len() >= 2 && bytes[0] == 0xff && (bytes[1] & 0xe0) == 0xe0),
             "MP3 output is missing an ID3 tag or MPEG frame sync"
         ),
         BytesEncodeTarget::Flac | BytesEncodeTarget::Flac24 => {
@@ -105,7 +105,7 @@ fn assert_container_marker(target: BytesEncodeTarget, bytes: &[u8]) {
             );
         }
         BytesEncodeTarget::Aac => assert!(
-            bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xF0) == 0xF0,
+            bytes.len() >= 2 && bytes[0] == 0xff && (bytes[1] & 0xf0) == 0xf0,
             "AAC output is missing an ADTS sync word"
         ),
         BytesEncodeTarget::M4a => assert_mp4(bytes, *b"mp4a", "M4A"),

@@ -111,10 +111,10 @@ mod tests {
     use ::kithara::{
         abr::AbrMode,
         analysis::{KeyEstimate, Mode, MusicalKey, PitchClass, TrackAnalysis},
+        decode::TrackMetadata,
         effects::GainDb,
         platform::{time::Duration, tokio::runtime::Handle},
         play::{Pitch, TrackSettings},
-        prelude::TrackMetadata,
         ui::{
             render::{ReadValue, Reads, TableCell, Walk},
             skin::ColorRole,

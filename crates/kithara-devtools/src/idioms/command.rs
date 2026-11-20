@@ -489,12 +489,13 @@ mod tests {
         let mut config = IdiomsConfig::default();
         config.thresholds.derivable_event.enabled = true;
         config.thresholds.derivable_event.owner_path = Some("crates/kithara-events".into());
+        let workspace_root = metadata.workspace_root.as_std_path();
         let scope = Scope::default().with_metadata(&metadata);
-        let scan = Scan::new(root);
+        let scan = Scan::new(workspace_root);
         let ctx = Context {
             config: &config,
             metadata: &metadata,
-            workspace_root: root,
+            workspace_root,
             scan: &scan,
             scope: &scope,
         };

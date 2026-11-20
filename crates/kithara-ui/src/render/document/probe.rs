@@ -1,22 +1,21 @@
 //! A context for a test that measures what one reader answers rather than
 //! what a document is shaped like.
 
+use std::sync::LazyLock;
+
 use super::{Clock, Ctx};
-use crate::{compile::CompiledUi, render::Reads};
+use crate::{
+    builtin,
+    compile::{CompiledUi, compile},
+    ids::EndpointId,
+    registry::{EndpointCategory, EndpointDesc, EndpointRegistry},
+    render::Reads,
+    source::UiConfig,
+    view,
+};
 
 /// A context over a document that says nothing.
 pub(crate) fn probe(reads: &dyn Reads) -> Ctx<'_, '_> {
-    use std::sync::LazyLock;
-
-    use crate::{
-        builtin,
-        compile::compile,
-        ids::EndpointId,
-        registry::{EndpointCategory, EndpointDesc, EndpointRegistry},
-        source::UiConfig,
-        view,
-    };
-
     struct Nothing;
 
     impl EndpointRegistry for Nothing {
