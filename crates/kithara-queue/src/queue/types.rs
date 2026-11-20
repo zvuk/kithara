@@ -135,6 +135,12 @@ impl Target {
         }
         self.playing = playing;
     }
+
+    /// Whether a replacement seat is in flight; its receipt alone applies
+    /// the requested play state.
+    pub(super) fn seated(&self) -> bool {
+        matches!(self.continued, Some(Continuation::Seat(_)))
+    }
 }
 
 /// Where a new track should land in the queue's internal `Vec`.

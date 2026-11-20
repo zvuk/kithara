@@ -10,7 +10,7 @@ use super::super::{
     Queue, Transition,
     command::play_error,
     slots::{LoadState, Role},
-    types::{Continuation, Target},
+    types::Target,
 };
 use crate::{AdvanceReason, QueueError, RepeatMode, TrackStatus};
 
@@ -46,7 +46,7 @@ where
         };
         // A seated replacement has already exchanged its slot's receiver;
         // only the seat's own receipt settles that ownership.
-        if matches!(target.continued, Some(Continuation::Seat(_))) {
+        if target.seated() {
             return Err(QueueError::NotReady(target.to));
         }
         let consumed = target.auto

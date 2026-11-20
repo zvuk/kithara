@@ -14,7 +14,7 @@ use super::{
     Queue, Transition,
     slots::{LoadState, Role},
     transition::TransitionRequest,
-    types::{Continuation, Placement, SeekPosition},
+    types::{Placement, SeekPosition},
 };
 use crate::{
     ActionAtItemEnd, AdvanceReason, PlaybackOrder, QueueError, QueueEvent, QueueRepeatMode,
@@ -360,11 +360,14 @@ where
         at: When<SessionFrame>,
         out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
+        if let Some(target) = self.target.as_mut().filter(|target| target.seated()) {
+            target.set_playing(false);
+            return Ok(None);
+        }
         if self.target.is_some_and(|target| {
             target.playing
                 && self.current == Some(target.to)
                 && self.tracks.is_changing_source(target.to)
-                && !matches!(target.continued, Some(Continuation::Seat(_)))
         }) {
             self.cancel_target(out)?;
         }
@@ -390,6 +393,10 @@ where
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
+        if let Some(target) = self.target.as_mut().filter(|target| target.seated()) {
+            target.set_playing(true);
+            return Ok(None);
+        }
         let requested = self
             .target
             .filter(|target| !target.auto)

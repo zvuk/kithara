@@ -4462,15 +4462,29 @@ async fn a_rejected_current_reselect_pause_retires_its_actual_sequence(
 }
 
 #[kithara::test(tokio)]
-#[case::paused(false, false)]
-#[case::played(true, false)]
-#[case::played_then_paused(true, true)]
+#[case::paused(false, false, false)]
+#[case::played(true, false, false)]
+#[case::played_then_paused(true, true, false)]
+#[case::played_before_the_seat(true, false, true)]
+#[case::played_then_paused_before_the_seat(true, true, true)]
 #[kithara::hang_watchdog]
 async fn a_seated_paused_replacement_owns_its_slot_until_its_receipt(
     #[by_ref] worker_owner: &WorkerOwner,
     #[case] played: bool,
     #[case] repaused: bool,
+    #[case] before_seat: bool,
 ) {
+    fn request(rig: &mut HandoverRig, played: bool, repaused: bool) {
+        if played {
+            rig.apply(QueueCommand::Play { at: When::Next })
+                .expect("play");
+        }
+        if repaused {
+            rig.apply(QueueCommand::Pause { at: When::Next })
+                .expect("pause again");
+        }
+    }
+
     let config = DeckMixerConfig::builder()
         .slots(std::num::NonZeroUsize::new(1).expect("one mixer slot"))
         .build();
@@ -4503,6 +4517,9 @@ async fn a_seated_paused_replacement_owns_its_slot_until_its_receipt(
     })
     .expect("source change");
     rig.load(0, 64.295).await;
+    if before_seat {
+        request(&mut rig, played, repaused);
+    }
     let seat = rig
         .deck
         .block(SessionFrame::new(512), 0.0)
@@ -4518,13 +4535,8 @@ async fn a_seated_paused_replacement_owns_its_slot_until_its_receipt(
         }),
         "the executor seats the replacement before its receipt settles"
     );
-    if played {
-        rig.apply(QueueCommand::Play { at: When::Next })
-            .expect("play");
-    }
-    if repaused {
-        rig.apply(QueueCommand::Pause { at: When::Next })
-            .expect("pause again");
+    if !before_seat {
+        request(&mut rig, played, repaused);
     }
 
     let seek = rig.apply(QueueCommand::Seek { to: Position::ZERO });
