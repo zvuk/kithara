@@ -2,7 +2,8 @@ id: perf.no-component-pool-construction
 message: |
   Declaring or constructing a typed buffer-pool region outside its composition
   owner creates a second owner and bypasses the shared hard budget. Only
-  `crates/kithara-app/src/pools.rs`, `crates/kithara-ffi/src/pools.rs`, and the
+  `crates/kithara-analyze/src/pools.rs`, `crates/kithara-app/src/pools.rs`,
+  `crates/kithara-ffi/src/pools.rs`, and the
   `kithara-ui-draw` draw-buffer facade own production schemas and region
   construction. Components receive the existing facade and acquire registered
   buffers with `get::<K>()` or `get_with_len::<K>()`. Schema builders are
@@ -27,6 +28,7 @@ ignores:
   - crates/kithara-test-utils/**
   - crates/kithara-ui-gallery/**
   - crates/kithara-workspace-hack/**
+  - crates/kithara-analyze/src/pools.rs
   - crates/kithara-app/src/pools.rs
   - crates/kithara-ffi/src/pools.rs
   - "**/tests/**"
