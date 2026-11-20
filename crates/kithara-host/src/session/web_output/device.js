@@ -18,14 +18,18 @@ export class HostDevice {
   get error() { return this.failure; }
 
   async initialize(root, script, module, memory, channels) {
+    console.debug("KITHARA_BOOTSTRAP audio import-start");
     this.bindings = await import(root);
     const url = URL.createObjectURL(new Blob([
       `import * as bindgen from ${JSON.stringify(root)};\n`, script,
     ], { type: "text/javascript" }));
     try {
+      console.debug("KITHARA_BOOTSTRAP audio lock-request");
       await navigator.locks.request("wasm_safe_thread:bootstrap", async () => {
+        console.debug("KITHARA_BOOTSTRAP audio lock-enter");
         if (this.closed) return;
         await this.context.audioWorklet.addModule(url);
+        console.debug("KITHARA_BOOTSTRAP audio module-ready");
         if (this.closed) return;
         await new Promise((resolve, reject) => {
           this.node = new AudioWorkletNode(this.context, "KitharaOutput", {
@@ -33,10 +37,12 @@ export class HostDevice {
             channelCount: channels, outputChannelCount: [channels],
             processorOptions: [module, memory],
           });
+          console.debug("KITHARA_BOOTSTRAP audio processor-created");
           this.node.onprocessorerror = (event) => { reject(event); this.fail(event.message); };
           this.node.port.onmessage = ({ data }) => {
             switch (data.kind) {
               case "ready":
+                console.debug("KITHARA_BOOTSTRAP audio processor-ready");
                 resolve();
                 this.booted = true;
                 if (this.closed) this.node.port.postMessage({ kind: "stop" });
@@ -66,6 +72,7 @@ export class HostDevice {
           };
         });
       });
+      console.debug("KITHARA_BOOTSTRAP audio lock-released");
     } finally {
       URL.revokeObjectURL(url);
     }

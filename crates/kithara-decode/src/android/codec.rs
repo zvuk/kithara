@@ -356,12 +356,9 @@ fn append_pcm_float(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
     let start = out.len();
     let end = start + bytes.len() / 4;
     out.ensure_len(end)?;
-    out[start..end]
-        .iter_mut()
-        .zip(bytes.as_chunks::<4>().0)
-        .for_each(|(dst, chunk)| {
-            *dst = f32::from_le_bytes(*chunk);
-        });
+    for (dst, chunk) in out[start..end].iter_mut().zip(bytes.as_chunks::<4>().0) {
+        *dst = f32::from_le_bytes(*chunk);
+    }
     out.truncate(end);
     Ok(())
 }

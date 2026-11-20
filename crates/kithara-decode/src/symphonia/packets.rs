@@ -1,3 +1,5 @@
+#[cfg(feature = "symphonia")]
+use std::io::{Seek, SeekFrom};
 use std::{
     io,
     num::{NonZeroU16, NonZeroU64},
@@ -323,14 +325,11 @@ impl Packets {
                 {
                     return InputState::Busy;
                 }
-                Ok(None) => {
-                    self.control.cancel();
-                    if let Some(requests) = &self.requests {
-                        drop(requests.send(Request::Retire));
-                    }
-                    self.operation = Operation::Retiring;
-                }
+                Ok(None) => self.retire(),
             }
+        }
+        if matches!(self.operation, Operation::Idle) && self.control.is_cancelled() {
+            self.retire();
         }
         if matches!(self.operation, Operation::Retiring) {
             for _ in 0..2 {
@@ -350,6 +349,15 @@ impl Packets {
             Operation::Reading | Operation::Seeking => InputState::Busy,
             Operation::Retiring => InputState::Retiring,
         }
+    }
+
+    /// The parser thread drops its input before it replies `Retired`.
+    fn retire(&mut self) {
+        self.control.cancel();
+        if let Some(requests) = &self.requests {
+            drop(requests.send(Request::Retire));
+        }
+        self.operation = Operation::Retiring;
     }
 }
 
@@ -427,8 +435,6 @@ fn run(
 /// exhausted isomp4 reader is rebuilt over the same stream before it seeks.
 #[cfg(feature = "symphonia")]
 fn rewind_isomp4(reader: Box<dyn FormatReader>) -> Result<Box<dyn FormatReader>> {
-    use std::io::{Seek, SeekFrom};
-
     let mut stream = reader.into_inner();
     stream.seek(SeekFrom::Start(0))?;
     let reader = symphonia::default::formats::IsoMp4Reader::try_new(

@@ -33,7 +33,7 @@ const STRIDES: [usize; 5] = [1, 2, 3, 6, 9];
 const RATE: u32 = 48_000;
 const UNWRITTEN: f32 = -1.0;
 /// A signaling `NaN`: a plain copy keeps its quiet bit clear.
-const SIGNALING_NAN: u32 = 0x7F80_0001;
+const SIGNALING_NAN: u32 = 0x7f80_0001;
 const SPECIALS: [f32; 9] = [
     0.0,
     -0.0,
@@ -45,6 +45,60 @@ const SPECIALS: [f32; 9] = [
     f32::NAN,
     f32::from_bits(SIGNALING_NAN),
 ];
+
+#[kithara::test]
+fn last_loud_matches_scalar_at_native_and_fallback_levels() {
+    for limit in [-1.0, 0.0, 1e-6, f32::INFINITY, f32::NAN] {
+        for size in SIZES {
+            for offset in OFFSETS {
+                let samples: Vec<_> = [limit.next_down(), limit, -limit, limit.next_up()]
+                    .into_iter()
+                    .chain(SPECIALS)
+                    .cycle()
+                    .take(size.checked_add(offset).expect("bounded fixture length"))
+                    .collect();
+                let samples = samples.get(offset..).expect("fixture includes its offset");
+                let expected = samples.iter().rposition(|sample| sample.abs() > limit);
+                for level in [Level::fallback(), Level::new()] {
+                    let actual =
+                        dispatch!(level, simd => simd::last_loud_kernel(simd, samples, limit));
+                    assert_eq!(
+                        actual, expected,
+                        "size={size} offset={offset} limit={limit}"
+                    );
+                }
+                assert_eq!(crate::last_loud(samples, limit), expected);
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn last_loud_finds_every_position_across_full_blocks_and_a_partial_tail() {
+    for size in SIZES.into_iter().chain([128, 512]) {
+        for offset in OFFSETS {
+            for level in [Level::fallback(), Level::new()] {
+                let mut samples = vec![0.0_f32; size.saturating_add(offset)];
+                let input = samples.get(offset..).expect("fixture contains its offset");
+                assert_eq!(
+                    dispatch!(level, simd => simd::last_loud_kernel(simd, input, 1e-6)),
+                    None
+                );
+                assert_eq!(crate::last_loud(input, 1e-6), None);
+                for position in 0..size {
+                    *samples
+                        .get_mut(offset.saturating_add(position))
+                        .expect("fixture position fits") = -0.25;
+                    let input = samples.get(offset..).expect("fixture contains its offset");
+                    let actual =
+                        dispatch!(level, simd => simd::last_loud_kernel(simd, input, 1e-6));
+                    assert_eq!(actual, Some(position), "size={size} offset={offset}");
+                    assert_eq!(crate::last_loud(input, 1e-6), Some(position));
+                }
+            }
+        }
+    }
+}
 
 #[kithara::test]
 fn scalar_gain_matches_ieee_multiplication_at_every_level() {

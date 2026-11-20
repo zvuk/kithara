@@ -348,7 +348,6 @@ mod tests {
         ffi::OsString,
         fs::{self, FileTimes},
         path::{Path, PathBuf},
-        process::Command,
         sync::{
             Arc, Barrier,
             atomic::{AtomicUsize, Ordering},
@@ -735,22 +734,15 @@ mod tests {
         ]);
         let target = tempfile::tempdir()?;
         let ci = |name: &str| (name == "CI").then(|| OsString::from("true"));
-        let compile = || {
-            Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-                .current_dir(checkout.path())
-                .env("CARGO_TARGET_DIR", target.path())
-                .env_remove("RUSTC_WRAPPER")
-                .args(["build", "--offline", "--quiet", "--message-format=json"])
-                .output()
-        };
+        let compile = || crate::ci::fixture::cargo_build(checkout.path(), target.path());
         {
             let _build = super::build(checkout.path(), target.path(), &ci)?;
-            let first = compile()?;
+            let first = compile();
             assert!(first.status.success(), "{first:?}");
         }
         {
             let _build = super::build(checkout.path(), target.path(), &ci)?;
-            let warm = compile()?;
+            let warm = compile();
             assert!(warm.status.success(), "{warm:?}");
             assert!(
                 String::from_utf8_lossy(&warm.stdout).lines().all(|line| {
@@ -772,7 +764,7 @@ mod tests {
         )?;
 
         let _build = super::build(checkout.path(), target.path(), &ci)?;
-        let changed = compile()?;
+        let changed = compile();
         assert!(
             changed.status.success(),
             "the retained target used dependency metadata from another source: {}",

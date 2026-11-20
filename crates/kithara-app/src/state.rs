@@ -16,8 +16,9 @@ use kithara::{
             task,
         },
     },
-    play::{BpmInfo, DjEvent, EngineEvent, MediaTime, PlayerEvent, SessionEvent},
-    prelude::EngineLoadSnapshot,
+    play::{
+        BpmInfo, DjEvent, EngineEvent, EngineLoadSnapshot, MediaTime, PlayerEvent, SessionEvent,
+    },
     queue::{QueueEvent, TrackEntry, TrackStatus},
     stream::AudioCodec,
 };
@@ -94,7 +95,7 @@ impl UiState {
             playing: queue.is_playing(),
             position: queue.position_seconds().unwrap_or(0.0),
             duration: queue.duration_seconds().unwrap_or(0.0),
-            volume: queue.volume(),
+            volume: f32::from(queue.mix_settings().volume()),
             speed: queue.default_rate(),
             analysis: None,
             unready_ranges: Arc::default(),
@@ -319,7 +320,7 @@ impl StateController {
         let mode = abr.as_ref().and_then(AbrHandle::mode);
         let mut st = self.state.lock();
         st.playing = queue.is_playing();
-        st.volume = queue.volume();
+        st.volume = f32::from(queue.mix_settings().volume());
         st.speed = queue.default_rate();
         st.position = position;
         st.duration = duration;

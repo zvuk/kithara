@@ -8,7 +8,8 @@ use fearless_simd::f64x2;
 use fearless_simd::{Level, dispatch, prelude::*};
 use num_traits::AsPrimitive;
 
-use super::route::{route, table};
+use super::{last_loud_kernel, padded};
+use crate::backend::route::{route, table};
 
 /// Replaces `NaN`, ±infinity, subnormals and −0.0 with `+0.0` in place; every
 /// other value keeps its bits.
@@ -17,7 +18,7 @@ pub fn sanitize(samples: &mut [f32]) {
 }
 
 #[inline(always)]
-pub(super) fn sanitize_kernel<S: Simd>(simd: S, samples: &mut [f32]) {
+pub(in crate::backend) fn sanitize_kernel<S: Simd>(simd: S, samples: &mut [f32]) {
     let smallest = S::f32s::splat(simd, f32::MIN_POSITIVE);
     let largest = S::f32s::splat(simd, f32::MAX);
     let zero = S::f32s::splat(simd, 0.0);
@@ -33,7 +34,7 @@ pub(crate) fn div(samples: &mut [f32], divisor: f32) -> usize {
 }
 
 #[inline(always)]
-pub(super) fn div_kernel<S: Simd>(simd: S, samples: &mut [f32], divisor: f32) -> usize {
+pub(in crate::backend) fn div_kernel<S: Simd>(simd: S, samples: &mut [f32], divisor: f32) -> usize {
     let divisor = S::f32s::splat(simd, divisor);
     update(simd, samples, [], |x, []| x.div(divisor))
 }
@@ -56,7 +57,11 @@ pub(crate) fn scale_in_place(samples: &mut [f32], gain: f32) -> usize {
 }
 
 #[inline(always)]
-pub(super) fn scale_in_place_kernel<S: Simd>(simd: S, samples: &mut [f32], gain: f32) -> usize {
+pub(in crate::backend) fn scale_in_place_kernel<S: Simd>(
+    simd: S,
+    samples: &mut [f32],
+    gain: f32,
+) -> usize {
     let len = samples.len();
     let gains = S::f32s::splat(simd, gain);
     let mut chunks = samples.chunks_exact_mut(S::f32s::LEN);
@@ -78,7 +83,12 @@ pub(crate) fn ramp(output: &mut [f32], start: f32, step: f32) -> usize {
 }
 
 #[inline(always)]
-pub(super) fn ramp_kernel<S: Simd>(simd: S, output: &mut [f32], start: f32, step: f32) -> usize {
+pub(in crate::backend) fn ramp_kernel<S: Simd>(
+    simd: S,
+    output: &mut [f32],
+    start: f32,
+    step: f32,
+) -> usize {
     let mut index = S::f32s::splat(simd, 0.0);
     let mut count = 0.0_f32;
     for slot in index.as_mut_slice() {
@@ -101,14 +111,19 @@ pub(crate) fn mul_add(x: &[f32], y: &[f32], acc: &mut [f32]) -> usize {
 }
 
 #[inline(always)]
-pub(super) fn mul_add_kernel<S: Simd>(simd: S, x: &[f32], y: &[f32], acc: &mut [f32]) -> usize {
+pub(in crate::backend) fn mul_add_kernel<S: Simd>(
+    simd: S,
+    x: &[f32],
+    y: &[f32],
+    acc: &mut [f32],
+) -> usize {
     update(simd, acc, [x, y], |acc, [x, y]| x.mul_add_precise(y, acc))
 }
 
 /// `target[i] = f(target[i], [inputs[0][i], ...])` over the common prefix of
 /// the target and the inputs, a vector at a time; returns the prefix length.
 #[inline(always)]
-pub(super) fn update<S: Simd, I: Inputs<S>>(
+pub(in crate::backend) fn update<S: Simd, I: Inputs<S>>(
     simd: S,
     target: &mut [f32],
     inputs: I,
@@ -126,7 +141,7 @@ pub(super) fn update<S: Simd, I: Inputs<S>>(
 /// The slices an element-wise kernel reads beside its target. Each arity
 /// destructures its array, so a block loads its vectors without a loop over
 /// the inputs, which the size profile would neither unroll nor inline.
-pub(super) trait Inputs<S: Simd>: Copy {
+pub(in crate::backend) trait Inputs<S: Simd>: Copy {
     /// One vector per input.
     type Vectors;
     /// `len` capped at every input's length.
@@ -188,7 +203,7 @@ impl<S: Simd> Inputs<S> for [&[f32]; 2] {
 /// shorter when `len` is not a multiple of the lane count. An index loop:
 /// the size profile leaves slice splitting and chunk iterators as calls.
 #[inline(always)]
-pub(super) fn blocks<S: Simd>(len: usize, mut f: impl FnMut(usize, usize)) {
+pub(in crate::backend) fn blocks<S: Simd>(len: usize, mut f: impl FnMut(usize, usize)) {
     let mut start = 0;
     while start < len {
         let end = len.min(start.saturating_add(S::f32s::LEN));
@@ -199,7 +214,7 @@ pub(super) fn blocks<S: Simd>(len: usize, mut f: impl FnMut(usize, usize)) {
 
 /// The vector holding `block`, zero-padded when it is shorter than the lanes.
 #[inline(always)]
-pub(super) fn vector<S: Simd>(simd: S, block: &[f32]) -> S::f32s {
+pub(in crate::backend) fn vector<S: Simd>(simd: S, block: &[f32]) -> S::f32s {
     if block.len() == S::f32s::LEN {
         S::f32s::from_slice(simd, block)
     } else {
@@ -209,7 +224,7 @@ pub(super) fn vector<S: Simd>(simd: S, block: &[f32]) -> S::f32s {
 
 /// Writes the first `block.len()` lanes of `value` into `block`.
 #[inline(always)]
-pub(super) fn store<S: Simd>(value: S::f32s, block: &mut [f32]) {
+pub(in crate::backend) fn store<S: Simd>(value: S::f32s, block: &mut [f32]) {
     if block.len() == S::f32s::LEN {
         value.store_slice(block);
     } else {
@@ -227,16 +242,6 @@ fn sanitized<S: Simd>(x: S::f32s, smallest: S::f32s, largest: S::f32s, zero: S::
     magnitude.simd_le(largest).select(normal, zero)
 }
 
-/// A vector holding `tail` in its first lanes and `+0.0` in the rest.
-#[inline(always)]
-pub(super) fn padded<S: Simd>(simd: S, tail: &[f32]) -> S::f32s {
-    let mut vector = S::f32s::splat(simd, 0.0);
-    for (slot, sample) in vector.as_mut_slice().iter_mut().zip(tail) {
-        *slot = *sample;
-    }
-    vector
-}
-
 pub(crate) fn crossfade_linear(
     outgoing: &[f32],
     samples: &mut [f32],
@@ -248,7 +253,7 @@ pub(crate) fn crossfade_linear(
 }
 
 #[inline(always)]
-pub(super) fn crossfade_linear_kernel<S: Simd>(
+pub(in crate::backend) fn crossfade_linear_kernel<S: Simd>(
     simd: S,
     outgoing: &[f32],
     samples: &mut [f32],
@@ -454,7 +459,7 @@ pub(crate) fn first_quiet<P: Deref<Target = [f32]>>(
 }
 
 #[inline(always)]
-pub(super) fn first_quiet_kernel<S: Simd, P: Deref<Target = [f32]>>(
+pub(in crate::backend) fn first_quiet_kernel<S: Simd, P: Deref<Target = [f32]>>(
     simd: S,
     planes: &[P],
     range: Range<usize>,
@@ -498,7 +503,11 @@ pub(crate) fn narrow_f64(input: &[f64], output: &mut [f32]) -> usize {
 }
 
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
-pub(super) fn narrow_kernel<S: Simd>(simd: S, input: &[f64], output: &mut [f32]) -> usize {
+pub(in crate::backend) fn narrow_kernel<S: Simd>(
+    simd: S,
+    input: &[f64],
+    output: &mut [f32],
+) -> usize {
     let count = input.len().min(output.len());
     let (Some(input), Some(output)) = (input.get(..count), output.get_mut(..count)) else {
         return 0;
@@ -524,7 +533,7 @@ pub(crate) fn multiply_squared_in_place(
     dispatch!(Level::new(), simd => multiply_squared_kernel(simd, samples, square, gains))
 }
 
-pub(super) fn multiply_squared_kernel<S: Simd>(
+pub(in crate::backend) fn multiply_squared_kernel<S: Simd>(
     simd: S,
     samples: &mut [f32],
     square: &[f32],
@@ -533,4 +542,12 @@ pub(super) fn multiply_squared_kernel<S: Simd>(
     update(simd, samples, [square, gains], |x, [square, gain]| {
         x.mul(square.mul(square)).mul(gain)
     })
+}
+
+pub(crate) fn last_loud(samples: &[f32], limit: f32) -> Option<usize> {
+    let (last, prefix) = samples.split_last()?;
+    if last.abs() > limit {
+        return Some(prefix.len());
+    }
+    dispatch!(Level::new(), simd => last_loud_kernel(simd, samples, limit))
 }

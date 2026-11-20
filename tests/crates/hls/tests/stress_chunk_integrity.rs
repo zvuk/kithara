@@ -449,7 +449,7 @@ fn check_chunk_integrity(
     let total_secs = total_duration.map_or(segments * segment_duration * 0.9, |d| d.as_secs_f64());
     let max_seek_secs = (total_secs - 0.5).max(0.1);
 
-    let mut rng = Xorshift64::new(0xAB25_5017_C400_0000);
+    let mut rng = Xorshift64::new(0xab25_5017_c400_0000);
     let mut successful_reads = 0u64;
     let mut inter_chunk_breaks = 0u64;
     let mut inter_sample_breaks = 0u64;

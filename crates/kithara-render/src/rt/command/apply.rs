@@ -9,7 +9,7 @@ use super::{
         processor::Deck,
         track::{PlayerTrack, ReadPcm},
     },
-    state::*,
+    state::{answer_stop, returned_pcm},
 };
 use crate::bridge::{DeckEqChange, DeckPart, DeckProtocol, Fade, Returned, Slot};
 

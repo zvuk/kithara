@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use iced::{Element, window::Id};
-use kithara::prelude::ResourceSrc;
+use kithara::play::ResourceSrc;
 
 use super::{app::Kithara, message::Message};
 use crate::engine::DeckSnapshot;

@@ -1,5 +1,6 @@
 use kithara_platform::sync::Arc;
 use kithara_stream::{PlayheadState, PlayheadWrite};
+use kithara_warp::WarpControlsChange;
 
 use super::*;
 use crate::{Bound, TrackSettingsChange};
@@ -21,11 +22,14 @@ fn lane_retirement_failed_open_finishes_its_pending_configuration() {
     let old = command_at_zero(
         &mut track,
         &mut rig,
-        TrackCommand::Configure(TrackSettingsChange::Pitch(Pitch::HELD), When::Next),
+        TrackCommand::Configure(
+            TrackSettingsChange::Controls(WarpControlsChange::Pitch(Pitch::HELD)),
+            When::Next,
+        ),
     )
     .expect("configuration in opening lane");
     assert!(track.snapshot().pending_lane);
-    assert!(track.projected().pitch().keylock());
+    assert!(track.projected().controls().pitch().keylock());
     let receipt = rig.open(Err(LoadRefusal::Cancelled)).expect("refused open");
     answer_source(&mut track, &mut rig, receipt);
     assert_eq!(track.status(), TrackStatus::Idle);
@@ -34,7 +38,7 @@ fn lane_retirement_failed_open_finishes_its_pending_configuration() {
         "the closed inbox answers its commands"
     );
     assert!(
-        !track.projected().pitch().keylock(),
+        !track.projected().controls().pitch().keylock(),
         "arrived refusals settle before handover"
     );
 
@@ -57,7 +61,10 @@ fn lane_retirement_failed_open_finishes_its_pending_configuration() {
     let new = command_at_zero(
         &mut track,
         &mut rig,
-        TrackCommand::Configure(TrackSettingsChange::Pitch(Pitch::HELD), When::Next),
+        TrackCommand::Configure(
+            TrackSettingsChange::Controls(WarpControlsChange::Pitch(Pitch::HELD)),
+            When::Next,
+        ),
     )
     .expect("new scope configuration");
     assert_eq!(new, old, "bare sequence numbers repeat across channels");
@@ -67,7 +74,7 @@ fn lane_retirement_failed_open_finishes_its_pending_configuration() {
         .expect("second refused open");
     answer_source(&mut track, &mut rig, receipt);
     assert!(!track.snapshot().pending_lane);
-    assert!(!track.projected().pitch().keylock());
+    assert!(!track.projected().controls().pitch().keylock());
 }
 
 #[kithara::test]
@@ -84,7 +91,10 @@ async fn lane_retirement_during_open_keeps_admission_closed(#[case] opened: bool
         command_at_zero(
             &mut track,
             &mut rig,
-            TrackCommand::Configure(TrackSettingsChange::Pitch(Pitch::HELD), When::Next),
+            TrackCommand::Configure(
+                TrackSettingsChange::Controls(WarpControlsChange::Pitch(Pitch::HELD)),
+                When::Next,
+            ),
         )
         .is_none(),
         "configuration without an accepting executor stays local"
@@ -327,7 +337,10 @@ fn lane_retirement_late_receipts_do_not_reopen_or_reconfigure_the_scope() {
     let requested = command_at_zero(
         &mut track,
         &mut rig,
-        TrackCommand::Configure(TrackSettingsChange::Pitch(Pitch::HELD), When::Next),
+        TrackCommand::Configure(
+            TrackSettingsChange::Controls(WarpControlsChange::Pitch(Pitch::HELD)),
+            When::Next,
+        ),
     )
     .expect("pending configuration");
     command_at_zero(&mut track, &mut rig, TrackCommand::Release);
@@ -367,11 +380,14 @@ fn lane_retirement_late_receipts_do_not_reopen_or_reconfigure_the_scope() {
         command_at_zero(
             &mut track,
             &mut rig,
-            TrackCommand::Configure(TrackSettingsChange::Pitch(Pitch::default()), When::Next)
+            TrackCommand::Configure(
+                TrackSettingsChange::Controls(WarpControlsChange::Pitch(Pitch::default())),
+                When::Next,
+            )
         )
         .is_none()
     );
-    assert!(!track.projected().pitch().keylock());
+    assert!(!track.projected().controls().pitch().keylock());
     rig.opens
         .resume(loading, (), ())
         .expect("retiring open")
@@ -383,7 +399,7 @@ fn lane_retirement_late_receipts_do_not_reopen_or_reconfigure_the_scope() {
         .expect("terminal open refusal");
     answer_source(&mut track, &mut rig, receipt);
     assert_eq!(track.status(), TrackStatus::Released);
-    assert!(!track.projected().pitch().keylock());
+    assert!(!track.projected().controls().pitch().keylock());
 }
 
 #[kithara::test]
