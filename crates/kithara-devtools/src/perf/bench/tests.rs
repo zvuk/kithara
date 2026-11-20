@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::*;
@@ -51,11 +52,49 @@ required-features = ["spectrum", "portable"]
     fs::write(
         root.join("benches/kernel.rs"),
         r#"
-use std::{env, fs::OpenOptions, io::Write};
+use std::{env, fs::{self, OpenOptions}, io::Write};
 fn main() {
     let args: Vec<_> = env::args().skip(1).collect();
-    if args.iter().any(|arg| arg == "--list") {
-        for id in include_str!("../ids").lines() { println!("{id}: benchmark"); }
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    let ids = include_str!("../ids");
+    if let ["--bench", mode, filter @ ("paired" | "head-only")] = args.as_slice() {
+        let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
+        writeln!(events, "{mode}:{filter}:{}", env::current_exe().unwrap().display()).unwrap();
+        let mut selected: Vec<_> = ids.lines()
+            .filter(|id| *filter != "paired" || !id.starts_with("forms/"))
+            .collect();
+        if *mode == "--test" && selected.contains(&"group/reverse") {
+            selected.reverse();
+        }
+        for id in selected {
+            match *mode {
+                "--list" => println!("{id}: benchmark"),
+                "--test" => {
+                    println!("Testing {id}");
+                    match id {
+                        "group/exit" => std::process::exit(2),
+                        "group/no-success" => return,
+                        "group/duplicate" => println!("Success\nTesting {id}"),
+                        "group/artifact" => {
+                            let home = env::var("CRITERION_HOME").unwrap();
+                            fs::write(std::path::Path::new(&home).join("sample.json"), "{}").unwrap();
+                        }
+                        _ => {}
+                    }
+                    println!("Success");
+                }
+                _ => std::process::exit(3),
+            }
+        }
+        return;
+    }
+    if args.iter().any(|arg| matches!(*arg, "paired" | "head-only")) {
+        let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
+        writeln!(events, "timing").unwrap();
+        std::process::exit(4);
+    }
+    if args.contains(&"--list") {
+        for id in ids.lines() { println!("{id}: benchmark"); }
         return;
     }
     let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
@@ -293,7 +332,7 @@ fn bench_builds_precede_measurements_and_head_only_needs_no_critcmp() {
     head.filter = filter.into();
     for _ in 0..2 {
         fs::write(temp.path().join("events"), "").unwrap();
-        execute(&ctx, &head, true).unwrap();
+        execute(&ctx, &head, true, None).unwrap();
         assert_eq!(
             fs::read_to_string(temp.path().join("events")).unwrap(),
             "run:head\n"
@@ -305,7 +344,7 @@ fn bench_builds_precede_measurements_and_head_only_needs_no_critcmp() {
     }
 
     fs::write(temp.path().join("events"), "").unwrap();
-    let error = execute(&ctx, &request(&base), true).unwrap_err();
+    let error = execute(&ctx, &request(&base), true, None).unwrap_err();
     assert_eq!(error.to_string(), "start benchmark command");
     assert_eq!(
         fs::read_to_string(temp.path().join("events")).unwrap(),
@@ -340,7 +379,13 @@ fn bench_refuses_empty_or_unpaired_ids_before_measurement() {
         ("group/a", "group/b", true),
     ] {
         let (temp, ctx, base) = fixture(base_ids, head_ids);
-        let error = execute(&ctx, &request(if compared { &base } else { "" }), true).unwrap_err();
+        let error = execute(
+            &ctx,
+            &request(if compared { &base } else { "" }),
+            true,
+            None,
+        )
+        .unwrap_err();
         if base_ids == "group/a" && head_ids == "group/b" {
             assert_eq!(
                 error.to_string(),
@@ -376,7 +421,7 @@ fn bench_target_admission_explains_manifest_feature_differences() {
     .unwrap();
     let mut request = request(&base);
     request.target = "fixture-bench:kernel".into();
-    let error = execute(&ctx, &request, true).unwrap_err();
+    let error = execute(&ctx, &request, true, None).unwrap_err();
     assert_eq!(
         error.to_string(),
         "base/head benchmark targets or required features differ; only in base: [\"fixture-bench:kernel:portable,spectrum\"]; only in head: [\"fixture-bench:kernel:portable\"]"
@@ -425,4 +470,299 @@ fn bench_cli_preserves_all_four_parameters() {
             ("BENCH_BASE_REF", "main")
         ]
     );
+}
+
+fn preflight_request(ctx: &Ctx, base: &str, id: &str) -> (Request, Value) {
+    let mut request = request(base);
+    request.head = command(&ctx.root, "git", &["rev-parse", "HEAD"]);
+    let declaration = json!({
+        "head": request.head,
+        "baseline": "irrelevant-to-controller",
+        "collections": {
+            "z-paired": {
+                "filter": "paired",
+                "expected_base_ids": [id],
+                "expected_head_ids": [id],
+            },
+            "a-forms": {
+                "filter": "head-only",
+                "expected_head_ids": [id, "forms/b"],
+            },
+        },
+    });
+    (request, declaration)
+}
+
+#[test]
+fn bench_preflight_builds_lists_then_executes_only_untimed_callbacks() {
+    let (temp, ctx, base) = fixture("group/a", "forms/b\ngroup/a");
+    let (request, declaration) = preflight_request(&ctx, &base, "group/a");
+    let raw = format!("{declaration}\n");
+    execute(&ctx, &request, false, Some(&raw)).unwrap();
+
+    let events = fs::read_to_string(temp.path().join("events")).unwrap();
+    let calls: Vec<_> = events.lines().collect();
+    assert_eq!(calls.len(), 6);
+    for (actual, expected) in calls.iter().zip([
+        "--list:paired:",
+        "--list:paired:",
+        "--list:head-only:",
+        "--test:paired:",
+        "--test:paired:",
+        "--test:head-only:",
+    ]) {
+        assert!(actual.starts_with(expected), "{actual}");
+    }
+    let executable = |index: usize| calls[index].splitn(3, ':').nth(2).unwrap();
+    assert_ne!(executable(0), executable(1));
+    for index in [2, 4, 5] {
+        assert_eq!(executable(1), executable(index));
+    }
+    assert_eq!(executable(0), executable(3));
+
+    let log = fs::read_to_string(ctx.root.join("bench-results.txt")).unwrap();
+    let builds: Vec<_> = log
+        .lines()
+        .filter(|line| line.contains("\"--no-run\""))
+        .collect();
+    assert_eq!(builds.len(), 2);
+    assert_ne!(builds[0], builds[1]);
+    for build in builds {
+        assert!(build.contains("CARGO_PROFILE_BENCH_STRIP=\"none\""));
+        assert!(build.contains("CARGO_TARGET_DIR="));
+    }
+    for marker in [
+        "--sample-size",
+        "--save-baseline",
+        "missing-benchmark-comparison-tool",
+    ] {
+        assert!(!log.contains(marker), "{marker}");
+    }
+    assert!(log.contains(&sha256(raw.as_bytes())));
+    let results = fs::read_dir(ctx.root.join("bench-results"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert_eq!(
+        fs::read_to_string(results.join("a-forms/head/test.txt")).unwrap(),
+        "Testing forms/b\nSuccess\nTesting group/a\nSuccess\n"
+    );
+    ensure_no_criterion_results(&results).unwrap();
+    let proof = fs::read_to_string(results.join("provenance.txt")).unwrap();
+    assert!(proof.contains(&format!("parent {base}")));
+    assert!(proof.contains("CARGO_PROFILE_BENCH_STRIP=none"));
+    for arm in ["base", "head"] {
+        let digest = sha256(&fs::read(results.join("elf").join(arm)).unwrap());
+        assert!(proof.contains(&format!("{arm} ELF SHA-256 {digest}")));
+        assert!(log.contains(&digest));
+    }
+}
+
+#[test]
+fn bench_preflight_rejects_callback_reordering_for_the_same_binary() {
+    let (temp, ctx, base) = fixture("group/reverse\ngroup/a", "group/reverse\ngroup/a");
+    let (request, mut declaration) = preflight_request(&ctx, &base, "group/a");
+    let cases = json!(["group/a", "group/reverse"]);
+    declaration["collections"] = json!({"paired": {
+        "filter": "paired",
+        "expected_base_ids": cases,
+        "expected_head_ids": cases,
+    }});
+    let actual = execute(&ctx, &request, false, Some(&declaration.to_string())).unwrap_err();
+    assert!(
+        actual.to_string().contains("differ from inventory order"),
+        "{actual:#}"
+    );
+    let events = fs::read_to_string(temp.path().join("events")).unwrap();
+    let modes: Vec<_> = events
+        .lines()
+        .map(|line| line.split_once(':').unwrap().0)
+        .collect();
+    assert_eq!(modes, ["--list", "--list", "--test"]);
+}
+
+#[test]
+fn bench_preflight_rejects_invalid_requests_before_children() {
+    let (temp, ctx, base) = fixture("group/a", "group/a\nforms/b");
+    let (request, declaration) = preflight_request(&ctx, &base, "group/a");
+    let raw = declaration.to_string();
+    let mut short = request.clone();
+    short.base = "abc".into();
+    let mut no_base = request.clone();
+    no_base.base.clear();
+    let mut no_target = request.clone();
+    no_target.target.clear();
+    let mut filtered = request.clone();
+    filtered.filter = "another".into();
+    for (input, raw, measure, error) in [
+        (&request, raw.as_str(), true, "timing enabled"),
+        (&short, &raw, false, "full lowercase"),
+        (&no_base, &raw, false, "full lowercase"),
+        (&no_target, &raw, false, "bench target must"),
+        (&filtered, &raw, false, "filters belong"),
+        (&request, "{", false, "parse preflight declaration"),
+    ] {
+        let actual = execute(&ctx, input, measure, Some(raw)).unwrap_err();
+        assert!(actual.to_string().contains(error), "{actual}");
+    }
+
+    for (pointer, value, error) in [
+        ("/head", json!("different"), "head does not match"),
+        ("/collections", json!({}), "no collections"),
+        (
+            "/collections/z-paired/expected_base_ids",
+            json!([]),
+            "empty or duplicate",
+        ),
+        (
+            "/collections/z-paired/expected_head_ids",
+            json!(["a", "a"]),
+            "empty or duplicate",
+        ),
+        (
+            "/collections/z-paired/filter",
+            json!("--test"),
+            "valid filter",
+        ),
+    ] {
+        let mut invalid = declaration.clone();
+        *invalid.pointer_mut(pointer).unwrap() = value;
+        let actual = execute(&ctx, &request, false, Some(&invalid.to_string())).unwrap_err();
+        assert!(actual.to_string().contains(error), "{actual}");
+    }
+    for name in [
+        "",
+        ".",
+        "..",
+        "/absolute",
+        "../escape",
+        "a/b",
+        "a\\b",
+        "x:\n",
+        "elf",
+        "provenance.txt",
+    ] {
+        let mut invalid = declaration.clone();
+        invalid["collections"] = json!({(name): declaration["collections"]["z-paired"]});
+        let actual = execute(&ctx, &request, false, Some(&invalid.to_string())).unwrap_err();
+        assert!(
+            actual.to_string().contains("safe path component"),
+            "{actual}"
+        );
+    }
+    assert!(!ctx.root.join("bench-results.txt").exists());
+    assert!(!temp.path().join("events").exists());
+}
+
+#[test]
+fn bench_preflight_rejects_bad_inventory_before_callbacks() {
+    for (base_ids, head_ids, error) in [
+        (
+            "group/a",
+            "group/a\nforms/b\nforms/extra",
+            "Criterion IDs do not match",
+        ),
+        ("group/a", "group/a", "Criterion IDs do not match"),
+        (
+            "group/a",
+            "group/a\ngroup/a\nforms/b",
+            "duplicate Criterion ID",
+        ),
+        ("group/b", "group/a\nforms/b", "Criterion IDs do not match"),
+    ] {
+        let (temp, ctx, base) = fixture(base_ids, head_ids);
+        let (request, declaration) = preflight_request(&ctx, &base, "group/a");
+        let actual = execute(&ctx, &request, false, Some(&declaration.to_string())).unwrap_err();
+        assert!(format!("{actual:#}").contains(error), "{actual:#}");
+        let events = fs::read_to_string(temp.path().join("events")).unwrap();
+        assert!(
+            events.lines().all(|line| line.starts_with("--list:")),
+            "{events}"
+        );
+    }
+}
+
+#[test]
+fn bench_preflight_requires_successful_callbacks_without_criterion_files() {
+    for (id, error) in [
+        ("group/exit", "benchmark command"),
+        ("group/no-success", "did not report Success"),
+        ("group/duplicate", "duplicate Criterion callback"),
+        ("group/artifact", "unexpected Criterion output"),
+    ] {
+        let (temp, ctx, base) = fixture(id, &format!("{id}\nforms/b"));
+        let (request, declaration) = preflight_request(&ctx, &base, id);
+        let actual = execute(&ctx, &request, false, Some(&declaration.to_string())).unwrap_err();
+        assert!(format!("{actual:#}").contains(error), "{actual:#}");
+        let events = fs::read_to_string(temp.path().join("events")).unwrap();
+        assert_eq!(
+            events
+                .lines()
+                .filter(|line| line.starts_with("--list:"))
+                .count(),
+            3
+        );
+        assert_eq!(
+            events
+                .lines()
+                .filter(|line| line.starts_with("--test:"))
+                .count(),
+            1
+        );
+        let log = fs::read_to_string(ctx.root.join("bench-results.txt")).unwrap();
+        assert!(!log.contains("Untimed benchmark preflight evidence:"));
+    }
+}
+
+#[test]
+fn bench_preflight_callback_parser_accepts_diagnostics_between_records() {
+    let recorded = concat!(
+        "crossover_geometry rate=48000 channels=2 bands=3 frequencies=[249.70744, 4325.059] backend=portable target=x86_64\n",
+        "Testing crossover_df1_svf/df1_3band/128\n",
+        "Success\n",
+        "crossover_delta bands=3 block=512 candidate=svf case=retirement_bits moving=true finite_pairs=8 max_abs_finite=1.0141204801825835e31 bit_differences=5 nonfinite_df1=16398 nonfinite_candidate=16398 subnormal_df1=0 subnormal_candidate=0 last_nonzero_df1=Some(8202) last_nonzero_candidate=Some(8202)\n",
+        "Testing crossover_df1_svf/df1_3band/512\n",
+        "Success\n",
+    );
+    assert_eq!(
+        callback_ids(recorded.as_bytes()).unwrap(),
+        [
+            "crossover_df1_svf/df1_3band/128",
+            "crossover_df1_svf/df1_3band/512",
+        ],
+    );
+}
+
+#[test]
+fn bench_preflight_callback_parser_rejects_malformed_records() {
+    for (malformed, expected) in [
+        ("diagnostic only\n", "no Criterion callbacks were reported"),
+        ("Success\n", "unexpected Criterion callback record"),
+        ("Testing\n", "unexpected Criterion callback record"),
+        (
+            "Testing\tcase\nSuccess\n",
+            "unexpected Criterion callback record",
+        ),
+        ("Testing \nSuccess\n", "Criterion callback needs an ID"),
+        (
+            "Testing case\ndiagnostic\nSuccess\n",
+            "did not report Success",
+        ),
+        (
+            "Testing case\nSuccess\nSuccess extra\n",
+            "unexpected Criterion callback record",
+        ),
+        (
+            "Testing case\nSuccess\nTesting case\nSuccess\n",
+            "duplicate Criterion callback",
+        ),
+    ] {
+        let actual = callback_ids(malformed.as_bytes()).unwrap_err();
+        assert!(
+            actual.to_string().contains(expected),
+            "{malformed:?}: {actual:#}"
+        );
+    }
 }

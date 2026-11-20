@@ -882,6 +882,34 @@ mod tests {
         assert!(gitlab.contains("- .ci-artifacts/junit/android-test.xml"));
     }
 
+    #[test]
+    fn the_benchmark_preflight_workflow_passes_data_only_in_the_lane_environment() {
+        let workflows = crate::testing::workspace::root().join(".github/workflows");
+        let dispatch = fs::read_to_string(workflows.join("dispatch.yml")).unwrap();
+        let run = fs::read_to_string(workflows.join("run.yml")).unwrap();
+        let lane = fs::read_to_string(workflows.join("lane.yml")).unwrap();
+        let path = "inputs.bench_preflight";
+        assert!(dispatch.contains("&& '-preflight' || ''"));
+        assert!(
+            dispatch.contains("cancel-in-progress: ${{ (inputs.bench_preflight || '') == '' }}")
+        );
+        let (_, deep) = dispatch.split_once("\n  deep:\n").unwrap();
+        assert_eq!(
+            deep.matches("bench_preflight: ${{ inputs.bench_preflight || '' }}")
+                .count(),
+            1
+        );
+        let (main, dependent) = run.split_once("\n  dependent:\n").unwrap();
+        assert!(main.contains("bench_preflight: ${{ inputs.bench_preflight }}"));
+        assert!(!dependent.contains(path));
+        let (_, step) = lane.split_once("- name: Run the lane\n").unwrap();
+        let (environment, shell) = step.split_once("        run: |\n").unwrap();
+        assert!(environment.contains("BENCH_PREFLIGHT: ${{ inputs.bench_preflight }}"));
+        assert_eq!(lane.matches(path).count(), 1);
+        assert!(!shell.contains(path));
+        assert!(shell.contains(r#"if [ -n "$BENCH_TARGET" ] && [ -z "$BENCH_PREFLIGHT" ]; then export RUN_BENCHMARKS=1; fi"#));
+    }
+
     /// Windows runs no `ci lane`: its guest keeps one build directory, and a
     /// called workflow inherits no environment from its caller, so the workflow
     /// names it. Left unset, the job builds in the checkout, which
