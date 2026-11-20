@@ -1,6 +1,10 @@
 //! Checkouts the build-directory tests claim.
 
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::Path,
+    process::{Command, Output},
+};
 
 use tempfile::TempDir;
 
@@ -29,4 +33,41 @@ pub(crate) fn git_checkout(files: &[(&str, &str)]) -> TempDir {
     }
     git(checkout.path(), &["add", "-A"]);
     checkout
+}
+
+/// Builds `checkout` with the real Cargo into `target`, reporting each unit
+/// as a JSON message on stdout.
+///
+/// Empty wrapper variables override any `build.rustc-wrapper` or
+/// `build.rustc-workspace-wrapper` from Cargo configuration, so no host
+/// compiler cache takes part in the build.
+pub(crate) fn cargo_build(checkout: &Path, target: &Path) -> Output {
+    Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+        .current_dir(checkout)
+        .env("CARGO_TARGET_DIR", target)
+        .env("RUSTC_WRAPPER", "")
+        .env("RUSTC_WORKSPACE_WRAPPER", "")
+        .args(["build", "--offline", "--quiet", "--message-format=json"])
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn a_cargo_build_runs_no_configured_compiler_wrapper() {
+    let checkout = git_checkout(&[
+        (
+            "Cargo.toml",
+            "[package]\nname='wrapper-probe'\nversion='0.1.0'\nedition='2024'\n",
+        ),
+        ("src/lib.rs", ""),
+        (
+            ".cargo/config.toml",
+            "[build]\nrustc-wrapper = 'no-compiler-wrapper'\nrustc-workspace-wrapper = 'no-compiler-wrapper'\n",
+        ),
+    ]);
+    let target = tempfile::tempdir().unwrap();
+
+    let output = cargo_build(checkout.path(), target.path());
+
+    assert!(output.status.success(), "{output:?}");
 }
