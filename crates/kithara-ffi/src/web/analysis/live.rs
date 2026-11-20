@@ -263,7 +263,7 @@ mod runs {
                 match open_reader(config, &reader_cancel, rate, pools).await {
                     Ok(reader) => {
                         queue.attach_observer(id, producer);
-                        worker.start(pass, reader);
+                        let _completion = worker.start(pass, reader);
                         send_reply(request_id, Ok(()));
                     }
                     Err(error) => {
