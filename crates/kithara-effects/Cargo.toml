@@ -50,7 +50,6 @@ criterion = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 assert_no_alloc = { workspace = true }
-criterion = { workspace = true }
 
 [[bench]]
 name = "feedback_delay"

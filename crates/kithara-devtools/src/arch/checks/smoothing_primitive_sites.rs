@@ -395,8 +395,6 @@ fn fused(expr: &Expr) -> Option<(&Expr, &Expr, &Expr)> {
     }
 }
 
-/// True when `expr` (outside occurrences of `place`) indexes a buffer or
-/// reads a name bound from a sequence.
 /// Whether `expr` reads a sequence: a sequence parameter, an element, an
 /// index into either, or a local derived from them. `place` (the state itself)
 /// and `owner` (the element the state belongs to) are not sequence reads.
