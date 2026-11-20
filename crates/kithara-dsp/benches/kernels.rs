@@ -307,7 +307,6 @@ fn vector(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "routes")]
 fn routed_ramp(c: &mut Criterion) {
     let mut group = c.benchmark_group("ramp");
     for frames in [128, 512] {
@@ -321,7 +320,6 @@ fn routed_ramp(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "routes")]
 fn routed_div(c: &mut Criterion) {
     let mut group = c.benchmark_group("div");
     for frames in [128, 512] {
@@ -339,7 +337,6 @@ fn routed_div(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "routes")]
 fn routed_mul_add(c: &mut Criterion) {
     let mut group = c.benchmark_group("mul_add");
     for frames in [128, 512] {
@@ -356,17 +353,6 @@ fn routed_mul_add(c: &mut Criterion) {
         }
     }
     group.finish();
-}
-
-fn routed(c: &mut Criterion) {
-    #[cfg(feature = "routes")]
-    {
-        routed_ramp(c);
-        routed_div(c);
-        routed_mul_add(c);
-    }
-    #[cfg(not(feature = "routes"))]
-    let _ = c;
 }
 
 fn downmix(c: &mut Criterion) {
@@ -779,7 +765,9 @@ criterion_group!(
     crossfade,
     kernels,
     vector,
-    routed,
+    routed_ramp,
+    routed_div,
+    routed_mul_add,
     downmix,
     biquad,
     support::crossover_biquad::bench,

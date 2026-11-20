@@ -72,6 +72,27 @@ pub(crate) fn step_pair<S: Simd>(
     quiet
 }
 
+/// One scalar-`f64` TPT step: the next state and the `response` output, in the
+/// same operation order as [`step`].
+#[inline(always)]
+pub(super) fn step_scalar(
+    x: f64,
+    [s1, s2]: [f64; 2],
+    [a1, a2, a3]: [f64; 3],
+    damping: f64,
+    response: Response,
+) -> ([f64; 2], f64) {
+    let v3 = x - s2;
+    let v1 = a1 * s1 + a2 * v3;
+    let v2 = s2 + a2 * s1 + a3 * v3;
+    let output = match response {
+        Response::LowPass => v2,
+        Response::HighPass => x - damping * v1 - v2,
+        Response::AllPass => x - 2.0 * damping * v1,
+    };
+    ([2.0 * v1 - s1, 2.0 * v2 - s2], output)
+}
+
 /// Scalar-`f64` channel-pair step, bit-exact with [`step_pair`]. This is the
 /// form the route selects on Apple Silicon.
 #[inline(always)]
@@ -85,28 +106,23 @@ pub(crate) fn step_pair_scalar<S: Simd>(
     response: Response,
 ) -> bool {
     let _ = simd;
-    let [a1, a2, a3] = coefficients;
     let mut quiet = true;
     for (sample, (s1, s2)) in samples
         .iter_mut()
         .zip(state1.iter_mut().zip(state2.iter_mut()))
     {
         let input = sample.as_deref().copied().unwrap_or(0.0);
-        let x = f64::from(input);
-        let (m1, m2) = (*s1, *s2);
-        let v3 = x - m2;
-        let v1 = a1 * m1 + a2 * v3;
-        let v2 = m2 + a2 * m1 + a3 * v3;
-        *s1 = 2.0 * v1 - m1;
-        *s2 = 2.0 * v2 - m2;
+        let ([next1, next2], output) = step_scalar(
+            f64::from(input),
+            [*s1, *s2],
+            coefficients,
+            damping,
+            response,
+        );
+        *s1 = next1;
+        *s2 = next2;
         if let Some(sample) = sample.as_deref_mut() {
-            let output = match response {
-                Response::LowPass => v2,
-                Response::HighPass => x - damping * v1 - v2,
-                Response::AllPass => x - 2.0 * damping * v1,
-            }
-            .to_f32()
-            .unwrap_or(f32::NAN);
+            let output = output.to_f32().unwrap_or(f32::NAN);
             quiet &= input.abs() <= SILENT_PEAK && output.abs() <= SILENT_PEAK;
             *sample = output;
         }

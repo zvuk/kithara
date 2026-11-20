@@ -704,16 +704,7 @@ pub(crate) fn bench(c: &mut Criterion) {
                         BatchSize::SmallInput,
                     );
                 });
-                #[cfg(feature = "routes")]
-                let execution_forms = kithara_dsp::routes::crossover::forms::<2, Vec<f32>>();
-                #[cfg(not(feature = "routes"))]
-                let execution_forms = [(
-                    "entry",
-                    |filter: &mut Crossover<2>,
-                     input: &[&[f32]; 2],
-                     bands: &mut [[Vec<f32>; 2]]| filter.split(input, bands),
-                )];
-                for (name, kernel) in execution_forms {
+                for (name, kernel) in kithara_dsp::routes::crossover::forms::<2, Vec<f32>>() {
                     let mut svf = Svf::new(&frequencies, frames);
                     group.bench_function(
                         BenchmarkId::new(format!("{name}_{variant}"), frames),

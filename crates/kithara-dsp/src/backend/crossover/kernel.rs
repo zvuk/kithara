@@ -74,24 +74,20 @@ impl<const CHANNELS: usize> Section<CHANNELS> {
     }
 
     #[inline(always)]
-    fn run_scalar(&mut self, channel: usize, input: f32, response: Response) -> f32 {
-        let [a1, a2, a3] = self.coefficients;
+    fn run_scalar(&mut self, channel: usize, input: f32) -> f32 {
         let [memory1, memory2] = &mut self.state;
         let memory1 = memory1.get_mut(channel).expect("validated scalar channel");
         let memory2 = memory2.get_mut(channel).expect("validated scalar channel");
-        let [s1, s2] = [*memory1, *memory2];
-        let x = f64::from(input);
-        let v3 = x - s2;
-        let v1 = a1 * s1 + a2 * v3;
-        let v2 = s2 + a2 * s1 + a3 * v3;
-        *memory1 = 2.0 * v1 - s1;
-        *memory2 = 2.0 * v2 - s2;
-        let output: f32 = match response {
-            Response::LowPass => v2,
-            Response::HighPass => x - consts::CROSSOVER_DAMPING * v1 - v2,
-            Response::AllPass => x - 2.0 * consts::CROSSOVER_DAMPING * v1,
-        }
-        .as_();
+        let ([next1, next2], output) = svf::step_scalar(
+            f64::from(input),
+            [*memory1, *memory2],
+            self.coefficients,
+            consts::CROSSOVER_DAMPING,
+            self.response,
+        );
+        *memory1 = next1;
+        *memory2 = next2;
+        let output: f32 = output.as_();
         let quiet = self
             .quiet
             .get_mut(channel)
@@ -197,13 +193,13 @@ pub(crate) fn process_scalar<
             for (split, band) in splits.iter_mut().zip(lower) {
                 let mut low = high;
                 for section in &mut split.lowpass {
-                    low = section.run_scalar(channel, low, Response::LowPass);
+                    low = section.run_scalar(channel, low);
                 }
                 for section in &mut split.highpass {
-                    high = section.run_scalar(channel, high, Response::HighPass);
+                    high = section.run_scalar(channel, high);
                 }
                 for section in &mut split.allpass {
-                    low = section.run_scalar(channel, low, Response::AllPass);
+                    low = section.run_scalar(channel, low);
                 }
                 *band
                     .get_mut(channel)
