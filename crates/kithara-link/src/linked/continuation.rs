@@ -1,64 +1,43 @@
 use kithara_command::Seq;
 use kithara_play::{Outbox, PlayError, Position, Settled, Track, TrackStatus};
-use kithara_render::{LaneFrame, bridge::SlotMark};
-use kithara_signal::{FrameCount, SessionFrame};
-use kithara_sync::{Slew, SlewCause, slew};
+use kithara_render::bridge::SlotMark;
+use kithara_signal::SessionFrame;
+use kithara_sync::SpeedCurve;
 
 use super::{
     Linked, LinkedPlayer,
-    state::{Cause, ContinuationAdmission, RunningCorrection, SourceContinuation},
+    state::{Cause, ContinuationAdmission, SourceContinuation},
 };
 use crate::covers;
 
 impl<P: Track> Linked<P> {
+    /// Cues the incoming source with the outgoing track's accepted speed law,
+    /// so both sources move alike through the entry window.
     pub(super) fn prepare_synced_continuation(
         &mut self,
         at: SessionFrame,
         position: Position,
-        speed: f64,
+        law: SpeedCurve,
         out: &mut Outbox<'_>,
     ) -> Result<bool, PlayError> {
         if !self
             .inner
-            .prepare_source_continuation(at, position, speed, out)?
+            .prepare_source_continuation(at, position, law.clone(), out)?
         {
             return Ok(false);
         }
         if let Some(entry) = &self.continuation {
             return Ok(matches!(entry.admission, ContinuationAdmission::Preparing));
         }
-        let Some(grid) = self
+        if !self
             .grid
             .as_ref()
-            .filter(|grid| covers(grid.geometry(), position))
-        else {
+            .is_some_and(|grid| covers(grid.geometry(), position))
+        {
             return Ok(false);
-        };
-        let source = self.source(grid)?;
-        let Some(Slew::Corrects {
-            curve,
-            frames,
-            coverage,
-        }) = slew(
-            &self.host,
-            &source,
-            position,
-            at,
-            self.config.epsilon(),
-            SlewCause::Drift { from: speed },
-            self.horizon(),
-        )
-        else {
-            return Err(PlayError::NotReady);
-        };
-        let frames = usize::try_from(frames)
-            .map(FrameCount::new)
-            .map_err(|error| PlayError::Internal(error.to_string()))?;
-        if let Some(cue) = self.inner.cue(position, curve, out)? {
+        }
+        if self.inner.cue(position, law, out)?.is_some() {
             self.continuation = Some(SourceContinuation {
-                cue,
-                frames,
-                coverage,
                 admission: ContinuationAdmission::Preparing,
             });
             self.cue = None;
@@ -105,21 +84,6 @@ impl<P: Track> Linked<P> {
         {
             return;
         }
-        let Some(origin) = mark.session_at(LaneFrame {
-            frame: 0,
-            ..mark.lane
-        }) else {
-            return;
-        };
-        self.correction = Some((
-            entry.cue,
-            RunningCorrection {
-                at: origin,
-                frames: entry.frames,
-                segment: mark.lane.segment,
-            },
-        ));
-        self.plan_sent(origin, entry.coverage);
         self.alignment = Some(Cause::Drift);
     }
 }

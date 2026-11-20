@@ -549,6 +549,10 @@ impl Track for ScriptedTrack {
         Ok((track.position + elapsed, f64::from(track.speed)))
     }
 
+    fn planned_law(&self, _at: SessionFrame) -> Result<SpeedCurve, PlayError> {
+        Ok(SpeedCurve::Constant(self.snapshot().speed))
+    }
+
     fn planned_end(&self, _rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError> {
         Ok(None)
     }

@@ -525,7 +525,7 @@ impl<P: Track> Track for Linked<P> {
         &mut self,
         at: SessionFrame,
         position: Position,
-        speed: f64,
+        speed: kithara_sync::SpeedCurve,
         out: &mut Outbox<'_>,
     ) -> Result<bool, PlayError> {
         if self.synced() {
@@ -613,6 +613,7 @@ impl<P: Track> Track for Linked<P> {
                 at: SessionFrame,
                 sample_rate: std::num::NonZeroU32,
             ) -> Result<(Position, f64), PlayError>;
+            fn planned_law(&self, at: SessionFrame) -> Result<kithara_sync::SpeedCurve, PlayError>;
             fn planned_end(
                 &self,
                 sample_rate: std::num::NonZeroU32,

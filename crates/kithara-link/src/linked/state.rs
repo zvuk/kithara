@@ -192,9 +192,6 @@ pub struct Linked<P> {
 }
 
 pub(super) struct SourceContinuation {
-    pub(super) cue: Seq,
-    pub(super) frames: FrameCount,
-    pub(super) coverage: Coverage,
     pub(super) admission: ContinuationAdmission,
 }
 

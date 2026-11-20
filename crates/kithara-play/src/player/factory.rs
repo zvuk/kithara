@@ -57,7 +57,7 @@ pub trait Track: Player<Command = TrackCommand, Snapshot: AsRef<TrackSnapshot>> 
         &mut self,
         at: SessionFrame,
         _position: Position,
-        _speed: f64,
+        _speed: SpeedCurve,
         out: &mut super::Outbox<'_>,
     ) -> Result<bool, PlayError> {
         self.prepare_entry(at, out)
@@ -72,6 +72,14 @@ pub trait Track: Player<Command = TrackCommand, Snapshot: AsRef<TrackSnapshot>> 
         at: SessionFrame,
         sample_rate: NonZeroU32,
     ) -> Result<(Position, f64), PlayError>;
+
+    /// Projects the accepted speed law from the output frame on, in output
+    /// frames after it, through every speed command still ahead.
+    ///
+    /// # Errors
+    /// Returns when no uninterrupted slot mark is known or the law cannot be
+    /// restated on another source.
+    fn planned_law(&self, at: SessionFrame) -> Result<SpeedCurve, PlayError>;
 
     /// Projects the first media end through accepted speed and jump history.
     ///

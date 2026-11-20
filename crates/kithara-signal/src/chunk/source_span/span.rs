@@ -123,7 +123,9 @@ impl SourceSpan {
     /// Maps an original exponential source basis over a nonempty output span.
     ///
     /// Rates are source frames per output frame; elapsed and the time constant
-    /// are output frames. The rational origin is at curve elapsed zero.
+    /// are output frames. The rational origin is at the approach's own elapsed
+    /// zero; a resumed approach reaches it already inside its course, so its
+    /// advance counts from there.
     /// Unrepresentable coordinates or an overflowing range return `None`.
     #[must_use]
     pub fn approaching(
@@ -137,11 +139,24 @@ impl SourceSpan {
         if output_frames == 0 {
             return None;
         }
-        let mapping = Mapping::Approach(Approach {
-            curve,
-            elapsed,
+        let phase = curve.phase();
+        let course = Approach {
+            curve: curve.course(),
+            elapsed: 0,
             origin: Ratio::new(origin_numerator, origin_denominator)?,
             affine: Affine::identity()?,
+        };
+        let mapping = Mapping::Approach(if phase == 0 {
+            Approach { elapsed, ..course }
+        } else {
+            Approach {
+                elapsed: elapsed.checked_add(phase)?,
+                affine: Affine {
+                    offset: Offset::Subtract(course.advance_at(phase)?),
+                    ..course.affine
+                },
+                ..course
+            }
         });
         mapping.validate(output_frames)?;
         Some(Self {
@@ -1044,6 +1059,55 @@ mod tests {
             assert_eq!(normalized.source_ratio_at(0), empty.source_ratio_at(0));
             assert_eq!(normalized.for_output_range(0..0), Some(normalized));
             assert_eq!(empty.for_output_range(0..1), None);
+        }
+    }
+
+    #[kithara::test]
+    #[case::inside_the_source(30_001, 3)]
+    #[case::at_a_fresh_segment(0, 1)]
+    fn a_resumed_approach_continues_its_course_frame_for_frame(
+        #[case] numerator: u128,
+        #[case] denominator: u128,
+    ) {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let origin = Ratio::new(
+            numerator,
+            NonZeroU128::new(denominator).expect("denominator"),
+        )
+        .expect("origin");
+        let curve = ExponentialApproach::new(1.0, 1.0333333333333334, 240.0).expect("curve");
+        let (entered, tail) = (383, 512);
+        let course = SourceSpan::approaching(
+            origin.numerator,
+            origin.denominator,
+            curve,
+            0,
+            rate,
+            entered + tail,
+        )
+        .expect("whole course");
+        let resumed = SourceSpan::approaching(
+            origin.numerator,
+            origin.denominator,
+            curve.resumed(entered).expect("resumed course"),
+            0,
+            rate,
+            tail,
+        )
+        .expect("a resumed course starts at any origin");
+        let words: [u64; 24] = resumed.into();
+        assert_eq!(SourceSpan::try_from(words), Ok(resumed));
+        let at = |span: SourceSpan, frame| {
+            let (numerator, denominator) = span.source_ratio_at(frame).expect("source ratio");
+            Ratio::new(numerator, denominator).expect("ratio")
+        };
+        let lead = at(course, entered).sub(origin).expect("course lead");
+        for frame in 0..=tail {
+            assert_eq!(
+                at(resumed, frame).add(lead),
+                Some(at(course, entered + frame)),
+                "frame {frame}"
+            );
         }
     }
 }

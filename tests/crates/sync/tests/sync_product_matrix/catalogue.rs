@@ -16,7 +16,9 @@ use super::{
 };
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
-async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase() {
+#[case::constant_sync(None)]
+#[case::during_a_tempo_ramp(Some(124.0))]
+async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase(#[case] tempo: Option<f64>) {
     let case = ONE_DECK;
     let second = usize::try_from(case.sample_rate).expect("fixture sample rate");
     let sources = prepared_sources(Provider::HlsSame(HlsProtection::Plain)).await;
@@ -65,6 +67,9 @@ async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase() {
             assert!(held.source_changing);
             assert!(control.position_seconds().expect("outgoing audio advances") > requested);
             gate.release_body();
+        }
+        if let Some(bpm) = tempo {
+            rig.set_tempo(case, bpm, true).await;
         }
         let ArtifactSource::Value(model) = rig.provider_grid(0) else {
             panic!("authored beat grid");
@@ -135,6 +140,14 @@ async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase() {
         drop(rig);
         captures.push(pcm);
     }
+    let frames = (positions[1] - positions[0]).abs() * f64::from(case.sample_rate);
+    if tempo.is_some() {
+        assert!(
+            frames <= 1.0,
+            "playheads={positions:?}, difference={frames} frames"
+        );
+        return;
+    }
     let stems: Vec<_> = captures.iter().map(Vec::as_slice).collect();
     let failures = synchronization_failures(
         "fixed HLS versus catalogue source continuation",
@@ -143,7 +156,6 @@ async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase() {
         case.sample_rate,
         START_BPM,
     );
-    let frames = (positions[1] - positions[0]).abs() * f64::from(case.sample_rate);
     assert!(
         failures.is_empty() && frames <= 1.0,
         "PCM: {failures:?}, playheads={positions:?}, difference={frames} frames"

@@ -182,8 +182,8 @@ fn a_source_continuation_keeps_its_cue_and_rebinds_at_the_native_cut(#[case] app
         LaneFrame,
         bridge::{DeckPart, Returned, Slot, SlotMark},
     };
-    use kithara_signal::SegmentId;
-    use kithara_sync::{Slew, SlewCause, slew};
+    use kithara_signal::{ExponentialApproach, SegmentId};
+    use kithara_sync::SpeedCurve;
 
     let model = grid(24_000, 0, None, 480_000);
     let (mut deck, control, mut rig, _) = super::fixtures::loaded(model.clone());
@@ -197,20 +197,18 @@ fn a_source_continuation_keeps_its_cue_and_rebinds_at_the_native_cut(#[case] app
     let requested = SessionFrame::new(24_000);
     let position = position(6_000);
     let host = trajectory(120.0, 4);
-    let source = source_grid(&model);
-    let Some(Slew::Corrects { curve, frames, .. }) = slew(
-        &host,
-        &source,
-        position,
-        requested,
-        crate::LinkConfig::default().epsilon(),
-        SlewCause::Drift { from: 1.0 },
-        horizon(),
-    ) else {
-        panic!("fixture needs a correction");
-    };
+    let law = SpeedCurve::ApproachSteps(
+        vec![
+            (0, ExponentialApproach::new(1.0, 1.0, 0.0).expect("level")),
+            (
+                255,
+                ExponentialApproach::new(1.0, 1.04, 240.0).expect("approach"),
+            ),
+        ]
+        .into(),
+    );
     assert!(
-        !rig.run(|out| deck.prepare_source_continuation(requested, position, 1.0, out))
+        !rig.run(|out| deck.prepare_source_continuation(requested, position, law.clone(), out))
             .expect("prepare")
     );
     let commands = control.commands();
@@ -218,13 +216,13 @@ fn a_source_continuation_keeps_its_cue_and_rebinds_at_the_native_cut(#[case] app
     assert_eq!(
         commands,
         [
-            (prepared, Command::Speed(curve, When::Next)),
+            (prepared, Command::Speed(law.clone(), When::Next)),
             (prepared, Command::Seek(position)),
         ]
     );
     rig.apply(&mut deck, prepared, 0);
     assert!(
-        rig.run(|out| deck.prepare_source_continuation(requested, position, 1.0, out))
+        rig.run(|out| deck.prepare_source_continuation(requested, position, law.clone(), out))
             .expect("ready")
     );
 
@@ -279,12 +277,7 @@ fn a_source_continuation_keeps_its_cue_and_rebinds_at_the_native_cut(#[case] app
             &mut deck, submitted, &Outcome::Applied { at: actual, data: () },
             vec![DeckPart::Returned(Returned::SourceContinued { to: slot, mark, media_origin })],
         ), Settled::Applied { at, .. } if at == actual));
-        assert_eq!(
-            deck.snapshot().sync,
-            SyncStatus::Correcting {
-                remaining: FrameCount::new(usize::try_from(frames - trimmed).expect("remaining")),
-            }
-        );
+        assert_eq!(deck.snapshot().sync, SyncStatus::On);
     } else {
         assert!(matches!(
             rig.settle_parts(

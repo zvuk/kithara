@@ -156,6 +156,10 @@ impl Track for SnapshotTrack {
         panic!("terminal-event fixture does not project a render lane")
     }
 
+    fn planned_law(&self, _at: SessionFrame) -> Result<kithara_sync::SpeedCurve, PlayError> {
+        panic!("terminal-event fixture does not project a render lane")
+    }
+
     fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError> {
         let Some(duration) = self.0.duration else {
             return Ok(None);

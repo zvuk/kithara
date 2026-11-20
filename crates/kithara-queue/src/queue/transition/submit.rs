@@ -99,7 +99,8 @@ where
             && let Some(current) = self.current_track().filter(|track| track.follows_host())
         {
             let rate = NonZeroU32::new(self.deck.mixer.sample_rate).ok_or(PlayError::Untimed)?;
-            Some(current.planned(frame, rate)?)
+            let (position, _) = current.planned(frame, rate)?;
+            Some((position, current.planned_law(frame)?))
         } else {
             None
         };
@@ -109,9 +110,7 @@ where
             .ok_or(PlayError::NoActiveSlot)?
             .track;
         match anchor {
-            Some((position, speed)) => {
-                track.prepare_source_continuation(frame, position, speed, out)
-            }
+            Some((position, law)) => track.prepare_source_continuation(frame, position, law, out),
             None => track.prepare_entry(frame, out),
         }
     }
