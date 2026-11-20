@@ -1123,3 +1123,93 @@ fn should_arm_crossfade_cases(
         assert_eq!(queue.target.expect("same transition").bound, sent);
     }
 }
+
+#[kithara::test]
+#[case::failed(Some(decode_fault()))]
+#[case::unready(None)]
+fn only_a_failed_private_receiver_ends_its_source_change(#[case] fault: Option<PlaybackFault>) {
+    let (mut queue, _, current) = selected_second();
+    let accepted = queue.control().current().expect("current").url;
+    queue
+        .tracks
+        .stage_source(
+            current,
+            TrackSource::from("https://example.com/alternate.mp3"),
+            kithara_play::Position::ZERO,
+        )
+        .expect("staged source");
+    let slot = Slot::new(2);
+    let mut track = queue
+        .config
+        .factory
+        .track(PlayerConfig {
+            item: current,
+            slot: Some(slot),
+            settings: TrackSettings::default(),
+        })
+        .expect("snapshot track");
+    track.0.status = fault.map_or(PlayerTrackStatus::Loading, |fault| {
+        PlayerTrackStatus::Failed {
+            at: SessionFrame::new(7),
+            fault,
+        }
+    });
+    queue.active.push(Active {
+        item: current,
+        slot,
+        track,
+        role: Role::Incoming,
+        load: None,
+    });
+    queue.target = Some(super::super::super::types::Target {
+        to: current,
+        bound: None,
+        settings: CrossfadeSettings::default(),
+        transition: Transition::None,
+        reason: crate::AdvanceReason::UserSelect,
+        playing: true,
+        auto: false,
+        stale: None,
+        continued: None,
+        repeat: None,
+        chained: false,
+    });
+    queue.clock = Some((SessionFrame::new(64), FrameCount::new(128)));
+    let mut events = queue.subscribe::<QueueEvent>();
+    let (mut deck, _deck_inbox) = channel(ChannelConfig::builder().build());
+    let (mut dispatcher, _dispatcher_inbox) = channel(ChannelConfig::builder().build());
+    queue
+        .transition_loaded(&mut Outbox::new(&mut deck, &mut dispatcher))
+        .expect("readiness pass");
+    queue.publish();
+
+    let failed = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event.event {
+            QueueEvent::TrackLoadFailed {
+                id,
+                reason,
+                auto_skipped: false,
+            } if id == current => Some(reason),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let after = queue.control().current().expect("current");
+    assert_eq!(
+        (
+            queue.target.is_some(),
+            queue.tracks.is_changing_source(current),
+            after.source_failed,
+            failed,
+        ),
+        (
+            fault.is_none(),
+            fault.is_none(),
+            fault.is_some(),
+            fault.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        ),
+        "only a terminal receiver ends the change"
+    );
+    if fault.is_some() {
+        assert_eq!((after.id, after.url), (current, accepted));
+    }
+}

@@ -400,9 +400,16 @@ where
         let Some(active) = self.active.get(index) else {
             return Ok(false);
         };
-        if !matches!(active.role, Role::Incoming)
-            || (matches!(active.load, Some(LoadState::Opening(_)))
-                && !self.active.is_replacement(index))
+        if !matches!(active.role, Role::Incoming) {
+            return Ok(false);
+        }
+        if let PlayingStatus::Failed { fault, .. } = active.track.snapshot().as_ref().status
+            && self.tracks.is_changing_source(active.item)
+        {
+            self.fail_source_change(active.item, fault.to_string(), out)?;
+            return Ok(false);
+        }
+        if matches!(active.load, Some(LoadState::Opening(_))) && !self.active.is_replacement(index)
         {
             return Ok(false);
         }
@@ -593,14 +600,7 @@ where
             && let Settled::Rejected { reason, .. } = settled
         {
             let error = QueueError::Play(super::super::hosted::refusal(reason));
-            self.cancel_target(out).map_err(play_error)?;
-            self.tracks.fail_source(id);
-            self.announce(QueueEvent::TrackLoadFailed {
-                id,
-                reason: error.to_string(),
-                auto_skipped: false,
-            });
-            return Ok(());
+            return self.fail_source_change(id, error.to_string(), out);
         }
         let preloaded = active.role == Role::Preloaded;
         let leaving = active.role == Role::Leaving;
@@ -643,6 +643,24 @@ where
         {
             self.target = None;
         }
+        Ok(())
+    }
+
+    /// Ends `id`'s source change on its receiver's terminal `reason`: the
+    /// staged receiver is released and the accepted source stays current.
+    fn fail_source_change(
+        &mut self,
+        id: TrackId,
+        reason: String,
+        out: &mut Outbox<'_>,
+    ) -> Result<(), PlayError> {
+        self.cancel_target(out).map_err(play_error)?;
+        self.tracks.fail_source(id);
+        self.announce(QueueEvent::TrackLoadFailed {
+            id,
+            reason,
+            auto_skipped: false,
+        });
         Ok(())
     }
 }
