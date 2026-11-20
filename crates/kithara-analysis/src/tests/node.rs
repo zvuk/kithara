@@ -200,6 +200,7 @@ fn enqueue(
         revision: 0,
         rate: super::fixtures::spec().sample_rate,
         resume: None,
+        report: None,
     })
     .expect("analysis node accepts the test job");
     results
@@ -254,6 +255,7 @@ fn pending_reader_yields_one_scheduler_tick(analysis_pcm: &'static [f32]) {
         )),
         cancel: CancelToken::root(),
         resume: None,
+        report: None,
     })
     .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(builder, receiver);
@@ -283,6 +285,7 @@ fn cancel_racing_finalize_publishes_partial_before_dropping_sender(analysis_pcm:
         )),
         cancel: cancel.clone(),
         resume: None,
+        report: None,
     })
     .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(builder, receiver);
@@ -313,6 +316,7 @@ fn offered(analysis_pcm: &'static [f32], ranges: &[(u64, usize)]) -> Option<Trac
         reader: Box::new(FakeReader::stalled(ranges.len() + 2)),
         cancel: CancelToken::root(),
         resume: None,
+        report: None,
     })
     .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(waveform_only(), receiver);
@@ -367,6 +371,7 @@ fn an_offer_reaches_only_the_pass_its_handle_names(analysis_pcm: &'static [f32])
             reader: Box::new(FakeReader::stalled(8)),
             cancel: CancelToken::root(),
             resume: None,
+            report: None,
         })
         .expect("analysis node accepts the test job");
         (
@@ -424,6 +429,7 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone(analysis_pcm: &'static [f3
         reader: Box::new(FakeReader::stalled(4)),
         cancel: CancelToken::root(),
         resume: None,
+        report: None,
     })
     .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(waveform_only(), receiver);
@@ -480,6 +486,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes(analysis_pcm: &'static [f32]) {
         reader: Box::new(FakeReader::stalled(STALLS)),
         cancel: CancelToken::root(),
         resume: None,
+        report: None,
     })
     .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(waveform_only(), receiver);
@@ -580,6 +587,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, R
         reader: Box::new(FakeReader::stalled(STALLS)),
         cancel: CancelToken::root(),
         resume: None,
+        report: None,
     })
     .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(waveform_only(), receiver);
@@ -690,6 +698,7 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union(analysis_pcm: &'stati
         reader: Box::new(FakeReader::stalled(STALLS)),
         cancel: CancelToken::root(),
         resume: None,
+        report: None,
     })
     .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(waveform_only(), receiver);
@@ -791,6 +800,7 @@ where
         ingest: super::fixtures::idle_ingest(),
         cancel: cancel.clone(),
         resume: None,
+        report: None,
     })
     .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(builder, receiver);
@@ -1238,7 +1248,7 @@ fn final_publication_waits_for_trailing_detection(analysis_pcm: &'static [f32]) 
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 #[kithara::test(native, flash(false))]
-fn cancel_during_trailing_detection_never_settles(analysis_pcm: &'static [f32]) {
+async fn cancel_during_trailing_detection_never_settles(analysis_pcm: &'static [f32]) {
     let (started, started_rx) = mpsc::channel();
     let (release, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
@@ -1255,17 +1265,26 @@ fn cancel_during_trailing_detection_never_settles(analysis_pcm: &'static [f32]) 
     let frames = usize::try_from(consts::FIXTURES_SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
     let cancel = CancelToken::root();
-    let mut results = enqueue(
-        &jobs,
-        "trailing-track",
-        Box::new(FakeReader::chunked(
+    let (tx, mut results) = watch::channel(None);
+    let (report, reported) = kithara_platform::tokio::sync::oneshot::channel();
+    let completion = crate::AnalysisCompletion::new(reported, results.clone(), cancel.clone());
+    jobs.send(Job {
+        tx,
+        token: "trailing-track".into(),
+        reader: Box::new(FakeReader::chunked(
             builder.pools(),
             sine(analysis_pcm, frames),
             1,
         )),
-        cancel.clone(),
-        super::fixtures::idle_ingest(),
-    );
+        cancel: cancel.clone(),
+        ingest: super::fixtures::idle_ingest(),
+        demand: AnalysisDemand::ALL,
+        revision: 0,
+        rate: super::fixtures::spec().sample_rate,
+        resume: None,
+        report: Some(report),
+    })
+    .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(builder, receiver);
 
     let _ = node.tick();
@@ -1304,6 +1323,12 @@ fn cancel_during_trailing_detection_never_settles(analysis_pcm: &'static [f32]) 
         "cancellation during trailing detection never settles the pass"
     );
     assert!(progress.is_resumable(), "the cancelled pass can resume");
+    let crate::AnalysisOutcome::Cancelled { last: Some(last) } = completion.outcome().await else {
+        panic!("trailing cancellation reports the resumable publication");
+    };
+    assert!(last.is_resumable());
+    assert!(!last.analysis().is_settled());
+    assert_eq!(last.analysis().revision(), progress.analysis().revision());
 }
 
 #[cfg(feature = "analysis-waveform")]
@@ -1500,6 +1525,7 @@ fn a_pass_with_no_detector_publishes_the_rest(analysis_pcm: &'static [f32]) {
         reader: Box::new(FakeReader::stalled(3)),
         cancel: CancelToken::root(),
         resume: None,
+        report: None,
     })
     .expect("analysis node accepts the test job");
     let mut node = NodeHarness::new(waveform_only().with_beat(), receiver);

@@ -70,6 +70,7 @@ fn a_real_track_reaches_its_end_whole(probe_pcm: Option<Vec<f32>>) {
         reader: Box::new(track),
         cancel: CancelToken::root(),
         resume: None,
+        report: None,
         demand: AnalysisDemand::ALL,
     })
     .expect("node accepts the job");
