@@ -1,24 +1,44 @@
-use std::path::Path;
+//! Browser capabilities for the `WebDriver` session, from `webdriver.json`.
 
-// Limit network traces to the four known stall fixtures: the worklet-import pair and both lib-test binaries.
-pub(crate) fn perf_logging_target(args: &[String]) -> bool {
-    args.iter().any(|arg| {
-        let name = Path::new(arg)
-            .file_name()
-            .map(|name| name.to_string_lossy());
-        matches!(
-            name.as_deref(),
-            Some(name)
-                if (name.starts_with("web_bootstrap-")
-                    || name.starts_with("web_analysis-")
-                    || name.starts_with("kithara_ffi-")
-                    || name.starts_with("kithara_host-"))
-                    && name.ends_with(".wasm")
-        )
-    })
+use std::{fs, path::Path};
+
+use anyhow::{Context, Result, anyhow};
+use serde_json::{Map, Value};
+
+use crate::driver::Browser;
+
+/// `webdriver.json` with Chrome's network and page tracing added for the binaries
+/// whose startup stalls are being traced.
+pub(crate) fn load(browser: Browser, wasm: &Path) -> Result<Map<String, Value>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("webdriver.json");
+    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let mut config: Value =
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    if browser == Browser::Chrome && perf_logging_target(wasm) {
+        apply_perf_logging(&mut config).map_err(|error| anyhow!(error))?;
+        eprintln!("webdriver config: fixture network perf logging requested");
+    }
+    match config {
+        Value::Object(map) => Ok(map),
+        _ => Err(anyhow!("{} is not a JSON object", path.display())),
+    }
 }
 
-pub(crate) fn apply_perf_logging(config: &mut serde_json::Value) -> Result<(), String> {
+// Limit network traces to the four known stall fixtures: the worklet-import pair and both lib-test binaries.
+fn perf_logging_target(wasm: &Path) -> bool {
+    let name = wasm.file_name().map(|name| name.to_string_lossy());
+    matches!(
+        name.as_deref(),
+        Some(name)
+            if (name.starts_with("web_bootstrap-")
+                || name.starts_with("web_analysis-")
+                || name.starts_with("kithara_ffi-")
+                || name.starts_with("kithara_host-"))
+                && name.ends_with(".wasm")
+    )
+}
+
+fn apply_perf_logging(config: &mut Value) -> Result<(), String> {
     let root = config
         .as_object_mut()
         .ok_or_else(|| "webdriver.json is not a JSON object".to_string())?;
@@ -48,8 +68,10 @@ pub(crate) fn apply_perf_logging(config: &mut serde_json::Value) -> Result<(), S
     Ok(())
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use kithara_test_utils::kithara;
     use serde_json::json;
 
@@ -76,10 +98,10 @@ mod tests {
             "/cache/deps/kithara_ffi-ec784db4d0559dc9.wasm",
             "/cache/deps/kithara_host-260fbe53033cc5d3.wasm",
         ] {
-            assert!(perf_logging_target(&[binary.to_string()]));
+            assert!(perf_logging_target(Path::new(binary)));
         }
         let other = "/cache/deps/web_observer-fc399469e0e06114.wasm";
-        assert!(!perf_logging_target(&[other.to_string()]));
+        assert!(!perf_logging_target(Path::new(other)));
     }
 
     #[kithara::test(native, flash(false))]
