@@ -2910,7 +2910,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ] } },
+  ] }, env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
   { args = [
     "test",
     "test-utils",
@@ -2951,7 +2951,7 @@ steps = [
     "--flash=off",
     "--profile",
     "ci",
-  ], label = "Apple flash-off gate" },
+  ], label = "Apple flash-off gate", env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]

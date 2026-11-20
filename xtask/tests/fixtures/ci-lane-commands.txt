@@ -526,6 +526,7 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test test-utils
 # apple-test / branch
   <require os> macos
@@ -533,6 +534,7 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --draft --selection-output=.ci-artifacts/junit/apple-test.selection.json --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test test-utils
 # apple-test / platforms
   <require os> macos
@@ -540,6 +542,7 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test test-utils
 # apple-test / merge-request
   <require os> macos
@@ -547,6 +550,7 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test test-utils
 # apple-test / quarantine
   <require os> macos
@@ -554,6 +558,7 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test test-utils
 # apple-test / main
   <require os> macos
@@ -561,6 +566,7 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test test-utils
 # apple-test / nightly
   <require os> macos
@@ -568,6 +574,7 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test test-utils
 # apple-test / weekly
   refused: weekly pipelines do not run the Apple suite
@@ -577,6 +584,7 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test test-utils
 # apple-test-flash-off / bench
   <require os> macos
@@ -584,54 +592,63 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --draft --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / platforms
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / merge-request
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / quarantine
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / main
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / nightly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / weekly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / release
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-xcframework / bench
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
