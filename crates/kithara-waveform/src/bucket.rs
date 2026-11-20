@@ -82,8 +82,8 @@ impl Waveform {
     /// Takes normalized buckets folded within the format limit by this crate's analyzer.
     pub(crate) fn analysed(buckets: Vec<Bucket>, span_frames: NonZeroU64) -> Self {
         Self {
-            buckets: Arc::from(buckets),
             span_frames,
+            buckets: Arc::from(buckets),
         }
     }
 
@@ -116,7 +116,7 @@ impl Waveform {
     ///
     /// # Errors
     /// Returns [`WaveformError`] for too many buckets or a band outside `[0, 1]`.
-    pub fn new(buckets: Vec<Bucket>, span_frames: NonZeroU64) -> Result<Self, WaveformError> {
+    pub fn try_new(buckets: Vec<Bucket>, span_frames: NonZeroU64) -> Result<Self, WaveformError> {
         if buckets.len() > MAX_BUCKETS {
             return Err(WaveformError::TooLarge {
                 buckets: buckets.len(),
@@ -170,7 +170,7 @@ impl Blob for Waveform {
                 heights[Band::High.idx()],
             ));
         }
-        Self::new(buckets, span_frames).map_err(|_| BlobError::Corrupt)
+        Self::try_new(buckets, span_frames).map_err(|_| BlobError::Corrupt)
     }
 
     fn encode(&self, w: &mut Writer<'_>) {
@@ -198,7 +198,7 @@ mod value_tests {
     fn a_band_outside_the_painted_range_is_refused(#[case] height: f32) {
         let buckets = vec![Bucket::new(0.5, 0.5, 0.5), Bucket::new(0.0, height, 0.0)];
         let refused =
-            Waveform::new(buckets, NonZeroU64::MIN).expect_err("the band is out of range");
+            Waveform::try_new(buckets, NonZeroU64::MIN).expect_err("the band is out of range");
         match refused {
             WaveformError::Band { index, value } => {
                 assert_eq!(index, 1);
@@ -213,7 +213,7 @@ mod value_tests {
     fn more_buckets_than_the_format_holds_are_refused() {
         let buckets = vec![Bucket::default(); MAX_BUCKETS + 1];
         assert_eq!(
-            Waveform::new(buckets, NonZeroU64::MIN).expect_err("the waveform is too long"),
+            Waveform::try_new(buckets, NonZeroU64::MIN).expect_err("the waveform is too long"),
             WaveformError::TooLarge {
                 buckets: MAX_BUCKETS + 1
             }
@@ -223,8 +223,8 @@ mod value_tests {
     #[kithara::test]
     fn buckets_inside_the_range_are_kept_in_order() {
         let buckets = vec![Bucket::new(0.0, 0.5, 1.0), Bucket::new(1.0, 0.0, 0.25)];
-        let wave =
-            Waveform::new(buckets.clone(), NonZeroU64::MIN).expect("every band is inside [0, 1]");
+        let wave = Waveform::try_new(buckets.clone(), NonZeroU64::MIN)
+            .expect("every band is inside [0, 1]");
         assert_eq!(wave.buckets(), buckets.as_slice());
     }
 }
@@ -237,7 +237,7 @@ mod bytes_tests {
     use super::{Bucket, NonZeroU64, WAVEFORM_BYTES_VERSION, Waveform};
 
     fn sample() -> Waveform {
-        Waveform::new(
+        Waveform::try_new(
             vec![Bucket::new(0.1, 0.2, 0.3), Bucket::new(0.0, 1.0, 0.5)],
             NonZeroU64::new(2048).unwrap(),
         )
@@ -256,7 +256,7 @@ mod bytes_tests {
     #[kithara::test]
     fn a_span_larger_than_u32_round_trips_as_u64() {
         let span = NonZeroU64::new(u64::from(u32::MAX) * 1024).unwrap();
-        let wave = Waveform::new(vec![Bucket::new(0.5, 1.0, 0.0)], span).unwrap();
+        let wave = Waveform::try_new(vec![Bucket::new(0.5, 1.0, 0.0)], span).unwrap();
         let bytes = to_bytes(&wave);
         assert_eq!(&bytes[4..12], &span.get().to_le_bytes());
         let back = Waveform::try_from(bytes.as_slice()).unwrap();
@@ -267,7 +267,7 @@ mod bytes_tests {
     #[kithara::test]
     fn empty_round_trips() {
         let wave =
-            Waveform::new(Vec::new(), NonZeroU64::MIN).expect("no buckets is a valid waveform");
+            Waveform::try_new(Vec::new(), NonZeroU64::MIN).expect("no buckets is a valid waveform");
         let bytes = to_bytes(&wave);
         let back = Waveform::try_from(bytes.as_slice()).expect("empty blob round-trips");
         assert!(back.is_empty());
