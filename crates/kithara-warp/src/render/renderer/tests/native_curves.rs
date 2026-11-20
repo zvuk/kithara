@@ -850,7 +850,7 @@ fn commanded_slew_gestures_keep_physical_phase_pitch_and_level(
     let config = WarpConfig::builder()
         .backend(backend)
         .speed(initial)
-        .pitch(Pitch::HELD)
+        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
         .render_quantum_frames(NonZeroUsize::new(512).expect("prepared quantum"))
         .build();
     let high = 132.0;
