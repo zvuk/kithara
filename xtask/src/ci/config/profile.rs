@@ -102,7 +102,7 @@ mod tests {
         }
 
         let ext = crate::config::KitharaExt::load(&workspace_root()).unwrap();
-        for lane in ["apple-test", "apple-test-flash-off"] {
+        for lane in ["apple-test", "apple-test-flash-off", "apple-net-units"] {
             for step in &ext.ci.lanes[lane].steps {
                 assert!(
                     !step.env.contains_key("CARGO_TARGET_DIR"),
