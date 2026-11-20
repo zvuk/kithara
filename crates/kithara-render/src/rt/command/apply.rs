@@ -69,7 +69,11 @@ impl Deck {
                 segment,
             } => {
                 let track = self.source_track(slot, pcm, segment, item_id, seq, cut);
-                Some(self.replace_track(slot, track, context_valid, read_pcm))
+                Some(if cut.is_some_and(|cut| cut.continues_in(slot)) {
+                    self.continue_track(slot, track)
+                } else {
+                    self.replace_track(slot, track, context_valid, read_pcm)
+                })
             }
             DeckPart::Chain { from, to } => Some(self.chain_tracks(from, to)),
             DeckPart::ContinueSource { to, .. } => cut.map(|cut| {
@@ -262,15 +266,14 @@ impl Deck {
         DeckPart::Adopt { slot, segment }
     }
 
+    /// Seats `track` stopped, as an attachment does; only a start plays it.
     fn replace_track(
         &mut self,
         slot: Slot,
-        mut track: PlayerTrack,
+        track: PlayerTrack,
         context_valid: bool,
         read_pcm: ReadPcm,
     ) -> DeckPart {
-        track.start(Fade::Declick);
-        track.snap_gate();
         let Some(current) = self.tracks.at_mut(slot) else {
             return returned_pcm(slot, track);
         };
@@ -287,6 +290,17 @@ impl Deck {
             );
         }
         returned_pcm(slot, old)
+    }
+
+    /// A same-slot continuation hands the slot's envelope to the aligned
+    /// receiver, so the cut sounds one signal instead of an eviction tail
+    /// over it.
+    fn continue_track(&mut self, slot: Slot, mut track: PlayerTrack) -> DeckPart {
+        let Some(current) = self.tracks.at_mut(slot) else {
+            return returned_pcm(slot, track);
+        };
+        track.continue_slot(current);
+        returned_pcm(slot, std::mem::replace(current, track))
     }
 
     pub(in crate::rt) fn track(

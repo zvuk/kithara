@@ -584,12 +584,18 @@ fn removing_a_slot_while_its_tail_sounds_preserves_gain_continuity(#[case] repla
     send(
         &mut ends,
         at(BLOCK),
-        vec![DeckPart::Replace {
-            item_id: kithara_events::TrackId::allocate(),
-            slot: A,
-            pcm: pcm_samples(1.0, &vec![1.0; 8192], false),
-            segment: SegmentId::FIRST,
-        }],
+        vec![
+            DeckPart::Replace {
+                item_id: kithara_events::TrackId::allocate(),
+                slot: A,
+                pcm: pcm_samples(1.0, &vec![1.0; 8192], false),
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        ],
     );
     const CUT: usize = 100;
     send(

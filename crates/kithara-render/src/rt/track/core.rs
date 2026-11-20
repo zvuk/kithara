@@ -81,10 +81,21 @@ impl PlayerTrack {
         if self.state != SlotState::Playing || !matches!(self.stop, StopState::Idle) {
             return None;
         }
-        let mark = self.mark(at)?;
-        let info = self.resource.source_info()?;
-        let position = info.spec.elapsed_since(info.media_origin?, mark.position);
+        self.mark(at)?;
+        let origin = self.resource.source_info()?.media_origin?;
+        let position = self.resource.position()?.elapsed_at(0, origin)?;
         Some((self.item_id, position))
+    }
+
+    /// Takes over the logical slot `old` sounds: its envelope, gain program,
+    /// clock and transport carry over, leaving `old` with this track's fresh ones.
+    pub(in crate::rt) fn continue_slot(&mut self, old: &mut Self) {
+        std::mem::swap(&mut self.fade, &mut old.fade);
+        std::mem::swap(&mut self.gate, &mut old.gate);
+        std::mem::swap(&mut self.output, &mut old.output);
+        self.clock = old.clock;
+        self.state = old.state;
+        self.resource.set_playing(self.state == SlotState::Playing);
     }
 
     pub(in crate::rt) fn stages_item(&self, item: TrackId) -> bool {
@@ -236,7 +247,7 @@ impl PlayerTrack {
 
     /// Lane frames the track still drops before it plays: the dropout's
     /// unpaid frames under session time, none under media time.
-    pub(super) const fn owed(&self) -> u32 {
+    pub(in crate::rt) const fn owed(&self) -> u32 {
         match self.clock {
             TrackClock::Session => self.gap.saturating_sub(self.paid),
             TrackClock::Media => 0,

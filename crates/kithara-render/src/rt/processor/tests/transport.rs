@@ -461,16 +461,22 @@ async fn a_replace_plays_the_old_consumer_out_of_the_tail(
         &mut ends,
         at(REPLACE_AT),
         &[(A, None)],
-        vec![DeckPart::Replace {
-            item_id: if same_item {
-                old_item
-            } else {
-                kithara_events::TrackId::allocate()
+        vec![
+            DeckPart::Replace {
+                item_id: if same_item {
+                    old_item
+                } else {
+                    kithara_events::TrackId::allocate()
+                },
+                slot: A,
+                pcm: pcm(constant_half, 60.0),
+                segment: SegmentId::FIRST,
             },
-            slot: A,
-            pcm: pcm(constant_half, 60.0),
-            segment: SegmentId::FIRST,
-        }],
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        ],
     );
 
     let left = render(&mut mixer, BLOCK);
@@ -499,7 +505,7 @@ async fn a_replace_plays_the_old_consumer_out_of_the_tail(
         .expect("the replace is answered");
     assert_applied_at(outcome, REPLACE_AT);
     assert!(
-        matches!(parts.as_slice(), [DeckPart::Returned(Returned::Pcm { slot, pcm: old, .. })] if *slot == A && std::ptr::eq(old.as_ref(), old_ptr)),
+        matches!(parts.as_slice(), [DeckPart::Returned(Returned::Pcm { slot, pcm: old, .. }), DeckPart::Start { .. }] if *slot == A && std::ptr::eq(old.as_ref(), old_ptr)),
         "the old consumer comes back: {parts:?}"
     );
 }
@@ -1095,6 +1101,7 @@ enum ContinuationOutcome {
     Rate,
     Closed,
     Axis,
+    Owed,
 }
 
 #[kithara::test]
@@ -1108,6 +1115,7 @@ enum ContinuationOutcome {
 #[case::refuses_a_staged_receiver_closed_while_parked(false, ContinuationOutcome::Closed)]
 #[case::refuses_a_private_receiver_closed_while_parked(true, ContinuationOutcome::Closed)]
 #[case::refuses_an_axis_restart_while_parked(false, ContinuationOutcome::Axis)]
+#[case::waits_for_a_session_dropout_to_be_repaid(false, ContinuationOutcome::Owed)]
 fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
     #[case] replace: bool,
     #[case] expected: ContinuationOutcome,
@@ -1135,7 +1143,13 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
         );
         PcmPacket::Chunk(Box::new(packet))
     };
-    outgoing.push(packet(0, 500, 4096, 0.125, spec, 2));
+    let owed = matches!(expected, ContinuationOutcome::Owed);
+    let delivered = if owed {
+        u64::try_from(BLOCK).unwrap()
+    } else {
+        4096
+    };
+    outgoing.push(packet(0, 500, delivered, 0.125, spec, 2));
     let ahead = matches!(expected, ContinuationOutcome::Ahead);
     if ahead {
         incoming.push(packet(640, 2048, 128, 0.375, incoming_spec, 2));
@@ -1156,6 +1170,12 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
             fade: Fade::Declick,
         },
     ];
+    if owed {
+        initial.push(DeckPart::Clock {
+            slot: A,
+            clock: crate::bridge::TrackClock::Session,
+        });
+    }
     if !replace {
         initial.push(DeckPart::Attach {
             slot: B,
@@ -1206,7 +1226,8 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
     let transition = send_on(&mut ends, at(BLOCK), &basis, parts);
 
     let held = render_frames(&mut mixer, BLOCK, 128);
-    assert!(held.iter().all(|sample| (*sample - 0.125).abs() < 1e-6));
+    let missed = if owed { 0.0 } else { 0.125 };
+    assert!(held.iter().all(|sample| (*sample - missed).abs() < 1e-6));
     let premature = receipts(&mut ends);
     assert!(
         premature.is_empty(),
@@ -1261,6 +1282,42 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
         assert_eq!(mixer.track(B).unwrap().state(), SlotState::Stopped);
         return;
     }
+    if owed {
+        outgoing.push(packet(delivered, 500, 4096, 0.125, spec, 2));
+        incoming.push(packet(128, 2048, 512, -0.25, incoming_spec, 2));
+        // The cut lands one frame later than the plain cut, so the motion
+        // window needs PCM past lane 768.
+        incoming.push(packet(640, 2048, 256, 0.375, incoming_spec, 2));
+        let repaid = render_frames(&mut mixer, applied_at, 1);
+        assert!(
+            (repaid[0] - 0.125).abs() < 1e-6,
+            "the outgoing slot repays its dropout before the cut: {repaid:?}"
+        );
+        assert!(
+            receipts(&mut ends)
+                .iter()
+                .all(|(seq, ..)| *seq != transition),
+            "the same parked batch waits for the repaid mark"
+        );
+        let first = render_frames(&mut mixer, applied_at + 1, 1);
+        assert!(
+            (first[0] - 0.375).abs() < 1e-6,
+            "actual first PCM frame: {first:?}"
+        );
+        let replies = receipts(&mut ends);
+        let (_, result, parts) = replies.iter().find(|(seq, ..)| *seq == transition).unwrap();
+        assert_applied_at(result, applied_at + 1);
+        let mark = parts
+            .iter()
+            .find_map(|part| match part {
+                DeckPart::Returned(Returned::SourceContinued { mark, .. }) => Some(mark),
+                _ => None,
+            })
+            .expect("the applied cut carries the first incoming mark");
+        assert_eq!(mark.session, frame_at(applied_at + 1));
+        assert_eq!(mark.lane.frame, 641);
+        return;
+    }
     if matches!(expected, ContinuationOutcome::Hole) {
         incoming.push(packet(129, 2048, 512, -0.25, incoming_spec, 2));
         let still_playing = render_frames(&mut mixer, applied_at, 1);
@@ -1292,11 +1349,10 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
     if !ahead {
         incoming.push(packet(640, 2048, 128, 0.375, incoming_spec, 2));
     }
-    let first = render_frames(&mut mixer, applied_at, 1);
-    let expected = if replace { 0.5 } else { 0.375 };
+    let first = render_frames(&mut mixer, applied_at, 2);
     assert!(
-        (first[0] - expected).abs() < 1e-6,
-        "actual first PCM frame: {first:?}"
+        first.iter().all(|sample| (*sample - 0.375).abs() < 1e-6),
+        "the continued slot sounds its aligned signal once: {first:?}"
     );
     let replies = receipts(&mut ends);
     let (_, result, parts) = replies.iter().find(|(seq, ..)| *seq == transition).unwrap();

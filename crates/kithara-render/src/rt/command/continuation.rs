@@ -19,7 +19,16 @@ use crate::{
 #[derive(Clone, Copy)]
 pub(super) struct SourceCut {
     pub(super) point: CutPoint,
+    from: Slot,
     private: Option<Slot>,
+}
+
+impl SourceCut {
+    /// The private receiver replaces the source's own slot: one logical slot
+    /// changes its receiver on the cut frame.
+    pub(super) fn continues_in(self, slot: Slot) -> bool {
+        self.from == slot && self.private == Some(slot)
+    }
 }
 
 pub(super) enum Preparation {
@@ -174,6 +183,11 @@ impl Deck {
         }
         let old = self.tracks.at(from).ok_or(refusal)?;
         let (item, logical) = old.sounding_source(due.at()).ok_or(refusal)?;
+        if old.owed() > 0 {
+            // The outgoing reader skips the dropout before it plays again, so
+            // its mark on this frame is behind what it will sound.
+            return Ok(Preparation::Pending { from, prefix });
+        }
         let budget = self.recycle.get_mut(to.index()).ok_or(refusal)?;
         let (plan, private) = match receiver(due.commands_mut(), from, to, item).ok_or(refusal)? {
             Some((pcm, segment)) => (
@@ -190,7 +204,13 @@ impl Deck {
                 from,
                 prefix: plan.prefix,
             },
-            |point| Preparation::Ready(Some(SourceCut { point, private })),
+            |point| {
+                Preparation::Ready(Some(SourceCut {
+                    point,
+                    from,
+                    private,
+                }))
+            },
         ))
     }
 
