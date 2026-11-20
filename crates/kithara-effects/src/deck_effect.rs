@@ -14,6 +14,8 @@ pub enum FxParamUnit {
     Ratio,
     /// Duration in seconds.
     Seconds,
+    Frames,
+    Hertz,
 }
 
 /// An immutable native parameter domain; no mapping means integral steps.

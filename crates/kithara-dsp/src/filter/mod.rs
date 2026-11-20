@@ -13,6 +13,6 @@ pub use one_pole::OnePoleLowPass;
 
 pub use self::{
     biquad::Biquad,
-    svf::{Response, SVF_CHUNK_FRAMES, StateVariableFilter},
+    svf::{Response, SVF_CHUNK_FRAMES, StateVariableFilter, SvfDesign, decay_frames},
 };
 pub use crate::backend::Fir;
