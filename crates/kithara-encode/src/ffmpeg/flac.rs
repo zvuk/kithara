@@ -27,7 +27,7 @@ use crate::{
 pub(crate) struct FlacFFmpegEncoder;
 
 impl FlacFFmpegEncoder {
-    pub(crate) const FLAC_BLOCK_TYPE_MASK: u8 = 0x7F;
+    pub(crate) const FLAC_BLOCK_TYPE_MASK: u8 = 0x7f;
     pub(crate) const FLAC_FRAME_SAMPLES: usize = 4608;
     pub(crate) const FLAC_LAST_BLOCK_FLAG: u8 = 0x80;
     pub(crate) const FLAC_METADATA_HEADER_LEN: usize = 4;

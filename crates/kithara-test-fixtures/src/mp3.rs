@@ -61,12 +61,12 @@ fn frame_len_and_tag(data: &[u8], offset: usize) -> (usize, usize) {
         .try_into()
         .expect("four header bytes");
     let word = u32::from_be_bytes(header);
-    assert_eq!(word & 0xFFE0_0000, 0xFFE0_0000, "frame must start on sync");
+    assert_eq!(word & 0xffe0_0000, 0xffe0_0000, "frame must start on sync");
     assert_eq!((word >> 19) & 0x3, 0b11, "fixture must be MPEG-1");
     assert_eq!((word >> 17) & 0x3, 0b01, "fixture must be Layer III");
 
     let bitrate = consts::MPEG1_BITRATES_KBPS
-        [usize::try_from((word >> 12) & 0xF).expect("bitrate index fits usize")]
+        [usize::try_from((word >> 12) & 0xf).expect("bitrate index fits usize")]
         * 1000;
     let sample_rate = consts::MPEG1_SAMPLE_RATES
         [usize::try_from((word >> 10) & 0x3).expect("rate index fits usize")];

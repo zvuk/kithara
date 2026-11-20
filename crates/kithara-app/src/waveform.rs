@@ -17,7 +17,7 @@ use kithara::{
             task::{self, JoinHandle},
         },
     },
-    prelude::{PlaybackResamplerBackend, Resource},
+    play::{PlaybackResamplerBackend, Resource},
     worker::{Wake, Worker},
 };
 use tracing::warn;

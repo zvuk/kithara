@@ -491,7 +491,7 @@ mod tests {
             time::Duration,
             tokio::runtime::{Builder as RuntimeBuilder, Handle},
         },
-        prelude::ResourceSrc,
+        play::ResourceSrc,
         worker::{DispatcherConfig, TaskConfig, WorkerConfig},
     };
     use kithara_test_utils::kithara;

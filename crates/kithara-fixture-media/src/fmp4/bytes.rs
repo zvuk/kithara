@@ -96,11 +96,11 @@ pub(crate) fn descriptor(tag: u8, payload: &[u8]) -> Vec<u8> {
     let mut value = payload.len();
     let mut stack = [0u8; 4];
     let mut len = 0;
-    stack[len] = value.to_le_bytes()[0] & 0x7F;
+    stack[len] = value.to_le_bytes()[0] & 0x7f;
     len += 1;
     value >>= 7;
     while value > 0 {
-        stack[len] = (value.to_le_bytes()[0] & 0x7F) | 0x80;
+        stack[len] = (value.to_le_bytes()[0] & 0x7f) | 0x80;
         len += 1;
         value >>= 7;
     }

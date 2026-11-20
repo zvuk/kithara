@@ -1,3 +1,5 @@
+#[cfg(feature = "symphonia")]
+use std::io::{Seek, SeekFrom};
 use std::{
     io,
     num::{NonZeroU16, NonZeroU64},
@@ -433,8 +435,6 @@ fn run(
 /// exhausted isomp4 reader is rebuilt over the same stream before it seeks.
 #[cfg(feature = "symphonia")]
 fn rewind_isomp4(reader: Box<dyn FormatReader>) -> Result<Box<dyn FormatReader>> {
-    use std::io::{Seek, SeekFrom};
-
     let mut stream = reader.into_inner();
     stream.seek(SeekFrom::Start(0))?;
     let reader = symphonia::default::formats::IsoMp4Reader::try_new(

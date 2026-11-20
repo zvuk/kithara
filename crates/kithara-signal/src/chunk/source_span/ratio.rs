@@ -253,11 +253,11 @@ mod tests {
             u128::MAX - 1,
             u128::MAX,
         ];
-        let mut state = 0x9E37_79B9_7F4A_7C15_F39C_C060_5CED_C834_u128;
+        let mut state = 0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c834_u128;
         for _ in 0..64 {
             state = state
-                .wrapping_mul(0x2360_ED05_1FC6_5DA4_4385_DF64_9FCC_F645)
-                .wrapping_add(0x5851_F42D_4C95_7F2D_1405_7B7E_F767_814F);
+                .wrapping_mul(0x2360_ed05_1fc6_5da4_4385_df64_9fcc_f645)
+                .wrapping_add(0x5851_f42d_4c95_7f2d_1405_7b7e_f767_814f);
             values.push(state >> (state % 127));
             values.push((state >> 96) * 44_100 * 48_000);
         }
@@ -297,11 +297,11 @@ mod tests {
             u128::MAX >> 1,
             u128::MAX,
         ];
-        let mut state = 0x2545_F491_4F6C_DD1D_9E37_79B9_7F4A_7C15_u128;
+        let mut state = 0x2545_f491_4f6c_dd1d_9e37_79b9_7f4a_7c15_u128;
         for _ in 0..24 {
             state = state
-                .wrapping_mul(0x2360_ED05_1FC6_5DA4_4385_DF64_9FCC_F645)
-                .wrapping_add(0x5851_F42D_4C95_7F2D_1405_7B7E_F767_814F);
+                .wrapping_mul(0x2360_ed05_1fc6_5da4_4385_df64_9fcc_f645)
+                .wrapping_add(0x5851_f42d_4c95_7f2d_1405_7b7e_f767_814f);
             components.push((state >> (state % 125)).max(1));
         }
         let ratios: Vec<_> = components

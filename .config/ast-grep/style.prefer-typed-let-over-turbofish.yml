@@ -1,0 +1,36 @@
+id: style.prefer-typed-let-over-turbofish
+message: |
+  A `let` whose type is given by a turbofish on the value. Annotate the
+  binding instead: `let ids: Vec<_> = rows.iter().map(id).collect();`. The
+  type then sits next to the name it describes.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+utils:
+  turbofish-call:
+    kind: call_expression
+    has:
+      field: function
+      kind: generic_function
+      has:
+        field: function
+        kind: field_expression
+        has:
+          field: field
+          regex: '^(?:parse|collect|into|try_into|sum|product)$'
+rule:
+  all:
+    - kind: let_declaration
+    - not:
+        has:
+          field: type
+          regex: '.'
+    - has:
+        field: value
+        any:
+          - matches: turbofish-call
+          - all:
+              - kind: try_expression
+              - has:
+                  matches: turbofish-call

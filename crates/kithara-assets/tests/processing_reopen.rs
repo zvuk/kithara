@@ -99,12 +99,12 @@ fn reopened_committed_resource_after_cache_eviction_is_not_processed_again() {
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
     let scope = store.scope::<Test>(&source(ROOT)).unwrap();
-    let proc = xor_processor(0x5A, Some(Arc::clone(&call_count)));
+    let proc = xor_processor(0x5a, Some(Arc::clone(&call_count)));
 
     let key0 = scope.key(&resource("segments/0000.bin")).unwrap();
     let key1 = scope.key(&resource("segments/0001.bin")).unwrap();
     let plaintext = b"segment-0-payload";
-    let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5A).collect();
+    let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5a).collect();
 
     write_commit(
         scope
@@ -163,12 +163,12 @@ fn reopened_committed_processed_resource_without_ctx_reads_committed_bytes() {
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
     let scope = store.scope::<Test>(&source(ROOT)).unwrap();
-    let proc = xor_processor(0x5A, Some(Arc::clone(&call_count)));
+    let proc = xor_processor(0x5a, Some(Arc::clone(&call_count)));
 
     let key0 = scope.key(&resource("segments/0000.bin")).unwrap();
     let key1 = scope.key(&resource("segments/0001.bin")).unwrap();
     let plaintext = b"segment-0-payload";
-    let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5A).collect();
+    let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5a).collect();
 
     write_commit(
         scope
@@ -210,12 +210,12 @@ fn reopened_large_committed_processed_resource_without_ctx_reads_committed_bytes
         .cache_capacity(NonZeroUsize::new(1).unwrap())
         .build();
     let scope = store.scope::<Test>(&source(ROOT)).unwrap();
-    let proc = xor_processor(0x5A, Some(Arc::clone(&call_count)));
+    let proc = xor_processor(0x5a, Some(Arc::clone(&call_count)));
 
     let key0 = scope.key(&resource("segments/0000.bin")).unwrap();
     let key1 = scope.key(&resource("segments/0001.bin")).unwrap();
     let plaintext: Vec<u8> = (0u8..=u8::MAX).cycle().take(512 * 1024 + 37).collect();
-    let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5A).collect();
+    let expected: Vec<u8> = plaintext.iter().map(|byte| byte ^ 0x5a).collect();
 
     write_commit(
         scope
@@ -322,8 +322,8 @@ fn a_second_party_ending_leaves_the_committed_bytes_readable(
         .build();
     let scope = store.scope::<Test>(&source(ROOT)).unwrap();
     let key = scope.key(&resource("segments/0000.bin")).unwrap();
-    let proc = xor_processor(0x5A, None);
-    let expected: Vec<u8> = PLAINTEXT.iter().map(|byte| byte ^ 0x5A).collect();
+    let proc = xor_processor(0x5a, None);
+    let expected: Vec<u8> = PLAINTEXT.iter().map(|byte| byte ^ 0x5a).collect();
     let acquire = || {
         scope
             .store()
@@ -378,8 +378,8 @@ fn a_dead_generation_gives_way_to_a_fresh_one(#[case] disk: bool, #[case] abando
         .build();
     let scope = store.scope::<Test>(&source(ROOT)).unwrap();
     let key = scope.key(&resource("segments/0000.bin")).unwrap();
-    let proc = xor_processor(0x5A, None);
-    let expected: Vec<u8> = PLAINTEXT.iter().map(|byte| byte ^ 0x5A).collect();
+    let proc = xor_processor(0x5a, None);
+    let expected: Vec<u8> = PLAINTEXT.iter().map(|byte| byte ^ 0x5a).collect();
     let acquire = || {
         scope
             .store()
