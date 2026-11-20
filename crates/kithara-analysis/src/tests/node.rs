@@ -1236,6 +1236,76 @@ fn final_publication_waits_for_trailing_detection(analysis_pcm: &'static [f32]) 
     );
 }
 
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+#[kithara::test(native, flash(false))]
+fn cancel_during_trailing_detection_never_settles(analysis_pcm: &'static [f32]) {
+    let (started, started_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let detector = Box::new(shareable(Unimock::new(
+        BeatDetectorMock
+            .next_call(matching!(_))
+            .answers_arc(Arc::new(move |_, _| {
+                started.send(()).ok();
+                release_rx.lock().recv().ok();
+                Ok(raw_beat(0.5))
+            })),
+    )));
+    let builder = beat_waveform(detector, 2, 2);
+    let frames = usize::try_from(consts::FIXTURES_SR).expect("test rate fits usize");
+    let (jobs, receiver) = mpsc::channel();
+    let cancel = CancelToken::root();
+    let mut results = enqueue(
+        &jobs,
+        "trailing-track",
+        Box::new(FakeReader::chunked(
+            builder.pools(),
+            sine(analysis_pcm, frames),
+            1,
+        )),
+        cancel.clone(),
+        super::fixtures::idle_ingest(),
+    );
+    let mut node = NodeHarness::new(builder, receiver);
+
+    let _ = node.tick();
+    let _ = node.tick();
+    started_rx
+        .recv_timeout(Instant::now() + Duration::from_secs(2))
+        .expect("EOF starts the short trailing window");
+    assert_eq!(node.tick(), TickResult::Backpressured);
+    let progress = results
+        .borrow_and_update()
+        .clone()
+        .expect("what the pass read is published when the reading ends");
+    assert!(
+        progress.analysis().is_complete(),
+        "the end of reading publishes the whole coverage: {:?}",
+        progress.analysis().missing()
+    );
+    assert!(
+        !progress.analysis().is_settled() && progress.is_resumable(),
+        "a pass still detecting is not settled: a restart resumes the detection"
+    );
+    assert!(
+        matches!(results.has_changed(), Ok(false)),
+        "the final sender remains alive while detection runs"
+    );
+
+    cancel.cancel();
+    release.send(()).expect("release trailing detection");
+    drive_until(&mut node, || results.has_changed().is_err());
+    let progress = results
+        .borrow_and_update()
+        .clone()
+        .expect("the final publication");
+    assert!(
+        !progress.analysis().is_settled(),
+        "cancellation during trailing detection never settles the pass"
+    );
+    assert!(progress.is_resumable(), "the cancelled pass can resume");
+}
+
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test(native, flash(false))]
 fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
