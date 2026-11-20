@@ -420,7 +420,7 @@ where
         reason: &Rejection<PlayError>,
         out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
-        if retries(reason, self.active.is_replacement(index)) {
+        if outlives(reason, self.active.is_replacement(index)) {
             Ok(())
         } else {
             self.cancel_target(out).map_err(play_error)
@@ -443,8 +443,14 @@ where
             return Ok(());
         };
         let continued = settled_continuation(target, seq);
+        // An applied seat already gave the slot to the replacement, so it
+        // enters whatever its status; a paused target waits for its frame.
         let seated = matches!(continued, Some(Continuation::Seat(_)));
-        let paused = held_paused(&active.track.snapshot().as_ref().status, seated);
+        let paused = seated
+            || matches!(
+                active.track.snapshot().as_ref().status,
+                PlayingStatus::Paused { .. }
+            );
         if continued.is_some() {
             self.target.as_mut().ok_or(PlayError::NotReady)?.continued = None;
             if let Settled::Rejected { reason, .. } = settled {
@@ -480,18 +486,8 @@ fn enters(target: Target, continued: Option<Continuation>) -> bool {
     continued.is_some() || !target.playing && target.stale.is_some()
 }
 
-/// Whether `status` holds the paused frame a paused target waits for; a
-/// `seated` replacement lands loaded without a start.
-fn held_paused(status: &PlayingStatus, seated: bool) -> bool {
-    match status {
-        PlayingStatus::Paused { .. } => true,
-        PlayingStatus::Loaded => seated,
-        _ => false,
-    }
-}
-
 /// Whether a paused target outlives the rejection of its continuation; a
 /// refused seat releases the replacement, so it cannot retry.
-fn retries<R>(reason: &Rejection<R>, replacement: bool) -> bool {
+fn outlives<R>(reason: &Rejection<R>, replacement: bool) -> bool {
     matches!(reason, Rejection::Late | Rejection::Stale) && !replacement
 }
