@@ -192,6 +192,16 @@ pub(super) fn render(mixer: &mut TestMixer, start: usize) -> Vec<f32> {
 }
 
 pub(super) fn render_frames(mixer: &mut TestMixer, start: usize, frames: usize) -> Vec<f32> {
+    render_frames_in(mixer, SessionEpoch::new(0), start, frames)
+}
+
+/// Renders `frames` from session frame `start` on the output axis `epoch`.
+pub(super) fn render_frames_in(
+    mixer: &mut TestMixer,
+    epoch: SessionEpoch,
+    start: usize,
+    frames: usize,
+) -> Vec<f32> {
     let mut left = vec![0.0f32; frames];
     let mut right = vec![0.0f32; frames];
     let inputs: [&[f32]; 0] = [];
@@ -201,13 +211,14 @@ pub(super) fn render_frames(mixer: &mut TestMixer, start: usize, frames: usize) 
         outputs: &mut outputs,
     };
     mixer.inbox.0.drain();
-    render_realtime(mixer, start, frames, &mut buffers);
+    render_realtime(mixer, epoch, start, frames, &mut buffers);
     left
 }
 
 #[kithara::rtsan_forbid_blocking]
 pub(super) fn render_realtime(
     mixer: &mut TestMixer,
+    epoch: SessionEpoch,
     start: usize,
     frames: usize,
     buffers: &mut ProcBuffers,
@@ -216,7 +227,7 @@ pub(super) fn render_realtime(
     let context = OutputContext::new(
         frame_at(start)..frame_at(start + frames),
         shape().sample_rate,
-        SessionEpoch::new(0),
+        epoch,
         None,
     )
     .expect("output range");

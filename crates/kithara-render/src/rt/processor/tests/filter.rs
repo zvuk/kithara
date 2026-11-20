@@ -17,7 +17,7 @@ fn stereo_frames(mixer: &mut TestMixer, start: usize, frames: usize) -> [Vec<f32
         outputs: &mut outputs,
     };
     mixer.inbox.0.drain();
-    render_realtime(mixer, start, frames, &mut buffers);
+    render_realtime(mixer, SessionEpoch::new(0), start, frames, &mut buffers);
     pcm
 }
 

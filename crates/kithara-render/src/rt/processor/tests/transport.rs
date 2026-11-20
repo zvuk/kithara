@@ -1093,6 +1093,8 @@ enum ContinuationOutcome {
     Pause,
     Hole,
     Rate,
+    Closed,
+    Axis,
 }
 
 #[kithara::test]
@@ -1103,6 +1105,9 @@ enum ContinuationOutcome {
 #[case::paused_while_parked(false, ContinuationOutcome::Pause)]
 #[case::rejects_a_hole_in_a_private_receiver(true, ContinuationOutcome::Hole)]
 #[case::rejects_a_later_rate_change(true, ContinuationOutcome::Rate)]
+#[case::refuses_a_staged_receiver_closed_while_parked(false, ContinuationOutcome::Closed)]
+#[case::refuses_a_private_receiver_closed_while_parked(true, ContinuationOutcome::Closed)]
+#[case::refuses_an_axis_restart_while_parked(false, ContinuationOutcome::Axis)]
 fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
     #[case] replace: bool,
     #[case] expected: ContinuationOutcome,
@@ -1228,6 +1233,31 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
             Outcome::Rejected(Rejection::Stale)
         ));
         assert_eq!(mixer.track(A).unwrap().state(), SlotState::Stopped);
+        assert_eq!(mixer.track(B).unwrap().state(), SlotState::Stopped);
+        return;
+    }
+    if matches!(expected, ContinuationOutcome::Closed) {
+        drop(incoming);
+        let still_playing = render_frames(&mut mixer, applied_at, 1);
+        assert!((still_playing[0] - 0.125).abs() < 1e-6);
+        let replies = receipts(&mut ends);
+        assert!(matches!(
+            outcome_of(&replies, transition),
+            Outcome::Rejected(Rejection::Refused(DeckRefusal::SourceContinuation { slot }))
+                if *slot == to
+        ));
+        assert_eq!(mixer.track(A).unwrap().state(), SlotState::Playing);
+        return;
+    }
+    if matches!(expected, ContinuationOutcome::Axis) {
+        incoming.push(packet(128, 2048, 512, -0.25, incoming_spec, 2));
+        incoming.push(packet(640, 2048, 128, 0.375, incoming_spec, 2));
+        let _ = render_frames_in(&mut mixer, SessionEpoch::new(1), applied_at, 1);
+        let replies = receipts(&mut ends);
+        assert!(matches!(
+            outcome_of(&replies, transition),
+            Outcome::Rejected(Rejection::Refused(DeckRefusal::AxisRestarted))
+        ));
         assert_eq!(mixer.track(B).unwrap().state(), SlotState::Stopped);
         return;
     }
