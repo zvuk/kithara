@@ -152,8 +152,8 @@ where
         let follows_host = shown.map(Track::follows_host);
         let mut track = shown.map(|track| track.snapshot().as_ref().clone());
         if let Some(track) = &mut track {
-            if track.duration.is_none() && self.current == Some(track.item) {
-                track.duration = self.tracks.logical_duration(track.item);
+            if self.current == Some(track.item) {
+                track.duration = self.tracks.known_duration(track.item, track.duration);
             }
             match self.held_position {
                 Some(SeekPosition::Held(to)) => track.position = to,

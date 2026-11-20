@@ -250,9 +250,6 @@ where
             #[expr($.is_some_and(|record| record.source_change.is_some()))]
             #[call(find)]
             pub(crate) fn is_changing_source(&self, id: TrackId) -> bool;
-            #[expr($.and_then(|record| record.logical_duration))]
-            #[call(find)]
-            pub(crate) fn logical_duration(&self, id: TrackId) -> Option<Duration>;
             #[expr($.map(|record| &record.status))]
             #[call(find)]
             pub(crate) fn status(&self, id: TrackId) -> Option<&TrackStatus>;
@@ -305,6 +302,20 @@ where
         record.source = change.source;
         record.logical_duration = duration.or(record.logical_duration);
         true
+    }
+
+    /// The end `id` shows: its source's own end once known, which then
+    /// replaces any end carried over from a previous source.
+    pub(crate) fn known_duration(
+        &mut self,
+        id: TrackId,
+        own: Option<Duration>,
+    ) -> Option<Duration> {
+        let record = self.record_mut(id)?;
+        if own.is_some() {
+            record.logical_duration = own;
+        }
+        record.logical_duration
     }
 
     pub(crate) fn restore_source(&mut self, id: TrackId) -> bool {
@@ -564,6 +575,21 @@ mod tests {
             Position::ZERO,
         ));
         tracks
+    }
+
+    #[kithara::test]
+    fn a_changed_source_carries_its_end_until_its_own_is_known() {
+        let mut tracks = two_tracks();
+        let (first, second) = (TrackId(1), TrackId(2));
+        let secs = Duration::from_secs;
+        tracks
+            .stage_source(first, "https://x/alternate.mp3".into(), Position::ZERO)
+            .expect("the first track accepts a source change");
+        assert!(tracks.commit_source(first, Some(secs(64))));
+        assert_eq!(tracks.known_duration(first, None), Some(secs(64)));
+        assert_eq!(tracks.known_duration(first, Some(secs(70))), Some(secs(70)));
+        assert_eq!(tracks.known_duration(first, None), Some(secs(70)));
+        assert_eq!(tracks.known_duration(second, None), None);
     }
 
     /// The slot a load of `id` hands its decoder.

@@ -422,9 +422,10 @@ async fn catalogue_quality_switch_preserves_the_sounding_track(#[case] check: Qu
                     if extent_only {
                         assert_eq!(current.id, track);
                         assert!(view.playing && rig.flag(PLAYING));
-                        assert!(
-                            view.duration.is_some(),
-                            "known logical duration disappeared at {current:?}, position={:?}",
+                        assert_eq!(
+                            view.duration,
+                            Some(duration),
+                            "the logical duration changed at {current:?}, position={:?}",
                             view.position,
                         );
                     } else {

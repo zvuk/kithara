@@ -83,7 +83,82 @@ async fn a_source_change_follows_its_native_receipt_after_selection_changes(
     rig.finish().await;
 }
 
+#[kithara::test(tokio)]
+async fn a_changed_source_shows_its_latest_known_end(#[by_ref] worker_owner: &WorkerOwner) {
+    let mut rig = HandoverRig::playing(&worker_owner.0).await;
+    let id = rig.ids[0];
+    assert_eq!(rig.current_end(Some(64.295)), Some(64.295));
+    let alternate = fixture_uri(rig.dir.path(), "alternate.wav");
+    seed_fixture(
+        rig.queue.config.store.as_ref().unwrap(),
+        &alternate,
+        kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
+    );
+    rig.apply(QueueCommand::ReplaceSource {
+        id,
+        source: alternate.clone().into(),
+    })
+    .unwrap();
+    rig.load(0, 64.295).await;
+    let receipts = rig.deck.block(SessionFrame::new(128), 0.0).unwrap();
+    rig.settle(receipts);
+    assert_eq!(rig.queue.control().track(id).unwrap().url, Some(alternate));
+    // The replacement fixture holds 1024 frames at 44.1 kHz.
+    let committed = Some(Duration::from_nanos(1024 * 1_000_000_000 / 44_100).as_secs_f64());
+    rig.queue.publish();
+    assert_eq!(
+        rig.queue.control().duration_seconds(),
+        committed,
+        "the replacement's own end replaces the transferred one",
+    );
+    assert_eq!(rig.current_end(None), committed, "no older end resurfaces");
+    assert_eq!(rig.current_end(Some(70.0)), Some(70.0), "own end wins");
+    assert_eq!(
+        rig.current_end(None),
+        Some(70.0),
+        "the old end stays replaced"
+    );
+
+    rig.select(1, Transition::None).unwrap();
+    rig.load(1, 50.0).await;
+    crate::mock::finish(&mut rig.queue, &mut rig.deck);
+    assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    assert_eq!(
+        rig.current_end(None),
+        Some(50.0),
+        "another item shows only its own end"
+    );
+    rig.finish().await;
+}
+
 impl HandoverRig {
+    /// Publishes the current track after its slot reports `end` as its own
+    /// media end, returning the duration the queue shows.
+    #[track_caller]
+    fn current_end(&mut self, end: Option<f64>) -> Option<f64> {
+        let current = self.queue.active_current_index().expect("current track");
+        let slot = self.queue.active.get(current).expect("current track").slot;
+        let slots = &mut self.queue.deck.mixer.slots;
+        let declared = slots
+            .iter()
+            .find_map(|snapshot| snapshot.source)
+            .expect("declared fixture source");
+        slots[usize::from(slot.get())].source = Some(AudioChunkInfo {
+            media_end: end.map(Duration::from_secs_f64),
+            ..declared
+        });
+        with_outbox(&mut self.queue, &mut self.deck, |queue, out| {
+            queue
+                .active
+                .get_mut(current)
+                .expect("current track")
+                .track
+                .tick(SessionFrame::new(384), out);
+        });
+        self.queue.publish();
+        self.queue.control().duration_seconds()
+    }
+
     async fn finish(self) {
         let Self {
             queue,
