@@ -4,10 +4,10 @@ use kithara::{
     },
     decode::DecoderBackend,
     events::{EventBus, TrackId},
-    play::Settled,
+    play::{DeckMixSettingsChange, Settled},
     signal::SegmentId,
 };
-use kithara_command::Seq;
+use kithara_command::{Seq, When};
 use kithara_integration_tests::offline::linked::{LinkReceiptOrigin, LinkSpeed};
 use kithara_render::bridge::{Slot, SlotSnapshot};
 use num_traits::ToPrimitive;
@@ -582,7 +582,9 @@ impl ProductHarness {
             let (reference, observer) = super::control::DecodedRecorder::open();
             let id = host
                 .run(move || {
-                    control.set_muted(muted).expect("deck mute");
+                    control
+                        .mix(When::Next, DeckMixSettingsChange::Muted(muted))
+                        .expect("deck mute");
                     let item = control.append(TrackSource::Config(Box::new(config)))?;
                     control.attach_observer(item, observer);
                     Ok::<_, kithara::queue::QueueError>(item)
@@ -790,7 +792,7 @@ impl ProductHarness {
     /// Ticks every deck from the host owner thread, as the app update loop
     /// would.
     async fn tick_all(&self, case: SyncCase) -> kithara::warp::BeatGridSnapshot {
-        use kithara::warp::BeatGrid;
+        use ::kithara::warp::BeatGrid;
         let controls: Vec<_> = self
             .decks
             .iter()
@@ -1159,7 +1161,7 @@ impl ProductHarness {
         first_speed: usize,
         jump: Option<SessionFrame>,
     ) -> Vec<String> {
-        use kithara::play::Settled;
+        use ::kithara::play::Settled;
         use kithara_command::When;
 
         let host_grid = self.host.session_grid().await;
@@ -1389,7 +1391,7 @@ impl ProductHarness {
     }
 
     pub(crate) async fn grid_binding_failures(&mut self, case: SyncCase) -> Vec<String> {
-        use kithara::play::TrackStatus as OwnerTrackStatus;
+        use ::kithara::play::TrackStatus as OwnerTrackStatus;
         let host_grid = self.host.session_grid().await;
         let mut failures = Vec::new();
         let mut evidence = Vec::new();
@@ -1544,7 +1546,7 @@ impl ProductHarness {
         case: SyncCase,
         required_placements: Option<usize>,
     ) -> Vec<String> {
-        use kithara::play::Settled;
+        use ::kithara::play::Settled;
         use kithara_integration_tests::offline::linked::LinkReceiptOrigin;
 
         let host_grid = self.host.session_grid().await;

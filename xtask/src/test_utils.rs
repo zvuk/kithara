@@ -582,9 +582,15 @@ mod tests {
     fn failures_include_output_after_temporary_capture_is_removed() -> Result<()> {
         let _signals = signals();
         let cancel = child::Cancel::install()?;
-        for (script, seconds) in [
-            ("printf stdout; printf stderr >&2; exit 7", None),
-            ("printf stdout; printf stderr >&2; exec sleep 60", Some(1)),
+        // The killed case runs last: the command cancels this test process
+        // only after writing, so the capture holds output when the owned
+        // group is stopped, and the cancellation stays pending afterwards.
+        for (script, killed) in [
+            ("printf stdout; printf stderr >&2; exit 7", false),
+            (
+                "printf stdout; printf stderr >&2; kill -TERM $PPID; exec sleep 60",
+                true,
+            ),
         ] {
             let root = tempfile::tempdir()?;
             let capture = root.path().join("capture");
@@ -596,13 +602,14 @@ mod tests {
                 target: &root.path().join("target"),
             };
             let error = consumer
-                .checked(Command::new("sh").args(["-c", script]), "failure", seconds)
+                .checked(Command::new("sh").args(["-c", script]), "failure", None)
                 .expect_err("command must fail");
             drop(root);
             assert!(!capture.exists());
             let diagnostics = format!("{error:#}");
             assert!(diagnostics.contains("stdout"), "{diagnostics}");
             assert!(diagnostics.contains("stderr"), "{diagnostics}");
+            assert_eq!(diagnostics.contains("cancelled"), killed, "{diagnostics}");
         }
         Ok(())
     }

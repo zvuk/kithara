@@ -1,4 +1,5 @@
 mod binding;
+mod color;
 mod doc;
 mod measure;
 mod motion;
@@ -8,6 +9,7 @@ mod style;
 pub(crate) use self::style::text_roles;
 pub use self::{
     binding::{BindingRef, ViewSet},
+    color::ColorSource,
     doc::{ChromeStyle, ModuleDoc, ModuleDrop, parse_module},
     measure::{Measure, MeasureAxis},
     motion::{Easing, Motion, Pose, Repeat},

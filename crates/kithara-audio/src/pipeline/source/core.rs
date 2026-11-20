@@ -32,6 +32,7 @@ use crate::{
         rebuild::RecreateState,
         seek::ResumeTarget,
         stream::shared::SharedStream,
+        track::WaitingReason,
     },
 };
 
@@ -392,9 +393,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    fn source_wait_reason(&self) -> Option<crate::pipeline::track::WaitingReason> {
-        use crate::pipeline::track::WaitingReason;
-
+    fn source_wait_reason(&self) -> Option<WaitingReason> {
         let active = self.decode.active();
         if !self.waiting_for_source || active.has_output() || active.decoder().has_prepared_result()
         {
@@ -561,8 +560,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         );
     }
 
-    fn pending_wait_reason(&self) -> crate::pipeline::track::WaitingReason {
-        use crate::pipeline::track::WaitingReason;
+    fn pending_wait_reason(&self) -> WaitingReason {
         match self.shared_stream.phase() {
             SourcePhase::WaitingDemand => WaitingReason::WaitingDemand,
             SourcePhase::WaitingMetadata => WaitingReason::WaitingMetadata,

@@ -66,8 +66,8 @@ impl StreamInfo {
         let max_frame_size = u32::from_be_bytes([0, b[7], b[8], b[9]]);
         let packed = u64::from_be_bytes([b[10], b[11], b[12], b[13], b[14], b[15], b[16], b[17]]);
         let channels = u16::try_from(((packed >> 41) & 0x7) + 1).unwrap_or(1);
-        let bits_per_sample = u16::try_from(((packed >> 36) & 0x1F) + 1).unwrap_or(16);
-        let total_samples = packed & 0xF_FFFF_FFFF;
+        let bits_per_sample = u16::try_from(((packed >> 36) & 0x1f) + 1).unwrap_or(16);
+        let total_samples = packed & 0xf_ffff_ffff;
         Ok(Self {
             total_samples,
             bits_per_sample,
@@ -102,7 +102,7 @@ mod tests {
         let packed = (u64::from(sample_rate) << 44)
             | (u64::from(channels - 1) << 41)
             | (u64::from(bits - 1) << 36)
-            | (total_samples & 0xF_FFFF_FFFF);
+            | (total_samples & 0xf_ffff_ffff);
         b[10..18].copy_from_slice(&packed.to_be_bytes());
         b
     }

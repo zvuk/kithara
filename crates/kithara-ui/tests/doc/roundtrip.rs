@@ -652,7 +652,7 @@ fn a_row_carries_its_active_tone_and_frame_roles() {
 
     assert!(active.is_some());
     assert_eq!(*background, Some(ColorRole::BgSelect));
-    assert_eq!(*active_background, Some(ColorRole::BgPanel));
+    assert_eq!(*active_background, Some(ColorRole::BgPanel.into()));
     assert_eq!(*frame_color, Some(ColorRole::LineInner));
     assert_eq!(*active_frame_color, Some(ColorRole::Accent));
 }
@@ -691,7 +691,7 @@ fn a_glyph_and_a_text_carry_the_tones_flags_and_icons_they_name() {
     assert_eq!(*icon, Param::Fixed(IconName::ChevronRight));
     assert_eq!(*active_icon, Some(Param::Fixed(IconName::ChevronDown)));
     assert_eq!(*style, GlyphStyle::Menu);
-    assert_eq!(*color, Some(Param::Fixed(ColorRole::Muted)));
+    assert_eq!(*color, Some(Param::Fixed(ColorRole::Muted.into())));
     assert_eq!(*active_color, Some(Param::Fixed(ColorRole::Accent)));
     assert!(active.is_some());
 
@@ -707,7 +707,41 @@ fn a_glyph_and_a_text_carry_the_tones_flags_and_icons_they_name() {
     };
 
     assert_eq!(*style, TextStyle::Mono);
-    assert_eq!(*color, Some(ColorRole::Muted));
+    assert_eq!(*color, Some(ColorRole::Muted.into()));
     assert_eq!(*active_color, Some(ColorRole::Text));
     assert!(active.is_some());
+}
+
+#[kithara::test]
+fn bound_color_colours_roundtrip_on_row_glyph_and_text() {
+    let text = r#"(
+        schema: "kithara.module",
+        version: 1,
+        id: "key-chip",
+        root: Row(
+            id: "chip",
+            active: Telemetry(id: "deck.key.locked"),
+            active_background: FromRead(read: Telemetry(id: "deck.key.color"), base: Accent),
+            children: [
+                Glyph(
+                    id: "icon",
+                    icon: Music2,
+                    color: FromRead(read: Telemetry(id: "deck.key.color"), base: Accent),
+                ),
+                Text(
+                    id: "key",
+                    read: Telemetry(id: "deck.key.sounding"),
+                    color: FromRead(read: Telemetry(id: "deck.key.color"), base: Accent),
+                ),
+            ],
+        ),
+    )"#;
+    let doc = module_roundtrip(text);
+    assert!(matches!(
+        doc.root,
+        ControlNode::Row {
+            active_background: Some(kithara_ui::module::ColorSource::FromRead { .. }),
+            ..
+        }
+    ));
 }

@@ -212,7 +212,7 @@ impl LaneState {
                 LaneCommand::SetSpeed(curve) => warp
                     .set_speed(curve.clone(), revision)
                     .map_err(|_| TrackFailureKind::Render)?,
-                LaneCommand::SetPitch(pitch) => warp.set_pitch(*pitch),
+                LaneCommand::Warp(change) => warp.apply(*change),
                 LaneCommand::Jump { to } => {
                     let gain = self.jump.map_or(1.0, |jump| jump.gain(self.cursor.frame));
                     self.jump = Some(Jump::Down {

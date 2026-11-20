@@ -1,5 +1,7 @@
 use std::{
+    fs,
     io::Write,
+    path::PathBuf,
     process::{Command, Stdio},
 };
 
@@ -9,7 +11,10 @@ use serde_json::Value;
 use url::{Url, form_urlencoded::byte_serialize};
 
 use super::{
-    super::{Deployment, Request},
+    super::{
+        Deployment, Request,
+        command::{Preflight, sha256},
+    },
     macos,
 };
 use crate::Ctx;
@@ -18,6 +23,8 @@ use crate::Ctx;
 pub(in crate::perf::bench) struct DispatchArgs {
     #[arg(value_enum)]
     host: Host,
+    #[arg(long = "bench-preflight", value_name = "FILE")]
+    preflight: Option<PathBuf>,
     #[command(flatten)]
     request: Request,
 }
@@ -110,6 +117,19 @@ fn resolve(ctx: &Ctx, repository: &str, source: &str) -> Result<String> {
 
 pub(in crate::perf::bench) fn run(args: &DispatchArgs, ctx: &Ctx) -> Result<()> {
     ensure!(
+        args.preflight.is_none() || matches!(args.host, Host::Linux),
+        "benchmark preflight dispatch requires Linux"
+    );
+    let input = args
+        .preflight
+        .as_ref()
+        .map(fs::read_to_string)
+        .transpose()?;
+    if let Some(raw) = &input {
+        Preflight::parse(&args.request, raw, false)?;
+        println!("preflight declaration SHA-256 {}", sha256(raw.as_bytes()));
+    }
+    ensure!(
         !args.request.target.is_empty(),
         "dispatch requires --bench-target"
     );
@@ -141,18 +161,24 @@ pub(in crate::perf::bench) fn run(args: &DispatchArgs, ctx: &Ctx) -> Result<()> 
         ..args.request.clone()
     };
     match args.host {
-        Host::Linux => linux(ctx, &repository, &controller, &request),
+        Host::Linux => {
+            let args = linux_arguments(&repository, &controller, &request, input.as_deref());
+            let args: Vec<_> = args.iter().map(String::as_str).collect();
+            print!("{}", output(ctx, "gh", &args, None)?);
+            println!("https://github.com/{repository}/actions/workflows/dispatch.yml");
+            Ok(())
+        }
         Host::Macos => macos::run(ctx, &config, &request),
     }
 }
 
-fn linux(ctx: &Ctx, repository: &str, controller: &str, request: &Request) -> Result<()> {
-    let values: Vec<_> = request
-        .parameters()
-        .into_iter()
-        .map(|(key, value)| format!("{}={value}", key.to_ascii_lowercase()))
-        .collect();
-    let mut args = vec![
+fn linux_arguments(
+    repository: &str,
+    controller: &str,
+    request: &Request,
+    input: Option<&str>,
+) -> Vec<String> {
+    let mut args: Vec<_> = [
         "workflow",
         "run",
         "dispatch.yml",
@@ -164,18 +190,81 @@ fn linux(ctx: &Ctx, repository: &str, controller: &str, request: &Request) -> Re
         "kind=nightly",
         "-f",
         "only=deep-bench",
-    ];
-    for value in &values {
-        args.extend(["-f", value]);
+    ]
+    .map(str::to_owned)
+    .into();
+    for (key, value) in request.parameters() {
+        args.extend(["-f".into(), format!("{}={value}", key.to_ascii_lowercase())]);
     }
-    print!("{}", output(ctx, "gh", &args, None)?);
-    println!("https://github.com/{repository}/actions/workflows/dispatch.yml");
-    Ok(())
+    if let Some(raw) = input {
+        args.extend(["-f".into(), format!("bench_preflight={raw}")]);
+    }
+    args
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bench_linux_dispatch_preserves_payload_and_declaration_bytes() {
+        let request = Request {
+            target: "p:b:f".into(),
+            head: "head".into(),
+            base: "base".into(),
+            ..Request::default()
+        };
+        let default = linux_arguments("owner/repo", "controller", &request, None);
+        assert_eq!(
+            default,
+            [
+                "workflow",
+                "run",
+                "dispatch.yml",
+                "--repo",
+                "owner/repo",
+                "--ref",
+                "controller",
+                "-f",
+                "kind=nightly",
+                "-f",
+                "only=deep-bench",
+                "-f",
+                "bench_target=p:b:f",
+                "-f",
+                "bench_filter=",
+                "-f",
+                "bench_ref=head",
+                "-f",
+                "bench_base_ref=base"
+            ]
+        );
+        let raw = "{\"collections\":{}}\n";
+        let opts = linux_arguments("owner/repo", "controller", &request, Some(raw));
+        assert_eq!(&opts[..default.len()], default);
+        assert_eq!(
+            &opts[default.len()..],
+            ["-f", "bench_preflight={\"collections\":{}}\n"]
+        );
+    }
+
+    #[test]
+    fn bench_mac_preflight_is_refused_before_loading_or_running_anything() {
+        let root = tempfile::tempdir().unwrap();
+        let manifest = root.path().join("Cargo.toml");
+        fs::write(&manifest, "[workspace]\n").unwrap();
+        let ctx = Ctx::load_from_manifest(&manifest).unwrap();
+        let args = DispatchArgs {
+            host: Host::Macos,
+            preflight: Some(root.path().join("absent.json")),
+            request: Request::default(),
+        };
+        let error = run(&args, &ctx).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "benchmark preflight dispatch requires Linux"
+        );
+    }
 
     #[test]
     fn bench_source_repository_comes_from_existing_git_remotes() {

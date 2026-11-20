@@ -51,6 +51,11 @@ pub(super) fn validate_config(config: &TestCommandConfig) -> Result<()> {
             config.default_backend
         );
     }
+    for (receipt, prefix) in &config.required_case_prefixes {
+        if receipt.trim().is_empty() || prefix.trim().is_empty() {
+            bail!("test.required_case_prefixes needs a nonempty receipt path and case prefix");
+        }
+    }
     for (name, lane) in &config.lanes {
         if lane.cargo.workspace != lane.cargo.packages.is_empty() {
             bail!("test.lanes.{name}.cargo needs exactly one of `workspace = true` or `packages`");
@@ -86,7 +91,7 @@ pub(super) fn validate_config(config: &TestCommandConfig) -> Result<()> {
 
 pub(super) fn select_lane<'a>(
     config: &'a TestCommandConfig,
-    request: &'a TestRequest,
+    request: &TestRequest,
 ) -> Result<&'a str> {
     let explicit_lane = match request.lanes.as_slice() {
         [] => None,
@@ -115,7 +120,7 @@ pub(super) fn select_lane<'a>(
         }
         Some(false) | None => explicit_lane.unwrap_or(&config.default_lane),
     };
-    if !config.lanes.contains_key(lane_name) {
+    let Some((lane, _)) = config.lanes.get_key_value(lane_name) else {
         let valid = config
             .lanes
             .keys()
@@ -123,8 +128,8 @@ pub(super) fn select_lane<'a>(
             .collect::<Vec<_>>()
             .join(", ");
         bail!("unsupported test lane `{lane_name}`; configured values: {valid}");
-    }
-    Ok(lane_name)
+    };
+    Ok(lane)
 }
 
 #[derive(Clone, Copy)]

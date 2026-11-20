@@ -20,10 +20,11 @@ impl Cascade {
     pub(crate) fn set_section(
         &mut self,
         section: usize,
+        planes: Range<usize>,
         coefficients: [f32; 5],
     ) -> Result<(), FilterError> {
         self.0
-            .set_section(section, coefficients)
+            .set_section(section, planes, coefficients)
             .map_err(filter_error)
     }
 

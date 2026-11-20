@@ -165,7 +165,10 @@ impl DeckCache {
             runtime,
         );
         self.tempo = format_tempo(deck.speed);
-        self.transpose = format_transpose(deck.pitch);
+        self.transpose = format_transpose(
+            deck.warp_controls_available
+                .then(|| deck.settings.controls().pitch()),
+        );
         self.bpm = format_bpm(deck.analysis.bpm, deck.speed);
         self.remain = format_remain(deck);
         self.subtitle = track_subtitle(deck);
@@ -214,11 +217,14 @@ fn format_tempo(speed: f32) -> String {
     format!("{:+.1}%", tenths / 10.0 + 0.0)
 }
 
-fn format_transpose(pitch: Option<Pitch>) -> String {
-    let shift = pitch.map_or(0, |(Pitch::Vinyl { shift } | Pitch::Held { shift })| {
+fn pitch_shift(pitch: Option<Pitch>) -> i8 {
+    pitch.map_or(0, |(Pitch::Vinyl { shift } | Pitch::Held { shift })| {
         i8::from(shift)
-    });
-    match shift {
+    })
+}
+
+fn format_transpose(pitch: Option<Pitch>) -> String {
+    match pitch_shift(pitch) {
         0 => String::new(),
         up if up > 0 => format!("+{up}"),
         down => format!("{}{}", consts::MINUS_SIGN, down.unsigned_abs()),
@@ -257,6 +263,7 @@ mod tests {
             time::Duration,
             tokio::{sync::watch, task},
         },
+        play::TrackSettings,
     };
     use kithara_test_utils::kithara;
 
@@ -382,7 +389,8 @@ mod tests {
             .eq_bands(Vec::new())
             .tempo(TempoPercent::DEFAULT)
             .synced(false)
-            .pitch(Pitch::default())
+            .settings(TrackSettings::default())
+            .warp_controls_available(true)
             .state(ui)
             .maybe_catalogue(catalogue)
             .build()

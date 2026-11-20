@@ -7,7 +7,7 @@ use super::{
     field::{LiveField, Member},
     implementation::docs,
 };
-use crate::config::field::Live;
+use crate::config::{field::Live, patch::renamed};
 
 /// `CheckedConfig` whenever the struct declares a check error or a live field,
 /// then the change enum, `LiveConfig`, `<Name>Control` and `<Name>Exec` when it
@@ -28,7 +28,7 @@ pub(super) fn expand(
     let live = if fields.is_empty() {
         None
     } else {
-        let change = live(item, &fields);
+        let change = live(item, &fields)?;
         let control = control(item, members)?;
         let exec = exec(item, &fields)?;
         Some(quote! { #change #control #exec })
@@ -120,7 +120,7 @@ fn checked(item: &DeriveInput, members: &[Member<'_>], error: Option<&Type>) -> 
 
 /// The change enum and `LiveConfig`. Their bindings carry a prefix no caller
 /// names, so neither a field check path nor a constant in scope meets them.
-fn live(item: &DeriveInput, fields: &[(&Member<'_>, &LiveField)]) -> TokenStream {
+fn live(item: &DeriveInput, fields: &[(&Member<'_>, &LiveField)]) -> Result<TokenStream> {
     let name = &item.ident;
     let visibility = &item.vis;
     let change = change_name(item);
@@ -143,6 +143,14 @@ fn live(item: &DeriveInput, fields: &[(&Member<'_>, &LiveField)]) -> TokenStream
         let cfgs: Vec<&Attribute> = cfgs(member.attributes).collect();
         variants.push(quote! { #(#surface)* #variant(#payload) });
         if member.nested {
+            let nested_change = spelled(
+                &renamed(
+                    member.ty,
+                    "Change",
+                    "nested live requires a named configuration type",
+                )?,
+                item,
+            );
             checks.push(quote! {
                 #(#cfgs)*
                 #change::#variant(#value) => ::core::result::Result::Ok(#change::#variant(
@@ -156,8 +164,8 @@ fn live(item: &DeriveInput, fields: &[(&Member<'_>, &LiveField)]) -> TokenStream
             nested.push(quote! {
                 #(#cfgs)*
                 #[automatically_derived]
-                impl ::core::convert::From<#payload> for #change {
-                    fn from(#value: #payload) -> Self {
+                impl ::core::convert::From<#nested_change> for #change {
+                    fn from(#value: #nested_change) -> Self {
                         Self::#variant(#value)
                     }
                 }
@@ -186,7 +194,7 @@ fn live(item: &DeriveInput, fields: &[(&Member<'_>, &LiveField)]) -> TokenStream
         .iter()
         .any(|(_, live)| matches!(live.mode, Live::Owner));
     let subject = format!(" One change of one live field of [`{name}`].");
-    quote! {
+    Ok(quote! {
         #[doc = #subject]
         #[derive(::core::clone::Clone, ::core::marker::Copy, ::core::fmt::Debug)]
         #visibility enum #change {
@@ -215,5 +223,5 @@ fn live(item: &DeriveInput, fields: &[(&Member<'_>, &LiveField)]) -> TokenStream
                 }
             }
         }
-    }
+    })
 }

@@ -208,7 +208,9 @@ impl Census {
 
     /// Notes one binding a control reads.
     pub(crate) fn note_read(&mut self, path: &str, binding: &BindingRef, origin: &SourceUri) {
-        if let Some((state, _)) = self.view_target(path, binding, origin) {
+        if let BindingRef::Page { id, name: None } = binding {
+            self.read.insert(id.0.clone());
+        } else if let Some((state, _)) = self.view_target(path, binding, origin) {
             self.read.insert(state);
         }
     }
@@ -304,6 +306,7 @@ impl Census {
         for binding in [
             site.read,
             site.active,
+            site.color_read,
             site.columns_state,
             site.status,
             site.query,

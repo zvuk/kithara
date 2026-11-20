@@ -237,7 +237,15 @@ fn multichannel_biquad_rejects_a_shape_it_was_not_built_for() {
     assert_eq!(filter.process(&mut one, 0..8), Err(BiquadError::Shape));
     assert_eq!(filter.process(&mut short, 0..8), Err(BiquadError::Shape));
     assert_eq!(
-        filter.set_section(1, [1.0, 0.0, 0.0, 0.0, 0.0]),
+        filter.set_section(1, 0..2, [1.0, 0.0, 0.0, 0.0, 0.0]),
+        Err(BiquadError::Shape)
+    );
+    assert_eq!(
+        filter.set_section(0, 0..0, [1.0, 0.0, 0.0, 0.0, 0.0]),
+        Err(BiquadError::Shape)
+    );
+    assert_eq!(
+        filter.set_section(0, 2..3, [1.0, 0.0, 0.0, 0.0, 0.0]),
         Err(BiquadError::Shape)
     );
     assert_eq!(filter.copy_state_from(&other), Err(BiquadError::Shape));
@@ -249,7 +257,7 @@ fn multichannel_biquad_keeps_a_finite_prefix_before_a_future_nan() {
     let mut filter =
         MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
     filter
-        .set_section(0, [1.0, 0.0, 0.0, -0.5, 0.0])
+        .set_section(0, 0..1, [1.0, 0.0, 0.0, -0.5, 0.0])
         .expect("one section");
     let mut plane = vec![1.0, 0.0, f32::NAN, 1.0e-10, 1.0];
     filter
@@ -271,8 +279,8 @@ fn multichannel_biquad_reapplying_equal_coefficients_is_bit_neutral() {
         MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
     let mut repeated =
         MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
-    once.set_section(0, section).expect("one section");
-    repeated.set_section(0, section).expect("one section");
+    once.set_section(0, 0..1, section).expect("one section");
+    repeated.set_section(0, 0..1, section).expect("one section");
     let input: Vec<f32> = (0_u16..256)
         .map(|frame| (f32::from(frame) * 0.142_5).sin())
         .collect();
@@ -282,7 +290,9 @@ fn multichannel_biquad_reapplying_equal_coefficients_is_bit_neutral() {
         .expect("whole stream");
     let mut actual = input;
     for frame in 0..actual.len() {
-        repeated.set_section(0, section).expect("same section");
+        repeated
+            .set_section(0, 0..1, section)
+            .expect("same section");
         repeated
             .process(&mut [actual.as_mut_slice()], frame..frame + 1)
             .expect("one frame");
@@ -299,7 +309,7 @@ fn multichannel_biquad_refuses_the_entire_shape_without_advancing_history() {
         MultichannelBiquad::new(NonZeroUsize::MIN.saturating_add(1), NonZeroUsize::MIN)
             .expect("native setup");
     filter
-        .set_section(0, [1.0, 0.0, 0.0, -0.5, 0.0])
+        .set_section(0, 0..2, [1.0, 0.0, 0.0, -0.5, 0.0])
         .expect("one section");
     let mut short = [vec![1.0, 0.0, 0.0], vec![0.0]];
     let before = short.clone();
@@ -455,7 +465,7 @@ fn singleton_multiply_preserves_ieee_prefix_and_tails() {
     for sample in SPECIALS.into_iter().chain([0.7, -1.5]) {
         for gain in SPECIALS.into_iter().chain([0.7, -1.5]) {
             for (sample_count, gain_count) in [(1, 1), (1, 3), (3, 1)] {
-                let mut samples = [sample, -0.0, f32::from_bits(0x7F80_0001)];
+                let mut samples = [sample, -0.0, f32::from_bits(0x7f80_0001)];
                 let before = samples;
                 let gains = [gain, -9.0, f32::INFINITY];
                 let expected = sample * gain;
@@ -473,7 +483,7 @@ fn singleton_multiply_preserves_ieee_prefix_and_tails() {
             }
         }
     }
-    let mut samples = [-0.0, f32::from_bits(0x7F80_0001)];
+    let mut samples = [-0.0, f32::from_bits(0x7f80_0001)];
     let before = bits(samples);
     assert_eq!(multiply_in_place_f32(&mut samples, &[]), 0);
     assert_eq!(bits(samples), before);
@@ -563,4 +573,26 @@ fn add_accumulates_the_common_prefix() {
         "the shorter sum"
     );
     assert_eq!(add_f32(&[], &mut acc), 0, "an empty source");
+}
+
+#[kithara::test]
+fn multichannel_biquad_validates_the_mutable_borrow_before_ffi() {
+    struct Plane([f32; 4]);
+    impl std::ops::Deref for Plane {
+        type Target = [f32];
+        fn deref(&self) -> &[f32] {
+            &self.0
+        }
+    }
+    impl std::ops::DerefMut for Plane {
+        fn deref_mut(&mut self) -> &mut [f32] {
+            &mut self.0[..0]
+        }
+    }
+    let mut filter =
+        MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("identity setup");
+    let mut planes = [Plane([0.25; 4])];
+    assert_eq!(filter.process(&mut planes, 0..4), Err(BiquadError::Shape));
+
+    assert_eq!(planes[0].0, [0.25; 4]);
 }

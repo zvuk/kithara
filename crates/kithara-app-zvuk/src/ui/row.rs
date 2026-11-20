@@ -7,11 +7,16 @@ use kithara_ui::{
 };
 use url::Url;
 
-use crate::{MediaTrack, Track, TrackId, model::ItemStatus};
+use crate::{MediaTrack, SearchArtist, SearchRelease, Track, TrackId, model::ItemStatus};
 
-pub(super) struct Row {
-    pub(super) id: TrackId,
-    pub(super) liked: bool,
+pub(super) enum Row {
+    Track(TrackRow),
+    Entity(EntityRow),
+}
+
+pub(super) struct TrackRow {
+    id: TrackId,
+    liked: bool,
     title: String,
     artists: String,
     duration: String,
@@ -21,40 +26,115 @@ pub(super) struct Row {
     drag: Option<BTreeMap<String, String>>,
 }
 
+pub(super) struct EntityRow {
+    key: String,
+    title: String,
+    artists: String,
+}
+
 impl Row {
     pub(super) fn new(track: Track, stream: Option<&MediaTrack>, adaptive: bool) -> Self {
+        Self::Track(TrackRow::new(track, stream, adaptive))
+    }
+
+    pub(super) fn artist(artist: SearchArtist) -> Self {
+        Self::entity(format!("artist:{}", artist.id.0), artist.title, &[])
+    }
+
+    pub(super) fn release(release: SearchRelease) -> Self {
+        let artists = release
+            .artists
+            .into_iter()
+            .map(|artist| artist.title)
+            .collect::<Vec<String>>();
+        Self::entity(format!("album:{}", release.id.0), release.title, &artists)
+    }
+
+    fn entity(key: String, title: String, artists: &[String]) -> Self {
+        Self::Entity(EntityRow {
+            key,
+            title,
+            artists: artists.join(", "),
+        })
+    }
+
+    pub(super) fn key(&self) -> &str {
+        match self {
+            Self::Track(row) => &row.id.0,
+            Self::Entity(row) => &row.key,
+        }
+    }
+
+    pub(super) fn track_id(&self) -> Option<&TrackId> {
+        match self {
+            Self::Track(row) => Some(&row.id),
+            Self::Entity(_) => None,
+        }
+    }
+
+    pub(super) fn entity_action(&self) -> Option<&str> {
+        match self {
+            Self::Track(_) => None,
+            Self::Entity(row) => Some(&row.key),
+        }
+    }
+
+    pub(super) fn reaction(&self) -> Option<(TrackId, bool)> {
+        self.track_id()
+            .map(|id| (id.clone(), !matches!(self, Self::Track(row) if row.liked)))
+    }
+
+    pub(super) fn confirm_reaction(&mut self, id: &TrackId, liked: bool) {
+        if let Self::Track(row) = self
+            && row.id == *id
+        {
+            row.liked = liked;
+        }
+    }
+
+    pub(super) fn enrich(&mut self, stream: &MediaTrack, adaptive: bool) {
+        if let Self::Track(row) = self {
+            row.set_stream(Some(stream), adaptive);
+        }
+    }
+
+    pub(super) fn source(&self) -> Option<&str> {
+        match self {
+            Self::Track(row) => row.drag.as_ref()?.get("source").map(String::as_str),
+            Self::Entity(_) => None,
+        }
+    }
+
+    pub(super) fn set_adaptive(&mut self, adaptive: bool) {
+        if let Self::Track(row) = self {
+            row.set_adaptive(adaptive);
+        }
+    }
+
+    pub(super) fn matches(&self, query: &str) -> bool {
+        let (title, artists) = match self {
+            Self::Track(row) => (&row.title, &row.artists),
+            Self::Entity(row) => (&row.title, &row.artists),
+        };
+        title.to_lowercase().contains(query) || artists.to_lowercase().contains(query)
+    }
+
+    pub(super) fn view(&self, selected: bool) -> TableRow<'_> {
+        match self {
+            Self::Track(row) => row.view(selected),
+            Self::Entity(row) => row.view(selected),
+        }
+    }
+}
+
+impl TrackRow {
+    fn new(track: Track, stream: Option<&MediaTrack>, adaptive: bool) -> Self {
         let artists = track
             .artists
             .iter()
             .map(|artist| artist.title.as_str())
             .collect::<Vec<&str>>()
             .join(", ");
-        let mut choices: Vec<PlaybackChoice> = Vec::new();
-        if let Some(url) = stream
-            .and_then(|stream| stream.stream_v3.as_ref())
-            .and_then(|stream| stream.hls.as_ref())
-        {
-            choices.push(PlaybackChoice {
-                source: url.clone(),
-                label: "AUTO".to_owned(),
-                adaptive: true,
-            });
-        }
-        if let Some(progressive) = stream.and_then(|stream| stream.stream.as_ref()) {
-            for (label, url) in [
-                ("MP3 High", &progressive.high),
-                ("MP3 Mid", &progressive.mid),
-                ("FLAC", &progressive.flac),
-            ] {
-                if let Some(url) = url {
-                    choices.push(PlaybackChoice {
-                        source: url.clone(),
-                        label: label.to_owned(),
-                        adaptive: false,
-                    });
-                }
-            }
-        }
         let album = track.album().map(str::to_owned);
         let artwork = track
             .artwork()
@@ -70,18 +150,44 @@ impl Row {
             duration: format!("{}:{:02}", track.duration / 60, track.duration % 60),
             album,
             artwork,
-            choices,
+            choices: Vec::new(),
             drag: None,
         };
-        row.set_adaptive(adaptive);
+        row.set_stream(stream, adaptive);
         row
     }
 
-    pub(super) fn source(&self) -> Option<&str> {
-        self.drag.as_ref()?.get("source").map(String::as_str)
+    fn set_stream(&mut self, stream: Option<&MediaTrack>, adaptive: bool) {
+        self.choices.clear();
+        if let Some(url) = stream
+            .and_then(|stream| stream.stream_v3.as_ref())
+            .and_then(|stream| stream.hls.as_ref())
+        {
+            self.choices.push(PlaybackChoice {
+                source: url.clone(),
+                label: "AUTO".to_owned(),
+                adaptive: true,
+            });
+        }
+        if let Some(progressive) = stream.and_then(|stream| stream.stream.as_ref()) {
+            for (label, url) in [
+                ("MP3 High", &progressive.high),
+                ("MP3 Mid", &progressive.mid),
+                ("FLAC", &progressive.flac),
+            ] {
+                if let Some(url) = url {
+                    self.choices.push(PlaybackChoice {
+                        source: url.clone(),
+                        label: label.to_owned(),
+                        adaptive: false,
+                    });
+                }
+            }
+        }
+        self.set_adaptive(adaptive);
     }
 
-    pub(super) fn set_adaptive(&mut self, adaptive: bool) {
+    fn set_adaptive(&mut self, adaptive: bool) {
         self.drag = self
             .choices
             .iter()
@@ -98,11 +204,7 @@ impl Row {
             });
     }
 
-    pub(super) fn matches(&self, query: &str) -> bool {
-        self.title.to_lowercase().contains(query) || self.artists.to_lowercase().contains(query)
-    }
-
-    pub(super) fn view(&self, selected: bool) -> TableRow<'_> {
+    fn view(&self, selected: bool) -> TableRow<'_> {
         let row = TableRow::new(
             vec![
                 TableCell::icon(
@@ -126,6 +228,21 @@ impl Row {
             Some(drag) => row.with_drag(Cow::Borrowed(drag)),
             None => row,
         }
+    }
+}
+
+impl EntityRow {
+    fn view(&self, selected: bool) -> TableRow<'_> {
+        TableRow::new(
+            vec![
+                TableCell::icon("open", IconName::ChevronRight, false)
+                    .with_action(self.key.as_str()),
+                TableCell::text("title", &self.title),
+                TableCell::text("artist", &self.artists),
+                TableCell::text("time", "-"),
+            ],
+            selected,
+        )
     }
 }
 

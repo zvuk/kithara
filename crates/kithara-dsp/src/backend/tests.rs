@@ -10,7 +10,7 @@ use num_traits::ToPrimitive;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::accelerate;
-use super::{cascade, delay, fade, platform, portable, simd, strided};
+use super::{cascade, delay, fade, platform, portable, route, simd, strided};
 use crate::{
     fade::FadeCurve,
     filter::{Coefficients, Hertz, Type},
@@ -25,7 +25,7 @@ const STRIDES: [usize; 5] = [1, 2, 3, 6, 9];
 const RATE: u32 = 48_000;
 const UNWRITTEN: f32 = -1.0;
 /// A signaling `NaN`: a plain copy keeps its quiet bit clear.
-const SIGNALING_NAN: u32 = 0x7F80_0001;
+const SIGNALING_NAN: u32 = 0x7f80_0001;
 const SPECIALS: [f32; 9] = [
     0.0,
     -0.0,
@@ -37,6 +37,60 @@ const SPECIALS: [f32; 9] = [
     f32::NAN,
     f32::from_bits(SIGNALING_NAN),
 ];
+
+#[kithara::test]
+fn last_loud_matches_scalar_at_native_and_fallback_levels() {
+    for limit in [-1.0, 0.0, 1e-6, f32::INFINITY, f32::NAN] {
+        for size in SIZES {
+            for offset in OFFSETS {
+                let samples: Vec<_> = [limit.next_down(), limit, -limit, limit.next_up()]
+                    .into_iter()
+                    .chain(SPECIALS)
+                    .cycle()
+                    .take(size.checked_add(offset).expect("bounded fixture length"))
+                    .collect();
+                let samples = samples.get(offset..).expect("fixture includes its offset");
+                let expected = samples.iter().rposition(|sample| sample.abs() > limit);
+                for level in [Level::fallback(), Level::new()] {
+                    let actual =
+                        dispatch!(level, simd => simd::last_loud_kernel(simd, samples, limit));
+                    assert_eq!(
+                        actual, expected,
+                        "size={size} offset={offset} limit={limit}"
+                    );
+                }
+                assert_eq!(crate::last_loud(samples, limit), expected);
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn last_loud_finds_every_position_across_full_blocks_and_a_partial_tail() {
+    for size in SIZES.into_iter().chain([128, 512]) {
+        for offset in OFFSETS {
+            for level in [Level::fallback(), Level::new()] {
+                let mut samples = vec![0.0_f32; size.saturating_add(offset)];
+                let input = samples.get(offset..).expect("fixture contains its offset");
+                assert_eq!(
+                    dispatch!(level, simd => simd::last_loud_kernel(simd, input, 1e-6)),
+                    None
+                );
+                assert_eq!(crate::last_loud(input, 1e-6), None);
+                for position in 0..size {
+                    *samples
+                        .get_mut(offset.saturating_add(position))
+                        .expect("fixture position fits") = -0.25;
+                    let input = samples.get(offset..).expect("fixture contains its offset");
+                    let actual =
+                        dispatch!(level, simd => simd::last_loud_kernel(simd, input, 1e-6));
+                    assert_eq!(actual, Some(position), "size={size} offset={offset}");
+                    assert_eq!(crate::last_loud(input, 1e-6), Some(position));
+                }
+            }
+        }
+    }
+}
 
 #[kithara::test]
 fn scalar_gain_matches_ieee_multiplication_at_every_level() {
@@ -659,7 +713,7 @@ macro_rules! handover_run {
             let half = frames.wrapping_div(2);
             for (section, coefficients) in halves[0].iter().enumerate() {
                 cascade
-                    .set_section(section, *coefficients)
+                    .set_section(section, 0..channels.get(), *coefficients)
                     .expect("section");
             }
             cascade
@@ -669,7 +723,8 @@ macro_rules! handover_run {
             cascade.process(planes, 0..half).expect("shape matches");
             twin.copy_state_from(&cascade).expect("same shape");
             for (section, coefficients) in halves[1].iter().enumerate() {
-                twin.set_section(section, *coefficients).expect("section");
+                twin.set_section(section, 0..channels.get(), *coefficients)
+                    .expect("section");
             }
             twin.process(planes, half..frames).expect("shape matches");
         }
@@ -686,7 +741,7 @@ fn portable_fallback_run(planes: &mut [Vec<f32>], halves: &[Vec<[f32; 5]>; 2]) {
     for (range, set) in [(0..half, &halves[0]), (half..frames, &halves[1])] {
         for (section, coefficients) in set.iter().enumerate() {
             cascade
-                .set_section(section, *coefficients)
+                .set_section(section, 0..channels.get(), *coefficients)
                 .expect("section");
         }
         dispatch!(Level::fallback(), simd => cascade::cascade_kernel(simd, &mut cascade, planes, range));
@@ -757,7 +812,7 @@ fn a_silent_channel_beside_a_playing_one_never_reaches_subnormals() {
     ];
     for (name, call) in runs {
         let mut cascade = cascade::Cascade::new(stride(2), stride(1)).expect("cascade");
-        cascade.set_section(0, section).expect("section");
+        cascade.set_section(0, 0..2, section).expect("section");
         assert_eq!(sine_440().len(), CALL.saturating_mul(CALLS));
         let subnormal: usize = sine_440()
             .as_chunks::<CALL>()
@@ -841,28 +896,17 @@ fn vectors() -> Vec<Vectors> {
     ])
 }
 
-/// The `ramp` kernel at the native and the fallback level: one kernel on
-/// every platform.
-fn ramps() -> [(&'static str, WithScalars); 2] {
-    [
-        ("native", simd::ramp),
-        (
-            "fallback",
-            |output, start, step| dispatch!(Level::fallback(), simd => simd::ramp_kernel(simd, output, start, step)),
-        ),
-    ]
+/// Measured ramp forms and the fallback parity reference.
+fn ramps() -> impl Iterator<Item = (&'static str, WithScalars)> {
+    let fallback: WithScalars = |output, start, step| dispatch!(Level::fallback(), simd => simd::ramp_kernel(simd, output, start, step));
+    route::table::ramp::routes().chain([("fallback", fallback)])
 }
 
-/// The `mul_add` kernel at the native and the fallback level: one kernel on
-/// every platform.
-fn mul_adds() -> [(&'static str, MulAdd); 2] {
-    [
-        ("native", simd::mul_add),
-        (
-            "fallback",
-            |x, y, acc| dispatch!(Level::fallback(), simd => simd::mul_add_kernel(simd, x, y, acc)),
-        ),
-    ]
+/// Measured multiply-add forms and the fallback parity reference.
+fn mul_adds() -> impl Iterator<Item = (&'static str, MulAdd)> {
+    let fallback: MulAdd =
+        |x, y, acc| dispatch!(Level::fallback(), simd => simd::mul_add_kernel(simd, x, y, acc));
+    route::table::mul_add::routes().chain([("fallback", fallback)])
 }
 
 /// Equal bits, or both `NaN`: a `NaN` payload is the backend's to choose.
@@ -1149,10 +1193,9 @@ fn ramp_counts_exactly_at_every_level() {
 #[kithara::test]
 fn div_matches_ieee_division_at_every_level() {
     let fallback = |samples: &mut [f32], divisor: f32| dispatch!(Level::fallback(), simd => simd::div_kernel(simd, samples, divisor));
-    for (name, div) in [
-        ("native", simd::div as fn(&mut [f32], f32) -> usize),
-        ("fallback", fallback),
-    ] {
+    for (name, div) in
+        route::table::div::routes().chain([("fallback", fallback as fn(&mut [f32], f32) -> usize)])
+    {
         for divisor in [3.0, -0.7].into_iter().chain(SPECIALS) {
             for size in SIZES {
                 for offset in OFFSETS {
@@ -1170,6 +1213,56 @@ fn div_matches_ieee_division_at_every_level() {
                     );
                 }
             }
+        }
+    }
+}
+
+#[kithara::test]
+fn routed_vector_forms_keep_bits_and_untouched_tails() {
+    for frames in [0_usize, 1, 3, 7, 31, 128, 129, 512, 513] {
+        let input: Vec<_> = SPECIALS.into_iter().cycle().take(frames).collect();
+        let seed: Vec<_> = input.iter().copied().chain([UNWRITTEN; 3]).collect();
+        let mut expected = seed.clone();
+        simd::ramp(expected.split_at_mut(frames).0, -0.0, 0.125);
+        for (name, kernel) in route::table::ramp::routes() {
+            let mut actual = seed.clone();
+            assert_eq!(kernel(actual.split_at_mut(frames).0, -0.0, 0.125), frames);
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "ramp {name}"
+            );
+        }
+
+        let mut expected = seed.clone();
+        simd::div(expected.split_at_mut(frames).0, 3.0);
+        for (name, kernel) in route::table::div::routes() {
+            let mut actual = seed.clone();
+            assert_eq!(kernel(actual.split_at_mut(frames).0, 3.0), frames);
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "div {name}"
+            );
+        }
+
+        let short = input.split_at(frames.saturating_sub(1)).0;
+        let mut expected = seed.clone();
+        let count = simd::mul_add(&input, short, &mut expected);
+        for (name, kernel) in route::table::mul_add::routes() {
+            let mut actual = seed.clone();
+            assert_eq!(kernel(&input, short, &mut actual), count);
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "mul_add {name}"
+            );
         }
     }
 }

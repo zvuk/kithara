@@ -3,8 +3,10 @@
 use kithara::{
     dsp::param::{DEFAULT_SETTLE_RATIO, DEFAULT_SMOOTH_SECONDS},
     platform::time::Duration,
+    play::DeckMixSettingsChange,
     queue::QueueControl,
 };
+use kithara_command::When;
 use kithara_integration_tests::{
     kithara,
     smoothing::{
@@ -45,7 +47,7 @@ async fn deck_volume_step_is_ramped() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
     let before = observe(&harness, consts::OBSERVE_BLOCKS).await;
     harness
-        .run(|deck| deck.set_volume(0.0))
+        .run(|deck| deck.mix(When::Next, DeckMixSettingsChange::Volume(0.0.into())))
         .await
         .expect("the deck takes the volume");
     let (after, silent) = observe_until(&harness, |block| peak(block) == 0.0).await;

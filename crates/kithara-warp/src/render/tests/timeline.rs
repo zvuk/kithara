@@ -31,9 +31,9 @@ use super::flush_serviced;
 ))]
 use super::{LaneFeed, chunk, renderer, samples, spec};
 use super::{WarpRenderer, f64_of};
-use crate::Pitch;
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use crate::Warp;
+use crate::{Pitch, WarpControls};
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 fn assert_identity_quantum(
@@ -105,7 +105,7 @@ fn assert_identity_quantum(
 fn manual_ramp_to_the_rate_limit_keeps_quantized_requests_bounded() {
     let config = WarpConfig::builder()
         .speed(2.0)
-        .pitch(Pitch::HELD)
+        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
         .backend(StretchKind::Signalsmith)
         .backends(
             kithara_stretch::ElasticBackendConfig::builder()
@@ -178,7 +178,7 @@ fn live_unity_transition_drains_active_backend_tail(
 ) {
     let config = WarpConfig::builder()
         .speed(0.5)
-        .pitch(Pitch::HELD)
+        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
         .backend(backend)
         .build();
     let signal = |frame: u64| {
@@ -312,7 +312,7 @@ fn a_fractional_identity_phase_snaps_to_its_nearest_frame_without_starving(
 ) {
     let config = WarpConfig::builder()
         .speed(1.0 / 1.6)
-        .pitch(Pitch::HELD)
+        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
         .backend(backend)
         .build();
     let signal = |frame: u64| {
@@ -367,7 +367,7 @@ fn keylocked_unity_reenters_the_engine_without_a_source_jump_or_starvation(
     let mut fx = renderer(
         &WarpConfig::builder()
             .speed(1.0)
-            .pitch(Pitch::HELD)
+            .controls(WarpControls::builder().pitch(Pitch::HELD).build())
             .backend(backend)
             .build(),
     );
@@ -450,7 +450,7 @@ fn reset_discards_pending_span_before_new_timeline(
     let mut fx = renderer(
         &WarpConfig::builder()
             .speed(1.0 / 0.75)
-            .pitch(Pitch::HELD)
+            .controls(WarpControls::builder().pitch(Pitch::HELD).build())
             .backend(backend)
             .build(),
     );
@@ -497,7 +497,7 @@ fn a_deferred_reset_renders_like_a_fresh_renderer(
     const SEEK_FRAME: usize = 40_960;
     let config = WarpConfig::builder()
         .speed(0.75)
-        .pitch(Pitch::HELD)
+        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
         .backend(backend)
         .build();
     let channels = usize::from(consts::CH);

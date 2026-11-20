@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::{
-    Config, Error, GraphQlError, MediaTrack, Playlist, PlaylistId, Track, TrackId, TrackPage,
-    consts,
+    ArtistId, Config, Error, GraphQlError, MediaTrack, Playlist, PlaylistId, ReleaseId, SearchPage,
+    SearchResults, SearchScope, Track, TrackId, TrackPage, consts,
 };
 
 /// Catalogue operations using the caller's transport and the identity its
@@ -57,7 +57,7 @@ impl<N: Net> Client<N> {
         }
     }
 
-    /// Loads the first search page and the service's total for this query.
+    /// Loads one typed search page and its opaque continuation.
     /// # Errors
     ///
     /// Returns authentication, transport, `GraphQL` or protocol errors.
@@ -65,18 +65,50 @@ impl<N: Net> Client<N> {
         &self,
         token: &AccessToken,
         query: &str,
-    ) -> Result<TrackPage, Error> {
-        let track_fields = consts::TRACK_FIELDS;
+        scope: SearchScope,
+        cursor: Option<&str>,
+    ) -> Result<SearchResults, Error> {
+        let (field, fields) = match scope {
+            SearchScope::Tracks => ("tracks", consts::TRACK_FIELDS),
+            SearchScope::Artists => ("artists", "id title"),
+            SearchScope::Albums => ("releases", "id title artists { title }"),
+        };
         let operation = format!(
-            "query KitharaSearch($query: String!) {{ search(query: $query) {{ tracks(limit: 100) {{ items {{ {track_fields} }} page {{ total }} }} }} }}"
+            "query KitharaSearch($query: String!, $limit: Int, $cursor: Cursor) {{ search(query: $query) {{ {field}(limit: $limit, cursor: $cursor) {{ items {{ {fields} }} page {{ total cursor }} }} }} }}"
         );
         let data = self
-            .execute(&self.net, token, &operation, json!({ "query": query }))
+            .execute(
+                &self.net,
+                token,
+                &operation,
+                json!({ "query": query, "limit": 100, "cursor": cursor }),
+            )
             .await?;
-        Ok(TrackPage {
-            tracks: decode(&data, "/search/tracks/items")?,
-            total: decode_count(&data, "/search/tracks/page/total")?,
-        })
+        match scope {
+            SearchScope::Tracks => Ok(SearchResults::Tracks(search_page(&data, field)?)),
+            SearchScope::Artists => Ok(SearchResults::Artists(search_page(&data, field)?)),
+            SearchScope::Albums => Ok(SearchResults::Albums(search_page(&data, field)?)),
+        }
+    }
+
+    /// Loads up to the service's three query suggestions.
+    /// # Errors
+    ///
+    /// Returns authentication, transport, `GraphQL` or protocol errors.
+    pub(crate) async fn autocomplete(
+        &self,
+        token: &AccessToken,
+        query: &str,
+    ) -> Result<Vec<String>, Error> {
+        let data = self
+            .execute(
+                &self.net,
+                token,
+                "query KitharaAutocomplete($query: String!) { searchAutocomplete(query: $query, limit: 3) { content } }",
+                json!({ "query": query }),
+            )
+            .await?;
+        decode(&data, "/searchAutocomplete/content")
     }
 
     /// Loads the first liked page and the configured account's collection count.
@@ -145,6 +177,58 @@ impl<N: Net> Client<N> {
             tracks: decode(&playlists[0], "/tracks")?,
             total: decode_count(&playlists[0], "/trackCount")?,
         })
+    }
+
+    /// Loads an artist's popular tracks in service order.
+    /// # Errors
+    ///
+    /// Returns authentication, transport, `GraphQL` or protocol errors.
+    pub(crate) async fn artist_tracks(
+        &self,
+        token: &AccessToken,
+        id: &ArtistId,
+    ) -> Result<TrackPage, Error> {
+        let ids = encode(&[id])?;
+        let track_fields = consts::TRACK_FIELDS;
+        let operation = format!(
+            "query KitharaArtistTracks {{ getArtists(ids: {ids}) {{ id popularTracks(limit: 100, offset: 0) {{ {track_fields} }} }} }}"
+        );
+        let data = self
+            .execute(&self.net, token, &operation, json!({}))
+            .await?;
+        detail_tracks(
+            &data,
+            "getArtists",
+            "popularTracks",
+            &id.0,
+            "artist identity does not match request",
+        )
+    }
+
+    /// Loads a release's tracks in release order.
+    /// # Errors
+    ///
+    /// Returns authentication, transport, `GraphQL` or protocol errors.
+    pub(crate) async fn release_tracks(
+        &self,
+        token: &AccessToken,
+        id: &ReleaseId,
+    ) -> Result<TrackPage, Error> {
+        let ids = encode(&[id])?;
+        let track_fields = consts::TRACK_FIELDS;
+        let operation = format!(
+            "query KitharaReleaseTracks {{ getReleases(ids: {ids}) {{ id tracks {{ {track_fields} }} }} }}"
+        );
+        let data = self
+            .execute(&self.net, token, &operation, json!({}))
+            .await?;
+        detail_tracks(
+            &data,
+            "getReleases",
+            "tracks",
+            &id.0,
+            "release identity does not match request",
+        )
     }
 
     /// Resolve one batch with one request; an empty batch performs no I/O.
@@ -264,6 +348,36 @@ impl<N: Net> Client<N> {
     }
 }
 
+fn search_page<T: DeserializeOwned>(data: &Value, field: &str) -> Result<SearchPage<T>, Error> {
+    let root = format!("/search/{field}");
+    Ok(SearchPage {
+        items: decode(data, &format!("{root}/items"))?,
+        total: decode_count(data, &format!("{root}/page/total"))?,
+        cursor: decode_cursor(data, &format!("{root}/page/cursor"))?,
+    })
+}
+
+fn detail_tracks(
+    data: &Value,
+    field: &str,
+    tracks_field: &str,
+    id: &str,
+    mismatch: &'static str,
+) -> Result<TrackPage, Error> {
+    let entities = data
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or(Error::Protocol("missing operation result"))?;
+    if entities.len() != 1 || entities[0].get("id").and_then(Value::as_str) != Some(id) {
+        return Err(Error::Protocol(mismatch));
+    }
+    let tracks: Vec<Track> = decode(&entities[0], &format!("/{tracks_field}"))?;
+    Ok(TrackPage {
+        total: Some(tracks.len()),
+        tracks,
+    })
+}
+
 fn decode_errors(envelope: &Value) -> Result<Vec<GraphQlError>, Error> {
     envelope.get("errors").map_or_else(
         || Ok(Vec::new()),
@@ -312,6 +426,16 @@ fn decode<T: DeserializeOwned>(data: &Value, pointer: &str) -> Result<T, Error> 
         .pointer(pointer)
         .ok_or(Error::Protocol("missing operation result"))?;
     serde_json::from_value(value.clone()).map_err(|_| Error::Protocol("invalid operation result"))
+}
+
+fn decode_cursor(data: &Value, pointer: &str) -> Result<Option<String>, Error> {
+    data.pointer(pointer)
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            serde_json::from_value(value.clone())
+                .map_err(|_| Error::Protocol("invalid operation result"))
+        })
+        .transpose()
 }
 
 fn decode_count(data: &Value, pointer: &str) -> Result<Option<usize>, Error> {

@@ -138,36 +138,56 @@ fn rejected_slot_volume_leaves_live_values_unchanged(#[by_ref] worker_owner: &Wo
         assert_eq!(scope.available(), 0);
     }
     assert!(matches!(
-        mix_command(&mut queue, &mut rig, &mut mix, QueueCommand::SetVolume(0.4)),
+        mix_command(
+            &mut queue,
+            &mut rig,
+            &mut mix,
+            QueueCommand::Mix(DeckMixSettingsChange::Volume(0.4.into()), When::Next)
+        ),
         Err(PlayError::Full("deck"))
     ));
     assert_eq!(f32::from(mix.config().volume()), 1.0);
     assert_eq!(f32::from(mix.projected().volume()), 1.0);
-    assert_eq!(control.volume(), 1.0);
+    assert_eq!(f32::from(control.mix_settings().volume()), 1.0);
     assert!(matches!(
-        mix_command(&mut queue, &mut rig, &mut mix, QueueCommand::SetMuted(true)),
+        mix_command(
+            &mut queue,
+            &mut rig,
+            &mut mix,
+            QueueCommand::Mix(DeckMixSettingsChange::Muted(true), When::Next)
+        ),
         Err(PlayError::Full("deck"))
     ));
     assert!(!mix.config().muted());
     assert!(!mix.projected().muted());
-    assert!(!control.is_muted());
+    assert!(!control.mix_settings().muted());
     assert!(events.try_recv().is_err());
 
     rig.ring.close(rig.scope).expect("close scoped channel");
     assert!(matches!(
-        mix_command(&mut queue, &mut rig, &mut mix, QueueCommand::SetVolume(0.4)),
+        mix_command(
+            &mut queue,
+            &mut rig,
+            &mut mix,
+            QueueCommand::Mix(DeckMixSettingsChange::Volume(0.4.into()), When::Next)
+        ),
         Err(PlayError::Closed)
     ));
     assert_eq!(f32::from(mix.config().volume()), 1.0);
     assert_eq!(f32::from(mix.projected().volume()), 1.0);
-    assert_eq!(control.volume(), 1.0);
+    assert_eq!(f32::from(control.mix_settings().volume()), 1.0);
     assert!(matches!(
-        mix_command(&mut queue, &mut rig, &mut mix, QueueCommand::SetMuted(true)),
+        mix_command(
+            &mut queue,
+            &mut rig,
+            &mut mix,
+            QueueCommand::Mix(DeckMixSettingsChange::Muted(true), When::Next)
+        ),
         Err(PlayError::Closed)
     ));
     assert!(!mix.config().muted());
     assert!(!mix.projected().muted());
-    assert!(!control.is_muted());
+    assert!(!control.mix_settings().muted());
     assert!(events.try_recv().is_err());
 
     let mut idle =
@@ -176,7 +196,7 @@ fn rejected_slot_volume_leaves_live_values_unchanged(#[by_ref] worker_owner: &Wo
         &mut queue,
         &mut idle,
         &mut mix,
-        QueueCommand::SetVolume(0.4),
+        QueueCommand::Mix(DeckMixSettingsChange::Volume(0.4.into()), When::Next),
     )
     .expect("idle volume accepted")
     .expect("mix batch");
@@ -206,7 +226,7 @@ fn rejected_slot_volume_leaves_live_values_unchanged(#[by_ref] worker_owner: &Wo
     let mut scope = idle.ring.scope(idle.scope).expect("idle scope");
     let mut out = Outbox::new(&mut scope, &mut idle.dispatcher).in_pass(pass);
     HostedDeck::tick(&mut queue, pass, &mut out);
-    assert_eq!(control.volume(), 0.4);
+    assert_eq!(f32::from(control.mix_settings().volume()), 0.4);
     assert!(matches!(events.try_recv().map(|event| event.event),
         Ok(PlayerEvent::VolumeChanged { volume }) if volume == 0.4));
     assert!(

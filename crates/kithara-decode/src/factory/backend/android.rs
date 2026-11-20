@@ -1,3 +1,4 @@
+use kithara_android::media::sys::{KEY_ENCODER_DELAY, KEY_ENCODER_PADDING};
 use kithara_bufpool::HasPool;
 use kithara_resampler::ResamplerBackend;
 use kithara_stream::{AudioCodec, ContainerFormat};
@@ -7,7 +8,13 @@ use super::super::{
     mpeg::build_mpeg_decoder,
     segment::{build_fmp4_segment_decoder, should_use_segment_aware},
 };
-use crate::{DecodeError, DecodeResult, Decoder, DecoderConfig, traits::BoxedSource};
+use crate::{
+    DecodeError, DecodeResult, Decoder, DecoderConfig,
+    android::{AndroidCodec, AndroidMediaExtractorDemuxer},
+    demuxer::Demuxer,
+    gapless::probe_mp4_gapless,
+    traits::BoxedSource,
+};
 
 pub(in crate::factory) fn create<B, S>(
     source: BoxedSource,
@@ -19,8 +26,6 @@ where
     B: ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    use crate::android::AndroidCodec;
-
     if should_use_segment_aware(codec, container, &config)
         && let Some(layout) = config.byte_map.clone()
     {
@@ -88,13 +93,6 @@ where
     B: ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    use kithara_android::media::sys::{KEY_ENCODER_DELAY, KEY_ENCODER_PADDING};
-
-    use crate::{
-        android::{AndroidCodec, AndroidMediaExtractorDemuxer},
-        demuxer::Demuxer,
-        gapless::probe_mp4_gapless,
-    };
     if codec == AudioCodec::Mp3 {
         return build_mpeg_decoder(source, container, config, |demuxer| {
             AndroidCodec::open_with_config(demuxer.track_info())

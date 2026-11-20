@@ -12,7 +12,7 @@ use kithara::{
     net::NetOptions,
     platform::{
         CancelToken, time,
-        time::{Duration, Instant},
+        time::{Duration, Instant, WallInstant},
         tokio::{sync::broadcast::error::TryRecvError, task::spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig, TrackConfig},
@@ -543,6 +543,15 @@ impl SeekPressure {
     }
 }
 
+/// Deliberate pacing and diagnostics must not consume the PCM-read budget.
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
+pub(crate) fn read_abr_chunk<T>(context: String, read: impl FnOnce() -> T) -> T {
+    hang_tick!(context);
+    let output = read();
+    hang_tick!();
+    output
+}
+
 /// ABR is locked while a seek is pending, so the seek lands on the variant that
 /// played before it even after the estimate fell below that variant. The lock
 /// ends with the seek and a switch splices at the decode head, so the first
@@ -553,7 +562,10 @@ impl SeekPressure {
 /// was held still arrive, and how many of them there are depends on how long
 /// the seek stayed pending — not on ABR.
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3))]
-pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
+pub(crate) async fn abr_frozen_during_seek_resumes_after(
+    temp_dir: TestTempDir,
+    overlap_real_work: bool,
+) {
     use kithara::{
         audio::{AudioRead, AudioSession},
         signal::AudioChunk,
@@ -785,16 +797,18 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
     }
     seek_segment.release();
 
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     fn read_after_seek(
         audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
         mut events: EventReceiver<TestEvent>,
+        overlap_real_work: bool,
     ) -> Vec<AbrEvent> {
-        hang_tick!(format!(
-            "seek landing; recent_abr_newest_first={:?}",
-            abr_seek_evidence()
-        ));
-        let landing = match AudioRead::next_chunk(audio).expect("read the seek landing") {
+        let landing = match read_abr_chunk(
+            format!(
+                "seek landing; recent_abr_newest_first={:?}",
+                abr_seek_evidence()
+            ),
+            || AudioRead::next_chunk(audio).expect("read the seek landing"),
+        ) {
             ChunkOutcome::Chunk(chunk) => Some(*chunk),
             ChunkOutcome::Eof { .. } => None,
             ChunkOutcome::Pending { .. } => panic!("blocking seek landing remained pending"),
@@ -811,24 +825,44 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
             "the seek must land on the variant that played before it, although the \
          estimate fell below it while the seek was pending"
         );
+        let pacing_started = WallInstant::now();
+        let real_work = overlap_real_work.then(|| {
+            let (started, entered) = kithara::platform::sync::mpsc::channel();
+            let work = kithara::platform::thread::spawn_named("hls-real-work", move || {
+                started.send(()).expect("announce real work");
+                kithara_test_utils::test::wall_sleep(Duration::from_millis(1100));
+            });
+            entered.recv().expect("real work started");
+            work
+        });
         pace(
             landing
                 .spec()
                 .duration_for(landing.frames() as u64)
                 .expect("seek landing has a valid duration"),
         );
+        if let Some(work) = real_work {
+            work.join().expect("unrelated real work completed");
+            let pacing_elapsed = pacing_started.elapsed();
+            assert!(
+                pacing_elapsed >= Duration::from_secs(1),
+                "the unrelated work must delay the next PCM read"
+            );
+        }
         let mut decisions = Vec::new();
         let mut chunks = 1u64;
         let mut frames = u64::from(landing.meta.frames);
         let mut last_chunk = landing.meta;
         loop {
             drain_abr_decisions(&mut events, &mut decisions);
-            hang_tick!(format!(
-                "post-seek chunks={chunks} frames={frames} last_chunk={last_chunk:?}; \
-                 recent_abr_newest_first={:?}",
-                abr_seek_evidence()
-            ));
-            let chunk = match AudioRead::next_chunk(audio).expect("read after the seek landing") {
+            let chunk = match read_abr_chunk(
+                format!(
+                    "post-seek chunks={chunks} frames={frames} last_chunk={last_chunk:?}; \
+                     recent_abr_newest_first={:?}",
+                    abr_seek_evidence()
+                ),
+                || AudioRead::next_chunk(audio).expect("read after the seek landing"),
+            ) {
                 ChunkOutcome::Chunk(chunk) => Some(*chunk),
                 ChunkOutcome::Eof { .. } => None,
                 ChunkOutcome::Pending { .. } => panic!("blocking post-seek read remained pending"),
@@ -842,7 +876,6 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
                     abr_seek_evidence()
                 );
             });
-            hang_reset!();
             chunks += 1;
             frames += u64::from(chunk.meta.frames);
             last_chunk = chunk.meta;
@@ -863,7 +896,7 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) 
     }
     let (_audio, decisions) = kithara_integration_tests::reads::blocking_audio(
         kithara_integration_tests::mock::with_blocking_reads(audio),
-        move |audio| read_after_seek(audio, events),
+        move |audio| read_after_seek(audio, events, overlap_real_work),
     )
     .await;
     let unlocked = decisions

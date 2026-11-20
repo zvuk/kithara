@@ -776,7 +776,7 @@ fn patch_error_type(ty: &Type) -> Result<Type> {
 }
 
 /// `kithara_beat::BeatConfig` becomes `kithara_beat::BeatConfig{suffix}`.
-fn renamed(ty: &Type, suffix: &str, refusal: &str) -> Result<Type> {
+pub(in crate::config) fn renamed(ty: &Type, suffix: &str, refusal: &str) -> Result<Type> {
     let Type::Path(mut path) = ty.clone() else {
         return Err(Error::new(ty.span(), refusal));
     };
