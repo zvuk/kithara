@@ -1,5 +1,8 @@
+use std::num::NonZeroU32;
+
 use kithara_bufpool::HasPool;
 use kithara_resampler::ResamplerBackend;
+use kithara_signal::rescale_frame_round;
 use kithara_stream::{AudioCodec, ContainerFormat};
 
 #[cfg(feature = "ape")]
@@ -164,17 +167,6 @@ fn scale_gapless_for_output_domain(
         return Ok(Some(info));
     };
 
-    if source_rate == 0 {
-        return Err(DecodeError::InvalidSampleRate {
-            resource: "apple.gapless.source",
-        });
-    }
-    if output_rate == 0 {
-        return Err(DecodeError::InvalidSampleRate {
-            resource: "apple.gapless.output",
-        });
-    }
-
     Ok(Some(GaplessInfo {
         leading_frames: round_scaled_frames(info.leading_frames, source_rate, output_rate)?,
         trailing_frames: round_scaled_frames(info.trailing_frames, source_rate, output_rate)?,
@@ -182,11 +174,13 @@ fn scale_gapless_for_output_domain(
 }
 
 fn round_scaled_frames(count: u64, source_rate: u32, output_rate: u32) -> DecodeResult<u64> {
-    let numerator = u128::from(count)
-        .saturating_mul(u128::from(output_rate))
-        .saturating_add(u128::from(source_rate / 2));
-    let scaled = numerator / u128::from(source_rate);
-    u64::try_from(scaled).map_err(|_| DecodeError::InvalidData {
+    let source_rate = NonZeroU32::new(source_rate).ok_or(DecodeError::InvalidSampleRate {
+        resource: "apple.gapless.source",
+    })?;
+    let output_rate = NonZeroU32::new(output_rate).ok_or(DecodeError::InvalidSampleRate {
+        resource: "apple.gapless.output",
+    })?;
+    rescale_frame_round(count, source_rate, output_rate).ok_or(DecodeError::InvalidData {
         detail: "apple gapless output-domain frame count overflow",
     })
 }
@@ -202,18 +196,25 @@ mod apple_factory_tests {
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_signal::{AudioChunk, AudioSpec};
     use kithara_stream::{AudioCodec, ByteMap, MediaInfo};
-    use kithara_test_fixtures::{mock_fixtures::one_packet, unit_fixtures::trim_silence};
+    use kithara_test_fixtures::{
+        mock_fixtures::one_packet,
+        unit_fixtures::{aac_init, trim_silence},
+    };
     use kithara_test_utils::kithara;
 
     use super::{round_scaled_frames, track_with_output_domain_gapless};
     use crate::{
         DecodeError, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
         DecoderTrackInfo, GaplessInfo, GaplessTrimmer,
+        apple::AppleCodec,
         codec::FrameCodec,
         composed::{ComposedDecoder, DecoderRuntime},
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
         error::DecodeResult,
-        fmp4::test_layout::{FakeSegmented, aac_one},
+        fmp4::{
+            parsing::parse_init,
+            test_layout::{FakeSegmented, aac_one},
+        },
         test_pools::{TestPools, pools},
         traits::Decoder,
     };
@@ -426,6 +427,32 @@ mod apple_factory_tests {
                 leading_frames: 1115,
                 trailing_frames: 480,
             })
+        );
+    }
+
+    #[kithara::test]
+    #[case::upsampled(48_000)]
+    #[case::downsampled(24_000)]
+    fn apple_codec_preserves_factory_output_domain_gapless(
+        aac_init: Vec<u8>,
+        #[case] output_rate: u32,
+    ) {
+        let init = parse_init(&aac_init, &pools()).expect("AAC init");
+        let mut source_track = aac_track(
+            init.sample_rate,
+            Some(GaplessInfo::new(u64::from(init.sample_rate), 0)),
+        );
+        source_track.channels = init.channels;
+        source_track.extra_data = init.config.as_ref().to_vec();
+        let output_track = track_with_output_domain_gapless(&source_track, Some(output_rate))
+            .expect("factory output domain");
+        let codec = AppleCodec::open_with_config(&output_track, true, Some(output_rate))
+            .expect("real Apple codec");
+
+        assert_eq!(
+            codec.track_info().gapless,
+            Some(GaplessInfo::new(u64::from(output_rate), 0)),
+            "the factory already expressed one second of trim in output frames",
         );
     }
 
