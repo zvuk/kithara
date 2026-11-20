@@ -90,7 +90,7 @@ mod tests {
         })
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn chrome_fixture_targets_are_scoped() {
         for binary in [
             "/cache/deps/web_bootstrap-8f845460d7dd326c.wasm",
@@ -104,7 +104,7 @@ mod tests {
         assert!(!perf_logging_target(Path::new(other)));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn merge_enables_network_and_keeps_every_prior_key() {
         let mut config = config();
         apply_perf_logging(&mut config).expect("merge applies");
@@ -120,7 +120,7 @@ mod tests {
         assert_eq!(config["custom:capability"], json!({ "kept": true }));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn merge_is_idempotent() {
         let mut config = config();
         apply_perf_logging(&mut config).expect("first merge");
@@ -129,7 +129,7 @@ mod tests {
         assert_eq!(config, once);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn wrong_shapes_are_errors_not_panics() {
         for mut bad in [
             json!([]),

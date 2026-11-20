@@ -14,7 +14,7 @@ const PACKAGES: [&str; 3] = [
     "wasm-bindgen-test-shared",
 ];
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native)]
 fn generator_runtime_and_harness_resolve_to_one_bindgen_version() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock");
     let text = fs::read_to_string(&path).expect("the workspace lock file is readable");

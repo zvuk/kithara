@@ -8,12 +8,14 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_platform::time::{Duration, Instant, sleep, timeout};
 use kithara_test_utils::free_loopback_port;
 use serde_json::{Map, Value, json};
 
 /// How long a freshly spawned driver gets to bind its port.
 const DRIVER_START: Duration = Duration::from_secs(5);
+/// How long the driver gets to close the browser once the run is over.
+const SESSION_CLOSE: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Browser {
@@ -56,8 +58,8 @@ pub(crate) fn locate() -> Result<(Browser, PathBuf)> {
         .context("no WebDriver: set CHROMEDRIVER, GECKODRIVER or SAFARIDRIVER, or put chromedriver on PATH")
 }
 
-/// A running driver and the browser session it opened. Dropping it ends the
-/// session and stops the driver.
+/// A running driver and the browser session it opened. `close` ends the
+/// session; dropping it only stops the driver, which leaves the browser behind.
 pub(crate) struct Session {
     http: reqwest::Client,
     base: String,
@@ -73,23 +75,28 @@ impl Session {
     ) -> Result<Self> {
         let port = free_loopback_port()?;
         let arguments = env::var(format!("{}_ARGS", browser.variable())).unwrap_or_default();
-        let mut driver = Command::new(&path)
+        let driver = Command::new(&path)
             .args(arguments.split_whitespace())
             .arg(format!("--port={port}"))
             .stdout(Stdio::null())
             .spawn()
             .with_context(|| format!("starting {}", path.display()))?;
         let address = SocketAddr::from(([127, 0, 0, 1], port));
+        let mut session = Self {
+            http: reqwest::Client::new(),
+            base: format!("http://{address}"),
+            id: String::new(),
+            driver,
+        };
         let deadline = Instant::now() + DRIVER_START;
         while TcpStream::connect(address).is_err() {
-            if let Some(status) = driver.try_wait()? {
+            if let Some(status) = session.driver.try_wait()? {
                 bail!(
                     "{} exited before binding its port: {status}",
                     path.display()
                 );
             }
             if Instant::now() >= deadline {
-                let _ = driver.kill();
                 bail!(
                     "{} did not bind port {port} within {DRIVER_START:?}",
                     path.display()
@@ -97,12 +104,6 @@ impl Session {
             }
             sleep(Duration::from_millis(100)).await;
         }
-        let mut session = Self {
-            http: reqwest::Client::new(),
-            base: format!("http://{address}"),
-            id: String::new(),
-            driver,
-        };
         let reply = session
             .call(
                 reqwest::Method::POST,
@@ -172,13 +173,33 @@ impl Session {
         if !status.is_success() {
             bail!("WebDriver {path} answered {status}: {text}");
         }
-        serde_json::from_str(&text).with_context(|| format!("WebDriver {path} answered {text}"))
+        let reply: Value = serde_json::from_str(&text)
+            .with_context(|| format!("WebDriver {path} answered {text}"))?;
+        // The legacy protocol Chrome is driven with reports failures in a
+        // non-zero `status` under a success HTTP code.
+        if reply
+            .get("status")
+            .and_then(Value::as_i64)
+            .is_some_and(|code| code != 0)
+        {
+            bail!("WebDriver {path} answered {text}");
+        }
+        Ok(reply)
     }
 
     pub(crate) async fn close(mut self) {
         let path = format!("/session/{}", self.id);
-        if let Err(error) = self.call(reqwest::Method::DELETE, &path, None).await {
-            eprintln!("closing the browser session failed: {error:#}");
+        match timeout(
+            SESSION_CLOSE,
+            self.call(reqwest::Method::DELETE, &path, None),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => eprintln!("closing the browser session failed: {error:#}"),
+            Err(_) => {
+                eprintln!("the driver did not close the browser session within {SESSION_CLOSE:?}");
+            }
         }
         self.stop();
     }

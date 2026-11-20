@@ -8,6 +8,7 @@ publish = false
 autotests = false
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+js-sys = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [lints]

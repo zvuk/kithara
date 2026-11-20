@@ -12,7 +12,7 @@ mod server;
 mod suite;
 
 use std::{
-    env,
+    convert, env,
     io::{self, Write},
     path::PathBuf,
     process::ExitCode,
@@ -71,12 +71,7 @@ async fn main() -> ExitCode {
         "WASM_TEST_RUNNER_TIMEOUT_SECS",
         if cli.filter.is_some() { 180 } else { 1800 },
     );
-    let outcome = timeout(watchdog, run(cli)).await.unwrap_or_else(|_| {
-        Err(anyhow::anyhow!(
-            "the browser run exceeded {watchdog:?}; WASM_TEST_RUNNER_TIMEOUT_SECS overrides it"
-        ))
-    });
-    match outcome {
+    match run(cli, watchdog).await {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(error) => {
@@ -86,8 +81,10 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Runs the binary's selected tests; `false` when any of them failed.
-async fn run(cli: Cli) -> Result<bool> {
+/// Runs the binary's selected tests within `watchdog`; `false` when any of
+/// them failed. The browser session is closed however the run ends.
+async fn run(cli: Cli, watchdog: Duration) -> Result<bool> {
+    let deadline = Instant::now() + watchdog;
     let filter = Filter {
         pattern: cli.filter.clone(),
         exact: cli.exact,
@@ -103,7 +100,7 @@ async fn run(cli: Cli) -> Result<bool> {
         println!("no tests to run!");
         return Ok(true);
     }
-    let _fixtures = fixture::ensure().await?;
+    let _fixtures = within(deadline, watchdog, fixture::ensure()).await??;
     let dir = tempfile::tempdir()?;
     suite.generate(dir.path())?;
     let (browser, driver) = driver::locate()?;
@@ -114,13 +111,36 @@ async fn run(cli: Cli) -> Result<bool> {
     let index = page::write(dir.path(), &suite, options, browser.hidden_style())?;
     let server = server::spawn(dir.path().to_path_buf(), index).await;
     let capabilities = capabilities::load(browser, &cli.file)?;
-    let session = Session::start(browser, driver, capabilities).await?;
+    let session = within(
+        deadline,
+        watchdog,
+        Session::start(browser, driver, capabilities),
+    )
+    .await??;
     let url = server.url("/").to_string();
     eprintln!("Running headless tests in {browser:?} at {url}");
-    session.visit(&url).await?;
-    let passed = report(&session, seconds("WASM_BINDGEN_TEST_TIMEOUT", 20)).await;
+    let outcome = within(deadline, watchdog, drive(&session, &url))
+        .await
+        .and_then(convert::identity);
     session.close().await;
-    passed
+    outcome
+}
+
+/// `future`'s output, unless the run's `deadline` passes first.
+async fn within<F: Future>(deadline: Instant, watchdog: Duration, future: F) -> Result<F::Output> {
+    timeout(deadline.saturating_duration_since(Instant::now()), future)
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "the browser run exceeded {watchdog:?}; WASM_TEST_RUNNER_TIMEOUT_SECS overrides it"
+            )
+        })
+}
+
+/// Opens the page and reports its results.
+async fn drive(session: &Session, url: &str) -> Result<bool> {
+    session.visit(url).await?;
+    report(session, seconds("WASM_BINDGEN_TEST_TIMEOUT", 20)).await
 }
 
 /// Streams the page's output until the summary appears or `limit` passes.

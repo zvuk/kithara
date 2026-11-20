@@ -140,7 +140,7 @@ mod tests {
         (tests.into_iter().map(|test| test.name).collect(), filtered)
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn selects_only_test_exports() {
         let (names, filtered) = names(&Filter::default());
         assert_eq!(
@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(filtered, 0);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn substring_and_exact_filters_count_what_they_drop() {
         let substring = Filter {
             pattern: Some("passes".into()),
@@ -170,7 +170,7 @@ mod tests {
         assert_eq!(names(&exact), (vec!["browser::passes".into()], 2));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn mode_section_selects_browser_or_dedicated_worker() {
         assert_eq!(Mode::from_section(None).unwrap(), Mode::Browser);
         assert_eq!(Mode::from_section(Some(&[0x01])).unwrap(), Mode::Browser);
