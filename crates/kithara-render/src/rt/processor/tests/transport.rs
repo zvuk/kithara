@@ -1089,6 +1089,7 @@ async fn a_transport_reset_finishes_the_active_underrun_once(#[case] reset: Deck
 
 enum ContinuationOutcome {
     Cut,
+    Ahead,
     Pause,
     Hole,
     Rate,
@@ -1097,6 +1098,8 @@ enum ContinuationOutcome {
 #[kithara::test]
 #[case::silent_slot(false, ContinuationOutcome::Cut)]
 #[case::replace(true, ContinuationOutcome::Cut)]
+#[case::waits_for_a_cue_ahead_of_the_consumed_mark(false, ContinuationOutcome::Ahead)]
+#[case::replace_waits_for_a_cue_ahead_of_the_consumed_mark(true, ContinuationOutcome::Ahead)]
 #[case::paused_while_parked(false, ContinuationOutcome::Pause)]
 #[case::rejects_a_hole_in_a_private_receiver(true, ContinuationOutcome::Hole)]
 #[case::rejects_a_later_rate_change(true, ContinuationOutcome::Rate)]
@@ -1128,7 +1131,12 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
         PcmPacket::Chunk(Box::new(packet))
     };
     outgoing.push(packet(0, 500, 4096, 0.125, spec, 2));
-    incoming.push(packet(0, 2048, 128, -0.25, incoming_spec, 2));
+    let ahead = matches!(expected, ContinuationOutcome::Ahead);
+    if ahead {
+        incoming.push(packet(640, 2048, 128, 0.375, incoming_spec, 2));
+    } else {
+        incoming.push(packet(0, 2048, 128, -0.25, incoming_spec, 2));
+    }
     let item = TrackId::allocate();
     let to = if replace { A } else { B };
     let mut initial = vec![
@@ -1235,7 +1243,9 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
         assert_eq!(mixer.track(A).unwrap().state(), SlotState::Playing);
         return;
     }
-    incoming.push(packet(128, 2048, 512, -0.25, incoming_spec, 2));
+    if !ahead {
+        incoming.push(packet(128, 2048, 512, -0.25, incoming_spec, 2));
+    }
     if matches!(expected, ContinuationOutcome::Rate) {
         incoming.push(packet(640, 2048, 64, 0.375, incoming_spec, 2));
         incoming.push(packet(704, 2048, 64, 0.375, incoming_spec, 3));
@@ -1249,7 +1259,9 @@ fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
         assert_eq!(mixer.track(A).unwrap().state(), SlotState::Playing);
         return;
     }
-    incoming.push(packet(640, 2048, 128, 0.375, incoming_spec, 2));
+    if !ahead {
+        incoming.push(packet(640, 2048, 128, 0.375, incoming_spec, 2));
+    }
     let first = render_frames(&mut mixer, applied_at, 1);
     let expected = if replace { 0.5 } else { 0.375 };
     assert!(

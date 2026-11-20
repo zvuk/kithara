@@ -130,6 +130,8 @@ impl PlayerResource {
 
 /// Reads only the currently admitted packets, in FIFO order. A packet of the
 /// current segment counts against the limit even if the head is already held.
+/// A receiver that starts after the consumed position leaves the cut pending
+/// until the outgoing source reaches it.
 pub(in crate::rt) fn scan_cut<'a>(
     packets: impl Iterator<Item = (&'a PcmPacket, usize)>,
     segment: SegmentId,
@@ -158,7 +160,7 @@ pub(in crate::rt) fn scan_cut<'a>(
         let start = span.position_at(offset_u64).ok_or(())?;
         let end = boundary.raw_end;
         if raw < start {
-            return Err(());
+            return Ok(plan);
         }
         if raw < end {
             plan.point = Some(cut_point(
