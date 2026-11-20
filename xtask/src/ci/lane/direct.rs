@@ -800,6 +800,29 @@ label = "run"
             .collect()
     }
 
+    /// The files left in the Chromium captures in `build`: an emptied capture
+    /// stays for the build's own lifecycle, and holds none.
+    #[cfg(unix)]
+    fn captured_files(build: &Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        let mut dirs = captures_in(build);
+        while let Some(dir) = dirs.pop() {
+            for entry in fs::read_dir(&dir).expect("list a capture") {
+                let path = entry.expect("read a capture entry").path();
+                if path
+                    .symlink_metadata()
+                    .expect("read a capture entry")
+                    .is_dir()
+                {
+                    dirs.push(path);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        files
+    }
+
     /// A failed lane's job uploads the driver log and the network logs its own
     /// run wrote, copied out before its build is released: the next job on
     /// the same build writes elsewhere and cannot replace them, and a link or
@@ -849,7 +872,7 @@ label = "run"
             upload.display()
         );
         let slot = builds.join("trivial-0");
-        assert_eq!(captures_in(&slot), Vec::<PathBuf>::new());
+        assert_eq!(captured_files(&slot), Vec::<PathBuf>::new());
 
         let checkout_b = tempfile::tempdir_in(temp.path()).expect("create job B's checkout");
         let runner_temp_b = tempfile::tempdir_in(temp.path()).expect("create job B's RUNNER_TEMP");
@@ -954,21 +977,34 @@ label = "run"
 
     /// A capture whose directories the run pointed elsewhere - its network
     /// log directory replaced by a link or by another directory, or the whole
-    /// capture replaced by a link - is not the one the steps were given. The
+    /// capture replaced by a link or by another directory - is not the one
+    /// the steps were given. The
     /// report is not told, and what took its place is neither uploaded nor
     /// removed.
     #[cfg(unix)]
     #[test]
     fn a_chromium_report_whose_directories_were_replaced_is_neither_told_nor_removed() {
         let netlog = format!("\"${CHROMIUM_NETLOG_ENV}\"");
-        for (replace, moved_in) in [
-            (format!("rm -rf {netlog}; ln -s FOREIGN {netlog}"), false),
-            (format!("rm -rf {netlog}; mv FOREIGN {netlog}"), true),
+        for (replace, netlog_moved, root_moved) in [
+            (
+                format!("rm -rf {netlog}; ln -s FOREIGN {netlog}"),
+                false,
+                false,
+            ),
+            (format!("rm -rf {netlog}; mv FOREIGN {netlog}"), true, false),
             (
                 format!(
                     "capture=$(dirname {netlog}); rm -rf \"$capture\"; ln -s FOREIGN_ROOT \"$capture\""
                 ),
                 false,
+                false,
+            ),
+            (
+                format!(
+                    "capture=$(dirname {netlog}); rm -rf \"$capture\"; mv FOREIGN_ROOT \"$capture\""
+                ),
+                false,
+                true,
             ),
         ] {
             let temp = tempfile::tempdir().expect("create fixture workspace");
@@ -1006,20 +1042,23 @@ label = "run"
                 0,
                 "{replace}"
             );
-            let left = if moved_in {
+            let capture = || {
                 let captures = captures_in(&temp.path().join("builds/trivial-0"));
                 assert_eq!(captures.len(), 1, "{replace}: {captures:?}");
-                captures[0].join(CHROMIUM_NETLOG_DIR)
-            } else {
-                foreign.clone()
+                captures[0].clone()
+            };
+            let (left_root, left_netlog) = match (root_moved, netlog_moved) {
+                (true, _) => (capture(), capture().join(CHROMIUM_NETLOG_DIR)),
+                (false, true) => (foreign_root.clone(), capture().join(CHROMIUM_NETLOG_DIR)),
+                (false, false) => (foreign_root.clone(), foreign.clone()),
             };
             assert_eq!(
-                fs::read_to_string(left.join("web_observer-a.jsonl")).unwrap(),
+                fs::read_to_string(left_netlog.join("web_observer-a.jsonl")).unwrap(),
                 "foreign\n",
                 "{replace}: what took the report's place stays"
             );
             assert_eq!(
-                fs::read_to_string(foreign_root.join(CHROMIUM_DRIVER_LOG)).unwrap(),
+                fs::read_to_string(left_root.join(CHROMIUM_DRIVER_LOG)).unwrap(),
                 "foreign\n",
                 "{replace}"
             );
@@ -1173,7 +1212,7 @@ label = "run"
         assert_eq!(fs::read_to_string(&github_env).unwrap(), "");
         assert_eq!(fs::read_dir(runner_temp.path()).unwrap().count(), 0);
         assert_eq!(
-            captures_in(&builds.join("trivial-0")),
+            captured_files(&builds.join("trivial-0")),
             Vec::<PathBuf>::new()
         );
     }

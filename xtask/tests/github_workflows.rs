@@ -2717,6 +2717,9 @@ fn a_report_lane_uploads_its_job_copy_and_fails_a_missing_one() -> anyhow::Resul
                 "steps.lane.outcome": outcome,
                 "steps.report.outcome": report,
                 "steps.report.outputs.path": if report == "success" { copy } else { "" },
+                // A short write left an ancestor ending as a report's name;
+                // only the check's own outcome and path decide the upload.
+                "env.KITHARA_LANE_REPORT": "/runner/job.chromium",
                 "inputs.artifact-when": when,
                 "inputs.artifact-report": "chromium",
                 "inputs.artifact-path": "",
@@ -2811,6 +2814,7 @@ fn a_report_check_passes_only_the_whole_copy_in_the_jobs_storage() -> anyhow::Re
     fs::create_dir(&empty)?;
     let linked = temp.join("web-chromium-report-g7H8i9.chromium");
     std::os::unix::fs::symlink(&whole, &linked)?;
+    let missing = temp.join("web-chromium-report-m3N4o5.chromium");
     let foreign = root
         .path()
         .canonicalize()?
@@ -2829,6 +2833,7 @@ fn a_report_check_passes_only_the_whole_copy_in_the_jobs_storage() -> anyhow::Re
         (temp.display().to_string(), false),
         (job_root.display().to_string(), false),
         (empty.display().to_string(), false),
+        (missing.display().to_string(), false),
         (linked.display().to_string(), false),
         (foreign.display().to_string(), false),
     ] {

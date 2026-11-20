@@ -681,15 +681,18 @@ mod tests {
     use kithara_devtools::common::tools::ToolsConfig;
     use tempfile::TempDir;
 
+    #[cfg(unix)]
+    use super::declared_report;
     use super::{
         super::{config::fixture, kache::KacheJob, process::Step},
-        CacheGroup, CompilerCache, Lane, PipelineKind, command_lane, compiler_cache_note,
-        declared_report, evidence, execute_lane, executor_replies, kache_note,
-        sccache_server_is_stopped,
+        CacheGroup, CompilerCache, Lane, PipelineKind, command_lane, compiler_cache_note, evidence,
+        execute_lane, executor_replies, kache_note, sccache_server_is_stopped,
     };
+    #[cfg(unix)]
+    use crate::ci::build_dir::Target;
     use crate::{
         Cli,
-        ci::{build_dir::Target, process::Process},
+        ci::process::Process,
         config::{CiLaneConfig, KitharaExt},
         consts,
     };

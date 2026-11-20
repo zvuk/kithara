@@ -4,13 +4,22 @@ use std::{
     io::{self, Read},
     os::{
         fd::AsFd,
-        unix::{ffi::OsStrExt, fs::MetadataExt},
+        unix::{
+            ffi::{OsStrExt, OsStringExt},
+            fs::MetadataExt,
+        },
     },
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail, ensure};
-use nix::{dir::Dir, errno::Errno, fcntl, sys::stat::Mode};
+use nix::{
+    dir::Dir,
+    errno::Errno,
+    fcntl,
+    sys::stat::{self, Mode},
+    unistd::{self, UnlinkatFlags},
+};
 use tempfile::{Builder, TempDir};
 use tracing::{info, warn};
 
@@ -45,14 +54,15 @@ pub(in crate::ci::lane) mod consts {
 /// One run's Chromium report: captured in a fresh directory of the build the
 /// run holds, so a job reusing that build later writes elsewhere.
 pub(super) struct ChromiumReport {
-    capture: TempDir,
+    capture: PathBuf,
     directories: Directories,
     destination: Destination,
 }
 
 /// The capture and network log directories, held open from their creation.
-/// What the report copies is read through these, so a name pointed elsewhere
-/// during the run cannot make another directory this run's report.
+/// What the report copies, and what emptying it unlinks, is reached through
+/// these, so a name pointed elsewhere during the run cannot make another
+/// directory this run's report or the one emptying it reaches.
 struct Directories {
     capture: File,
     netlog: File,
@@ -80,36 +90,41 @@ impl ChromiumReport {
         fs::create_dir_all(build).with_context(|| format!("creating {}", build.display()))?;
         let build =
             fs::canonicalize(build).with_context(|| format!("resolving {}", build.display()))?;
-        // Removed only by `discard`, once it is still the capture: a run that
-        // unwinds before then leaves it in the build rather than removing
-        // whatever its name points at by then.
-        let capture = Builder::new()
+        let parent = open_directory(fcntl::AT_FDCWD, &build)
+            .with_context(|| format!("opening {}", build.display()))?;
+        // Made and opened relative to the build's descriptor, and nothing
+        // removes it by name: a run that ends without its report leaves it.
+        let (held, capture) = Builder::new()
             .prefix(consts::REPORT_PREFIX)
-            .disable_cleanup(true)
-            .tempdir_in(&build)
+            .make_in(&build, |path| {
+                let name = Path::new(path.file_name().unwrap_or(path.as_os_str()));
+                stat::mkdirat(&parent, name, Mode::S_IRWXU)?;
+                Ok(open_directory(&parent, name)?)
+            })
+            .and_then(|made| made.keep().map_err(|error| error.error))
             .with_context(|| format!("creating a capture directory in {}", build.display()))?;
         ensure!(
             capture
-                .path()
                 .to_str()
                 .is_some_and(|path| !path.contains(char::is_whitespace)),
             "chromedriver cannot take {} as one argument",
-            capture.path().display()
+            capture.display()
         );
-        let held = open_directory(fcntl::AT_FDCWD, capture.path())
-            .with_context(|| format!("opening {}", capture.path().display()))?;
-        fs::create_dir(capture.path().join(consts::CHROMIUM_NETLOG_DIR)).with_context(|| {
+        // What was opened is what was made only while nothing is in it yet.
+        ensure!(
+            names_in(&held)?.is_empty(),
+            "{} held something before this run wrote to it",
+            capture.display()
+        );
+        stat::mkdirat(&held, consts::CHROMIUM_NETLOG_DIR, Mode::S_IRWXU).with_context(|| {
             format!(
                 "creating the network log directory in {}",
-                capture.path().display()
+                capture.display()
             )
         })?;
         let netlog =
             open_directory(&held, Path::new(consts::CHROMIUM_NETLOG_DIR)).with_context(|| {
-                format!(
-                    "opening the network log directory in {}",
-                    capture.path().display()
-                )
+                format!("opening the network log directory in {}", capture.display())
             })?;
         let destination = if github {
             let (Some(env_file), Some(temp)) = (var("GITHUB_ENV"), var("RUNNER_TEMP")) else {
@@ -152,13 +167,12 @@ impl ChromiumReport {
     /// wrapper's network log directory.
     pub(super) fn env(&self) -> [(OsString, OsString); 2] {
         let mut driver = OsString::from("--verbose --log-path=");
-        driver.push(self.capture.path().join(consts::CHROMIUM_DRIVER_LOG));
+        driver.push(self.capture.join(consts::CHROMIUM_DRIVER_LOG));
         [
             (OsString::from("CHROMEDRIVER_ARGS"), driver),
             (
                 OsString::from(consts::CHROMIUM_NETLOG_ENV),
                 self.capture
-                    .path()
                     .join(consts::CHROMIUM_NETLOG_DIR)
                     .into_os_string(),
             ),
@@ -186,20 +200,21 @@ impl ChromiumReport {
                     }
                     Err(error) => warn!("this job's Chromium report is not uploaded: {error:#}"),
                 }
-                remove(report.capture.path());
+                report.directories.empty(&report.capture);
             }
             Destination::InPlace => {
-                // Kept before logging: a disabled level skips its arguments.
-                let kept = report.capture.keep();
-                info!("this run's Chromium report is in {}", kept.display());
+                info!(
+                    "this run's Chromium report is in {}",
+                    report.capture.display()
+                );
             }
         }
     }
 
-    /// Removes a report nobody wants.
+    /// Empties a report nobody wants.
     pub(super) fn discard(self) {
         if let Some(report) = self.still_named() {
-            remove(report.capture.path());
+            report.directories.empty(&report.capture);
         }
     }
 
@@ -207,7 +222,7 @@ impl ChromiumReport {
     /// the steps were given. Otherwise it is left as it stands: whatever took
     /// their place is not this run's to upload or to remove.
     fn still_named(self) -> Option<Self> {
-        let problem = match self.directories.named_by(self.capture.path()) {
+        let problem = match self.directories.named_by(&self.capture) {
             Ok(true) => return Some(self),
             Ok(false) => "no longer names the directories this run's steps were given".to_owned(),
             Err(error) => {
@@ -216,10 +231,9 @@ impl ChromiumReport {
                 )
             }
         };
-        let kept = self.capture.keep();
         warn!(
             "{} {problem}; nothing in it is uploaded or removed",
-            kept.display()
+            self.capture.display()
         );
         None
     }
@@ -259,16 +273,51 @@ impl Directories {
         }
         Ok(())
     }
+
+    /// Unlinks every file in the network log directory and in the capture,
+    /// through the descriptors held since they were made. A name is unlinked
+    /// only inside these directories and never as a directory, so whatever
+    /// took either directory's name, and any directory put in them, stays;
+    /// the emptied directories stay too, for the build's own lifecycle.
+    fn empty(&self, capture: &Path) {
+        for dir in [&self.netlog, &self.capture] {
+            let names = match names_in(dir) {
+                Ok(names) => names,
+                Err(error) => {
+                    warn!(
+                        "this run's Chromium capture in {} stays: {error:#}",
+                        capture.display()
+                    );
+                    continue;
+                }
+            };
+            for name in names {
+                match unistd::unlinkat(dir, name.as_os_str(), UnlinkatFlags::NoRemoveDir) {
+                    Ok(()) | Err(Errno::ENOENT | Errno::EISDIR | Errno::EPERM) => {}
+                    Err(error) => warn!(
+                        "{} stays in this run's Chromium capture in {}: {error}",
+                        Path::new(&name).display(),
+                        capture.display()
+                    ),
+                }
+            }
+        }
+    }
 }
 
-/// Removes a capture that `still_named` found to be this run's.
-fn remove(capture: &Path) {
-    if let Err(error) = fs::remove_dir_all(capture) {
-        warn!(
-            "this run's Chromium capture stays in {}: {error}",
-            capture.display()
-        );
+/// The names in `dir`, other than itself and its parent.
+fn names_in(dir: &File) -> Result<Vec<OsString>> {
+    let mut listing = Dir::openat(dir, ".", consts::DIRECTORY, Mode::empty())
+        .context("listing a capture directory")?;
+    let mut names = Vec::new();
+    for entry in listing.iter() {
+        let entry = entry.context("listing a capture directory")?;
+        let name = entry.file_name().to_bytes();
+        if name != b"." && name != b".." {
+            names.push(OsString::from_vec(name.to_vec()));
+        }
     }
+    Ok(names)
 }
 
 /// Opens the directory at `path`, relative to `parent`.
@@ -319,4 +368,54 @@ fn copy_leaf(dir: &File, name: &OsStr, destination: &Path) -> Result<Option<u64>
                 destination.display()
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::{ChromiumReport, consts};
+
+    /// Emptying a report reaches only the directories it made, whatever
+    /// their names point at by then: here both were moved aside and foreign
+    /// ones took their names after the report was admitted. The foreign bytes
+    /// stay, and the moved capture loses its files but stays as a directory.
+    #[test]
+    fn emptying_a_report_leaves_whatever_took_its_names() {
+        let build = tempfile::tempdir().expect("create a build");
+        let report = ChromiumReport::prepare(build.path(), false, &|_| None)
+            .expect("prepare a report outside a job");
+        let capture = report.capture.clone();
+        let netlog = capture.join(consts::CHROMIUM_NETLOG_DIR);
+        fs::write(capture.join(consts::CHROMIUM_DRIVER_LOG), "own").expect("write the driver log");
+        fs::write(netlog.join("own.jsonl"), "own").expect("write a network log");
+
+        let aside = build.path().join("aside");
+        fs::rename(&capture, &aside).expect("move the capture aside");
+        fs::create_dir_all(&netlog).expect("put a foreign capture in its place");
+        fs::write(capture.join(consts::CHROMIUM_DRIVER_LOG), "foreign")
+            .expect("write a foreign driver log");
+        fs::write(netlog.join("own.jsonl"), "foreign").expect("write a foreign network log");
+
+        report.directories.empty(&report.capture);
+
+        for foreign in [
+            capture.join(consts::CHROMIUM_DRIVER_LOG),
+            netlog.join("own.jsonl"),
+        ] {
+            assert_eq!(
+                fs::read_to_string(&foreign).unwrap(),
+                "foreign",
+                "{}",
+                foreign.display()
+            );
+        }
+        assert!(!aside.join(consts::CHROMIUM_DRIVER_LOG).exists());
+        assert_eq!(
+            fs::read_dir(aside.join(consts::CHROMIUM_NETLOG_DIR))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
 }
