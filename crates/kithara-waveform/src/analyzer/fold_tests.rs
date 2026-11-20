@@ -56,14 +56,17 @@ fn a_factor_states_the_same_span_on_different_track_lengths() {
 }
 
 #[kithara::test]
-#[case(3 * MAX_BUCKETS, 3)]
-#[case(3 * MAX_BUCKETS + 1, 4)]
+#[case(3 * MAX_BUCKETS, 1, 3)]
+#[case(3 * MAX_BUCKETS + 1, 1, 4)]
+#[case(3 * MAX_BUCKETS, 2, 3)]
+#[case(3 * MAX_BUCKETS, 4, 4)]
 fn a_long_track_coarsens_to_the_smallest_factor_that_round_trips(
     #[case] count: usize,
+    #[case] factor: u32,
     #[case] effective: u64,
 ) {
     let mut analyzer = windows(u64::try_from(count).unwrap());
-    let wave = analyzer.snapshot(NonZeroU32::MIN, None);
+    let wave = analyzer.snapshot(NonZeroU32::new(factor).unwrap(), None);
     assert_eq!(
         wave.len(),
         count.div_ceil(usize::try_from(effective).unwrap())
