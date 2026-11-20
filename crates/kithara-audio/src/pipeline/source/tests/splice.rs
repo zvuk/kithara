@@ -1338,16 +1338,20 @@ mod buffered_readiness {
         drop(native);
     }
 
-    struct SourceWake(Arc<NativeReads>);
+    /// Counts source wakes apart from the fixture's input-event notifications.
+    struct SourceWake {
+        native: Arc<NativeReads>,
+        wakes: AtomicUsize,
+    }
 
     impl kithara_stream::WorkerWake for SourceWake {
-        delegate::delegate! {
-            to self.0.changed {
-                #[call(notify_one)]
-                fn defer(&self);
-                #[call(notify_one)]
-                fn wake(&self);
-            }
+        fn defer(&self) {
+            self.wake();
+        }
+
+        fn wake(&self) {
+            self.wakes.fetch_add(1, Ordering::AcqRel);
+            self.native.changed.notify_one();
         }
     }
 
@@ -1357,7 +1361,10 @@ mod buffered_readiness {
     async fn superseded_constructed_input_is_destroyed_before_next_open(#[case] resampled: bool) {
         let mut fixture = splice_source(vec![slq_layout()]).await;
         let native = Arc::new(NativeReads::default());
-        let source_wake = Arc::new(SourceWake(native.clone()));
+        let source_wake = Arc::new(SourceWake {
+            native: native.clone(),
+            wakes: AtomicUsize::new(0),
+        });
         let rate = if resampled {
             NonZeroU32::new(48_000).expect("resampled rate")
         } else {
@@ -1473,31 +1480,63 @@ mod buffered_readiness {
         .await
         .expect("the replacement worker hands its constructed generation to the source");
 
+        let superseded_from = native.state.lock().events.len();
         let final_target = Duration::from_secs(1);
         assert!(matches!(
             fixture.source.seek(final_target),
             Ok(crate::SeekOutcome::Pending { target, .. }) if target == final_target
         ));
-        let mut release_drop = Some(release_drop);
-        if Arc::strong_count(&source_wake) <= constructed_wake_owners {
-            kithara_platform::time::timeout(Duration::from_secs(5), async {
-                loop {
-                    let changed = native.changed.notified();
-                    if native
-                        .state
-                        .lock()
-                        .events
-                        .contains(&InputEvent::DropHeld(1))
-                    {
-                        break;
-                    }
-                    changed.await;
+        kithara_platform::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = native.changed.notified();
+                if native
+                    .state
+                    .lock()
+                    .events
+                    .contains(&InputEvent::DropHeld(1))
+                {
+                    break;
                 }
-            })
-            .await
-            .expect("the superseded input retires before the next construction starts");
-            release_drop = None;
-        }
+                changed.await;
+            }
+        })
+        .await
+        .expect("the superseded input reaches its held destructor");
+        // Give the source an admission opportunity while the superseded input is still live.
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
+        assert!(!matches!(fixture.source.phase, OwnerPhase::Failed { .. }));
+        // The flash yield resolves only after every participant parks or finishes, so a
+        // construction admitted so far has already moved the cursor and opened its input.
+        kithara_platform::time::timeout(
+            Duration::from_secs(5),
+            kithara_platform::tokio::task::yield_now(),
+        )
+        .await
+        .expect("the source settles while the superseded input is held");
+        let events = native.state.lock().events.clone();
+        let admitted = events[superseded_from..]
+            .iter()
+            .find(|event| matches!(event, InputEvent::Opened(_) | InputEvent::Cursor(_)));
+        assert!(
+            admitted.is_none(),
+            "no construction may start while the superseded input is live: \
+             admitted={admitted:?} events={:?}",
+            events.iter().enumerate().collect::<Vec<_>>(),
+        );
+        let owner_wakes = source_wake.wakes.load(Ordering::Acquire);
+        drop(release_drop);
+        kithara_platform::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = native.changed.notified();
+                if source_wake.wakes.load(Ordering::Acquire) > owner_wakes {
+                    break;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .expect("the retired superseded input wakes the source");
         kithara_platform::time::timeout(Duration::from_secs(5), async {
             loop {
                 let changed = native.changed.notified();
@@ -1513,7 +1552,6 @@ mod buffered_readiness {
         .await
         .expect("the superseding command opens its own input");
         let events = native.state.lock().events.clone();
-        drop(release_drop);
         let dropped = events
             .iter()
             .position(|event| *event == InputEvent::Dropped(1));
