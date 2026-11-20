@@ -160,7 +160,7 @@ async fn run_case(
                 sine,
                 total_secs,
                 seek_count,
-                0xCAFE_BEEF_F00D_1234u64,
+                0xcafe_beef_f00d_1234u64,
                 |_| {},
             )
         }

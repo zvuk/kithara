@@ -465,7 +465,7 @@ fn singleton_multiply_preserves_ieee_prefix_and_tails() {
     for sample in SPECIALS.into_iter().chain([0.7, -1.5]) {
         for gain in SPECIALS.into_iter().chain([0.7, -1.5]) {
             for (sample_count, gain_count) in [(1, 1), (1, 3), (3, 1)] {
-                let mut samples = [sample, -0.0, f32::from_bits(0x7F80_0001)];
+                let mut samples = [sample, -0.0, f32::from_bits(0x7f80_0001)];
                 let before = samples;
                 let gains = [gain, -9.0, f32::INFINITY];
                 let expected = sample * gain;
@@ -483,7 +483,7 @@ fn singleton_multiply_preserves_ieee_prefix_and_tails() {
             }
         }
     }
-    let mut samples = [-0.0, f32::from_bits(0x7F80_0001)];
+    let mut samples = [-0.0, f32::from_bits(0x7f80_0001)];
     let before = bits(samples);
     assert_eq!(multiply_in_place_f32(&mut samples, &[]), 0);
     assert_eq!(bits(samples), before);

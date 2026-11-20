@@ -6,7 +6,7 @@ use kithara_sync::{SessionBeat, TempoStep, TempoTrajectory};
 use num_traits::ToPrimitive;
 
 use crate::{
-    MetronomeConfig, PlayError,
+    MetronomeConfig, MetronomeConfigChange, PlayError,
     api::{SESSION_BEATS_PER_BAR, SessionDuckingMode, Tempo},
     consts,
 };

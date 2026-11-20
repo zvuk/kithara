@@ -4524,6 +4524,61 @@ mod tests {
         );
     }
 
+    #[kithara::test]
+    fn presses_in_a_hosted_popover_reach_its_rows() {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "layout.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "popover-host",
+                root: Module(instance: "deck-a", source: "deck.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "deck.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "app-deck", chrome: Plain,
+                root: Popover(id: "quality", open: Model(id: "demo.toggle.on"),
+                    anchor: Spacer(id: "anchor", size: Some((w: Fixed(120.0), h: Fixed(24.0)))),
+                    content: Column(id: "choices", gap: 0.0, pad: 0.0, children: [
+                        Pressable(id: "high", press: Command(id: "eq-menu-toggle"),
+                            child: Spacer(id: "high-face", size: Some((w: Fixed(120.0), h: Fixed(30.0))))),
+                        Pressable(id: "auto", press: Command(id: "eq-menu-toggle"),
+                            child: Spacer(id: "auto-face", size: Some((w: Fixed(120.0), h: Fixed(30.0))))),
+                    ])))"#,
+        );
+        let ui = compile(
+            "layout.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            &UiConfig::default(),
+            &view::EMPTY,
+        )
+        .expect("hosted popover fixture compiles");
+        let reads = FixtureReads::default();
+        let renderer = headless_renderer();
+        let viewport = Size::new(300.0, 200.0);
+        let mut element = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+
+        for (y, path) in [(12.0, "deck-a/high"), (42.0, "deck-a/auto")] {
+            let (messages, _) = dispatch(
+                &mut element,
+                &mut tree,
+                &node,
+                &renderer,
+                viewport,
+                &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+                Point::new(42.0, y),
+            );
+            assert_eq!(messages, [control_event(path, ControlAction::Activate)]);
+        }
+    }
+
     /// Mounts one compiled fixture in a window and hands the caller the mounted
     /// tree. Every press in these tests goes through the host the window runs,
     /// rather than through the target list alone, because what is under test is

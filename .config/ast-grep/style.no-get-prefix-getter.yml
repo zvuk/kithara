@@ -1,0 +1,34 @@
+id: style.no-get-prefix-getter
+message: |
+  A getter named `get_*`. Name the getter after the value it returns:
+  `fn estimate(&self)`, not `fn get_estimate(&self)`. A method that takes a key
+  (`get_raw_key(&self, url)`) is a lookup and keeps its name; a method that
+  implements a foreign trait keeps the trait's name.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  all:
+    - any:
+        - kind: function_item
+        - kind: function_signature_item
+    - has:
+        field: name
+        regex: '^get_'
+    - has:
+        field: parameters
+        regex: "^\\(\\s*&\\s*(?:'\\w+\\s+)?(?:mut\\s+)?self\\s*,?\\s*\\)$"
+    - any:
+        - inside:
+            kind: declaration_list
+            inside:
+              kind: impl_item
+              not:
+                has:
+                  field: trait
+                  regex: '.'
+        - inside:
+            kind: declaration_list
+            inside:
+              kind: trait_item

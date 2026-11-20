@@ -10,7 +10,13 @@ use super::{
     mpeg::build_mpeg_decoder,
     segment::{build_fmp4_segment_decoder, should_use_segment_aware},
 };
-use crate::{DecodeError, DecodeResult, Decoder, DecoderConfig, traits::BoxedSource};
+use crate::{
+    DecodeError, DecodeResult, Decoder, DecoderConfig,
+    demuxer::Demuxer,
+    gapless::scoped_probe,
+    symphonia::{FileOpen, SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
+    traits::BoxedSource,
+};
 
 pub(super) fn create<B, S>(
     source: BoxedSource,
@@ -28,11 +34,8 @@ where
     }
     if codec == AudioCodec::Mp3 && container == Some(ContainerFormat::Wav) {
         let gapless = config.gapless;
-        let symphonia_config = crate::symphonia::SymphoniaConfig::builder()
-            .gapless(gapless)
-            .build();
+        let symphonia_config = SymphoniaConfig::builder().gapless(gapless).build();
         return build_mpeg_decoder(source, container, config, |demuxer| {
-            use crate::{demuxer::Demuxer, symphonia::SymphoniaCodec};
             SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)
         });
     }
@@ -54,11 +57,6 @@ where
     B: ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    use crate::{
-        demuxer::Demuxer,
-        symphonia::{SymphoniaCodec, SymphoniaConfig},
-    };
-
     tracing::debug!(
         ?codec,
         ?container,
@@ -84,15 +82,10 @@ pub(super) fn open_file_demuxer<B, S>(
     codec: AudioCodec,
     container: Option<ContainerFormat>,
     config: &DecoderConfig<B, S>,
-) -> DecodeResult<crate::symphonia::SymphoniaDemuxer>
+) -> DecodeResult<SymphoniaDemuxer>
 where
     S: HasPool<u8>,
 {
-    use crate::{
-        gapless::scoped_probe,
-        symphonia::{FileOpen, SymphoniaDemuxer},
-    };
-
     let probed_gapless = if config.gapless && container != Some(ContainerFormat::Mp4) {
         scoped_probe(&mut *source, codec, &config.pools)?
     } else {
@@ -134,8 +127,6 @@ where
     B: ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    use crate::symphonia::{SymphoniaCodec, SymphoniaConfig};
-
     tracing::debug!(
         ?codec,
         "fmp4_segment: dispatching to segment-aware Symphonia path"

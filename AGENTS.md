@@ -67,6 +67,7 @@ Every fact below has one owner. Link to the owner; do not restate it.
   with no domain, so it gets its own small crate named after that mechanism.
   A name like `common`, `core`, or `utils` means the owner was never found:
   go back to the second rule.
+- Relays MUST use owner types, with no per-field API.
 - Do not introduce parallel mutable sources of truth. When old and new state
   must coexist, stage the ownership transfer in the task packet or plan.
 - Do not grow the architecture out of fallback paths. A fallback is a branch

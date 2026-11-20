@@ -28,7 +28,7 @@ use kithara_test_utils::kithara;
 ))]
 use super::{LaneFeed, WarpRenderer, dominant_bin, drain_tail, expected_bin, samples as concat};
 use super::{chunk, renderer, spec};
-use crate::{Pitch, WarpConfig};
+use crate::{Pitch, WarpConfig, WarpControls, WarpControlsChange};
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
@@ -126,7 +126,7 @@ fn live_activation_primes_from_passthrough_history(
 ) {
     let config = WarpConfig::builder()
         .speed(1.0)
-        .pitch(Pitch::HELD)
+        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
         .backend(backend)
         .render_quantum_frames(NonZeroUsize::new(32).expect("test quantum is non-zero"))
         .build();
@@ -238,7 +238,7 @@ fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
     renderer(
         &WarpConfig::builder()
             .speed(speed)
-            .pitch(Pitch::HELD)
+            .controls(WarpControls::builder().pitch(Pitch::HELD).build())
             .backend(kind)
             .build(),
     )
@@ -683,7 +683,7 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp
     let mut fx = renderer(
         &WarpConfig::builder()
             .speed(1.0)
-            .pitch(Pitch::HELD)
+            .controls(WarpControls::builder().pitch(Pitch::HELD).build())
             .backend(backend)
             .build(),
     );
@@ -749,7 +749,7 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_si
         "off: vinyl pitch follows speed"
     );
 
-    fx.set_pitch(Pitch::HELD);
+    fx.apply(WarpControlsChange::Pitch(Pitch::HELD));
     let mut stretched: Vec<f32> = Vec::new();
     for _ in 0..24 {
         hang_tick!();
@@ -789,7 +789,7 @@ mod transpose {
         },
         render,
     };
-    use crate::{Pitch, Semitones, WarpConfig, consts};
+    use crate::{Pitch, Semitones, WarpConfig, WarpControls, WarpControlsChange, consts};
 
     fn semitones(value: i8) -> Semitones {
         Semitones::checked(value).expect("fixture shift is in range")
@@ -799,11 +799,15 @@ mod transpose {
         let shift = semitones(transpose);
         WarpConfig::builder()
             .speed(speed)
-            .pitch(if keylock {
-                Pitch::Held { shift }
-            } else {
-                Pitch::Vinyl { shift }
-            })
+            .controls(
+                WarpControls::builder()
+                    .pitch(if keylock {
+                        Pitch::Held { shift }
+                    } else {
+                        Pitch::Vinyl { shift }
+                    })
+                    .build(),
+            )
             .backend(backend)
             .build()
     }
@@ -933,7 +937,7 @@ mod transpose {
         let context = format!("keylock {keylock}, speed {speed}, {transpose:+}");
         assert_peak(
             &samples(&chunks),
-            consts::F0 * config.pitch().factor(f64::from(speed)),
+            consts::F0 * config.controls().pitch().factor(f64::from(speed)),
             &context,
         );
     }
@@ -1029,8 +1033,8 @@ mod transpose {
         assert_live_change(
             &warp_sine,
             &config,
-            consts::F0 * config.pitch().factor(speed),
-            |fx| fx.set_pitch(pitch),
+            consts::F0 * config.controls().pitch().factor(speed),
+            |fx| fx.apply(WarpControlsChange::Pitch(pitch)),
             consts::F0 * pitch.factor(speed),
         );
     }
@@ -1064,11 +1068,11 @@ mod transpose {
             &transposed(backend, 1.0, keylock, 3),
             consts::F0 * shift(3),
             |fx| {
-                fx.set_pitch(if keylock {
+                fx.apply(WarpControlsChange::Pitch(if keylock {
                     Pitch::HELD
                 } else {
                     Pitch::default()
-                });
+                }));
             },
             consts::F0,
         );

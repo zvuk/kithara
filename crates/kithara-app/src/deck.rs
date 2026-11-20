@@ -8,10 +8,14 @@ use kithara::{
     host::{DeckId, HostOwned},
     link::LinkedHostCommand,
     platform::CancelToken,
-    play::{DeckMixerConfig, Pitch, PitchStep, PlayError, ResourcePrep, TrackSettings},
+    play::{
+        DeckMixSettingsChange, DeckMixerConfig, Pitch, PitchStep, PlayError, ResourcePrep,
+        TrackSettings, TrackSettingsChange, WarpControls,
+    },
     queue::{QueueConfig, QueueError, Transition},
 };
 use kithara_app_library::Playable;
+use kithara_command::When;
 use kithara_config::Configure;
 use tracing::{debug, error};
 
@@ -136,7 +140,12 @@ impl DeckRecord {
             .mixer(DeckMixerConfig::builder().eq_bands(config.eq_bands).build())
             .track(
                 TrackSettings::builder()
-                    .pitch(config.warp.pitch_control(Pitch::HELD).unwrap_or_default())
+                    .controls(
+                        config
+                            .warp
+                            .available_controls(WarpControls::builder().pitch(Pitch::HELD).build())
+                            .unwrap_or_default(),
+                    )
                     .build(),
             )
             .build();
@@ -205,7 +214,8 @@ impl DeckRecord {
                 .eq_bands(self.eq_bands.clone())
                 .tempo(tempo)
                 .synced(synced)
-                .maybe_pitch(queue.pitch())
+                .settings(queue.track_settings())
+                .warp_controls_available(queue.warp_controls().is_some())
                 .state(state)
                 .maybe_catalogue(
                     state
@@ -254,7 +264,10 @@ impl DeckRecord {
 
     /// Keeps `tempo` only once the deck took its speed.
     fn set_tempo(&mut self, tempo: TempoPercent) {
-        match self.queue().set_rate(tempo.speed()) {
+        match self
+            .queue()
+            .configure_track(TrackSettingsChange::Speed(tempo.speed()))
+        {
             Ok(()) => self.tempo = tempo,
             Err(e) => error!(speed = tempo.speed(), error = %e, "tempo refused"),
         }
@@ -410,8 +423,12 @@ impl DeckSet {
 
         for record in &self.records {
             let (trim, crossfader) = mix.gains(edit(record))?;
-            record.queue.set_trim(trim)?;
-            record.queue.set_crossfader(crossfader)?;
+            record
+                .queue
+                .mix(When::Next, DeckMixSettingsChange::Trim(trim))?;
+            record
+                .queue
+                .mix(When::Next, DeckMixSettingsChange::Crossfader(crossfader))?;
         }
 
         for record in &mut self.records {
@@ -825,7 +842,7 @@ mod tests {
                 );
 
                 for record in decks.set.records() {
-                    assert_eq!(record.queue().volume(), 1.0);
+                    assert_eq!(f32::from(record.queue().mix_settings().volume()), 1.0);
                 }
             })
             .await;

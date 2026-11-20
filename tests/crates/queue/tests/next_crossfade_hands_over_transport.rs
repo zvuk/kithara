@@ -11,6 +11,7 @@ use kithara::{
     events::{EventReceiver, TrackId},
     host::{HostConfig, HostSettings, MetronomeConfig, Tap},
     platform::time::{self, Duration, sleep},
+    play::TrackSettingsChange,
     queue::{QueueControl, QueueEvent, Transition},
 };
 use kithara_integration_tests::{
@@ -176,7 +177,9 @@ async fn a_next_press_hands_the_transport_to_the_track_it_crossfades_in(
         .expect("the first track is selected");
     if let Some(rate) = tempo {
         harness
-            .run(&queue, move |q| q.set_rate(rate))
+            .run(&queue, move |q| {
+                q.configure_track(TrackSettingsChange::Speed(rate))
+            })
             .await
             .expect("the deck takes the tempo");
     }
@@ -312,7 +315,9 @@ async fn a_track_at_a_set_tempo_keeps_sounding_through_an_offline_render() {
         .await
         .expect("the track is selected");
     harness
-        .run(&queue, move |q| q.set_rate(RATE))
+        .run(&queue, move |q| {
+            q.configure_track(TrackSettingsChange::Speed(RATE))
+        })
         .await
         .expect("the deck takes the tempo");
     harness.run(&queue, QueueControl::play).await;

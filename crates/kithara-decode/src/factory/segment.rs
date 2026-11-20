@@ -4,7 +4,10 @@ use kithara_resampler::ResamplerBackend;
 use kithara_stream::{AudioCodec, ByteMap, ContainerFormat, needs_exact_byte_sizes};
 
 use super::build::finish;
-use crate::{DecodeResult, Decoder, DecoderConfig, traits::BoxedSource};
+use crate::{
+    DecodeResult, Decoder, DecoderConfig, demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer,
+    traits::BoxedSource,
+};
 
 /// Gate for the segment-aware fMP4 path. Routes AAC / FLAC fMP4 with a
 /// surfaced `SegmentedSource` (HLS) through `Fmp4SegmentDecoder`. File
@@ -45,8 +48,6 @@ pub(super) fn build_fmp4_segment_decoder<C>(
 where
     C: crate::codec::FrameCodec + 'static,
 {
-    use crate::{demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer};
-
     let demuxer = Fmp4SegmentDemuxer::open(
         source,
         layout,

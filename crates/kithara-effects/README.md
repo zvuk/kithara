@@ -15,8 +15,8 @@
 # kithara-effects
 
 Deck and master audio effects for Kithara. The crate owns the band equaliser
-and the DJ isolator, the stereo equaliser a deck runs, the peak limiter, and the
-Firewheel node that puts the limiter on a session bus. It does not decode
+and the DJ isolator, the stereo equaliser a deck runs, the deck feedback delay,
+the peak limiter, and the Firewheel node that puts the limiter on a session bus. It does not decode
 audio, own player or session state, or reach the network.
 
 `filter::FilterEffect` is the deck filter knob: transparent at its center,
@@ -60,6 +60,8 @@ fn boost_low_band<S: HasPool<f32>>(config: &EqConfig<S>, sample_rate: NonZeroU32
 
 <tr><td><code>FxParamDescriptor</code></td><td>A checked native range, unit and optional linear/log mapping; no mapping declares integer steps</td></tr>
 
+<tr><td><code>FeedbackDelay</code></td><td>Stereo feedback delay composing DSP history and a fixed high-pass; owns its comb policy and takes history from the pools</td></tr>
+
 <tr><td><code>IsolatorEq</code></td><td>DJ isolator built on crossover filters</td></tr>
 
 <tr><td><code>PeakLimiter</code></td><td>Linked peak limiter holding a ceiling; a lookahead delays its output by the frames it reports</td></tr>
@@ -71,6 +73,13 @@ fn boost_low_band<S: HasPool<f32>>(config: &EqConfig<S>, sample_rate: NonZeroU32
 <tr><td><code>LimiterNode</code></td><td>Firewheel node putting the limiter on a session bus</td></tr>
 
 </table>
+
+### Feedback delay
+
+The effect owns its feedback comb, time-cross/pending policy and tail detector.
+It composes the DSP delay line, fixed SVF and vector kernels; nothing after
+construction allocates. Only the design cutoff saturates at the DSP limit:
+the requested 20..=4000 Hz setting remains readable and returns at higher rates.
 
 ## Features
 

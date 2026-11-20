@@ -17,3 +17,20 @@ routes! { @export
         targets: [Simd, Simd, Simd];
     }
 }
+
+routes! { @export
+    svf_pair[S: fearless_simd::Simd](
+        simd: S,
+        samples: &mut [Option<&mut f32>],
+        state1: &mut [f64],
+        state2: &mut [f64],
+        coefficients: [f64; 3],
+        damping: f64,
+        response: crate::filter::Response,
+    ) -> bool {
+        simd: crate::backend::svf::step_pair;
+        scalar: crate::backend::svf::step_pair_scalar;
+        entry: crate::backend::svf::step_pair;
+        targets: [Scalar, Simd, Simd];
+    }
+}

@@ -399,62 +399,133 @@ pub struct FfiTimeRange {
 /// (async broadcast task + OS polling thread). Swift must handle
 /// thread-safe delivery internally.
 #[derive(Debug)]
-#[cfg_attr(all(feature = "uniffi", not(target_arch = "wasm32")), derive(uniffi::Enum))]
-#[rustfmt::skip]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Enum)
+)]
 pub enum FfiPlayerEvent {
-    TimeChanged { seconds: f64 },
-    RateChanged { rate: f32 },
-    CurrentItemChanged { item_id: Option<TrackId> },
-    StatusChanged { status: FfiPlayerStatus },
-    TimeControlStatusChanged { status: FfiTimeControlStatus },
-    Error { error: String },
-    DurationChanged { seconds: f64 },
-    BufferedDurationChanged { seconds: f64 },
-    VolumeChanged { volume: f32 },
-    MuteChanged { muted: bool },
+    TimeChanged {
+        seconds: f64,
+    },
+    RateChanged {
+        rate: f32,
+    },
+    CurrentItemChanged {
+        item_id: Option<TrackId>,
+    },
+    StatusChanged {
+        status: FfiPlayerStatus,
+    },
+    TimeControlStatusChanged {
+        status: FfiTimeControlStatus,
+    },
+    Error {
+        error: String,
+    },
+    DurationChanged {
+        seconds: f64,
+    },
+    BufferedDurationChanged {
+        seconds: f64,
+    },
+    VolumeChanged {
+        volume: f32,
+    },
+    MuteChanged {
+        muted: bool,
+    },
     ItemDidPlayToEnd,
     /// A track aborted mid-stream because the decoder / source
     /// reported a non-recoverable error. Distinct from
     /// [`Self::ItemDidPlayToEnd`]: the track did NOT reach its
     /// natural end. UI clients should surface this as a track
     /// failure (skip-and-flag), not treat it as completion.
-    ItemDidFail { item_id: Option<TrackId> },
+    ItemDidFail {
+        item_id: Option<TrackId>,
+    },
     /// Queue-level: the loading/playback status of an item changed.
     /// `item_id` is the private queue id used by the player wrapper to
     /// route back to the Swift-owned item.
-    TrackStatusChanged { item_id: TrackId, status: FfiTrackStatus },
+    TrackStatusChanged {
+        item_id: TrackId,
+        status: FfiTrackStatus,
+    },
     /// Queue reached the end with `RepeatMode::Off` active.
     QueueEnded,
     /// A crossfade between tracks just started. `duration_seconds` is
     /// the configured crossfade window - UIs can drive progress from it.
-    CrossfadeStarted { settings: FfiCrossfadeSettings },
+    CrossfadeStarted {
+        settings: FfiCrossfadeSettings,
+    },
     /// The configured crossfade window changed at runtime.
-    CrossfadeSettingsChanged { settings: FfiCrossfadeSettings },
-    PlaybackOrderChanged { order: FfiPlaybackOrder },
-    ActionAtItemEndChanged { action: FfiActionAtItemEnd },
-    TrackAdded { item_id: TrackId, index: u64 },
-    TrackRemoved { item_id: TrackId },
-    TrackLoadFailed { item_id: TrackId, reason: String, auto_skipped: bool },
-    RepeatModeChanged { mode: FfiRepeatMode },
-    NextTrackReady { item_id: TrackId, index: u64 },
-    CurrentItemAdvanced { item_id: Option<TrackId>, reason: FfiAdvanceReason },
+    CrossfadeSettingsChanged {
+        settings: FfiCrossfadeSettings,
+    },
+    PlaybackOrderChanged {
+        order: FfiPlaybackOrder,
+    },
+    ActionAtItemEndChanged {
+        action: FfiActionAtItemEnd,
+    },
+    TrackAdded {
+        item_id: TrackId,
+        index: u64,
+    },
+    TrackRemoved {
+        item_id: TrackId,
+    },
+    TrackLoadFailed {
+        item_id: TrackId,
+        reason: String,
+        auto_skipped: bool,
+    },
+    RepeatModeChanged {
+        mode: FfiRepeatMode,
+    },
+    NextTrackReady {
+        item_id: TrackId,
+        index: u64,
+    },
+    CurrentItemAdvanced {
+        item_id: Option<TrackId>,
+        reason: FfiAdvanceReason,
+    },
     EngineStarted,
     EngineStopped,
     CrossfadeCompleted,
     CrossfadeCancelled,
-    MasterVolumeChanged { volume: f32 },
-    AudioRouteChanged { reason: FfiRouteChangeReason },
+    MasterVolumeChanged {
+        volume: f32,
+    },
+    AudioRouteChanged {
+        reason: FfiRouteChangeReason,
+    },
     DjBpmDetected {
         slot: u64,
         bpm: f64,
         confidence: Option<f32>,
         first_beat_offset_seconds: f64,
     },
-    DjKeylockChanged { on: bool },
-    DjStretchBackendChanged { kind: FfiStretchBackendKind },
-    AssetCommitted { asset_root: String, rel_path: String, final_len: Option<u64> },
-    AssetFailed { asset_root: String, rel_path: String, reason: String },
-    AssetEvicted { asset_root: String, reason: FfiEvictReason },
+    DjKeylockChanged {
+        on: bool,
+    },
+    DjStretchBackendChanged {
+        kind: FfiStretchBackendKind,
+    },
+    AssetCommitted {
+        asset_root: String,
+        rel_path: String,
+        final_len: Option<u64>,
+    },
+    AssetFailed {
+        asset_root: String,
+        rel_path: String,
+        reason: String,
+    },
+    AssetEvicted {
+        asset_root: String,
+        reason: FfiEvictReason,
+    },
 }
 
 /// Transition style for a track switch.
