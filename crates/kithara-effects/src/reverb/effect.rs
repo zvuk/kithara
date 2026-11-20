@@ -5,7 +5,7 @@ use kithara_dsp::{
     add,
     delay::{DelayDiffuser, DelayError, DelayLine, DiffuserError, Tap},
     filter::{FilterError, OnePoleLowPass},
-    scale_add, scale_in_place,
+    last_loud, scale_add, scale_in_place,
 };
 use num_traits::ToPrimitive;
 
@@ -316,10 +316,7 @@ impl Reverb {
     ) -> Result<(), ReverbError> {
         let [first, _] = input;
         let count = first.len();
-        let last = input
-            .iter()
-            .filter_map(|plane| plane.iter().rposition(|sample| *sample != 0.0))
-            .max();
+        let last = input.iter().filter_map(|plane| last_loud(plane, 0.0)).max();
         if self.tail_exhausted() && last.is_none() {
             for plane in output {
                 plane.fill(0.0);
