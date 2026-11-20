@@ -53,6 +53,13 @@ Every fact below has one owner. Link to the owner; do not restate it.
   reuse existing crates when possible.
 - Do not add `[patch.crates-io]` overrides to workspace manifests or Cargo
   configuration. Declare publish-compatible dependencies directly.
+- A dependency or tool fork is allowed only when it does not block publishing
+  to crates.io and needs no fork maintained or published by this project.
+  Do not route around this rule with build-time patches such as
+  `cargo install --config patch...`, git or path dependencies, vendored
+  copies, or patched tools baked into CI images. When a third-party crate or
+  tool is broken, fix the cause directly, switch to another crate, or solve it
+  inside the workspace.
 - Encoded/container media types live in `kithara-stream`. Do not duplicate
   `AudioCodec`, `ContainerFormat`, or `MediaInfo` elsewhere. Decoded-audio
   signal value types and pure sample/time math live in `kithara-signal`.
