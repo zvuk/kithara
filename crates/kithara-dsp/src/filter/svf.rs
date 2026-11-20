@@ -27,7 +27,7 @@ pub enum Response {
     AllPass,
 }
 
-/// A checked LP/HP design for a fixed-cutoff state-variable filter.
+/// A checked LP/HP/all-pass design for a fixed-cutoff state-variable filter.
 #[derive(Clone, Copy, Debug)]
 pub struct SvfDesign {
     response: Response,
@@ -122,7 +122,7 @@ pub(crate) fn coefficients(gain: f64, damping: f64) -> [f64; 3] {
 /// State is two `f64` planes, `CHANNELS` wide, held inline and processed in
 /// channel pairs. Gain preparation uses Accelerate on Apple and portable SIMD
 /// elsewhere; its scratch is on the stack, so nothing allocates.
-/// Low-pass and high-pass are outputs of the same
+/// Low-pass, high-pass and all-pass are outputs of the same
 /// state; at fixed `g` and `k` they equal the RBJ cookbook responses. Two
 /// consecutive frames whose input and output both stay at or below `1e-9`
 /// reset the state, so silence never decays into denormals.

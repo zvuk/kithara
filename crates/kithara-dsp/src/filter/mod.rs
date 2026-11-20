@@ -1,7 +1,7 @@
 mod biquad;
 mod crossover;
 mod error;
-pub(crate) mod svf;
+mod svf;
 #[cfg(test)]
 mod tests;
 
@@ -12,6 +12,7 @@ pub use crossover::Crossover;
 #[cfg(feature = "routes")]
 pub(crate) use crossover::measured as crossover_routes;
 pub use error::FilterError;
+pub(crate) use svf::coefficients;
 
 pub use self::{
     biquad::Biquad,

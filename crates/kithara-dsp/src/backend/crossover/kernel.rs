@@ -6,7 +6,7 @@ use num_traits::{AsPrimitive, ToPrimitive};
 use crate::{
     backend::svf,
     consts,
-    filter::{Response, svf::coefficients},
+    filter::{Response, coefficients},
 };
 
 struct Section<const CHANNELS: usize> {
