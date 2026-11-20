@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, path::absolute};
+use std::num::NonZeroUsize;
 
 use kithara::{
     analysis::{
@@ -12,12 +12,12 @@ use kithara::{
         CancelToken, thread,
         tokio::{runtime::Handle, select},
     },
-    play::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc},
+    play::{PlaybackResamplerBackend, Resource, ResourceConfig},
 };
 
 use crate::{
     RunError,
-    input::{Args, Artifact, Track},
+    input::{self, Args, Artifact, Track},
     pools::{self, AnalyzePools, Pools},
 };
 
@@ -61,11 +61,7 @@ impl Engine {
     }
 
     async fn open(&self, track: &Track) -> Result<Resource, OpenError> {
-        let src = if track.src.starts_with("http://") || track.src.starts_with("https://") {
-            ResourceSrc::parse(&track.src).map_err(|error| OpenError(error.to_string()))?
-        } else {
-            ResourceSrc::Path(absolute(&track.src).map_err(|error| OpenError(error.to_string()))?)
-        };
+        let src = input::source(&track.src).map_err(OpenError)?;
         let config = ResourceConfig::<AnalyzePools>::for_src(src)
             .store(self.store.clone())
             .downloader(self.downloader.clone())
@@ -81,10 +77,13 @@ impl Engine {
         Ok(resource)
     }
 
-    pub(crate) fn try_new(args: &Args, cancel: CancelToken) -> Result<Self, RunError> {
-        let parallelism = thread::available_parallelism()
-            .ok_or_else(|| std::io::Error::other("processor count unavailable"))?;
-        let pools = pools::build(args.jobs.unwrap_or(parallelism))?;
+    pub(crate) fn try_new(
+        args: &Args,
+        jobs: NonZeroUsize,
+        cancel: CancelToken,
+    ) -> Result<Self, RunError> {
+        let parallelism = available_parallelism()?;
+        let pools = pools::build(jobs)?;
         let mut builder =
             AnalyzerBuilder::<PlaybackResamplerBackend, AnalyzePools>::new(pools.clone());
         for artifact in &args.artifacts {
@@ -121,9 +120,10 @@ impl Engine {
 }
 
 pub(crate) fn jobs(args: &Args) -> Result<NonZeroUsize, RunError> {
-    Ok(match args.jobs {
-        Some(jobs) => jobs,
-        None => thread::available_parallelism()
-            .ok_or_else(|| std::io::Error::other("processor count unavailable"))?,
-    })
+    args.jobs.map_or_else(available_parallelism, Ok)
+}
+
+fn available_parallelism() -> Result<NonZeroUsize, RunError> {
+    Ok(thread::available_parallelism()
+        .ok_or_else(|| std::io::Error::other("processor count unavailable"))?)
 }

@@ -25,7 +25,12 @@ async fn full_selection_settles_at_the_decoded_native_rate() {
         Args::try_parse_from(["analyze", path.to_str().expect("fixture path")]).expect("args");
     let batch = Batch::try_new(args, Cursor::new("")).expect("input");
     let scope = CancelScope::new(None);
-    let engine = Engine::try_new(&batch.args, scope.token()).expect("engine");
+    let engine = Engine::try_new(
+        &batch.args,
+        super::jobs(&batch.args).expect("jobs"),
+        scope.token(),
+    )
+    .expect("engine");
     let outcome = engine
         .analyze(&batch.tracks[0])
         .await
@@ -60,7 +65,8 @@ async fn missing_source_does_not_stop_the_batch() {
     let batch = Batch::try_new(args, Cursor::new(input)).expect("input");
     let scope = CancelScope::new(None);
     let (tx, mut rx) = mpsc::channel(3);
-    let task = kithara::platform::tokio::task::spawn(batch.analyze(scope.token(), tx));
+    let jobs = super::jobs(&batch.args).expect("jobs");
+    let task = kithara::platform::tokio::task::spawn(batch.analyze(jobs, scope.token(), tx));
     let mut results = BTreeMap::new();
     while let Some((track, outcome)) = rx.recv().await {
         results.insert(track.id, outcome);
@@ -119,7 +125,8 @@ async fn four_jobs_admit_four_sources_and_match_one_job() {
     .expect("input");
     let scope = CancelScope::new(None);
     let (tx, mut rx) = mpsc::channel(4);
-    let task = kithara::platform::tokio::task::spawn(batch.analyze(scope.token(), tx));
+    let jobs = super::jobs(&batch.args).expect("jobs");
+    let task = kithara::platform::tokio::task::spawn(batch.analyze(jobs, scope.token(), tx));
     let admitted = timeout(Duration::from_secs(5), async {
         for _ in 0..4 {
             requests.recv().await.expect("four admitted sources");
@@ -138,7 +145,8 @@ async fn four_jobs_admit_four_sources_and_match_one_job() {
     )
     .expect("input");
     let (tx, mut rx) = mpsc::channel(4);
-    let task = kithara::platform::tokio::task::spawn(batch.analyze(scope.token(), tx));
+    let jobs = super::jobs(&batch.args).expect("jobs");
+    let task = kithara::platform::tokio::task::spawn(batch.analyze(jobs, scope.token(), tx));
     let mut serial = BTreeMap::new();
     while let Some((track, result)) = rx.recv().await {
         serial.insert(track.id, settled(result));
@@ -178,7 +186,8 @@ async fn selection_and_fold_preserve_the_requested_density() {
     let source = path.to_str().expect("path");
     let scope = CancelScope::new(None);
     let args = Args::try_parse_from(["analyze", "--artifacts", "beat,key", source]).expect("args");
-    let engine = Engine::try_new(&args, scope.token()).expect("engine");
+    let engine =
+        Engine::try_new(&args, super::jobs(&args).expect("jobs"), scope.token()).expect("engine");
     let track = Track::try_from(source).expect("track");
     let outcome = engine.analyze(&track).await.expect("source");
     let AnalysisOutcome::Complete(progress) = outcome else {
@@ -195,7 +204,8 @@ async fn selection_and_fold_preserve_the_requested_density() {
             options.extend(["--waveform-fold", fold]);
         }
         let args = Args::try_parse_from(options).expect("args");
-        let engine = Engine::try_new(&args, scope.token()).expect("engine");
+        let engine = Engine::try_new(&args, super::jobs(&args).expect("jobs"), scope.token())
+            .expect("engine");
         let outcome = engine.analyze(&track).await.expect("source");
         let AnalysisOutcome::Complete(progress) = outcome else {
             panic!("settles: {outcome:?}")

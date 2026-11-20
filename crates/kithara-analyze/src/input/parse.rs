@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io::BufRead,
     num::{NonZeroU32, NonZeroUsize},
-    path::{Path, PathBuf},
+    path::{Path, PathBuf, absolute},
 };
 
 use clap::{Error, Parser, ValueEnum, error::ErrorKind};
@@ -104,21 +104,26 @@ impl TryFrom<&str> for Track {
     type Error = Error;
 
     fn try_from(src: &str) -> Result<Self, Self::Error> {
-        let id = if src.starts_with("http://") || src.starts_with("https://") {
-            let ResourceSrc::Url(url) =
-                ResourceSrc::parse(src).map_err(|error| usage(format!("{src}: {error}")))?
-            else {
-                return Err(usage(format!("invalid URL: {src}")));
-            };
-            stem(Path::new(url.path()))?
-        } else {
-            stem(Path::new(src))?
+        let id = match source(src).map_err(usage)? {
+            ResourceSrc::Url(url) => stem(Path::new(url.path()))?,
+            ResourceSrc::Path(path) => stem(&path)?,
         };
         validate_id(&id).map_err(usage)?;
         Ok(Self {
             id,
             src: src.to_owned(),
         })
+    }
+}
+
+/// Where `src` points: an `http(s)` URL, otherwise a local path made absolute.
+pub(crate) fn source(src: &str) -> Result<ResourceSrc, String> {
+    if src.starts_with("http://") || src.starts_with("https://") {
+        ResourceSrc::parse(src).map_err(|error| format!("{src}: {error}"))
+    } else {
+        absolute(src)
+            .map(ResourceSrc::Path)
+            .map_err(|error| format!("{src}: {error}"))
     }
 }
 
