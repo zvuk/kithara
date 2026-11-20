@@ -844,7 +844,7 @@ mod tests {
     }
 
     /// Both spans follow one `step / denominator` law; the outgoing one
-    /// starts at zero and the incoming one at origin frame 1_024, so the
+    /// starts at zero and the incoming one at origin frame 1024, so the
     /// incoming boundary after `incoming_start` is the outgoing `consumed`.
     #[kithara::test]
     #[case::whole_frame(1, 1, 48_002, 49_025)]
