@@ -66,7 +66,7 @@ async fn multi_threaded_contention_preserves_data() {
                     .get_with_len::<u8>(64)
                     .expect("test bytes fit the region budget");
                 let tag =
-                    u8::try_from((thread * iterations + iteration) & 0xFF).expect("tag fits u8");
+                    u8::try_from((thread * iterations + iteration) & 0xff).expect("tag fits u8");
                 buffer.fill(tag);
                 assert!(buffer.iter().all(|&byte| byte == tag));
             }

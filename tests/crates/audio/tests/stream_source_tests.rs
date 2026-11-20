@@ -8,7 +8,7 @@ use kithara::{
         DecoderEvent, ReadOutcome, RubatoBackend,
     },
     platform::time::{self, Duration, WallInstant},
-    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig, WarpControls},
     signal::{AudioChunk, SegmentId},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
     warp::{Pitch, StretchKind, WarpConfig},
@@ -150,7 +150,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
                             .expect("render quantum is non-zero"),
                     )
                     .backend(backend)
-                    .pitch(Pitch::HELD)
+                    .controls(WarpControls::builder().pitch(Pitch::HELD).build())
                     .build(),
             )
             .build(),

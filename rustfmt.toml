@@ -24,3 +24,7 @@ group_imports = "StdExternalCrate"
 # Shorthand
 use_field_init_shorthand = true
 use_try_shorthand = true
+
+# Literals and macros
+hex_literal_case = "Lower"
+format_macro_matchers = true

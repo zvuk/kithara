@@ -7,7 +7,7 @@ use kithara_stream::{Stream, mock::NoopWorkerWake};
 use kithara_test_fixtures::assets;
 
 use crate::{
-    Audio, AudioConfig,
+    Audio, AudioConfig, AudioSource, Fetch, TrackStep,
     test_pools::{TestPools, pools},
 };
 
@@ -32,8 +32,6 @@ pub(crate) async fn prepared_audio() -> Audio<Stream<File<TestPools>>> {
 #[kithara_test_utils::kithara::hang_watchdog]
 #[kithara_test_utils::kithara::flash(io)]
 pub(crate) async fn produced_audio(audio: &mut Audio<Stream<File<TestPools>>>) -> AudioChunk {
-    use crate::{AudioSource, Fetch, TrackStep};
-
     loop {
         hang_tick!();
         let _ = audio.prepare_deferred();

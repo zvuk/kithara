@@ -507,7 +507,7 @@ fn skips_non_itunsmpb_freeform_without_reading_data() {
 
 #[kithara::test]
 fn ignores_standard_ilst_items_including_cover_art() {
-    let cover_payload = vec![0xFFu8; 1024];
+    let cover_payload = vec![0xffu8; 1024];
     let cover = atom(*b"covr", &data_box(13, &cover_payload));
     let title = atom([0xa9, b'n', b'a', b'm'], &data_box(1, b"Title"));
 

@@ -7,7 +7,7 @@ use kithara_stretch::{
     ElasticBackendConfigPatchError, StretchKind,
 };
 
-use crate::{Pitch, consts};
+use crate::{WarpControls, consts};
 
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
@@ -26,15 +26,14 @@ pub struct WarpConfig {
         patch(skip)
     )]
     speed: f32,
-    /// Pitch a renderer built from this configuration starts at, where its
-    /// backend has keylock.
+    /// Controls a renderer starts at before its first lane command.
     #[config(
         skip = "construction value the render lane changes live",
         builder(default),
         get(copy),
         patch(skip)
     )]
-    pitch: Pitch,
+    controls: WarpControls,
     /// Stretch engine every renderer built from this configuration renders on.
     #[config(
         skip = "construction value fixed for the renderer's life",
@@ -56,23 +55,22 @@ pub struct WarpConfig {
 }
 
 impl WarpConfig {
-    /// `pitch` where this configuration's backend can shift it apart from
-    /// speed; `None` on a backend without keylock.
+    /// Controls available on this backend, absent without keylock.
     #[must_use]
-    pub fn pitch_control(&self, pitch: Pitch) -> Option<Pitch> {
+    pub fn available_controls(&self, controls: WarpControls) -> Option<WarpControls> {
         self.backend
             .capabilities()
             .contains(BackendCapabilities::KEYLOCK)
-            .then_some(pitch)
+            .then_some(controls)
     }
 
-    /// A copy whose renderer starts at `speed` and `pitch`: where a track's
+    /// A copy whose renderer starts at `speed` and `controls`: where a track's
     /// render lane stands when it opens, before its first command.
     #[must_use]
-    pub fn starting_at(&self, speed: f32, pitch: Pitch) -> Self {
+    pub fn starting_at(&self, speed: f32, controls: WarpControls) -> Self {
         Self {
             speed,
-            pitch,
+            controls,
             ..self.clone()
         }
     }
@@ -90,8 +88,8 @@ mod tests {
             let config = WarpConfig::builder().backend(*kind).build();
             let keylock = kind.capabilities().contains(BackendCapabilities::KEYLOCK);
             assert_eq!(
-                config.pitch_control(Pitch::HELD),
-                keylock.then_some(Pitch::HELD),
+                config.available_controls(WarpControls::default()),
+                keylock.then_some(WarpControls::default()),
                 "{kind}"
             );
         }

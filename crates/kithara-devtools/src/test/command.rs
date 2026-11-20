@@ -1,11 +1,16 @@
-use std::{fs, path::Path, process::Command};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use super::{
     draft::{DraftScope, PR_TESTS_ENV},
-    inventory::admit_expected,
+    inventory::{TestId, admit_expected, list_selection},
     package_build,
     request::TestRequest,
     resolve::{ResolvedLane, resolve},
@@ -38,7 +43,9 @@ pub(crate) fn run(args: &TestArgs, ctx: &Ctx) -> Result<()> {
     let test = &ctx.config.test;
 
     let block = std::env::var(PR_TESTS_ENV).ok();
-    let plan = plan(test, root, &request, block.as_deref())?;
+    let plan = plan(test, root, &request, block.as_deref())?.admit(test, &request, |lane| {
+        list_selection(lane, &request.passthrough, root)
+    })?;
     if let Some(output) = &request.selection_output {
         plan.write_selection(&root.join(output))?;
     }
@@ -96,6 +103,39 @@ enum Plan<'a> {
 }
 
 impl Plan<'_> {
+    fn admit(
+        self,
+        test: &TestCommandConfig,
+        request: &TestRequest,
+        mut list: impl FnMut(&ResolvedLane) -> Result<BTreeSet<TestId>>,
+    ) -> Result<Self> {
+        let lane = match &self {
+            Self::NotRequired(_) => return Ok(self),
+            Self::Lane(lane) | Self::Draft { lane, .. } => *lane,
+        };
+        let Some(prefix) = request
+            .selection_output
+            .as_deref()
+            .and_then(Path::to_str)
+            .and_then(|path| test.required_case_prefixes.get(path))
+        else {
+            return Ok(self);
+        };
+        let resolved = requested_lane(test, lane, request)?;
+        let has_required_case =
+            |cases: BTreeSet<TestId>| cases.iter().any(|(_, name)| name.starts_with(prefix));
+        if !has_required_case(list(&resolved)?) {
+            bail!("test lane `{lane}` has no compiled test cases starting with `{prefix}`");
+        }
+        if let Self::Draft { scope, .. } = &self
+            && scope.needs_inventory(request.narrow.as_deref())
+            && !has_required_case(list(&resolved.filtered(scope.filterset())?)?)
+        {
+            return Ok(Self::NotRequired(lane));
+        }
+        Ok(self)
+    }
+
     fn write_selection(&self, path: &Path) -> Result<()> {
         let lanes: Vec<&str> = match self {
             Self::Lane(lane) | Self::Draft { lane, .. } => vec![lane],
@@ -112,24 +152,42 @@ impl Plan<'_> {
 fn plan<'a>(
     test: &'a TestCommandConfig,
     root: &Path,
-    request: &'a TestRequest,
+    request: &TestRequest,
     pr_tests: Option<&str>,
 ) -> Result<Plan<'a>> {
     validate_config(test)?;
     let lane = select_lane(test, request)?;
-    if !request.draft {
-        return Ok(Plan::Lane(lane));
-    }
-    let scope = DraftScope::load(test, root, pr_tests)?;
-    let holds = test
-        .lanes
-        .get(lane)
-        .is_some_and(|config| scope.holds(&config.cargo));
-    Ok(if holds {
-        Plan::Draft { lane, scope }
+    let scope = if request.draft {
+        let scope = DraftScope::load(test, root, pr_tests)?;
+        let config = &test.lanes[lane];
+        if !scope.holds(&config.cargo)
+            || (matches!(&config.runner, TestRunner::Nextest(_))
+                && !scope.holds_narrow(request.narrow.as_deref()))
+        {
+            return Ok(Plan::NotRequired(lane));
+        }
+        Some(scope)
     } else {
-        Plan::NotRequired(lane)
-    })
+        None
+    };
+    Ok(scope.map_or(Plan::Lane(lane), |scope| Plan::Draft { lane, scope }))
+}
+
+/// Returns the receipt path and configured test lane for a test invocation.
+///
+/// # Errors
+///
+/// Fails on invalid arguments or an unknown test lane.
+pub fn selection_receipt<'a>(
+    test: &'a TestCommandConfig,
+    args: &[String],
+) -> Result<Option<(PathBuf, &'a str)>> {
+    let request = TestRequest::parse(args)?;
+    request
+        .selection_output
+        .as_ref()
+        .map(|path| Ok((path.clone(), select_lane(test, &request)?)))
+        .transpose()
 }
 
 /// Reports build time before the verdict rather than after it: a red lane is exactly when the
@@ -294,6 +352,105 @@ mod selection_tests {
         rest.pop();
         rest.drain(filter..=filter + 1);
         assert_eq!(rest, main_args);
+    }
+
+    #[test]
+    fn an_exact_package_filter_reports_the_draft_admission() {
+        let mut test = drafted();
+        let root = crate::test::repository_tests::root();
+        let workspace = &mut test.lanes.get_mut("harness").unwrap().cargo;
+        workspace.workspace = true;
+        workspace.packages.clear();
+
+        let args = ["--lane=harness", "--narrow=package(=kithara-net)"];
+        let full = request(&args);
+        let draft = request(&[args[0], args[1], "--draft"]);
+        let directory = tempfile::tempdir().unwrap();
+        let selection = directory.path().join("selection.json");
+        for (request, block, expected) in [
+            (&draft, None, "[]"),
+            (&draft, Some("packages = ['kithara-net']"), r#"["harness"]"#),
+            (
+                &draft,
+                Some("filter = 'package(=kithara-net)'"),
+                r#"["harness"]"#,
+            ),
+            (&full, None, r#"["harness"]"#),
+        ] {
+            plan(&test, &root, request, block)
+                .unwrap()
+                .write_selection(&selection)
+                .unwrap();
+            assert_eq!(fs::read_to_string(&selection).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn a_required_namespace_checks_capability_before_a_free_filter_can_opt_out() {
+        const PREFIX: &str = "backend::apple::";
+        const AWAY: &str = "filter = 'test(=non_apple)'";
+        const HIT: &str = "filter = 'test(=backend::apple::case)'";
+        const NAMED: &str = "packages = ['kithara-net']";
+
+        let mut test = drafted();
+        let root = crate::test::repository_tests::root();
+        let workspace = &mut test.lanes.get_mut("harness").unwrap().cargo;
+        workspace.workspace = true;
+        workspace.packages.clear();
+        test.required_case_prefixes
+            .insert("selection.json".to_owned(), PREFIX.to_owned());
+        let opts = [
+            "--lane=harness",
+            "--narrow=package(=kithara-net)",
+            "--selection-output=selection.json",
+            "--no-block=on",
+        ];
+        let full = request(&opts);
+        let draft = request(&[opts.as_slice(), &["--draft"]].concat());
+        let directory = tempfile::tempdir().unwrap();
+        let receipt = directory.path().join("selection.json");
+        for (request, block, compiled, matched, calls, selected) in [
+            (&draft, None, false, false, 0, Some("[]")),
+            (&draft, Some(NAMED), false, false, 1, None),
+            (&draft, Some(NAMED), true, true, 1, Some(r#"["harness"]"#)),
+            (&draft, Some(AWAY), false, false, 1, None),
+            (&draft, Some(AWAY), true, false, 2, Some("[]")),
+            (&draft, Some(HIT), true, true, 2, Some(r#"["harness"]"#)),
+            (&full, None, false, false, 1, None),
+            (&full, None, true, true, 1, Some(r#"["harness"]"#)),
+        ] {
+            let mut listed = 0;
+            let result =
+                plan(&test, &root, request, block)
+                    .unwrap()
+                    .admit(&test, request, |lane| {
+                        listed += 1;
+                        let TestRunner::Nextest(config) = &lane.runner else {
+                            panic!("case prefixes are selected through nextest");
+                        };
+                        let filter = config.filter.as_deref().unwrap();
+                        assert!(filter.contains("package(=kithara-net)"));
+                        if listed == 2 {
+                            assert!(filter.contains("test("));
+                        }
+                        let case = if compiled && (listed == 1 || matched) {
+                            "backend::apple::case"
+                        } else {
+                            "non_apple"
+                        };
+                        Ok(BTreeSet::from([(
+                            "kithara-net".to_owned(),
+                            case.to_owned(),
+                        )]))
+                    });
+            assert_eq!(listed, calls, "{block:?}");
+            if let Some(selected) = selected {
+                result.unwrap().write_selection(&receipt).unwrap();
+                assert_eq!(fs::read_to_string(&receipt).unwrap(), selected, "{block:?}");
+            } else {
+                assert!(result.is_err(), "{block:?}: the Apple namespace is absent");
+            }
+        }
     }
 
     #[test]

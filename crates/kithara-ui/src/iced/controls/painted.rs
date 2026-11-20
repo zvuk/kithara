@@ -1313,23 +1313,13 @@ mod tests {
             x: 0.0,
             y: 0.0,
         };
-        let painter = || {
-            Glyph::new(
-                skin.rgba(ColorRole::Text),
-                skin.rgba(ColorRole::Accent),
-                14.0,
-            )
-        };
+        let painter = || Glyph::new(14.0);
         for icon in [IconName::Play, IconName::Zvuk] {
             let mark = icon
                 .mark()
                 .unwrap_or_else(|| panic!("{icon:?} must have a mark"));
-            for active in [false, true] {
-                let data = || GlyphData {
-                    active,
-                    mark,
-                    active_mark: None,
-                };
+            for color in [skin.rgba(ColorRole::Text), skin.rgba(ColorRole::Accent)] {
+                let data = || GlyphData { mark, color };
                 let iced = Paint::pooled(painter(), data(), skin, &DrawBuffers::default())
                     .draw_list(&PaintState::default(), bounds, VisualState::Idle);
                 let mut masonry = Painted::pooled(painter(), data(), skin, &DrawBuffers::default());

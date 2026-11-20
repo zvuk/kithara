@@ -37,3 +37,61 @@ pub(crate) fn corner_frame(
     band.fill_path(corner_ring(bounds, radius, corners, width), color);
     list.clip(frame_clip(bounds, sides, width), band.finish());
 }
+
+pub(crate) fn paint_node_background(
+    bounds: Rect,
+    color: Option<Rgba>,
+    round: FrameCorners,
+    radius: f32,
+    list: &mut DrawListBuilder,
+) {
+    let Some(color) = color else {
+        return;
+    };
+    if round.any() && radius > 0.0 {
+        list.fill_path(corner_path(bounds, radius, round), color);
+    } else {
+        list.fill_rect(bounds, color);
+    }
+}
+
+pub(crate) fn paint_node_frame(
+    bounds: Rect,
+    frame: Option<(FrameSides, Rgba, f32)>,
+    round: FrameCorners,
+    radius: f32,
+    list: &mut DrawListBuilder,
+) {
+    let Some((sides, color, width)) = frame else {
+        return;
+    };
+    if round.any() && radius > 0.0 {
+        corner_frame(list, bounds, radius, round, sides, color, width);
+        return;
+    }
+    let right = bounds.x + (bounds.w - width).max(0.0);
+    let bottom = bounds.y + (bounds.h - width).max(0.0);
+    let mut side = |x: f32, y: f32, w: f32, h: f32| {
+        list.fill_rect(
+            Rect {
+                x,
+                y,
+                w: w.max(0.0),
+                h: h.max(0.0),
+            },
+            color,
+        );
+    };
+    if sides.top {
+        side(bounds.x, bounds.y, bounds.w, width);
+    }
+    if sides.right {
+        side(right, bounds.y, width, bounds.h);
+    }
+    if sides.bottom {
+        side(bounds.x, bottom, bounds.w, width);
+    }
+    if sides.left {
+        side(bounds.x, bounds.y, width, bounds.h);
+    }
+}

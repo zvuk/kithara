@@ -24,7 +24,7 @@ mod consts {
     pub(super) const RATE_48K: u32 = 48_000;
     pub(super) const STEREO: u16 = 2;
     /// The sample count occupies the low 36 bits of that field.
-    pub(super) const STREAMINFO_COUNT_MASK: u64 = 0x0000_000F_FFFF_FFFF;
+    pub(super) const STREAMINFO_COUNT_MASK: u64 = 0x0000_000f_ffff_ffff;
     /// Offset of STREAMINFO's packed rate/channels/depth/sample-count field:
     /// `fLaC` and the metablock header, then ten bytes into the body.
     pub(super) const STREAMINFO_COUNT_OFFSET: usize = 18;
@@ -50,7 +50,14 @@ fn encode(
 }
 
 macro_rules! encode_signal {
-    ($target:ident, $wave:ident, $sample_rate:ident, $channels:ident, $total_frames:ident, $bit_rate:ident) => {
+    (
+        $target:ident,
+        $wave:ident,
+        $sample_rate:ident,
+        $channels:ident,
+        $total_frames:ident,
+        $bit_rate:ident
+    ) => {
         encode(
             BytesEncodeTarget::$target,
             $wave,

@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use kithara::{
+    decode::TrackMetadata,
     events::TrackId,
-    prelude::{ResourceSrc, TrackMetadata},
+    play::ResourceSrc,
     queue::{QueueError, Transition},
 };
 use kithara_app_library::Playable;

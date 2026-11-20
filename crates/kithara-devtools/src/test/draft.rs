@@ -94,6 +94,24 @@ impl DraftScope {
         })
     }
 
+    /// An exact package filter can rule out the lane without a test inventory.
+    /// An arbitrary block filter may still select cases in that package.
+    pub(super) fn holds_narrow(&self, narrow: Option<&str>) -> bool {
+        self.filter.is_some() || self.includes_package(narrow)
+    }
+
+    pub(super) fn needs_inventory(&self, narrow: Option<&str>) -> bool {
+        self.filter.is_some() && !self.includes_package(narrow)
+    }
+
+    fn includes_package(&self, narrow: Option<&str>) -> bool {
+        narrow
+            .and_then(|filter| filter.strip_prefix("package(="))
+            .and_then(|name| name.strip_suffix(')'))
+            .filter(|name| self.members.contains(*name))
+            .is_none_or(|name| self.packages.contains(name))
+    }
+
     /// The one filterset a draft lane adds to its command.
     pub(crate) fn filterset(&self) -> String {
         self.packages

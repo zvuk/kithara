@@ -65,7 +65,7 @@ pub(super) fn parse_tkhd_track_id(payload: &[u8]) -> Option<u32> {
 pub(super) fn parse_data_box(payload: &[u8]) -> Option<(u32, &[u8])> {
     let header = read_be_u32(payload.get(..4)?)?;
     let value = payload.get(8..)?;
-    Some((header & 0x00FF_FFFF, value))
+    Some((header & 0x00ff_ffff, value))
 }
 
 /// Parse an iTunSMPB ASCII payload into typed leading/trailing frame counts.

@@ -10,7 +10,7 @@ pub use binding_subst::scoped_key;
 pub(crate) use binding_subst::{intern_binding, scoped_state, substitute_binding, substitute_map};
 pub(crate) use machine::Expander;
 pub use node::{
-    Binding, BindingKind, BlockSpec, ControlSpec, ExpandedNode, MagnetSpec, MeasureSpec,
+    Binding, BindingKind, BlockSpec, ColorSpec, ControlSpec, ExpandedNode, MagnetSpec, MeasureSpec,
     SurfaceSpec,
 };
 pub(crate) use node::{

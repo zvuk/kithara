@@ -412,6 +412,60 @@
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
+# apple-net-units / bench
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+# apple-net-units / branch
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --draft --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+# apple-net-units / platforms
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+# apple-net-units / merge-request
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+# apple-net-units / quarantine
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+# apple-net-units / main
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+# apple-net-units / nightly
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+# apple-net-units / weekly
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+# apple-net-units / release
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
 # apple-safari / bench
   <require os> macos
   <require tools> cargo just

@@ -12,6 +12,7 @@ Forbidden in production code:
 - `#[expect(...)]`;
 - `#![allow(...)]`;
 - `// xtask-lint-ignore:`;
+- `#[rustfmt::skip]`;
 - baseline growth.
 
 An unavoidable lint means STOP and fix the underlying code. Do not make a commit

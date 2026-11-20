@@ -246,6 +246,7 @@ impl<'a> TableRow<'a> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ReadValue<'a> {
+    Color(crate::skin::ColorRole),
     Text(&'a str),
     Image(&'a crate::draw::Image),
     Bool(bool),
