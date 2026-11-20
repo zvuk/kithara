@@ -74,7 +74,7 @@ impl<const CHANNELS: usize> Section<CHANNELS> {
     }
 
     #[inline(always)]
-    fn run_scalar(&mut self, channel: usize, input: f32) -> f32 {
+    fn run_scalar(&mut self, channel: usize, input: f32, response: Response) -> f32 {
         let [memory1, memory2] = &mut self.state;
         let memory1 = memory1.get_mut(channel).expect("validated scalar channel");
         let memory2 = memory2.get_mut(channel).expect("validated scalar channel");
@@ -83,7 +83,7 @@ impl<const CHANNELS: usize> Section<CHANNELS> {
             [*memory1, *memory2],
             self.coefficients,
             consts::CROSSOVER_DAMPING,
-            self.response,
+            response,
         );
         *memory1 = next1;
         *memory2 = next2;
@@ -193,13 +193,13 @@ pub(crate) fn process_scalar<
             for (split, band) in splits.iter_mut().zip(lower) {
                 let mut low = high;
                 for section in &mut split.lowpass {
-                    low = section.run_scalar(channel, low);
+                    low = section.run_scalar(channel, low, Response::LowPass);
                 }
                 for section in &mut split.highpass {
-                    high = section.run_scalar(channel, high);
+                    high = section.run_scalar(channel, high, Response::HighPass);
                 }
                 for section in &mut split.allpass {
-                    low = section.run_scalar(channel, low);
+                    low = section.run_scalar(channel, low, Response::AllPass);
                 }
                 *band
                     .get_mut(channel)
