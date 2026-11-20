@@ -10,12 +10,7 @@ use num_traits::{AsPrimitive, ToPrimitive};
 use super::{
     CombError, DelayTime, Feedback, FeedbackDelayConfig, FeedbackHighPass, comb::FeedbackComb,
 };
-use crate::{
-    DeckEffect, FxParamChange, FxParamDescriptor,
-    FxParamMapping::{Linear, Log},
-    FxParamUnit::{Frames, Hertz, Ratio},
-    consts,
-};
+use crate::{DeckEffect, FxParamChange, FxParamDescriptor, FxParamMapping, FxParamUnit, consts};
 
 /// Stereo deck FX delay: unfiltered first echo, then a Butterworth high-pass on each repeat.
 /// Time/capacity count frames; time changes cross over 20 ms.
@@ -46,19 +41,19 @@ impl FeedbackDelay {
         let parameters = [
             (
                 f64::from(DelayTime::MIN)..=capacity.min(f64::from(DelayTime::MAX)),
-                Frames,
-                Linear,
+                FxParamUnit::Frames,
+                FxParamMapping::Linear,
             ),
             (
                 f64::from(f32::from(Feedback::MIN))..=f64::from(f32::from(Feedback::MAX)),
-                Ratio,
-                Linear,
+                FxParamUnit::Ratio,
+                FxParamMapping::Linear,
             ),
             (
                 f64::from(f32::from(FeedbackHighPass::MIN))
                     ..=f64::from(f32::from(FeedbackHighPass::MAX)),
-                Hertz,
-                Log,
+                FxParamUnit::Hertz,
+                FxParamMapping::Log,
             ),
         ]
         .map(|(range, unit, mapping)| {
