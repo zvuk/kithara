@@ -43,7 +43,7 @@ fn sample_rate_index(rate: u32) -> u8 {
         .iter()
         .position(|r| *r == rate)
         .and_then(|i| u8::try_from(i).ok())
-        .unwrap_or(0xF)
+        .unwrap_or(0xf)
 }
 
 const fn channel_layout(channels: u8) -> Option<Channels> {

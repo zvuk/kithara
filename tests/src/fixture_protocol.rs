@@ -367,7 +367,7 @@ pub fn generate_segment(variant: usize, segment: usize, size: usize) -> Vec<u8> 
     let mut data = prefix.into_bytes();
     data.extend(b"TEST_SEGMENT_DATA");
     if data.len() < size {
-        data.resize(size, 0xFF);
+        data.resize(size, 0xff);
     }
     data
 }
@@ -396,7 +396,7 @@ pub fn expected_byte_at_test_pattern(
     if off_in_seg < prefix_bytes.len() {
         prefix_bytes[off_in_seg]
     } else {
-        0xFF
+        0xff
     }
 }
 
@@ -517,7 +517,7 @@ mod tests {
         let data = generate_segment(1, 2, 100);
         assert!(data.starts_with(b"V1-SEG-2:TEST_SEGMENT_DATA"));
         assert_eq!(data.len(), 100);
-        assert_eq!(data[99], 0xFF);
+        assert_eq!(data[99], 0xff);
     }
 
     #[kithara::test]

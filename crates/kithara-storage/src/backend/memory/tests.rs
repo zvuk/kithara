@@ -399,7 +399,7 @@ fn test_sparse_write(#[case] offset: u64, #[case] payload: &[u8]) {
     assert_eq!(n, payload.len());
     assert_eq!(&buf[..], payload);
 
-    let mut zero_buf = [0xFFu8; 4];
+    let mut zero_buf = [0xffu8; 4];
     let n = res.read_at(0, &mut zero_buf).unwrap();
     assert_eq!(n, 4);
     assert_eq!(&zero_buf, &[0, 0, 0, 0]);
@@ -417,13 +417,13 @@ fn test_growable_write_beyond_initial_capacity() {
     )
     .unwrap();
 
-    let data = vec![0xAB; 128];
+    let data = vec![0xab; 128];
     res.write_at(0, &data).unwrap();
 
     let mut buf = vec![0u8; 128];
     let n = res.read_at(0, &mut buf).unwrap();
     assert_eq!(n, 128);
-    assert!(buf.iter().all(|b| *b == 0xAB));
+    assert!(buf.iter().all(|b| *b == 0xab));
 }
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -455,20 +455,20 @@ fn test_from_bytes_readable() {
 fn test_backward_write_does_not_lose_data() {
     let res = create_resource();
 
-    res.write_at(0, &[0xAA; 100]).unwrap();
-    res.write_at(200, &[0xBB; 100]).unwrap();
-    res.write_at(50, &[0xCC; 50]).unwrap();
+    res.write_at(0, &[0xaa; 100]).unwrap();
+    res.write_at(200, &[0xbb; 100]).unwrap();
+    res.write_at(50, &[0xcc; 50]).unwrap();
 
     let mut buf = [0u8; 10];
     let n = res.read_at(0, &mut buf).unwrap();
     assert_eq!(n, 10);
-    assert_eq!(&buf, &[0xAA; 10]);
+    assert_eq!(&buf, &[0xaa; 10]);
 
     let n = res.read_at(50, &mut buf).unwrap();
     assert_eq!(n, 10);
-    assert_eq!(&buf, &[0xCC; 10]);
+    assert_eq!(&buf, &[0xcc; 10]);
 
     let n = res.read_at(200, &mut buf).unwrap();
     assert_eq!(n, 10);
-    assert_eq!(&buf, &[0xBB; 10]);
+    assert_eq!(&buf, &[0xbb; 10]);
 }

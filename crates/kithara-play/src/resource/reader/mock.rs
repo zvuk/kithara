@@ -12,7 +12,7 @@ use kithara_stream::StreamType;
 
 use super::{
     super::{PlaybackResamplerBackend, ResourceConfig, ResourceLane, SourceType},
-    core::*,
+    core::{LaneGeometry, OpenedTrack, ResourceLoad, geometry},
 };
 use crate::PlayWorker;
 

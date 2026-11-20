@@ -165,7 +165,7 @@ fn an_embed_marked_asset_reads_the_bytes_that_were_stored() {
 #[kithara::test(native, flash(false))]
 fn the_encoded_pilot_is_an_mpeg_audio_stream() {
     const ID3_TAG: &[u8; 3] = b"ID3";
-    const MPEG_SYNC: u8 = 0xFF;
+    const MPEG_SYNC: u8 = 0xff;
 
     let asset = assets::sine_mp3_a440_2s();
     let bytes = asset.bytes();

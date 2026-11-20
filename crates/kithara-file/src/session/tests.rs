@@ -325,7 +325,7 @@ fn file_source_phase_during_seek(
 #[case::waiting_when_current_byte_is_missing(32, SourcePhase::Waiting)]
 #[case::eof_at_end(64, SourcePhase::Eof)]
 fn file_source_phase_parameterless(#[case] position: u64, #[case] expected: SourcePhase) {
-    let data = [0xABu8; 64];
+    let data = [0xabu8; 64];
     let res = create_committed_resource(&data[..16]);
     let coord = make_coord();
     let bus = EventBus::new(16);

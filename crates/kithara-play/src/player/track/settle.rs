@@ -16,7 +16,7 @@ use super::{
     },
     core::PlayerImpl,
     segment::{Adoption, Segment},
-    state::*,
+    state::{Position, TrackStatus},
 };
 use crate::PlayError;
 
