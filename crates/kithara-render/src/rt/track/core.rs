@@ -5,7 +5,7 @@ use kithara_command::Seq;
 use kithara_dsp::param::SmootherConfig;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
-use kithara_signal::{FrameCount, SegmentId, SessionFrame};
+use kithara_signal::{FrameCount, SegmentId, SessionFrame, SourceElapsed};
 
 use super::{PlayerResource, RtSink, fade::TrackFade, gate::TrackGate, output::SlotOutput};
 use crate::{
@@ -77,7 +77,10 @@ impl PlayerTrack {
         }
     }
 
-    pub(in crate::rt) fn sounding_source(&self, at: SessionFrame) -> Option<(TrackId, Duration)> {
+    pub(in crate::rt) fn sounding_source(
+        &self,
+        at: SessionFrame,
+    ) -> Option<(TrackId, SourceElapsed)> {
         if self.state != SlotState::Playing || !matches!(self.stop, StopState::Idle) {
             return None;
         }

@@ -1,5 +1,5 @@
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioChunk, AudioSpec, SegmentId, SessionFrame, SourceSpan};
+use kithara_signal::{AudioChunk, AudioSpec, SegmentId, SessionFrame, SourceElapsed, SourceSpan};
 
 use super::{PlayerResource, ReadOutcome};
 use crate::{LaneFrame, PcmPacket, bridge::SlotMark};
@@ -135,7 +135,7 @@ impl PlayerResource {
 pub(in crate::rt) fn scan_cut<'a>(
     packets: impl Iterator<Item = (&'a PcmPacket, usize)>,
     segment: SegmentId,
-    logical: Duration,
+    logical: SourceElapsed,
     prefix: Option<CutPrefix>,
     limit: usize,
 ) -> Result<CutPlan, ()> {
@@ -185,7 +185,7 @@ fn cut_point(
     segment: SegmentId,
     lane_frame: u64,
     start: u64,
-    logical: Duration,
+    logical: SourceElapsed,
     origin: Duration,
 ) -> Result<CutPoint, ()> {
     let lo = span.output_floor_since(start, origin, logical).ok_or(())?;
@@ -203,21 +203,47 @@ fn cut_point(
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::num::{NonZeroU32, NonZeroU128};
 
-    use kithara_signal::{AudioSpec, SegmentId};
+    use kithara_platform::time::Duration;
+    use kithara_signal::{AudioSpec, SegmentId, SourceSpan};
     use kithara_test_utils::kithara;
 
     use super::scan_cut;
     use crate::{PcmPacket, worker::packet_tests::chunk};
 
+    /// Both sides follow one `step / denominator` law; the outgoing source
+    /// starts at zero and the incoming one at origin frame 1_024, so the
+    /// boundary after `incoming_start` is the outgoing `consumed` boundary.
     #[kithara::test]
-    fn an_exact_incoming_boundary_is_cut_on_its_own_frame() {
-        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("rate"));
-        let mut packet = chunk(spec, SegmentId::FIRST, 0, 49_025, &[0.25; 2 * 130]);
+    #[case::whole_frame(1, 1, 48_002, 49_025)]
+    #[case::fractional_phase(5, 4, 48_001, 61_024)]
+    fn an_exact_incoming_boundary_is_cut_on_its_own_frame(
+        #[case] step: u128,
+        #[case] denominator: u128,
+        #[case] consumed: u64,
+        #[case] incoming_start: u64,
+    ) {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let spec = AudioSpec::new(2, rate);
+        let denominator = NonZeroU128::new(denominator).expect("denominator");
+        let outgoing =
+            SourceSpan::try_from((0, step, denominator, rate, consumed + 1)).expect("outgoing law");
+        let logical = outgoing
+            .elapsed_at(consumed, Duration::ZERO)
+            .expect("consumed position");
+        let incoming = SourceSpan::try_from((
+            u128::from(incoming_start) * denominator.get(),
+            step,
+            denominator,
+            rate,
+            130,
+        ))
+        .expect("incoming law");
+        let mut packet = chunk(spec, SegmentId::FIRST, 0, incoming_start, &[0.25; 2 * 130]);
+        packet.meta.source_span = Some(incoming);
         packet.meta.media_origin = Some(spec.duration_for(1_024).expect("origin"));
         let packet = PcmPacket::Chunk(Box::new(packet));
-        let logical = spec.duration_for(48_002).expect("consumed position");
 
         let plan = scan_cut(
             [(&packet, 0)].into_iter(),
@@ -230,9 +256,9 @@ mod tests {
 
         let point = plan.point.expect("the boundary is inside the packet");
         assert_eq!(
-            point.lane.frame, 1,
-            "source frame 49_026 is the exact match"
+            (point.lane.frame, point.position),
+            (1, incoming.position_at(1).expect("boundary")),
+            "the next incoming boundary is the exact match"
         );
-        assert_eq!(point.position, spec.duration_for(49_026).expect("boundary"));
     }
 }

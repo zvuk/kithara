@@ -21,15 +21,17 @@ pub fn rescale_frame_ceil(
 /// Endpoints within nanosecond precision of whole frames use their frame difference.
 /// Fractional or unrepresentable endpoints retain their time difference.
 pub(super) fn elapsed_since(sample_rate: NonZeroU32, origin: Duration, time: Duration) -> Duration {
-    let frame_on_grid = |timestamp| {
-        let frame = frame_at(sample_rate, timestamp).ok()?;
-        let frame_time = duration_for(sample_rate, frame).ok()?;
-        (timestamp.abs_diff(frame_time) <= Duration::from_nanos(1)).then_some(frame)
-    };
-    frame_on_grid(origin)
-        .zip(frame_on_grid(time))
+    frame_on_grid(sample_rate, origin)
+        .zip(frame_on_grid(sample_rate, time))
         .and_then(|(origin, time)| duration_for(sample_rate, time.saturating_sub(origin)).ok())
         .unwrap_or_else(|| time.saturating_sub(origin))
+}
+
+/// The whole frame `timestamp` represents within nanosecond precision.
+pub(super) fn frame_on_grid(sample_rate: NonZeroU32, timestamp: Duration) -> Option<u64> {
+    let frame = frame_at(sample_rate, timestamp).ok()?;
+    let frame_time = duration_for(sample_rate, frame).ok()?;
+    (timestamp.abs_diff(frame_time) <= Duration::from_nanos(1)).then_some(frame)
 }
 
 pub(super) fn duration_for(sample_rate: NonZeroU32, frames: u64) -> Result<Duration, SignalError> {

@@ -1,7 +1,6 @@
 use kithara_command::{Due, LevelInbox, Target};
 use kithara_events::TrackId;
-use kithara_platform::time::Duration;
-use kithara_signal::{SegmentId, SessionFrame};
+use kithara_signal::{SegmentId, SessionFrame, SourceElapsed};
 
 use super::{
     super::{
@@ -83,7 +82,7 @@ impl Continuation {
         old: &'a PlayerTrack,
         packets: impl Fn() -> I,
         segment: SegmentId,
-        logical: Duration,
+        logical: SourceElapsed,
         prefix: Option<CutPrefix>,
         limit: usize,
     ) -> Result<CutPlan, DeckRefusal> {
@@ -110,7 +109,7 @@ impl Continuation {
         old: &PlayerTrack,
         pcm: &mut PcmReceiver,
         segment: SegmentId,
-        logical: Duration,
+        logical: SourceElapsed,
         prefix: Option<CutPrefix>,
         budget: &mut usize,
     ) -> Result<CutPlan, DeckRefusal> {
@@ -132,7 +131,7 @@ impl Continuation {
         &self,
         tracks: &mut TrackSlots,
         item: TrackId,
-        logical: Duration,
+        logical: SourceElapsed,
         prefix: Option<CutPrefix>,
         budget: &mut usize,
     ) -> Result<CutPlan, DeckRefusal> {

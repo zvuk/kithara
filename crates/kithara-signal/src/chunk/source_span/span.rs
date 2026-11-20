@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     num::{NonZeroU32, NonZeroU64, NonZeroU128},
     ops::Range,
 };
@@ -50,6 +51,27 @@ impl SourceInverse {
     }
 }
 
+/// Exact source time from a media origin to a [`SourceSpan`] boundary.
+///
+/// Boundaries keep their rational phase. An origin within nanosecond
+/// precision of a whole source frame counts as that frame; any other origin
+/// counts as its exact timestamp. Spans of different sample rates compare on
+/// one time axis.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceElapsed(Ratio);
+
+impl Ord for SourceElapsed {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.compare(other.0)
+    }
+}
+
+impl PartialOrd for SourceElapsed {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 fn fractional_nanos(numerator: u128, denominator: u128) -> u32 {
     let mut remainder = 0;
     let mut nanos = 0;
@@ -97,16 +119,26 @@ impl SourceSpan {
         Some(Duration::new(seconds, nanos))
     }
 
-    /// Source time from `origin` to an output boundary on this span's source
-    /// frame grid, as [`AudioSpec::elapsed_since`](crate::AudioSpec::elapsed_since)
-    /// measures it: a boundary on a whole source frame keeps its exact frame
-    /// difference instead of the difference of two truncated timestamps.
+    /// Exact source time from `origin` to an output boundary, saturating at zero.
     #[must_use]
-    pub fn elapsed_at(self, output_frame: u64, origin: Duration) -> Option<Duration> {
-        Some(crate::time::elapsed_since(
-            self.sample_rate,
-            origin,
-            self.position_at(output_frame)?,
+    pub fn elapsed_at(self, output_frame: u64, origin: Duration) -> Option<SourceElapsed> {
+        let rate = u128::from(self.sample_rate.get());
+        let origin = match crate::time::frame_on_grid(self.sample_rate, origin) {
+            Some(frame) => Ratio::new(u128::from(frame), NonZeroU128::MIN)?,
+            None => Ratio::new(
+                origin.as_nanos().checked_mul(rate)?,
+                NonZeroU128::new(1_000_000_000)?,
+            )?,
+        };
+        let (numerator, denominator) = self.source_ratio_at(output_frame)?;
+        let position = Ratio::new(numerator, denominator)?;
+        let frames = if position.compare(origin) == Ordering::Greater {
+            position.sub(origin)?
+        } else {
+            Ratio::new(0, NonZeroU128::MIN)?
+        };
+        Some(SourceElapsed(
+            frames.mul(Ratio::new(1, NonZeroU128::new(rate)?)?)?,
         ))
     }
 
@@ -117,7 +149,12 @@ impl SourceSpan {
     /// spans too. An `elapsed` before `from`, an empty range and
     /// unrepresentable positions return `None`.
     #[must_use]
-    pub fn output_floor_since(self, from: u64, origin: Duration, elapsed: Duration) -> Option<u64> {
+    pub fn output_floor_since(
+        self,
+        from: u64,
+        origin: Duration,
+        elapsed: SourceElapsed,
+    ) -> Option<u64> {
         if from >= self.output_frames || self.elapsed_at(from, origin)? > elapsed {
             return None;
         }
@@ -780,14 +817,16 @@ mod tests {
         let elapsed = (0..=frames)
             .map(|frame| span.elapsed_at(frame, origin).expect("elapsed"))
             .collect::<Vec<_>>();
+        let instant = Ratio::new(
+            1,
+            NonZeroU128::new(1_000_000_000_000_000).expect("femtosecond"),
+        )
+        .expect("instant");
         let probes = elapsed.iter().flat_map(|&time| {
-            [
-                time.checked_sub(Duration::from_nanos(1)),
-                Some(time),
-                time.checked_add(Duration::from_nanos(1)),
-            ]
-            .into_iter()
-            .flatten()
+            [time.0.sub(instant), Some(time.0), time.0.add(instant)]
+                .into_iter()
+                .flatten()
+                .map(SourceElapsed)
         });
         for probe in probes {
             for from in 0..frames {
@@ -804,17 +843,37 @@ mod tests {
         assert_eq!(span.output_floor_since(frames, origin, elapsed[0]), None);
     }
 
+    /// Both spans follow one `step / denominator` law; the outgoing one
+    /// starts at zero and the incoming one at origin frame 1_024, so the
+    /// incoming boundary after `incoming_start` is the outgoing `consumed`.
     #[kithara::test]
-    fn an_origin_relative_floor_keeps_an_exact_whole_frame_match() {
+    #[case::whole_frame(1, 1, 48_002, 49_025)]
+    #[case::fractional_phase(5, 4, 48_001, 61_024)]
+    fn an_origin_relative_floor_keeps_an_exact_boundary_match(
+        #[case] step: u128,
+        #[case] denominator: u128,
+        #[case] consumed: u64,
+        #[case] incoming_start: u128,
+    ) {
         let rate = NonZeroU32::new(48_000).expect("rate");
-        let span = SourceSpan::new(49_025, 49_155, rate, 130).expect("affine");
+        let denominator = NonZeroU128::new(denominator).expect("denominator");
+        let outgoing =
+            SourceSpan::try_from((0, step, denominator, rate, consumed + 1)).expect("outgoing");
+        let incoming = SourceSpan::try_from((
+            incoming_start * denominator.get(),
+            step,
+            denominator,
+            rate,
+            8,
+        ))
+        .expect("incoming");
         let origin = crate::time::duration_for(rate, 1_024).expect("origin");
-        let consumed = crate::time::duration_for(rate, 48_002).expect("consumed");
-        assert!(
-            origin + consumed < span.position_at(1).expect("boundary"),
-            "the truncated sum falls one nanosecond short of the exact boundary"
-        );
-        assert_eq!(span.output_floor_since(0, origin, consumed), Some(1));
+        let elapsed = outgoing
+            .elapsed_at(consumed, Duration::ZERO)
+            .expect("consumed");
+
+        assert_eq!(incoming.elapsed_at(1, origin), Some(elapsed));
+        assert_eq!(incoming.output_floor_since(0, origin, elapsed), Some(1));
     }
 
     #[kithara::test]
