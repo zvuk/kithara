@@ -1,12 +1,22 @@
 use kithara_bufpool::HasPool;
+use kithara_mpa::MpaReader;
 use kithara_resampler::ResamplerBackend;
 use kithara_stream::{AudioCodec, ContainerFormat};
+use symphonia_core::{
+    formats::FormatOptions,
+    io::{MediaSourceStream, ReadBytes},
+};
 
 use super::{
     build::finish,
     probe::{skip_id3_tags, wav_data_range},
 };
-use crate::{DecodeError, DecodeResult, Decoder, DecoderConfig, traits::BoxedSource};
+use crate::{
+    DecodeError, DecodeResult, Decoder, DecoderConfig,
+    gapless::scoped_probe,
+    symphonia::{SymphoniaDemuxer, adapter::ReadSeekAdapter},
+    traits::BoxedSource,
+};
 
 /// MPEG audio through the demuxer that rolls a packet read back when it meets bytes still in
 /// flight, so a stalled read resumes at the same packet and a seek reads only from where it lands.
@@ -17,22 +27,11 @@ pub(super) fn build_mpeg_decoder<C>(
         impl ResamplerBackend,
         impl HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     >,
-    open_codec: impl FnOnce(&mut crate::symphonia::SymphoniaDemuxer) -> DecodeResult<C>,
+    open_codec: impl FnOnce(&mut SymphoniaDemuxer) -> DecodeResult<C>,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     C: crate::codec::FrameCodec + 'static,
 {
-    use kithara_mpa::MpaReader;
-    use symphonia_core::{
-        formats::FormatOptions,
-        io::{MediaSourceStream, ReadBytes},
-    };
-
-    use crate::{
-        gapless::scoped_probe,
-        symphonia::{SymphoniaDemuxer, adapter::ReadSeekAdapter},
-    };
-
     let audio_start = skip_id3_tags(&mut source)?;
     let range = if container == Some(ContainerFormat::Wav) {
         Some(wav_data_range(&mut source)?)

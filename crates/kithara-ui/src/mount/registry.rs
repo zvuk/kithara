@@ -38,19 +38,19 @@ macro_rules! controls {
                     .maybe_active(active.as_ref())
                     .maybe_active_color(*active_color)
                     .align(*align)
-                    .maybe_color(*color)
+                    .maybe_color(color.as_ref())
                     .maybe_font(*font)
                     .maybe_label(*label)
                     .style(*style)
                     .maybe_weight(*weight)
                     .build();
-            Glyph { style } { icon, active_icon, color, active_color, active } => painted
+            Glyph { style } { icon, active_icon, color, active_color, active } => apply
                 $crate::mount::Glyph { style: *style },
                 $crate::mount::label::glyph::host::Glyph::builder()
                     .maybe_active(active.as_ref())
                     .maybe_active_color(*active_color)
                     .maybe_active_icon(*active_icon)
-                    .maybe_color(*color)
+                    .maybe_color(color.as_ref())
                     .icon(*icon)
                     .style(*style)
                     .build();

@@ -55,7 +55,7 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
             } else {
                 helper.register_behavior(FixtureBehavior {
                     content: Content::StaticBytes {
-                        bytes: Arc::new(vec![0xABu8; consts::SEGMENT_SIZE]),
+                        bytes: Arc::new(vec![0xabu8; consts::SEGMENT_SIZE]),
                         content_type: Some("video/mp2t"),
                     },
                     delivery: Delivery::Range,

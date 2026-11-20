@@ -22,6 +22,7 @@ mod consts {
 /// stops ringing before subnormals.
 pub(crate) struct Cascade {
     channels: NonZeroUsize,
+    sections: NonZeroUsize,
     coefficients: Box<[[f32; 5]]>,
     state: Box<[[f32; 4]]>,
 }
@@ -34,7 +35,8 @@ impl Cascade {
             .ok_or(FilterError::Shape)?;
         Ok(Self {
             channels,
-            coefficients: vec![consts::IDENTITY; sections.get()].into_boxed_slice(),
+            sections,
+            coefficients: vec![consts::IDENTITY; states].into_boxed_slice(),
             state: vec![[0.0; 4]; states].into_boxed_slice(),
         })
     }
@@ -42,13 +44,24 @@ impl Cascade {
     pub(crate) fn set_section(
         &mut self,
         section: usize,
+        planes: Range<usize>,
         coefficients: [f32; 5],
     ) -> Result<(), FilterError> {
-        let slot = self
+        if section >= self.sections.get() || planes.is_empty() || planes.end > self.channels.get() {
+            return Err(FilterError::Shape);
+        }
+        let selected = self
             .coefficients
-            .get_mut(section)
+            .get_mut(
+                planes.start.saturating_mul(self.sections.get())
+                    ..planes.end.saturating_mul(self.sections.get()),
+            )
             .ok_or(FilterError::Shape)?;
-        *slot = coefficients;
+        for channel in selected.chunks_exact_mut(self.sections.get()) {
+            if let Some(slot) = channel.get_mut(section) {
+                *slot = coefficients;
+            }
+        }
         Ok(())
     }
 
@@ -81,10 +94,30 @@ impl Cascade {
     }
 }
 
+#[inline(always)]
+fn section_coefficients<S: Simd>(
+    simd: S,
+    designs: &[[f32; 5]],
+    sections: usize,
+    section: usize,
+) -> [S::f32s; 5] {
+    let mut values = [S::f32s::splat(simd, 0.0); 5];
+    for (lane, channel) in designs.chunks_exact(sections).enumerate() {
+        if let Some(&[b0, b1, b2, a1, a2]) = channel.get(section) {
+            for (vector, value) in values.iter_mut().zip([b0, b1, b2, -a1, -a2]) {
+                if let Some(slot) = vector.as_mut_slice().get_mut(lane) {
+                    *slot = value;
+                }
+            }
+        }
+    }
+    values
+}
+
 /// Runs every section over `range` of each plane in place; the caller has
 /// checked the shape.
 #[inline(always)]
-pub(super) fn cascade_kernel<S: Simd, P: DerefMut<Target = [f32]>>(
+pub(in crate::backend) fn cascade_kernel<S: Simd, P: DerefMut<Target = [f32]>>(
     simd: S,
     cascade: &mut Cascade,
     planes: &mut [P],
@@ -93,18 +126,19 @@ pub(super) fn cascade_kernel<S: Simd, P: DerefMut<Target = [f32]>>(
     let Cascade {
         coefficients,
         state,
+        sections,
         ..
     } = cascade;
     let lanes = S::f32s::LEN;
-    let sections = coefficients.len();
+    let sections = sections.get();
     let zero = S::f32s::splat(simd, 0.0);
-    for (group, states) in planes
+    for ((group, states), designs) in planes
         .chunks_mut(lanes)
         .zip(state.chunks_mut(lanes.saturating_mul(sections)))
+        .zip(coefficients.chunks(lanes.saturating_mul(sections)))
     {
-        for (section, &[b0, b1, b2, a1, a2]) in coefficients.iter().enumerate() {
-            let [b0, b1, b2, na1, na2] =
-                [b0, b1, b2, -a1, -a2].map(|value| S::f32s::splat(simd, value));
+        for section in 0..sections {
+            let [b0, b1, b2, na1, na2] = section_coefficients(simd, designs, sections, section);
             let [mut x1, mut x2, mut y1, mut y2] = [zero; 4];
             for (lane, channel) in states.chunks(sections).enumerate() {
                 let Some(delay) = channel.get(section) else {

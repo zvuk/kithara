@@ -14,13 +14,14 @@ use kithara::{
         tokio::sync::broadcast::{self, error::TryRecvError},
     },
     play::{
-        CrossfadeSettings, DeckMixSettings, DeckMixerConfig, HostedDeck, PlayWorker,
-        PlayWorkerConfig, PlayerEvent, PlayerFactory, Resource, ResourcePrep, TrackFactory,
-        TrackSettings,
+        CrossfadeSettings, DeckMixSettings, DeckMixSettingsChange, DeckMixerConfig, HostedDeck,
+        PlayWorker, PlayWorkerConfig, PlayerEvent, PlayerFactory, Resource, ResourcePrep,
+        TrackFactory, TrackSettings,
     },
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     warp::WarpConfig,
 };
+use kithara_command::When;
 use kithara_render::bridge::{DeckEvent, DeckSnapshot, RtMetricsSnapshot};
 
 use super::{
@@ -143,7 +144,7 @@ where
             .map_or_else(TrackSettings::default, |warp| {
                 TrackSettings::builder()
                     .speed(warp.speed())
-                    .pitch(warp.pitch_control(warp.pitch()).unwrap_or_default())
+                    .controls(warp.available_controls(warp.controls()).unwrap_or_default())
                     .build()
             });
         let prep = ResourcePrep::builder()
@@ -256,8 +257,10 @@ where
     /// # Errors
     /// Returns the player's refusal of the change.
     pub async fn set_volume(&self, volume: f32) -> Result<(), QueueError> {
-        self.with_queue(move |control| control.set_volume(volume))
-            .await
+        self.with_queue(move |control| {
+            control.mix(When::Next, DeckMixSettingsChange::Volume(volume.into()))
+        })
+        .await
     }
 
     /// Current playback position in seconds.

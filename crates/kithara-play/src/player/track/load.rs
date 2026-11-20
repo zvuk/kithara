@@ -11,7 +11,7 @@ use super::{
     super::outbox::{Outbox, Settled, rejection},
     core::PlayerImpl,
     seat::{Attaching, Seat},
-    state::*,
+    state::{Extent, Lane, Loading, Position, TrackStatus},
 };
 use crate::{OpenedTrack, PlayError, ResourceLoad};
 

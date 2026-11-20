@@ -8,7 +8,7 @@ mod consts {
     pub(super) const RIFF_PRELUDE_BYTES: usize = 8;
     pub(super) const SAMPLE_BYTES: usize = 2;
     /// Size fields of a streaming header, which names no total.
-    pub(super) const UNKNOWN_SIZE: u32 = 0xFFFF_FFFF;
+    pub(super) const UNKNOWN_SIZE: u32 = 0xffff_ffff;
 }
 
 /// The 44-byte RIFF/WAVE header for interleaved 16-bit PCM.

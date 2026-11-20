@@ -1,0 +1,36 @@
+id: style.no-string-concat-chain
+message: |
+  A string built from a chain of `+`. Use `format!` (or `write!` into an
+  existing buffer): the template reads as the result, and it allocates once.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  all:
+    - kind: binary_expression
+    - has:
+        field: operator
+        regex: '^\+$'
+    - has:
+        field: left
+        kind: binary_expression
+        has:
+          field: operator
+          regex: '^\+$'
+    - not:
+        inside:
+          kind: binary_expression
+          has:
+            field: operator
+            regex: '^\+$'
+    - has:
+        stopBy:
+          not:
+            kind: binary_expression
+        any:
+          - kind: string_literal
+          - kind: raw_string_literal
+          - all:
+              - kind: macro_invocation
+              - regex: '^format!'

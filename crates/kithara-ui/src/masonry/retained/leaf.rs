@@ -35,7 +35,7 @@ use crate::{
         CustomSkin, Published, ReadValue, WindowCommand, custom::CustomWidget, document::Ctx,
     },
     shaping::TextContext,
-    skin::TextRoleSkin,
+    skin::{ColorRole, TextRoleSkin},
 };
 
 pub(crate) enum Leaf {
@@ -329,7 +329,33 @@ impl Leaf {
         widget.repaint()
     }
 
-    /// Takes what this leaf's endpoint now ctx. This is the one way a mounted
+    pub(crate) fn tint_text(
+        &mut self,
+        token: ColorRole,
+        rgba: Rgba,
+        on: bool,
+        active_uses_base: bool,
+    ) -> bool {
+        let Self::Text {
+            role, color, lit, ..
+        } = self
+        else {
+            return false;
+        };
+        if let Some(faces) = lit {
+            faces.idle.role.color = token;
+            faces.idle.color = rgba;
+            if active_uses_base {
+                faces.lit.role.color = token;
+                faces.lit.color = rgba;
+            }
+            return self.light(on);
+        }
+        role.color = token;
+        std::mem::replace(color, rgba) != rgba
+    }
+
+    /// Takes what this leaf's endpoint now reads. This is the one way a mounted
     /// leaf learns a new value without the tree being rebuilt around it.
     pub(crate) fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
         match self {

@@ -30,10 +30,14 @@ use ::kithara::{
         time::{self, Duration},
         tokio::task,
     },
-    play::{CrossfaderGain, PlayerFactory, ResourceConfig, ResourceSrc, TrackFactory},
+    play::{
+        CrossfaderGain, DeckMixSettingsChange, PlayerFactory, ResourceConfig, ResourceSrc,
+        TrackFactory,
+    },
     queue::{AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
     stream::AudioCodec,
 };
+use kithara_command::When;
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper,
     cochlea::CochleaReport,
@@ -360,9 +364,12 @@ async fn build_queue(
     };
     harness
         .run(&queue, |control| {
-            control.set_crossfader(
-                CrossfaderGain::checked(CENSUS_LEVEL)
-                    .expect("the census level is a crossfader gain"),
+            control.mix(
+                When::Next,
+                DeckMixSettingsChange::Crossfader(
+                    CrossfaderGain::checked(CENSUS_LEVEL)
+                        .expect("the census level is a crossfader gain"),
+                ),
             )
         })
         .await

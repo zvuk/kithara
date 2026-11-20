@@ -17,6 +17,20 @@ pub fn rescale_frame_ceil(
     u64::try_from(numerator.div_ceil(u128::from(source_rate.get()))).ok()
 }
 
+/// Rescale a frame count to the nearest target frame, rounding ties upward.
+///
+/// Returns `None` when the target count exceeds `u64::MAX`.
+#[must_use]
+pub fn rescale_frame_round(
+    frames: u64,
+    source_rate: NonZeroU32,
+    target_rate: NonZeroU32,
+) -> Option<u64> {
+    let numerator =
+        u128::from(frames) * u128::from(target_rate.get()) + u128::from(source_rate.get() / 2);
+    u64::try_from(numerator / u128::from(source_rate.get())).ok()
+}
+
 pub(super) fn duration_for(sample_rate: NonZeroU32, frames: u64) -> Result<Duration, SignalError> {
     let nanos = u128::from(frames)
         .checked_mul(consts::NANOS_PER_SECOND)

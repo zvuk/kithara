@@ -31,7 +31,7 @@ impl LayoutPreview<'_> {
         Canvas::new(Preview {
             geometry: PreviewGeometry::new(&self.ui.root),
             metrics: self.skin.layout_preview,
-            palette: self.skin.palette,
+            palette: *self.skin.palette,
         })
         .width(Length::Fill)
         .height(Length::Fixed(self.skin.layout_preview.height))

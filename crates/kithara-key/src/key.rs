@@ -79,6 +79,48 @@ impl TryFrom<u8> for PitchClass {
     }
 }
 
+impl MusicalKey {
+    /// Open Key label (`1d`..`12d` for major, `1m`..`12m` for minor) on the wheel of fifths.
+    #[must_use]
+    pub const fn open_key(self) -> &'static str {
+        const MAJOR: [&str; 12] = [
+            "1d", "2d", "3d", "4d", "5d", "6d", "7d", "8d", "9d", "10d", "11d", "12d",
+        ];
+        const MINOR: [&str; 12] = [
+            "1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "10m", "11m", "12m",
+        ];
+        let labels = match self.mode {
+            Mode::Major => &MAJOR,
+            Mode::Minor => &MINOR,
+        };
+        labels[self.open_key_index()]
+    }
+
+    /// Zero-based position of this key on the Open Key wheel, from C major or A minor.
+    #[must_use]
+    pub const fn open_key_index(self) -> usize {
+        const FIFTH: usize = 7;
+        const RELATIVE_MAJOR: usize = 3;
+        let tonic = self.tonic.semitone() as usize;
+        let major = match self.mode {
+            Mode::Major => tonic,
+            Mode::Minor => tonic + RELATIVE_MAJOR,
+        };
+        FIFTH * major % 12
+    }
+
+    /// This key moved by `semitones`, keeping its mode.
+    #[must_use]
+    pub fn transposed(self, semitones: i8) -> Self {
+        let step = semitones.rem_euclid(12).unsigned_abs();
+        let tonic = PitchClass::ALL[usize::from((self.tonic.semitone() + step) % 12)];
+        Self {
+            mode: self.mode,
+            tonic,
+        }
+    }
+}
+
 impl KeyEstimate {
     /// `key` at `strength`, when the strength is finite and at most 1.
     #[must_use]
@@ -189,5 +231,84 @@ mod tests {
         let document =
             format!(r#"{{"schema_version":{KEY_SCHEMA_VERSION},"tonic":12,"mode":"major"}}"#);
         assert!(serde_json::from_str::<MusicalKey>(&document).is_err());
+    }
+
+    #[kithara::test]
+    fn transposing_rotates_the_tonic_and_keeps_the_mode() {
+        let c_major = MusicalKey {
+            tonic: PitchClass::C,
+            mode: Mode::Major,
+        };
+        let a_minor = MusicalKey {
+            tonic: PitchClass::A,
+            mode: Mode::Minor,
+        };
+        assert_eq!(
+            c_major.transposed(1),
+            MusicalKey {
+                tonic: PitchClass::CSharp,
+                mode: Mode::Major,
+            }
+        );
+        assert_eq!(
+            c_major.transposed(-1),
+            MusicalKey {
+                tonic: PitchClass::B,
+                mode: Mode::Major,
+            }
+        );
+        assert_eq!(a_minor.transposed(-12), a_minor);
+        assert_eq!(
+            c_major.transposed(i8::MIN),
+            MusicalKey {
+                tonic: PitchClass::E,
+                mode: Mode::Major,
+            }
+        );
+        assert_eq!(
+            c_major.transposed(i8::MAX),
+            MusicalKey {
+                tonic: PitchClass::G,
+                mode: Mode::Major,
+            }
+        );
+        for key in every_key() {
+            assert_eq!(key.transposed(0), key);
+            assert_eq!(key.transposed(12), key);
+            assert_eq!(key.transposed(-12), key);
+        }
+    }
+
+    #[kithara::test]
+    fn the_24_keys_name_their_open_key_numbers() {
+        let wheel = [
+            ("1d", PitchClass::C, Mode::Major),
+            ("1m", PitchClass::A, Mode::Minor),
+            ("2d", PitchClass::G, Mode::Major),
+            ("2m", PitchClass::E, Mode::Minor),
+            ("3d", PitchClass::D, Mode::Major),
+            ("3m", PitchClass::B, Mode::Minor),
+            ("4d", PitchClass::A, Mode::Major),
+            ("4m", PitchClass::FSharp, Mode::Minor),
+            ("5d", PitchClass::E, Mode::Major),
+            ("5m", PitchClass::CSharp, Mode::Minor),
+            ("6d", PitchClass::B, Mode::Major),
+            ("6m", PitchClass::GSharp, Mode::Minor),
+            ("7d", PitchClass::FSharp, Mode::Major),
+            ("7m", PitchClass::DSharp, Mode::Minor),
+            ("8d", PitchClass::CSharp, Mode::Major),
+            ("8m", PitchClass::ASharp, Mode::Minor),
+            ("9d", PitchClass::GSharp, Mode::Major),
+            ("9m", PitchClass::F, Mode::Minor),
+            ("10d", PitchClass::DSharp, Mode::Major),
+            ("10m", PitchClass::C, Mode::Minor),
+            ("11d", PitchClass::ASharp, Mode::Major),
+            ("11m", PitchClass::G, Mode::Minor),
+            ("12d", PitchClass::F, Mode::Major),
+            ("12m", PitchClass::D, Mode::Minor),
+        ];
+        for (label, tonic, mode) in wheel {
+            assert_eq!(MusicalKey { mode, tonic }.open_key(), label);
+        }
     }
 }

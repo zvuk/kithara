@@ -39,7 +39,7 @@ impl MockSource {
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             reported_len: u64::try_from(len).unwrap_or(u64::MAX),
-            data: vec![0xAA; len],
+            data: vec![0xaa; len],
         }
     }
 }
@@ -271,5 +271,5 @@ fn read_after_seek() {
         .read(&mut buf)
         .expect("read after seek should succeed");
     assert!(n > 0);
-    assert_eq!(&buf[..n], &vec![0xAA; n][..]);
+    assert_eq!(&buf[..n], &vec![0xaa; n][..]);
 }

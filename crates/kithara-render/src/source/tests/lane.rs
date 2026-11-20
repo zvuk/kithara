@@ -1,4 +1,6 @@
-use kithara_warp::Pitch;
+#[cfg(feature = "stretch-identity")]
+use kithara_warp::WarpControls;
+use kithara_warp::{Pitch, WarpControlsChange};
 
 use super::*;
 
@@ -455,9 +457,11 @@ fn a_transpose_lands_on_its_frame_and_moves_the_pitch() {
             }
             emit(&mut source, 0, AT + SETTLE + WINDOW as u64)
         };
-        let emitted = engaged(Some(vec![LaneCommand::SetPitch(Pitch::Held {
-            shift: kithara_warp::Semitones::checked(3).expect("fixture shift is in range"),
-        })]));
+        let emitted = engaged(Some(vec![LaneCommand::Warp(WarpControlsChange::Pitch(
+            Pitch::Held {
+                shift: kithara_warp::Semitones::checked(3).expect("fixture shift is in range"),
+            },
+        ))]));
         let cue = ENGAGE + (AT - ENGAGE) * 4 / 5;
         assert_eq!(
             emitted
@@ -493,7 +497,7 @@ fn an_engine_batch_renders_on_as_its_engine_started_on_its_frame() {
     const WINDOW: usize = 4_096;
     const REACH: usize = 2_048;
     for backend in keylock_backends() {
-        let command = LaneCommand::SetPitch(Pitch::HELD);
+        let command = LaneCommand::Warp(WarpControlsChange::Pitch(Pitch::HELD));
         let to = (backend, true);
         let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
         let pools = pools();
@@ -537,7 +541,9 @@ fn an_engine_batch_renders_on_as_its_engine_started_on_its_frame() {
             )
             .expect("the lane has room for the reference history");
         let mut start = speed_batch(1.25);
-        start.commands.push(LaneCommand::SetPitch(Pitch::HELD));
+        start
+            .commands
+            .push(LaneCommand::Warp(WarpControlsChange::Pitch(Pitch::HELD)));
         fresh
             .send(
                 When::At(LaneFrame {
@@ -605,7 +611,7 @@ fn an_engine_and_a_speed_batch_on_one_frame_engage_the_new_engine() {
                 segment: SegmentId::FIRST,
                 frame: AT,
             }),
-            command_batch(LaneCommand::SetPitch(Pitch::HELD)),
+            command_batch(LaneCommand::Warp(WarpControlsChange::Pitch(Pitch::HELD))),
         )
         .expect("the lane has room for the engine change");
         lane.send(
@@ -661,7 +667,7 @@ fn identity_source_preserves_buffers_despite_initial_and_live_controls(quarter: 
     let config = kithara_warp::WarpConfig::builder()
         .backend(StretchKind::Identity)
         .speed(0.5)
-        .pitch(Pitch::HELD)
+        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
         // A decoded chunk the size of a lane packet renders as itself.
         .render_quantum_frames(NonZeroUsize::new(64).expect("quantum"))
         .build();
@@ -686,7 +692,7 @@ fn identity_source_preserves_buffers_despite_initial_and_live_controls(quarter: 
                     basis: Vec::new(),
                     commands: vec![
                         LaneCommand::SetSpeed(SpeedCurve::Constant(2.0)),
-                        LaneCommand::SetPitch(Pitch::default()),
+                        LaneCommand::Warp(WarpControlsChange::Pitch(Pitch::default())),
                     ],
                 },
             )

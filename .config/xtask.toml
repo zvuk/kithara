@@ -149,6 +149,7 @@ lockbud_exclude = [
   "kithara-fuzz",
   "kithara-harness-tests",
   "kithara-hls-tests",
+  "kithara-hls-keys-tests",
   "kithara-host-tests",
   "kithara-integration-tests",
   "kithara-play-tests",
@@ -692,6 +693,7 @@ cargo.packages = [
   "kithara-file-tests",
   "kithara-hls",
   "kithara-hls-tests",
+  "kithara-hls-keys-tests",
   "kithara-host",
   "kithara-host-tests",
   "kithara-play",
@@ -741,6 +743,7 @@ cargo.packages = [
   "kithara-harness-tests",
   "kithara-hls",
   "kithara-hls-tests",
+  "kithara-hls-keys-tests",
   "kithara-host",
   "kithara-host-tests",
   "kithara-integration-tests",
@@ -809,6 +812,7 @@ cargo.packages = [
   "kithara-decode-tests",
   "kithara-file-tests",
   "kithara-hls-tests",
+  "kithara-hls-keys-tests",
   "kithara-host-tests",
   "kithara-integration-tests",
   "kithara-play-tests",
@@ -923,7 +927,7 @@ cargo.packages = ["kithara-file", "kithara-file-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.hls]
-cargo.packages = ["kithara-hls", "kithara-hls-tests"]
+cargo.packages = ["kithara-hls", "kithara-hls-tests", "kithara-hls-keys-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.host]
@@ -1295,6 +1299,8 @@ pr_review_line_limit = 5000
 # project migration, so a moved known failure stays known while a new failure
 # still blocks the pipeline.
 [ext.ci.verdict.id_aliases]
+"kithara-hls-tests::hls::keys_integration::" = "kithara-hls-keys-tests::hls::keys_integration::"
+"kithara-hls-tests::hls_heavy::drm_stream_integrity::" = "kithara-hls-keys-tests::hls_heavy::drm_stream_integrity::"
 "kithara-assets::eviction_subscription::dropping_second_subscriber_preserves_first" = "kithara-assets::eviction_subscription::dropping_one_subscriber_preserves_the_other_second"
 "kithara-assets::eviction_subscription::dropping_first_subscriber_preserves_second" = "kithara-assets::eviction_subscription::dropping_one_subscriber_preserves_the_other_first"
 "kithara-assets::availability_persistence::delete_asset_persists_availability_deletion_across_rebuild" = "kithara-assets::availability_persistence::a_deletion_persists_in_availability_across_rebuild_delete_asset"

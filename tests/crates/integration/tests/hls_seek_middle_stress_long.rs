@@ -16,7 +16,9 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio::{sync::broadcast::error::RecvError, task, task::yield_now},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerEvent, ResourceConfig, ResourceSrc},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerEvent, ResourceConfig, ResourceSrc, TrackSettingsChange,
+    },
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -56,7 +58,7 @@ mod consts {
     pub(super) const GATE_REQUEST_TICKS: u32 = 2_000;
     pub(super) const GATE_HOLD_TICKS: u32 = 4;
 
-    pub(super) const RATE_SEED: u64 = 0xA11C_E5EE_D5EE_0001;
+    pub(super) const RATE_SEED: u64 = 0xa11c_e5ee_d5ee_0001;
     pub(super) const SCENARIO_DURATION: Duration = Duration::from_secs(60);
     pub(super) const RATE_CHANGE_INTERVAL: Duration = Duration::from_millis(10);
     pub(super) const RATE_PATTERN: [f32; 8] = [0.72, 1.38, 0.86, 1.24, 0.64, 1.55, 0.93, 1.12];
@@ -120,7 +122,7 @@ async fn churn_rates(queue: QueueControl<TestPools>, seed: u64, stop: CancelToke
         let random_byte = rng.next_u64().to_le_bytes()[0];
         let rate = consts::RATE_PATTERN[usize::from(random_byte) % consts::RATE_PATTERN.len()];
         let control = queue.clone();
-        task::spawn_blocking(move || control.set_rate(rate))
+        task::spawn_blocking(move || control.configure_track(TrackSettingsChange::Speed(rate)))
             .await
             .expect("rate change")
             .expect("a finite rate is accepted");
@@ -498,7 +500,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(
         consts::RATE_SEED,
         churn_stop.clone(),
     ));
-    let mut seek_rng = Xorshift64::new(consts::RATE_SEED ^ 0x5EE7_5EE7_5EE7_5EE7);
+    let mut seek_rng = Xorshift64::new(consts::RATE_SEED ^ 0x5ee7_5ee7_5ee7_5ee7);
     let mut seek_count = 0;
 
     while deadline.saturating_duration_since(Instant::now()) > consts::SEEK_STOP_MARGIN {
