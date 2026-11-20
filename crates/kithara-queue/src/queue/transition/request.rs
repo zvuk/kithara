@@ -397,46 +397,71 @@ where
         target: Target,
         out: &mut Outbox<'_>,
     ) -> Result<bool, PlayError> {
+        if self.end_failed_source_change(index, out)? {
+            return Ok(false);
+        }
         let Some(active) = self.active.get(index) else {
             return Ok(false);
         };
-        if !matches!(active.role, Role::Incoming) {
-            return Ok(false);
-        }
-        if let PlayingStatus::Failed { fault, .. } = active.track.snapshot().as_ref().status
-            && self.tracks.is_changing_source(active.item)
-        {
-            self.fail_source_change(active.item, fault.to_string(), out)?;
-            return Ok(false);
-        }
-        if matches!(active.load, Some(LoadState::Opening(_))) && !self.active.is_replacement(index)
+        if !matches!(active.role, Role::Incoming)
+            || (matches!(active.load, Some(LoadState::Opening(_)))
+                && !self.active.is_replacement(index))
         {
             return Ok(false);
         }
         let initial_attachment = target.playing && self.initial_attachment(index)?;
-        if !initial_attachment
-            && !matches!(
-                active.track.snapshot().as_ref().status,
-                PlayingStatus::Loaded
-                    | PlayingStatus::Paused { .. }
-                    | PlayingStatus::Playing { .. }
-                    | PlayingStatus::Faded { .. }
-            )
-        {
+        if !initial_attachment && !holds_media(&active.track.snapshot().as_ref().status) {
             return Ok(false);
         }
-        if let Some(load) = active.load.filter(|_| !initial_attachment) {
-            if !self.finish_load(index)? {
-                self.cancel_target(out).map_err(play_error)?;
-                return Ok(false);
-            }
-            if let Some(target) = &mut self.target {
-                target.continued = Some(Continuation::Load(load.seq()));
-            }
+        if let Some(load) = active.load.filter(|_| !initial_attachment)
+            && !self.continue_load(index, load, out)?
+        {
+            return Ok(false);
         }
         if let Some(SeekPosition::Held(to)) = self.held_position {
             self.seek_to(to, out).map_err(play_error)?;
         }
+        Ok(true)
+    }
+
+    /// Commits the opened load of the target, or cancels the target when the
+    /// load cannot finish.
+    fn continue_load(
+        &mut self,
+        index: usize,
+        load: LoadState,
+        out: &mut Outbox<'_>,
+    ) -> Result<bool, PlayError> {
+        if !self.finish_load(index)? {
+            self.cancel_target(out).map_err(play_error)?;
+            return Ok(false);
+        }
+        if let Some(target) = &mut self.target {
+            target.continued = Some(Continuation::Load(load.seq()));
+        }
+        Ok(true)
+    }
+
+    /// An incoming private receiver that failed terminally ends its source change.
+    fn end_failed_source_change(
+        &mut self,
+        index: usize,
+        out: &mut Outbox<'_>,
+    ) -> Result<bool, PlayError> {
+        let Some(active) = self
+            .active
+            .get(index)
+            .filter(|active| matches!(active.role, Role::Incoming))
+        else {
+            return Ok(false);
+        };
+        let PlayingStatus::Failed { fault, .. } = active.track.snapshot().as_ref().status else {
+            return Ok(false);
+        };
+        if !self.tracks.is_changing_source(active.item) {
+            return Ok(false);
+        }
+        self.fail_source_change(active.item, fault.to_string(), out)?;
         Ok(true)
     }
 
@@ -521,6 +546,17 @@ where
             Some(frame)
         })
     }
+}
+
+/// Whether a receiver in `status` holds media a transition can enter.
+fn holds_media(status: &PlayingStatus) -> bool {
+    matches!(
+        status,
+        PlayingStatus::Loaded
+            | PlayingStatus::Paused { .. }
+            | PlayingStatus::Playing { .. }
+            | PlayingStatus::Faded { .. }
+    )
 }
 
 impl<S, F> Queue<S, F>
