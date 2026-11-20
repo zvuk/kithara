@@ -1,6 +1,7 @@
 use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_key::KeyError;
 use kithara_resampler::ResamplerBackend;
 use kithara_waveform::AnalyzerError;
 use rangemap::RangeSet;
@@ -11,11 +12,22 @@ use super::{
 };
 use crate::{
     AnalysisProgress, BlobError,
+    progress::ResumeShape,
     slots::{
         beat::{self, Config, Slot},
-        waveform,
+        key, waveform,
     },
 };
+
+/// Why a pass ended in error: its analyzers could not be built, or its key
+/// estimator failed on the way.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PassError {
+    #[error(transparent)]
+    Waveform(#[from] AnalyzerError),
+    #[error(transparent)]
+    Key(#[from] KeyError),
+}
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -29,6 +41,8 @@ where
     /// The bucket ceiling a waveform is asked to fill, when one is wanted at
     /// all. No waveform configured means no waveform slot is ever built.
     waveform: Option<usize>,
+    /// Whether a key is estimated at all.
+    key: bool,
     #[field(get, vis = "pub(crate)")]
     pools: PoolRegion<S>,
 }
@@ -45,6 +59,7 @@ where
             pools,
             beat: Config::default(),
             waveform: None,
+            key: false,
             beat_config: None,
         }
     }
@@ -55,7 +70,7 @@ where
         token: AnalysisToken,
         revision: u64,
         demand: AnalysisDemand,
-    ) -> Result<TrackAnalyzers<B, S>, AnalyzerError> {
+    ) -> Result<TrackAnalyzers<B, S>, PassError> {
         Ok(TrackAnalyzers {
             revision,
             token,
@@ -68,6 +83,11 @@ where
                 Some(buckets) => waveform::Slot::try_from((buckets, rate, &self.pools))?,
                 None => waveform::Slot::default(),
             },
+            key: if self.key && demand.key() {
+                key::Slot::new(rate, &self.pools)?
+            } else {
+                key::Slot::default()
+            },
             coverage: RangeSet::new(),
             fingerprint: self.fingerprint_for(demand),
             settled: false,
@@ -78,9 +98,8 @@ where
         })
     }
 
-    /// What this configuration produces, per artifact. The two tags are
-    /// separate so a waveform resolution change cannot invalidate stored beat
-    /// results.
+    /// What this configuration produces, per artifact. The tags are separate
+    /// so a waveform resolution change cannot invalidate stored beat results.
     #[must_use]
     pub fn fingerprint(&self) -> AnalysisFingerprint {
         self.fingerprint_for(AnalysisDemand::ALL)
@@ -90,27 +109,30 @@ where
     /// narrowed fingerprint, so its result is never read as a full one.
     #[must_use]
     pub fn fingerprint_for(&self, demand: AnalysisDemand) -> AnalysisFingerprint {
-        AnalysisFingerprint::new(
-            demand
-                .beat()
-                .then(|| {
-                    self.beat_config
-                        .as_ref()
-                        .and_then(BeatAnalysisConfig::cache_tag)
-                })
-                .flatten()
-                .as_deref(),
-            demand
-                .waveform()
-                .then(|| waveform::cache_tag(self.waveform))
-                .flatten()
-                .as_deref(),
-        )
+        AnalysisFingerprint::builder()
+            .maybe_beat(
+                demand
+                    .beat()
+                    .then(|| {
+                        self.beat_config
+                            .as_ref()
+                            .and_then(BeatAnalysisConfig::cache_tag)
+                    })
+                    .flatten(),
+            )
+            .maybe_waveform(
+                demand
+                    .waveform()
+                    .then(|| waveform::cache_tag(self.waveform))
+                    .flatten(),
+            )
+            .maybe_key(demand.key().then(|| key::cache_tag(self.key)).flatten())
+            .build()
     }
 
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.waveform.is_none() && self.beat.is_empty()
+        self.waveform.is_none() && !self.key && self.beat.is_empty()
     }
 
     pub(crate) fn restore(
@@ -135,8 +157,12 @@ where
         Ok(analyzers)
     }
 
-    pub(crate) fn resume_shape(&self) -> (bool, bool) {
-        (self.waveform.is_some(), !self.beat.is_empty())
+    pub(crate) fn resume_shape(&self) -> ResumeShape {
+        ResumeShape {
+            waveform: self.waveform.is_some(),
+            beat: !self.beat.is_empty(),
+            key: self.key,
+        }
     }
 
     pub(crate) fn take_detector(&mut self) -> Option<beat::Detector> {
@@ -183,6 +209,13 @@ where
             .beat
             .with_detector(detector, params, beat_config.clone());
         builder.beat_config = Some(beat_config);
+        builder
+    }
+
+    #[must_use]
+    pub const fn with_key(self) -> Self {
+        let mut builder = self;
+        builder.key = true;
         builder
     }
 
@@ -278,13 +311,17 @@ mod tests {
     fn a_waveform_pass_publishes_a_waveform_and_no_beat(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut analyzers = waveform_pass(pools.clone(), 8);
-        analyzers.push(
-            &chunk(&pools, &analysis_silence, 8192, 0),
-            &mut Extent::default(),
-            None,
-        );
+        analyzers
+            .push(
+                &chunk(&pools, &analysis_silence, 8192, 0),
+                &mut Extent::default(),
+                None,
+            )
+            .expect("key estimation succeeds");
 
-        let snapshot = analyzers.snapshot(None, true, Some(8192));
+        let snapshot = analyzers
+            .snapshot(None, true, Some(8192))
+            .expect("key estimation succeeds");
         assert!(snapshot.waveform().is_some(), "the waveform slot is filled");
         assert!(snapshot.beat().is_none(), "no beat pass was configured");
     }
@@ -299,13 +336,17 @@ mod tests {
         let mut analyzers = builder
             .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
-        analyzers.push(
-            &chunk(&pools, &analysis_silence, 8192, 0),
-            &mut Extent::default(),
-            detector.as_mut(),
-        );
+        analyzers
+            .push(
+                &chunk(&pools, &analysis_silence, 8192, 0),
+                &mut Extent::default(),
+                detector.as_mut(),
+            )
+            .expect("key estimation succeeds");
 
-        let snapshot = analyzers.snapshot(detector.as_mut(), true, Some(8192));
+        let snapshot = analyzers
+            .snapshot(detector.as_mut(), true, Some(8192))
+            .expect("key estimation succeeds");
         assert!(snapshot.waveform().is_some(), "the waveform is published");
         assert!(
             snapshot.beat().is_some(),
@@ -318,12 +359,18 @@ mod tests {
         let pools = pools();
         let mut extent = Extent::default();
         let mut analyzers = waveform_pass(pools.clone(), 8);
-        analyzers.push(
-            &chunk(&pools, &analysis_silence, 8192, 0),
-            &mut extent,
-            None,
-        );
-        let covered = analyzers.snapshot(None, false, None).coverage().clone();
+        analyzers
+            .push(
+                &chunk(&pools, &analysis_silence, 8192, 0),
+                &mut extent,
+                None,
+            )
+            .expect("key estimation succeeds");
+        let covered = analyzers
+            .snapshot(None, false, None)
+            .expect("key estimation succeeds")
+            .coverage()
+            .clone();
 
         // A rate the pass was not opened with.
         let foreign = AudioChunk::new(
@@ -341,24 +388,37 @@ mod tests {
             sample_buffer(&pools, &analysis_silence[..2048]),
         );
         assert_eq!(
-            analyzers.push(&foreign, &mut Extent::default(), None),
+            analyzers
+                .push(&foreign, &mut Extent::default(), None)
+                .expect("key estimation succeeds"),
             Ingest::ForeignRate
         );
         assert_eq!(
-            analyzers.snapshot(None, false, None).coverage(),
+            analyzers
+                .snapshot(None, false, None)
+                .expect("key estimation succeeds")
+                .coverage(),
             &covered,
             "a foreign rate must not move the coverage"
         );
 
         assert_eq!(
-            analyzers.push(
-                &chunk(&pools, &analysis_silence, 8192, 0),
-                &mut extent,
-                None
-            ),
+            analyzers
+                .push(
+                    &chunk(&pools, &analysis_silence, 8192, 0),
+                    &mut extent,
+                    None
+                )
+                .expect("key estimation succeeds"),
             Ingest::Covered
         );
-        assert_eq!(analyzers.snapshot(None, false, None).coverage(), &covered);
+        assert_eq!(
+            analyzers
+                .snapshot(None, false, None)
+                .expect("key estimation succeeds")
+                .coverage(),
+            &covered
+        );
     }
 
     #[kithara::test(native, flash(false))]
@@ -372,16 +432,20 @@ mod tests {
             .expect("analysis buffers fit the test region");
 
         assert_eq!(
-            analyzers.push(
-                &chunk(&pools, &analysis_silence, 8192, 0),
-                &mut Extent::default(),
-                None
-            ),
+            analyzers
+                .push(
+                    &chunk(&pools, &analysis_silence, 8192, 0),
+                    &mut Extent::default(),
+                    None
+                )
+                .expect("key estimation succeeds"),
             Ingest::ForeignRate,
             "the first chunk does not get to redefine the axis"
         );
 
-        let snapshot = analyzers.snapshot(None, false, None);
+        let snapshot = analyzers
+            .snapshot(None, false, None)
+            .expect("key estimation succeeds");
         assert_eq!(
             snapshot.source_sample_rate(),
             axis,
@@ -399,30 +463,43 @@ mod tests {
         let pools = pools();
         let mut analyzers = waveform_pass(pools.clone(), 8);
         // A producer was starved over [8192, 16384) and carried on past it.
-        analyzers.push(
-            &chunk(&pools, &analysis_silence, 8192, 0),
-            &mut Extent::default(),
-            None,
-        );
-        analyzers.push(
-            &chunk(&pools, &analysis_silence, 8192, 16_384),
-            &mut Extent::default(),
-            None,
-        );
+        analyzers
+            .push(
+                &chunk(&pools, &analysis_silence, 8192, 0),
+                &mut Extent::default(),
+                None,
+            )
+            .expect("key estimation succeeds");
+        analyzers
+            .push(
+                &chunk(&pools, &analysis_silence, 8192, 16_384),
+                &mut Extent::default(),
+                None,
+            )
+            .expect("key estimation succeeds");
 
         assert_eq!(
-            analyzers.snapshot(None, false, None).missing(),
+            analyzers
+                .snapshot(None, false, None)
+                .expect("key estimation succeeds")
+                .missing(),
             vec![8192..8192 + 8192],
             "the hole is known to exist because something landed past it"
         );
 
-        analyzers.push(
-            &chunk(&pools, &analysis_silence, 8192, 8192),
-            &mut Extent::default(),
-            None,
-        );
+        analyzers
+            .push(
+                &chunk(&pools, &analysis_silence, 8192, 8192),
+                &mut Extent::default(),
+                None,
+            )
+            .expect("key estimation succeeds");
         assert!(
-            analyzers.snapshot(None, false, None).missing().is_empty(),
+            analyzers
+                .snapshot(None, false, None)
+                .expect("key estimation succeeds")
+                .missing()
+                .is_empty(),
             "a range taken on a second offer leaves the missing set"
         );
     }
@@ -433,13 +510,17 @@ mod tests {
         let mut analyzers = waveform_pass(pools.clone(), 8);
         // A range decoded away from the start, which is what a schedule
         // covers first.
-        analyzers.push(
-            &chunk(&pools, &analysis_silence, 8192, 65_536),
-            &mut Extent::default(),
-            None,
-        );
+        analyzers
+            .push(
+                &chunk(&pools, &analysis_silence, 8192, 65_536),
+                &mut Extent::default(),
+                None,
+            )
+            .expect("key estimation succeeds");
 
-        let snapshot = analyzers.snapshot(None, false, None);
+        let snapshot = analyzers
+            .snapshot(None, false, None)
+            .expect("key estimation succeeds");
         assert_eq!(
             snapshot.source_frames(),
             73_728,
@@ -458,14 +539,20 @@ mod tests {
     fn nothing_past_the_frontier_is_claimed_missing(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut analyzers = waveform_pass(pools.clone(), 8);
-        analyzers.push(
-            &chunk(&pools, &analysis_silence, 8192, 0),
-            &mut Extent::default(),
-            None,
-        );
+        analyzers
+            .push(
+                &chunk(&pools, &analysis_silence, 8192, 0),
+                &mut Extent::default(),
+                None,
+            )
+            .expect("key estimation succeeds");
 
         assert!(
-            analyzers.snapshot(None, false, None).missing().is_empty(),
+            analyzers
+                .snapshot(None, false, None)
+                .expect("key estimation succeeds")
+                .missing()
+                .is_empty(),
             "a pass that has not been told how long the track is claims nothing beyond what it saw"
         );
 
@@ -473,6 +560,7 @@ mod tests {
         assert!(
             analyzers
                 .snapshot(None, true, Some(8192))
+                .expect("key estimation succeeds")
                 .missing()
                 .is_empty()
         );
@@ -484,14 +572,26 @@ mod tests {
         let mut analyzers = waveform_pass(pools.clone(), 8);
         let mut revisions = Vec::new();
         for block in 0..3u64 {
-            analyzers.push(
-                &chunk(&pools, &analysis_silence, 8192, block * 8192),
-                &mut Extent::default(),
-                None,
+            analyzers
+                .push(
+                    &chunk(&pools, &analysis_silence, 8192, block * 8192),
+                    &mut Extent::default(),
+                    None,
+                )
+                .expect("key estimation succeeds");
+            revisions.push(
+                analyzers
+                    .snapshot(None, false, None)
+                    .expect("key estimation succeeds")
+                    .revision(),
             );
-            revisions.push(analyzers.snapshot(None, false, None).revision());
         }
-        revisions.push(analyzers.snapshot(None, true, Some(8192)).revision());
+        revisions.push(
+            analyzers
+                .snapshot(None, true, Some(8192))
+                .expect("key estimation succeeds")
+                .revision(),
+        );
 
         assert!(
             revisions.windows(2).all(|pair| pair[1] > pair[0]),
@@ -506,13 +606,21 @@ mod tests {
             .with_waveform(8)
             .build(spec().sample_rate, "track-a".into(), 3, AnalysisDemand::ALL)
             .expect("waveform buffers fit the test region");
-        analyzers.push(
-            &chunk(&pools, &analysis_silence, 8192, 0),
-            &mut Extent::default(),
-            None,
-        );
+        analyzers
+            .push(
+                &chunk(&pools, &analysis_silence, 8192, 0),
+                &mut Extent::default(),
+                None,
+            )
+            .expect("key estimation succeeds");
 
-        assert_eq!(analyzers.snapshot(None, false, None).revision(), 4);
+        assert_eq!(
+            analyzers
+                .snapshot(None, false, None)
+                .expect("key estimation succeeds")
+                .revision(),
+            4
+        );
     }
 
     #[kithara::test(native, flash(false))]
@@ -526,23 +634,35 @@ mod tests {
             .with_waveform(8)
             .build(spec().sample_rate, "track-b".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
-        first.push(
-            &chunk(&pools, &analysis_silence, 8192, 0),
-            &mut Extent::default(),
-            None,
-        );
-        second.push(
-            &chunk(&pools, &analysis_silence, 8192, 0),
-            &mut Extent::default(),
-            None,
-        );
+        first
+            .push(
+                &chunk(&pools, &analysis_silence, 8192, 0),
+                &mut Extent::default(),
+                None,
+            )
+            .expect("key estimation succeeds");
+        second
+            .push(
+                &chunk(&pools, &analysis_silence, 8192, 0),
+                &mut Extent::default(),
+                None,
+            )
+            .expect("key estimation succeeds");
 
         assert_eq!(
-            first.snapshot(None, true, Some(8192)).token().as_str(),
+            first
+                .snapshot(None, true, Some(8192))
+                .expect("key estimation succeeds")
+                .token()
+                .as_str(),
             "track-a"
         );
         assert_eq!(
-            second.snapshot(None, true, Some(8192)).token().as_str(),
+            second
+                .snapshot(None, true, Some(8192))
+                .expect("key estimation succeeds")
+                .token()
+                .as_str(),
             "track-b"
         );
     }
@@ -556,6 +676,7 @@ mod tests {
                 .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
                 .expect("analysis buffers fit the test region")
                 .snapshot(None, false, None)
+                .expect("key estimation succeeds")
                 .fingerprint()
                 .clone()
         };
@@ -575,6 +696,44 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
+    fn a_pass_without_key_demand_carries_no_key_tag(analysis_silence: Vec<f32>) {
+        let pools = pools();
+        let builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
+            .with_waveform(8)
+            .with_beat()
+            .with_key();
+        let full = builder.fingerprint();
+        let narrowed = AnalysisDemand::ALL.difference(AnalysisDemand::KEY);
+        assert!(full.key().is_some(), "a key-enabled builder tags its key");
+        assert_eq!(builder.fingerprint_for(narrowed).key(), None);
+        assert_eq!(
+            builder.fingerprint_for(narrowed).beat(),
+            full.beat(),
+            "the key leaves the beat tag alone"
+        );
+        assert_eq!(
+            builder.fingerprint_for(narrowed).waveform(),
+            full.waveform()
+        );
+
+        let mut pass = builder
+            .build(spec().sample_rate, "track-a".into(), 0, narrowed)
+            .expect("analysis buffers fit the test region");
+        pass.push(
+            &chunk(&pools, &analysis_silence, 8192, 0),
+            &mut Extent::default(),
+            None,
+        )
+        .expect("key estimation succeeds");
+        pass.settle();
+        let snapshot = pass
+            .snapshot(None, true, Some(8192))
+            .expect("key estimation succeeds");
+        assert_eq!(snapshot.fingerprint().key(), None);
+        assert_eq!(snapshot.key(), None);
+    }
+
+    #[kithara::test(native, flash(false))]
     fn a_grid_is_provisional_until_the_pass_settles_over_a_covered_extent(
         analysis_silence: Vec<f32>,
     ) {
@@ -586,13 +745,17 @@ mod tests {
         let mut analyzers = builder
             .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
-        analyzers.push(
-            &chunk(&pools, &analysis_silence, 8192, 0),
-            &mut Extent::default(),
-            detector.as_mut(),
-        );
+        analyzers
+            .push(
+                &chunk(&pools, &analysis_silence, 8192, 0),
+                &mut Extent::default(),
+                detector.as_mut(),
+            )
+            .expect("key estimation succeeds");
 
-        let early = analyzers.snapshot(detector.as_mut(), false, None);
+        let early = analyzers
+            .snapshot(detector.as_mut(), false, None)
+            .expect("key estimation succeeds");
         assert!(early.extent().is_none(), "the extent is not known yet");
         assert!(
             early
@@ -601,7 +764,9 @@ mod tests {
             "a grid without a known extent cannot be final"
         );
 
-        let read = analyzers.snapshot(detector.as_mut(), false, Some(8192));
+        let read = analyzers
+            .snapshot(detector.as_mut(), false, Some(8192))
+            .expect("key estimation succeeds");
         assert!(
             read.beat()
                 .is_none_or(|beat| beat.state() == BeatState::Provisional),
@@ -609,7 +774,9 @@ mod tests {
         );
 
         analyzers.settle();
-        let ended = analyzers.snapshot(detector.as_mut(), true, Some(8192));
+        let ended = analyzers
+            .snapshot(detector.as_mut(), true, Some(8192))
+            .expect("key estimation succeeds");
         assert_eq!(
             ended.extent(),
             Some(8192),
@@ -667,15 +834,19 @@ mod tests {
         let mut extent = Extent::default();
         for index in 0..COVERED_CHUNKS {
             let at = u64::from(index) * 8192;
-            analyzers.push(
-                &chunk(&pools, &analysis_silence, 8192, at),
-                &mut extent,
-                detector.as_mut(),
-            );
+            analyzers
+                .push(
+                    &chunk(&pools, &analysis_silence, 8192, at),
+                    &mut extent,
+                    detector.as_mut(),
+                )
+                .expect("key estimation succeeds");
         }
         let covered = u64::from(COVERED_CHUNKS) * 8192;
 
-        let early = analyzers.snapshot(detector.as_mut(), true, None);
+        let early = analyzers
+            .snapshot(detector.as_mut(), true, None)
+            .expect("key estimation succeeds");
         let provisional = early.grid().expect("the pass states what it heard");
         assert_eq!(provisional.as_raw().state, BeatGridState::Provisional);
         assert!(
@@ -712,7 +883,9 @@ mod tests {
         );
 
         analyzers.settle();
-        let ended = analyzers.snapshot(detector.as_mut(), true, Some(covered));
+        let ended = analyzers
+            .snapshot(detector.as_mut(), true, Some(covered))
+            .expect("key estimation succeeds");
         let settled = ended.grid().expect("the settled pass states its grid");
         assert_eq!(settled.as_raw().state, BeatGridState::Final);
         assert!(
@@ -746,12 +919,15 @@ mod tests {
         audio.meta.media_origin = Some(Duration::from_nanos(25_056_689));
         audio.meta.visible_origin = Some(Duration::from_nanos(11_995_465));
         assert_eq!(
-            pass.push(&audio, &mut Extent::default(), None),
+            pass.push(&audio, &mut Extent::default(), None)
+                .expect("key estimation succeeds"),
             Ingest::Accepted
         );
         assert_eq!(pass.visible_origin(), audio.meta.visible_origin);
         let chunk_frames = NonZeroU64::new(44_100).expect("resume chunk size is non-zero");
-        let progress = pass.progress(None, false, chunk_frames, Some(100_000));
+        let progress = pass
+            .progress(None, false, chunk_frames, Some(100_000))
+            .expect("key estimation succeeds");
         assert_eq!(progress.analysis().media_origin(), audio.meta.media_origin);
         assert_eq!(
             progress.analysis().coverage().iter().collect::<Vec<_>>(),
@@ -766,7 +942,9 @@ mod tests {
             None,
             "the persisted raw extent does not invent the visible basis"
         );
-        let after = restored.snapshot(None, false, progress.analysis().extent());
+        let after = restored
+            .snapshot(None, false, progress.analysis().extent())
+            .expect("key estimation succeeds");
         assert_eq!(after.media_origin(), audio.meta.media_origin);
         assert_eq!(after.coverage(), progress.analysis().coverage());
         assert_eq!(
@@ -783,10 +961,13 @@ mod tests {
         audio.meta.media_origin = None;
         audio.meta.visible_origin = None;
         assert_eq!(
-            pass.push(&audio, &mut Extent::default(), None),
+            pass.push(&audio, &mut Extent::default(), None)
+                .expect("key estimation succeeds"),
             Ingest::Accepted
         );
-        let snapshot = pass.snapshot(None, false, Some(1553));
+        let snapshot = pass
+            .snapshot(None, false, Some(1553))
+            .expect("key estimation succeeds");
         assert_eq!(snapshot.media_origin(), None);
         assert_eq!(
             snapshot.coverage().iter().collect::<Vec<_>>(),
@@ -804,8 +985,14 @@ mod tests {
         let mut pass = waveform_pass(pools.clone(), 8);
         let mut extent = Extent::default();
         let first = chunk(&pools, &analysis_silence, 1024, 22_050);
-        assert_eq!(pass.push(&first, &mut extent, None), Ingest::Accepted);
-        let before = pass.snapshot(None, false, None);
+        assert_eq!(
+            pass.push(&first, &mut extent, None)
+                .expect("key estimation succeeds"),
+            Ingest::Accepted
+        );
+        let before = pass
+            .snapshot(None, false, None)
+            .expect("key estimation succeeds");
         for (media_origin, visible_origin) in [
             (Some(Duration::from_millis(25)), Some(Duration::ZERO)),
             (Some(Duration::ZERO), Some(Duration::from_millis(12))),
@@ -813,8 +1000,14 @@ mod tests {
             let mut foreign = chunk(&pools, &analysis_silence, 1024, 44_100);
             foreign.meta.media_origin = media_origin;
             foreign.meta.visible_origin = visible_origin;
-            assert_eq!(pass.push(&foreign, &mut extent, None), Ingest::ForeignClock);
-            let after = pass.snapshot(None, false, None);
+            assert_eq!(
+                pass.push(&foreign, &mut extent, None)
+                    .expect("key estimation succeeds"),
+                Ingest::ForeignClock
+            );
+            let after = pass
+                .snapshot(None, false, None)
+                .expect("key estimation succeeds");
             assert_eq!(after.media_origin(), before.media_origin());
             assert_eq!(after.coverage(), before.coverage());
             assert_eq!(
@@ -850,10 +1043,13 @@ mod tests {
         assert!(writer.push(&metadata, 4, analysis_silence[..4].iter().copied()));
         let span = reader.pop(&mut out).expect("the first span is accepted");
         assert_eq!(
-            pass.push_mono(&out, span, &mut extent, None),
+            pass.push_mono(&out, span, &mut extent, None)
+                .expect("key estimation succeeds"),
             Ingest::Accepted
         );
-        let before = pass.snapshot(None, false, None);
+        let before = pass
+            .snapshot(None, false, None)
+            .expect("key estimation succeeds");
         assert_eq!(before.media_origin(), metadata.media_origin);
         assert_eq!(
             before.coverage().iter().collect::<Vec<_>>(),
@@ -874,14 +1070,21 @@ mod tests {
             } else {
                 Ingest::ForeignClock
             };
-            assert_eq!(pass.push_mono(&out, span, &mut extent, None), expected);
             assert_eq!(
-                pass.snapshot(None, false, None).media_origin(),
+                pass.push_mono(&out, span, &mut extent, None)
+                    .expect("key estimation succeeds"),
+                expected
+            );
+            assert_eq!(
+                pass.snapshot(None, false, None)
+                    .expect("key estimation succeeds")
+                    .media_origin(),
                 metadata.media_origin
             );
         }
         assert_eq!(
             pass.snapshot(None, false, None)
+                .expect("key estimation succeeds")
                 .coverage()
                 .iter()
                 .collect::<Vec<_>>(),
@@ -896,29 +1099,43 @@ mod tests {
         let mut first = chunk(&pools, &analysis_silence, 1024, 529);
         first.meta.media_origin = None;
         assert_eq!(
-            pass.push(&first, &mut Extent::default(), None),
+            pass.push(&first, &mut Extent::default(), None)
+                .expect("key estimation succeeds"),
             Ingest::Accepted
         );
-        let before = pass.snapshot(None, false, None);
+        let before = pass
+            .snapshot(None, false, None)
+            .expect("key estimation succeeds");
         let mut foreign = chunk(&pools, &analysis_silence, 1024, 22_050);
         foreign.meta.media_origin = Some(Duration::from_nanos(25_056_689));
         foreign.meta.visible_origin = Some(Duration::from_millis(12));
         assert_eq!(
-            pass.push(&foreign, &mut Extent::default(), None),
+            pass.push(&foreign, &mut Extent::default(), None)
+                .expect("key estimation succeeds"),
             Ingest::ForeignClock
         );
-        assert_eq!(pass.snapshot(None, false, None).media_origin(), None);
         assert_eq!(
-            pass.snapshot(None, false, None).coverage(),
+            pass.snapshot(None, false, None)
+                .expect("key estimation succeeds")
+                .media_origin(),
+            None
+        );
+        assert_eq!(
+            pass.snapshot(None, false, None)
+                .expect("key estimation succeeds")
+                .coverage(),
             before.coverage()
         );
         foreign.meta.visible_origin = first.meta.visible_origin;
         assert_eq!(
-            pass.push(&foreign, &mut Extent::default(), None),
+            pass.push(&foreign, &mut Extent::default(), None)
+                .expect("key estimation succeeds"),
             Ingest::Accepted
         );
         assert_eq!(
-            pass.snapshot(None, false, None).media_origin(),
+            pass.snapshot(None, false, None)
+                .expect("key estimation succeeds")
+                .media_origin(),
             foreign.meta.media_origin
         );
     }

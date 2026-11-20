@@ -8,7 +8,6 @@ use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_platform::{CancelToken, tokio::sync::watch};
 use kithara_resampler::ResamplerBackend;
 use kithara_signal::{AudioSpec, FrameCoverage};
-use kithara_waveform::AnalyzerError;
 use kithara_worker::TickResult;
 use rangemap::RangeSet;
 use tracing::{debug, warn};
@@ -17,7 +16,8 @@ use super::schedule::Schedule;
 use crate::{
     AnalysisProgress, BlobError,
     analyzer::{
-        AnalysisDemand, AnalysisToken, AnalyzerBuilder, Detector, Extent, Ingest, TrackAnalyzers,
+        AnalysisDemand, AnalysisToken, AnalyzerBuilder, Detector, Extent, Ingest, PassError,
+        TrackAnalyzers,
     },
     producer::ring,
     slots::{
@@ -164,18 +164,26 @@ where
                     "analysis: decoded PCM offered"
                 );
                 let range = chunk.meta.frame_range();
-                let Ok(analyzers) = open(
+                let pushed = open(
                     &mut self.analyzers,
                     builder,
                     self.rate,
                     &self.token,
                     self.revision,
                     self.demand,
-                ) else {
-                    self.phase = TaskPhase::Done;
-                    return TickResult::Progress;
+                )
+                .and_then(|analyzers| {
+                    analyzers
+                        .push(&chunk, &mut self.extent, detector)
+                        .map_err(PassError::from)
+                });
+                let outcome = match pushed {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        self.fail(&error);
+                        return TickResult::Progress;
+                    }
                 };
-                let outcome = analyzers.push(&chunk, &mut self.extent, detector);
                 if outcome != Ingest::Accepted {
                     debug!(?outcome, "analysis: range not folded in");
                 }
@@ -218,7 +226,7 @@ where
         &mut self,
         builder: &AnalyzerBuilder<B, S>,
         detector: Option<&mut Detector>,
-    ) -> Result<bool, AnalyzerError> {
+    ) -> Result<bool, PassError> {
         let scratch = self
             .scratch
             .get_or_insert_with(|| builder.pools().get::<f32>());
@@ -238,7 +246,7 @@ where
                 break;
             };
             let outcome =
-                analyzers.push_mono(scratch, span, &mut self.extent, detector.as_deref_mut());
+                analyzers.push_mono(scratch, span, &mut self.extent, detector.as_deref_mut())?;
             if outcome != Ingest::Accepted {
                 debug!(
                     ?outcome,
@@ -256,6 +264,11 @@ where
             return false;
         };
         analyzers.covered_frames().saturating_sub(self.published_at) >= self.publish_frames
+    }
+
+    fn fail(&mut self, error: &PassError) {
+        warn!(?error, "analysis: pass failed; ended unsettled");
+        self.phase = TaskPhase::Done;
     }
 
     pub(crate) fn fail_compute_unavailable(&mut self) {
@@ -317,10 +330,13 @@ where
         if analyzers.covered_frames() == 0 {
             return;
         }
-        let progress =
-            analyzers.progress(detector, ending, self.chunk_frames, self.extent.frames());
-        self.published_at = analyzers.covered_frames();
-        self.tx.send(Some(progress)).ok();
+        match analyzers.progress(detector, ending, self.chunk_frames, self.extent.frames()) {
+            Ok(progress) => {
+                self.published_at = analyzers.covered_frames();
+                self.tx.send(Some(progress)).ok();
+            }
+            Err(error) => self.fail(&error.into()),
+        }
     }
 
     fn run_window(&self) -> Option<u64> {
@@ -462,9 +478,12 @@ where
                     None => self.reader.visible_origin(),
                 };
                 let mut detector = detector;
-                let Ok(drained) = self.drain(builder, detector.as_deref_mut()) else {
-                    self.phase = TaskPhase::Done;
-                    return TickResult::Progress;
+                let drained = match self.drain(builder, detector.as_deref_mut()) {
+                    Ok(drained) => drained,
+                    Err(error) => {
+                        self.fail(&error);
+                        return TickResult::Progress;
+                    }
                 };
                 let raw_end = self
                     .reader
@@ -472,6 +491,9 @@ where
                     .and_then(|length| visible_origin?.checked_add(length));
                 self.extent.claim(raw_end, self.rate);
                 let result = self.step(builder, detector.as_deref_mut());
+                if self.is_done() {
+                    return TickResult::Progress;
+                }
                 if self.is_ending() || self.due() || self.beat_dirty {
                     self.publish(detector, false);
                     self.beat_dirty = false;
@@ -502,7 +524,7 @@ fn open<'a, B, S>(
     token: &AnalysisToken,
     revision: u64,
     demand: AnalysisDemand,
-) -> Result<&'a mut TrackAnalyzers<B, S>, AnalyzerError>
+) -> Result<&'a mut TrackAnalyzers<B, S>, PassError>
 where
     B: ResamplerBackend,
     S: HasPool<f32> + Send + Sync + 'static,
@@ -510,11 +532,7 @@ where
     if let Some(analyzers) = slot {
         Ok(analyzers)
     } else {
-        let analyzers = builder
-            .build(rate, token.clone(), revision, demand)
-            .inspect_err(|error| {
-                warn!(?error, "analysis: analyzer initialization failed");
-            })?;
+        let analyzers = builder.build(rate, token.clone(), revision, demand)?;
         Ok(slot.insert(analyzers))
     }
 }

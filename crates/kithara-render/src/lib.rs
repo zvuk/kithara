@@ -11,10 +11,13 @@ mod dispatcher;
 mod lane;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
+mod node;
+mod offline;
 mod priority;
 pub mod rt;
 mod source;
 mod worker;
+pub use bridge::OfflineDeckError;
 pub use crossfade::{
     CrossfadeCurve, CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError,
     InvalidCrossfade,
@@ -23,14 +26,15 @@ pub use dispatcher::{
     Dispatched, DispatcherCommand, DispatcherProtocol, LaneId, LaneStart, LaneTask, LoadRequest,
     Loaded, Open, OpenResult, dispatch,
 };
-use humantime_serde as _;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
-pub use lane::{LaneApplied, LaneCommand, LaneFrame, LaneProtocol, LaneSetup};
+pub use lane::{LaneApplied, LaneCommand, LaneFrame, LaneProtocol, LaneSetup, LaneTarget};
+pub use node::{PlayerNode, PlayerNodePreparationError};
+pub use offline::OfflineDeck;
 pub use priority::ServiceClass;
 pub use source::WarpSource;
 pub use worker::{
-    DecoderNode, EngineLoad, EngineLoadSnapshot, LoadRefusal, PcmPacket, PcmReceiver, PlayWorker,
-    PlayWorkerConfig, PlayWorkerConfigPatch, StreamWake, TrackConfig, TrackConfigPatch,
+    DecoderNode, EngineLoad, EngineLoadSnapshot, LoadRefusal, OpenedPcm, PcmPacket, PcmReceiver,
+    PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, StreamWake, TrackConfig, TrackConfigPatch,
     pcm_quantum,
 };

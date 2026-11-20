@@ -104,7 +104,6 @@ impl ResourceBuilder {
             .maybe_headers(headers.map(Into::into))
             .store(self.store.clone())
             .downloader(self.downloader.clone())
-            .worker(self.worker.clone())
             .build())
     }
 }

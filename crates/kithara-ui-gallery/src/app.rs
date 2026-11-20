@@ -264,7 +264,7 @@ fn compiled(
 
 #[must_use]
 pub fn theme(skin: &Skin) -> Theme {
-    let palette = skin.palette;
+    let palette = &skin.palette;
     Theme::custom(
         "Kithara".to_owned(),
         theme::Palette {

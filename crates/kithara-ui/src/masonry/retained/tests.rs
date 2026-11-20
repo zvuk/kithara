@@ -210,8 +210,10 @@ impl Reads for FixtureReads {
             "deck.playback.playing"
             | "deck.playback.looping"
             | "deck.playback.synced"
+            | "deck.stream.quality_ready"
+            | "deck.stream.error_hidden"
             | "ui.menu.open" => Some(ReadValue::Bool(true)),
-            "deck.playback.reverse" => Some(ReadValue::Bool(false)),
+            "deck.playback.reverse" | "deck.stream.auto_hidden" => Some(ReadValue::Bool(false)),
             "deck.playback.position_normalized" => Some(ReadValue::Scalar(0.375)),
             "deck.view.zoom" => Some(ReadValue::Scalar(0.25)),
             "library.breadcrumb" => Some(ReadValue::Text("All Tracks")),
@@ -4100,11 +4102,18 @@ fn fixture_registry() -> FixtureRegistry {
 }
 
 fn insert_stream_endpoints(registry: &mut FixtureRegistry) {
-    registry.insert(
-        EndpointCategory::Telemetry,
+    for id in [
         "deck.stream.quality_hidden",
-        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
-    );
+        "deck.stream.quality_ready",
+        "deck.stream.error_hidden",
+        "deck.stream.auto_hidden",
+    ] {
+        registry.insert(
+            EndpointCategory::Telemetry,
+            id,
+            EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
+        );
+    }
     registry.insert(
         EndpointCategory::Model,
         "deck.stream.quality",

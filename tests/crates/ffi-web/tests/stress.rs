@@ -11,7 +11,7 @@ use kithara::{
     events::EventBus,
     hls::{Hls, HlsConfig},
     platform::time::{Duration, Instant},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     signal::SourceSpan,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
@@ -108,9 +108,10 @@ fn stress_pipeline_config(url: Url) -> (PlayWorker<TestPools>, AudioConfig<Hls<T
 
 async fn create_pipeline_with_url(url: Url) -> LaneAudio<Stream<Hls<TestPools>>, TestPools> {
     let (worker, config) = stress_pipeline_config(url);
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .unwrap();
+    let mut audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .unwrap();
     audio
         .preload()
         .expect("start preloading the stress fixture");
@@ -723,7 +724,7 @@ async fn stress_rapid_seeks_must_not_stall(#[future(awt)] stress_source: (TestSe
     const SEEK_COUNT: usize = 1000;
     let sample_rate = audio.spec().sample_rate.get();
     let channels = audio.spec().channels as usize;
-    let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
+    let mut rng = Xorshift64::new(0xdead_beef_cafe_1337);
     let mut dead_seeks = 0u64;
     let mut seek_errors = 0u64;
     let mut integrity_errors = 0u64;
@@ -887,7 +888,7 @@ async fn stress_seek_to_zero_after_pressure(#[future(awt)] stress_source: (TestS
     let max_seek = duration_secs - 0.5;
     info!(warmup, duration_secs, "Warmup done");
 
-    let mut rng = Xorshift64::new(0xABCD_EF01_2345_6789);
+    let mut rng = Xorshift64::new(0xabcd_ef01_2345_6789);
     let mut seek_events = audio.events::<AudioEvent>();
     let mut decoder_events = audio.events::<DecoderEvent>();
     for i in 0..500 {

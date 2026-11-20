@@ -11,13 +11,15 @@ use kithara::{
     },
     platform::{CancelScope, time::Duration},
     play::{
-        BeatGrid, CrossfadeSettings, DeckMixerConfig, PlayError, PlayWorker, PlayWorkerConfig,
-        PlayerEvent, PlayerStatus, ResourcePrep, TrackSettings, mock,
+        BeatGrid, CrossfadeSettings, DeckMixSettingsChange, DeckMixerConfig, PlayError, PlayWorker,
+        PlayWorkerConfig, PlayerEvent, PlayerStatus, ResourcePrep, TrackSettings,
+        TrackSettingsChange, mock,
     },
     queue::{ActionAtItemEnd, Queue, QueueConfig, QueueError, QueueEvent, Transition},
     signal::AudioSpec,
     warp::WarpConfig,
 };
+use kithara_command::When;
 use kithara_config::Config;
 use kithara_test_utils::bufpool::{TestPools, pools};
 
@@ -125,22 +127,28 @@ fn player_basic_behaviors(#[case] scenario: PlayerBasicScenario) {
 fn player_volume_clamps() {
     let (mut host, player) = player();
     let mut cursor = 0;
-    player.set_volume(2.0).expect("volume clamps");
+    player
+        .mix(When::Next, DeckMixSettingsChange::Volume(2.0.into()))
+        .expect("volume clamps");
     render_block(&mut host, &mut cursor);
-    assert!((player.volume() - 1.0).abs() < f32::EPSILON);
-    player.set_volume(-1.0).expect("volume clamps");
+    assert!((f32::from(player.mix_settings().volume()) - 1.0).abs() < f32::EPSILON);
+    player
+        .mix(When::Next, DeckMixSettingsChange::Volume((-1.0).into()))
+        .expect("volume clamps");
     render_block(&mut host, &mut cursor);
-    assert!((player.volume() - 0.0).abs() < f32::EPSILON);
+    assert!((f32::from(player.mix_settings().volume()) - 0.0).abs() < f32::EPSILON);
 }
 
 #[kithara::test]
 fn player_muted() {
     let (mut host, player) = player();
     let mut cursor = 0;
-    assert!(!player.is_muted());
-    player.set_muted(true).expect("mute is accepted");
+    assert!(!player.mix_settings().muted());
+    player
+        .mix(When::Next, DeckMixSettingsChange::Muted(true))
+        .expect("mute is accepted");
     render_block(&mut host, &mut cursor);
-    assert!(player.is_muted());
+    assert!(player.mix_settings().muted());
 }
 
 #[kithara::test]
@@ -180,7 +188,9 @@ fn player_events_subscribe() {
     let (mut host, player) = player();
     let mut cursor = 0;
     let mut rx = player.subscribe::<PlayerEvent>();
-    player.set_volume(0.5).expect("volume is accepted");
+    player
+        .mix(When::Next, DeckMixSettingsChange::Volume(0.5.into()))
+        .expect("volume is accepted");
     render_block(&mut host, &mut cursor);
     let event = rx.try_recv();
     assert!(event.is_ok());
@@ -309,10 +319,16 @@ fn synchronous_player_events_remain_in_order() {
     let mut cursor = 0;
     let mut rx = player.subscribe::<PlayerEvent>();
 
-    player.set_volume(0.5).expect("volume is accepted");
-    player.set_muted(true).expect("mute is accepted");
+    player
+        .mix(When::Next, DeckMixSettingsChange::Volume(0.5.into()))
+        .expect("volume is accepted");
+    player
+        .mix(When::Next, DeckMixSettingsChange::Muted(true))
+        .expect("mute is accepted");
     render_block(&mut host, &mut cursor);
-    player.set_rate(2.0).expect("rate is accepted");
+    player
+        .configure_track(TrackSettingsChange::Speed(2.0))
+        .expect("rate is accepted");
 
     let e1 = rx.try_recv();
     let e2 = rx.try_recv();
@@ -465,8 +481,12 @@ fn select_item_without_runtime_errors_without_bookkeeping() {
         .store(AssetStore::builder(pools()).build())
         .build();
     let prep = prep();
-    let prepared = prep
-        .prepare(source.clone(), &mock::output(None).get())
+    let (prepared, _load) = prep
+        .prepare(
+            source.clone(),
+            &mock::output(None).get(),
+            Box::new(kithara::audio::AudioObserverSlot::default().relay()),
+        )
         .expect("the source config is valid before runtime admission");
     assert!(
         prepared.cancel().is_some(),

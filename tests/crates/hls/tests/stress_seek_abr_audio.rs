@@ -5,7 +5,7 @@ use kithara::{
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -419,7 +419,7 @@ fn random_seek_cycles(audio: &mut HlsAudio, buf: &mut [f32], channels: usize, ma
     );
 
     check_fractional_saw_controls();
-    let mut rng = Xorshift64::new(0xAB25_5017_C400_0000);
+    let mut rng = Xorshift64::new(0xab25_5017_c400_0000);
     let mut tally = SeekTally::default();
 
     for i in 0..consts::SEEK_ITERATIONS {
@@ -623,13 +623,12 @@ async fn stress_seek_abr_audio(
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .media_info(fixture.media_info())
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");

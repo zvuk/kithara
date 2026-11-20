@@ -7,7 +7,7 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::fixtures::{
-    Command, Rig, answer, deck, grid, horizon, load, position, source_grid, trajectory,
+    Command, Rig, answer, deck, grid, horizon, load, position, sound, source_grid, trajectory,
 };
 use crate::{LinkedPlayer, SyncStatus};
 
@@ -229,7 +229,7 @@ fn a_synchronized_replay_prepares_zero_with_the_actual_entry_law() {
 }
 
 #[kithara::test]
-fn a_silent_retime_keeps_the_callers_frame_and_latest_native_cue() {
+fn a_silent_retime_waits_for_its_latest_native_cue() {
     let (mut deck, control, mut rig, _) = super::fixtures::loaded(grid(24_000, 0, None, 480_000));
     let prepared = rig
         .run(|out| LinkedPlayer::sync(&mut deck, true, out))
@@ -247,15 +247,16 @@ fn a_silent_retime_keeps_the_callers_frame_and_latest_native_cue() {
     rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[frame], out));
     let latest = control.commands()[0].0;
     assert_ne!(first, latest);
-    assert_eq!(LinkedPlayer::retime_applied(&mut deck, frame), None);
+    let bound = Bound::AtOrAfter(frame);
+    assert_eq!(deck.entry(bound), None);
     rig.apply(&mut deck, first, 0);
     assert_eq!(
-        LinkedPlayer::retime_applied(&mut deck, frame),
+        deck.entry(bound),
         None,
-        "the replaced cue cannot credit the caller's retime"
+        "the replaced cue cannot ready the track"
     );
     rig.apply(&mut deck, latest, 0);
-    assert_eq!(LinkedPlayer::retime_applied(&mut deck, frame), Some(true));
+    assert!(deck.entry(bound).is_some());
 }
 
 #[kithara::test]
@@ -263,10 +264,7 @@ fn a_silent_retime_keeps_the_callers_frame_and_latest_native_cue() {
 #[case::preparation_between_callers(100_000, false)]
 #[case::cue_before_callers(0, true)]
 #[case::cue_between_callers(100_000, true)]
-fn an_entry_replacement_transfers_all_retime_callers_to_its_current_receipt(
-    #[case] at: i64,
-    #[case] explicit_cue: bool,
-) {
+fn an_entry_replacement_waits_for_its_current_receipt(#[case] at: i64, #[case] explicit_cue: bool) {
     let model = grid(24_000, 0, None, 480_000);
     let (mut deck, control, mut rig, _) = super::fixtures::loaded(model.clone());
     let prepared = rig
@@ -286,7 +284,7 @@ fn an_entry_replacement_transfers_all_retime_callers_to_its_current_receipt(
         rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[caller], out));
         let seq = control.commands()[0].0;
         rig.apply(&mut deck, seq, 0);
-        assert_eq!(LinkedPlayer::retime_applied(&mut deck, caller), Some(true));
+        assert!(deck.entry(Bound::AtOrAfter(caller)).is_some());
         previous = Some(seq);
     }
     let previous = previous.expect("last retime receipt");
@@ -319,21 +317,16 @@ fn an_entry_replacement_transfers_all_retime_callers_to_its_current_receipt(
     let current = commands[0].0;
     assert_ne!(current, previous);
     assert_eq!(commands[1].1, Command::Seek(position(0)));
-    for caller in callers {
-        assert_eq!(LinkedPlayer::retime_applied(&mut deck, caller), None);
-    }
+    let bound = Bound::AtOrAfter(at);
+    assert_eq!(deck.entry(bound), None);
     rig.apply(&mut deck, previous, 0);
-    for caller in callers {
-        assert_eq!(
-            LinkedPlayer::retime_applied(&mut deck, caller),
-            None,
-            "a discarded segment cannot credit its replacement"
-        );
-    }
+    assert_eq!(
+        deck.entry(bound),
+        None,
+        "a discarded segment cannot ready its replacement"
+    );
     rig.apply(&mut deck, current, 0);
-    for caller in callers {
-        assert_eq!(LinkedPlayer::retime_applied(&mut deck, caller), Some(true));
-    }
+    assert!(deck.entry(bound).is_some());
 }
 
 #[kithara::test]
@@ -578,11 +571,7 @@ fn preparation_preserves_both_phase_error_directions(
 fn audible_exact_beat_selects_a_reachable_future_cue() {
     let (mut deck, control, mut rig, _) = super::fixtures::loaded(grid(24_000, 0, None, 480_000));
     rig.delivery = FrameCount::new(24_000);
-    control.edit(|script| {
-        script.snapshot.status = TrackStatus::Playing {
-            since: SessionFrame::new(0),
-        }
-    });
+    sound(&control, &mut rig, 0, 0);
     rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("align");
     let commands = control.commands();
@@ -605,12 +594,8 @@ fn audible_exact_beat_selects_a_reachable_future_cue() {
 fn audible_manual_speed_selects_the_cue_the_faster_stream_reaches() {
     let (mut deck, control, mut rig, _) = super::fixtures::loaded(grid(24_000, 0, None, 480_000));
     rig.delivery = FrameCount::new(24_000);
-    control.edit(|script| {
-        script.snapshot.status = TrackStatus::Playing {
-            since: SessionFrame::new(0),
-        };
-        script.snapshot.speed = 2.0;
-    });
+    sound(&control, &mut rig, 0, 0);
+    control.edit(|script| script.snapshot.speed = 2.0);
     rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("align");
     let commands = control.commands();
@@ -635,12 +620,7 @@ fn audible_alignment_seeks_ahead_of_the_live_source_at_the_next_host_downbeat() 
         super::fixtures::loaded(grid(24_000, 0, Some((4, 0)), 960_000));
     rig.now = SessionFrame::new(60_768);
     rig.delivery = FrameCount::new(35_232);
-    control.edit(|script| {
-        script.snapshot.position = position(383_872);
-        script.snapshot.status = TrackStatus::Playing {
-            since: SessionFrame::new(60_768),
-        };
-    });
+    sound(&control, &mut rig, 60_768, 383_872);
     rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("align");
     let commands = control.commands();

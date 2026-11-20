@@ -14,7 +14,7 @@ use kithara::{
             task::{spawn, spawn_blocking},
         },
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     signal::AudioChunk,
     stream::Stream,
 };
@@ -408,13 +408,12 @@ async fn live_stress_real_mp3_seek_read_cache(
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = kithara_integration_tests::mock::load_audio(
         &worker,
-        kithara::play::TrackConfig::for_audio(
+        (
             AudioConfig::<File<TestPools>>::for_stream(file_config)
                 .hint(("mp3").to_string())
                 .build(),
-        )
-        .block_on_underrun(true)
-        .build(),
+            TrackConfig::builder().block_on_underrun(true).build(),
+        ),
     )
     .await
     .expect("audio creation");
@@ -428,7 +427,7 @@ async fn live_stress_real_mp3_seek_read_cache(
 
         let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
         let max_seek_secs = (duration_secs - 2.0).max(20.0);
-        let mut rng = Xorshift64::new(0xA11C_5EED_0000_0101);
+        let mut rng = Xorshift64::new(0xa11c_5eed_0000_0101);
         let random_seek = phase2_random_seek_stress(&mut audio, &mut rng, max_seek_secs);
         assert!(
             random_seek.chunks_read >= consts::MIN_RANDOM_CHUNKS,

@@ -10,6 +10,16 @@ pub(crate) struct TrackId(pub(crate) String);
 #[serde(transparent)]
 pub(crate) struct PlaylistId(pub(crate) String);
 
+/// Stable identity of a catalogue artist.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub(crate) struct ArtistId(pub(crate) String);
+
+/// Stable identity of a catalogue release.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub(crate) struct ReleaseId(pub(crate) String);
+
 /// Artist metadata returned with a track.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub(crate) struct Artist {
@@ -75,6 +85,26 @@ pub(crate) enum ItemStatus {
     Liked,
     /// The account has disliked the track.
     Disliked,
+}
+
+/// One artist search result.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub(crate) struct SearchArtist {
+    /// Stable artist identity.
+    pub(crate) id: ArtistId,
+    /// Display title supplied by the catalogue.
+    pub(crate) title: String,
+}
+
+/// One release search result.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub(crate) struct SearchRelease {
+    /// Stable release identity.
+    pub(crate) id: ReleaseId,
+    /// Display title supplied by the catalogue.
+    pub(crate) title: String,
+    /// Release artists supplied by the catalogue.
+    pub(crate) artists: Vec<Artist>,
 }
 
 /// One playlist in the configured account collection.

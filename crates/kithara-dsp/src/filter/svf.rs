@@ -3,12 +3,15 @@ use std::{
     ops::{DerefMut, Range},
 };
 
-use fearless_simd::{Level, dispatch, f64x2, prelude::*};
+use fearless_simd::{Level, dispatch, prelude::*};
 use num_traits::ToPrimitive;
 
 use super::FilterError;
 use crate::{
-    backend::{platform, svf_step},
+    backend::{
+        platform,
+        route::{route, table},
+    },
     consts,
 };
 
@@ -71,8 +74,9 @@ impl SvfDesign {
     }
 }
 
-/// Frames until the fixed SVF's slowest pole decays under `floor`.
-/// A decay beyond the addressable frame count saturates at `usize::MAX`.
+/// Frames for unit amplitude at the largest pole radius to reach `floor` in `(0, 1)`.
+/// The geometric count excludes pole multiplicity and impulse-response scale.
+/// Returns at least one frame and saturates at `usize::MAX`.
 #[must_use]
 pub fn decay_frames(design: SvfDesign, floor: f64) -> usize {
     let SvfDesign { gain, damping, .. } = design;
@@ -261,31 +265,9 @@ impl<const CHANNELS: usize> StateVariableFilter<CHANNELS> {
             .zip(memory1.chunks_mut(2))
             .zip(memory2.chunks_mut(2))
         {
-            let s1 = f64x2::from_fn(simd, |lane| memory1.get(lane).copied().unwrap_or(0.0));
-            let s2 = f64x2::from_fn(simd, |lane| memory2.get(lane).copied().unwrap_or(0.0));
-            let x = f64x2::from_fn(simd, |lane| {
-                samples
-                    .get(lane)
-                    .and_then(Option::as_deref)
-                    .copied()
-                    .map_or(0.0, f64::from)
-            });
-            let ([next1, next2], output) =
-                svf_step(simd, x, [s1, s2], [a1, a2, a3], damping, response);
-            for (memory, value) in memory1.iter_mut().zip(next1.as_slice()) {
-                *memory = *value;
-            }
-            for (memory, value) in memory2.iter_mut().zip(next2.as_slice()) {
-                *memory = *value;
-            }
-            for (sample, output) in samples.iter_mut().zip(output.as_slice()) {
-                if let Some(sample) = sample.as_deref_mut() {
-                    let output = output.to_f32().unwrap_or(f32::NAN);
-                    frame_quiet &=
-                        sample.abs() <= consts::SILENT_PEAK && output.abs() <= consts::SILENT_PEAK;
-                    *sample = output;
-                }
-            }
+            frame_quiet &= route!(table::svf_pair => (
+                simd, samples, memory1, memory2, [a1, a2, a3], damping, response,
+            ));
         }
         self.reset_state = false;
         self.count(frame_quiet);

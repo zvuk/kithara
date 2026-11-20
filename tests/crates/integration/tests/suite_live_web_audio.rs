@@ -32,10 +32,12 @@ use kithara::{
         tokio::task,
     },
     play::{
-        CrossfaderGain, MixTapWriter, PlayWorker, PlayWorkerConfig, PlayerFactory, ResourcePrep,
+        CrossfaderGain, DeckMixSettingsChange, MixTapWriter, PlayWorker, PlayWorkerConfig,
+        PlayerFactory, ResourcePrep,
     },
     queue::{Queue, QueueConfig, Transition},
 };
+use kithara_command::When;
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
@@ -102,17 +104,27 @@ fn stage_name(stage: u64) -> &'static str {
 
 /// One player on the fixture sine, owned by the Worker the wasm Host requires
 /// for insertion. It keeps ticking until the test's Host route closes.
-fn spawn_player_worker(sender: wasm::HostSender<TestPools>, stage: Arc<AtomicU64>) {
+fn spawn_player_worker(
+    sender: wasm::HostSender<TestPools>,
+    stage: Arc<AtomicU64>,
+    outputs: OutputGroup,
+) {
     spawn_named("live-web-audio-player", move || {
         keep_worker_alive();
-        task::spawn(run_player_worker(sender, stage));
+        task::spawn(run_player_worker(sender, stage, outputs));
     });
 }
 
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn run_player_worker(sender: wasm::HostSender<TestPools>, stage: Arc<AtomicU64>) {
+async fn run_player_worker(
+    sender: wasm::HostSender<TestPools>,
+    stage: Arc<AtomicU64>,
+    outputs: OutputGroup,
+) {
     stage.store(1, Ordering::Relaxed);
     let mut host = wasm::remote_host(sender);
+    host.attach_outputs(Tap::Master, outputs)
+        .expect("install the mix tap");
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region.clone()).build());
     let store = AssetStore::builder(region)
@@ -226,11 +238,8 @@ async fn live_web_audio_plays_at_session_rate() {
     let drops = Arc::new(AtomicU64::new(0));
     let mut outputs = OutputGroup::new();
     outputs.push(MixTapWriter::new(pcm_tx, Arc::clone(&drops)));
-    host.attach_outputs(Tap::Master, outputs)
-        .expect("install the mix tap");
-
     let stage = Arc::new(AtomicU64::new(0));
-    spawn_player_worker(sender, Arc::clone(&stage));
+    spawn_player_worker(sender, Arc::clone(&stage), outputs);
 
     let page = web_sys::window().expect("the browser main thread owns a window");
     let document = page.document().expect("the runner page owns a document");
@@ -378,17 +387,27 @@ fn open_deck(
     owner
 }
 
-fn spawn_deck_pair_worker(sender: wasm::HostSender<TestPools>, pair: Arc<DeckPair>) {
+fn spawn_deck_pair_worker(
+    sender: wasm::HostSender<TestPools>,
+    pair: Arc<DeckPair>,
+    outputs: OutputGroup,
+) {
     spawn_named("live-web-audio-decks", move || {
         keep_worker_alive();
-        task::spawn(run_deck_pair_worker(sender, pair));
+        task::spawn(run_deck_pair_worker(sender, pair, outputs));
     });
 }
 
 #[kithara_test_utils::kithara::hang_watchdog]
-async fn run_deck_pair_worker(sender: wasm::HostSender<TestPools>, pair: Arc<DeckPair>) {
+async fn run_deck_pair_worker(
+    sender: wasm::HostSender<TestPools>,
+    pair: Arc<DeckPair>,
+    outputs: OutputGroup,
+) {
     pair.stage.store(1, Ordering::Relaxed);
     let mut host = wasm::remote_host(sender);
+    host.attach_outputs(Tap::Master, outputs)
+        .expect("install the mix tap");
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region.clone()).build());
     let store = AssetStore::builder(region)
@@ -413,7 +432,7 @@ async fn run_deck_pair_worker(sender: wasm::HostSender<TestPools>, pair: Arc<Dec
             for (deck, level) in decks.iter().zip(levels) {
                 let level = CrossfaderGain::checked(level).expect("a crossfader gain");
                 deck.control()
-                    .set_crossfader(level)
+                    .mix(When::Next, DeckMixSettingsChange::Crossfader(level))
                     .expect("set the crossfader level");
             }
             if applied == DeckPair::UNAPPLIED {
@@ -516,11 +535,8 @@ async fn two_decks_in_one_host_follow_the_crossfader() {
     let drops = Arc::new(AtomicU64::new(0));
     let mut outputs = OutputGroup::new();
     outputs.push(MixTapWriter::new(pcm_tx, Arc::clone(&drops)));
-    host.attach_outputs(Tap::Master, outputs)
-        .expect("install the mix tap");
-
     let pair = Arc::new(DeckPair::new(0.0));
-    spawn_deck_pair_worker(sender, Arc::clone(&pair));
+    spawn_deck_pair_worker(sender, Arc::clone(&pair), outputs);
     let deadline = js_sys::Date::now() + 2.0 * AUDIO_BUDGET_MS;
     let second = usize::try_from(RATE.get()).unwrap();
 

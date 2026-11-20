@@ -24,7 +24,38 @@ pub(crate) fn prepare_route_restart<T, S>(
         .ctx
         .as_ref()
         .ok_or(SessionError::NoContext)?
-        .is_active();
+        .is_active()
+        && state.stream.is_some();
+    let target = restart_target(state, was_running)?;
+    let stamp = target
+        .stamp()
+        .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
+    state
+        .root
+        .publish_unavailable(stamp, state.settings.config().sample_rate(), target.epoch());
+    state.reserved_session_grid = Some(target);
+
+    // The stream's axis ends here: what the owner staged for it goes to the
+    // transport first, which refuses its frames along with the axis, whether
+    // its stream stops now or already stopped on its own.
+    state.publish_staged();
+    if was_running {
+        state.stream = None;
+        #[cfg(target_arch = "wasm32")]
+        state
+            .ctx
+            .as_mut()
+            .ok_or(SessionError::NoContext)?
+            .request_deactivate();
+    }
+    state.publish_root();
+    finish_route_restart(state, target)
+}
+
+fn restart_target<T, S>(
+    state: &mut SessionState<T, S>,
+    was_running: bool,
+) -> Result<SessionGridGeneration, SessionError> {
     let current = state.root.grid();
     let MapAxis::Session(axis) = current.axis() else {
         return Err(SessionError::Graph(
@@ -65,29 +96,7 @@ pub(crate) fn prepare_route_restart<T, S>(
             .advance_restart()
             .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
     }
-    let stamp = target
-        .stamp()
-        .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
-    state
-        .root
-        .publish_unavailable(stamp, state.settings.config().sample_rate(), target.epoch());
-    state.reserved_session_grid = Some(target);
-
-    // The stream's axis ends here: what the owner staged for it goes to the
-    // transport first, which refuses its frames along with the axis, whether
-    // its stream stops now or already stopped on its own.
-    state.publish_staged();
-    if was_running {
-        state.stream = None;
-        #[cfg(target_arch = "wasm32")]
-        state
-            .ctx
-            .as_mut()
-            .ok_or(SessionError::NoContext)?
-            .request_deactivate();
-    }
-    state.publish_root();
-    finish_route_restart(state, target)
+    Ok(target)
 }
 
 /// Once the stopped stream's processor is back, converges its grid while

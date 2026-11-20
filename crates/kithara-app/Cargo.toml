@@ -98,6 +98,7 @@ kithara-app-document = { workspace = true }
 kithara-app-library = { workspace = true }
 kithara-app-zvuk = { workspace = true, optional = true }
 kithara-assets = { workspace = true }
+kithara-command = { workspace = true }
 kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-events = { workspace = true }
@@ -148,6 +149,9 @@ kithara = { workspace = true, default-features = false, features = ["download", 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"), not(all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["download", "fdk-aac"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dirs-next = { workspace = true }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["symphonia", "webcodecs", "client-reqwest", "tls-rustls"] }
 
@@ -171,7 +175,7 @@ kithara-test-utils = { workspace = true, features = ["test", "usdt", "mock", "ha
 
 async-trait = { workspace = true }
 futures = { workspace = true }
-keyring-core = { workspace = true, features = ["sample"] }
+keyring-core = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 

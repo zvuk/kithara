@@ -385,10 +385,14 @@ where
                 if self.port.is_full() {
                     return TickResult::Backpressured;
                 }
-                self.source.upstream_parked();
+                if reason != WaitingReason::OperationPending {
+                    self.source.upstream_parked();
+                }
                 return match reason {
                     WaitingReason::WaitingDemand => TickResult::UpstreamPending,
-                    WaitingReason::Waiting | WaitingReason::WaitingMetadata => TickResult::Waiting,
+                    WaitingReason::Waiting
+                    | WaitingReason::WaitingMetadata
+                    | WaitingReason::OperationPending => TickResult::Waiting,
                 };
             }
         }

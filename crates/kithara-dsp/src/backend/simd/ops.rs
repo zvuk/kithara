@@ -7,6 +7,7 @@ use fearless_simd::{Level, dispatch, prelude::*};
 use num_traits::AsPrimitive;
 
 use super::{last_loud_kernel, padded};
+use crate::backend::route::{route, table};
 
 /// Replaces `NaN`, ±infinity, subnormals and −0.0 with `+0.0` in place; every
 /// other value keeps its bits.
@@ -27,7 +28,7 @@ pub(in crate::backend) fn sanitize_kernel<S: Simd>(simd: S, samples: &mut [f32])
 /// `samples[i] /= divisor`, correctly rounded, over the whole slice; returns
 /// its length.
 pub(crate) fn div(samples: &mut [f32], divisor: f32) -> usize {
-    dispatch!(Level::new(), simd => div_kernel(simd, samples, divisor))
+    route!(table::div => (samples, divisor))
 }
 
 #[inline(always)]
@@ -76,7 +77,7 @@ pub(in crate::backend) fn scale_in_place_kernel<S: Simd>(
 /// `output[i] = start + i*step`, rounded once while `i` stays below 2^24;
 /// returns `output.len()`.
 pub(crate) fn ramp(output: &mut [f32], start: f32, step: f32) -> usize {
-    dispatch!(Level::new(), simd => ramp_kernel(simd, output, start, step))
+    route!(table::ramp => (output, start, step))
 }
 
 #[inline(always)]
@@ -104,7 +105,7 @@ pub(in crate::backend) fn ramp_kernel<S: Simd>(
 /// `acc[i] += x[i]*y[i]`, rounded once, over the common prefix of the three
 /// slices; returns its length.
 pub(crate) fn mul_add(x: &[f32], y: &[f32], acc: &mut [f32]) -> usize {
-    dispatch!(Level::new(), simd => mul_add_kernel(simd, x, y, acc))
+    route!(table::mul_add => (x, y, acc))
 }
 
 #[inline(always)]

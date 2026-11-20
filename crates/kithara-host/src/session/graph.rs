@@ -10,7 +10,9 @@ use super::{
     SessionError,
     context::GraphError,
     queue::settle_root_receipts,
-    state::{DeckNode, RetiredDeck, SessionState, TapSlot, add_graph_node, ensure_ctx},
+    state::{
+        DeckNode, OutputPhase, RetiredDeck, SessionState, TapSlot, add_graph_node, ensure_ctx,
+    },
     transport::TransportState,
 };
 use crate::{
@@ -178,7 +180,7 @@ pub(crate) fn idle<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionEr
         .as_mut()
         .ok_or(SessionError::NoContext)?
         .request_deactivate();
-    state.stream_needs_restart = false;
+    state.output_phase = OutputPhase::Idle;
     state.publish_root();
     Ok(())
 }

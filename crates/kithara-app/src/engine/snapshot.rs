@@ -2,17 +2,17 @@ use std::collections::BTreeMap;
 
 use kithara::{
     abr::AbrMode,
+    analysis::MusicalKey,
     effects::GainDb,
     host::{DeckId, api::Tempo},
     platform::sync::Arc,
-    play::Pitch,
-    prelude::EngineLoadSnapshot,
+    play::{EngineLoadSnapshot, TrackSettings},
     queue::TrackEntry,
 };
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    analysis::TrackArtifacts,
+    analysis::{TrackArtifacts, TrackFacts},
     broadcast::Broadcaster,
     deck::{EqMode, TempoPercent},
     mix::{MixState, MixStrip},
@@ -26,7 +26,7 @@ pub(crate) struct EngineSnapshot {
     pub(crate) mix: MixState,
     pub(crate) tempo: Tempo,
     pub(crate) decks: Vec<DeckSnapshot>,
-    pub(crate) track_bpms: Arc<BTreeMap<String, f64>>,
+    pub(crate) track_facts: Arc<BTreeMap<String, TrackFacts>>,
     pub(crate) applied_seq: u64,
 }
 
@@ -38,7 +38,7 @@ impl EngineSnapshot {
             mix: MixState::default(),
             tempo: Tempo::DEFAULT,
             decks: Vec::new(),
-            track_bpms: Arc::new(BTreeMap::new()),
+            track_facts: Arc::new(BTreeMap::new()),
             applied_seq: 0,
         }
     }
@@ -82,7 +82,8 @@ pub(crate) struct DeckSnapshot {
     pub(crate) tempo: TempoPercent,
     pub(crate) speed: f32,
     pub(crate) synced: bool,
-    pub(crate) pitch: Option<Pitch>,
+    pub(crate) settings: TrackSettings,
+    pub(crate) warp_controls_available: bool,
     pub(crate) playing: bool,
     pub(crate) duration: f64,
     pub(crate) position: f64,
@@ -94,6 +95,10 @@ pub(crate) struct StreamView {
     pub(crate) selected: Option<usize>,
     pub(crate) variants: Vec<AbrVariant>,
     pub(crate) is_auto: bool,
+    pub(crate) current_label: Option<String>,
+    pub(crate) auto_available: bool,
+    pub(crate) busy: bool,
+    pub(crate) failed: bool,
 }
 
 #[derive(Clone)]
@@ -103,6 +108,7 @@ pub(crate) struct AnalysisView {
     pub(crate) unready: Arc<[[f32; 2]]>,
     pub(crate) artifacts: Option<TrackArtifacts>,
     pub(crate) bpm: Option<f32>,
+    pub(crate) key: Option<MusicalKey>,
 }
 
 #[bon::bon]
@@ -115,8 +121,10 @@ impl DeckSnapshot {
         eq_bands: Vec<GainDb>,
         tempo: TempoPercent,
         synced: bool,
-        pitch: Option<Pitch>,
+        settings: TrackSettings,
+        #[builder(default)] warp_controls_available: bool,
         state: &UiState,
+        catalogue: Option<&kithara_app_library::Playable>,
     ) -> Self {
         Self {
             id,
@@ -124,14 +132,15 @@ impl DeckSnapshot {
             strip,
             analysis: AnalysisView::new(state),
             eq_bands,
-            stream: StreamView::new(state),
+            stream: StreamView::new(state, catalogue),
             track_name: state.track_name.clone(),
             tracks: state.tracks.clone(),
             engine_load: state.engine_load,
             tempo,
             speed: state.speed,
             synced,
-            pitch,
+            settings,
+            warp_controls_available,
             current_track_index: state.current_track_index,
             duration: state.duration,
             position: state.position,
@@ -141,17 +150,56 @@ impl DeckSnapshot {
 }
 
 impl StreamView {
-    fn new(state: &UiState) -> Self {
+    fn new(state: &UiState, catalogue: Option<&kithara_app_library::Playable>) -> Self {
         let selected = match state.abr_mode {
             Some(AbrMode::Manual(variant)) => Some(variant.get()),
             Some(AbrMode::Auto(_)) | None => None,
         };
-        Self {
+        let current = state
+            .current_track_index
+            .and_then(|index| state.tracks.get(index));
+        let mut stream = Self {
             current: state.current_variant,
             selected,
             variants: state.abr_variants.clone(),
             is_auto: selected.is_none(),
+            current_label: None,
+            auto_available: true,
+            busy: current.is_some_and(|track| track.source_changing),
+            failed: current.is_some_and(|track| track.source_failed),
+        };
+        if let Some(catalogue) = catalogue
+            && let Some((index, choice)) =
+                catalogue.choices.iter().enumerate().find(|(_, choice)| {
+                    current.and_then(|track| track.url.as_deref()) == Some(choice.source.as_str())
+                })
+        {
+            stream.current_label = if choice.adaptive {
+                state
+                    .abr_variants
+                    .iter()
+                    .find(|variant| Some(variant.index) == state.current_variant)
+                    .map(|variant| variant.label.clone())
+            } else {
+                Some(choice.label.clone())
+            };
+            stream.current = (!choice.adaptive).then_some(index);
+            stream.selected = stream.current;
+            stream.is_auto = choice.adaptive;
+            stream.auto_available = catalogue.choices.iter().any(|choice| choice.adaptive);
+            stream.variants = catalogue
+                .choices
+                .iter()
+                .enumerate()
+                .filter(|(_, choice)| !choice.adaptive)
+                .map(|(index, choice)| AbrVariant {
+                    index,
+                    label: choice.label.clone(),
+                    detail: String::new(),
+                })
+                .collect();
         }
+        stream
     }
 }
 
@@ -164,6 +212,7 @@ impl AnalysisView {
                 .as_ref()
                 .and_then(TrackArtifacts::grid)
                 .map(|grid| grid.as_raw().bpm.as_()),
+            key: state.analysis.as_ref().and_then(TrackArtifacts::key),
             beats: Arc::clone(&state.beat_marks),
             downbeats: Arc::clone(&state.downbeat_marks),
             unready: Arc::clone(&state.unready_ranges),

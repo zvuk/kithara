@@ -18,6 +18,7 @@ use crate::{
     draw::{Geom, Rect},
     iced::{
         controls::{ChromeLeaf, chrome_leaf, header_chevron},
+        immediate::cache::Cache,
         skin::IcedSkin,
         tree::Widget,
     },
@@ -346,7 +347,7 @@ impl CornerTicks {
 /// The drawn chrome and the shape it was drawn for, kept between frames so an
 /// unchanged window border is not tessellated again on every redraw.
 struct ChromeState {
-    cache: canvas::Cache,
+    cache: Cache,
     painted: Cell<Option<(FrameChrome, Rectangle)>>,
 }
 

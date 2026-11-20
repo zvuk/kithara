@@ -66,6 +66,7 @@ impl Entry {
     pub(super) fn accept(&mut self, loaded: Loaded) {
         match loaded {
             Loaded::BeatGrid(result) => self.prepared.beat_grid = result.into(),
+            Loaded::Key(result) => self.prepared.key = result.into(),
             Loaded::Waveform(result) => self.prepared.waveform = result.into(),
         }
         self.republish();

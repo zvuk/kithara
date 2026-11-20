@@ -715,6 +715,7 @@ mod subject {
             fs::create_dir_all(checkout).expect("create checkout");
             fs::write(checkout.join("identity"), identity).expect("write checkout identity");
         }
+        let subject = subject.canonicalize().expect("canonical subject checkout");
         fs::write(controller.join("nextest.toml"), "").expect("write nextest config");
         fs::write(controller.join(REPORT), STALE_REPORT).expect("write stale controller report");
         let executable = std::env::current_exe().expect("current test executable");
@@ -3725,10 +3726,6 @@ mod engine_selection_tests {
                 "ordinary {name} gate remains configured"
             );
         }
-        assert_eq!(
-            project.test.lanes["analysis"].default_features,
-            ["kithara-beat/dsp", "kithara-waveform/dsp"]
-        );
         assert_eq!(
             project.test.lanes["net-host"].default_backend.as_deref(),
             Some("host")

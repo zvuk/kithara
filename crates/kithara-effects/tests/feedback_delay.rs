@@ -955,3 +955,25 @@ fn feedback_delay_high_pass_boundaries_and_former_holes(#[case] retune: bool) {
         }
     }
 }
+
+#[kithara::test]
+fn feedback_delay_refuses_a_time_past_its_domain_even_with_spare_capacity() {
+    let oversized = f64::from(DelayTime::MAX) + 1.0;
+    let capacity = oversized.to_usize().expect("capacity fits usize");
+    let mut effect = delay(settings(1, capacity, 0.0, 1000.0));
+    assert!(effect.parameters()[0].contains(f64::from(DelayTime::MAX)));
+    assert!(!effect.parameters()[0].contains(oversized));
+    effect.set(FxParamChange {
+        index: 0,
+        value: oversized,
+    });
+
+    let input = [1.0, 0.0];
+    let mut wet = [[0.0; 2]; 2];
+    let [left, right] = &mut wet;
+    effect.process([&input; 2], [left, right]);
+    assert_eq!(
+        wet.map(|plane| plane.map(f32::to_bits)),
+        [[0.0_f32.to_bits(), 1.0_f32.to_bits()]; 2]
+    );
+}

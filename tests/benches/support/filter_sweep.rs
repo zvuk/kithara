@@ -3,7 +3,7 @@ use std::hint::black_box;
 use criterion::{BatchSize, Criterion};
 use kithara::{
     effects::filter::{FilterEffect, FilterKnob, FilterSettings},
-    play::{CurveShape, FilterProgram, ParameterKnot},
+    play::{CurveShape, DeckMixSettingsChange, FilterProgram, ParameterKnot},
     signal::SessionFrame,
 };
 use kithara_command::When;
@@ -30,7 +30,12 @@ fn at(frame: u64) -> When<SessionFrame> {
 /// glide settle, so every iteration starts from the same filter state.
 async fn prepare(harness: &OfflinePlayer) {
     harness
-        .with_queue(|queue| queue.filter(When::Next, FilterKnob::DEFAULT))
+        .with_queue(|queue| {
+            queue.mix(
+                When::Next,
+                DeckMixSettingsChange::Filter(FilterKnob::DEFAULT),
+            )
+        })
         .await
         .expect("center the knob and cancel programs");
     harness.seek(0.0).await;
@@ -38,7 +43,7 @@ async fn prepare(harness: &OfflinePlayer) {
     assert!(warm[warm.len() - 128..].iter().all(|sample| *sample == 0.5));
     let turn = harness.host().position() + u64::try_from(PRELUDE).expect("prelude");
     harness
-        .with_queue(move |queue| queue.filter(at(turn), knob(START)))
+        .with_queue(move |queue| queue.mix(at(turn), DeckMixSettingsChange::Filter(knob(START))))
         .await
         .expect("turn to the program start");
     let turned = harness.render(PRELUDE + FILTER_WARM).await;

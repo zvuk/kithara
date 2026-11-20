@@ -2,6 +2,7 @@
 
 pub use std::num::{NonZeroU32, NonZeroUsize};
 
+use ::kithara::play::DeckMixSettingsChange;
 pub use kithara::{
     audio::{
         AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, ReadOutcome,
@@ -25,6 +26,7 @@ pub use kithara::{
     platform::time::WallInstant,
     play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, Resource},
 };
+use kithara_command::When;
 pub use kithara_test_fixtures::{
     analysis_beat_fixtures::{fused_seam, fused_seam_stereo},
     signal::{deinterleave_left, goertzel_magnitude, max_silence_run},
@@ -124,7 +126,6 @@ pub async fn create_resource(
     any(target_os = "macos", target_os = "ios")
 ))]
 pub async fn create_apple_fused_resource(
-    worker: &PlayWorker<TestPools>,
     created: &CreatedHls,
     cache_dir: &std::path::Path,
 ) -> ResourceConfig<TestPools> {
@@ -141,9 +142,7 @@ pub async fn create_apple_fused_resource(
     )
     .downloader(create_test_downloader())
     .store(store)
-    .worker(worker.clone())
     .host_sample_rate(NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("device rate"))
-    .block_on_underrun(true)
     .decoder(
         AudioDecoderConfig::builder()
             .backend(DecoderBackend::Apple)
@@ -180,9 +179,12 @@ pub async fn render_synthetic_fused_deficit_seam(
     .await;
     harness
         .with_queue(move |queue| {
-            queue.set_crossfader(
-                CrossfaderGain::checked(FUSED_FIXTURE_MASTER_LEVEL)
-                    .expect("the master level is a crossfader gain"),
+            queue.mix(
+                When::Next,
+                DeckMixSettingsChange::Crossfader(
+                    CrossfaderGain::checked(FUSED_FIXTURE_MASTER_LEVEL)
+                        .expect("the master level is a crossfader gain"),
+                ),
             )
         })
         .await

@@ -399,11 +399,11 @@ fn parse_stage(listed: &str) -> Contents {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, mem::ManuallyDrop, path::Path, process::Command, time::SystemTime};
+    use std::{fs, mem::ManuallyDrop, path::Path, time::SystemTime};
 
     use super::*;
     use crate::{
-        ci::build_dir::fixture::{git, git_checkout},
+        ci::build_dir::fixture::{cargo_build, git, git_checkout},
         consts,
     };
 
@@ -418,13 +418,7 @@ mod tests {
     /// Whether Cargo compiled the probe package when asked to build the
     /// checkout into `dir`.
     fn compiles(checkout: &Path, dir: &Path) -> bool {
-        let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-            .current_dir(checkout)
-            .env("CARGO_TARGET_DIR", dir)
-            .env_remove("RUSTC_WRAPPER")
-            .args(["build", "--offline", "--quiet", "--message-format=json"])
-            .output()
-            .unwrap();
+        let output = cargo_build(checkout, dir);
         assert!(output.status.success(), "{output:?}");
         String::from_utf8_lossy(&output.stdout).lines().any(|line| {
             line.contains("\"reason\":\"compiler-artifact\"") && line.contains("\"fresh\":false")

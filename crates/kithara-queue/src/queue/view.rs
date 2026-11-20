@@ -4,9 +4,9 @@ use kithara_bufpool::HasPool;
 use kithara_events::{EventReceiver, EventSet, TrackId};
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    DeckMixSettings, DeckMixerConfig, DeckSnapshot, EngineLoadSnapshot, Pitch, Player,
-    PlayerStatus, Position, SlotSnapshot, Track, TrackFactory, TrackSettings, TrackSnapshot,
-    TrackStatus as PlayingStatus,
+    DeckMixSettings, DeckMixerConfig, DeckSnapshot, EngineLoadSnapshot, Player, PlayerStatus,
+    Position, SlotSnapshot, Track, TrackFactory, TrackSettings, TrackSnapshot,
+    TrackStatus as PlayingStatus, WarpControls,
 };
 
 use super::{PlaybackView, Queue, QueueControl, types::SeekPosition};
@@ -50,7 +50,7 @@ where
     repeat: RepeatMode,
     action: ActionAtItemEnd,
     initial: TrackSettings,
-    pitch: Option<Pitch>,
+    controls: Option<WarpControls>,
     slot: Option<SlotSnapshot>,
     sample_rate: u32,
     held_position: Option<Position>,
@@ -88,7 +88,7 @@ where
         navigation: &NavigationState,
         settings: QueueSettings,
         initial: TrackSettings,
-        pitch: Option<Pitch>,
+        controls: Option<WarpControls>,
         action: ActionAtItemEnd,
         deck: DeckObservation,
     ) -> Self {
@@ -104,7 +104,7 @@ where
             repeat: navigation.repeat_mode(),
             action,
             initial,
-            pitch,
+            controls,
             slot: None,
             sample_rate: 0,
             held_position: None,
@@ -131,7 +131,7 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     /// The transition target, or the track navigation advances to.
     fn upcoming(&mut self) -> Option<TrackId> {
@@ -182,7 +182,7 @@ where
             repeat: self.navigation.repeat_mode(),
             action: self.config.action_at_item_end,
             initial: self.config.track,
-            pitch: self.config.pitch(),
+            controls: self.config.warp_controls(),
             slot,
             sample_rate: self.deck.mixer.sample_rate,
             held_position: self.held_position.and_then(SeekPosition::held),
@@ -352,14 +352,6 @@ where
             #[call(read)]
             pub fn engine_load(&self) -> EngineLoadSnapshot;
         }
-        to self.view.read().deck.mix {
-            #[must_use]
-            #[expr(f32::from($))]
-            pub fn volume(&self) -> f32;
-            #[must_use]
-            #[call(muted)]
-            pub fn is_muted(&self) -> bool;
-        }
         to self.view.read().deck.mixer.eq {
             #[must_use]
             #[call(bands)]
@@ -401,11 +393,22 @@ where
             .map_or_else(|| snapshot.initial.speed(), |track| track.speed)
     }
 
-    /// The deck's pitch: the one its sounding and next tracks are given,
-    /// `None` when its backend has no pitch control.
+    /// Settings inherited by this deck's active and later tracks.
     #[must_use]
-    pub fn pitch(&self) -> Option<Pitch> {
-        self.view.read().pitch
+    pub fn track_settings(&self) -> TrackSettings {
+        self.view.read().initial
+    }
+
+    /// Renderer controls available on this deck's fixed backend.
+    #[must_use]
+    pub fn warp_controls(&self) -> Option<WarpControls> {
+        self.view.read().controls
+    }
+
+    /// Mix settings applied by the deck's last receipt.
+    #[must_use]
+    pub fn mix_settings(&self) -> DeckMixSettings {
+        self.view.read().deck.mix
     }
 
     #[must_use]
@@ -474,7 +477,9 @@ where
             return PlaybackView::default();
         };
         PlaybackView {
-            buffered: snapshot.slot.map(|slot| slot.frontier.max(slot.cached)),
+            buffered: snapshot
+                .slot
+                .map(|slot| slot.frontier.max(track.cached.as_secs_f64())),
             duration: track.duration.map(|duration| duration.as_secs_f64()),
             position: Some(track.position.as_secs_f64()),
             playing: !snapshot.deck.suspended
@@ -503,7 +508,7 @@ mod tests {
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build();
         let queue = Queue::new(QueueConfig::builder().prep(prep).build());
-        let player: PlayerImpl<TestPools> = PlayerFactory
+        let player: PlayerImpl = PlayerFactory
             .track(PlayerConfig {
                 item: TrackId::allocate(),
                 slot: Some(Slot::new(0)),
@@ -513,10 +518,10 @@ mod tests {
         let mut snapshot = (*queue.view.read()).clone();
         let mut track = player.snapshot();
         track.duration = Some(Duration::from_secs(200));
+        track.cached = Duration::from_secs_f64(cached);
         snapshot.track = Some(track);
         snapshot.slot = Some(SlotSnapshot {
             frontier,
-            cached,
             ..SlotSnapshot::default()
         });
         queue.view.publish(snapshot);
@@ -569,7 +574,7 @@ mod tests {
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build();
         let queue: Queue<TestPools> = Queue::new(QueueConfig::builder().prep(prep).build());
-        let player: PlayerImpl<TestPools> = PlayerFactory
+        let player: PlayerImpl = PlayerFactory
             .track(PlayerConfig {
                 item: TrackId::allocate(),
                 slot: Some(Slot::new(0)),

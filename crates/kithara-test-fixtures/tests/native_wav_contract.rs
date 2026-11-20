@@ -161,10 +161,10 @@ fn mp3_wave_and_tagged_elementary_fragments_preserve_every_wrapper_byte(#[case] 
     let mut wave = Vec::new();
     if tagged {
         let len = u32::try_from(audio.len()).expect("fixture fits an ID3 tag size");
-        let syncsafe = (len & 0x0FE0_0000) << 3
-            | (len & 0x001F_C000) << 2
-            | (len & 0x0000_3F80) << 1
-            | (len & 0x0000_007F);
+        let syncsafe = (len & 0x0fe0_0000) << 3
+            | (len & 0x001f_c000) << 2
+            | (len & 0x0000_3f80) << 1
+            | (len & 0x0000_007f);
         wave.extend_from_slice(&[b'I', b'D', b'3', 4, 0, 0]);
         wave.extend_from_slice(&syncsafe.to_be_bytes());
         wave.extend_from_slice(audio);

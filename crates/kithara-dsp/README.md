@@ -70,7 +70,7 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>filter::SvfDesign</code></td><td>Checked LP/HP fixed-cutoff design and its strict cutoff ceiling; <code>StateVariableFilter::process_fixed</code> runs prepared gains without carrying policy</td></tr>
 
-<tr><td><code>filter::decay_frames</code></td><td>Frames the slowest pole of a prepared SVF design takes to decay under a level</td></tr>
+<tr><td><code>filter::decay_frames</code></td><td>Geometric decay count from unit amplitude at the largest pole radius of a prepared SVF design</td></tr>
 
 <tr><td><code>filter::Coefficients</code></td><td>The <code>biquad</code> crate's RBJ cookbook designs (with <code>Type</code>, <code>Hertz</code> and <code>Errors</code>), re-exported as the one import path</td></tr>
 

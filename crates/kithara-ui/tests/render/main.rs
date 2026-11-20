@@ -4,6 +4,7 @@
 //! the surface it mounts into, driven through the public API.
 
 mod address;
+mod artwork;
 #[cfg(feature = "iced")]
 mod fonts;
 mod picture_library;

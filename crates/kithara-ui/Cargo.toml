@@ -60,7 +60,17 @@ render = [
     "kithara-ui-draw/list",
     "kithara-ui-shaping/shape",
 ]
-iced = ["render", "dep:iced", "iced/advanced", "kithara-ui-draw/iced", "kithara-ui-input/iced"]
+iced = [
+    "render",
+    "dep:bytemuck",
+    "dep:half",
+    "dep:iced",
+    "dep:iced_renderer",
+    "dep:iced_wgpu",
+    "iced/advanced",
+    "kithara-ui-draw/iced",
+    "kithara-ui-input/iced",
+]
 vello = ["render", "dep:lucide-icons", "dep:num-traits", "dep:tracing", "dep:vello"]
 
 [dependencies]
@@ -75,11 +85,13 @@ kithara-ui-lottie = { workspace = true, optional = true }
 kithara-ui-shaping = { workspace = true }
 
 bon = { workspace = true }
+bytemuck = { workspace = true, optional = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
 futures-lite = { workspace = true, optional = true }
+half = { workspace = true, optional = true }
 iced = { workspace = true, optional = true }
 iced_renderer = { workspace = true, optional = true }
 iced_runtime = { workspace = true, optional = true }

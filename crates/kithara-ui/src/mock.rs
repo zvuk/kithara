@@ -99,6 +99,28 @@ pub fn player_registry() -> MapEndpoints {
     );
     registry.insert(
         EndpointCategory::Telemetry,
+        "deck.track.key",
+        EndpointDesc::new(ValueKind::Text).with_scope("deck"),
+    );
+    for (id, kind) in [
+        ("deck.key.color", ValueKind::Color),
+        ("deck.track.key_color", ValueKind::Color),
+        ("deck.key.sounding_hidden", ValueKind::Bool),
+        ("deck.key.transpose_hidden", ValueKind::Bool),
+    ] {
+        registry.insert(
+            EndpointCategory::Telemetry,
+            id,
+            EndpointDesc::new(kind).with_scope("deck"),
+        );
+    }
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "deck.key.sounding",
+        EndpointDesc::new(ValueKind::Text).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Telemetry,
         "player.output.levels",
         EndpointDesc::new(ValueKind::Stereo),
     );
@@ -295,11 +317,18 @@ fn insert_clock_endpoints(registry: &mut MapEndpoints) {
 }
 
 fn insert_stream_endpoints(registry: &mut MapEndpoints) {
-    registry.insert(
-        EndpointCategory::Telemetry,
+    for id in [
         "deck.stream.quality_hidden",
-        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
-    );
+        "deck.stream.quality_ready",
+        "deck.stream.error_hidden",
+        "deck.stream.auto_hidden",
+    ] {
+        registry.insert(
+            EndpointCategory::Telemetry,
+            id,
+            EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
+        );
+    }
     registry.insert(
         EndpointCategory::Model,
         "deck.stream.quality",

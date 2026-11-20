@@ -313,7 +313,7 @@ mod shadowed {
     use kithara_config::{Config, LiveConfig};
     use kithara_test_utils::kithara;
 
-    use super::Tone;
+    use super::{Tone, ToneChange};
 
     #[derive(Clone, Copy, Debug, PartialEq, Config)]
     #[config(builder(none), fields(value, get(copy)))]

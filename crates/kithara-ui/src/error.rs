@@ -6,6 +6,12 @@ use crate::ids::SourceUri;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum UiDocError {
+    #[error("{origin}: required artwork {name:?} at {path} is not declared or built in")]
+    UnknownArtwork {
+        origin: SourceUri,
+        name: String,
+        path: String,
+    },
     #[error("{origin}: RON syntax error: {source}")]
     Syntax {
         origin: SourceUri,

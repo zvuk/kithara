@@ -15,7 +15,7 @@ required-features = ["all"]
 
 [[bin]]
 name = "wasm_test_runner"
-path = "bin/wasm_test_runner.rs"
+path = "bin/wasm_test_runner/main.rs"
 test = false
 required-features = ["all"]
 
@@ -189,7 +189,7 @@ kithara-app = { workspace = true, default-features = false, optional = true }
 kithara-app-library = { workspace = true, optional = true }
 kithara-devtools-trace-format = { workspace = true, optional = true }
 
-keyring-core = { workspace = true, optional = true, features = ["sample"] }
+keyring-core = { workspace = true, optional = true }
 
 # `bungee-sys` fails through `cmake`/MSVC and its build script refuses Android
 # by target triple. Android stretches through Signalsmith, the backend
@@ -284,8 +284,9 @@ kithara-test-dylib = { workspace = true }
 
 criterion = { workspace = true }
 
-[lints]
-workspace = true
+[[test]]
+name = "wasm_runner_config"
+path = "bin/wasm_test_runner/config.rs"
 
 [[test]]
 name = "suite_light"
@@ -317,6 +318,9 @@ required-features = ["perf"]
 name = "memory_rss"
 path = "perf/memory_rss.rs"
 required-features = ["perf"]
+
+[lints]
+workspace = true
 
 [[bench]]
 name = "refactor_hotpaths"

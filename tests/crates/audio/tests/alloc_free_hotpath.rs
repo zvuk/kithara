@@ -4,6 +4,7 @@ use assert_no_alloc::*;
 use kithara::{
     self,
     bufpool::{PoolConfig, SampleBuffer},
+    play::WarpControls,
     resampler::{
         Resampler, ResamplerConfig, ResamplerControl, ResamplerMode, ResamplerOptions,
         ResamplerQuality, ResamplerSettings, create_resampler, glide::GlideBackend,
@@ -57,7 +58,7 @@ fn warp_renderer(
     let config = WarpConfig::builder()
         .speed(speed)
         .backend(kind)
-        .pitch(Pitch::HELD)
+        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
         .build();
     Warp::new((), &config).renderer(spec, pools)
 }
@@ -409,7 +410,7 @@ fn timestretch_maximum_output_is_allocation_free(
         let config = WarpConfig::builder()
             .speed(0.05)
             .backend(kind)
-            .pitch(Pitch::HELD)
+            .controls(WarpControls::builder().pitch(Pitch::HELD).build())
             .source_block_frames(NonZeroUsize::new(MAXIMUM_OUTPUT).expect("source block"))
             .build();
         let mut maximum = Warp::new((), &config).renderer(spec, pools.clone());

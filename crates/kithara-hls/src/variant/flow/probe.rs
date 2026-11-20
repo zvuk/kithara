@@ -10,7 +10,7 @@ use url::Url;
 
 use crate::{
     handle::{SegmentPeer, segment_peer::parse_size_headers},
-    segment::SegmentContent,
+    segment::{PlannedFetch, SegmentContent},
     variant::{HlsVariant, PlanCtx},
 };
 
@@ -261,7 +261,15 @@ where
                 .segments
                 .get(idx as usize)
                 .filter(|segment| matches!(segment.content(), SegmentContent::Plain))
-                .is_some_and(|segment| segment.set_resolved_size(len)),
+                .is_some_and(|segment| {
+                    if segment.size().is_exact() {
+                        return false;
+                    }
+                    if self.defer_prefix_settle(PlannedFetch::Segment(idx), len) {
+                        return true;
+                    }
+                    segment.set_resolved_size(len)
+                }),
         }
     }
 

@@ -7,7 +7,7 @@ use kithara::{
         sync::{Arc, Mutex},
         tokio::{runtime::Handle, task::spawn_blocking_on},
     },
-    play::{DeckMixerConfig, PlayWorkerConfig, ResourcePrep, TrackSettings},
+    play::{DeckMixerConfig, PlayWorkerConfig, ResourcePrep, TrackSettings, WarpControls},
     queue::{QueueConfig, QueueSettings},
     warp::{Pitch, WarpConfig},
 };
@@ -28,7 +28,7 @@ use crate::{
 fn player_warp() -> WarpConfig {
     let keylock = cfg!(all(feature = "apple", target_vendor = "apple"));
     WarpConfig::builder()
-        .maybe_pitch(keylock.then_some(Pitch::HELD))
+        .maybe_controls(keylock.then_some(WarpControls::builder().pitch(Pitch::HELD).build()))
         .build()
 }
 
@@ -87,7 +87,7 @@ impl NativeInner {
         let queue_store = store.handle().clone();
         let warp = player_warp();
         let track = TrackSettings::builder()
-            .pitch(warp.pitch_control(warp.pitch()).unwrap_or_default())
+            .controls(warp.available_controls(warp.controls()).unwrap_or_default())
             .build();
         let prep = ResourcePrep::builder()
             .worker(worker)

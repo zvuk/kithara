@@ -9,8 +9,7 @@ use kithara::{
     analysis::{AnalysisDemand, BeatAnalysisConfig, BeatArtifact},
     assets::StorageBackend,
     platform::{CancelToken, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig},
-    prelude::{ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
 };
 use kithara_app::{
     pools::{AppPools, AppStore, PoolsSection, build},
@@ -59,7 +58,6 @@ fn records() -> Vec<(String, f64)> {
 
 async fn analyse(path: &str) -> TrackAnalysis {
     let pools = build(&PoolsSection::default()).expect("app pools");
-    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let src = ResourceSrc::parse(path)
         .unwrap_or_else(|error| panic!("{path} must name a source: {error}"));
     let store = AppStore::builder(pools.clone())
@@ -67,7 +65,6 @@ async fn analyse(path: &str) -> TrackAnalysis {
         .build();
     let config = ResourceConfig::<AppPools>::for_src(src)
         .store(store)
-        .worker(worker)
         .build();
 
     let mut runner = TrackAnalysisRunner::new(

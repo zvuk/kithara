@@ -4,7 +4,10 @@ use kithara::{
     assets::AssetStore,
     effects::filter::{FilterEffect, FilterKnob, FilterSettings},
     host::Tap,
-    play::{CurveShape, FilterProgram, ParameterKnot, PlayError, ResourceConfig, ResourceSrc},
+    play::{
+        CurveShape, DeckMixSettingsChange, FilterProgram, ParameterKnot, PlayError, ResourceConfig,
+        ResourceSrc,
+    },
     queue::{QueueError, TrackSource},
     signal::SessionFrame,
     warp::WarpConfig,
@@ -65,7 +68,7 @@ fn bits(pcm: &[f32]) -> Vec<u32> {
 
 async fn loaded_filter_source(source: String) -> (OfflinePlayer, Underruns) {
     let options = OfflinePlayerOptions::builder()
-        .block_on_underrun(false)
+        .block_on_underrun(true)
         .output_block_frames(NonZeroU32::new(64).expect("callback"))
         .warp(
             WarpConfig::builder()
@@ -109,7 +112,12 @@ async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u
     let start = harness.host().position();
     let turn = start + 529 + phase;
     harness
-        .with_queue(move |queue| queue.filter(When::At(frame(turn)), knob(-0.5)))
+        .with_queue(move |queue| {
+            queue.mix(
+                When::At(frame(turn)),
+                DeckMixSettingsChange::Filter(knob(-0.5)),
+            )
+        })
         .await
         .expect("public knob turn");
     let mut tap = harness
@@ -132,7 +140,12 @@ async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u
         .await
         .expect("public S-shaped program");
     harness
-        .with_queue(move |queue| queue.filter(When::At(frame(manual)), knob(0.25)))
+        .with_queue(move |queue| {
+            queue.mix(
+                When::At(frame(manual)),
+                DeckMixSettingsChange::Filter(knob(0.25)),
+            )
+        })
         .await
         .expect("public manual takeover");
     let stale = s_program(curve + 256, 64, 1.0, 1.0);
@@ -162,7 +175,12 @@ async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u
 
     let center = harness.host().position() + 529 + phase;
     harness
-        .with_queue(move |queue| queue.filter(When::At(frame(center)), FilterKnob::DEFAULT))
+        .with_queue(move |queue| {
+            queue.mix(
+                When::At(frame(center)),
+                DeckMixSettingsChange::Filter(FilterKnob::DEFAULT),
+            )
+        })
         .await
         .expect("public return to center");
     // The manual glide to center lasts 62 ms, about 2734 frames.
@@ -195,10 +213,10 @@ async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u
         vec![0.5; expected.len()],
         "the oracle hears the turn, the program and the takeover"
     );
-    assert_eq!(bits(&take), bits(&expected));
     assert_eq!(tap.drops(), 0);
     underruns.checkpoint(harness.metrics(), true, "Filter final complete edges");
     assert_eq!(harness.metrics().underruns(), 0);
+    assert_eq!(bits(&take), bits(&expected));
     harness.close().await;
 }
 
@@ -215,7 +233,12 @@ async fn filter_tail_and_programme_outlive_source_eof_and_close_while_owned() {
     let start = harness.host().position();
     let turn = start + 529;
     harness
-        .with_queue(move |queue| queue.filter(When::At(frame(turn)), knob(-0.5)))
+        .with_queue(move |queue| {
+            queue.mix(
+                When::At(frame(turn)),
+                DeckMixSettingsChange::Filter(knob(-0.5)),
+            )
+        })
         .await
         .expect("turn the knob");
     let mut tap = harness
