@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use kithara_command::LevelInbox;
+use kithara_effects::eq::GainShapeError;
 use kithara_signal::SessionFrame;
 
 use super::super::processor::Deck;
@@ -13,36 +14,29 @@ impl Deck {
         start: SessionFrame,
         range: Range<usize>,
         input: Option<[&mut [f32]; 2]>,
-    ) {
+    ) -> Result<(), GainShapeError> {
         let at = SessionFrame::new(
-            i64::from(start).saturating_add(i64::try_from(range.start).expect("prepared frame")),
+            i64::from(start).saturating_add(i64::try_from(range.start).unwrap_or(i64::MAX)),
         );
-        let animated = {
-            let eq = self.eq_programs.curves(level);
-            let filter = self.filter_programs.program(level);
-            let animated = eq.iter().any(Option::is_some) || filter.is_some();
-            if let Some([left, right]) = input {
-                if animated {
-                    self.render.finish_curves(left, right, at, &eq, filter);
-                } else {
-                    self.render.finish(left, right);
-                }
+        self.programs.write(level, at, range.len());
+        if let Some([left, right]) = input {
+            if self.programs.any_applied() {
+                self.render.finish_curves(left, right, &self.programs)?;
             } else {
-                self.render.advance(at, range.len(), &eq, filter);
-                self.render.idle();
+                self.render.finish(left, right)?;
             }
-            animated
-        };
-        if !animated {
-            return;
+        } else {
+            self.render.advance(range.len(), &self.programs)?;
+            self.render.idle();
         }
-        let Some(last) = range.end.checked_sub(1) else {
-            return;
-        };
-        let at = SessionFrame::new(
-            i64::from(start).saturating_add(i64::try_from(last).expect("prepared frame")),
-        );
-        self.finish_filter_programs(level, at);
-        self.finish_eq_programs(level, at);
+        if let Some(last) = range.end.checked_sub(1) {
+            self.finish_programs(
+                level,
+                SessionFrame::new(
+                    i64::from(start).saturating_add(i64::try_from(last).unwrap_or(i64::MAX)),
+                ),
+            );
+        }
+        Ok(())
     }
 }

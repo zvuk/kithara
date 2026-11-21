@@ -10,6 +10,7 @@ pub(crate) use super::spectrum::{Dft, Work, correlate};
 pub(crate) use super::{
     delay::{blend as delay_blend, diffuse as delay_diffuse},
     interpolate::interpolate,
+    simd::narrow_f64,
 };
 
 mod consts {
