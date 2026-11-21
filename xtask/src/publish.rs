@@ -399,9 +399,12 @@ enum PublishMode<'a> {
 /// in its own new directory, removed when the run ends.
 fn fresh_verification_target(target: &Path) -> Result<tempfile::TempDir> {
     fs::create_dir_all(target).with_context(|| format!("create {}", target.display()))?;
+    let target = target
+        .canonicalize()
+        .with_context(|| format!("resolve verification target {}", target.display()))?;
     tempfile::Builder::new()
         .prefix(consts::PUBLISH_VERIFICATION_DIR)
-        .tempdir_in(target)
+        .tempdir_in(&target)
         .with_context(|| format!("create a verification target in {}", target.display()))
 }
 
@@ -776,18 +779,57 @@ mod tests {
     #[test]
     fn a_dry_publication_never_verifies_against_an_earlier_runs_build() {
         let target = tempfile::tempdir().expect("target");
+        let physical_target = target.path().canonicalize().expect("canonical target");
         let earlier = fresh_verification_target(target.path()).expect("earlier run");
         fs::write(earlier.path().join("libdep.rlib"), b"earlier").expect("earlier build");
 
         let fresh = fresh_verification_target(target.path()).expect("fresh target");
 
         assert_ne!(fresh.path(), earlier.path());
-        assert!(fresh.path().starts_with(target.path()));
+        assert!(fresh.path().starts_with(&physical_target));
         assert_eq!(fs::read_dir(fresh.path()).expect("read target").count(), 0);
         let ended = earlier.path().to_path_buf();
         drop(earlier);
         assert!(!ended.exists());
         assert!(fresh_verification_target(&target.path().join("absent")).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verification_keeps_its_leased_directory_when_the_build_alias_moves() -> Result<()> {
+        let targets = tempfile::tempdir()?;
+        let first = targets.path().join("first");
+        let second = targets.path().join("second");
+        fs::create_dir(&first)?;
+        fs::create_dir(&second)?;
+        let _lease = kithara_devtools::lease::hold(&first)?;
+        let alias = targets.path().join("build");
+        std::os::unix::fs::symlink(&first, &alias)?;
+        let verification = fresh_verification_target(&alias)?;
+        let original = verification.path().canonicalize()?;
+        assert!(original.starts_with(first.canonicalize()?));
+
+        let staged = targets.path().join("next-build");
+        std::os::unix::fs::symlink(&second, &staged)?;
+        fs::rename(&staged, &alias)?;
+        assert_eq!(alias.canonicalize()?, second.canonicalize()?);
+        assert!(kithara_devtools::lease::evict(&first)?.is_none());
+        let decoy = second.join(original.file_name().context("verification target name")?);
+        fs::create_dir(&decoy)?;
+        fs::write(decoy.join("keep"), b"second target")?;
+
+        fs::write(verification.path().join("after-retarget"), b"first target")?;
+        assert!(
+            original.join("after-retarget").is_file(),
+            "verification writes must stay in the original leased directory"
+        );
+        assert_eq!(fs::read(original.join("after-retarget"))?, b"first target");
+        assert!(!decoy.join("after-retarget").exists());
+        drop(verification);
+        assert!(!original.exists());
+        assert_eq!(fs::read(decoy.join("keep"))?, b"second target");
+        assert!(first.is_dir());
+        Ok(())
     }
 
     #[test]
