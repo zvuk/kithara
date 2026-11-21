@@ -450,6 +450,10 @@ impl Deck {
             }
             return Ok(false);
         }
+        let at = SessionFrame::new(
+            i64::from(start).saturating_add(i64::try_from(range.start).unwrap_or(i64::MAX)),
+        );
+        self.programs.write(level, at, range.len());
         if self.render.take_priming() {
             for (_, track) in self.tracks.iter_mut() {
                 track.snap_gate();
@@ -499,7 +503,7 @@ impl Deck {
                 sounded = true;
             }
         }
-        sounded |= self.render.ringing();
+        sounded |= self.render.ringing(Some(&self.programs), range.len());
         self.finish_range(
             level,
             start,

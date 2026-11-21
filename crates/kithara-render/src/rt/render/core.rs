@@ -265,10 +265,10 @@ impl RenderPass {
     /// Whether a unit still sounds a tail of input the deck no longer plays,
     /// or still ramps its dry/wet, which settles on its own frame only while
     /// the chain renders.
-    pub(crate) fn ringing(&self) -> bool {
+    pub(in crate::rt) fn ringing(&self, programs: Option<&DeckPrograms>, frames: usize) -> bool {
         !self.filter.tail_exhausted()
-            || self.units.iter().any(|unit| {
-                unit.running()
+            || self.units.iter().enumerate().any(|(index, unit)| {
+                unit.running(programs.and_then(|rows| rows.mix_values(index, frames)))
                     && (!unit.mix.has_settled()
                         || unit
                             .effect
@@ -810,7 +810,7 @@ mod tests {
                 "{from} Hz to {to} Hz: the chain sounds {settled} once settled"
             );
             assert!(
-                !render.ringing(),
+                !render.ringing(None, 0),
                 "{from} Hz to {to} Hz: a settled unit with its tail spent no longer rings"
             );
         }

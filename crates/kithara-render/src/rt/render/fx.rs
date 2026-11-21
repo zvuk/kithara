@@ -133,9 +133,14 @@ impl RenderPass {
 }
 
 impl FxUnit {
-    /// On, holding an effect, and not settled fully dry.
-    pub(super) fn running(&self) -> bool {
-        self.on && self.effect.is_some() && !self.mix.has_settled_at(0.0)
+    /// On, holding an effect, and audible under its program or manual glide.
+    pub(super) fn running(&self, programmed: Option<&[f64]>) -> bool {
+        self.on
+            && self.effect.is_some()
+            && programmed.map_or_else(
+                || !self.mix.has_settled_at(0.0),
+                |values| values.iter().any(|value| *value != 0.0),
+            )
     }
 
     /// Deliver to the effect each parameter value a program prepared for
@@ -168,7 +173,7 @@ impl FxUnit {
 
     /// Run the unit over a stereo pair under the values programs prepared for
     /// this chunk. The effect processes in runs of frames between parameter
-    /// changes, so each value applies on its frame whatever the chunking.
+    /// changes and fully dry transitions, so each value applies on its frame whatever the chunking.
     pub(super) fn run(
         &mut self,
         unit: usize,
@@ -178,10 +183,16 @@ impl FxUnit {
     ) {
         let frames = left.len().min(right.len());
         let mix = programs.and_then(|rows| rows.mix_values(unit, frames));
+        let changes_audibility = mix.is_some_and(|values| {
+            values
+                .windows(2)
+                .any(|pair| (pair[0] == 0.0) != (pair[1] == 0.0))
+        });
         let Some(rows) = programs.filter(|rows| {
             self.effect.is_some()
-                && (0..self.delivered.len())
-                    .any(|index| rows.param_values(unit, index, frames).is_some())
+                && (changes_audibility
+                    || (0..self.delivered.len())
+                        .any(|index| rows.param_values(unit, index, frames).is_some()))
         }) else {
             self.process(left, right, wet, mix);
             return;
@@ -190,7 +201,10 @@ impl FxUnit {
         while start < frames {
             self.deliver(rows, unit, start, frames);
             let mut end = start + 1;
-            while end < frames && !self.changes_at(rows, unit, end, frames) {
+            while end < frames
+                && mix.is_none_or(|values| (values[start] == 0.0) == (values[end] == 0.0))
+                && !self.changes_at(rows, unit, end, frames)
+            {
                 end += 1;
             }
             self.process(
@@ -240,6 +254,10 @@ impl FxUnit {
             return;
         };
         if let Some(values) = programmed {
+            if values.iter().all(|value| *value == 0.0) {
+                self.hold(programmed);
+                return;
+            }
             let frames = left.len().min(right.len()).min(values.len());
             let [wet_left, wet_right] = wet;
             let (left, right) = (&mut left[..frames], &mut right[..frames]);

@@ -273,7 +273,7 @@ fn cancels(slots: Slots, part: &DeckPart, index: usize) -> bool {
             return slots.eq(index);
         }
         DeckPart::Eq(DeckEqChange::Gain { band, .. }) => {
-            return index == DeckParameter::eq_index(*band);
+            return slots.eq(index) && index == DeckParameter::eq_index(*band);
         }
         DeckPart::Fx(DeckFxChange::Mix { unit, .. }) => return slots.mix(*unit) == Some(index),
         DeckPart::Fx(DeckFxChange::Install { unit, .. } | DeckFxChange::Clear { unit }) => {

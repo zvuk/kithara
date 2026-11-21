@@ -104,4 +104,30 @@ mod tests {
             assert_eq!(values[1024].to_bits(), 1.0_f64.to_bits());
         }
     }
+
+    #[kithara::test]
+    #[case::linear(CurveShape::LINEAR)]
+    #[case::cubic(CurveShape::cubic(0.0, 1.0).expect("bounded cubic"))]
+    fn finite_extreme_endpoints_produce_finite_in_range_values(#[case] shape: CurveShape) {
+        for endpoints in [
+            [-1.0e308, 1.0e308],
+            [1.0e308, -1.0e308],
+            [-f64::MAX, f64::MAX],
+            [f64::MAX, -f64::MAX],
+            [-f64::MAX, 1.0],
+            [-1.0, f64::MAX],
+        ] {
+            let mut values = [0.0, 0.25, 0.5, 0.75, 1.0];
+            shape.process(&mut values, endpoints);
+            assert_eq!(values[0].to_bits(), endpoints[0].to_bits());
+            assert_eq!(values[4].to_bits(), endpoints[1].to_bits());
+            let range = endpoints[0].min(endpoints[1])..=endpoints[0].max(endpoints[1]);
+            for (frame, value) in values.into_iter().enumerate() {
+                assert!(
+                    value.is_finite() && range.contains(&value),
+                    "{shape:?}, {endpoints:?}, frame {frame}: {value}"
+                );
+            }
+        }
+    }
 }
