@@ -20,7 +20,7 @@ mod worker;
 
 pub use analyzer::{
     AnalysisDemand, AnalyzerBuilder, BeatAnalysisConfig, BeatAnalysisConfigPatch,
-    BeatAnalysisConfigPatchError,
+    BeatAnalysisConfigPatchError, PassError,
 };
 pub use archive::{
     AnalysisFile, AnalysisFileError, AnalysisFilePatch, AnalysisFileSpec, AnalysisFileUpdate,
@@ -46,7 +46,10 @@ pub use kithara_waveform::{AnalysisParams, Bucket, Waveform};
 pub use producer::AnalysisProducer;
 pub use progress::AnalysisProgress;
 pub use rangemap::RangeSet;
-pub use worker::{AnalysisOpen, AnalysisPass, AnalysisWorker, AnalysisWorkerConfig};
+pub use worker::{
+    AnalysisCompletion, AnalysisError, AnalysisOpen, AnalysisOutcome, AnalysisPass, AnalysisWorker,
+    AnalysisWorkerConfig,
+};
 /// The served beat-grid contract, re-exported from its owner so a consumer of
 /// a publication can name what [`TrackAnalysis::grid`] hands it. The types are
 /// `kithara-beat`'s own: a server reading a stored grid needs no analyzer.

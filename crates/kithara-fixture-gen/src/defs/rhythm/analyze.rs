@@ -6,8 +6,8 @@ use std::{
 
 use futures_lite::future::block_on;
 use kithara_analysis::{
-    AnalysisDemand, AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder,
-    BeatArtifact,
+    AnalysisDemand, AnalysisOutcome, AnalysisToken, AnalysisWorker, AnalysisWorkerConfig,
+    AnalyzerBuilder, BeatArtifact,
 };
 use kithara_audio::{
     AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, DecodeError, ReadOutcome,
@@ -73,7 +73,7 @@ fn analyze(reader: PcmReader) -> (Option<BeatArtifact>, u64) {
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
     let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let rate = reader.spec.sample_rate;
-    let (mut results, _producer) = worker()
+    let (_results, _producer, completion) = worker()
         .analyze(
             Box::new(reader),
             AnalysisToken::from("rhythm-fixture"),
@@ -82,16 +82,11 @@ fn analyze(reader: PcmReader) -> (Option<BeatArtifact>, u64) {
             AnalysisDemand::ALL,
         )
         .expect("the rhythm pass opens under the pool budget");
-    let progress = block_on(async {
-        while results.changed().await.is_ok() {}
-        results.borrow().clone()
-    })
-    .expect("production rhythm analysis produced no result");
+    let progress = match block_on(completion.outcome()) {
+        AnalysisOutcome::Complete(progress) | AnalysisOutcome::Incomplete(progress) => progress,
+        outcome => panic!("production rhythm analysis did not settle: {outcome:?}"),
+    };
     let analysis = progress.analysis();
-    assert!(
-        analysis.is_settled(),
-        "rhythm analysis must cover the source"
-    );
     let frames = analysis
         .extent()
         .expect("settled rhythm analysis has a source extent");

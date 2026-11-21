@@ -90,12 +90,12 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays(
     let cancel = CancelToken::never();
     let worker = AnalysisWorker::new(
         AnalysisWorkerConfig::for_builder(
-            AnalyzerBuilder::<NoResamplerBackend, _>::new(pools).with_waveform(64),
+            AnalyzerBuilder::<NoResamplerBackend, _>::new(pools).with_waveform(NonZeroU32::MIN),
         )
         .cancel(cancel)
         .build(),
     );
-    let (analysis, producer) = worker
+    let (analysis, producer, _completion) = worker
         .analyze(
             stalled_reader(AudioSpec::new(2, rate)),
             "played-track".into(),

@@ -40,12 +40,13 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates(quarter: Vec<f32>, #[ca
     let cancel = CancelToken::never();
     let worker = AnalysisWorker::new(
         AnalysisWorkerConfig::for_builder(
-            AnalyzerBuilder::<NoResamplerBackend, TestPools>::new(pools()).with_waveform(64),
+            AnalyzerBuilder::<NoResamplerBackend, TestPools>::new(pools())
+                .with_waveform(NonZeroU32::MIN),
         )
         .cancel(cancel)
         .build(),
     );
-    let (_analysis, mut producer) = worker
+    let (_analysis, mut producer, _completion) = worker
         .analyze(
             stalled_reader(spec),
             "rt-track".into(),
