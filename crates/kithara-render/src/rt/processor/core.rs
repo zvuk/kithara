@@ -329,6 +329,7 @@ impl<E: SessionInbox> DeckMixer<E> {
             if self.retired { None } else { self.deck.epoch },
             self.deck.render.control_values(),
             self.deck.render.filter_knob(),
+            self.deck.render.fx_mixes(),
         );
         self.snapshot.publish();
     }

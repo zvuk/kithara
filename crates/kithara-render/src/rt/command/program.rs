@@ -7,25 +7,72 @@ use super::{
 };
 use crate::bridge::{
     DeckEqChange, DeckFxChange, DeckMixSettingsChange, DeckParameter, DeckPart, DeckProgram,
-    DeckProtocol, DeckRefusal, DeckSnapshot, LayoutRevision, ParameterCurve, ParameterSnapshot,
-    Returned,
+    DeckProtocol, DeckRefusal, DeckSnapshot, FxTarget, LayoutRevision, ParameterCurve,
+    ParameterSnapshot, Returned,
 };
+
+/// Where each parameter of a deck keeps its program state: the fixed
+/// controls, then each EQ band the deck has room for, then each unit's dry/wet.
+#[derive(Clone, Copy)]
+struct Slots {
+    bands: usize,
+    units: usize,
+}
+
+impl Slots {
+    const fn fx_start(self) -> usize {
+        DeckParameter::eq_index(self.bands)
+    }
+
+    const fn count(self) -> usize {
+        self.fx_start() + self.units
+    }
+
+    const fn eq(self, index: usize) -> bool {
+        index >= DeckParameter::EQ_START && index < self.fx_start()
+    }
+
+    fn mix(self, unit: usize) -> Option<usize> {
+        (unit < self.units).then(|| self.fx_start() + unit)
+    }
+
+    fn of(self, parameter: DeckParameter) -> Option<usize> {
+        match parameter {
+            DeckParameter::EqBand { band, .. } => {
+                (band < self.bands).then(|| DeckParameter::eq_index(band))
+            }
+            DeckParameter::Fx {
+                unit,
+                target: FxTarget::Mix,
+                ..
+            } => self.mix(unit),
+            DeckParameter::Fx {
+                target: FxTarget::Param(_),
+                ..
+            } => None,
+            fixed => fixed.fixed(),
+        }
+    }
+}
 
 pub(in crate::rt) struct DeckPrograms {
     scope: ScopeId,
     layout: Option<Seq>,
     units: Vec<Option<Seq>>,
+    slots: Slots,
     fields: Vec<ParameterState>,
     values: Vec<Vec<f64>>,
 }
 
 impl DeckPrograms {
     pub(in crate::rt) fn new(scope: ScopeId, bands: usize, units: usize, capacity: usize) -> Self {
-        let count = DeckParameter::eq_index(bands);
+        let slots = Slots { bands, units };
+        let count = slots.count();
         Self {
             scope,
             layout: None,
             units: vec![None; units],
+            slots,
             fields: vec![ParameterState::default(); count],
             values: (0..count).map(|_| Vec::with_capacity(capacity)).collect(),
         }
@@ -38,13 +85,18 @@ impl DeckPrograms {
     }
 
     pub(in crate::rt) fn owner(&self, parameter: DeckParameter) -> Option<Seq> {
-        self.fields
-            .get(parameter.index())
+        self.slots
+            .of(parameter)
+            .and_then(|index| self.fields.get(index))
             .and_then(|field| field.program.applied())
     }
 
     pub(in crate::rt) fn begin(&mut self, parameter: DeckParameter, seq: Seq) {
-        if let Some(field) = self.fields.get_mut(parameter.index()) {
+        if let Some(field) = self
+            .slots
+            .of(parameter)
+            .and_then(|index| self.fields.get_mut(index))
+        {
             field.begin(seq);
         }
     }
@@ -78,7 +130,7 @@ impl DeckPrograms {
                 .and_then(|field| field.program.active());
             if let Some(curve) = seq
                 .and_then(|seq| level.committed(seq))
-                .and_then(|commands| program_in(commands, index))
+                .and_then(|commands| program_in(self.slots, commands, index))
                 .map(DeckProgram::curve)
             {
                 self.write_curve(index, curve, at, frames);
@@ -102,8 +154,16 @@ impl DeckPrograms {
     }
 
     pub(in crate::rt) fn eq_values(&self) -> &[Vec<f64>] {
-        let eq = DeckParameter::EQ_START;
-        self.values.get(eq..).unwrap_or_default()
+        self.values
+            .get(DeckParameter::EQ_START..self.slots.fx_start())
+            .unwrap_or_default()
+    }
+
+    /// The dry/wet a program prepared for `unit` over the next `frames` frames.
+    pub(in crate::rt) fn mix_values(&self, unit: usize, frames: usize) -> Option<&[f64]> {
+        self.slots
+            .mix(unit)
+            .and_then(|index| self.values(index, frames))
     }
 
     pub(in crate::rt) fn publish(
@@ -112,32 +172,39 @@ impl DeckPrograms {
         epoch: Option<SessionEpoch>,
         channels: [f64; DeckParameter::CHANNELS],
         knob: f64,
+        mixes: impl Iterator<Item = f64>,
     ) {
         snapshot.epoch = epoch;
         let layout = epoch.map(|_| LayoutRevision::new(self.scope, self.layout));
         snapshot.eq.set_layout(layout);
-        for (unit, revision) in snapshot.fx_layouts.iter_mut().zip(&self.units) {
-            *unit = epoch.map(|_| LayoutRevision::new(self.scope, *revision));
+        for (unit, revision) in snapshot.fx.iter_mut().zip(&self.units) {
+            unit.layout = epoch.map(|_| LayoutRevision::new(self.scope, *revision));
         }
+        let mut mixes = mixes;
         for (index, field) in self.fields.iter().enumerate() {
             let program = field.program.applied();
             let authority = field.authority;
             if let Some(channel) = snapshot.channels.get_mut(index) {
                 *channel = ParameterSnapshot::new(channels[index], program, authority);
-            } else if index == DeckParameter::Filter.index() {
+            } else if index == DeckParameter::FILTER {
                 snapshot.filter.publish(knob, program, authority);
-            } else {
+            } else if self.slots.eq(index) {
                 let band = index - DeckParameter::EQ_START;
                 snapshot.eq.publish_program(band, program, authority);
+            } else if let (Some(unit), Some(mix)) = (
+                snapshot.fx.get_mut(index - self.slots.fx_start()),
+                mixes.next(),
+            ) {
+                unit.mix = ParameterSnapshot::new(mix, program, authority);
             }
         }
     }
 }
 
-fn program_in(commands: &[DeckPart], index: usize) -> Option<&DeckProgram> {
+fn program_in(slots: Slots, commands: &[DeckPart], index: usize) -> Option<&DeckProgram> {
     commands.iter().find_map(|part| match part {
         DeckPart::Program { program, .. } | DeckPart::Returned(Returned::Program(program))
-            if program.parameter().index() == index =>
+            if slots.of(program.parameter()) == Some(index) =>
         {
             Some(program)
         }
@@ -145,22 +212,27 @@ fn program_in(commands: &[DeckPart], index: usize) -> Option<&DeckProgram> {
     })
 }
 
-fn cancels(part: &DeckPart, index: usize) -> bool {
+fn cancels(slots: Slots, part: &DeckPart, index: usize) -> bool {
     let parameter = match part {
         DeckPart::Eq(DeckEqChange::Layout(_) | DeckEqChange::Reset) => {
-            return index >= DeckParameter::EQ_START;
+            return slots.eq(index);
         }
         DeckPart::Eq(DeckEqChange::Gain { band, .. }) => {
             return index == DeckParameter::eq_index(*band);
         }
-        DeckPart::Program { program, .. } => program.parameter(),
-        DeckPart::Mix(DeckMixSettingsChange::Trim(_)) => DeckParameter::Trim,
-        DeckPart::Mix(DeckMixSettingsChange::Volume(_)) => DeckParameter::Volume,
-        DeckPart::Mix(DeckMixSettingsChange::Crossfader(_)) => DeckParameter::Crossfader,
-        DeckPart::Mix(DeckMixSettingsChange::Filter(_)) => DeckParameter::Filter,
+        DeckPart::Fx(
+            DeckFxChange::Mix { unit, .. }
+            | DeckFxChange::Install { unit, .. }
+            | DeckFxChange::Clear { unit },
+        ) => return slots.mix(*unit) == Some(index),
+        DeckPart::Program { program, .. } => return slots.of(program.parameter()) == Some(index),
+        DeckPart::Mix(DeckMixSettingsChange::Trim(_)) => DeckParameter::TRIM,
+        DeckPart::Mix(DeckMixSettingsChange::Volume(_)) => DeckParameter::VOLUME,
+        DeckPart::Mix(DeckMixSettingsChange::Crossfader(_)) => DeckParameter::CROSSFADER,
+        DeckPart::Mix(DeckMixSettingsChange::Filter(_)) => DeckParameter::FILTER,
         _ => return false,
     };
-    parameter.index() == index
+    parameter == index
 }
 
 impl Deck {
@@ -169,6 +241,7 @@ impl Deck {
         commands: &[DeckPart],
     ) -> Result<(), DeckRefusal> {
         let bands = self.programs.eq_values().len();
+        let slots = self.programs.slots;
         let mut layout_changes = false;
         for part in commands {
             if let DeckPart::Eq(DeckEqChange::Layout(layout)) = part {
@@ -194,24 +267,34 @@ impl Deck {
             if self.epoch != Some(*epoch) {
                 return Err(DeckRefusal::AxisRestarted);
             }
-            let field = self
-                .programs
-                .fields
-                .get(parameter.index())
-                .ok_or(DeckRefusal::ParameterUnavailable { parameter })?;
-            if let DeckParameter::EqBand { band, layout } = parameter {
-                self.validate_eq_revision(band, layout, layout_changes)?;
-                if !self.render.accepts_eq_program(band) {
-                    return Err(DeckRefusal::ParameterUnavailable { parameter });
+            let unavailable = DeckRefusal::ParameterUnavailable { parameter };
+            let slot = slots.of(parameter).ok_or(unavailable)?;
+            let field = self.programs.fields.get(slot).ok_or(unavailable)?;
+            match parameter {
+                DeckParameter::EqBand { band, layout } => {
+                    self.validate_eq_revision(band, layout, layout_changes)?;
+                    if !self.render.accepts_eq_program(band) {
+                        return Err(unavailable);
+                    }
                 }
+                DeckParameter::Fx { unit, layout, .. } => {
+                    let current = self.programs.units.get(unit).copied().ok_or(unavailable)?;
+                    if layout != LayoutRevision::new(self.programs.scope, current) {
+                        return Err(DeckRefusal::ParameterOutdated { parameter });
+                    }
+                    if !self.render.holds_fx(unit) {
+                        return Err(unavailable);
+                    }
+                }
+                _ => {}
             }
             if *authority != field.authority
                 || commands.iter().any(|part| {
-                    !matches!(part, DeckPart::Program { .. }) && cancels(part, parameter.index())
+                    !matches!(part, DeckPart::Program { .. }) && cancels(slots, part, slot)
                 })
-                || commands.get(..index).is_some_and(|prefix| {
-                    prefix.iter().any(|part| cancels(part, parameter.index()))
-                })
+                || commands
+                    .get(..index)
+                    .is_some_and(|prefix| prefix.iter().any(|part| cancels(slots, part, slot)))
             {
                 return Err(DeckRefusal::ParameterOutdated { parameter });
             }
@@ -272,7 +355,7 @@ impl Deck {
         part: &DeckPart,
     ) {
         for index in 0..self.programs.fields.len() {
-            if !cancels(part, index) {
+            if !cancels(self.programs.slots, part, index) {
                 continue;
             }
             let Some(field) = self.programs.fields.get_mut(index) else {
@@ -294,7 +377,8 @@ impl Deck {
         match part {
             DeckPart::Eq(DeckEqChange::Layout(_)) => {
                 self.programs.layout = Some(due.seq());
-                if let Some(fields) = self.programs.fields.get_mut(DeckParameter::EQ_START..) {
+                let eq = DeckParameter::EQ_START..self.programs.slots.fx_start();
+                if let Some(fields) = self.programs.fields.get_mut(eq) {
                     fields.fill(ParameterState::default());
                 }
             }
@@ -321,7 +405,7 @@ impl Deck {
             };
             let ended = level
                 .committed(seq)
-                .and_then(|commands| program_in(commands, index))
+                .and_then(|commands| program_in(self.programs.slots, commands, index))
                 .is_some_and(|program| at >= program.end());
             if ended {
                 field.program = ProgramState::Held(seq);

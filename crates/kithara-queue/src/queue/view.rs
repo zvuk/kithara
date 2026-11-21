@@ -374,6 +374,18 @@ where
         }
     }
 
+    /// The revision of the effect FX `unit` holds, which addresses its programs.
+    #[must_use]
+    pub fn fx_layout(&self, unit: usize) -> Option<LayoutRevision> {
+        self.view
+            .read()
+            .deck
+            .mixer
+            .fx
+            .get(unit)
+            .and_then(|fx| fx.layout)
+    }
+
     #[must_use]
     pub fn crossfade_settings(&self) -> kithara_play::CrossfadeSettings {
         self.view.read().settings.crossfade()

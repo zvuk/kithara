@@ -167,10 +167,10 @@ fn layout_and_unit_revisions_leave_other_program_scopes_running_and_refuse_stale
     assert_eq!(volume.value(), 1.0);
     assert_eq!(volume.program(), None);
     assert_eq!(
-        snapshot.fx_layouts[0].expect("unit 0").instance(),
+        snapshot.fx[0].layout.expect("unit 0").instance(),
         Some(cleared)
     );
-    assert_eq!(snapshot.fx_layouts[1].expect("unit 1").instance(), None);
+    assert_eq!(snapshot.fx[1].layout.expect("unit 1").instance(), None);
     let new_layout: LayoutRevision = snapshot.eq.layout().expect("new layout");
     let bad = part(
         &mut ends,

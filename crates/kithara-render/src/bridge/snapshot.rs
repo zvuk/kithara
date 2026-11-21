@@ -5,8 +5,8 @@ use kithara_effects::GainDb;
 use kithara_signal::AudioChunkInfo;
 
 use super::{
-    DeckParameter, FilterSnapshot, LayoutRevision, RtMetricsSnapshot, SlotBinding, SlotMark,
-    SlotOutputSnapshot, SlotState,
+    DeckParameter, FilterSnapshot, FxTarget, LayoutRevision, RtMetricsSnapshot, SlotBinding,
+    SlotMark, SlotOutputSnapshot, SlotState,
 };
 
 /// What a deck's mixer last published of each slot and of itself, once per block.
@@ -26,7 +26,17 @@ pub struct DeckSnapshot {
     pub filter: FilterSnapshot,
     pub epoch: Option<kithara_signal::SessionEpoch>,
     pub channels: [ParameterSnapshot; DeckParameter::CHANNELS],
-    pub fx_layouts: Vec<Option<LayoutRevision>>,
+    /// One entry per FX unit, in unit order.
+    pub fx: Vec<FxSnapshot>,
+}
+
+/// One FX unit as its mixer last published it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FxSnapshot {
+    /// The revision of the effect the unit holds, which addresses its programs.
+    pub layout: Option<LayoutRevision>,
+    /// The dry/wet the unit applied.
+    pub mix: ParameterSnapshot,
 }
 
 impl DeckSnapshot {
@@ -40,7 +50,7 @@ impl DeckSnapshot {
                 bands: vec![EqBandSnapshot::default(); eq_bands],
                 layout: None,
             },
-            fx_layouts: vec![None; fx_units],
+            fx: vec![FxSnapshot::default(); fx_units],
             ..Self::default()
         }
     }
@@ -97,7 +107,21 @@ impl DeckSnapshot {
                 })
             }
             DeckParameter::EqBand { .. } => None,
-            parameter => self.channels.get(parameter.index()).copied(),
+            DeckParameter::Fx {
+                unit,
+                layout,
+                target,
+            } => {
+                let unit = self.fx.get(unit).filter(|fx| fx.layout == Some(layout))?;
+                match target {
+                    FxTarget::Mix => Some(unit.mix),
+                    FxTarget::Param(_) => None,
+                }
+            }
+            parameter => parameter
+                .fixed()
+                .and_then(|index| self.channels.get(index))
+                .copied(),
         }
     }
 }

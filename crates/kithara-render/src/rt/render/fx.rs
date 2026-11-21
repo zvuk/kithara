@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use kithara_bufpool::SampleBuffer;
 use kithara_dsp::param::SmoothedParam;
 use kithara_effects::{DeckEffect, FxParamChange};
+use num_traits::cast::AsPrimitive;
 
 use super::RenderPass;
 use crate::{
@@ -20,6 +21,20 @@ pub(super) struct FxUnit {
 impl RenderPass {
     pub(crate) const fn fx_units(&self) -> usize {
         self.units.len()
+    }
+
+    /// Whether `unit` holds an effect.
+    pub(crate) fn holds_fx(&self, unit: usize) -> bool {
+        self.units
+            .get(unit)
+            .is_some_and(|unit| unit.effect.is_some())
+    }
+
+    /// The dry/wet each unit applies, in unit order.
+    pub(crate) fn fx_mixes(&self) -> impl Iterator<Item = f64> + '_ {
+        self.units
+            .iter()
+            .map(|unit| f64::from(unit.mix.target_value()))
     }
 
     /// Check a parameter against the effect after preceding installs and clears.
@@ -97,8 +112,17 @@ impl FxUnit {
         self.on && self.effect.is_some() && !self.mix.has_settled_at(0.0)
     }
 
+    /// Take the last dry/wet a program prepared, bypassing the ramp.
+    pub(super) fn hold(&mut self, programmed: Option<&[f64]>) {
+        if let Some(value) = programmed.and_then(<[f64]>::last) {
+            self.mix.set_value(value.as_());
+            self.mix.reset_to_target();
+        }
+    }
+
     /// Run the unit's effect on the frames of a stereo pair and mix its wet
-    /// signal in. While the dry/wet ramps, the effect runs up to the frame the
+    /// signal in. A program's dry/wet applies on each frame as prepared.
+    /// While the manual dry/wet ramps, the effect runs up to the frame the
     /// ramp settles on, whatever block holds it; settled fully dry, the unit
     /// neither runs its effect nor touches the frames. Off or empty, the unit
     /// is not heard, so its dry/wet takes its target at once.
@@ -107,12 +131,40 @@ impl FxUnit {
         left: &mut [f32],
         right: &mut [f32],
         wet: &mut [SampleBuffer; 2],
+        programmed: Option<&[f64]>,
     ) {
         let on = self.on;
         let Some(effect) = self.effect.as_mut().filter(|_| on) else {
             self.mix.reset_to_target();
+            self.hold(programmed);
             return;
         };
+        if let Some(values) = programmed {
+            let frames = left.len().min(right.len()).min(values.len());
+            let [wet_left, wet_right] = wet;
+            let (left, right) = (&mut left[..frames], &mut right[..frames]);
+            let (wet_left, wet_right) = (&mut wet_left[..frames], &mut wet_right[..frames]);
+            effect.process([&*left, &*right], [&mut *wet_left, &mut *wet_right]);
+            let mut mixes = [0.0; FADE_CHUNK];
+            let mut keeps = [0.0; FADE_CHUNK];
+            for start in (0..frames).step_by(FADE_CHUNK) {
+                let end = (start + FADE_CHUNK).min(frames);
+                let len = end - start;
+                kithara_dsp::narrow_f64(&values[start..end], &mut mixes[..len]);
+                for (keep, mix) in keeps.iter_mut().zip(&mixes[..len]) {
+                    *keep = 1.0 - *mix;
+                }
+                for (dry, wet) in [
+                    (&mut left[start..end], &wet_left[start..end]),
+                    (&mut right[start..end], &wet_right[start..end]),
+                ] {
+                    kithara_dsp::multiply_in_place(dry, &keeps[..len]);
+                    kithara_dsp::mul_add(wet, &mixes[..len], dry);
+                }
+            }
+            self.hold(programmed);
+            return;
+        }
         if self.mix.has_settled_at(0.0) {
             return;
         }
