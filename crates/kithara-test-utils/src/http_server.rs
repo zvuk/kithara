@@ -1,6 +1,6 @@
 //! A local axum HTTP server bound to a free loopback port for one test.
 
-use std::io;
+use std::{io, net};
 
 use axum::Router;
 use kithara_platform::{
@@ -12,6 +12,16 @@ use kithara_platform::{
     },
 };
 use url::Url;
+
+/// A loopback port free at the time of the call, for a child process that
+/// binds its own listener and takes the port as an argument.
+///
+/// # Errors
+///
+/// Returns the error when no loopback port can be bound.
+pub fn free_loopback_port() -> io::Result<u16> {
+    Ok(net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
+}
 
 /// Lightweight HTTP test server wrapper.
 pub struct TestHttpServer {

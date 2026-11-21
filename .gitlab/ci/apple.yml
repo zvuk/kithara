@@ -70,6 +70,30 @@ apple:test:
       - .ci-artifacts/junit/
       - "tests/crates/sync/.ci-artifacts/audio/"
 
+# A separate job preserves both suites' JUnit reports.
+apple:net-units:
+  extends:
+    - .apple-job
+    - .judged
+    - .measured
+    - .rules-verify-and-branch
+  needs:
+    - apple:lint
+    - job: apple:pr-tests
+      optional: true
+  script:
+    - just ci run apple-net-units
+  artifacts:
+    when: always
+    expire_in: 30 days
+    reports:
+      junit: .ci-artifacts/junit/apple-net-units.xml
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - .ci-artifacts/junit/apple-net-units.xml
+      - .ci-artifacts/junit/apple-net-units.selection.json
+      - .ci-artifacts/junit/apple-net-units.failed
+
 # The same suite with the clock left real. It owns a second target directory,
 # so it is another whole build of the workspace, and what it guards is the
 # flash accounting rather than the change under review. The default branch and

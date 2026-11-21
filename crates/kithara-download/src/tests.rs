@@ -1415,7 +1415,11 @@ async fn spawn_stalled_body_server() -> TestHttpServer {
         "/data",
         get(|| async {
             let first = futures::stream::iter([Ok::<_, Infallible>(Bytes::from_static(b"xx"))]);
-            Body::from_stream(first.chain(futures::stream::pending()))
+            // NSURLSession can buffer a tiny untyped prefix while sniffing its MIME type.
+            (
+                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                Body::from_stream(first.chain(futures::stream::pending())),
+            )
         }),
     );
     TestHttpServer::new(app).await
