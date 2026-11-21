@@ -2211,6 +2211,7 @@ timeout_minutes = 180
 # configuration: whole on a ready pull request, `main` and every night, and
 # the draft scope's part they hold on any other branch push.
 [ext.ci.lanes.linux-tooling]
+artifact = { name = "hang-dumps-tooling", path = ".ci-artifacts/hang", when = "failure" }
 cache_group = "host"
 label = "tooling"
 os = ["macos", "linux"]
@@ -2225,7 +2226,7 @@ steps = [
     "test",
     "run",
     "--lane=tooling",
-  ], label = "Native tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Native tooling lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "gate"
 kinds = [
