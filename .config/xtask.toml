@@ -2905,7 +2905,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ], label = "Apple network units" },
+  ], label = "Apple network units", env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "platforms"
 kinds = [

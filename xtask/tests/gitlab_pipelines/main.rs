@@ -1034,6 +1034,7 @@ fn apple_network_units_upload_their_own_verdict_evidence() {
             ".ci-artifacts/junit/apple-net-units.xml",
             ".ci-artifacts/junit/apple-net-units.selection.json",
             ".ci-artifacts/junit/apple-net-units.failed",
+            ".ci-artifacts/hang/",
         ])
     );
     assert_eq!(leaf["needs"][0].as_str(), Some("apple:lint"));
