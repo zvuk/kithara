@@ -4,6 +4,7 @@
 //! Deck and master audio effects.
 
 mod deck_effect;
+pub mod delay;
 mod dsp;
 pub mod eq;
 pub mod filter;

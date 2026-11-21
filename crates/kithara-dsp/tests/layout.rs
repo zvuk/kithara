@@ -22,7 +22,7 @@ fn count(value: usize) -> NonZeroUsize {
 /// all pass through the kernels.
 fn sample(channel: usize, frame: usize) -> f32 {
     let key = u32::try_from(channel << 16 | frame).expect("fixture index fits u32");
-    f32::from_bits(key.wrapping_mul(0x9E37_79B9).rotate_left(11))
+    f32::from_bits(key.wrapping_mul(0x9e37_79b9).rotate_left(11))
 }
 
 fn bits(values: &[f32]) -> Vec<u32> {

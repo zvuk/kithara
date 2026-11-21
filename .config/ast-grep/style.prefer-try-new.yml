@@ -1,0 +1,18 @@
+id: style.prefer-try-new
+message: |
+  A fallible constructor named `new`. Name it `try_new`, so the call site
+  `Type::try_new(..)?` tells the reader it can fail; keep `new` for
+  constructors that always succeed.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  all:
+    - kind: function_item
+    - has:
+        field: name
+        regex: '^new$'
+    - has:
+        field: return_type
+        regex: '^(?:[\w]+::)*Result\b'

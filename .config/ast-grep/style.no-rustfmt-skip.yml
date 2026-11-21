@@ -1,0 +1,15 @@
+id: style.no-rustfmt-skip
+message: |
+  `rustfmt::skip` opts this code out of `just fmt`. Formatting is not
+  negotiable, the same as any other gate: delete the attribute and let rustfmt
+  lay the code out. If the formatted result reads badly, restructure the code
+  (split the expression, name the parts) rather than hand-align it.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  any:
+    - kind: attribute_item
+    - kind: inner_attribute_item
+  regex: '\brustfmt::skip\b'

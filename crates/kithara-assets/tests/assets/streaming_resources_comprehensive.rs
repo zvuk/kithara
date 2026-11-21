@@ -175,7 +175,7 @@ fn streaming_resource_commit_behavior(
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
     let reader = writer.reader();
 
-    let data = vec![0xAB; 4096];
+    let data = vec![0xab; 4096];
     writer.write_at(0, &data).unwrap();
     reader.wait_range(0..(data.len() as u64)).unwrap();
 
@@ -231,7 +231,7 @@ fn streaming_resource_zero_length_operations(
     let writer = pending(scope.store().acquire_resource(&key, None).unwrap());
     let reader = writer.reader();
 
-    let data = vec![0xCC; 2048];
+    let data = vec![0xcc; 2048];
     writer.write_at(base_offset, &data).unwrap();
     reader
         .wait_range(base_offset..(base_offset + data.len() as u64))

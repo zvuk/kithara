@@ -50,7 +50,7 @@ pub mod wait;
 #[cfg(feature = "test")]
 pub use cancel::{cancel_token, cancel_token_cancelled};
 #[cfg(all(feature = "http-server", not(target_arch = "wasm32")))]
-pub use http_server::TestHttpServer;
+pub use http_server::{TestHttpServer, free_loopback_port};
 #[cfg(not(target_arch = "wasm32"))]
 pub use pace::pace;
 pub use rng::Xorshift64;

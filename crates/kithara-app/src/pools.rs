@@ -3,8 +3,7 @@ use kithara::{
     bufpool::{OverallBudget, PoolConfig, PoolConfigPatch, PoolError, PoolRegion, pool_schema},
     host::{Host, HostConfig, HostCore, HostSettings},
     link::{LinkedConfig, LinkedFactory, LinkedHost, LinkedHostConfig, LinkedHostDeck},
-    play::{PlayError, PlayWorker, PlayerFactory, ResourceConfig},
-    prelude::PlaybackResamplerBackend,
+    play::{PlayError, PlayWorker, PlaybackResamplerBackend, PlayerFactory, ResourceConfig},
     queue::{Queue, QueueControl, TrackSource},
 };
 use serde::Deserialize;

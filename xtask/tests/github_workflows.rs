@@ -1669,9 +1669,10 @@ fn a_newer_dispatch_of_one_selection_supersedes_the_older() {
             "the dispatch group omits `{part}`: {group}"
         );
     }
+    assert!(group.ends_with("${{ (inputs.bench_preflight || '') != '' && '-preflight' || '' }}"));
     assert_eq!(
-        mapping_field(concurrency, "cancel-in-progress").as_bool(),
-        Some(true)
+        mapping_field(concurrency, "cancel-in-progress").as_str(),
+        Some("${{ (inputs.bench_preflight || '') == '' }}")
     );
 }
 
@@ -2330,6 +2331,7 @@ fn bench_parameters_reach_the_common_executor_as_data() {
         "bench_filter",
         "bench_ref",
         "bench_base_ref",
+        "bench_preflight",
     ] {
         let dispatch = github_workflow("dispatch.yml");
         assert_eq!(
@@ -2337,6 +2339,10 @@ fn bench_parameters_reach_the_common_executor_as_data() {
             Some("")
         );
         for (caller, job, _, with) in &forwarding {
+            if parameter == "bench_preflight" && caller == "run.yml" && job != "run" {
+                assert!(!with.contains_key(parameter), "{caller}/{job}");
+                continue;
+            }
             let expected = if caller == "dispatch.yml" {
                 format!("${{{{ inputs.{parameter} || '' }}}}")
             } else {
@@ -2356,7 +2362,9 @@ fn bench_parameters_reach_the_common_executor_as_data() {
         );
     }
     let script = mapping_field(step, "run").as_str().unwrap();
-    assert!(script.contains("if [ -n \"$BENCH_TARGET\" ]; then export RUN_BENCHMARKS=1; fi"));
+    assert!(script.contains(
+        r#"if [ -n "$BENCH_TARGET" ] && [ -z "$BENCH_PREFLIGHT" ]; then export RUN_BENCHMARKS=1; fi"#
+    ));
     assert!(!script.contains("inputs.bench_"));
 }
 

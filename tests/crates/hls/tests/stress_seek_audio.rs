@@ -438,7 +438,7 @@ fn random_seek_reads(
     max_seek_secs: f64,
 ) -> ChurnSnapshot {
     check_fractional_saw_controls();
-    let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
+    let mut rng = Xorshift64::new(0xdead_beef_cafe_1337);
     let seek_positions: Vec<f64> = (0..consts::SEEK_ITERATIONS)
         .map(|_| rng.range_f64(0.001, max_seek_secs))
         .collect();

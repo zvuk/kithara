@@ -123,7 +123,7 @@ fn read_descriptor_header(cursor: &mut Cursor<&[u8]>) -> DecodeResult<(u8, u32)>
         cursor
             .read_exact(&mut b)
             .map_err(|e| DecodeError::parse("read descriptor size byte", e))?;
-        size = (size << 7) | u32::from(b[0] & 0x7F);
+        size = (size << 7) | u32::from(b[0] & 0x7f);
         if b[0] & 0x80 == 0 {
             return Ok((tag[0], size));
         }

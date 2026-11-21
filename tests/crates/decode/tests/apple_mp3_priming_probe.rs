@@ -42,17 +42,17 @@ fn read_enc_delay_padding(bytes: &[u8], lame_tag_off: usize) -> Option<(u32, u32
     let triple = bytes.get(s..s + 3)?;
     let val = (u32::from(triple[0]) << 16) | (u32::from(triple[1]) << 8) | u32::from(triple[2]);
     let enc_delay = val >> 12;
-    let enc_padding = val & 0xFFF;
+    let enc_padding = val & 0xfff;
     Some((enc_delay, enc_padding))
 }
 
 fn write_enc_delay(bytes: &mut [u8], lame_tag_off: usize, new_enc_delay: u32) {
     let s = lame_tag_off + 21;
     let (_, old_padding) = read_enc_delay_padding(bytes, lame_tag_off).unwrap_or((0, 0));
-    let val = ((new_enc_delay & 0xFFF) << 12) | (old_padding & 0xFFF);
-    bytes[s] = ((val >> 16) & 0xFF) as u8;
-    bytes[s + 1] = ((val >> 8) & 0xFF) as u8;
-    bytes[s + 2] = (val & 0xFF) as u8;
+    let val = ((new_enc_delay & 0xfff) << 12) | (old_padding & 0xfff);
+    bytes[s] = ((val >> 16) & 0xff) as u8;
+    bytes[s + 1] = ((val >> 8) & 0xff) as u8;
+    bytes[s + 2] = (val & 0xff) as u8;
 }
 
 /// Decode the given MP3 bytes via the chosen backend at the requested

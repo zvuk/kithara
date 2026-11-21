@@ -229,8 +229,8 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     }
 
     if let Some((seg1, seg1_reader, _)) = segments.first() {
-        let a = vec![0xAAu8; 4096];
-        let b = vec![0xBBu8; 2048];
+        let a = vec![0xaau8; 4096];
+        let b = vec![0xbbu8; 2048];
 
         seg1.write_at(0, &a).unwrap();
         seg1.write_at(8192, &b).unwrap();
@@ -245,7 +245,7 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     }
 
     if let Some((seg2, seg2_reader, _)) = segments.get(1) {
-        let c = vec![0xCCu8; 10 * 1024];
+        let c = vec![0xccu8; 10 * 1024];
         seg2.write_at(0, &c).unwrap();
         seg2_reader.wait_range(0..(c.len() as u64)).unwrap();
         assert_eq!(read_bytes(seg2_reader, 0, c.len()), c);

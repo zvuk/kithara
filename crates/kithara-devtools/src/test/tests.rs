@@ -269,6 +269,7 @@ pub(super) fn synthetic_project() -> ProjectConfig {
             default_backend: "http".to_owned(),
             nextest_config: ".config/nextest.toml".to_owned(),
             known_flakes: Vec::new(),
+            required_case_prefixes: BTreeMap::new(),
             features: vec!["base-feature".to_owned()],
             flash: toml::from_str::<TestFlashConfig>("features = ['virtual-time']\ndefault = true")
                 .expect("flash config"),

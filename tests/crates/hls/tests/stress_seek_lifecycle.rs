@@ -210,7 +210,7 @@ fn rapid_random_seeks(audio: &mut HlsAudio, buf: &mut [f32], channels: usize, ma
         "Phase 2: {} rapid random seeks",
         consts::STRESS_SEEK_ITERATIONS
     );
-    let mut rng = Xorshift64::new(0xCAFE_BABE_DEAD_BEEF);
+    let mut rng = Xorshift64::new(0xcafe_babe_dead_beef);
     let mut stress = SeekStress::default();
 
     for i in 0..consts::STRESS_SEEK_ITERATIONS {

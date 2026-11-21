@@ -644,9 +644,11 @@ mod buffered_readiness {
     };
 
     use kithara_decode::{DecoderResamplerConfig, DecoderSeekOutcome};
+    use kithara_platform::sync::mpsc;
     use kithara_resampler::{ResamplerOptions, rubato::RubatoBackend};
     use kithara_stream::{
-        ReaderChunkSignal, ReaderControl, ReaderEventSink, ReaderSeekSignal, SessionReader,
+        ConstructionGate, ReaderChunkSignal, ReaderControl, ReaderEventSink, ReaderSeekSignal,
+        SessionReader,
     };
 
     use super::*;
@@ -669,6 +671,7 @@ mod buffered_readiness {
         Started(usize, InputOperation),
         Waiting(usize, InputOperation, Range<u64>),
         Cancelled(usize),
+        DropHeld(usize),
         Dropped(usize),
         Cursor(u64),
     }
@@ -676,6 +679,8 @@ mod buffered_readiness {
     #[derive(Default)]
     pub(super) struct NativeReadState {
         readers: Vec<(kithara_platform::CancelToken, Option<NonZeroU32>)>,
+        construction_gates: Vec<Option<ConstructionGate>>,
+        held_drop: Option<(usize, mpsc::Receiver<()>)>,
         pub(super) events: Vec<InputEvent>,
         active: Option<(usize, InputOperation)>,
     }
@@ -759,6 +764,21 @@ mod buffered_readiness {
 
     impl Drop for NativeInput {
         fn drop(&mut self) {
+            let held = {
+                let mut native = self.native.state.lock();
+                let held = native
+                    .held_drop
+                    .take_if(|(reader, _)| *reader == self.reader)
+                    .map(|(_, release)| release);
+                if held.is_some() {
+                    native.events.push(InputEvent::DropHeld(self.reader));
+                }
+                held
+            };
+            if let Some(release) = held {
+                self.native.changed.notify_one();
+                let _released = release.recv();
+            }
             drop(self.input.take());
             self.native
                 .state
@@ -779,6 +799,7 @@ mod buffered_readiness {
                     let mut native = native.state.lock();
                     let number = native.readers.len();
                     native.readers.push((control.cancel_token(), rate));
+                    native.construction_gates.push(reader.construction_gate());
                     native.events.push(InputEvent::Opened(number));
                     number
                 };
@@ -1290,7 +1311,17 @@ mod buffered_readiness {
                 .iter()
                 .position(|event| *event == InputEvent::Opened(reader + 1))
                 .expect("next actual input was opened");
-            assert!(command_start <= cancelled && cancelled < retired && retired < next_open);
+            assert!(
+                command_start <= cancelled && cancelled < retired && retired < next_open,
+                "reader {reader}: command_start={command_start} cancelled={cancelled} \
+                 retired={retired} next_open={next_open}; rates={:?}; events={:?}",
+                native
+                    .readers
+                    .iter()
+                    .map(|(_, rate)| *rate)
+                    .collect::<Vec<_>>(),
+                native.events.iter().enumerate().collect::<Vec<_>>(),
+            );
             let mutation = native
                 .events
                 .iter()
@@ -1305,6 +1336,236 @@ mod buffered_readiness {
             );
         }
         drop(native);
+    }
+
+    /// Counts source wakes apart from the fixture's input-event notifications.
+    struct SourceWake {
+        native: Arc<NativeReads>,
+        wakes: AtomicUsize,
+    }
+
+    impl kithara_stream::WorkerWake for SourceWake {
+        fn defer(&self) {
+            self.wake();
+        }
+
+        fn wake(&self) {
+            self.wakes.fetch_add(1, Ordering::AcqRel);
+            self.native.changed.notify_one();
+        }
+    }
+
+    #[kithara::test(tokio)]
+    #[case(false)]
+    #[case(true)]
+    async fn superseded_constructed_input_is_destroyed_before_next_open(#[case] resampled: bool) {
+        let mut fixture = splice_source(vec![slq_layout()]).await;
+        let native = Arc::new(NativeReads::default());
+        let source_wake = Arc::new(SourceWake {
+            native: native.clone(),
+            wakes: AtomicUsize::new(0),
+        });
+        let rate = if resampled {
+            NonZeroU32::new(48_000).expect("resampled rate")
+        } else {
+            fixture.source.decode.output_spec().sample_rate
+        };
+        assert!(fixture.state.native.set(native.clone()).is_ok());
+        *fixture.state.media_info.lock() = None;
+        fixture.source.shared_stream.set_position(0);
+        fixture.source.factory = native_factory(native.clone());
+        fixture.source.wake = source_wake.clone();
+        fixture.source.host_rate = Some(rate);
+        fixture.source.decoder_backend = kithara_decode::DecoderBackend::Symphonia;
+        fixture.source.playback_resampler_backend = "rubato";
+        let reader = fixture.source.shared_stream.open_initial_reader();
+        let factory = fixture.source.factory.clone();
+        let (generation, _) = kithara_platform::tokio::task::spawn_blocking(move || {
+            factory.build_generation(reader, None, 0, None, Some(rate), GaplessMode::Disabled)
+        })
+        .await
+        .expect("native generation task completes")
+        .expect("native fMP4 generation");
+        fixture
+            .source
+            .decode
+            .prepare_replacement_profile(generation.spec());
+        assert!(fixture.source.decode.take_stage_error().is_none());
+        drop(fixture.source.decode.replace_active(generation));
+        fixture.source.decode.reset();
+        let boundary = fixture.state.active_layout().segments[0].byte_range.end;
+        fixture.state.available.store(boundary, Ordering::Release);
+        kithara_platform::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = native.changed.notified();
+                fixture.source.prepare_deferred();
+                let step = fixture.source.step_track();
+                assert!(!matches!(&step, TrackStep::Failed(_) | TrackStep::Eof));
+                fixture.source.finish_deferred();
+                if native.state.lock().events.iter().any(|event| matches!(
+                    event,
+                    InputEvent::Waiting(0, InputOperation::Read, range) if range.start >= boundary
+                )) {
+                    break;
+                }
+                if matches!(step, TrackStep::Blocked(_)) {
+                    changed.await;
+                }
+            }
+        })
+        .await
+        .expect("the active native Read must be busy on withheld input");
+
+        let (release_drop, held_drop) = mpsc::channel();
+        native.state.lock().held_drop = Some((1, held_drop));
+        fixture.state.available.store(u64::MAX, Ordering::Release);
+        let idle_wake_owners = Arc::strong_count(&source_wake);
+        let first_target =
+            fixture.state.active_layout().segments[1].decode_time + Duration::from_secs(1);
+        assert!(matches!(
+            fixture.source.seek(first_target),
+            Ok(crate::SeekOutcome::Pending { target, .. }) if target == first_target
+        ));
+        kithara_platform::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = native.changed.notified();
+                if Arc::strong_count(&source_wake) > idle_wake_owners {
+                    break;
+                }
+                fixture.source.prepare_deferred();
+                fixture.source.finish_deferred();
+                assert!(!matches!(fixture.source.phase, OwnerPhase::Failed { .. }));
+                if Arc::strong_count(&source_wake) > idle_wake_owners {
+                    break;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .expect("the retired active input starts one replacement construction");
+        kithara_platform::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = native.changed.notified();
+                if native
+                    .state
+                    .lock()
+                    .construction_gates
+                    .get(1)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|gate| !gate.is_armed())
+                {
+                    break;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .expect("the replacement construction completes without being installed");
+        assert!(
+            !native
+                .state
+                .lock()
+                .events
+                .contains(&InputEvent::DropHeld(1)),
+            "the constructed replacement still owns its input"
+        );
+        let constructed_wake_owners = idle_wake_owners + 1;
+        kithara_platform::time::timeout(Duration::from_secs(5), async {
+            // The worker releases its wake clone after sending the completion and waking the
+            // source, so no notification follows the release.
+            while Arc::strong_count(&source_wake) > constructed_wake_owners {
+                kithara_platform::tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the replacement worker hands its constructed generation to the source");
+
+        let superseded_from = native.state.lock().events.len();
+        let final_target = Duration::from_secs(1);
+        assert!(matches!(
+            fixture.source.seek(final_target),
+            Ok(crate::SeekOutcome::Pending { target, .. }) if target == final_target
+        ));
+        kithara_platform::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = native.changed.notified();
+                if native
+                    .state
+                    .lock()
+                    .events
+                    .contains(&InputEvent::DropHeld(1))
+                {
+                    break;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .expect("the superseded input reaches its held destructor");
+        // Give the source an admission opportunity while the superseded input is still live.
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
+        assert!(!matches!(fixture.source.phase, OwnerPhase::Failed { .. }));
+        // The flash yield resolves only after every participant parks or finishes, so a
+        // construction admitted so far has already moved the cursor and opened its input.
+        kithara_platform::time::timeout(
+            Duration::from_secs(5),
+            kithara_platform::tokio::task::yield_now(),
+        )
+        .await
+        .expect("the source settles while the superseded input is held");
+        let events = native.state.lock().events.clone();
+        let admitted = events[superseded_from..]
+            .iter()
+            .find(|event| matches!(event, InputEvent::Opened(_) | InputEvent::Cursor(_)));
+        assert!(
+            admitted.is_none(),
+            "no construction may start while the superseded input is live: \
+             admitted={admitted:?} events={:?}",
+            events.iter().enumerate().collect::<Vec<_>>(),
+        );
+        let owner_wakes = source_wake.wakes.load(Ordering::Acquire);
+        drop(release_drop);
+        kithara_platform::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = native.changed.notified();
+                if source_wake.wakes.load(Ordering::Acquire) > owner_wakes {
+                    break;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .expect("the retired superseded input wakes the source");
+        kithara_platform::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = native.changed.notified();
+                fixture.source.prepare_deferred();
+                fixture.source.finish_deferred();
+                assert!(!matches!(fixture.source.phase, OwnerPhase::Failed { .. }));
+                if native.state.lock().events.contains(&InputEvent::Opened(2)) {
+                    break;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .expect("the superseding command opens its own input");
+        let events = native.state.lock().events.clone();
+        let dropped = events
+            .iter()
+            .position(|event| *event == InputEvent::Dropped(1));
+        let next_open = events
+            .iter()
+            .position(|event| *event == InputEvent::Opened(2));
+        assert!(
+            dropped
+                .zip(next_open)
+                .is_some_and(|(dropped, next_open)| dropped < next_open),
+            "superseded constructed input must be destroyed before the next factory opens: \
+             dropped={dropped:?} next_open={next_open:?} events={:?}",
+            events.iter().enumerate().collect::<Vec<_>>(),
+        );
     }
 
     #[kithara::test(tokio)]

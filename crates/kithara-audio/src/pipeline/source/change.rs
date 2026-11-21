@@ -59,6 +59,7 @@ enum ChangeWork {
         completion: mpsc::Receiver<Replacement>,
         control: ReaderControl,
     },
+    ReleasingSuperseded(Box<DecoderGeneration>),
 }
 
 pub(super) struct SourceChange {
@@ -97,8 +98,9 @@ impl<T: StreamType> StreamAudioSource<T> {
                         control,
                     }
                 }
-                ChangeWork::Releasing => ChangeWork::Releasing,
-                ChangeWork::ReleasingReplacement => ChangeWork::ReleasingReplacement,
+                work @ (ChangeWork::Releasing
+                | ChangeWork::ReleasingReplacement
+                | ChangeWork::ReleasingSuperseded(_)) => work,
             },
             _ => {
                 if matches!(command, SourceCommand::Seek(_)) {
@@ -164,8 +166,12 @@ impl<T: StreamType> StreamAudioSource<T> {
                     control,
                 } => match completion.try_recv() {
                     Ok(result) => {
-                        drop(result);
-                        change.work = ChangeWork::ReleasingReplacement;
+                        change.work = match result {
+                            Ok((generation, ..)) => {
+                                ChangeWork::ReleasingSuperseded(Box::new(generation))
+                            }
+                            Err(_) => ChangeWork::ReleasingReplacement,
+                        };
                         self.phase = OwnerPhase::Changing(change);
                         self.drive_source_change()
                     }
@@ -181,6 +187,21 @@ impl<T: StreamType> StreamAudioSource<T> {
                         detail: "retiring source construction channel closed",
                     }),
                 },
+                ChangeWork::ReleasingSuperseded(mut generation) => {
+                    match generation.decoder_mut().release_input() {
+                        InputState::Busy | InputState::Retiring => {
+                            change.work = ChangeWork::ReleasingSuperseded(generation);
+                            self.phase = OwnerPhase::Changing(change);
+                            Ok(None)
+                        }
+                        InputState::Idle | InputState::Retired => {
+                            drop(generation);
+                            change.work = ChangeWork::ReleasingReplacement;
+                            self.phase = OwnerPhase::Changing(change);
+                            self.drive_source_change()
+                        }
+                    }
+                }
                 ChangeWork::Building {
                     completion,
                     control,
@@ -356,12 +377,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                     .build_generation(reader, info, offset, target, host_rate, gapless_mode)
                     .map(|(generation, outcome)| (generation, outcome, cause))
             })();
-            let result = if worker_control.is_cancelled() {
-                drop(result);
-                Err(DecodeError::Interrupted)
-            } else {
-                result
-            };
             drop(completed.send(result));
             wake.wake();
         }));

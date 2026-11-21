@@ -78,9 +78,9 @@ impl AvailabilityIndex {
 
             for (path, res_record) in asset_record.resources.iter() {
                 let mut avail = Availability::default();
-                res_record.ranges.iter().for_each(|r| {
+                for r in res_record.ranges.iter() {
                     avail.insert(r.0.to_native()..r.1.to_native());
-                });
+                }
 
                 let final_len: Option<u64> = res_record.final_len.as_ref().map(|l| l.to_native());
 
@@ -435,7 +435,7 @@ mod tests {
         let opened = OpenOptions::new().write(true).open(&canonical).unwrap();
 
         resource.reactivate().unwrap();
-        let replacement = vec![0xAB; final_len];
+        let replacement = vec![0xab; final_len];
         resource.write_at(0, &replacement).unwrap();
         resource.commit(Some(final_len as u64)).unwrap();
         assert_eq!(fs::read(&canonical).unwrap(), replacement);
@@ -466,7 +466,7 @@ mod tests {
         let previous = fs::read(&manifest).unwrap();
 
         resource.reactivate().unwrap();
-        resource.write_at(0, &vec![0xAB; final_len]).unwrap();
+        resource.write_at(0, &vec![0xab; final_len]).unwrap();
         resource.commit(Some(final_len as u64)).unwrap();
         assert_eq!(fs::metadata(&canonical).unwrap().len(), final_len as u64);
 

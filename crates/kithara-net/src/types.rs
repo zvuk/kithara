@@ -246,7 +246,8 @@ pub struct NetOptions {
     pub(crate) body_queue_resume_at: usize,
     /// Max idle connections per host. Enables HTTP keep-alive connection
     /// reuse, reducing `TIME_WAIT` accumulation under high request volume.
-    /// Set to 0 to disable pooling.
+    /// Set to 0 to disable pooling. Ignored by the Apple backend, whose
+    /// `URLSession` owns its connection pool and exposes no idle-pool bound.
     #[config(builder(default = 8))]
     pub(crate) pool_max_idle_per_host: usize,
 }

@@ -39,11 +39,22 @@ async fn signal(Path(name_with_ext): Path<String>, headers: HeaderMap) -> Respon
         )
             .into_response();
     }
-    build_range_response(
-        asset.bytes(),
-        &headers,
-        true,
-        true,
-        Some(entry.content_type),
-    )
+    tracing::debug!(
+        target: "kithara_fixture_serving",
+        event = "fixture_asset_bytes",
+        phase = "begin",
+        asset = entry.name,
+    );
+    let started = kithara::platform::time::WallInstant::now();
+    let bytes = asset.bytes();
+    let elapsed_ns = started.elapsed().as_nanos();
+    tracing::debug!(
+        target: "kithara_fixture_serving",
+        event = "fixture_asset_bytes",
+        phase = "end",
+        asset = entry.name,
+        bytes = bytes.len(),
+        elapsed_ns = elapsed_ns,
+    );
+    build_range_response(bytes, &headers, true, true, Some(entry.content_type))
 }

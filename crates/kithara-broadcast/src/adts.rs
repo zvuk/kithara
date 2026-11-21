@@ -11,9 +11,9 @@ pub(crate) struct AdtsPacker {
 impl AdtsPacker {
     const CHANNEL_CONFIGS: RangeInclusive<u8> = 1..=6;
 
-    const FULLNESS_HIGH_BITS: u8 = 0x1F;
+    const FULLNESS_HIGH_BITS: u8 = 0x1f;
 
-    const FULLNESS_LOW_BITS: u8 = 0x3F;
+    const FULLNESS_LOW_BITS: u8 = 0x3f;
     pub(crate) const HEADER_LEN: usize = 7;
     const HEADER_LEN_U16: u16 = 7;
     pub(crate) const MAX_PAYLOAD: usize = (1 << 13) - 1 - Self::HEADER_LEN;
@@ -52,8 +52,8 @@ impl AdtsPacker {
 
         out.reserve(Self::HEADER_LEN + payload.len());
         out.extend_from_slice(&[
-            0xFF,
-            0xF1,
+            0xff,
+            0xf1,
             (Self::PROFILE_AAC_LC << 6)
                 | (self.sample_rate_index << 2)
                 | (self.channel_config >> 2),
@@ -78,7 +78,7 @@ mod tests {
         let mut out = Vec::new();
         AdtsPacker::new(sample_rate, channels)
             .expect("packer")
-            .pack_into(&vec![0x5A; payload], &mut out)
+            .pack_into(&vec![0x5a; payload], &mut out)
             .expect("pack");
         out.truncate(AdtsPacker::HEADER_LEN);
         out
@@ -88,7 +88,7 @@ mod tests {
     fn stereo_48k_header_matches_the_wire_format() {
         assert_eq!(
             header(48_000, 2, consts::ADTS_PAYLOAD),
-            [0xFF, 0xF1, 0x4C, 0x80, 0x0D, 0x7F, 0xFC]
+            [0xff, 0xf1, 0x4c, 0x80, 0x0d, 0x7f, 0xfc]
         );
     }
 
@@ -96,7 +96,7 @@ mod tests {
     fn mono_44k1_header_matches_the_wire_format() {
         assert_eq!(
             header(44_100, 1, consts::ADTS_PAYLOAD),
-            [0xFF, 0xF1, 0x50, 0x40, 0x0D, 0x7F, 0xFC]
+            [0xff, 0xf1, 0x50, 0x40, 0x0d, 0x7f, 0xfc]
         );
     }
 

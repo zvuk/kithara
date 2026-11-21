@@ -53,7 +53,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::Te
     let scope = asset_scope(&temp_dir, "test-cache");
 
     let key = scope.key(&resource("cached.bin")).unwrap();
-    let ctx = xor_processor(0xAB, Some(Arc::clone(&call_count)));
+    let ctx = xor_processor(0xab, Some(Arc::clone(&call_count)));
 
     let original_data = b"Data for caching test";
     {
@@ -79,7 +79,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::Te
     let mut buf1 = vec![0u8; original_data.len()];
     let n = processed_res.read_at(0, &mut buf1).unwrap();
     assert_eq!(n, original_data.len());
-    let expected: Vec<u8> = original_data.iter().map(|b| b ^ 0xAB).collect();
+    let expected: Vec<u8> = original_data.iter().map(|b| b ^ 0xab).collect();
     assert_eq!(buf1, expected);
     assert_eq!(call_count.load(Ordering::SeqCst), count_after_commit);
 
@@ -101,7 +101,7 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTem
     let scope = asset_scope(&temp_dir, "test-partial");
 
     let key = scope.key(&resource("partial.bin")).unwrap();
-    let ctx = xor_processor(0xFF, Some(Arc::clone(&call_count)));
+    let ctx = xor_processor(0xff, Some(Arc::clone(&call_count)));
 
     let original_data: Vec<u8> = (0..100).collect();
     {
@@ -122,14 +122,14 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTem
     let n = processed_res.read_at(40, &mut buf).unwrap();
     assert_eq!(n, 20);
 
-    let expected: Vec<u8> = (40..60).map(|b: u8| b ^ 0xFF).collect();
+    let expected: Vec<u8> = (40..60).map(|b: u8| b ^ 0xff).collect();
     assert_eq!(buf, expected);
 
     let mut buf_end = vec![0u8; 20];
     let n_end = processed_res.read_at(90, &mut buf_end).unwrap();
     assert_eq!(n_end, 10);
 
-    let expected_end: Vec<u8> = (90..100).map(|b: u8| b ^ 0xFF).collect();
+    let expected_end: Vec<u8> = (90..100).map(|b: u8| b ^ 0xff).collect();
     assert_eq!(&buf_end[..10], &expected_end[..]);
 }
 
@@ -177,14 +177,14 @@ fn memory_store_serves_processed_bytes_after_commit() {
 
     let writer = pending(
         store
-            .acquire_resource_with_ctx(&key, None, Some(xor_processor(0x5A, None)))
+            .acquire_resource_with_ctx(&key, None, Some(xor_processor(0x5a, None)))
             .unwrap(),
     );
     writer.write_at(0, &original_data).unwrap();
     drop(writer.commit(Some(original_data.len() as u64)).unwrap());
 
     let reader = store.open_resource(&key, None).unwrap();
-    let expected: Vec<u8> = original_data.iter().map(|b| b ^ 0x5A).collect();
+    let expected: Vec<u8> = original_data.iter().map(|b| b ^ 0x5a).collect();
     assert_eq!(read_bytes(&reader, 0, original_data.len()), expected);
 }
 

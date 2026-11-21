@@ -33,14 +33,14 @@ fn run_seek_scenario(mut stream: impl Read + Seek, scenario: SeekScenario) {
             let mut ignored = [0; 10];
             stream.read_exact(&mut ignored).unwrap();
             assert_eq!(stream.seek(SeekFrom::Current(19)).unwrap(), 29);
-            assert_read(&mut stream, &[0xFF; 6]);
+            assert_read(&mut stream, &[0xff; 6]);
         }
         SeekScenario::Multiple => {
             assert_read(&mut stream, b"V0-SEG-0:");
             stream.seek(SeekFrom::Start(0)).unwrap();
             assert_read(&mut stream, b"V0-SEG-0:");
             stream.seek(SeekFrom::Start(100)).unwrap();
-            assert_read(&mut stream, &[0xFF; 6]);
+            assert_read(&mut stream, &[0xff; 6]);
         }
         SeekScenario::ReadAllThenBack => {
             let mut all_data = Vec::new();
@@ -57,7 +57,7 @@ fn run_seek_scenario(mut stream: impl Read + Seek, scenario: SeekScenario) {
         SeekScenario::AcrossAll => {
             assert_read(&mut stream, b"V0-SEG-0:");
             stream.seek(SeekFrom::Start(100)).unwrap();
-            assert_read(&mut stream, &[0xFF; 10]);
+            assert_read(&mut stream, &[0xff; 10]);
             stream.seek(SeekFrom::Start(0)).unwrap();
             assert_read(&mut stream, b"V0-SEG-0:");
         }

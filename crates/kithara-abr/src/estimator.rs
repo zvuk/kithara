@@ -32,7 +32,7 @@ impl Ewma {
         self.total_weight += weight.max(0.0);
     }
 
-    fn get_estimate(&self) -> f64 {
+    fn estimate(&self) -> f64 {
         if self.total_weight <= 0.0 {
             0.0
         } else {
@@ -105,10 +105,7 @@ impl Default for ThroughputEstimator {
 impl Estimator for ThroughputEstimator {
     fn estimate_bps(&self) -> Option<u64> {
         let inner = self.inner.lock();
-        let est = inner
-            .fast_ewma
-            .get_estimate()
-            .min(inner.slow_ewma.get_estimate());
+        let est = inner.fast_ewma.estimate().min(inner.slow_ewma.estimate());
 
         if est > 0.0 {
             est.round().to_u64().or(Some(0))
@@ -188,7 +185,7 @@ mod tests {
         ewma.add_sample(1.0, 16_000_000.0);
         ewma.add_sample(2.0, 4_000_000.0);
 
-        assert!((ewma.get_estimate() - 6_895_430.500_338_413).abs() < 0.001);
+        assert!((ewma.estimate() - 6_895_430.500_338_413).abs() < 0.001);
     }
 
     #[kithara::test]

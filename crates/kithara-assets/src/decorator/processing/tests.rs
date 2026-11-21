@@ -115,7 +115,7 @@ fn writer_commit_returns_readable_reader() {
 #[kithara::test]
 fn read_at_after_processing_honours_offset() {
     let call_count = Arc::new(AtomicUsize::new(0));
-    let process_fn = xor_chunk_processor(0xFF, Arc::clone(&call_count));
+    let process_fn = xor_chunk_processor(0xff, Arc::clone(&call_count));
     let content: Vec<u8> = (0..100).collect();
     let (writer, _dir) = mock_writer(&content);
 
@@ -129,7 +129,7 @@ fn read_at_after_processing_honours_offset() {
     let mut buf = vec![0u8; 20];
     let n = reader.read_at(40, &mut buf).unwrap();
     assert_eq!(n, 20);
-    let expected: Vec<u8> = (40..60).map(|b: u8| b ^ 0xFF).collect();
+    let expected: Vec<u8> = (40..60).map(|b: u8| b ^ 0xff).collect();
     assert_eq!(buf, expected);
 }
 
