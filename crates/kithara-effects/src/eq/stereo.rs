@@ -449,6 +449,33 @@ mod tests {
     }
 
     #[kithara::test]
+    fn eq_kill_on_a_pending_layout_sounds_once_that_layout_is_active() {
+        let config = EqConfig::builder(crate::test_pools::pools()).build();
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let make_layout = || {
+            Box::new(
+                EqLayout::new(&config, &[EqBandConfig::builder().build()], rate).expect("layout"),
+            )
+        };
+        let mut eq = StereoEq::with_layout(&config, rate, make_layout());
+        eq.take_layout(make_layout());
+        assert!(!eq.accepts_gain_program(0));
+        eq.set_kill(0, true);
+        let mut kills = [false];
+        eq.read_kills(&mut kills);
+        assert_eq!(kills, [true]);
+        let mut left = [0.25; 128];
+        let mut right = [-0.5; 128];
+        for _ in 0..512 {
+            left.fill(0.25);
+            right.fill(-0.5);
+            eq.process(&mut left, &mut right);
+        }
+        assert!(eq.accepts_gain_program(0));
+        assert!(left.iter().chain(&right).all(|value| value.to_bits() == 0));
+    }
+
+    #[kithara::test]
     fn prepared_gain_rows_refuse_wrong_lengths_before_pcm_or_state_changes() {
         let config = EqConfig::builder(crate::test_pools::pools()).build();
         let rate = NonZeroU32::new(48_000).expect("rate");

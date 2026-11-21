@@ -256,6 +256,10 @@ where
     }
 
     /// Changes a band's kill state in the observed EQ layout at a mixer frame.
+    ///
+    /// `layout` is the revision `eq_layout` reports and `eq_killed` answers for. Like a manual
+    /// gain, a kill addresses the layout that receives commands: one still waiting to be
+    /// crossed over to holds it until that layout sounds.
     /// # Errors
     /// Returns an admission refusal or a closed mailbox.
     pub fn set_eq_kill(

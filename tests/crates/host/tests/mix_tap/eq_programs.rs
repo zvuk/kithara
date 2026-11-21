@@ -26,29 +26,49 @@ async fn public_eq_kill_uses_the_mixer_frame_and_neutral_reset() {
         .build();
     let harness = OfflinePlayer::with_sample_rate(options, SAMPLE_RATE).await;
     let _ = harness.render(64).await;
-    let snapshot = harness.deck_snapshot();
-    let layout = snapshot.eq.layout().expect("layout");
-    let kill_at = SessionFrame::new(i64::from(snapshot.at) + 64);
+    let layout = harness
+        .with_queue(kithara::queue::QueueControl::eq_layout)
+        .await
+        .expect("layout");
+    let kill_at = SessionFrame::new(i64::from(harness.deck_snapshot().at) + 64);
     harness
         .with_queue(move |queue| queue.set_eq_kill(When::At(kill_at), 0, layout, true))
         .await
         .expect("timed kill");
     let _ = harness.render(64).await;
     assert_eq!(harness.deck_snapshot().at, kill_at);
-    assert_eq!(harness.deck_snapshot().eq.killed(0), Some(false));
+    assert_eq!(
+        harness.with_queue(|queue| queue.eq_killed(0)).await,
+        Some(false)
+    );
     let _ = harness.render(64).await;
-    let snapshot = harness.deck_snapshot();
-    assert_eq!(snapshot.eq.killed(0), Some(true));
-    assert_eq!(snapshot.eq.gain(0), GainDb::checked(-6.0));
+    assert_eq!(
+        harness.with_queue(|queue| queue.eq_killed(0)).await,
+        Some(true)
+    );
+    assert_eq!(
+        harness.with_queue(|queue| queue.eq_gain(0)).await,
+        Some(-6.0)
+    );
     harness
         .with_queue(kithara::queue::QueueControl::reset_eq)
         .await
         .expect("revision-free reset");
     let _ = harness.render(64).await;
-    let snapshot = harness.deck_snapshot();
-    assert_eq!(snapshot.eq.killed(0), Some(false));
-    assert_eq!(snapshot.eq.gain(0), Some(GainDb::DEFAULT));
-    assert_eq!(snapshot.eq.layout(), Some(layout));
+    assert_eq!(
+        harness.with_queue(|queue| queue.eq_killed(0)).await,
+        Some(false)
+    );
+    assert_eq!(
+        harness.with_queue(|queue| queue.eq_gain(0)).await,
+        Some(f32::from(GainDb::DEFAULT))
+    );
+    assert_eq!(
+        harness
+            .with_queue(kithara::queue::QueueControl::eq_layout)
+            .await,
+        Some(layout)
+    );
     harness.close().await;
 }
 
