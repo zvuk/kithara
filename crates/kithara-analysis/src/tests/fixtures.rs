@@ -91,7 +91,10 @@ pub(crate) fn beat_detector() -> Box<dyn BeatDetector> {
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 pub(super) fn artifacts(snapshot: &TrackAnalysis) -> Artifacts {
     (
-        snapshot.waveform().cloned().unwrap_or_default(),
+        snapshot
+            .waveform()
+            .cloned()
+            .expect("the waveform slot is configured"),
         snapshot
             .beat()
             .map(|beat| beat.artifact().beats().to_vec())
