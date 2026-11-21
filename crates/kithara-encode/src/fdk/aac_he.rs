@@ -153,6 +153,7 @@ impl AacHeEncoder {
             codec_config: asc,
             packets_per_segment: request.packets_per_segment,
             encoder_delay: request.encoder_delay,
+            codec_delay: info.nDelayCore,
             trailing_delay: request.trailing_delay,
             access_units: units,
         })

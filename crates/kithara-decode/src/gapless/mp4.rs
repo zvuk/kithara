@@ -7,7 +7,7 @@ use kithara_bufpool::{HasPool, PoolRegion};
 
 use crate::{
     DecodeResult, GaplessInfo,
-    mp4::{Mp4EditListEntry, Mp4Event, Mp4MediaTiming, scan_mp4},
+    mp4::{Mp4Event, Mp4MediaTiming, TrackEdit, scan_mp4},
     traits::DecoderInput,
 };
 
@@ -65,7 +65,7 @@ struct GaplessProbe {
 
 #[derive(Default)]
 struct TrackState {
-    edit: Option<Mp4EditListEntry>,
+    edit: TrackEdit,
     media: Option<Mp4MediaTiming>,
     sample_rate: Option<u32>,
 }
@@ -93,10 +93,7 @@ impl GaplessProbe {
             Mp4Event::TrackBegin => self.current = Some(TrackState::default()),
             Mp4Event::TrackEditList(entries) => {
                 if let Some(track) = &mut self.current {
-                    track.edit = match entries {
-                        [edit] => Some(*edit),
-                        _ => None,
-                    };
+                    track.edit = TrackEdit::from(entries);
                 }
             }
             Mp4Event::TrackEnd => return self.finish_track(),
@@ -127,50 +124,9 @@ impl GaplessProbe {
 }
 
 fn derive_from_track(track: &TrackState, movie_timescale: Option<u32>) -> Option<GaplessInfo> {
-    derive_from_edit(
-        track.edit?,
-        track.media?,
-        track.sample_rate?,
-        movie_timescale?,
-    )
-}
-
-pub(crate) fn derive_from_edit(
-    edit: Mp4EditListEntry,
-    media: Mp4MediaTiming,
-    sample_rate: u32,
-    movie_timescale: u32,
-) -> Option<GaplessInfo> {
-    if edit.media_rate != 1 << 16 {
-        return None;
-    }
-    let media_time = u64::try_from(edit.media_time).ok()?;
-
-    let leading = scale_frames(media_time, sample_rate, media.timescale)?;
-    let valid = scale_frames(edit.segment_duration, sample_rate, movie_timescale)?;
-    let total = scale_frames(media.duration, sample_rate, media.timescale)?;
-    let trailing = total.checked_sub(leading.checked_add(valid)?)?;
-
-    if leading == 0 && trailing == 0 {
-        return None;
-    }
-
-    Some(GaplessInfo {
-        leading_frames: leading,
-        trailing_frames: trailing,
-    })
-}
-
-fn scale_frames(value: u64, numerator: u32, denominator: u32) -> Option<u64> {
-    if denominator == 0 {
-        return None;
-    }
-
-    let scaled = u128::from(value)
-        .saturating_mul(u128::from(numerator))
-        .saturating_add(u128::from(denominator / 2))
-        / u128::from(denominator);
-    u64::try_from(scaled).ok()
+    track
+        .edit
+        .gapless(track.media?, track.sample_rate?, movie_timescale)
 }
 
 #[cfg(test)]
@@ -300,17 +256,24 @@ mod tests {
     }
 
     #[kithara::test]
-    fn derives_gapless_from_edit_list() {
+    #[case::bounded_edit(96_000, 1_916, 1_920)]
+    #[case::open_ended_edit_of_a_known_track(96_000, 0, 0)]
+    #[case::open_ended_edit_of_a_fragmented_track(0, 0, 0)]
+    fn derives_gapless_from_edit_list(
+        #[case] media_duration: u64,
+        #[case] segment_duration: u64,
+        #[case] trailing_frames: u64,
+    ) {
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd(1_000));
         moov.extend_from_slice(&track_with_elst(
             48_000,
             Mp4MediaTiming {
                 timescale: 48_000,
-                duration: 96_000,
+                duration: media_duration,
             },
             Mp4EditListEntry {
-                segment_duration: 1_916,
+                segment_duration,
                 media_time: 2_112,
 
                 media_rate: 1 << 16,
@@ -322,7 +285,7 @@ mod tests {
             probe_mp4_gapless(&mut reader, &pools()).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 2_112,
-                trailing_frames: 1_920,
+                trailing_frames,
             })
         );
     }

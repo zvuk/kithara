@@ -9,17 +9,6 @@ use crate::fmp4::{
     gapless::GaplessEncoding,
 };
 
-/// Native priming the codec's encoder emits at the start of every track,
-/// folded into the container's `encoder_delay`/`iTunSMPB` count by the
-/// fmp4 mux so a downstream `probe_mp4_gapless` reports the same trim
-/// total `FFmpeg` would have written.
-const fn codec_native_priming_frames(codec: AudioCodec) -> u64 {
-    match codec {
-        AudioCodec::AacLc => 1024,
-        _ => 0,
-    }
-}
-
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Fmp4MuxError {
@@ -302,12 +291,10 @@ fn trak_box(
 }
 
 fn edts_box(track: &EncodedTrack, total_duration: u64) -> Option<Vec<u8>> {
-    let codec = track.media_info.codec?;
     if track.encoder_delay == 0 && track.trailing_delay == 0 {
         return None;
     }
-    let native_priming = codec_native_priming_frames(codec);
-    let leading = u64::from(track.encoder_delay).saturating_add(native_priming);
+    let leading = leading_frames(track);
     let trailing_delay = u64::from(track.trailing_delay);
 
     let valid_duration = total_duration
@@ -320,6 +307,12 @@ fn edts_box(track: &EncodedTrack, total_duration: u64) -> Option<Vec<u8>> {
     Some(mp4_box(*b"edts", |buf| {
         buf.push_bytes(&elst_box(valid_duration, leading));
     }))
+}
+
+/// Frames before content zero: the requested padding plus the delay the
+/// codec's encoder reported.
+fn leading_frames(track: &EncodedTrack) -> u64 {
+    u64::from(track.encoder_delay).saturating_add(u64::from(track.codec_delay))
 }
 
 fn elst_box(segment_duration: u64, media_time: u64) -> Vec<u8> {
@@ -350,11 +343,7 @@ fn elst_box(segment_duration: u64, media_time: u64) -> Vec<u8> {
 /// `<version> <leading> <trailing> <total> ...`. We pad the tail with
 /// zero tokens so the string size matches what real-world tooling produces.
 fn udta_itunsmpb_box(track: &EncodedTrack, total_duration: u64) -> Vec<u8> {
-    let native_priming = track
-        .media_info
-        .codec
-        .map_or(0, codec_native_priming_frames);
-    let leading = u64::from(track.encoder_delay).saturating_add(native_priming);
+    let leading = leading_frames(track);
     let trailing = u64::from(track.trailing_delay);
     let total_audible = total_duration
         .saturating_sub(leading)
@@ -610,6 +599,7 @@ mod tests {
             codec_config: Vec::new(),
             packets_per_segment: 2,
             encoder_delay: 0,
+            codec_delay: 1024,
             trailing_delay: 0,
             access_units: vec![
                 EncodedAccessUnit {
@@ -661,6 +651,7 @@ mod tests {
             ],
             packets_per_segment: 2,
             encoder_delay: 0,
+            codec_delay: 0,
             trailing_delay: 0,
             access_units: vec![
                 EncodedAccessUnit {

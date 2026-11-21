@@ -2,6 +2,7 @@
 //! edit-list / iTunSMPB / mdhd metadata.
 
 mod boxes;
+mod edit;
 mod event;
 mod freeform;
 mod parse;
@@ -11,6 +12,7 @@ mod scan;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use edit::TrackEdit;
 pub(crate) use event::{ItunSmpb, Mp4EditListEntry, Mp4Event, Mp4MediaTiming};
 #[cfg(feature = "symphonia")]
 pub(crate) use presentation::{Presentation, probe_presentations};

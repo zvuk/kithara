@@ -3,8 +3,8 @@ use std::ops::ControlFlow;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::time::Duration;
 
-use super::{Mp4EditListEntry, Mp4Event, Mp4MediaTiming, scan_mp4};
-use crate::{DecodeResult, DecoderInput, GaplessInfo, gapless::derive_from_edit};
+use super::{Mp4Event, Mp4MediaTiming, TrackEdit, scan_mp4};
+use crate::{DecodeResult, DecoderInput, GaplessInfo};
 
 pub(crate) struct Presentation {
     pub(crate) track_id: u32,
@@ -13,20 +13,12 @@ pub(crate) struct Presentation {
     pub(crate) gapless: Option<GaplessInfo>,
 }
 
-#[derive(Clone, Copy, Default)]
-enum Edit {
-    #[default]
-    Identity,
-    Offset(Mp4EditListEntry),
-    Unsupported,
-}
-
 #[derive(Default)]
 struct Track {
     id: Option<u32>,
     media: Option<Mp4MediaTiming>,
     sample_rate: Option<u32>,
-    edit: Edit,
+    edit: TrackEdit,
 }
 
 impl Track {
@@ -34,26 +26,22 @@ impl Track {
         let track_id = self.id?;
         let media = self.media?;
         let sample_rate = self.sample_rate?;
-        let gapless = match self.edit {
-            Edit::Offset(edit) => {
-                movie_timescale.and_then(|scale| derive_from_edit(edit, media, sample_rate, scale))
-            }
-            Edit::Identity | Edit::Unsupported => None,
-        };
+        let gapless = self.edit.gapless(media, sample_rate, movie_timescale);
         let (media_origin, media_end) = match self.edit {
-            Edit::Identity => (
+            TrackEdit::Identity => (
                 Some(Duration::ZERO),
                 duration(media.duration, media.timescale).filter(|end| !end.is_zero()),
             ),
-            Edit::Offset(edit) => (
-                u64::try_from(edit.media_time)
-                    .ok()
-                    .and_then(|time| duration(time, media.timescale)),
-                movie_timescale
-                    .and_then(|scale| duration(edit.segment_duration, scale))
-                    .filter(|end| !end.is_zero()),
+            TrackEdit::Offset {
+                media_time,
+                segment,
+            } => (
+                duration(media_time, media.timescale),
+                segment
+                    .zip(movie_timescale)
+                    .and_then(|(segment, scale)| duration(segment.get(), scale)),
             ),
-            Edit::Unsupported => (None, None),
+            TrackEdit::Unsupported => (None, None),
         };
         Some(Presentation {
             track_id,
@@ -106,13 +94,7 @@ where
                 }
                 Mp4Event::TrackEditList(edits) => {
                     if let Some(track) = &mut track {
-                        track.edit = match edits {
-                            [] => Edit::Identity,
-                            [edit] if edit.media_time >= 0 && edit.media_rate == 1 << 16 => {
-                                Edit::Offset(*edit)
-                            }
-                            _ => Edit::Unsupported,
-                        };
+                        track.edit = TrackEdit::from(edits);
                     }
                 }
                 Mp4Event::TrackEnd => {
