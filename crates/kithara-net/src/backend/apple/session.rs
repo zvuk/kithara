@@ -2,10 +2,10 @@ use std::future::Future;
 
 use kithara_apple::foundation::{
     ns::{
-        NSInteger, NSOperationQueue, NSUInteger, NSURLSession, NSURLSessionConfiguration,
+        NSOperationQueue, NSUInteger, NSURLSession, NSURLSessionConfiguration,
         NSURLSessionDataTask, NSURLSessionTask,
     },
-    objc::rc::Retained,
+    objc::rc::{Retained, autoreleasepool},
     urlsession::{self, UrlSessionDelegate},
 };
 use kithara_bufpool::{HasPool, PoolRegion};
@@ -32,8 +32,6 @@ pub(super) type TaskId = NSUInteger;
 #[mirror(from_ref = NetOptions)]
 struct SharedSessionKey {
     is_insecure: bool,
-    #[mirror(rename = pool_max_idle_per_host)]
-    max_connections_per_host: usize,
 }
 
 #[derive(Clone)]
@@ -80,33 +78,35 @@ impl AppleSession {
         let (head_sender, head_receiver) = oneshot::channel();
         let accept_encoding = request.accept_encoding();
         let request = request.into_ns_request(&self.accept_encoding)?;
-        let data_task = self.shared.session.dataTaskWithRequest(&request);
-        let task: AppleTask = data_task.into();
-        let body_queue = Arc::new(AppleBodyQueue::new(
-            task.clone(),
-            self.body_queue_capacity,
-            self.body_queue_resume_at,
-            self.buffers.clone(),
-        ));
-        let task_id = task.id();
-        self.shared
-            .events
-            .register_metrics(task_id, self.connection_metrics.clone());
-        self.shared.events.register_stream(
-            task_id,
-            StreamState {
-                accept_encoding,
-                body_queue: Some(Arc::clone(&body_queue)),
-                head_sender: Some(head_sender),
-            },
-        );
-        task.resume();
+        autoreleasepool(move |_| {
+            let data_task = self.shared.session.dataTaskWithRequest(&request);
+            let task: AppleTask = data_task.into();
+            let body_queue = Arc::new(AppleBodyQueue::new(
+                task.clone(),
+                self.body_queue_capacity,
+                self.body_queue_resume_at,
+                self.buffers.clone(),
+            ));
+            let task_id = task.id();
+            self.shared
+                .events
+                .register_metrics(task_id, self.connection_metrics.clone());
+            self.shared.events.register_stream(
+                task_id,
+                StreamState {
+                    accept_encoding,
+                    body_queue: Some(Arc::clone(&body_queue)),
+                    head_sender: Some(head_sender),
+                },
+            );
+            task.resume();
 
-        Ok(StartedStream {
-            task,
-            body_queue,
-            head_receiver,
-            task_id,
+            Ok(StartedStream {
+                task,
+                body_queue,
+                head_receiver,
+                task_id,
+            })
         })
     }
 
@@ -126,25 +126,21 @@ impl AppleSession {
 
 impl SharedSession {
     fn new(key: SharedSessionKey) -> Self {
-        let events = AppleSessionEvents::new(key.is_insecure);
-        let delegate = make_delegate(&events);
-        let configuration = NSURLSessionConfiguration::ephemeralSessionConfiguration();
-        if let Ok(max_connections) = NSInteger::try_from(key.max_connections_per_host)
-            && max_connections > 0
-        {
-            configuration.setHTTPMaximumConnectionsPerHost(max_connections);
-        }
+        autoreleasepool(|_| {
+            let events = AppleSessionEvents::new(key.is_insecure);
+            let delegate = make_delegate(&events);
+            let configuration = NSURLSessionConfiguration::ephemeralSessionConfiguration();
+            let queue = NSOperationQueue::new();
+            queue.setMaxConcurrentOperationCount(1);
+            let session = urlsession::session_with_delegate(&configuration, &delegate, &queue);
 
-        let queue = NSOperationQueue::new();
-        queue.setMaxConcurrentOperationCount(1);
-        let session = urlsession::session_with_delegate(&configuration, &delegate, &queue);
-
-        Self {
-            events,
-            session,
-            key,
-            _delegate: delegate,
-        }
+            Self {
+                events,
+                session,
+                key,
+                _delegate: delegate,
+            }
+        })
     }
 }
 
@@ -199,6 +195,62 @@ mod tests {
 
     use super::{super::response::copy_data, *};
     use crate::NetError;
+
+    #[kithara::test(native, flash(false))]
+    fn idle_pool_capacity_leaves_the_native_connection_limit_unchanged() {
+        let ephemeral_default = NSURLSessionConfiguration::ephemeralSessionConfiguration()
+            .HTTPMaximumConnectionsPerHost();
+        let first = shared_session(&NetOptions::builder().pool_max_idle_per_host(0).build());
+
+        for idle in [0usize, 8, 40] {
+            let options = NetOptions::builder().pool_max_idle_per_host(idle).build();
+            let shared = shared_session(&options);
+            let limit = shared
+                .session
+                .configuration()
+                .HTTPMaximumConnectionsPerHost();
+            assert_eq!(
+                limit, ephemeral_default,
+                "pool_max_idle_per_host={idle} must not change HTTPMaximumConnectionsPerHost; \
+                 URLSession owns its connection pool and exposes no idle-pool bound"
+            );
+            assert_eq!(
+                Retained::as_ptr(&shared.session),
+                Retained::as_ptr(&first.session),
+                "pool_max_idle_per_host={idle} must reuse the one NSURLSession of its TLS policy"
+            );
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn secure_and_insecure_options_rekey_the_shared_session() {
+        let secure = NetOptions::default();
+        let insecure = NetOptions::builder().is_insecure(true).build();
+
+        assert_ne!(
+            SharedSessionKey::from(&secure),
+            SharedSessionKey::from(&insecure),
+            "is_insecure must still rekey the shared URLSession"
+        );
+
+        let secure_session = shared_session(&secure);
+        let insecure_session = shared_session(&insecure);
+        assert_ne!(
+            Retained::as_ptr(&secure_session.session),
+            Retained::as_ptr(&insecure_session.session),
+            "secure and insecure options must get distinct NSURLSessions"
+        );
+        assert_eq!(
+            Retained::as_ptr(&shared_session(&secure).session),
+            Retained::as_ptr(&secure_session.session),
+            "a repeated secure lookup must reuse its NSURLSession"
+        );
+        assert_eq!(
+            Retained::as_ptr(&shared_session(&insecure).session),
+            Retained::as_ptr(&insecure_session.session),
+            "a repeated insecure lookup must reuse its NSURLSession"
+        );
+    }
 
     #[kithara::test(native, flash(false))]
     fn configured_byte_pool_reaches_response_copy_path() {

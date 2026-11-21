@@ -764,19 +764,19 @@ mod tests {
         use super::*;
         use crate::{
             consts,
-            testing::{install_script, signals},
+            testing::{install_script, install_scripted_double, signals},
         };
 
+        /// Answers a bounded control call, so it runs nothing newly written.
         fn recording_adb(dir: &Path, trace: &Path, code: i32) -> PathBuf {
-            let path = dir.join("adb");
-            install_script(
-                &path,
+            install_scripted_double(
+                dir,
+                "adb",
                 &format!(
-                    "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexit {code}\n",
+                    "printf '%s\\n' \"$*\" >> '{}'\nexit {code}\n",
                     trace.display()
                 ),
-            );
-            path
+            )
         }
 
         fn recorded(trace: &Path) -> String {
@@ -906,11 +906,11 @@ mod tests {
         fn cancellation_during_reverse_acquisition_keeps_the_port_owned() {
             let dir = tempfile::tempdir().unwrap();
             let trace = dir.path().join("adb-calls");
-            let adb = dir.path().join("adb");
-            install_script(
-                &adb,
+            let adb = install_scripted_double(
+                dir.path(),
+                "adb",
                 &format!(
-                    "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$*\" in *tcp:0*) kill -TERM $PPID; echo 41234;; esac\n",
+                    "printf '%s\\n' \"$*\" >> '{}'\ncase \"$*\" in *tcp:0*) kill -TERM $PPID; echo 41234;; esac\n",
                     trace.display()
                 ),
             );

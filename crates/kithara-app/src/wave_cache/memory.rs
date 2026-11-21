@@ -207,7 +207,7 @@ mod tests {
         },
         bufpool::{OverallBudget, PoolConfig},
         file::File,
-        prelude::ResourceSrc,
+        play::ResourceSrc,
     };
     use kithara_test_utils::kithara;
 

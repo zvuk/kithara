@@ -104,7 +104,7 @@ fn read_frames(bytes: &[u8], base: usize) -> Result<Vec<AdtsFrame>, String> {
         let header = bytes
             .get(at..at + ADTS_HEADER_LEN)
             .ok_or_else(|| format!("frame at {} is a truncated header", base + at))?;
-        if header[0] != 0xFF || header[1] & 0xF0 != 0xF0 {
+        if header[0] != 0xff || header[1] & 0xf0 != 0xf0 {
             return Err(format!("no ADTS sync word at {}", base + at));
         }
 
@@ -121,7 +121,7 @@ fn read_frames(bytes: &[u8], base: usize) -> Result<Vec<AdtsFrame>, String> {
             ));
         }
 
-        let rate_index = usize::from(header[2] >> 2 & 0x0F);
+        let rate_index = usize::from(header[2] >> 2 & 0x0f);
         frames.push(AdtsFrame {
             offset: base + at,
             len,
@@ -143,5 +143,5 @@ fn read_frames(bytes: &[u8], base: usize) -> Result<Vec<AdtsFrame>, String> {
 fn syncsafe(bytes: &[u8]) -> usize {
     bytes
         .iter()
-        .fold(0, |size, byte| size << 7 | usize::from(byte & 0x7F))
+        .fold(0, |size, byte| size << 7 | usize::from(byte & 0x7f))
 }

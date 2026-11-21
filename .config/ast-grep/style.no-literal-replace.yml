@@ -1,0 +1,22 @@
+id: style.no-literal-replace
+message: |
+  A template filled by `.replace` on a string literal. Use `format!` with
+  named arguments: `format!("{host}/api")`.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  kind: call_expression
+  has:
+    field: function
+    kind: field_expression
+    all:
+      - has:
+          field: field
+          regex: '^replace$'
+      - has:
+          field: value
+          any:
+            - kind: string_literal
+            - kind: raw_string_literal

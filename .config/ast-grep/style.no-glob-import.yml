@@ -1,0 +1,35 @@
+id: style.no-glob-import
+message: |
+  Glob import. Name the items this module uses, so a reader sees where each
+  name comes from and a new item upstream cannot shadow a local one.
+
+  Allowed globs: a `pub use` re-export, `use super::*` in an inline module,
+  a `prelude::*` from a dependency, and a glob inside a function body (which
+  `style.no-local-use-in-prod-functions` reports on its own).
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  all:
+    - kind: use_wildcard
+    - not:
+        regex: '\bprelude::\*$'
+    - inside:
+        kind: use_declaration
+        stopBy: end
+        not:
+          has:
+            kind: visibility_modifier
+    - not:
+        inside:
+          kind: function_item
+          stopBy: end
+    - not:
+        all:
+          - regex: '^super::\*$'
+          - inside:
+              kind: declaration_list
+              stopBy: end
+              inside:
+                kind: mod_item

@@ -8,13 +8,181 @@ use std::{
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_dsp::{
-    filter::{Biquad, Coefficients, Hertz, Response, StateVariableFilter, Type},
+    filter::{Biquad, Coefficients, Hertz, Response, StateVariableFilter, SvfDesign, Type},
     interp::{Interpolation, interpolate, interpolate_frame, weighted_frames},
     spectrum::{Autocorrelation, Fft, FftLen, prediction_difference},
 };
 use kithara_test_utils::bufpool::pools;
-use num_traits::ToPrimitive;
+use num_traits::{AsPrimitive, ToPrimitive};
 use realfft::{RealToComplex, RealToComplexEven};
+
+fn loud_scalar(samples: &[f32], limit: f32) -> Option<usize> {
+    samples.iter().rposition(|sample| sample.abs() > limit)
+}
+
+fn last_loud(c: &mut Criterion) {
+    type Search = fn(&[f32], f32) -> Option<usize>;
+    let implementations: [(&str, Search); 2] = [
+        ("native", kithara_dsp::last_loud),
+        ("rposition", loud_scalar),
+    ];
+    let mut group = c.benchmark_group("last_loud");
+    group.sample_size(20);
+    for size in [128, 512, 4096] {
+        for shape in ["silent", "last"] {
+            let mut samples = vec![0.0_f32; size];
+            if shape == "last" {
+                *samples.last_mut().expect("nonempty") = 0.25;
+            }
+            let expected = loud_scalar(&samples, 1e-6);
+            group.throughput(Throughput::Elements(u64::try_from(size).expect("size")));
+            for (name, search) in implementations {
+                assert_eq!(search(&samples, 1e-6), expected);
+                group.bench_function(BenchmarkId::new(format!("{shape}/{name}"), size), |b| {
+                    b.iter(|| black_box(search(black_box(&samples), black_box(1e-6))));
+                });
+            }
+        }
+    }
+    group.finish();
+}
+
+fn scalar_svf_fixed(
+    planes: &mut [Vec<f32>; 2],
+    state: &mut [[f64; 2]; 2],
+    coefficients: &[f64; 4],
+    response: Response,
+) {
+    let [a1, a2, a3, damping] = *coefficients;
+    for (plane, memory) in planes.iter_mut().zip(state.iter_mut()) {
+        let [mut s1, mut s2] = *memory;
+        for sample in plane {
+            let x = f64::from(*sample);
+            let v3 = x - s2;
+            let v1 = a1 * s1 + a2 * v3;
+            let v2 = (s2 + a2 * s1) + a3 * v3;
+            s1 = 2.0 * v1 - s1;
+            s2 = 2.0 * v2 - s2;
+            *sample = match response {
+                Response::LowPass => v2,
+                Response::HighPass => (x - damping * v1) - v2,
+            }
+            .as_();
+        }
+        *memory = [s1, s2];
+    }
+}
+
+fn svf_fixed(c: &mut Criterion) {
+    let mut group = c.benchmark_group("svf_fixed");
+    group.sample_size(20);
+    let rate = NonZeroU32::new(48_000).expect("rate");
+    for frames in [128, 512] {
+        let samples: Vec<_> = tone(frames)
+            .into_iter()
+            .map(|sample| 0.25 * sample)
+            .collect();
+        let template = [samples.clone(), samples];
+        let cutoffs = vec![4000.0; frames];
+        group.throughput(Throughput::Elements(
+            u64::try_from(frames * 2).expect("stereo"),
+        ));
+        for response in [Response::LowPass, Response::HighPass] {
+            let design = SvfDesign::new(rate, 4000.0, FRAC_1_SQRT_2, response).expect("design");
+            let mut fixed = template.clone();
+            let mut dynamic = template.clone();
+            StateVariableFilter::<2>::new()
+                .process_fixed(&mut fixed, 0..frames, &design)
+                .expect("shape");
+            StateVariableFilter::<2>::new()
+                .process(
+                    &mut dynamic,
+                    0..frames,
+                    &cutoffs,
+                    rate,
+                    FRAC_1_SQRT_2,
+                    response,
+                )
+                .expect("shape");
+            assert!(
+                fixed
+                    .iter()
+                    .flatten()
+                    .zip(dynamic.iter().flatten())
+                    .all(|(left, right)| left.is_finite()
+                        && right.is_finite()
+                        && (left - right).abs() <= 1e-6)
+            );
+            for prepared in [true, false] {
+                let mode = if prepared { "fixed" } else { "per_frame" };
+                group.bench_function(
+                    BenchmarkId::new(format!("2ch_{response:?}/{mode}"), frames),
+                    |b| {
+                        b.iter_batched_ref(
+                            || (StateVariableFilter::<2>::new(), template.clone()),
+                            |(filter, planes)| {
+                                if prepared {
+                                    filter
+                                        .process_fixed(
+                                            black_box(&mut *planes),
+                                            0..frames,
+                                            black_box(&design),
+                                        )
+                                        .expect("shape");
+                                } else {
+                                    filter
+                                        .process(
+                                            black_box(&mut *planes),
+                                            0..frames,
+                                            black_box(&cutoffs),
+                                            rate,
+                                            FRAC_1_SQRT_2,
+                                            response,
+                                        )
+                                        .expect("shape");
+                                }
+                                black_box(planes);
+                            },
+                            BatchSize::SmallInput,
+                        );
+                    },
+                );
+            }
+
+            let gain = (std::f64::consts::PI * 4000.0 / f64::from(rate.get())).tan();
+            let damping = FRAC_1_SQRT_2.recip();
+            let a1 = (1.0 + gain * (gain + damping)).recip();
+            let a2 = gain * a1;
+            let coefficients = [a1, a2, gain * a2, damping];
+            let mut scalar = template.clone();
+            scalar_svf_fixed(&mut scalar, &mut [[0.0; 2]; 2], &coefficients, response);
+            assert!(fixed.iter().flatten().zip(scalar.iter().flatten()).all(
+                |(actual, expected)| actual.is_finite()
+                    && expected.is_finite()
+                    && (actual - expected).abs() <= 1e-6
+            ));
+            group.bench_function(
+                BenchmarkId::new(format!("2ch_{response:?}/scalar"), frames),
+                |b| {
+                    b.iter_batched_ref(
+                        || (template.clone(), [[0.0_f64; 2]; 2]),
+                        |(planes, state)| {
+                            scalar_svf_fixed(
+                                black_box(planes),
+                                black_box(state),
+                                black_box(&coefficients),
+                                response,
+                            );
+                            black_box(planes);
+                        },
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
+        }
+    }
+    group.finish();
+}
 
 mod consts {
     use super::NonZeroUsize;
@@ -589,6 +757,8 @@ fn source_frames(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    last_loud,
+    svf_fixed,
     crossfade,
     kernels,
     vector,

@@ -138,7 +138,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_read_past_the_end_yields_nothing() {
         let pcm = Pcm::new(44_100, 1, 2, Wave::Sawtooth);
-        let mut buf = [0xFFu8; 8];
+        let mut buf = [0xffu8; 8];
 
         assert_eq!(pcm.read_pcm_at(4, &mut buf), 0);
         assert_eq!(pcm.read_pcm_at(2, &mut buf), 2);
