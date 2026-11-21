@@ -130,8 +130,9 @@ impl PlayerResource {
 
 /// Reads only the currently admitted packets, in FIFO order. A packet of the
 /// current segment counts against the limit even if the head is already held.
-/// A receiver that starts after the consumed position leaves the cut pending
-/// until the outgoing source reaches it.
+/// The cut lands on the incoming boundary nearest to the consumed position.
+/// A receiver whose first boundary is nearer to a later outgoing position
+/// leaves the cut pending until the outgoing source reaches it.
 pub(in crate::rt) fn scan_cut<'a>(
     packets: impl Iterator<Item = (&'a PcmPacket, usize)>,
     segment: SegmentId,
@@ -156,16 +157,19 @@ pub(in crate::rt) fn scan_cut<'a>(
         let offset_u64 = u64::try_from(offset).map_err(|_| ())?;
         let (span, boundary) = CutPrefix::checked_packet(chunk, segment, offset_u64, plan.prefix)?;
         let origin = info.media_origin.ok_or(())?;
-        if logical < span.elapsed_at(offset_u64, origin).ok_or(())? {
+        let Some(nearest) = span
+            .output_nearest_since(offset_u64, origin, logical)
+            .ok_or(())?
+        else {
             return Ok(plan);
-        }
-        if logical < span.elapsed_at(span.output_frames(), origin).ok_or(())? {
+        };
+        if nearest < span.output_frames() {
             plan.point = Some(cut_point(
                 span,
                 segment,
                 info.lane_frame,
                 offset_u64,
-                logical,
+                nearest,
                 origin,
             )?);
             return Ok(plan);
@@ -185,18 +189,17 @@ fn cut_point(
     segment: SegmentId,
     lane_frame: u64,
     start: u64,
-    logical: SourceElapsed,
+    at: u64,
     origin: Duration,
 ) -> Result<CutPoint, ()> {
-    let lo = span.output_floor_since(start, origin, logical).ok_or(())?;
     Ok(CutPoint {
-        offset: usize::try_from(lo).map_err(|_| ())?,
-        advance: usize::try_from(lo - start).map_err(|_| ())?,
+        offset: usize::try_from(at).map_err(|_| ())?,
+        advance: usize::try_from(at - start).map_err(|_| ())?,
         lane: LaneFrame {
             segment,
-            frame: lane_frame.checked_add(lo).ok_or(())?,
+            frame: lane_frame.checked_add(at).ok_or(())?,
         },
-        position: span.position_at(lo).ok_or(())?,
+        position: span.position_at(at).ok_or(())?,
         origin,
     })
 }
@@ -213,28 +216,44 @@ mod tests {
     use crate::{PcmPacket, worker::packet_tests::chunk};
 
     /// Both sides follow one `step / denominator` law; the outgoing source
-    /// starts at zero and the incoming one at origin frame 1024, so the
-    /// boundary after `incoming_start` is the outgoing `consumed` boundary.
+    /// starts at zero and the incoming one at origin frame 1024, so incoming
+    /// boundary `matched` is the outgoing `consumed` boundary. A residue of
+    /// one millionth of a source frame on either side, below the nanosecond
+    /// an anchor carries, still cuts on that boundary.
     #[kithara::test]
-    #[case::whole_frame(1, 1, 48_002, 49_025)]
-    #[case::fractional_phase(5, 4, 48_001, 61_024)]
+    #[case::whole_frame(1, 1, 48_002, 49_025, 0, 0, 1)]
+    #[case::fractional_phase(5, 4, 48_001, 61_024, 0, 0, 1)]
+    #[case::incoming_after_the_outgoing(1, 1, 48_002, 49_025, 0, 1, 1)]
+    #[case::incoming_before_the_outgoing(1, 1, 48_002, 49_025, 1, 0, 1)]
+    #[case::fractional_incoming_after_the_outgoing(5, 4, 48_001, 61_024, 0, 1, 1)]
+    #[case::first_incoming_frame_after_the_outgoing(1, 1, 48_002, 49_026, 0, 1, 0)]
     fn an_exact_incoming_boundary_is_cut_on_its_own_frame(
         #[case] step: u128,
         #[case] denominator: u128,
         #[case] consumed: u64,
         #[case] incoming_start: u64,
+        #[case] outgoing_residue: u128,
+        #[case] incoming_residue: u128,
+        #[case] matched: u64,
     ) {
+        const MICRO: u128 = 1_000_000;
         let rate = NonZeroU32::new(48_000).expect("rate");
         let spec = AudioSpec::new(2, rate);
-        let denominator = NonZeroU128::new(denominator).expect("denominator");
-        let outgoing =
-            SourceSpan::try_from((0, step, denominator, rate, consumed + 1)).expect("outgoing law");
+        let denominator = NonZeroU128::new(denominator * MICRO).expect("denominator");
+        let outgoing = SourceSpan::try_from((
+            outgoing_residue,
+            step * MICRO,
+            denominator,
+            rate,
+            consumed + 1,
+        ))
+        .expect("outgoing law");
         let logical = outgoing
             .elapsed_at(consumed, Duration::ZERO)
             .expect("consumed position");
         let incoming = SourceSpan::try_from((
-            u128::from(incoming_start) * denominator.get(),
-            step,
+            u128::from(incoming_start) * denominator.get() + incoming_residue,
+            step * MICRO,
             denominator,
             rate,
             130,
@@ -257,7 +276,7 @@ mod tests {
         let point = plan.point.expect("the boundary is inside the packet");
         assert_eq!(
             (point.lane.frame, point.position),
-            (1, incoming.position_at(1).expect("boundary")),
+            (matched, incoming.position_at(matched).expect("boundary")),
             "the next incoming boundary is the exact match"
         );
     }
