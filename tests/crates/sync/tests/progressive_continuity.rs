@@ -5,15 +5,22 @@ use kithara::{
     events::TrackId,
     link::{GridAnswer, LinkConfig, LinkedHostCommand, SyncStatus},
     platform::time::Duration,
+    play::TrackCommand,
     sync::SpeedCurve,
-    warp::{BeatGridQuery, MapPoint, MapPosition},
+    warp::{Beat, BeatGridQuery, MapPoint, MapPosition},
 };
 use kithara_command::When;
-use kithara_integration_tests::{grid::Start, kithara, offline::linked::LinkReceiptOrigin};
+use kithara_integration_tests::{
+    cochlea::synchronization_failures,
+    grid::Start,
+    kithara,
+    offline::linked::{LinkProbeCommand, LinkReceiptOrigin},
+};
 use num_traits::ToPrimitive;
 
 use super::sync_product_matrix::{
-    Audible, BLOCK_FRAMES, ONE_DECK, PreparedSources, ProductHarness, SyncCase, synthetic_sources,
+    Audible, BLOCK_FRAMES, CHANNELS, ONE_DECK, PreparedSources, ProductHarness, START_BPM,
+    SyncCase, synthetic_sources,
 };
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
@@ -124,6 +131,112 @@ async fn progressive_analysis_preserves_consumed_audio_and_explicit_seek_lands_a
     }
 
     assert_explicit_seek_lands(&mut rig, case, placements, item).await;
+}
+
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+async fn progressive_grid_refinement_preserves_audible_phase(
+    #[future(awt)] synthetic_sources: PreparedSources,
+) {
+    let case = ONE_DECK.defer_grid().paused();
+    let second = usize::try_from(case.sample_rate).expect("fixture sample rate");
+    let mut tracks = Vec::new();
+    for refine in [false, true] {
+        let mut rig = ProductHarness::new(
+            case,
+            &synthetic_sources,
+            Start::Seconds(0.0),
+            Audible::Deck(0),
+        )
+        .await;
+        let deck = &rig.decks[0];
+        let item = deck.current().expect("sounding track").id;
+        let grid = rig.host.session_grid().await;
+        let entry = grid.position_at(MapPoint::new(
+            grid.stamp(),
+            Beat::new(4.0).expect("whole Host bar"),
+        ));
+        let BeatGridQuery::Resolved(entry) = entry else {
+            panic!("session grid resolves the entry");
+        };
+        let MapPosition::Session(entry) = *entry.value().value() else {
+            panic!("entry must be on the session axis");
+        };
+        deck.probe(LinkProbeCommand::Track {
+            item,
+            command: TrackCommand::Play {
+                at: When::At(entry),
+            },
+        });
+        let deck = deck.id();
+        let lead = u64::try_from(i64::from(entry)).expect("future entry") - rig.host.position();
+        let warm = usize::try_from(lead).expect("short entry lead") + 2 * second;
+        let _ = rig.capture_frames(case, warm, 128).await;
+        let kithara::play::ArtifactSource::Value(authored) = rig.provider_grid(0) else {
+            panic!("materialized authored grid");
+        };
+        let sounding = rig.decks[0].track_snapshot(item).expect("playing track");
+        assert!(sounding.track.position > Duration::from_millis(1500));
+        rig.request_sync(case).await;
+        rig.settle(case, 32).await;
+        let deck_handle = &rig.decks[0];
+        let (requests, placements) = deck_handle
+            .observe(|observation| (observation.speeds.len(), observation.placements.len()));
+        let mut pcm = Vec::new();
+        for (revision, observed_beats) in [(2, 4), (3, 12), (4, 24)] {
+            if refine || revision == 2 {
+                let mut raw = authored.as_raw().clone();
+                raw.revision = revision;
+                if refine && observed_beats < raw.beats.len() {
+                    raw.state = BeatGridState::Provisional;
+                    for beat in &mut raw.beats[observed_beats..] {
+                        beat.confidence = None;
+                    }
+                    raw.meter = None;
+                    raw.downbeats.clear();
+                }
+                let model = BeatGridModel::try_from(raw).expect("valid grid publication");
+                rig.host
+                    .send(LinkedHostCommand::Grid {
+                        deck,
+                        answer: GridAnswer {
+                            item,
+                            model: Ok(model),
+                        },
+                    })
+                    .await
+                    .expect("analysis reaches the sounding deck");
+            }
+            pcm.extend(rig.capture_frames(case, 2 * second, 128).await);
+            if revision == 2 {
+                assert!(rig.decks[0].observe(|observation| {
+                    observation.speeds[requests..].iter().any(|speed| {
+                        observation.placement_receipts.iter().any(|(owner, origin, receipt)| {
+                            *owner == item
+                                && *origin == LinkReceiptOrigin::Lane
+                                && matches!(receipt, kithara::play::Settled::Applied { seq, .. } if *seq == speed.seq)
+                        })
+                    })
+                }), "the first grid must actuate live Sync before refinement");
+            }
+        }
+        assert_eq!(
+            rig.decks[0].observe(|observation| observation.placements.len()),
+            placements,
+            "grid publication and refinement preserve the sounding lane"
+        );
+        assert!(rig.failures.is_empty(), "{:?}", rig.failures);
+        drop(rig);
+        tracks.push(pcm);
+    }
+    let stems: Vec<_> = tracks.iter().map(Vec::as_slice).collect();
+    let failures = synchronization_failures(
+        "final grid versus progressive refinement",
+        &stems,
+        CHANNELS,
+        case.sample_rate,
+        START_BPM,
+    );
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 async fn assert_explicit_seek_lands(

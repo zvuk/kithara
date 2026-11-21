@@ -945,7 +945,7 @@ type SampleResult<const N: usize> = Result<[f32; N], String>;
 
 #[derive(Clone, Default)]
 pub(in super::super) struct DecodedCapture {
-    chunks: std::collections::BTreeMap<(u64, u64), DecodedChunk>,
+    pub(in super::super) chunks: std::collections::BTreeMap<(u64, u64), DecodedChunk>,
     samples: usize,
     rejected: bool,
 }

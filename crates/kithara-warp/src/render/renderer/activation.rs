@@ -1,9 +1,10 @@
 use kithara_bufpool::HasPool;
-use kithara_signal::{AudioChunkInfo, FrameCount};
+use kithara_signal::{AudioChunkInfo, FrameCount, SourceSpan};
 use kithara_stretch::ElasticError;
 use kithara_test_macros as kithara;
 
 use super::{
+    super::trajectory::Fraction,
     core::{PreparedQuantum, WarpRenderer},
     mapping::source_demand,
 };
@@ -34,16 +35,49 @@ where
             self.retire_for_reprime()?;
             self.prepare(meta.spec);
         }
+        if self
+            .carried_phase
+            .is_some_and(|carried| carried.revision == meta.source_revision)
+        {
+            self.prepared_quantum = None;
+        }
         if let Some(frames) = self.prepared_source_window(meta, output_limit)? {
             return Ok(frames);
         }
         if self.rebase_source(meta) || self.transition_pending() || self.engine_outdated() {
             return Err(crate::WarpRenderError::NeedsService);
         }
+        self.apply_carried_phase(meta)?;
         self.terminal_source_end = None;
         let prepared = self.prepare_active_quantum(meta, remaining, output_limit)?;
         self.prepared_quantum = Some(prepared);
         Ok(FrameCount::new(prepared.frames))
+    }
+
+    /// Starts the first window of the revision a source cut left its phase to
+    /// at that phase; a window of another revision leaves it in place.
+    fn apply_carried_phase(&mut self, meta: AudioChunkInfo) -> Result<(), crate::WarpRenderError> {
+        let Some(carried) = self
+            .carried_phase
+            .filter(|carried| carried.revision == meta.source_revision)
+        else {
+            return Ok(());
+        };
+        self.carried_phase = None;
+        let residual = carried.residual;
+        let position = residual
+            .numerator
+            .checked_mul(u128::from(meta.spec.sample_rate.get()))
+            .zip(
+                residual
+                    .denominator
+                    .get()
+                    .checked_mul(u128::from(carried.rate.get())),
+            )
+            .and_then(|(numerator, denominator)| Fraction::new(numerator, denominator))
+            .and_then(|residual| residual.add(Fraction::new(u128::from(meta.frame_offset), 1)?))
+            .ok_or(crate::WarpRenderError::InvalidSourceGeometry)?;
+        self.reanchor_source(meta, (position.numerator, position.denominator))
     }
 
     fn prepared_source_window(
@@ -189,10 +223,7 @@ where
     }
 
     #[kithara::hang_watchdog]
-    fn terminal_span(
-        span: kithara_signal::SourceSpan,
-        end: u64,
-    ) -> Option<kithara_signal::SourceSpan> {
+    pub(super) fn terminal_span(span: SourceSpan, end: u64) -> Option<SourceSpan> {
         let mut outputs = span.output_frames();
         while outputs > 0 {
             hang_tick!();
@@ -207,8 +238,15 @@ where
     }
 
     /// Shrink a prepared source span at true EOF without sampling controls again.
-    #[kithara::hang_watchdog]
     pub fn prepare_terminal_quantum(&mut self, frames: usize) -> Option<FrameCount> {
+        self.prepare_tail(frames, Self::terminal_span)
+    }
+
+    fn prepare_tail(
+        &mut self,
+        frames: usize,
+        trim: impl FnOnce(SourceSpan, u64) -> Option<SourceSpan>,
+    ) -> Option<FrameCount> {
         let mut prepared = self.prepared_quantum.take()?;
         if frames == 0 || frames > prepared.frames {
             return None;
@@ -217,7 +255,7 @@ where
             .source_start
             .checked_add(u64::try_from(frames).ok()?)?;
         self.terminal_source_end = Some(end);
-        prepared.source_span = Self::terminal_span(prepared.source_span, end)?;
+        prepared.source_span = trim(prepared.source_span, end)?;
         prepared.frames = frames;
         prepared.active_frames = source_demand(prepared.source_span, prepared.source_start)
             .ok()?

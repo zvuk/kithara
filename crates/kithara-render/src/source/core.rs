@@ -22,6 +22,9 @@ use crate::{
 pub(super) enum DrainState {
     Open,
     LiveWarp,
+    /// The outgoing source drains to its physical end before the stage adopts
+    /// the decoder's source clock change.
+    Cut,
     Warp,
     Exhausted,
 }
@@ -590,7 +593,7 @@ where
         chunk: AudioChunk,
     ) -> ControlFlow<AudioChunk, Option<Fetch<AudioChunk>>> {
         let output = self.warp.render_quantum(chunk)?;
-        if self.warp.transition_pending() {
+        if self.warp.transition_pending() && !matches!(self.drain_state, DrainState::Cut) {
             self.drain_state = DrainState::LiveWarp;
         }
         ControlFlow::Continue(output.and_then(|output| self.fetch(output)))
@@ -681,6 +684,79 @@ where
         self.warp.reset();
     }
 
+    /// The decoder's stamp when it changes the source clock from the adopted one.
+    fn clock_change(&self) -> Option<SourceDiscontinuity> {
+        self.source.discontinuity().filter(|next| {
+            self.discontinuity
+                .is_none_or(|adopted| adopted.revision() != next.revision())
+        })
+    }
+
+    /// Drains the outgoing source to its physical end, one bounded packet per
+    /// step, before adopting the decoder's source clock change; the incoming
+    /// revision starts at the phase the outgoing tail leaves past that end.
+    fn step_cut(&mut self) -> Option<TrackStep<AudioChunk>> {
+        let Some(next) = self.clock_change() else {
+            if matches!(self.drain_state, DrainState::Cut) {
+                self.drain_state = DrainState::Open;
+            }
+            return None;
+        };
+        match self.drain_state {
+            DrainState::Open => {
+                if self.pending_input.is_some() || self.quantum_failed {
+                    return None;
+                }
+                let staged = self.staged_frames();
+                if staged > 0 {
+                    let Some(prepared) = self.prepared_frames else {
+                        return Some(TrackStep::StateChanged);
+                    };
+                    if staged >= prepared {
+                        return None;
+                    }
+                    let Some(frames) = self.warp.prepare_terminal_quantum(staged) else {
+                        self.quantum_failed = true;
+                        return Some(self.fail(TrackFailureKind::Render));
+                    };
+                    self.prepared_frames = Some(frames.get());
+                    self.drain_state = DrainState::Cut;
+                    return Some(self.render_staged(frames.get()));
+                }
+                self.drain_state = DrainState::Cut;
+            }
+            DrainState::Cut => {}
+            DrainState::LiveWarp | DrainState::Warp | DrainState::Exhausted => return None,
+        }
+        if self.quantum_failed {
+            return Some(self.fail(TrackFailureKind::Render));
+        }
+        let limit = self.lane.output_limit();
+        if limit == 0 {
+            return Some(TrackStep::StateChanged);
+        }
+        match self.warp.drain_source_cut(limit, next.revision()) {
+            Ok(Some(chunk)) => Some(
+                self.fetch(chunk)
+                    .map_or(TrackStep::StateChanged, TrackStep::Produced),
+            ),
+            Ok(None) => {
+                self.discard_staged_input();
+                self.discontinuity = Some(next);
+                self.spec = *next.spec();
+                self.drain_state = DrainState::Open;
+                self.prepare_renderers(self.spec);
+                None
+            }
+            Err(WarpRenderError::NeedsService) => Some(TrackStep::StateChanged),
+            Err(error) => {
+                tracing::error!(%error, "outgoing source cannot drain to its clock change");
+                self.quantum_failed = true;
+                Some(self.fail(TrackFailureKind::Render))
+            }
+        }
+    }
+
     fn sync_discontinuity(&mut self) -> bool {
         let next = self.source.discontinuity();
         let revision_changed = next.as_ref().map(SourceDiscontinuity::revision)
@@ -688,7 +764,11 @@ where
                 .discontinuity
                 .as_ref()
                 .map(SourceDiscontinuity::revision);
-        if revision_changed && (self.pending_input.is_some() || self.staged_frames() > 0) {
+        let cut_owns =
+            next.is_some() && !matches!(self.drain_state, DrainState::Warp | DrainState::Exhausted);
+        if revision_changed
+            && (self.pending_input.is_some() || self.staged_frames() > 0 || cut_owns)
+        {
             return false;
         }
         if let Some(discontinuity) = next.as_ref() {
@@ -744,7 +824,11 @@ where
         }
         let spec = self.source.prepare_deferred();
         self.sync_discontinuity();
-        let prepared_spec = if self.pending_input.is_some() || self.staged_frames() > 0 {
+        let prepared_spec = if self.pending_input.is_some()
+            || self.staged_frames() > 0
+            || matches!(self.drain_state, DrainState::Cut)
+            || self.clock_change().is_some()
+        {
             self.spec
         } else {
             spec.unwrap_or(self.spec)
@@ -762,16 +846,8 @@ where
             Ok(false) => {}
             Err(error) => return self.fail(error),
         }
-        if self.pending_input.is_none()
-            && self.staged_frames() > 0
-            && self.source.discontinuity() != self.discontinuity
-        {
-            let frames = self.staged_frames();
-            let Some(frames) = self.warp.prepare_terminal_quantum(frames) else {
-                return self.fail(TrackFailureKind::Render);
-            };
-            self.prepared_frames = Some(frames.get());
-            return self.render_staged(frames.get());
+        if let Some(step) = self.step_cut() {
+            return step;
         }
         if self.sync_discontinuity() {
             return TrackStep::StateChanged;
@@ -807,7 +883,9 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn decoder_discontinuity_drains_the_staged_outgoing_quantum() {
+    #[case::drained(false)]
+    #[case::failed_during_the_cut(true)]
+    fn decoder_discontinuity_drains_the_staged_outgoing_quantum(#[case] failed: bool) {
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("sample rate"));
         let next = SourceDiscontinuity::new(1, spec);
@@ -850,7 +928,20 @@ mod tests {
         assert_eq!(data.frames(), 512);
         assert!(data.samples.iter().all(|sample| *sample == 0.25));
         assert_eq!(source.discontinuity.expect("outgoing stamp").revision(), 0);
-        assert!(source.sync_discontinuity());
+        assert!(!source.sync_discontinuity());
+        if failed {
+            source.quantum_failed = true;
+            assert!(matches!(
+                source.step_track(),
+                TrackStep::Failed(TrackFailureKind::Render)
+            ));
+            assert!(matches!(
+                source.step_track(),
+                TrackStep::Failed(TrackFailureKind::Render)
+            ));
+            return;
+        }
+        assert!(source.step_cut().is_none());
         assert_eq!(source.discontinuity, Some(next));
     }
 

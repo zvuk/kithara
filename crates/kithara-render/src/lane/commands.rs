@@ -47,6 +47,9 @@ impl Lane {
                 .is_none_or(|frames| frames > 0)
     }
 
+    /// Executes the batches due at the cursor. A control keeps the renderer on
+    /// `spec`, the format the stage renders; only a new source entry takes the
+    /// decoder's format.
     pub(crate) fn execute_due<T, S>(
         &mut self,
         source: &mut T,
@@ -94,7 +97,12 @@ impl Lane {
                 due.refuse(failure);
                 return Err(failure);
             }
-            let next_spec = source.prepare_deferred().unwrap_or(spec);
+            let deferred = source.prepare_deferred();
+            let next_spec = if segment.is_some() {
+                deferred.unwrap_or(spec)
+            } else {
+                spec
+            };
             let Ok(latency) = warp.prepare_engine_latency(next_spec) else {
                 due.refuse(TrackFailureKind::Render);
                 return Err(TrackFailureKind::Render);
