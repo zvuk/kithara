@@ -17,7 +17,7 @@ use super::{
 use crate::test_pools::{Pools, TestPools, pools};
 
 fn waveform_only(pools: Pools) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
-    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools).with_waveform(16)
+    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools).with_waveform(NonZeroU32::MIN)
 }
 
 fn worker(pools: Pools, parent: &CancelToken) -> AnalysisWorker {
