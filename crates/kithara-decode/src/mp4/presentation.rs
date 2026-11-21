@@ -11,6 +11,8 @@ pub(crate) struct Presentation {
     pub(crate) media_origin: Option<Duration>,
     pub(crate) media_end: Option<Duration>,
     pub(crate) gapless: Option<GaplessInfo>,
+    media: Mp4MediaTiming,
+    sample_rate: u32,
 }
 
 #[derive(Default)]
@@ -48,6 +50,8 @@ impl Track {
             media_origin,
             media_end,
             gapless,
+            media,
+            sample_rate,
         })
     }
 }
@@ -84,14 +88,7 @@ where
                         track.sample_rate = Some(rate);
                     }
                 }
-                Mp4Event::ItunSmpb(info) => {
-                    if info.leading_frames != 0 || info.trailing_frames != 0 {
-                        itunsmpb = Some(GaplessInfo {
-                            leading_frames: info.leading_frames,
-                            trailing_frames: info.trailing_frames,
-                        });
-                    }
-                }
+                Mp4Event::ItunSmpb(info) => itunsmpb = Some(info),
                 Mp4Event::TrackEditList(edits) => {
                     if let Some(track) = &mut track {
                         track.edit = TrackEdit::from(edits);
@@ -111,8 +108,11 @@ where
         pools,
     )
     .map_err(|error| crate::DecodeError::parse("mp4 presentation", error))?;
-    if let [presentation] = result.as_mut_slice() {
-        presentation.gapless = presentation.gapless.or(itunsmpb);
+    if let [presentation] = result.as_mut_slice()
+        && presentation.gapless.is_none()
+    {
+        presentation.gapless =
+            itunsmpb.and_then(|info| info.gapless(presentation.media, presentation.sample_rate));
     }
     Ok(result)
 }

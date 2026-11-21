@@ -145,16 +145,16 @@ impl SymphoniaCodec {
         let decoder = registry
             .make_audio_decoder(&params, &opts)
             .map_err(DecodeError::backend)?;
-        let algo_delay = symphonia_decoder_algo_delay(track.codec);
-        let track_gapless = track
-            .gapless
-            .map(|info| apply_decoder_algo_delay(info, algo_delay));
-
         let prepared_rate = decoder
             .codec_params()
             .sample_rate
             .unwrap_or(track.sample_rate);
         let spec = checked_audio_spec(track.channels, prepared_rate, "symphonia.codec.track")?;
+        let track_gapless = track
+            .gapless
+            .map(|info| output_rate_gapless(info, track.sample_rate, spec.sample_rate))
+            .transpose()?
+            .map(|info| apply_decoder_algo_delay(info, symphonia_decoder_algo_delay(track.codec)));
         Ok(Self {
             decoder,
             spec,
@@ -473,6 +473,22 @@ const fn symphonia_decoder_algo_delay(codec: AudioCodec) -> u64 {
     }
 }
 
+/// Container trims count frames at the track's media rate; SBR doubles the
+/// output rate of an HE-AAC track whose media rate is the core rate.
+fn output_rate_gapless(
+    info: GaplessInfo,
+    media_rate: u32,
+    output_rate: NonZeroU32,
+) -> DecodeResult<GaplessInfo> {
+    let media_rate = NonZeroU32::new(media_rate).ok_or(DecodeError::InvalidSampleRate {
+        resource: "symphonia.codec.track",
+    })?;
+    info.rescaled(media_rate, output_rate)
+        .ok_or(DecodeError::InvalidData {
+            detail: "symphonia gapless output-rate frame count overflow",
+        })
+}
+
 const fn apply_decoder_algo_delay(info: GaplessInfo, algo_delay: u64) -> GaplessInfo {
     if algo_delay == 0 {
         return info;
@@ -544,6 +560,29 @@ mod tests {
             Err(other) => panic!("expected InvalidSampleRate, got {other:?}"),
             Ok(_) => panic!("zero sample rate must be rejected"),
         }
+    }
+
+    /// An HE-AAC track whose media rate is the 24 kHz core declares its trim
+    /// in core frames; the codec decodes SBR to 48 kHz and trims output frames.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "fdk-aac"))]
+    #[kithara::test]
+    fn declared_trim_is_scaled_from_the_media_rate_to_the_output_rate() {
+        let track = TrackInfo {
+            codec: AudioCodec::AacHe,
+            sample_rate: 24_000,
+            channels: 2,
+            extra_data: vec![0x13, 0x10, 0x56, 0xe5, 0x98],
+            duration: None,
+            gapless: Some(crate::GaplessInfo::new(2112, 1216)),
+        };
+        let codec = SymphoniaCodec::open_with_config(&track, &SymphoniaConfig::default())
+            .expect("BUG: HE-AAC codec open");
+
+        assert_eq!(codec.spec().sample_rate.get(), 48_000);
+        assert_eq!(
+            codec.track_info().gapless,
+            Some(crate::GaplessInfo::new(4224, 2432))
+        );
     }
 
     #[kithara::test]

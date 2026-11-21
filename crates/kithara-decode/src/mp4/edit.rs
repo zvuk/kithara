@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use super::{Mp4EditListEntry, Mp4MediaTiming};
+use super::{ItunSmpb, Mp4EditListEntry, Mp4MediaTiming};
 use crate::GaplessInfo;
 
 /// A track's edit list as the decoder applies it.
@@ -62,6 +62,19 @@ impl TrackEdit {
                 total.checked_sub(leading.checked_add(valid)?)?
             }
         };
+        (leading != 0 || trailing != 0).then_some(GaplessInfo {
+            leading_frames: leading,
+            trailing_frames: trailing,
+        })
+    }
+}
+
+impl ItunSmpb {
+    /// Leading and trailing frames at `sample_rate`; the tag counts ticks of
+    /// the media timescale, like an edit.
+    pub(crate) fn gapless(self, media: Mp4MediaTiming, sample_rate: u32) -> Option<GaplessInfo> {
+        let leading = scale_frames(self.leading_frames, sample_rate, media.timescale)?;
+        let trailing = scale_frames(self.trailing_frames, sample_rate, media.timescale)?;
         (leading != 0 || trailing != 0).then_some(GaplessInfo {
             leading_frames: leading,
             trailing_frames: trailing,

@@ -110,8 +110,9 @@ where
                 .unwrap_or_else(|| kithara_stream::ReaderControl::new(None)),
         },
     )?;
-    if probed_gapless.is_some() {
-        demuxer.set_gapless(probed_gapless);
+    if let Some(declared) = probed_gapless {
+        let gapless = declared.at(demuxer.track_info().sample_rate)?;
+        demuxer.set_gapless(Some(gapless));
     }
     demuxer.set_mp4_presentations(presentations, config.gapless);
     Ok(demuxer)

@@ -16,7 +16,7 @@ pub(crate) struct Mp4EditListEntry {
 /// Typed iTunes "iTunSMPB" payload. The four hex fields are: encoder version
 /// (ignored), encoder delay (front padding), encoder padding (trailing
 /// silence), and total non-padding sample count. We only surface the two that
-/// matter for gapless trimming.
+/// matter for gapless trimming, in ticks of the track's media timescale.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ItunSmpb {
     pub(crate) leading_frames: u64,

@@ -8,6 +8,7 @@ mod probe;
 mod trimmer;
 
 pub use heuristic::GaplessMode;
+pub(crate) use info::DeclaredGapless;
 pub use info::{GaplessInfo, GaplessTailCompensation};
 pub use mp4::probe_mp4_gapless;
 #[cfg(symphonia_demuxer)]
