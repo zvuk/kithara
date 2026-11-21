@@ -22,7 +22,7 @@ use super::{
         settings::{TrackSettings, TrackSettingsChange},
     },
     core::PlayerImpl,
-    geometry::{curve_area, curve_speed},
+    geometry::{RestatedLaw, curve_area, curve_speed},
     seat::Seat,
     state::{EndPlan, Lane, LaneOperation, PlannedChange, Position, TrackStatus},
 };
@@ -193,6 +193,34 @@ impl Track for PlayerImpl {
             position,
             curve_speed(curve, origin, target.saturating_sub(start))?,
         ))
+    }
+
+    fn planned_law(&self, at: SessionFrame) -> Result<SpeedCurve, PlayError> {
+        let (_, target) = self.planned_target(at)?;
+        let commands = self.lane_changes(true)?;
+        let base = SpeedCurve::Constant(self.segment.speed);
+        let mut curve = &base;
+        let mut origin = f64::from(self.segment.speed);
+        let mut start = 0;
+        let mut law = RestatedLaw::default();
+        for (frame, _, change) in commands.iter() {
+            let PlannedChange::Speed(next) = change else {
+                continue;
+            };
+            if frame > target && law.is_empty() {
+                law.restate(curve, origin, target.saturating_sub(start), 0)?;
+            }
+            origin = curve_speed(curve, origin, frame.saturating_sub(start))?;
+            start = frame;
+            curve = next;
+            if frame > target {
+                law.restate(curve, origin, 0, frame - target)?;
+            }
+        }
+        if law.is_empty() {
+            law.restate(curve, origin, target.saturating_sub(start), 0)?;
+        }
+        law.finish()
     }
 
     fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError> {

@@ -4726,6 +4726,7 @@ dependencies = [
  "kithara-derive",
  "kithara-encode",
  "kithara-events",
+ "kithara-integration-tests",
  "kithara-record",
  "kithara-test-fixtures",
  "kithara-test-utils",

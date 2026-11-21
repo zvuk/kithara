@@ -14,25 +14,30 @@ use super::{
 use crate::bridge::{DeckEqChange, DeckPart, DeckProtocol, Fade, Returned, Slot};
 
 impl Deck {
-    pub(in crate::rt) fn apply(
+    pub(super) fn apply(
         &mut self,
         part: DeckPart,
         at: SessionFrame,
         seq: Seq,
         context_valid: bool,
         read_pcm: ReadPcm,
+        cut: Option<super::continuation::SourceCut>,
     ) -> Option<DeckPart> {
         self.interrupt_underrun(&part, at);
+        let carried = cut.is_some_and(|cut| cut.carries(&part));
         match part {
             DeckPart::Attach {
                 slot,
                 item_id,
                 pcm,
                 segment,
-            } => self.attach(slot, item_id, pcm, segment, at, seq),
+            } => {
+                let track = self.source_track(slot, pcm, segment, item_id, seq, cut);
+                self.attach(slot, item_id, segment, at, seq, track)
+            }
             DeckPart::Detach { slot } => self.detach(slot, context_valid, read_pcm),
             DeckPart::Start { slot, fade } => {
-                if let Some(track) = self.tracks.at_mut(slot) {
+                if !carried && let Some(track) = self.tracks.at_mut(slot) {
                     track.start(fade);
                 }
                 Some(DeckPart::Start { slot, fade })
@@ -61,10 +66,21 @@ impl Deck {
                 pcm,
                 segment,
             } => {
-                let track = self.track(pcm, segment, item_id, seq);
-                Some(self.replace_track(slot, track, context_valid, read_pcm))
+                let track = self.source_track(slot, pcm, segment, item_id, seq, cut);
+                Some(if carried {
+                    self.continue_track(slot, track)
+                } else {
+                    self.replace_track(slot, track, context_valid, read_pcm)
+                })
             }
             DeckPart::Chain { from, to } => Some(self.chain_tracks(from, to)),
+            DeckPart::ContinueSource { to, .. } => cut.map(|cut| {
+                DeckPart::Returned(Returned::SourceContinued {
+                    to,
+                    mark: cut.point.mark(at),
+                    media_origin: cut.point.origin,
+                })
+            }),
             DeckPart::Clock { slot, clock } => {
                 if let Some(track) = self.tracks.at_mut(slot) {
                     track.set_clock(clock);
@@ -144,14 +160,13 @@ impl Deck {
         &mut self,
         slot: Slot,
         item_id: TrackId,
-        pcm: Box<crate::PcmReceiver>,
         segment: SegmentId,
         at: SessionFrame,
         seq: Seq,
+        track: PlayerTrack,
     ) -> Option<DeckPart> {
         #[cfg(not(feature = "usdt"))]
-        let _ = (at, seq);
-        let track = self.track(pcm, segment, item_id, seq);
+        let _ = (item_id, segment, at, seq);
         if let Some(track) = self.tracks.put(slot, track) {
             return Some(returned_pcm(slot, track));
         }
@@ -230,15 +245,14 @@ impl Deck {
         DeckPart::Adopt { slot, segment }
     }
 
+    /// Seats `track` stopped, as an attachment does; only a start plays it.
     fn replace_track(
         &mut self,
         slot: Slot,
-        mut track: PlayerTrack,
+        track: PlayerTrack,
         context_valid: bool,
         read_pcm: ReadPcm,
     ) -> DeckPart {
-        track.start(Fade::Declick);
-        track.snap_gate();
         let Some(current) = self.tracks.at_mut(slot) else {
             return returned_pcm(slot, track);
         };
@@ -255,6 +269,17 @@ impl Deck {
             );
         }
         returned_pcm(slot, old)
+    }
+
+    /// A same-slot continuation hands the slot's envelope to the aligned
+    /// receiver, so the cut sounds one signal instead of an eviction tail
+    /// over it.
+    fn continue_track(&mut self, slot: Slot, mut track: PlayerTrack) -> DeckPart {
+        let Some(current) = self.tracks.at_mut(slot) else {
+            return returned_pcm(slot, track);
+        };
+        track.continue_slot(current);
+        returned_pcm(slot, std::mem::replace(current, track))
     }
 
     pub(in crate::rt) fn track(

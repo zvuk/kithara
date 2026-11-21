@@ -73,8 +73,16 @@ impl Lane {
             }
             let at = due.at();
             let effects =
-                self.state
-                    .execute_commands(&due, source, warp, deferred, declick_frames)?;
+                match self
+                    .state
+                    .execute_commands(&due, source, warp, deferred, declick_frames)
+                {
+                    Ok(effects) => effects,
+                    Err(failure) => {
+                        due.refuse(failure);
+                        return Err(failure);
+                    }
+                };
             let CommandEffects {
                 segment,
                 requested_entry,
@@ -95,9 +103,10 @@ impl Lane {
             } else {
                 spec
             };
-            let latency = warp
-                .prepare_engine_latency(next_spec)
-                .map_err(|_| TrackFailureKind::Render)?;
+            let Ok(latency) = warp.prepare_engine_latency(next_spec) else {
+                due.refuse(TrackFailureKind::Render);
+                return Err(TrackFailureKind::Render);
+            };
             if segment.is_some() {
                 let seq = due.defer();
                 self.finish_pending(None);

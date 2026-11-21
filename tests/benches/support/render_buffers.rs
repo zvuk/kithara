@@ -257,12 +257,18 @@ fn check_adopt(fixture: &mut DeckFixture, output: &[Vec<f32>; 2]) {
 fn refill_fixture() -> (DeckFixture, f32) {
     let mut fixture = seeded(&[(SegmentId::FIRST, SEED + 7, 0.5)]);
     let pcm = fixture.pcm(&[(SegmentId::FIRST, 14, 0.25)]);
-    let seq = fixture.command(vec![DeckPart::Replace {
-        item_id: kithara_events::TrackId::allocate(),
-        slot: Slot::new(0),
-        pcm,
-        segment: SegmentId::FIRST,
-    }]);
+    let seq = fixture.command(vec![
+        DeckPart::Replace {
+            item_id: kithara_events::TrackId::allocate(),
+            slot: Slot::new(0),
+            pcm,
+            segment: SegmentId::FIRST,
+        },
+        DeckPart::Start {
+            slot: Slot::new(0),
+            fade: Fade::Declick,
+        },
+    ]);
     let _ = fixture.render(3);
     fixture.applied(seq, i64::try_from(SEED).expect("seed frames"));
     let gain = fixture

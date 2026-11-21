@@ -474,6 +474,26 @@ impl<'a> Outbox<'a> {
         Ok(seq)
     }
 
+    /// Aligns a replacement to the sounding track in the current timed batch.
+    ///
+    /// # Errors
+    /// Requires a timed group owned by the source change.
+    pub fn continue_source(&mut self, from: Slot, to: Slot) -> Result<(), PlayError> {
+        let at = self.group.as_ref().ok_or(PlayError::Untimed)?.at;
+        let window = self.pass().ok_or(PlayError::Untimed)?.deck_delivery;
+        self.deck(at, vec![DeckPart::ContinueSource { from, to, window }])?;
+        Ok(())
+    }
+
+    /// The explicit source-entry role of the current timed group, if any.
+    #[must_use]
+    pub fn source_continuation(&self) -> Option<(Slot, Slot)> {
+        let DeckPart::ContinueSource { from, to, .. } = self.group.as_ref()?.parts.first()? else {
+            return None;
+        };
+        Some((*from, *to))
+    }
+
     pub fn chain(&mut self, from: Slot, to: Slot) -> Result<Seq, PlayError> {
         self.deferred(vec![DeckPart::Chain { from, to }])
     }
@@ -510,7 +530,9 @@ pub(crate) fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
         | DeckPart::Fade { slot, .. }
         | DeckPart::Adopt { slot, .. }
         | DeckPart::Replace { slot, .. } => (Some(slot), None),
-        DeckPart::Chain { from, to } => (Some(from), Some(to)),
+        DeckPart::Chain { from, to } | DeckPart::ContinueSource { from, to, .. } => {
+            (Some(from), Some(to))
+        }
         DeckPart::Clock { .. }
         | DeckPart::Mix(_)
         | DeckPart::Eq(_)

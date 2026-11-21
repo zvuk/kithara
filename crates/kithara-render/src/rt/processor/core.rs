@@ -262,6 +262,10 @@ impl<E: SessionInbox> DeckMixer<E> {
             }
             self.deck
                 .fire_ended(level, start, at, context.is_some(), PlayerResource::read);
+            if cursor == 0 {
+                self.deck
+                    .resume_continuations(level, start, context.is_some());
+            }
             let command_frames = level
                 .frames_until_due(at)
                 .and_then(|count| usize::try_from(count).ok())

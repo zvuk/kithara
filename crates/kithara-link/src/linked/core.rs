@@ -7,14 +7,18 @@ use kithara_play::{
     SeekBatch, Settled, Track, TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange,
     TrackStatus,
 };
-use kithara_render::{LaneFrame, bridge::DeckPart, rt::DeckMixerConfig};
+use kithara_render::{
+    LaneFrame,
+    bridge::{DeckPart, Returned},
+    rt::DeckMixerConfig,
+};
 use kithara_signal::{FrameCount, SessionFrame};
 use tracing::warn;
 
 use super::{
     Linked, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting,
     geometry::{PastEnd, Placement, cue_position, place},
-    state::{Cause, Cue, Reissued, Relocation},
+    state::{Cause, ContinuationAdmission, Cue, Reissued, Relocation},
 };
 use crate::{GridAnswer, GridRefusal, TempoTrajectory, covers, entry};
 
@@ -218,6 +222,9 @@ impl<P: Track> Linked<P> {
     /// A new grid turns a track waiting for one to SYNC and aligns a synchronized one.
     fn take_grid(&mut self, model: BeatGridModel, out: &mut Outbox<'_>) {
         self.grid = Some(model);
+        if self.continuation.is_some() {
+            return;
+        }
 
         let track = self.inner.snapshot();
         let playing = matches!(track.as_ref().status, TrackStatus::Playing { .. });
@@ -253,37 +260,6 @@ impl<P: Track> Linked<P> {
         self.plan_end = None;
         if self.mode == SyncMode::Unsyncable {
             self.mode = SyncMode::NoGrid;
-        }
-    }
-
-    fn retime_silent(&mut self, at: SessionFrame, out: &mut Outbox<'_>) {
-        let Some(grid) = self.grid.as_ref() else {
-            return;
-        };
-        let snapshot = self.inner.snapshot();
-        let required = cue_position(snapshot.as_ref());
-        let Ok(source) = self.source(grid) else {
-            return;
-        };
-        let Some(entry_frame) = entry(&self.host, &source, required, Bound::AtOrAfter(at)) else {
-            return;
-        };
-        let sent =
-            self.curve(&source, required, entry_frame, None)
-                .and_then(|(curve, coverage)| {
-                    self.send_cue(required, curve, Some((entry_frame, coverage)), out)
-                });
-        match sent {
-            Ok(Some(_)) => {
-                if let Some(start) = self.start {
-                    self.start_caller.get_or_insert(start);
-                }
-                self.withdraw_start(required);
-            }
-            Ok(None) => {}
-            Err(error) => {
-                self.triage(&error, out);
-            }
         }
     }
 
@@ -388,7 +364,31 @@ impl<P: Track> Player for Linked<P> {
     }
 
     fn settle(&mut self, receipt: TrackReceipt<'_>, out: &mut Outbox<'_>) -> Settled {
+        let continuation = self.continuation.as_ref().and_then(|entry| {
+            let ContinuationAdmission::Submitted { to, seq: submitted } = entry.admission else {
+                return None;
+            };
+            let TrackReceipt::Deck { seq, batch, .. } = &receipt else {
+                return None;
+            };
+            if *seq != submitted {
+                return None;
+            }
+            Some(batch.commands.iter().find_map(|part| match part {
+                DeckPart::Returned(Returned::SourceContinued {
+                    to: slot,
+                    mark,
+                    media_origin,
+                }) if *slot == to => Some((*mark, *media_origin)),
+                _ => None,
+            }))
+        });
         let mut settled = self.inner.settle(receipt, out);
+        if let Some(cut) = continuation
+            && let Some(entry) = self.continuation.take()
+        {
+            self.settle_continuation(&entry, &settled, cut);
+        }
         self.answer_reissued(&settled);
         if let Settled::Rejected {
             seq,
@@ -521,6 +521,26 @@ impl<P: Track> Track for Linked<P> {
         Ok(false)
     }
 
+    fn prepare_source_continuation(
+        &mut self,
+        at: SessionFrame,
+        position: Position,
+        speed: kithara_sync::SpeedCurve,
+        out: &mut Outbox<'_>,
+    ) -> Result<bool, PlayError> {
+        if self.synced() {
+            self.prepare_synced_continuation(at, position, speed, out)
+        } else {
+            self.inner
+                .prepare_source_continuation(at, position, speed, out)
+        }
+    }
+
+    fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>) {
+        self.bind_continuation(result.as_ref().ok().copied());
+        self.inner.finish_group(result);
+    }
+
     fn cue(
         &mut self,
         position: Position,
@@ -593,11 +613,11 @@ impl<P: Track> Track for Linked<P> {
                 at: SessionFrame,
                 sample_rate: std::num::NonZeroU32,
             ) -> Result<(Position, f64), PlayError>;
+            fn planned_law(&self, at: SessionFrame) -> Result<kithara_sync::SpeedCurve, PlayError>;
             fn planned_end(
                 &self,
                 sample_rate: std::num::NonZeroU32,
             ) -> Result<Option<SessionFrame>, PlayError>;
-            fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);
         }
     }
 }
@@ -632,27 +652,6 @@ where
 
     fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         Player::tick(self, pass.now, out);
-    }
-}
-
-impl<P: Track> Linked<P> {
-    /// Cues `position` with `speed`; `plan` is where a speed plan of this
-    /// deck's own starts and how far it reaches, `None` for a caller's speed.
-    fn send_cue(
-        &mut self,
-        position: Position,
-        speed: kithara_sync::SpeedCurve,
-        plan: Option<(SessionFrame, kithara_sync::Coverage)>,
-        out: &mut Outbox<'_>,
-    ) -> Result<Option<Seq>, PlayError> {
-        let sent = self.inner.cue(position, speed, out)?;
-        if sent.is_some() {
-            match plan {
-                Some((at, coverage)) => self.plan_sent(at, coverage),
-                None => self.plan_end = None,
-            }
-        }
-        Ok(sent)
     }
 }
 

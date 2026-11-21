@@ -321,7 +321,7 @@ where
                 && target.repeat.is_none()
                 && !matches!(
                     target.continued,
-                    Some(Continuation::Removal { applied: false, .. })
+                    Some(Continuation::Removal { applied: false, .. } | Continuation::Seat(_))
                 )
         }) else {
             return Ok(None);
@@ -397,6 +397,9 @@ where
         target: Target,
         out: &mut Outbox<'_>,
     ) -> Result<bool, PlayError> {
+        if self.end_failed_source_change(index, out)? {
+            return Ok(false);
+        }
         let Some(active) = self.active.get(index) else {
             return Ok(false);
         };
@@ -407,29 +410,58 @@ where
             return Ok(false);
         }
         let initial_attachment = target.playing && self.initial_attachment(index)?;
-        if !initial_attachment
-            && !matches!(
-                active.track.snapshot().as_ref().status,
-                PlayingStatus::Loaded
-                    | PlayingStatus::Paused { .. }
-                    | PlayingStatus::Playing { .. }
-                    | PlayingStatus::Faded { .. }
-            )
-        {
+        if !initial_attachment && !holds_media(&active.track.snapshot().as_ref().status) {
             return Ok(false);
         }
-        if let Some(load) = active.load.filter(|_| !initial_attachment) {
-            if !self.finish_load(index)? {
-                self.cancel_target(out).map_err(play_error)?;
-                return Ok(false);
-            }
-            if let Some(target) = &mut self.target {
-                target.continued = Some(Continuation::Load(load.seq()));
-            }
+        if let Some(load) = active.load.filter(|_| !initial_attachment)
+            && !self.continue_load(index, load, out)?
+        {
+            return Ok(false);
         }
         if let Some(SeekPosition::Held(to)) = self.held_position {
             self.seek_to(to, out).map_err(play_error)?;
         }
+        Ok(true)
+    }
+
+    /// Commits the opened load of the target, or cancels the target when the
+    /// load cannot finish.
+    fn continue_load(
+        &mut self,
+        index: usize,
+        load: LoadState,
+        out: &mut Outbox<'_>,
+    ) -> Result<bool, PlayError> {
+        if !self.finish_load(index)? {
+            self.cancel_target(out).map_err(play_error)?;
+            return Ok(false);
+        }
+        if let Some(target) = &mut self.target {
+            target.continued = Some(Continuation::Load(load.seq()));
+        }
+        Ok(true)
+    }
+
+    /// An incoming private receiver that failed terminally ends its source change.
+    fn end_failed_source_change(
+        &mut self,
+        index: usize,
+        out: &mut Outbox<'_>,
+    ) -> Result<bool, PlayError> {
+        let Some(active) = self
+            .active
+            .get(index)
+            .filter(|active| matches!(active.role, Role::Incoming))
+        else {
+            return Ok(false);
+        };
+        let PlayingStatus::Failed { fault, .. } = active.track.snapshot().as_ref().status else {
+            return Ok(false);
+        };
+        if !self.tracks.is_changing_source(active.item) {
+            return Ok(false);
+        }
+        self.fail_source_change(active.item, fault.to_string(), out)?;
         Ok(true)
     }
 
@@ -445,15 +477,29 @@ where
         {
             return Ok(None);
         }
+        // A replacement takes over its slot seated and stopped; the paused
+        // source it replaces stands on the same frame until then.
+        let replacement = self.active.is_replacement(index);
+        let command = if replacement {
+            TrackCommand::Seat {
+                slot: self.active.get(index).ok_or(PlayError::NoActiveSlot)?.slot,
+                at: When::At(self.earliest()?),
+            }
+        } else {
+            TrackCommand::Pause { at: When::Next }
+        };
         let sent = self
             .active
             .get_mut(index)
             .ok_or(PlayError::NoActiveSlot)?
             .track
-            .apply(TrackCommand::Pause { at: When::Next }, out)?;
+            .apply(command, out)?;
         if let Some(seq) = sent {
-            self.target.as_mut().ok_or(PlayError::NotReady)?.continued =
-                Some(Continuation::Pause(seq));
+            self.target.as_mut().ok_or(PlayError::NotReady)?.continued = Some(if replacement {
+                Continuation::Seat(seq)
+            } else {
+                Continuation::Pause(seq)
+            });
         } else {
             self.enter_target(index, self.earliest()?, target.reason)?;
         }
@@ -490,6 +536,11 @@ where
     ) -> Result<Option<SessionFrame>, PlayError> {
         let earliest = self.earliest()?;
         let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
+        if self.tracks.is_changing_source(active.item)
+            && let Bound::AtOrAfter(frame) = bound
+        {
+            return Ok(Some(frame.max(earliest)));
+        }
         let Some(frame) = active.track.entry(bound) else {
             return Ok(None);
         };
@@ -499,6 +550,17 @@ where
             Some(frame)
         })
     }
+}
+
+/// Whether a receiver in `status` holds media a transition can enter.
+fn holds_media(status: &PlayingStatus) -> bool {
+    matches!(
+        status,
+        PlayingStatus::Loaded
+            | PlayingStatus::Paused { .. }
+            | PlayingStatus::Playing { .. }
+            | PlayingStatus::Faded { .. }
+    )
 }
 
 impl<S, F> Queue<S, F>
@@ -578,14 +640,7 @@ where
             && let Settled::Rejected { reason, .. } = settled
         {
             let error = QueueError::Play(super::super::hosted::refusal(reason));
-            self.cancel_target(out).map_err(play_error)?;
-            self.tracks.fail_source(id);
-            self.announce(QueueEvent::TrackLoadFailed {
-                id,
-                reason: error.to_string(),
-                auto_skipped: false,
-            });
-            return Ok(());
+            return self.fail_source_change(id, error.to_string(), out);
         }
         let preloaded = active.role == Role::Preloaded;
         let leaving = active.role == Role::Leaving;
@@ -628,6 +683,24 @@ where
         {
             self.target = None;
         }
+        Ok(())
+    }
+
+    /// Ends `id`'s source change on its receiver's terminal `reason`: the
+    /// staged receiver is released and the accepted source stays current.
+    fn fail_source_change(
+        &mut self,
+        id: TrackId,
+        reason: String,
+        out: &mut Outbox<'_>,
+    ) -> Result<(), PlayError> {
+        self.cancel_target(out).map_err(play_error)?;
+        self.tracks.fail_source(id);
+        self.announce(QueueEvent::TrackLoadFailed {
+            id,
+            reason,
+            auto_skipped: false,
+        });
         Ok(())
     }
 }

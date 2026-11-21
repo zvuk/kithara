@@ -1,5 +1,6 @@
 mod apply;
 mod arrivals;
+mod continuation;
 mod finish;
 mod gain;
 pub(in crate::rt) mod parameter;

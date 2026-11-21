@@ -1,6 +1,8 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_audio::{AudioReadError, AudioSource, SeekOutcome, TrackFailureKind, TrackStep};
+use kithara_audio::{
+    AudioReadError, AudioSource, FailureSource, SeekOutcome, TrackFailureKind, TrackStep,
+};
 use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, Seq, When, channel};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
@@ -17,6 +19,7 @@ use crate::{
 struct ReadySource {
     position: Duration,
     pending: bool,
+    failure: Option<TrackFailureKind>,
     seeks: Vec<Duration>,
 }
 
@@ -25,6 +28,12 @@ impl AudioSource for ReadySource {
 
     fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
         self.seeks.push(target);
+        if let Some(failure) = self.failure {
+            return Err(AudioReadError::Stream {
+                what: "seek",
+                source: FailureSource::Producer { failure },
+            });
+        }
         if self.pending {
             return Ok(SeekOutcome::Pending {
                 target,
@@ -93,6 +102,7 @@ impl LaneFixture {
             source: ReadySource {
                 position: Duration::ZERO,
                 pending: false,
+                failure: None,
                 seeks: Vec::new(),
             },
             renderer: warp.renderer(spec, pools()),
@@ -262,6 +272,48 @@ fn an_earlier_alignment_rejects_old_future_speed_and_keeps_fresh_controls() {
         .expect("fresh speed outcome");
     assert_eq!(receipt.seq(), fresh);
     assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+}
+
+/// A terminal seek error ends the executing segment command with its cause,
+/// instead of leaving the batch unanswered.
+#[kithara::test]
+fn a_terminal_seek_error_refuses_the_segment_command_it_executes() {
+    let mut fixture = LaneFixture::new();
+    fixture.source.failure = Some(TrackFailureKind::SourceCancelled);
+    let seq = fixture
+        .sender
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![LaneCommand::Segment {
+                    id: SegmentId::FIRST.next(),
+                    from: Duration::from_secs(1),
+                    speed: SpeedCurve::Constant(1.0),
+                }],
+            },
+        )
+        .expect("segment command fits the channel");
+
+    let result = fixture
+        .lane
+        .execute_due(&mut fixture.source, &mut fixture.renderer, fixture.spec);
+
+    assert!(matches!(result, Err(TrackFailureKind::SourceCancelled)));
+    let receipt = fixture
+        .sender
+        .receipts()
+        .next()
+        .expect("the executing batch is answered");
+    assert_eq!(receipt.seq(), seq);
+    assert!(
+        matches!(
+            receipt.outcome(),
+            Outcome::Rejected(Rejection::Refused(TrackFailureKind::SourceCancelled))
+        ),
+        "{:?}",
+        receipt.outcome()
+    );
 }
 
 /// Media has no PCM before its visible origin, so a segment positioned ahead of

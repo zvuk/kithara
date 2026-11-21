@@ -123,7 +123,9 @@ where
         self.call(QueueCommand::Select { id, transition })
     }
 
-    /// Replaces the current track's source, retaining its identity and media position.
+    /// Replaces the current track with another source of the same media.
+    /// The logical track retains its identity, media position and known duration
+    /// while the incoming source has yet to report its extent.
     /// The accepted source changes when the replacement enters the deck.
     /// # Errors
     /// Returns an unknown or non-current identity, an admission refusal or a closed mailbox.

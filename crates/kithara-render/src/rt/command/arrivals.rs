@@ -40,9 +40,19 @@ impl Deck {
 
     pub(crate) fn take_due(
         &mut self,
+        due: Due<'_, DeckProtocol>,
+        context_valid: bool,
+        read_pcm: ReadPcm,
+    ) {
+        self.take_due_with_prefix(due, context_valid, read_pcm, None);
+    }
+
+    pub(super) fn take_due_with_prefix(
+        &mut self,
         mut due: Due<'_, DeckProtocol>,
         context_valid: bool,
         read_pcm: ReadPcm,
+        prefix: Option<super::super::track::CutPrefix>,
     ) {
         if due
             .commands()
@@ -71,17 +81,38 @@ impl Deck {
             due.refuse(DeckRefusal::AxisRestarted);
             return;
         }
+        let cut = match self.prepare_continuation(&mut due, context_valid, prefix) {
+            Ok(super::continuation::Preparation::Ready(cut)) => cut,
+            Ok(super::continuation::Preparation::Pending { from, prefix }) => {
+                let checked = due.at();
+                self.armed[from.index()] = Some(Armed {
+                    seq: due.defer(),
+                    action: EndAction::ContinueSource {
+                        epoch: self.epoch,
+                        checked,
+                        prefix,
+                    },
+                });
+                return;
+            }
+            Err(reason) => {
+                due.refuse(reason);
+                return;
+            }
+        };
         let at = due.at();
         let seq = due.seq();
         let length = due.commands().len();
         for remaining in (0..length).rev() {
             let part = due.commands_mut().remove(0);
             self.interrupt_programs(&mut due, &part);
-            self.interrupt_output(&mut due, &part);
+            if !cut.is_some_and(|cut| cut.carries(&part)) {
+                self.interrupt_output(&mut due, &part);
+            }
             if let Some(slot) = shifted_slot(&part) {
                 self.interrupt_stop(&mut due, slot, remaining);
             }
-            if let Some(returned) = self.apply(part, at, seq, context_valid, read_pcm) {
+            if let Some(returned) = self.apply(part, at, seq, context_valid, read_pcm, cut) {
                 due.commands_mut().push(returned);
             }
         }
@@ -140,19 +171,20 @@ impl Deck {
         read_pcm: ReadPcm,
     ) {
         loop {
-            let next = self
-                .armed
-                .iter()
-                .enumerate()
-                .filter_map(|(index, armed)| {
-                    let armed = (*armed)?;
-                    let from = Slot::new(u16::try_from(index).ok()?);
-                    self.tracks
-                        .at(from)
-                        .is_some_and(|track| track.state() == crate::bridge::SlotState::Ended)
+            let next =
+                self.armed
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, armed)| {
+                        let armed = (*armed)?;
+                        let from = Slot::new(u16::try_from(index).ok()?);
+                        (!matches!(armed.action, EndAction::ContinueSource { .. })
+                            && self.tracks.at(from).is_some_and(|track| {
+                                track.state() == crate::bridge::SlotState::Ended
+                            }))
                         .then_some((index, armed))
-                })
-                .min_by_key(|(_, armed)| armed.seq);
+                    })
+                    .min_by_key(|(_, armed)| armed.seq);
             let Some((index, armed)) = next else { break };
             self.armed[index] = None;
             let Some(mut due) = level.resume(armed.seq, start, at) else {
@@ -178,7 +210,7 @@ impl Deck {
                     }
                 }
             }
-            if let Some(returned) = self.apply(part, at, seq, context_valid, read_pcm) {
+            if let Some(returned) = self.apply(part, at, seq, context_valid, read_pcm, None) {
                 due.commands_mut().push(returned);
             }
             due.apply(());
@@ -271,7 +303,8 @@ impl Deck {
                         return Err(DeckRefusal::RefusedFxParam { unit });
                     }
                 }
-                DeckPart::Clock { .. }
+                DeckPart::ContinueSource { .. }
+                | DeckPart::Clock { .. }
                 | DeckPart::Mix(_)
                 | DeckPart::Eq(_)
                 | DeckPart::GainProgram { .. }
