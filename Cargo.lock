@@ -6471,6 +6471,7 @@ dependencies = [
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",
+ "libc",
  "num-traits",
  "pin-project-lite",
  "rtsan-standalone",

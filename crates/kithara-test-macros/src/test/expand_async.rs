@@ -6,7 +6,7 @@ use syn::{Attribute, Ident, ReturnType};
 use super::{
     fixture_args::Preamble,
     shared::{
-        finalize_body, make_ambient_stmt, make_clock_measurement_stmt,
+        finalize_body, make_ambient_stmt, make_binary_resident_stmt, make_clock_measurement_stmt,
         make_dedicated_worker_config, make_hang_budget, make_hard_timeout_watchdog,
         make_runtime_builder, make_selenium_attrs, make_serial_attr, make_test_setup,
         make_wasm_serial_guard, sync_test_body, wrap_with_model, wrap_with_soft_fail,
@@ -96,8 +96,10 @@ pub(crate) fn emit_async_timeout_test(
     // before the future exists.
     let test_setup = make_test_setup(args, remaining_attrs);
     let clock_measurement = make_clock_measurement_stmt(args, fn_name);
+    let resident = make_binary_resident_stmt();
     let runtime_body = quote! {
         {
+            #resident
             #test_setup
             let __rt = #runtime_builder;
             let __result = ::std::panic::catch_unwind(
@@ -298,6 +300,33 @@ mod tests {
         assert!(expanded.contains("record_test_hang"));
         assert!(expanded.contains("wall-timeout"));
         assert!(expanded.contains("hard-timeout"));
+        Ok(())
+    }
+
+    #[test]
+    fn native_async_code_is_resident_before_the_deadline_is_armed() -> syn::Result<()> {
+        let args =
+            syn::parse_str::<TestArgs>("tokio, timeout(::std::time::Duration::from_secs(5))")?;
+        let name: Ident = parse_quote!(cold_binary);
+        let expanded = emit_async_timeout_test(
+            &name,
+            &Visibility::Inherited,
+            &ReturnType::Default,
+            &[],
+            &make_preamble(&[], None),
+            &args,
+            &TokenStream2::new(),
+        )
+        .to_string();
+
+        let resident = expanded.find("make_binary_resident");
+        let armed = expanded.find("time :: timeout");
+        assert!(
+            resident
+                .zip(armed)
+                .is_some_and(|(resident, armed)| resident < armed),
+            "{expanded}"
+        );
         Ok(())
     }
 }

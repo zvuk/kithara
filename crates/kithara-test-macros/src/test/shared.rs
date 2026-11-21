@@ -157,6 +157,16 @@ fn expects_panic(remaining_attrs: &[&Attribute]) -> bool {
         .any(|attr| attr.path().is_ident("should_panic"))
 }
 
+/// Pages the test binary's code in before a deadline is armed, so a budget
+/// measures the body rather than a cold page cache. Emitted only where that
+/// cost was observed.
+pub(crate) fn make_binary_resident_stmt() -> TokenStream2 {
+    quote! {
+        #[cfg(all(target_os = "linux", not(miri)))]
+        ::kithara_test_utils::test::make_binary_resident();
+    }
+}
+
 pub(crate) fn make_prekill_guard(fn_name: &Ident) -> TokenStream2 {
     let fn_name = fn_name.to_string();
     quote! {
@@ -217,10 +227,12 @@ pub(crate) fn wrap_with_timeout(
     let fn_name_str = fn_name.to_string();
     let dur = super::timeout::resolve(args);
     let prekill_guard = make_prekill_guard(fn_name);
+    let resident = make_binary_resident_stmt();
 
     if is_async {
         quote! {
             {
+                #resident
                 #prekill_guard
                 let __timeout_dur: ::std::time::Duration = #dur;
                 let __body = async { #body };
@@ -248,6 +260,7 @@ pub(crate) fn wrap_with_timeout(
         };
         quote! {
             {
+                #resident
                 #prekill_guard
                 let __timeout_dur: ::std::time::Duration = #dur;
                 let __body = move || { #body };
@@ -517,6 +530,29 @@ mod tests {
 
         assert!(expanded.contains("PreKillGuard"));
         assert!(expanded.contains("stress_case"));
+    }
+
+    #[test]
+    fn sync_code_is_resident_before_the_deadline_is_armed() {
+        let name: Ident = parse_quote!(cold_binary);
+
+        let expanded = wrap_with_timeout(
+            &quote!({}),
+            &TestArgs::default(),
+            false,
+            &name,
+            &ReturnType::Default,
+        )
+        .to_string();
+
+        let resident = expanded.find("make_binary_resident");
+        let armed = expanded.find("recv_timeout");
+        assert!(
+            resident
+                .zip(armed)
+                .is_some_and(|(resident, armed)| resident < armed),
+            "{expanded}"
+        );
     }
 
     #[test]
