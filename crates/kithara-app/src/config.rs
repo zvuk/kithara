@@ -163,10 +163,9 @@ pub struct AppConfig {
     /// spelling of those knobs.
     #[config(skip = "transferred to the broadcast owner", patch(skip))]
     pub broadcast: Option<AppBroadcastConfig>,
-    /// Upper bound on waveform buckets (native = one per FFT window). Only
-    /// caps very long tracks, to bound the cached blob.
-    #[config(builder(default = 96_000))]
-    pub waveform_max_buckets: usize,
+    /// Native analysis windows folded into each waveform bucket.
+    #[config(builder(default = NonZeroU32::MIN))]
+    pub waveform_fold: NonZeroU32,
     /// Band count of the EQ layout every deck's player graph is built with.
     #[config(builder(default = 3))]
     pub eq_bands: usize,
@@ -219,7 +218,7 @@ impl fmt::Debug for AppConfig {
                 &self.base_worker.as_ref().map(Worker::is_cancelled),
             )
             .field("broadcast", &self.broadcast)
-            .field("waveform_max_buckets", &self.waveform_max_buckets)
+            .field("waveform_fold", &self.waveform_fold)
             .field("eq_bands", &self.eq_bands)
             .field("sample_rate", &self.sample_rate)
             .field("output_block_frames", &self.output_block_frames)

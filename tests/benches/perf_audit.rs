@@ -55,7 +55,6 @@ use tempfile::TempDir;
 mod consts {
     pub(super) const CHANNELS: usize = 2;
     pub(super) const SAMPLE_RATE: u32 = 44_100;
-    pub(super) const ANALYSIS_BUCKETS: usize = 2_000;
     pub(super) const ANALYSIS_CHUNK_SECONDS: u64 = 16;
     pub(super) const DECODE_READ_LIMIT: usize = 16_384;
     pub(super) const STRETCH_FRAMES: usize = 8_192;
@@ -314,7 +313,7 @@ fn bench_analysis_worker(c: &mut Criterion) {
     let builder = AnalyzerBuilder::<PlaybackResamplerBackend, TestPools>::new(pools.clone())
         .with_beat_config(BeatAnalysisConfig::default())
         .with_beat()
-        .with_waveform(consts::ANALYSIS_BUCKETS);
+        .with_waveform(NonZeroU32::MIN);
     let analysis_worker = AnalysisWorker::new(AnalysisWorkerConfig::for_builder(builder).build());
     let token = AnalysisToken::from("perf-audit-track");
 
