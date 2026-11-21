@@ -183,29 +183,30 @@ pub(crate) fn process_scalar<
     frames: usize,
 ) {
     let (high_band, lower) = bands.split_last_mut().expect("validated high band");
-    for (channel, (input, high)) in input.iter().zip(high_band.iter_mut()).enumerate() {
-        let high = high
+    for (channel, (input, high_plane)) in input.iter().zip(high_band.iter_mut()).enumerate() {
+        let input = input.get(..frames).expect("validated scalar prefix");
+        let high_plane = high_plane
             .get_mut(..frames)
             .expect("validated scalar high frames");
-        high.copy_from_slice(input.get(..frames).expect("validated scalar prefix"));
-        for (split, band) in splits.iter_mut().zip(lower.iter_mut()) {
-            let band = band
-                .get_mut(channel)
-                .and_then(|plane| plane.get_mut(..frames))
-                .expect("validated scalar band frames");
-            for (high, band) in high.iter_mut().zip(band) {
-                let mut low = *high;
+        for (frame, (&sample, high_out)) in input.iter().zip(high_plane).enumerate() {
+            let mut high = sample;
+            for (split, band) in splits.iter_mut().zip(lower.iter_mut()) {
+                let mut low = high;
                 for section in &mut split.lowpass {
                     low = section.run_scalar(channel, low, Response::LowPass);
                 }
                 for section in &mut split.highpass {
-                    *high = section.run_scalar(channel, *high, Response::HighPass);
+                    high = section.run_scalar(channel, high, Response::HighPass);
                 }
                 for section in &mut split.allpass {
                     low = section.run_scalar(channel, low, Response::AllPass);
                 }
-                *band = low;
+                *band
+                    .get_mut(channel)
+                    .and_then(|plane| plane.get_mut(frame))
+                    .expect("validated scalar band frame") = low;
             }
+            *high_out = high;
         }
     }
 }
