@@ -125,19 +125,23 @@ is holding.
 
 ## The verdict
 
-Judged lanes set `allow_failure: true`; the verdict holds only failures absent
-from the default branch.
+Judged lanes set `allow_failure: true`. The verdict compares regressions with
+the default branch and checks the Apple network producer before updating or
+reading the journal.
 
-The lane dispatcher clears expected reports before execution because build
-directories persist, then collects outputs in `.ci-artifacts/junit/`. A lane
-that cannot name a test leaves its own failure marker: GitLab exposes no
+The lane dispatcher clears checkout staging and records early failures. Each
+test producer clears its raw report and stages fresh XML while it holds its
+build slot. A failure leaves the lane's marker because GitLab exposes no
 needed-job status.
 
-Branch's only test producer, `apple-test`, writes its canonical plan's selected
-lane names to `.ci-artifacts/junit/apple-test.selection.json` before running it.
-Only valid `[]` proves no suite applies. Nonempty lists need its own report
-with test cases. Failure markers and invalid or failing XML retain their behavior;
-other pipeline kinds require reports or failure markers.
+On Branch, `apple-test` writes its selected lanes to
+`.ci-artifacts/junit/apple-test.selection.json`. The Apple network producer
+writes its own selection on every scheduled kind. Only a Draft plan that
+excludes the Apple cases may omit its JUnit. When a PR filter can decide the
+selection, the harness confirms the configured namespace is present before
+checking the filtered inventory. A selected Apple network job must report
+an executed Apple case and zero failed attempts. On `main` and nightly, an
+invalid Apple network report prevents that run from updating the journal.
 
 Executors use their runner environment's `<shared cache root>/verdict/journal.json`
 as one Linux/macOS baseline. `main` and nightly runs record; branch, merge-request
