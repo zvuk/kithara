@@ -22,7 +22,8 @@ use crate::{
 /// Why a pass ended in error: its analyzers could not be built, or its key
 /// estimator failed on the way.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PassError {
+#[non_exhaustive]
+pub enum PassError {
     #[error(transparent)]
     Waveform(#[from] AnalyzerError),
     #[error(transparent)]
@@ -38,9 +39,8 @@ where
 {
     beat: Config<B>,
     beat_config: Option<BeatAnalysisConfig<B>>,
-    /// The bucket ceiling a waveform is asked to fill, when one is wanted at
-    /// all. No waveform configured means no waveform slot is ever built.
-    waveform: Option<usize>,
+    /// Native windows folded into each bucket, when a waveform is configured.
+    waveform: Option<NonZeroU32>,
     /// Whether a key is estimated at all.
     key: bool,
     #[field(get, vis = "pub(crate)")]
@@ -80,7 +80,7 @@ where
                 Slot::default()
             },
             waveform: match self.waveform.filter(|_| demand.waveform()) {
-                Some(buckets) => waveform::Slot::try_from((buckets, rate, &self.pools))?,
+                Some(fold) => waveform::Slot::try_from((fold, rate, &self.pools))?,
                 None => waveform::Slot::default(),
             },
             key: if self.key && demand.key() {
@@ -219,11 +219,12 @@ where
         builder
     }
 
+    /// Enable waveform analysis, folding this many native windows per bucket.
     #[must_use]
     #[cfg(feature = "analysis-waveform")]
-    pub const fn with_waveform(self, buckets: usize) -> Self {
+    pub const fn with_waveform(self, fold: NonZeroU32) -> Self {
         let mut builder = self;
-        builder.waveform = Some(buckets);
+        builder.waveform = Some(fold);
         builder
     }
 }
@@ -299,10 +300,10 @@ mod tests {
 
     fn waveform_pass(
         pools: Pools,
-        buckets: usize,
+        fold: NonZeroU32,
     ) -> TrackAnalyzers<NoResamplerBackend, TestPools> {
         AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
-            .with_waveform(buckets)
+            .with_waveform(fold)
             .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("waveform buffers fit the test region")
     }
@@ -310,7 +311,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_waveform_pass_publishes_a_waveform_and_no_beat(analysis_silence: Vec<f32>) {
         let pools = pools();
-        let mut analyzers = waveform_pass(pools.clone(), 8);
+        let mut analyzers = waveform_pass(pools.clone(), NonZeroU32::MIN);
         analyzers
             .push(
                 &chunk(&pools, &analysis_silence, 8192, 0),
@@ -330,7 +331,7 @@ mod tests {
     fn a_beat_pass_publishes_both_artifacts_at_once(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
-            .with_waveform(8)
+            .with_waveform(NonZeroU32::MIN)
             .with_beat_detector(beat_detector(), GridParams::default());
         let mut detector = builder.take_detector();
         let mut analyzers = builder
@@ -358,7 +359,7 @@ mod tests {
     fn a_rejected_range_leaves_the_coverage_alone(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut extent = Extent::default();
-        let mut analyzers = waveform_pass(pools.clone(), 8);
+        let mut analyzers = waveform_pass(pools.clone(), NonZeroU32::MIN);
         analyzers
             .push(
                 &chunk(&pools, &analysis_silence, 8192, 0),
@@ -427,7 +428,7 @@ mod tests {
         // Opened at 48 kHz; the reader turns out to decode at 44.1 kHz.
         let axis = NonZeroU32::new(48_000).expect("test rate is non-zero");
         let mut analyzers = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
-            .with_waveform(8)
+            .with_waveform(NonZeroU32::MIN)
             .build(axis, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
 
@@ -461,7 +462,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_range_no_one_covered_is_missing_until_it_arrives(analysis_silence: Vec<f32>) {
         let pools = pools();
-        let mut analyzers = waveform_pass(pools.clone(), 8);
+        let mut analyzers = waveform_pass(pools.clone(), NonZeroU32::MIN);
         // A producer was starved over [8192, 16384) and carried on past it.
         analyzers
             .push(
@@ -507,7 +508,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_scattered_coverage_is_measured_against_where_it_reaches(analysis_silence: Vec<f32>) {
         let pools = pools();
-        let mut analyzers = waveform_pass(pools.clone(), 8);
+        let mut analyzers = waveform_pass(pools.clone(), NonZeroU32::MIN);
         // A range decoded away from the start, which is what a schedule
         // covers first.
         analyzers
@@ -538,7 +539,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn nothing_past_the_frontier_is_claimed_missing(analysis_silence: Vec<f32>) {
         let pools = pools();
-        let mut analyzers = waveform_pass(pools.clone(), 8);
+        let mut analyzers = waveform_pass(pools.clone(), NonZeroU32::MIN);
         analyzers
             .push(
                 &chunk(&pools, &analysis_silence, 8192, 0),
@@ -569,7 +570,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn revisions_strictly_increase_across_publications(analysis_silence: Vec<f32>) {
         let pools = pools();
-        let mut analyzers = waveform_pass(pools.clone(), 8);
+        let mut analyzers = waveform_pass(pools.clone(), NonZeroU32::MIN);
         let mut revisions = Vec::new();
         for block in 0..3u64 {
             analyzers
@@ -603,7 +604,7 @@ mod tests {
     fn a_pass_opened_above_a_held_revision_publishes_above_it(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut analyzers = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
-            .with_waveform(8)
+            .with_waveform(NonZeroU32::MIN)
             .build(spec().sample_rate, "track-a".into(), 3, AnalysisDemand::ALL)
             .expect("waveform buffers fit the test region");
         analyzers
@@ -627,11 +628,11 @@ mod tests {
     fn a_snapshot_carries_the_token_its_pass_was_opened_with(analysis_silence: Vec<f32>) {
         let pools = pools();
         let mut first = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
-            .with_waveform(8)
+            .with_waveform(NonZeroU32::MIN)
             .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
         let mut second = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
-            .with_waveform(8)
+            .with_waveform(NonZeroU32::MIN)
             .build(spec().sample_rate, "track-b".into(), 0, AnalysisDemand::ALL)
             .expect("analysis buffers fit the test region");
         first
@@ -669,9 +670,9 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_waveform_resolution_change_leaves_the_beat_fingerprint_alone() {
-        let fingerprint = |buckets: usize| {
+        let fingerprint = |fold: NonZeroU32| {
             AnalyzerBuilder::<RubatoBackend, _>::new(pools())
-                .with_waveform(buckets)
+                .with_waveform(fold)
                 .with_beat()
                 .build(spec().sample_rate, "track-a".into(), 0, AnalysisDemand::ALL)
                 .expect("analysis buffers fit the test region")
@@ -681,17 +682,17 @@ mod tests {
                 .clone()
         };
 
-        let coarse = fingerprint(64);
-        let fine = fingerprint(2048);
+        let coarse = fingerprint(NonZeroU32::new(4).unwrap());
+        let fine = fingerprint(NonZeroU32::MIN);
         assert_eq!(
             coarse.beat(),
             fine.beat(),
-            "the bucket count is not part of beat identity"
+            "the fold factor is not part of beat identity"
         );
         assert_ne!(
             coarse.waveform(),
             fine.waveform(),
-            "the bucket count is part of waveform identity"
+            "the fold factor is part of waveform identity"
         );
     }
 
@@ -699,7 +700,7 @@ mod tests {
     fn a_pass_without_key_demand_carries_no_key_tag(analysis_silence: Vec<f32>) {
         let pools = pools();
         let builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
-            .with_waveform(8)
+            .with_waveform(NonZeroU32::MIN)
             .with_beat()
             .with_key();
         let full = builder.fingerprint();
@@ -739,7 +740,7 @@ mod tests {
     ) {
         let pools = pools();
         let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
-            .with_waveform(8)
+            .with_waveform(NonZeroU32::MIN)
             .with_beat_detector(beat_detector(), GridParams::default());
         let mut detector = builder.take_detector();
         let mut analyzers = builder
@@ -823,7 +824,7 @@ mod tests {
 
         let pools = pools();
         let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
-            .with_waveform(8)
+            .with_waveform(NonZeroU32::MIN)
             .with_beat_detector(steady_detector(), GridParams::default());
         let mut detector = builder.take_detector();
         let mut analyzers = builder
@@ -906,7 +907,8 @@ mod tests {
         analysis_silence: Vec<f32>,
     ) {
         let pools = pools();
-        let builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone()).with_waveform(8);
+        let builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone())
+            .with_waveform(NonZeroU32::MIN);
         let mut pass = builder
             .build(
                 spec().sample_rate,
@@ -956,7 +958,7 @@ mod tests {
     #[kithara::test]
     fn unknown_origin_intake_still_publishes_raw_waveform_and_coverage(analysis_silence: Vec<f32>) {
         let pools = pools();
-        let mut pass = waveform_pass(pools.clone(), 8);
+        let mut pass = waveform_pass(pools.clone(), NonZeroU32::MIN);
         let mut audio = chunk(&pools, &analysis_silence, 1024, 529);
         audio.meta.media_origin = None;
         audio.meta.visible_origin = None;
@@ -982,7 +984,7 @@ mod tests {
         analysis_silence: Vec<f32>,
     ) {
         let pools = pools();
-        let mut pass = waveform_pass(pools.clone(), 8);
+        let mut pass = waveform_pass(pools.clone(), NonZeroU32::MIN);
         let mut extent = Extent::default();
         let first = chunk(&pools, &analysis_silence, 1024, 22_050);
         assert_eq!(
@@ -1028,7 +1030,7 @@ mod tests {
         analysis_silence: Vec<f32>,
     ) {
         let pools = pools();
-        let mut pass = waveform_pass(pools.clone(), 8);
+        let mut pass = waveform_pass(pools.clone(), NonZeroU32::MIN);
         let mut extent = Extent::default();
         let (mut writer, mut reader) =
             crate::producer::ring::open(&pools, 64, 4).expect("ring fits");
@@ -1095,7 +1097,7 @@ mod tests {
     #[kithara::test]
     fn a_foreign_visible_clock_cannot_supply_an_unknown_media_origin(analysis_silence: Vec<f32>) {
         let pools = pools();
-        let mut pass = waveform_pass(pools.clone(), 8);
+        let mut pass = waveform_pass(pools.clone(), NonZeroU32::MIN);
         let mut first = chunk(&pools, &analysis_silence, 1024, 529);
         first.meta.media_origin = None;
         assert_eq!(

@@ -81,6 +81,7 @@ kithara-stream = { workspace = true, default-features = false }
 kithara-sync = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang", "temp-dir"] }
 kithara-warp = { workspace = true }
+kithara-waveform = { workspace = true }
 kithara-worker = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

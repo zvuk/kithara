@@ -300,6 +300,7 @@ mod tests {
     use kithara_play::{ArtifactSource, PlayWorker, PlayWorkerConfig, mock};
     use kithara_render::{LaneProtocol, LaneStart, Open};
     use kithara_test_utils::{TestTempDir, kithara, temp_dir};
+    use kithara_waveform::Waveform;
     use kithara_worker::Worker;
 
     use super::*;
@@ -374,7 +375,9 @@ mod tests {
             .store(AssetStore::builder(pools()).build())
             .beat_grid(ArtifactSource::from(grid.clone()))
             .key(ArtifactSource::from(key.clone()))
-            .waveform(ArtifactSource::Value(Arc::default()))
+            .waveform(ArtifactSource::Value(Arc::new(
+                Waveform::try_new(Vec::new(), NonZeroU64::MIN).expect("empty waveform is valid"),
+            )))
             .build();
         let (returned, _load) = loader
             .prepare_source(

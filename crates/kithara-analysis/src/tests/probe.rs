@@ -70,13 +70,14 @@ fn a_real_track_reaches_its_end_whole(probe_pcm: Option<Vec<f32>>) {
         reader: Box::new(track),
         cancel: CancelToken::root(),
         resume: None,
+        report: None,
         demand: AnalysisDemand::ALL,
     })
     .expect("node accepts the job");
 
     let mut node = NodeHarness::with_settings(
         AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
-            .with_waveform(64)
+            .with_waveform(NonZeroU32::MIN)
             .with_beat(),
         receiver,
         NonZeroU32::new(16).expect("nonzero"),

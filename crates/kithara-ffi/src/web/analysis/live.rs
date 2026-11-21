@@ -172,7 +172,6 @@ mod runs {
 
     mod consts {
         pub(super) const CALLER_HOLDS_NO_REVISION: u64 = 0;
-        pub(super) const WAVEFORM_MAX_BUCKETS: usize = 96_000;
     }
 
     type WebAnalyzerBuilder = AnalyzerBuilder<PlaybackResamplerBackend, FfiPools>;
@@ -190,7 +189,7 @@ mod runs {
         pub(crate) fn new(pools: Pools) -> Self {
             let builder: WebAnalyzerBuilder = AnalyzerBuilder::new(pools.clone())
                 .with_beat_config(BeatAnalysisConfig::default())
-                .with_waveform(consts::WAVEFORM_MAX_BUCKETS)
+                .with_waveform(NonZeroU32::MIN)
                 .with_beat();
             Self {
                 worker: Arc::new(AnalysisWorker::new(
@@ -264,7 +263,7 @@ mod runs {
                 match open_reader(config, &reader_cancel, rate, pools).await {
                     Ok(reader) => {
                         queue.attach_observer(id, producer);
-                        worker.start(pass, reader);
+                        let _completion = worker.start(pass, reader);
                         send_reply(request_id, Ok(()));
                     }
                     Err(error) => {
