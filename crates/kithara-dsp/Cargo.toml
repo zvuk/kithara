@@ -68,6 +68,10 @@ required-features = ["spectrum", "routes"]
 [[bench]]
 name = "delay"
 harness = false
+
+[[bench]]
+name = "reverb_primitives"
+harness = false
 required-features = ["routes"]
 
 [[bench]]

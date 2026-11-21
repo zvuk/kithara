@@ -1,3 +1,8 @@
+#![forbid(unsafe_code)]
+
+use criterion::{criterion_group, criterion_main};
+
 mod suite;
 
-pub(super) use suite::benchmarks;
+criterion_group!(benches, suite::benchmarks);
+criterion_main!(benches);
