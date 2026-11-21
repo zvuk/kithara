@@ -192,6 +192,14 @@ fn a_handle_clone_sees_the_replacement_band_array(#[by_ref] worker_owner: &Worke
             .collect::<Vec<_>>(),
         vec![-6.0, -2.0, 2.0, 1.0]
     );
+    mixer_call(&mut queue, &mut mixer, &mut loads, eq, |control| {
+        control.set_eq_layout(vec![EqBandConfig::builder().gain_db((-9.0).into()).build()])?;
+        control.reset_eq()
+    });
+    let rendered = mixer.ends.snapshot.read();
+    assert_eq!(rendered.eq.bands(), 1);
+    assert_eq!(rendered.eq.gain(0), Some(kithara_play::GainDb::DEFAULT));
+    assert_eq!(rendered.eq.killed(0), Some(false));
 }
 
 #[kithara::test(tokio)]

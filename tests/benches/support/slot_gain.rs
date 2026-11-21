@@ -138,9 +138,8 @@ pub(super) fn gain_shape(c: &mut Criterion) {
         let mut last = vec![0.0; usize::from(frames)];
         group.bench_function(format!("shape_cubic/{frames}"), |b| {
             b.iter(|| {
-                for (value, &position) in last.iter_mut().zip(black_box(&positions)) {
-                    *value = shape.progress(position);
-                }
+                last.copy_from_slice(black_box(&positions));
+                shape.process(&mut last, [0.0, 1.0]);
                 black_box(&last);
             });
             assert_eq!(last, expected);
