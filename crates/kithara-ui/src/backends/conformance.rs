@@ -355,7 +355,7 @@ fn vello_runs_a_ramp_across_the_shape_it_fills() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1544)))]
 fn vello_ramps_a_radial_out_from_the_centre_it_was_given() {
     assert!(
         ramp_runs_outward(&through_vello(&radial())),
@@ -366,7 +366,7 @@ fn vello_ramps_a_radial_out_from_the_centre_it_was_given() {
 /// iced has no radial gradient, so the honest answer is nothing — including the
 /// plain rectangle underneath, which it could have drawn perfectly well. Half a
 /// picture is a picture the list never described.
-#[kithara::test(timeout(Short))]
+#[kithara::test(timeout(::std::time::Duration::from_millis(3674)))]
 fn iced_refuses_a_list_holding_a_ramp_it_cannot_draw() {
     assert!(
         surface_is_untouched(&through_iced(&radial())),
@@ -378,7 +378,7 @@ fn iced_refuses_a_list_holding_a_ramp_it_cannot_draw() {
 /// ends and mitres its corners reaches past it. The cap and the join are asked
 /// about separately, so a backend that honours one and drops the other is
 /// caught by the half it dropped.
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1370)))]
 fn vello_shapes_a_stroke_the_way_the_pen_asked() {
     let flush = through_vello(&shaped(flush()));
     let reaching = through_vello(&shaped(reaching()));
@@ -429,7 +429,7 @@ fn iced_runs_a_ramp_across_the_shape_it_fills() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1354)))]
 fn iced_linear_gradient_quarters_preserve_the_authored_fraction() {
     let rgba = through_iced(&ramped());
     let middle = consts::OUTER.y + consts::OUTER.h / 2.0;
@@ -445,7 +445,7 @@ fn iced_linear_gradient_quarters_preserve_the_authored_fraction() {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1406)))]
 #[case::opaque([0.0, 0.25, 0.75, 1.0], [1.0; 4], [[128,128,0], [0,191,64], [0,64,191], [128,128,255]])]
 #[case::alpha([0.0, 0.25, 0.75, 1.0], [1.0, 0.5, 1.0, 0.25], [[128,64,0], [0,96,64], [0,32,191], [32,32,159]])]
 #[case::coincident([0.0, 0.5, 0.5, 1.0], [1.0; 4], [[191,64,0], [64,191,0], [64,64,255], [191,191,255]])]
