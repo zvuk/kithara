@@ -74,9 +74,11 @@ impl Session {
         capabilities: Map<String, Value>,
     ) -> Result<Self> {
         let port = free_loopback_port()?;
-        let arguments = env::var(format!("{}_ARGS", browser.variable())).unwrap_or_default();
+        let variable = format!("{}_ARGS", browser.variable());
+        let arguments = driver_arguments(&env::var(&variable).unwrap_or_default())
+            .with_context(|| format!("{variable} does not split as a shell splits it"))?;
         let driver = Command::new(&path)
-            .args(arguments.split_whitespace())
+            .args(arguments)
             .arg(format!("--port={port}"))
             .stdout(Stdio::null())
             .spawn()
@@ -216,6 +218,12 @@ impl Drop for Session {
     }
 }
 
+/// The extra driver arguments a `<VAR>_ARGS` value holds, split as a shell
+/// splits them, so a quoted path with spaces stays one argument.
+fn driver_arguments(value: &str) -> Option<Vec<String>> {
+    shlex::split(value)
+}
+
 /// Chrome is opened with the legacy `desiredCapabilities` body that
 /// `webdriver.json`'s `w3c: false` asks for; Firefox and Safari speak W3C.
 fn new_session(browser: Browser, mut capabilities: Map<String, Value>) -> Value {
@@ -241,5 +249,25 @@ fn new_session(browser: Browser, mut capabilities: Map<String, Value>) -> Value 
             json!({ "capabilities": { "alwaysMatch": capabilities, "firstMatch": [{}] } })
         }
         Browser::Safari => json!({ "desiredCapabilities": {}, "capabilities": {} }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::driver_arguments;
+
+    #[kithara::test(native)]
+    fn driver_arguments_split_as_a_shell_splits() {
+        assert_eq!(
+            driver_arguments(r"--verbose --log-path='/ci/job'\''s temp/chromedriver.log'"),
+            Some(vec![
+                "--verbose".to_owned(),
+                "--log-path=/ci/job's temp/chromedriver.log".to_owned(),
+            ])
+        );
+        assert_eq!(driver_arguments(""), Some(Vec::new()));
+        assert_eq!(driver_arguments("--log-path='unclosed"), None);
     }
 }
