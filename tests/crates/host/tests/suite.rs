@@ -8,6 +8,8 @@ mod deck_fx;
 #[cfg(not(target_arch = "wasm32"))]
 mod deck_membership;
 #[cfg(not(target_arch = "wasm32"))]
+mod fx_programs;
+#[cfg(not(target_arch = "wasm32"))]
 mod metronome;
 #[cfg(not(target_arch = "wasm32"))]
 mod metronome_grid;
