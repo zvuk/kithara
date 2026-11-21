@@ -453,7 +453,7 @@ fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
     assert_eq!(trace.events_of("fairness_yield").len(), 1);
 }
 
-#[kithara::test(native, flash(true), timeout(Duration::from_secs(10)))]
+#[kithara::test(native, flash(true))]
 async fn progress_fairness_keeps_runnable_work_ahead_of_a_waiting_reader() {
     let reader_budget = Duration::from_secs(3);
     let mut distant_timer = std::pin::pin!(time::sleep(Duration::from_secs(30)));
@@ -765,7 +765,12 @@ mod native {
         report
     }
 
-    #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(2))]
+    #[kithara::test(
+        native,
+        tokio,
+        timeout(::std::time::Duration::from_millis(12028)),
+        hang_timeout_secs(2)
+    )]
     async fn an_idle_backpressure_poll_can_resume_after_an_unrelated_timer() {
         let owner = kithara_test_utils::off_thread::OffThread::spawn("idle-backpressure", || {
             Ok::<_, ()>(())

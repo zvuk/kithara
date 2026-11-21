@@ -7,7 +7,7 @@ use kithara::{
     encode::EncodeConfig,
     host::{Host, HostConfig, HostSettings},
     output::{OfflineRenderError, OfflineRenderRequest, OfflineRenderer},
-    platform::{CancelScope, time::Duration},
+    platform::CancelScope,
     record::{RecordingConfig, RecordingCore, RecordingSink, assets::AssetPartSink},
     signal::AudioSpec,
 };
@@ -79,7 +79,7 @@ fn offline_render(sample_rate: NonZeroU32, frames: u64) -> (Host<TestPools>, Off
     (host, request)
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(10)))]
+#[kithara::test(native)]
 fn offline_renderer_publishes_only_complete_recordings() {
     let sample_rate = NonZeroU32::new(48_000).expect("test sample rate");
     let frames = 8;

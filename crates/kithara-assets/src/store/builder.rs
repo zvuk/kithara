@@ -380,7 +380,7 @@ mod tests {
         assert!(!hub.has_worker());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn commit_publishes_asset_committed() {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
@@ -408,7 +408,7 @@ mod tests {
     /// asked for again once it is back, and that request has to open a fresh
     /// download rather than trip over the wreckage of the last one.
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn reacquire_after_failure_opens_a_fresh_download() {
         let dir = tempdir().unwrap();
         let store = AssetStore::builder(crate::test_pools::pools())
@@ -438,7 +438,7 @@ mod tests {
         drop(parked);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn fail_publishes_asset_failed() {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
@@ -463,7 +463,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn quota_eviction_publishes_asset_evicted() {
         let dir = tempdir().unwrap();
         let bus = EventBus::new(8);
@@ -492,7 +492,7 @@ mod tests {
         )));
     }
 
-    #[kithara::test(native, timeout(Duration::from_secs(5)))]
+    #[kithara::test(native)]
     fn builder_local_mode_decorators_inactive() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.bin");
@@ -518,7 +518,7 @@ mod tests {
         assert_eq!(fs::read(&file_path).unwrap(), b"data");
     }
 
-    #[kithara::test(native, timeout(Duration::from_secs(5)))]
+    #[kithara::test(native)]
     fn memory_backend_opens_absolute_file_in_place() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.bin");
@@ -557,7 +557,7 @@ mod tests {
         assert_eq!(fs::read(&file_path).unwrap(), b"data");
     }
 
-    #[kithara::test(native, timeout(Duration::from_secs(5)))]
+    #[kithara::test(native)]
     fn builder_defaults_all_enabled() {
         let dir = tempdir().unwrap();
         let store = AssetStore::builder(crate::test_pools::pools())
@@ -577,7 +577,7 @@ mod tests {
         assert_eq!(&buf, b"hello");
     }
 
-    #[kithara::test(native, timeout(Duration::from_secs(5)))]
+    #[kithara::test(native)]
     fn builder_absolute_key_via_arbitrary_root() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("song.mp3");
@@ -597,7 +597,7 @@ mod tests {
         assert_eq!(&buf[..n], b"test data");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn memory_backend_serves_reads_without_a_disk_root() {
         let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
@@ -612,7 +612,7 @@ mod tests {
         assert_eq!(&buf[..n], b"data");
     }
 
-    #[kithara::test(native, timeout(Duration::from_secs(5)))]
+    #[kithara::test(native)]
     fn disk_backend_persists_across_store_reopen() {
         let dir = tempdir().unwrap();
         let key = ResourceKey::relative(consts::BUILDER_ROOT, "seg.m4s");
@@ -640,7 +640,7 @@ mod tests {
         assert_eq!(&buf[..n], b"data");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn memory_capabilities_lack_evict_and_lease() {
         let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
@@ -651,7 +651,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn disk_defaults_all_capabilities() {
         let dir = tempdir().unwrap();
         let store = AssetStore::builder(crate::test_pools::pools())
@@ -662,7 +662,7 @@ mod tests {
         assert_eq!(store.capabilities(), Capabilities::all());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn memory_retains_data_within_cache_capacity() {
         let backend = AssetStore::builder(crate::test_pools::pools())
             .cache_capacity(NonZeroUsize::new(5).unwrap())
@@ -685,7 +685,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn memory_evicts_data_beyond_cache_capacity() {
         let backend = AssetStore::builder(crate::test_pools::pools())
             .cache_capacity(NonZeroUsize::new(3).unwrap())
@@ -706,7 +706,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn memory_max_bytes_bounds_large_handle_cache() {
         let backend = AssetStore::builder(crate::test_pools::pools())
             .cache_capacity(NonZeroUsize::new(128).unwrap())
@@ -729,7 +729,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn memory_max_bytes_does_not_retain_oversized_resource() {
         let backend = AssetStore::builder(crate::test_pools::pools())
             .cache_capacity(NonZeroUsize::new(128).unwrap())
@@ -749,7 +749,7 @@ mod tests {
     /// whose file is gone, and the HLS reader spins on `wait_range=Ready` / `read_at=Retry`
     /// until the hang detector fires.
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn red_test_lease_resource_drop_strands_availability_index() {
         let dir = tempdir().unwrap();
         let store = AssetStore::builder(crate::test_pools::pools())
@@ -795,7 +795,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn red_test_hydrated_index_strands_a_pruned_cache() {
         let dir = tempdir().unwrap();
         let seg_root = "seg_root";
@@ -840,7 +840,7 @@ mod tests {
     /// `contains_range`/`final_len` answers strand a deleted resource and the reader
     /// spins on `wait_range=Ready` / `read_at=Retry` until the hang detector fires.
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn red_test_delete_asset_strands_availability_index() {
         let dir = tempdir().unwrap();
         let store = AssetStore::builder(crate::test_pools::pools())
@@ -964,7 +964,7 @@ mod tests {
     /// builder through `maybe_cache_capacity` and the store enforces it, not
     /// just the settings struct that reports it.
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn a_store_built_from_the_documents_settings_enforces_the_capacity_it_named() {
         let settings: AssetStoreConfigPatch =
             serde_yaml_ng::from_str("cache_capacity: 1\n").expect("the document types");

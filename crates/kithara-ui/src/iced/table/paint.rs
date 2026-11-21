@@ -58,7 +58,7 @@ impl TablePaint {
             body_inset: skin.table.header_height
                 + self.face.metrics().footer_height()
                 + skin.table.grid_gap * 2.0,
-            content_height: table_content_height(self.face.rows().len(), skin),
+            content_height: table_content_height(self.face.rows().len(), &skin.table),
             content_width: self.face.metrics().width(self.face.columns()),
             divider_columns: self
                 .face

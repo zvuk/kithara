@@ -8,7 +8,7 @@ use std::{
 };
 
 use kithara_assets::DiskAssetStore;
-use kithara_platform::{CancelToken, time::Duration};
+use kithara_platform::CancelToken;
 use kithara_test_utils::{kithara, temp_dir};
 
 use super::support::PinsIndex;
@@ -29,7 +29,7 @@ enum ReadBack {
     NewStore,
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(native, hang_timeout_secs(1))]
 #[case::missing_file(None)]
 #[case::corrupted_file(Some(&b"{ this is not valid json"[..]))]
 fn pins_index_bad_state_returns_default(
@@ -61,7 +61,7 @@ fn pins_index_bad_state_returns_default(
     );
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(native, hang_timeout_secs(1))]
 #[case::new_index(vec!["asset-a", "asset-b"], ReadBack::NewIndex)]
 #[case::single(vec!["asset-a"], ReadBack::SameIndex)]
 #[case::three(vec!["asset-a", "asset-b", "asset-c"], ReadBack::SameIndex)]
@@ -106,7 +106,7 @@ fn pins_index_roundtrip(
     assert_eq!(loaded, pins, "pins index must roundtrip via store/load");
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(native, hang_timeout_secs(1))]
 #[case(2)]
 #[case(3)]
 #[case(5)]

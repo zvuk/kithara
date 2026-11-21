@@ -69,7 +69,7 @@ impl SessionInbox for TestSessionInbox {
     }
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1917)))]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 #[case::manual(false)]
 #[case::all_bands(true)]

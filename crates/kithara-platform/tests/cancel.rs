@@ -14,7 +14,7 @@ use kithara_platform::{CancelToken, sync::Arc};
 use kithara_test_dylib as _;
 use kithara_test_utils::kithara;
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 async fn select_cancel_branch_is_cancel_safe() {
     // The cancelled() branch losing the select! race must unregister its slot,
     // so a later poll of a fresh Cancelled does not leak or lose the wake.
@@ -34,7 +34,7 @@ async fn select_cancel_branch_is_cancel_safe() {
         .expect("cancelled() must resolve after the master cancel");
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 async fn recreate_cancelled_in_loop_does_not_leak_slots() {
     // Re-creating and dropping Cancelled many times must not accumulate waker
     // slots: a final cancel still wakes a fresh future. This drives the real
@@ -57,7 +57,7 @@ async fn recreate_cancelled_in_loop_does_not_leak_slots() {
         .expect("cancelled() must still resolve after slot churn");
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn late_sync_registration_after_fire_fires_immediately() {
     let token = CancelToken::never();
     token.cancel();
@@ -74,7 +74,7 @@ fn late_sync_registration_after_fire_fires_immediately() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 async fn late_task_registration_after_fire_resolves() {
     // A cancelled() future first polled after the node has already cancelled
     // must resolve, not park forever (the fired latch on the task path).
@@ -85,7 +85,7 @@ async fn late_task_registration_after_fire_resolves() {
         .expect("cancelled() first polled post-cancel must resolve");
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio)]
 async fn flag_visible_after_cancelled_resolves() {
     // Release/Acquire ordering: a task that observed the cancel wake must see
     // the flag set (the Node sets the flag before firing wakers).
@@ -107,7 +107,7 @@ async fn flag_visible_after_cancelled_resolves() {
     assert!(seen, "flag must be visible once the wake was observed");
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn late_child_is_born_cancelled() {
     let master = CancelToken::root();
     master.cancel();
@@ -118,7 +118,7 @@ fn late_child_is_born_cancelled() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn repeat_cancel_is_idempotent() {
     let token = CancelToken::never();
     token.cancel();
@@ -126,7 +126,7 @@ fn repeat_cancel_is_idempotent() {
     assert!(token.is_cancelled());
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn drop_intermediate_token_root_cancel_reaches_grandchild() {
     // PARENT-LIVENESS PIN: drop the only handle to the intermediate token; the
     // grandchild must still observe a root cancel.

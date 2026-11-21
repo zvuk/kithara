@@ -158,7 +158,7 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use kithara_platform::{CancelToken, time::Duration};
+    use kithara_platform::CancelToken;
 
     use super::*;
     #[cfg(not(target_arch = "wasm32"))]
@@ -170,7 +170,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn mmap_variant_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.bin");
@@ -191,7 +191,7 @@ mod tests {
         assert!(res.path().is_some());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn mem_variant_roundtrip() {
         let mem = mem_resource();
         let res = StorageResource::from(mem);
@@ -206,7 +206,7 @@ mod tests {
         assert!(res.path().is_none());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn mem_double_commit_is_idempotent() {
         let mem = mem_resource();
         let res = StorageResource::from(mem);
@@ -224,7 +224,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn from_mmap_resource() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("conv.bin");
@@ -237,14 +237,14 @@ mod tests {
         assert!(matches!(res, StorageResource::Mmap(_)));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn from_mem_resource() {
         let mem = mem_resource();
         let res: StorageResource = mem.into();
         assert!(matches!(res, StorageResource::Mem(_)));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn status_delegation() {
         let mem = mem_resource();
         let res = StorageResource::from(mem);
@@ -255,7 +255,7 @@ mod tests {
         assert!(matches!(res.status(), ResourceStatus::Committed { .. }));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn wait_range_delegation() {
         let mem = mem_resource();
         let res = StorageResource::from(mem);
@@ -265,7 +265,7 @@ mod tests {
         assert_eq!(outcome, WaitOutcome::Ready);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn fail_delegation() {
         let mem = mem_resource();
         let res = StorageResource::from(mem);
@@ -274,7 +274,7 @@ mod tests {
         assert_eq!(res.status(), ResourceStatus::Failed("boom".to_string()));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn reactivate_delegation() {
         let mem = mem_resource();
         let res = StorageResource::from(mem);
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(res.status(), ResourceStatus::Active);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn reactivate_clears_failed_for_refetch() {
         let mem = mem_resource();
         let res = StorageResource::from(mem);

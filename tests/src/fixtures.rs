@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+use futures::executor::block_on;
 use kithara;
 use kithara_test_fixtures::SignalAsset;
 use url::Url;
@@ -37,6 +39,21 @@ pub async fn mixed_plain() -> (TestServerHelper, Url) {
     let server = TestServerHelper::new().await;
     let url = mixed_codec_ladder_url(&server, false).await;
     (server, url)
+}
+
+/// Master URL of [`mixed_plain`]'s ladder, served before the test body runs.
+///
+/// Native registration reads every ladder segment from the fixture store and
+/// never suspends, so a `#[by_ref]` parameter keeps that read out of the
+/// test's time budget. The ladder stays registered in the process-global
+/// server.
+#[cfg(not(target_arch = "wasm32"))]
+#[must_use]
+pub fn mixed_plain_url() -> Url {
+    block_on(async {
+        let server = TestServerHelper::new().await;
+        mixed_codec_ladder_url(&server, false).await
+    })
 }
 
 #[kithara::fixture]

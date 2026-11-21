@@ -3,12 +3,11 @@
 use std::num::NonZeroUsize;
 
 use kithara_assets::{AssetResourceState, AssetStore, StorageBackend, WriteSide};
-use kithara_platform::time::Duration;
 use kithara_test_utils::{bufpool::pools, kithara};
 
 use super::support::{LiteralLayout, literal_layouts, pending, read_bytes, resource, source};
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn retained_resource_survives_memory_cache_displacement() {
     let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
@@ -47,7 +46,7 @@ fn retained_resource_survives_memory_cache_displacement() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn memory_store_keeps_assets_past_max_assets() {
     let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
@@ -80,7 +79,7 @@ fn memory_store_keeps_assets_past_max_assets() {
     assert_eq!(read_bytes(&reader, 0, 4), b"aaaa");
 }
 
-#[kithara::test(timeout(Duration::from_secs(2)))]
+#[kithara::test]
 fn memory_store_reports_committed_state_after_handles_drop() {
     let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)

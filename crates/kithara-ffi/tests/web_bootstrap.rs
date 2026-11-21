@@ -59,8 +59,15 @@ async fn worklet_import_waits_for_worker_bootstrap_admission() {
     // A stuck snapshot query must not hold up reporting a readiness failure.
     let locks = timeout(Duration::from_millis(100), admission.bootstrap_locks()).await;
     let events = admission.bootstrap_events();
+    let module_urls = admission.module_urls();
+    // Diagnostic errors here must not mask the original failure cause: a
+    // failing resource query is logged as text and never panics.
+    let module_resources = admission
+        .module_resources()
+        .unwrap_or_else(|error| format!("module_resources diagnostic error: {error:?}"));
+    let document_url = document.url().unwrap_or_default();
     wasm_bindgen_test::console_log!(
-        "BOOTSTRAP_READY volume={} mixer_blocks={} worklet_imports={} audio_contexts={} bootstrap_events={events:?} bootstrap_locks={locks:?} held_bootstrap_locks={held_locks:?}",
+        "BOOTSTRAP_READY volume={} mixer_blocks={} worklet_imports={} audio_contexts={} bootstrap_events={events:?} bootstrap_locks={locks:?} held_bootstrap_locks={held_locks:?} module_urls={module_urls:?} module_resources={module_resources} document_url={document_url}",
         volume,
         mixer_blocks,
         admission.worklet_imports(),
@@ -136,6 +143,7 @@ mod admission {
         imports: Cell<u32>,
         requests: Cell<u32>,
         bootstrap: Events,
+        modules: RefCell<Vec<String>>,
         contexts: RefCell<Vec<WeakRef<JsValue>>>,
         hooks: RefCell<Vec<Property>>,
     }
@@ -206,6 +214,35 @@ mod admission {
             self.release_hooks
                 .push(Property::value(&self.locks, "request", &request)?);
             self.install_worklets()?;
+            self.install_blob_marker()?;
+            Ok(())
+        }
+
+        // Test-only witness: append a native console marker AFTER the
+        // original parts of the real HostDevice worklet blob at its
+        // synchronous construction. The marker is module code printing its
+        // own import.meta.url, so a driver-log witness line proves the
+        // worklet module body reached its final statement. Only blobs whose
+        // parts build the KitharaOutput processor are extended; the options
+        // argument and every original part pass through untouched, no URL is
+        // read, no fetch is issued, and no promise gate is added. Any
+        // reflection problem leaves the original arguments unchanged.
+        fn install_blob_marker(&mut self) -> Result<(), JsValue> {
+            let global = js_sys::global();
+            let original = get(&global, "Blob")?;
+            let marked = proxy(&original, "construct", move |target, args, new_target| {
+                let args = worklet_parts_with_marker(&args);
+                Ok(Reflect::construct_with_new_target(
+                    target.unchecked_ref(),
+                    args.unchecked_ref(),
+                    new_target.unchecked_ref(),
+                )?
+                .into())
+            })?;
+            self.observation
+                .hooks
+                .borrow_mut()
+                .push(Property::value(&global, "Blob", &marked)?);
             Ok(())
         }
 
@@ -328,6 +365,33 @@ mod admission {
             snapshot
         }
 
+        pub(super) fn module_urls(&self) -> Vec<String> {
+            self.observation.modules.borrow().clone()
+        }
+
+        // Partial ledger only: these are the window agent's resource timing
+        // entries. The blob root and every imported shim are distinct
+        // requests, and worklet-agent requests are incompletely reported, so
+        // missing entries here prove nothing by themselves.
+        pub(super) fn module_resources(&self) -> Result<String, JsValue> {
+            let global = js_sys::global();
+            let performance = get(&global, "performance")?;
+            let entries = function(&performance, "getEntriesByType")?
+                .call1(&performance, &"resource".into())?
+                .dyn_into::<Array>()?;
+            let selected = Array::new();
+            let modules = self.observation.modules.borrow();
+            for entry in entries.iter() {
+                let name = get(&entry, "name")?.as_string().unwrap_or_default();
+                if modules.iter().any(|module| name == *module)
+                    || name.contains("wasm-bindgen-test")
+                {
+                    selected.push(&entry);
+                }
+            }
+            Ok(js_sys::JSON::stringify(&selected)?.into())
+        }
+
         pub(super) async fn bootstrap_locks(&self) -> Result<JsValue, JsValue> {
             let snapshot = JsFuture::from(
                 function(&self.locks, "query")?
@@ -394,6 +458,9 @@ mod admission {
                 "apply",
                 move |target, receiver, args| {
                     state.imports.set(state.imports.get() + 1);
+                    if let Some(module) = get(&args, "0").ok().and_then(|value| value.as_string()) {
+                        state.modules.borrow_mut().push(module);
+                    }
                     let promise = apply(&target, &receiver, &args)?;
                     observe(&state.bootstrap, "module", &promise)?;
                     Ok(promise)
@@ -505,5 +572,21 @@ mod admission {
         });
         function(promise, "then")?.call2(promise, &resolve, &reject)?;
         Ok(())
+    }
+
+    fn worklet_parts_with_marker(args: &JsValue) -> JsValue {
+        let marker = "\n;console.log(\"KITHARA_PROBE worklet-module-body-evaluated module_url=\" + import.meta.url);";
+        if let Ok(parts) = get(args, "0").and_then(|parts| parts.dyn_into::<Array>()) {
+            let gated = parts.iter().any(|part| {
+                matches!(
+                    part.as_string(),
+                    Some(source) if source.contains("registerProcessor(\"KitharaOutput\"")
+                )
+            });
+            if gated {
+                parts.push(&marker.into());
+            }
+        }
+        args.clone()
     }
 }

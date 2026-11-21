@@ -69,10 +69,14 @@ tracing-subscriber = { workspace = true, optional = true, features = ["env-filte
 tracing-wasm = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 usdt = { workspace = true, optional = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

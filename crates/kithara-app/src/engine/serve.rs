@@ -29,8 +29,7 @@ pub(crate) async fn serve(
 #[cfg(test)]
 mod tests {
     use ::kithara::platform::{
-        CancelToken,
-        time::{self, Duration},
+        CancelToken, time,
         tokio::sync::{mpsc, oneshot},
     };
     use kithara_test_utils::kithara;
@@ -45,7 +44,7 @@ mod tests {
         let shutdown = CancelToken::root();
 
         time::timeout(
-            Duration::from_secs(2),
+            kithara_test_utils::TestBudget::Quick.timeout(false),
             serve(
                 || Err(EngineError::Missing("base worker")),
                 built_tx,

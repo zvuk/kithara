@@ -18,7 +18,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn an_injected_downloader_carries_the_remote_file_requests() {
     let bytes: Vec<_> = (0..4096)
         .map(|i| u8::try_from(i % 251).expect("fixture byte fits"))
@@ -76,7 +76,7 @@ async fn an_injected_downloader_carries_the_remote_file_requests() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 #[case::uncached(false)]
 #[case::cached(true)]
 async fn a_remote_file_without_a_downloader_is_refused(

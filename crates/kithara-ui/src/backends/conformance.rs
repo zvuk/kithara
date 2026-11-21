@@ -24,8 +24,9 @@ use vello::{
     kurbo::Affine,
     peniko::{Color as VelloColor, color::palette::css::BLACK},
     wgpu::{
-        DeviceDescriptor, Extent3d, Instance, InstanceDescriptor, RequestAdapterOptions,
-        TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
+        Device, DeviceDescriptor, Extent3d, Instance, InstanceDescriptor, Queue,
+        RequestAdapterOptions, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
+        TextureViewDescriptor,
     },
 };
 
@@ -325,7 +326,7 @@ fn through_vello(list: &DrawList) -> Vec<u8> {
     rasterise(&scene).unwrap_or_else(|error| panic!("vello must rasterise: {error}"))
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn vello_paints_what_a_clip_contains() {
     let rgba = through_vello(&clipped());
     assert!(
@@ -334,7 +335,7 @@ fn vello_paints_what_a_clip_contains() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn vello_leaves_the_hole_an_outline_asked_for() {
     let rgba = through_vello(&ring());
     let middle = consts::HOLE.y + consts::HOLE.h / 2.0;
@@ -354,7 +355,7 @@ fn vello_runs_a_ramp_across_the_shape_it_fills() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1544)))]
 fn vello_ramps_a_radial_out_from_the_centre_it_was_given() {
     assert!(
         ramp_runs_outward(&through_vello(&radial())),
@@ -365,7 +366,7 @@ fn vello_ramps_a_radial_out_from_the_centre_it_was_given() {
 /// iced has no radial gradient, so the honest answer is nothing — including the
 /// plain rectangle underneath, which it could have drawn perfectly well. Half a
 /// picture is a picture the list never described.
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(3674)))]
 fn iced_refuses_a_list_holding_a_ramp_it_cannot_draw() {
     assert!(
         surface_is_untouched(&through_iced(&radial())),
@@ -377,7 +378,7 @@ fn iced_refuses_a_list_holding_a_ramp_it_cannot_draw() {
 /// ends and mitres its corners reaches past it. The cap and the join are asked
 /// about separately, so a backend that honours one and drops the other is
 /// caught by the half it dropped.
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1370)))]
 fn vello_shapes_a_stroke_the_way_the_pen_asked() {
     let flush = through_vello(&shaped(flush()));
     let reaching = through_vello(&shaped(reaching()));
@@ -400,7 +401,7 @@ fn vello_shapes_a_stroke_the_way_the_pen_asked() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn iced_shapes_a_stroke_the_way_the_pen_asked() {
     let flush = through_iced(&shaped(flush()));
     let reaching = through_iced(&shaped(reaching()));
@@ -420,7 +421,7 @@ fn iced_shapes_a_stroke_the_way_the_pen_asked() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn iced_runs_a_ramp_across_the_shape_it_fills() {
     assert!(
         ramp_runs_across(&through_iced(&ramped())),
@@ -428,7 +429,7 @@ fn iced_runs_a_ramp_across_the_shape_it_fills() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1354)))]
 fn iced_linear_gradient_quarters_preserve_the_authored_fraction() {
     let rgba = through_iced(&ramped());
     let middle = consts::OUTER.y + consts::OUTER.h / 2.0;
@@ -444,7 +445,7 @@ fn iced_linear_gradient_quarters_preserve_the_authored_fraction() {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1406)))]
 #[case::opaque([0.0, 0.25, 0.75, 1.0], [1.0; 4], [[128,128,0], [0,191,64], [0,64,191], [128,128,255]])]
 #[case::alpha([0.0, 0.25, 0.75, 1.0], [1.0, 0.5, 1.0, 0.25], [[128,64,0], [0,96,64], [0,32,191], [32,32,159]])]
 #[case::coincident([0.0, 0.5, 0.5, 1.0], [1.0; 4], [[191,64,0], [64,191,0], [64,64,255], [191,191,255]])]
@@ -497,7 +498,7 @@ fn iced_linear_gradients_preserve_stop_intervals_and_premultiplied_alpha(
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn iced_leaves_the_hole_an_outline_asked_for() {
     assert!(
         ring_has_a_hole(&through_iced(&ring())),
@@ -505,7 +506,7 @@ fn iced_leaves_the_hole_an_outline_asked_for() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn iced_paints_what_a_clip_contains() {
     let rgba = through_iced(&clipped());
     let x = pixel_index(consts::ORIGIN.0 + consts::INSIDE.x + consts::INSIDE.w / 2.0);
@@ -556,63 +557,86 @@ fn through_iced(list: &DrawList) -> Vec<u8> {
 
 /// A wgpu device with no surface, and one scene rasterised through it.
 fn rasterise(scene: &Scene) -> Result<Vec<u8>, String> {
-    rasterise_at(
+    Rasteriser::new()?.rasterise_at(
         scene,
         (u32::from(consts::SURFACE.0), u32::from(consts::SURFACE.1)),
         BLACK,
     )
 }
 
-pub(crate) fn rasterise_at(
-    scene: &Scene,
-    size: (u32, u32),
-    base: VelloColor,
-) -> Result<Vec<u8>, String> {
-    let (width, height) = size;
-    let instance = Instance::new(&InstanceDescriptor::default());
-    let adapter = block_on(instance.request_adapter(&RequestAdapterOptions::default()))
-        .map_err(|error| format!("no wgpu adapter: {error}"))?;
-    let (device, queue) = block_on(adapter.request_device(&DeviceDescriptor::default()))
-        .map_err(|error| format!("no wgpu device: {error}"))?;
-    let mut renderer = Renderer::new(
-        &device,
-        RendererOptions {
-            use_cpu: false,
-            antialiasing_support: AaSupport::area_only(),
-            num_init_threads: None,
-            pipeline_cache: None,
-        },
-    )
-    .map_err(|error| format!("vello renderer: {error}"))?;
-    let texture = device.create_texture(&TextureDescriptor {
-        label: Some("clip-conformance"),
-        size: Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: TextureFormat::Rgba8Unorm,
-        usage: TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    renderer
-        .render_to_texture(
+pub(crate) struct Rasteriser {
+    device: Device,
+    queue: Queue,
+    renderer: Renderer,
+}
+
+impl Rasteriser {
+    pub(crate) fn new() -> Result<Self, String> {
+        let instance = Instance::new(&InstanceDescriptor::default());
+        let adapter = block_on(instance.request_adapter(&RequestAdapterOptions::default()))
+            .map_err(|error| format!("no wgpu adapter: {error}"))?;
+        let (device, queue) = block_on(adapter.request_device(&DeviceDescriptor::default()))
+            .map_err(|error| format!("no wgpu device: {error}"))?;
+        let renderer = Renderer::new(
             &device,
-            &queue,
-            scene,
-            &texture.create_view(&TextureViewDescriptor::default()),
-            &RenderParams {
-                width,
-                height,
-                base_color: base,
-                antialiasing_method: AaConfig::Area,
+            RendererOptions {
+                use_cpu: false,
+                antialiasing_support: AaSupport::area_only(),
+                num_init_threads: None,
+                pipeline_cache: None,
             },
         )
-        .map_err(|error| format!("render_to_texture: {error}"))?;
-    let mut rgba = Vec::new();
-    read_back(&device, &queue, &texture, (width, height), &mut rgba)?;
-    Ok(rgba)
+        .map_err(|error| format!("vello renderer: {error}"))?;
+        Ok(Self {
+            device,
+            queue,
+            renderer,
+        })
+    }
+
+    pub(crate) fn rasterise_at(
+        &mut self,
+        scene: &Scene,
+        size: (u32, u32),
+        base: VelloColor,
+    ) -> Result<Vec<u8>, String> {
+        let (width, height) = size;
+        let texture = self.device.create_texture(&TextureDescriptor {
+            label: Some("clip-conformance"),
+            size: Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        self.renderer
+            .render_to_texture(
+                &self.device,
+                &self.queue,
+                scene,
+                &texture.create_view(&TextureViewDescriptor::default()),
+                &RenderParams {
+                    width,
+                    height,
+                    base_color: base,
+                    antialiasing_method: AaConfig::Area,
+                },
+            )
+            .map_err(|error| format!("render_to_texture: {error}"))?;
+        let mut rgba = Vec::new();
+        read_back(
+            &self.device,
+            &self.queue,
+            &texture,
+            (width, height),
+            &mut rgba,
+        )?;
+        Ok(rgba)
+    }
 }

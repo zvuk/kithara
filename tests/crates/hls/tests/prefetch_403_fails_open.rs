@@ -19,7 +19,6 @@ use kithara_test_utils::{TestTempDir, temp_dir};
 
 #[kithara::test(
     tokio,
-    timeout(Duration::from_secs(2)),
     hang_timeout_secs(1),
     tracing("kithara_hls=debug,kithara_stream=info,warn")
 )]

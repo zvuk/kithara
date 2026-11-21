@@ -99,7 +99,12 @@ async fn stable_live_thread_baseline(hls: &CreatedHls) -> usize {
     last.unwrap_or_else(live_thread_count)
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
+#[kithara::test(
+    native,
+    tokio,
+    timeout(::std::time::Duration::from_millis(1650)),
+    hang_timeout_secs(5)
+)]
 async fn red_small_cache_seek_stress_does_not_leak_threads(
     #[future(awt)] test_pattern_hls: CreatedHls,
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {

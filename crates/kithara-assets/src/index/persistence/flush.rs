@@ -291,7 +291,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test]
     fn a_patch_writes_only_the_field_it_names() {
         let settings: FlushPolicyPatch =
             serde_yaml_ng::from_str("force_every_n_ops: 512\n").expect("the document types");
@@ -380,7 +380,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test]
     fn flush_sync_flushes_eagerly() {
         let src = CountingSource::new("src");
 
@@ -392,7 +392,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test]
     fn flush_now_drains_dirty_sources() {
         let hub = FlushHub::new(CancelToken::never(), fast_policy());
         let src = CountingSource::new("src");
@@ -420,7 +420,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test]
     fn durable_checkpoint_supersedes_a_stale_worker_snapshot() {
         struct Source {
             dirty: AtomicBool,
@@ -482,7 +482,7 @@ mod tests {
         assert!(source.durable.load(Ordering::Acquire));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test]
     fn flush_sync_uses_non_durable_variant() {
         let src = CountingSource::new("src");
 
@@ -506,7 +506,7 @@ mod tests {
     /// to the debounce deadline the moment the worker parks: the debounce
     /// closes the window instead of the cap, and each signal buys its own
     /// flush.
-    #[kithara::test(flash(false), timeout(Duration::from_secs(5)))]
+    #[kithara::test(flash(false))]
     fn worker_coalesces_burst_into_single_flush() {
         const BURST: usize = 5;
 
@@ -538,7 +538,7 @@ mod tests {
     /// The other exit from the window, which the burst above no longer
     /// reaches: a lone signal waits the debounce out. Waiting on the
     /// flush itself keeps the window length out of the claim.
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn worker_flushes_once_the_debounce_window_elapses() {
         let hub = FlushHub::new(CancelToken::never(), fast_policy());
         let (flushed_tx, flushed_rx) = mpsc::channel();
@@ -563,7 +563,7 @@ mod tests {
     /// closed or open a fresh one that the debounce holds shut, and
     /// neither reaches the source twice. Real clock, for the reason
     /// spelled out above `worker_coalesces_burst_into_single_flush`.
-    #[kithara::test(flash(false), timeout(Duration::from_secs(5)))]
+    #[kithara::test(flash(false))]
     fn force_every_n_ops_bypasses_debounce() {
         let policy = FlushPolicy {
             debounce: Duration::from_secs(10),
@@ -588,7 +588,7 @@ mod tests {
         assert_eq!(flushed_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn cancel_triggers_final_flush() {
         let cancel = CancelToken::never();
         let hub = FlushHub::new(cancel.clone(), fast_policy());
@@ -609,7 +609,7 @@ mod tests {
         assert_eq!(flushed_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn dropped_source_is_gc_d_on_next_cycle() {
         let hub = FlushHub::new(CancelToken::never(), fast_policy());
         let src = CountingSource::new("ephemeral");
@@ -637,7 +637,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn failed_flush_keeps_dirty_for_retry() {
         struct FailingSource {
             dirty: AtomicBool,
@@ -684,7 +684,7 @@ mod tests {
         assert!(!src.dirty.load(Ordering::Acquire));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test]
     fn register_lazily_starts_worker() {
         let hub = FlushHub::new(CancelToken::never(), fast_policy());
         assert!(
@@ -699,7 +699,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn repeated_hub_drop_cancels_cleanly() {
         for _ in 0..20 {
             let hub = FlushHub::new(CancelToken::never(), fast_policy());
@@ -712,7 +712,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, tokio, timeout(Duration::from_secs(2)))]
+    #[kithara::test(native, tokio)]
     async fn dropping_the_last_hub_does_not_block_an_async_poll() {
         let _mode = kithara_platform::no_block::force_panic_mode();
         let hub = FlushHub::new(CancelToken::never(), fast_policy());

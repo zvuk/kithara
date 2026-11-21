@@ -18,7 +18,7 @@ impl NetObserver for Retries {
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio)]
 async fn a_request_without_a_transport_fails_at_once_without_retrying() {
     let retries = Arc::new(Retries::default());
     let options = NetOptions::builder()

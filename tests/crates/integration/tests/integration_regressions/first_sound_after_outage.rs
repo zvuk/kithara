@@ -52,7 +52,7 @@ async fn first_sound_source() -> (PrivateTestServer, String) {
 /// is playing yet — the load itself fails, so there is no reader, no ring and no
 /// underrun. The track must still be playable once connectivity returns,
 /// without the user selecting it a second time.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread)]
 async fn first_sound_arrives_after_an_outage_before_playback(
     temp_dir: TestTempDir,
     #[future(awt)] first_sound_source: (PrivateTestServer, String),

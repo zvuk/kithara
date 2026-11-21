@@ -34,7 +34,7 @@ use crate::bufpool_ext::pools;
 /// silent forever. The first player in a process only escaped this because
 /// the very first `start_stream` blocks `play()` long enough for the load
 /// to win the race.
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio)]
 async fn play_issued_before_the_load_lands_still_starts_the_track(
     #[future(awt)] served_mp3: (TestServerHelper, Url),
 ) {

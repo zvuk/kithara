@@ -198,13 +198,13 @@ impl PinsIndex {
 mod tests {
     use std::fs;
 
-    use kithara_platform::{CancelToken, time::Duration};
+    use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
 
     use super::*;
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn empty_index_has_no_pins() {
         let pools = crate::test_pools::pools();
         let temp_dir = tempdir().unwrap();
@@ -222,7 +222,7 @@ mod tests {
         PinsIndex::with_persist_at(path.to_path_buf(), crate::test_pools::byte_buffer(&pools))
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn durable_pin_persists_immediately() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
@@ -233,7 +233,7 @@ mod tests {
         assert!(path.exists(), "a durable pin must materialise pins.bin");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn durable_unpin_persists_immediately() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
@@ -248,7 +248,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn local_pin_stays_off_disk() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
@@ -262,7 +262,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn local_pin_bars_eviction_like_any_other() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
@@ -276,7 +276,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn a_local_pin_alongside_a_durable_one_leaves_the_file_alone() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
@@ -294,7 +294,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn a_live_local_pin_survives_the_durable_one() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
@@ -310,7 +310,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn refcount_coalesces_repeated_pins() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(transitions_out, 0, "intermediate decrements stay in-memory");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn concurrent_leases_keep_pin_alive() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
@@ -343,7 +343,7 @@ mod tests {
         assert!(!idx.inner.state.contains_key("playlist"));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn durable_pins_persist_across_instances() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("shared.bin");
@@ -356,7 +356,7 @@ mod tests {
         assert!(reopened.inner.state.contains_key("persistent_asset"));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn local_pins_do_not_cross_instances() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("shared.bin");
@@ -372,7 +372,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn invalid_data_is_treated_as_empty() {
         let pools = crate::test_pools::pools();
         let temp_dir = tempdir().unwrap();
@@ -383,14 +383,14 @@ mod tests {
         assert!(idx.snapshot().is_empty());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn ephemeral_index_does_not_persist() {
         let idx = PinsIndex::ephemeral();
         assert!(idx.add("asset", PinDurability::Durable).unwrap());
         assert!(idx.inner.state.contains_key("asset"));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn clone_shares_state() {
         let pools = crate::test_pools::pools();
         let temp_dir = tempdir().unwrap();
@@ -437,7 +437,7 @@ mod tests {
     /// takes, so its cost climbs with the load it is already competing with
     /// — 500 spun rounds took 3.8 s to 16.5 s idle, 200 gated ones 4.2 s to
     /// 5.3 s.
-    #[kithara::test(timeout(Duration::from_secs(60)))]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(4972)))]
     fn an_eager_unpin_is_never_resurrected_by_a_concurrent_flush() {
         use std::sync::Barrier;
 

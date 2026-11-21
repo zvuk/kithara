@@ -907,7 +907,7 @@ mod tests {
     /// banked before that deadline existed pays for it only up to the lag
     /// bound: a 30 s harness timeout fired a second after a 37 s neighbour
     /// began.
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn a_deadline_does_not_inherit_real_time_from_before_it_was_set() {
         let _guard = guard();
         let flash = FlashInner::new_arc();

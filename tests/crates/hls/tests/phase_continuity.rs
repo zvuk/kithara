@@ -275,7 +275,7 @@ async fn run_case_paced(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(25)),
+    timeout(::std::time::Duration::from_millis(9266)),
     hang_timeout_secs(1),
     tracing(
         "info,kithara_render::lane=debug,render_refill=trace,kithara_hls=debug,kithara_decode=debug"
@@ -573,7 +573,7 @@ fn late_switches() -> Vec<(AbrMode, f64)> {
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(60)),
+    timeout(::std::time::Duration::from_millis(25104)),
     hang_timeout_secs(10)
 )]
 #[cfg_attr(not(target_os = "android"), case::aac_lc_symphonia_pace1ms(

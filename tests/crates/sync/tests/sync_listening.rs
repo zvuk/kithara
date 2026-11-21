@@ -147,7 +147,13 @@ pub(super) async fn render_frames(
     pcm
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(::std::time::Duration::from_millis(22402))
+)]
 #[case::tunnel_weak_beat(tunnel_sources().await, WEAK_BEAT)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
@@ -191,7 +197,13 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
     );
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(::std::time::Duration::from_millis(40824))
+)]
 #[case::app_playlist_27390231(super::sync_product_matrix::prepared_sources(super::sync_product_matrix::Provider::Library(&["library_mp3_zvuk_27390231"])).await, Start::Seconds(4.0), REAL_TRACK_SYNC, &[Some(96.0)])]
 #[case::app_playlist_151585912(super::sync_product_matrix::prepared_sources(super::sync_product_matrix::Provider::Library(&["library_mp3_zvuk_151585912"])).await, Start::Seconds(4.0), REAL_TRACK_SYNC, &[Some(96.0)])]
 #[case::app_playlist_125475417(super::sync_product_matrix::prepared_sources(super::sync_product_matrix::Provider::Library(&["library_mp3_zvuk_125475417"])).await, Start::Seconds(4.0), REAL_TRACK_SYNC, &[Some(96.0)])]

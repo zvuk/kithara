@@ -1,6 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::platform::time::Duration;
 use kithara_integration_tests::{
     kithara,
     smoothing::{
@@ -10,7 +9,7 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::signal::peak;
 
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(7424)))]
 async fn eq_gain_step_is_ramped() {
     let (harness, _) = sine_queue(SmoothingCase {
         eq_layout: Some(consts::THREE_BAND),
@@ -40,7 +39,7 @@ async fn eq_gain_step_is_ramped() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(7220)))]
 async fn eq_layout_switch_is_crossed_over() {
     let (harness, _) = sine_queue(SmoothingCase {
         eq_layout: Some(consts::THREE_BAND),
@@ -70,7 +69,7 @@ async fn eq_layout_switch_is_crossed_over() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(7324)))]
 async fn eq_layout_change_during_crossover_stays_continuous() {
     let (harness, _) = sine_queue(SmoothingCase {
         eq_layout: Some(consts::THREE_BAND),

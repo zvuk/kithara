@@ -370,14 +370,14 @@ impl AvailabilityObserver for ScopedAvailabilityObserver {
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use kithara_platform::{sync::Weak, time::Duration};
+    use kithara_platform::sync::Weak;
     use kithara_test_utils::kithara;
     use tempfile::TempDir;
 
     use super::*;
     use crate::index::persistence::{Flushable, IndexFile};
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn availability_default_is_empty() {
         let a = Availability::default();
         assert!(a.ranges.is_empty());
@@ -387,7 +387,7 @@ mod tests {
         assert!(!a.contains(&(0..1)));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn availability_insert_then_contains() {
         let mut a = Availability::default();
         a.insert(0..100);
@@ -396,14 +396,14 @@ mod tests {
         assert!(!a.contains(&(50..150)));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn availability_insert_empty_is_noop() {
         let mut a = Availability::default();
         a.insert(5..5);
         assert!(a.ranges.is_empty());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn availability_contains_rejects_gaps() {
         let mut a = Availability::default();
         a.insert(0..10);
@@ -414,7 +414,7 @@ mod tests {
         assert!(!a.contains(&(5..25)));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn availability_mark_committed_covers_full_range() {
         let mut a = Availability::default();
         a.mark_committed(10);
@@ -423,7 +423,7 @@ mod tests {
         assert!(a.contains(&(0..10)));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn availability_mark_committed_zero_len_has_no_range() {
         let mut a = Availability::default();
         a.mark_committed(0);
@@ -432,7 +432,7 @@ mod tests {
         assert!(a.ranges.is_empty());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     #[case::empty(0)]
     #[case::shorter(3)]
     fn committed_ranges_match_final_length_after_shrink(#[case] final_len: u64) {
@@ -448,7 +448,7 @@ mod tests {
         assert!(!availability.mark_committed(final_len));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     #[case::empty(0)]
     #[case::shorter(3)]
     fn committing_the_same_length_removes_legacy_range_tails(#[case] final_len: u64) {
@@ -463,7 +463,7 @@ mod tests {
         assert!(!availability.mark_committed(final_len));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn index_per_key_isolation() {
         let idx = AvailabilityIndex::new();
         let k1 = ResourceKey::relative("test_asset", "file1");
@@ -478,7 +478,7 @@ mod tests {
         assert!(!idx.contains_range(&k2, 0..10));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn index_new_is_empty() {
         let idx = AvailabilityIndex::new();
         let k = ResourceKey::relative("test_asset", "file1");
@@ -486,7 +486,7 @@ mod tests {
         assert_eq!(idx.final_len(&k), None);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn index_record_commit_sets_final_len_and_full_range() {
         let idx = AvailabilityIndex::new();
         let k = ResourceKey::relative("test_asset", "file1");
@@ -497,7 +497,7 @@ mod tests {
         assert!(idx.contains_range(&k, 0..50));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn index_record_write_slow_then_fast_path() {
         let idx = AvailabilityIndex::new();
         let k = ResourceKey::relative("test_asset", "file1");
@@ -509,7 +509,7 @@ mod tests {
         assert!(idx.contains_range(&k, 0..20));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn index_record_write_empty_range_is_noop() {
         let idx = AvailabilityIndex::new();
         let k = ResourceKey::relative("test_asset", "file1");
@@ -518,7 +518,7 @@ mod tests {
         assert!(!idx.contains_range(&k, 10..11));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn unchanged_records_do_not_dirty_the_index() {
         let idx = AvailabilityIndex::new();
         let k = ResourceKey::relative("test_asset", "file1");
@@ -534,7 +534,7 @@ mod tests {
         assert!(!idx.inner.dirty.load(Ordering::Acquire));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn flush_source_does_not_clear_a_new_dirty_signal() {
         let idx = AvailabilityIndex::new();
         let k = ResourceKey::relative("test_asset", "file1");
@@ -547,7 +547,7 @@ mod tests {
         assert!(idx.inner.dirty.load(Ordering::Acquire));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn index_remove_clears_entry() {
         let idx = AvailabilityIndex::new();
         let k = ResourceKey::relative("test_asset", "file1");
@@ -565,7 +565,7 @@ mod tests {
     /// with 512-frame blocks) while writes arrive at download cadence, so a
     /// stretch served from cache issues thousands of reads with no write in
     /// between. The burst is ten seconds of ticks over both snapshot reads.
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn a_read_burst_never_leaks_a_generation() {
         const TICKS_PER_SECOND: usize = 94;
         const BURST: usize = TICKS_PER_SECOND * 10;
@@ -604,7 +604,7 @@ mod tests {
     /// A reader overlapping range writes is never the last owner of a snapshot
     /// they displaced: its guard drop leaves the snapshot to the writer, and
     /// the first write after that drop frees it.
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn displaced_snapshot_is_freed_by_the_writer() {
         let idx = AvailabilityIndex::new();
         let k = ResourceKey::relative("test_asset", "file1");
@@ -636,7 +636,7 @@ mod tests {
     /// A reader overlapping structural edits is never the last owner of a tree
     /// they displaced: its guard drop leaves the tree to the writer, and the
     /// first edit after that drop frees it.
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn displaced_tree_is_freed_by_the_writer() {
         let idx = AvailabilityIndex::new();
         idx.record_write(&ResourceKey::relative("test_asset", "file1"), 0..10);
@@ -658,7 +658,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn index_snapshot_and_seed_roundtrip() {
         let dir = TempDir::new().unwrap();
         let file = IndexFile::new(dir.path().join("availability.bin"));
@@ -695,7 +695,7 @@ mod tests {
         assert_eq!(idx2.final_len(&k3), None);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn schema_empty_resource_loads_empty() {
         let dir = TempDir::new().unwrap();
         let file = IndexFile::new(dir.path().join("availability.bin"));
@@ -707,7 +707,7 @@ mod tests {
         assert!(idx.inner.state.assets.load().is_empty());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn schema_corrupt_payload_loads_empty() {
         let dir = TempDir::new().unwrap();
         let file = IndexFile::new(dir.path().join("availability.bin"));

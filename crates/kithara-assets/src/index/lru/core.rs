@@ -135,12 +135,12 @@ impl LruIndex {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use kithara_platform::time::Duration;
+
     use kithara_test_utils::kithara;
 
     use super::*;
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn update_bytes_does_not_change_eviction_order() {
         let lru = LruIndex::ephemeral();
         lru.touch("A", Some(100)).unwrap();
@@ -159,7 +159,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn update_bytes_unknown_root_is_noop() {
         let lru = LruIndex::ephemeral();
         let changed = lru.update_bytes("ghost", 4096).unwrap();
@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(lru.total_bytes_best_effort(), 0);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn update_bytes_idempotent_when_value_matches() {
         let lru = LruIndex::ephemeral();
         lru.touch("A", Some(100)).unwrap();

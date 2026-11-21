@@ -75,7 +75,7 @@ pub(super) fn table<'a>(
         (table.columns, cx.ctx.endpoint(table.width)),
         &cx.ctx,
         state,
-        cx.skin,
+        &cx.skin.table,
     );
     let rows = rows.iter().map(TableRowData::from).collect();
     let face = crate::atoms::table::face::TableFace::new(rows, columns, cx.skin, table.frame)

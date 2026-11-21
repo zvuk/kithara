@@ -371,7 +371,7 @@ fn full_ring_backpressures_typed() {
     );
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Medium))]
 fn shutdown_joins_and_panics_propagate() {
     let normal = ManualRingSession::start(config(1)).expect("start normal session");
     normal.shutdown().expect("normal shutdown joins");

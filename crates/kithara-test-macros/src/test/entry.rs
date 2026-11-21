@@ -16,8 +16,7 @@ use super::{
     fixture_args::{ParamInfo, extract_params, make_preamble},
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_serial_attr,
-        make_sync_test_attrs, make_test_setup, make_wasm_serial_guard,
-        wrap_with_sync_participation, wrap_with_timeout,
+        make_test_setup, make_wasm_serial_guard, wrap_with_sync_participation, wrap_with_timeout,
     },
 };
 
@@ -123,7 +122,7 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
         let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
         let full = quote! { { #test_setup #scoped #preamble #ambient #(#body_stmts)* } };
-        let with_timeout = wrap_with_timeout(&full, ctx.args.timeout(), true, name);
+        let with_timeout = wrap_with_timeout(&full, ctx.args, true, name, ctx.ret_type);
         let wrapped = finalize_body(&with_timeout, ctx.args, name, true);
         let serial_guard = make_wasm_serial_guard(ctx.args);
         let remaining_attrs = ctx.remaining_attrs;
@@ -237,7 +236,6 @@ fn generate_browser(ctx: &GenCtx<'_>) -> TokenStream2 {
 
 /// Default branch: sync native + WASM, or single-platform when async. One test per case.
 fn generate_default(ctx: &GenCtx<'_>) -> TokenStream2 {
-    let test_attrs = make_sync_test_attrs();
     let mut tests = TokenStream2::new();
 
     let mut emit = |name: &Ident, case_values: Option<&[Expr]>| {
@@ -247,7 +245,6 @@ fn generate_default(ctx: &GenCtx<'_>) -> TokenStream2 {
             ctx.vis,
             ctx.ret_type,
             ctx.remaining_attrs,
-            &test_attrs,
             ctx.is_async,
             &preamble,
             ctx.body_stmts,
@@ -271,6 +268,34 @@ mod tests {
     use syn::visit_mut::{self, VisitMut};
 
     use super::{TestArgs, emitted_name, generate};
+
+    #[test]
+    fn every_emission_defaults_to_a_constant_quick_timeout() -> syn::Result<()> {
+        for (attrs, source) in [
+            ("", "fn contract() {}"),
+            ("", "async fn contract() {}"),
+            ("native", "fn contract() {}"),
+            ("tokio, native", "async fn contract() {}"),
+            ("wasm", "fn contract() {}"),
+            ("browser", "async fn contract() {}"),
+            ("serial", "fn contract() {}"),
+            ("loom", "fn contract() {}"),
+        ] {
+            let expanded = generate(syn::parse_str(attrs)?, syn::parse_str(source)?)?;
+            syn::parse2::<syn::File>(expanded.clone())?;
+            let text = expanded.to_string();
+            assert!(text.contains("const __TIMEOUT"), "{attrs}: {text}");
+            assert!(
+                text.contains("TestBudget :: Quick . timeout"),
+                "{attrs}: {text}"
+            );
+            assert!(
+                text.contains("time :: timeout") || text.contains("recv_timeout"),
+                "{attrs}: {text}"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn unmarked_tests_are_visible_but_ignored_under_miri() -> syn::Result<()> {
@@ -518,8 +543,6 @@ mod tests {
         for source in [
             "#[should_panic]\nfn contract() {}",
             "#[should_panic(expected = \"boom\")]\nasync fn contract() {}",
-            "#[cfg_attr(not(target_arch = \"wasm32\"), should_panic(expected = \"boom\"))]\n\
-             fn contract() {}",
         ] {
             let args = syn::parse_str::<TestArgs>("")?;
             let function = syn::parse_str(source)?;

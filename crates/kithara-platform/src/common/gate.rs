@@ -523,7 +523,7 @@ mod tests {
     }
 
     #[cfg(feature = "flash")]
-    #[kithara::test(flash(false), timeout(Duration::from_secs(5)))]
+    #[kithara::test(flash(false))]
     fn a_contended_section_lets_the_clock_reach_its_holders_wait() {
         let _ambient = crate::flash::ambient_scope(true);
         let section = Arc::new(ExclusiveGate::default());

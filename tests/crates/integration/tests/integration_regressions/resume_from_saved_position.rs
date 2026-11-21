@@ -67,7 +67,7 @@ async fn append_track(
         .expect("append resume track")
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(90)))]
+#[kithara::test(tokio)]
 async fn playback_starts_from_the_seeked_position(
     #[future(awt)] served_short_mp3: (TestServerHelper, Url),
     temp_dir: TestTempDir,

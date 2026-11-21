@@ -12,10 +12,10 @@ use crate::{
     hosts::hosted::TablePlan,
     interact::Hit,
     module::TableFrame,
-    render::Skin,
+    skin::TableSkin,
 };
 pub(super) struct TableHost {
-    skin: Skin,
+    skin: TableSkin,
     frame: TableFrame,
     horizontal_path: String,
     path: String,
@@ -52,7 +52,7 @@ impl TableHost {
             horizontal_path: format!("{path}/scroll-x"),
             path: path.to_owned(),
             row_target: format!("{path}/rows"),
-            skin: table.skin.clone(),
+            skin: *table.skin,
             frame: table.frame,
             viewport_width,
         }
@@ -179,7 +179,7 @@ mod tests {
                         index,
                         0.0,
                         TableMetrics {
-                            skin: builtin::skin(),
+                            skin: &builtin::skin_doc().table,
                             frame: TableFrame::new(0.0, 0.0, true),
                         },
                     ),
@@ -232,7 +232,7 @@ mod tests {
             divider_columns(98.0),
             8,
             TableMetrics {
-                skin: builtin::skin(),
+                skin: &builtin::skin_doc().table,
                 frame: TableFrame::new(0.0, 0.0, true),
             },
             Rc::new(Cell::new(0.0)),
@@ -269,7 +269,7 @@ mod tests {
             divider_columns(98.0),
             8,
             TableMetrics {
-                skin: builtin::skin(),
+                skin: &builtin::skin_doc().table,
                 frame: TableFrame::new(0.0, 0.0, true),
             },
             Rc::new(Cell::new(0.0)),
@@ -299,7 +299,7 @@ mod tests {
             divider_columns(300.0),
             8,
             TableMetrics {
-                skin: builtin::skin(),
+                skin: &builtin::skin_doc().table,
                 frame: TableFrame::new(0.0, 0.0, true),
             },
             Rc::new(Cell::new(0.0)),

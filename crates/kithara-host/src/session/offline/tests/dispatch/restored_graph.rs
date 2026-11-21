@@ -3,7 +3,7 @@ use kithara_test_utils::off_thread::OffThread;
 
 use super::*;
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Medium))]
 async fn a_running_player_changes_its_eq_layout_in_place() {
     let owner = OffThread::spawn("host-eq-layout", || {
         Ok::<_, ()>((test_state(start_route_loss_stream), 0_u64))
@@ -72,7 +72,7 @@ async fn a_running_player_changes_its_eq_layout_in_place() {
     owner.close().await;
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Medium))]
 async fn host_mix_before_registration_becomes_the_start_level() {
     let owner = OffThread::spawn("host-start-mix", || {
         Ok::<_, ()>((test_state(start_route_loss_stream), 0_u64))
@@ -111,7 +111,7 @@ async fn host_mix_before_registration_becomes_the_start_level() {
     owner.close().await;
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Medium))]
 async fn unexpected_stream_stop_restarts_stream_without_dropping_player_graph_or_future_slots() {
     let owner = OffThread::spawn("host-route-restart", || {
         route_loss(RouteLossProbe::reset);

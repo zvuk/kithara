@@ -74,7 +74,7 @@ mod consts {
     pub(super) const DRAIN_BUDGET: Duration = Duration::from_secs(10);
 }
 
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(40)))]
+#[kithara::test(tokio, native, serial, timeout(Medium))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[cfg_attr(

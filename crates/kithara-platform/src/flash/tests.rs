@@ -1584,7 +1584,7 @@ fn a_joined_blocking_closure_holds_the_clock_until_its_joiner_wakes() {
                 thread::yield_now();
             }
         });
-        crate::time::timeout(Duration::from_secs(2), handle).await
+        crate::time::timeout(kithara_test_utils::TestBudget::Quick.timeout(false), handle).await
     });
     assert!(matches!(joined, Ok(Ok(()))), "{joined:?}");
     assert_eq!(
@@ -1604,7 +1604,7 @@ fn a_joined_task_holds_the_clock_until_its_joiner_wakes() {
     let _f = enter_dynamic(true);
     let (joined, took) = on_virtual_clock(async {
         let handle = crate::tokio::task::spawn(async {});
-        crate::time::timeout(Duration::from_secs(2), handle).await
+        crate::time::timeout(kithara_test_utils::TestBudget::Quick.timeout(false), handle).await
     });
     assert!(matches!(joined, Ok(Ok(()))), "{joined:?}");
     assert_eq!(
@@ -2701,7 +2701,7 @@ fn synchronous_participation_reuses_async_credit_and_settles_unwinds() {
 }
 
 #[cfg(not(feature = "loom"))]
-#[kithara::test(native, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(native, flash(false))]
 #[case::unnamed(false)]
 #[case::named(true)]
 fn a_sync_driver_joins_a_child_waiting_on_virtual_time(#[case] named: bool) {
@@ -2729,7 +2729,7 @@ fn a_sync_driver_joins_a_child_waiting_on_virtual_time(#[case] named: bool) {
 }
 
 #[cfg(all(feature = "no-block", not(feature = "loom")))]
-#[kithara::test(native, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(native, flash(false))]
 fn an_async_poll_cannot_join_a_child_waiting_on_virtual_time() {
     let _g = guard();
     reset();
@@ -2795,7 +2795,7 @@ enum RejectedSyncWait {
 }
 
 #[cfg(all(feature = "no-block", not(feature = "loom")))]
-#[kithara::test(native, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(native, flash(false))]
 #[case::timed_condvar(RejectedSyncWait::TimedCondvar)]
 #[case::untimed_condvar(RejectedSyncWait::UntimedCondvar)]
 #[case::sleep(RejectedSyncWait::Sleep)]
@@ -2891,7 +2891,7 @@ fn a_sync_driver_joins_an_immediate_child_without_changing_its_result() {
 }
 
 #[cfg(not(feature = "loom"))]
-#[kithara::test(native, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(native, flash(false))]
 fn a_detached_platform_child_finishes_and_releases_its_credit() {
     let _g = guard();
     reset();
@@ -2919,7 +2919,7 @@ fn a_detached_platform_child_finishes_and_releases_its_credit() {
 }
 
 #[cfg(not(feature = "loom"))]
-#[kithara::test(native, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(native, flash(false))]
 fn a_timed_panicking_child_releases_its_joiner_and_preserves_the_payload() {
     let _g = guard();
     reset();
@@ -2939,7 +2939,7 @@ fn a_timed_panicking_child_releases_its_joiner_and_preserves_the_payload() {
 }
 
 #[cfg(not(feature = "loom"))]
-#[kithara::test(native, flash(false), timeout(Duration::from_secs(2)))]
+#[kithara::test(native, flash(false))]
 fn a_platform_thread_is_finished_when_its_closure_returns() {
     /// Holds the OS thread past its closure until the test lets it go.
     struct HeldTeardown(mpsc::Receiver<()>);

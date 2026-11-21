@@ -52,7 +52,7 @@ async fn render_burst(player: &mut OfflinePlayer, blocks: u32) {
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, multi_thread, timeout(Short))]
 async fn hls_seek_past_end_terminates_in_bounded_time() {
     let master = TestServerHelper::new()
         .await

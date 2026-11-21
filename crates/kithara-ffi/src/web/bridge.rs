@@ -90,11 +90,13 @@ impl QueueBridge {
         if let Some(engine) = self.engine.get() {
             return Ok(engine);
         }
+        tracing::debug!("web engine initialization requested");
         let (host_sender, pools) = ensure_host_channel().map_err(|error| FfiError::Internal {
             description: error
                 .as_string()
                 .unwrap_or_else(|| "host construction failed".into()),
         })?;
+        tracing::debug!("web engine host channel ready");
         let resources = ResourceBuilder::new(pools.clone());
         let queue = FfiQueue::new(
             QueueConfig::builder()
@@ -110,6 +112,7 @@ impl QueueBridge {
         );
         let control = queue.control();
         let (analysis, requests) = mpsc::channel();
+        tracing::debug!("web queue worker spawn requested");
         let worker = thread::spawn_named("kithara-web-queue", move || {
             crate::web::worker::worker_main(queue, host_sender, pools, requests);
         });

@@ -423,7 +423,7 @@ mod tests {
     }
 
     /// A writer outside the pending index is settling, so the source opens after it.
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn a_source_waits_out_a_writer_of_its_own_store() {
         let dir = tempdir().expect("test cache directory");
         let store = AssetStore::builder(pools())
@@ -448,7 +448,7 @@ mod tests {
         assert!(create.await.is_ok());
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn remote_claim_wait_returns_cancelled() {
         let dir = tempdir().expect("test cache directory");
         let backend = StorageBackend::Disk {

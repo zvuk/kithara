@@ -43,7 +43,12 @@ const AUDIBLE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 /// wherever the startup wait sits: moving it back into construction hides it
 /// from a clock started at `play`, and the assertion then passes for a player
 /// that never began.
-#[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
+#[kithara::test(
+    native,
+    tokio,
+    timeout(::std::time::Duration::from_millis(1242)),
+    hang_timeout_secs(1)
+)]
 #[case(GaplessMode::MediaOnly)]
 #[case(GaplessMode::CodecPriming)]
 async fn gapless_modes_do_not_block_network_startup_until_full_cache(

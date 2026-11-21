@@ -7,7 +7,7 @@ use kithara_signal::SegmentId;
 use super::*;
 use crate::{AdvanceReason, queue::state::tests::wait_for_queue_event};
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn pause_and_none_suppress_natural_eof_progression(#[by_ref] worker_owner: &WorkerOwner) {
     for action in [ActionAtItemEnd::Pause, ActionAtItemEnd::None] {
@@ -55,7 +55,7 @@ async fn pause_and_none_suppress_natural_eof_progression(#[by_ref] worker_owner:
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio)]
 async fn a_tick_pauses_at_the_natural_end_it_drains(#[by_ref] worker_owner: &WorkerOwner) {
     let (mut queue, first, _, mut rig, fixture_directory) =
         crate::mock::selected(&worker_owner.0, FixtureSource::Synthetic).await;

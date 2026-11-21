@@ -79,7 +79,7 @@ impl StreamType for StalledStream {
 /// Each blocking wait returns within its re-aim interval, so only the read as a
 /// whole can tell that nothing arrives: it must trip the hang watchdog instead of
 /// re-aiming forever. The watchdog budget is virtual under flash.
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1136)))]
 fn a_read_that_never_progresses_trips_the_hang_watchdog() {
     let source = StalledSource {
         bytes: MemorySource::new(b"never delivered".to_vec()),

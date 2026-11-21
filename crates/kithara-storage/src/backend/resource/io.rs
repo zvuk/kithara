@@ -222,7 +222,7 @@ mod tests {
     /// a byte-capped cache that sees `Committed` may evict the resource and drop
     /// its record, and a record landing after that revives the availability of a
     /// resource nobody can open any more.
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn a_commit_is_recorded_before_it_is_published() {
         let pools = pools();
         let witness = Arc::new(CommitWitness::default());
@@ -256,7 +256,7 @@ mod tests {
     /// `inner.gate` state lock. The test holds that lock on this thread while a
     /// worker thread reads; a lock-free fast path completes immediately, a slow
     /// path blocks on the held guard and times out.
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn committed_read_does_not_take_state_mutex() {
         let pools = pools();
         let core: ResourceCore<MemDriver> = ResourceCore::open(
@@ -296,7 +296,7 @@ mod tests {
     /// that lock is held on this thread while a worker queries length and
     /// coverage; a lock-free path completes immediately, a locking path blocks
     /// on the held guard and times out.
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn committed_len_and_contains_do_not_take_state_mutex() {
         let pools = pools();
         let core: ResourceCore<MemDriver> = ResourceCore::open(
@@ -365,7 +365,7 @@ mod tests {
         assert!(covers);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     #[case::mem(Backend::Mem)]
     #[case::mmap(Backend::Mmap)]
     fn active_contains_range_does_not_take_state_mutex(#[case] backend: Backend) {
@@ -385,7 +385,7 @@ mod tests {
     /// ticks/s at 48 kHz with 512-frame blocks) while writes arrive at
     /// download cadence. The resource stays active, so every read of the
     /// ten-second burst answers from the snapshot.
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn a_read_burst_never_leaks_a_generation() {
         const TICKS_PER_SECOND: usize = 94;
         const BURST: usize = TICKS_PER_SECOND * 10;
@@ -414,7 +414,7 @@ mod tests {
     /// A reader overlapping writes is never the last owner of a snapshot they
     /// displaced: its guard drop leaves the snapshot to the writer, and the
     /// first write after that drop frees it.
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn displaced_snapshot_is_freed_by_the_writer() {
         let core = open_mem();
         core.write_at_inner(0, b"hello")
@@ -444,7 +444,7 @@ mod tests {
     /// produce-core read that takes the gate never waits on those frees. The
     /// test holds the retire list: the write publishes and then parks on it,
     /// and a gated read of the still active resource must answer meanwhile.
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn a_gated_read_never_waits_on_retired_frees() {
         let core = open_mem();
         let retired = core.inner.retired.lock();
@@ -564,7 +564,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(timeout(Duration::from_secs(30)))]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(7119)))]
     #[case::mem(Backend::Mem)]
     #[case::mmap(Backend::Mmap)]
     fn concurrent_generation_rewrite_never_tears_a_read(#[case] backend: Backend) {
@@ -656,7 +656,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(timeout(Duration::from_secs(30)))]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(7622)))]
     #[case::mem(Backend::Mem)]
     #[case::mmap(Backend::Mmap)]
     fn concurrent_varying_length_rewrite_via_wait_range_stays_consistent(#[case] backend: Backend) {

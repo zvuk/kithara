@@ -32,7 +32,17 @@ pub(crate) fn run(args: &ParityArgs, ctx: &Ctx) -> Result<()> {
         }
     }
 
-    let gallery = Gallery { root: &ctx.root };
+    let profile = ctx
+        .config
+        .test
+        .lanes
+        .get("ui")
+        .and_then(|lane| lane.cargo.profile.as_deref())
+        .context("UI parity requires the UI test lane's Cargo profile")?;
+    let gallery = Gallery {
+        root: &ctx.root,
+        profile,
+    };
     gallery.shoot("the gallery through iced", &dir.join("iced"), &[])?;
     gallery.shoot(
         "the gallery through masonry",
@@ -47,7 +57,10 @@ pub(crate) fn run(args: &ParityArgs, ctx: &Ctx) -> Result<()> {
     gallery.element(&dir.join("parts"))?;
 
     let studio = dir.join("studio");
-    studio_capture(&ctx.root, &studio)?;
+    finish(
+        studio_command(&ctx.root, &studio, profile),
+        "the shipped studio pages through both hosts",
+    )?;
     gallery.compare(
         "the shipped studio pages, host against host",
         [
@@ -71,6 +84,7 @@ fn rooted(root: &Path, path: &Path) -> PathBuf {
 /// a set through either one and what compares two sets.
 struct Gallery<'root> {
     root: &'root Path,
+    profile: &'root str,
 }
 
 impl Gallery<'_> {
@@ -78,6 +92,8 @@ impl Gallery<'_> {
         let mut command = Command::new("cargo");
         command.current_dir(self.root).args([
             "run",
+            "--profile",
+            self.profile,
             "-p",
             "kithara-ui-gallery",
             "--bin",
@@ -123,13 +139,15 @@ impl Gallery<'_> {
 
 /// The two sets of the pages the app ships, taken by the app's own test: the
 /// documents are the app's, and only the app knows what to read behind them.
-fn studio_capture(root: &Path, dir: &Path) -> Result<()> {
+fn studio_command(root: &Path, dir: &Path, profile: &str) -> Command {
     let mut command = Command::new("cargo");
     command
         .current_dir(root)
         .env(consts::STUDIO_CAPTURE, dir)
         .args([
             "test",
+            "--profile",
+            profile,
             "-p",
             "kithara-app",
             "--lib",
@@ -140,7 +158,7 @@ fn studio_capture(root: &Path, dir: &Path) -> Result<()> {
             "--",
             "--nocapture",
         ]);
-    finish(command, "the shipped studio pages through both hosts")
+    command
 }
 
 /// Runs one step and says what it was when it fails, because the command line
@@ -160,7 +178,7 @@ fn finish(mut command: Command, what: &str) -> Result<()> {
 mod tests {
     use std::{ffi::OsStr, path::Path};
 
-    use super::{Gallery, rooted};
+    use super::{Gallery, rooted, studio_command};
 
     #[test]
     fn a_relative_folder_is_taken_from_the_workspace_root() {
@@ -189,6 +207,7 @@ mod tests {
     fn every_step_runs_the_gallery_built_with_both_hosts() {
         let command = Gallery {
             root: Path::new("/work"),
+            profile: "configured-ui-profile",
         }
         .command();
         let args: Vec<_> = command.get_args().map(OsStr::to_string_lossy).collect();
@@ -197,5 +216,22 @@ mod tests {
             .position(|arg| arg == "--features")
             .and_then(|at| args.get(at + 1));
         assert_eq!(features.map(AsRef::as_ref), Some("masonry"));
+        for command in [
+            command,
+            studio_command(
+                Path::new("/work"),
+                Path::new("/work/studio"),
+                "configured-ui-profile",
+            ),
+        ] {
+            let args: Vec<_> = command.get_args().map(OsStr::to_string_lossy).collect();
+            assert_eq!(
+                args.iter()
+                    .position(|arg| arg == "--profile")
+                    .and_then(|at| args.get(at + 1))
+                    .map(AsRef::as_ref),
+                Some("configured-ui-profile")
+            );
+        }
     }
 }

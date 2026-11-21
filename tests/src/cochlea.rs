@@ -1039,7 +1039,7 @@ mod tests {
         assert_oracle_load_bearing(&control, channels, sample_rate, 512);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Medium))]
     fn report_fields_match_the_cochlea_probe(
         cochlea_loudness: Vec<f32>,
         cochlea_control: Vec<f32>,

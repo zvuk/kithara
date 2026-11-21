@@ -478,7 +478,7 @@ mod explorer {
         dir
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn a_picked_folder_appears_under_music_folders() {
         let mut rig = Rig::offline();
         let dir = crate_with(&[]);
@@ -489,7 +489,7 @@ mod explorer {
         assert_eq!(tree(&rig).get(at + 1), Some(&(2, name(dir.path()))));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn a_folder_lists_only_the_files_the_app_can_play() {
         let mut rig = Rig::offline();
         let dir = crate_with(&["notes.txt", "track.mp3"]);
@@ -508,7 +508,7 @@ mod explorer {
         assert_eq!(rig.text(STATUS).as_deref(), Some(""));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn a_listed_folder_draws_no_count_and_music_folders_counts_its_folders() {
         let mut rig = Rig::offline();
         let dir = crate_with(&["track.mp3"]);
@@ -543,7 +543,7 @@ mod explorer {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn a_folder_without_playable_files_shows_the_empty_state() {
         let mut rig = Rig::offline();
         let dir = crate_with(&["notes.txt"]);
@@ -567,7 +567,7 @@ mod explorer {
         assert_eq!(rig.text(STATUS), Some(words(&rig, "library.status.error")));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn a_node_that_lists_no_rows_shows_the_empty_state() {
         let mut rig = Rig::offline();
 
