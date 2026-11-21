@@ -1,6 +1,7 @@
 mod biquad;
 mod crossover;
 mod error;
+mod one_pole;
 mod svf;
 #[cfg(test)]
 mod tests;
@@ -12,6 +13,7 @@ pub use crossover::Crossover;
 #[cfg(feature = "routes")]
 pub(crate) use crossover::measured as crossover_routes;
 pub use error::FilterError;
+pub use one_pole::OnePoleLowPass;
 pub(crate) use svf::coefficients;
 
 pub use self::{
