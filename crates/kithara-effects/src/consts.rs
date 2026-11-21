@@ -10,6 +10,14 @@ pub(crate) const NYQUIST_FACTOR: f32 = 2.0;
 /// and up.
 pub(crate) const NYQUIST_SHARE: f64 = 0.45;
 
+/// Frames of stack scratch per feedback-comb channel.
+pub(crate) const COMB_CHUNK: usize = 256;
+/// The -120 dBFS write floor used by the feedback-comb tail policy.
+pub(crate) const COMB_FLOOR: f32 = 1e-6;
+
+/// Seconds a delay time change crosses from the old read to the new one.
+pub(crate) const DELAY_RAMP_SECONDS: f64 = 0.02;
+
 pub(crate) const PASSTHROUGH: Coefficients<f32> = Coefficients {
     a1: 0.0,
     a2: 0.0,

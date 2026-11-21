@@ -18,21 +18,7 @@ pub(super) fn admit_expected(
     expected_path: &Path,
 ) -> Result<()> {
     let expected = read_expected(expected_path)?;
-    let args = inventory_args(caller)?;
-    let mut command = lane.command(NextestAction::List, &args)?;
-    let output = command
-        .current_dir(root)
-        .stderr(Stdio::inherit())
-        .output()
-        .with_context(|| format!("list exact selection for test lane `{}`", lane.lane))?;
-    if !output.status.success() {
-        return Err(ChildFailure::inherited(
-            format!("test lane `{}` inventory", lane.lane),
-            output.status.code(),
-        ));
-    }
-    let json = String::from_utf8(output.stdout).context("nextest inventory is not UTF-8")?;
-    let selected = selected_inventory(decode_inventory(&json)?)?;
+    let selected = list_selection(lane, caller, root)?;
     if expected != selected {
         let missing = expected.difference(&selected).collect::<Vec<_>>();
         let unexpected = selected.difference(&expected).collect::<Vec<_>>();
@@ -55,6 +41,27 @@ pub(super) fn admit_expected(
         );
     }
     Ok(())
+}
+
+pub(super) fn list_selection(
+    lane: &ResolvedLane,
+    caller: &[String],
+    root: &Path,
+) -> Result<BTreeSet<TestId>> {
+    let mut command = lane.command(NextestAction::List, &inventory_args(caller)?)?;
+    let output = command
+        .current_dir(root)
+        .stderr(Stdio::inherit())
+        .output()
+        .with_context(|| format!("list selection for test lane `{}`", lane.lane))?;
+    if !output.status.success() {
+        return Err(ChildFailure::inherited(
+            format!("test lane `{}` inventory", lane.lane),
+            output.status.code(),
+        ));
+    }
+    let json = String::from_utf8(output.stdout).context("nextest inventory is not UTF-8")?;
+    selected_inventory(decode_inventory(&json)?)
 }
 
 fn read_expected(path: &Path) -> Result<BTreeSet<TestId>> {
