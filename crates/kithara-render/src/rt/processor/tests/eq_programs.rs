@@ -1,5 +1,5 @@
 use super::*;
-use crate::bridge::{CurveShape, EqGainProgram, ParameterKnot};
+use crate::bridge::{CurveShape, DeckParameter, DeckProgram, LayoutRevision, ParameterKnot};
 
 fn prepared(bands: usize) -> (TestMixer, TestEnds) {
     prepared_with_capacity(bands, 64)
@@ -12,24 +12,48 @@ fn prepared_with_capacity(bands: usize, capacity: usize) -> (TestMixer, TestEnds
     (mixer, ends)
 }
 
-fn program(band: usize, start: usize, end: usize, shape: CurveShape) -> EqGainProgram {
-    EqGainProgram::new(
+fn program(
+    band: usize,
+    start: usize,
+    end: usize,
+    shape: CurveShape,
+) -> impl FnOnce(LayoutRevision) -> DeckProgram {
+    eq_program(
         band,
         vec![
             ParameterKnot::new(frame_at(start), -12.0, shape).expect("left gain"),
             ParameterKnot::new(frame_at(end), 0.0, CurveShape::HOLD).expect("right gain"),
         ],
     )
-    .expect("prepared gain program")
 }
 
-fn part(ends: &mut TestEnds, program: EqGainProgram) -> DeckPart {
+fn eq_program(
+    band: usize,
+    knots: Vec<ParameterKnot>,
+) -> impl FnOnce(LayoutRevision) -> DeckProgram {
+    move |layout| {
+        DeckProgram::new(DeckParameter::EqBand { band, layout }, knots)
+            .expect("prepared EQ program")
+    }
+}
+
+fn part(ends: &mut TestEnds, prepare: impl FnOnce(LayoutRevision) -> DeckProgram) -> DeckPart {
     let snapshot = ends.deck.snapshot.read();
-    DeckPart::EqProgram {
-        binding: snapshot.eq.binding().expect("observed EQ axis"),
-        authority: snapshot.eq.authority(program.band()),
+    let program = prepare(snapshot.eq.layout().expect("observed EQ layout"));
+    DeckPart::Program {
+        epoch: snapshot.epoch.expect("observed EQ axis"),
+        authority: snapshot.eq.authority(match program.parameter() {
+            DeckParameter::EqBand { band, .. } => band,
+            _ => unreachable!(),
+        }),
         program,
     }
+}
+
+fn value_at(curve: &crate::bridge::ParameterCurve, at: SessionFrame) -> f64 {
+    let mut value = [0.0];
+    curve.write(&mut crate::bridge::CurveCursor::default(), at, &mut value);
+    value[0]
 }
 
 fn amplitude(gain: GainDb) -> f32 {
@@ -38,6 +62,142 @@ fn amplitude(gain: GainDb) -> f32 {
     } else {
         10.0_f32.powf(f32::from(gain) / 20.0)
     }
+}
+
+#[kithara::test]
+#[case(0)]
+#[case(5)]
+fn eq_kill_is_timed_and_preserves_the_running_program_and_authority(#[case] offset: usize) {
+    let (mut mixer, mut ends) = prepared(1);
+    let command = part(&mut ends, program(0, BLOCK, BLOCK + 40, CurveShape::HOLD));
+    let seq = send(&mut ends, at(BLOCK), vec![command]);
+    let before = render_frames(&mut mixer, BLOCK, 8);
+    let gain = GainDb::checked(-12.0).expect("prepared gain");
+    assert!(
+        before
+            .iter()
+            .all(|sample| sample.to_bits() == amplitude(gain).to_bits())
+    );
+    let (layout, authority) = {
+        let snapshot = ends.deck.snapshot.read();
+        (
+            snapshot.eq.layout().expect("layout"),
+            snapshot.eq.authority(0),
+        )
+    };
+    let on = BLOCK + 8 + offset;
+    let off = on + 8;
+    let kill = |on| {
+        DeckPart::Eq(DeckEqChange::Kill {
+            band: 0,
+            layout,
+            on,
+        })
+    };
+    let killed = send(&mut ends, at(on), vec![kill(true)]);
+    let restored = send(&mut ends, at(off), vec![kill(false)]);
+    let pcm = render_frames(&mut mixer, BLOCK + 8, offset + 8);
+    assert!(
+        pcm[..offset]
+            .iter()
+            .all(|value| value.to_bits() == amplitude(gain).to_bits())
+    );
+    assert!((0.0..amplitude(gain)).contains(&pcm[offset]));
+    {
+        let snapshot = ends.deck.snapshot.read();
+        assert_eq!(snapshot.at, frame_at(off));
+        assert_eq!(snapshot.eq.killed(0), Some(true));
+        assert_eq!(snapshot.eq.gain(0), Some(gain));
+        assert_eq!(snapshot.eq.authority(0), authority);
+        assert_eq!(snapshot.eq.program(0), Some(seq));
+    }
+    let restore = render_frames(&mut mixer, off, 1);
+    assert!(restore[0] > *pcm.last().expect("last masked frame"));
+    assert!(restore[0] < amplitude(gain));
+    let snapshot = ends.deck.snapshot.read();
+    assert_eq!(snapshot.eq.killed(0), Some(false));
+    assert_eq!(snapshot.eq.gain(0), Some(gain));
+    assert_eq!(snapshot.eq.authority(0), authority);
+    assert_eq!(snapshot.eq.program(0), Some(seq));
+    let replies = receipts(&mut ends);
+    assert_applied_at(outcome_of(&replies, killed), on);
+    assert_applied_at(outcome_of(&replies, restored), off);
+}
+
+#[kithara::test]
+fn eq_kill_refuses_a_stale_layout_or_unknown_band_before_any_batch_changes() {
+    let (mut mixer, mut ends) = prepared(2);
+    let revision = ends.deck.snapshot.read().eq.layout().expect("layout");
+    let kill = |band| {
+        DeckPart::Eq(DeckEqChange::Kill {
+            band,
+            layout: revision,
+            on: true,
+        })
+    };
+    let layout = || DeckPart::Eq(DeckEqChange::Layout(eq_layout(&[GainDb::MAX])));
+    let same_batch = send(&mut ends, at(BLOCK), vec![layout(), kill(0)]);
+    let invalid = send(&mut ends, at(BLOCK + 1), vec![kill(0), kill(2)]);
+    let stale = send(&mut ends, at(BLOCK + 4), vec![kill(0)]);
+    render_frames(&mut mixer, BLOCK, 2);
+    assert_eq!(ends.deck.snapshot.read().eq.layout(), Some(revision));
+    assert_eq!(ends.deck.snapshot.read().eq.killed(0), Some(false));
+    assert_eq!(ends.deck.snapshot.read().eq.gain(0), Some(GainDb::DEFAULT));
+    let replacement = send(&mut ends, at(BLOCK + 2), vec![layout()]);
+    render_frames(&mut mixer, BLOCK + 2, 4);
+    let replies = receipts(&mut ends);
+    for seq in [same_batch, stale] {
+        assert!(matches!(
+            outcome_of(&replies, seq),
+            Outcome::Rejected(Rejection::Refused(DeckRefusal::ParameterOutdated {
+                parameter: DeckParameter::EqBand { band: 0, .. }
+            }))
+        ));
+    }
+    assert!(matches!(
+        outcome_of(&replies, invalid),
+        Outcome::Rejected(Rejection::Refused(DeckRefusal::ParameterUnavailable {
+            parameter: DeckParameter::EqBand { band: 2, .. }
+        }))
+    ));
+    assert_applied_at(outcome_of(&replies, replacement), BLOCK + 2);
+    let snapshot = ends.deck.snapshot.read();
+    assert_eq!(snapshot.eq.killed(0), Some(false));
+    assert_eq!(snapshot.eq.killed(1), None);
+}
+
+#[kithara::test]
+fn eq_kill_reset_neutralizes_the_addressed_bands_and_keeps_existing_takeover() {
+    let (mut mixer, mut ends) = prepared(2);
+    let command = part(&mut ends, program(0, BLOCK, BLOCK + 64, CurveShape::HOLD));
+    let program = send(&mut ends, at(BLOCK), vec![command]);
+    let layout = ends.deck.snapshot.read().eq.layout().expect("layout");
+    send(
+        &mut ends,
+        at(BLOCK + 1),
+        vec![DeckPart::Eq(DeckEqChange::Kill {
+            band: 0,
+            layout,
+            on: true,
+        })],
+    );
+    render_frames(&mut mixer, BLOCK, 2);
+    assert_eq!(ends.deck.snapshot.read().eq.killed(0), Some(true));
+    assert_eq!(ends.deck.snapshot.read().eq.program(0), Some(program));
+
+    let reset = send(
+        &mut ends,
+        at(BLOCK + 2),
+        vec![DeckPart::Eq(DeckEqChange::Reset)],
+    );
+    render_frames(&mut mixer, BLOCK + 2, 1);
+    let snapshot = ends.deck.snapshot.read();
+    assert_eq!(snapshot.eq.killed(0), Some(false));
+    assert_eq!(snapshot.eq.gain(0), Some(GainDb::DEFAULT));
+    assert_eq!(snapshot.eq.program(0), None);
+    assert_eq!(snapshot.eq.authority(0), Some(reset));
+    let replies = receipts(&mut ends);
+    assert_applied_at(outcome_of(&replies, reset), BLOCK + 2);
 }
 
 #[kithara::test]
@@ -97,13 +257,21 @@ fn same_frame_manual_control_does_not_start_from_an_unrendered_replacement() {
             &mut ends,
             program(0, BLOCK + 2, BLOCK + 18, CurveShape::LINEAR),
         );
+        let last_program_gain = match &command {
+            DeckPart::Program { program, .. } => GainDb::checked(
+                value_at(program.curve(), frame_at((BLOCK + 10).saturating_sub(1)))
+                    .to_f32()
+                    .expect("native program gain"),
+            )
+            .expect("declared EQ range"),
+            _ => unreachable!("prepared EQ program"),
+        };
         send(&mut ends, at(BLOCK + 2), vec![command]);
         render_frames(&mut mixer, BLOCK, 8);
-        let replacement = EqGainProgram::new(
+        let replacement = eq_program(
             0,
             vec![ParameterKnot::new(frame_at(BLOCK + 10), -24.0, CurveShape::HOLD).expect("kill")],
-        )
-        .expect("replacement");
+        );
         let replacement = part(&mut ends, replacement);
         let manual = DeckPart::Eq(DeckEqChange::Gain {
             band: 0,
@@ -123,9 +291,8 @@ fn same_frame_manual_control_does_not_start_from_an_unrendered_replacement() {
             smoothing.smooth_seconds,
             smoothing.settle_ratio,
         );
-        let mut reference = kithara_dsp::param::SmoothingFilter::new(amplitude(
-            GainDb::checked(-6.0).expect("old curve at takeover"),
-        ));
+        let last_applied = amplitude(last_program_gain);
+        let mut reference = kithara_dsp::param::SmoothingFilter::new(last_applied);
         reference.process(amplitude(GainDb::MAX), coeff);
         reference.try_settle(
             amplitude(GainDb::MAX),
@@ -133,12 +300,24 @@ fn same_frame_manual_control_does_not_start_from_an_unrendered_replacement() {
             smoothing.settle_ratio,
         );
         assert_eq!(pcm.get(2).copied(), Some(reference.z1));
+        let before_manual = pcm.get(1).copied().expect("last programme frame");
+        let first_manual = pcm.get(2).copied().expect("takeover frame");
+        assert_eq!(
+            before_manual, last_applied,
+            "the origin is the last rendered programme value"
+        );
+        assert!(
+            (first_manual - before_manual).abs() <= (reference.z1 - last_applied).abs(),
+            "the takeover seam moves by at most one smoothing step"
+        );
         let replies = receipts(&mut ends);
         assert_applied_at(outcome_of(&replies, manual_seq), BLOCK + 10);
         if manual_first {
             assert!(matches!(
                 outcome_of(&replies, replacement_seq),
-                Outcome::Rejected(Rejection::Refused(DeckRefusal::EqOutdated { band: 0 }))
+                Outcome::Rejected(Rejection::Refused(DeckRefusal::ParameterOutdated {
+                    parameter: DeckParameter::EqBand { band: 0, .. }
+                }))
             ));
         } else {
             assert_applied_at(outcome_of(&replies, replacement_seq), BLOCK + 10);
@@ -148,13 +327,14 @@ fn same_frame_manual_control_does_not_start_from_an_unrendered_replacement() {
             .find(|(seq, _, _)| *seq == replacement_seq)
             .and_then(|(_, _, parts)| {
                 parts.iter().find_map(|part| match part {
-                    DeckPart::EqProgram { program, .. } => Some(program),
+                    DeckPart::Program { program, .. }
+                    | DeckPart::Returned(Returned::Program(program)) => Some(program),
                     _ => None,
                 })
             })
             .expect("replacement storage returned");
         assert_eq!(returned.start(), frame_at(BLOCK + 10));
-        assert_eq!(returned.curve().segment_at(0), (-24.0, -24.0, 0.0));
+        assert_eq!(value_at(returned.curve(), returned.start()), -24.0);
         let snapshot = ends.deck.snapshot.read();
         assert_eq!(snapshot.eq.authority(0), Some(manual_seq));
         assert_eq!(snapshot.eq.program(0), None);
@@ -166,10 +346,10 @@ fn same_frame_manual_control_does_not_start_from_an_unrendered_replacement() {
 }
 
 #[kithara::test]
-fn eq_capacity_refuses_only_the_excess_field_and_returns_its_program() {
+fn every_eq_parameter_has_its_own_program_slot() {
     let (mut mixer, mut ends) = prepared(17);
     let mut accepted = Vec::new();
-    for band in 0..EqGainProgram::MAX_ACTIVE {
+    for band in 0..16 {
         let command = part(
             &mut ends,
             program(band, BLOCK, BLOCK + 1000, CurveShape::LINEAR),
@@ -188,32 +368,26 @@ fn eq_capacity_refuses_only_the_excess_field_and_returns_its_program() {
     let refused = send(&mut ends, at(BLOCK + 1), vec![excess]);
     render_frames(&mut mixer, BLOCK + 1, 1);
     let replies = receipts(&mut ends);
-    assert_eq!(replies.len(), 1);
-    assert!(matches!(
-        outcome_of(&replies, refused),
-        Outcome::Rejected(Rejection::Refused(DeckRefusal::EqProgramCapacity))
-    ));
-    assert!(matches!(
-        replies.first().and_then(|(_, _, parts)| parts.first()),
-        Some(DeckPart::EqProgram { .. })
-    ));
+    assert!(
+        replies.is_empty(),
+        "the seventeenth field is admitted independently"
+    );
     let snapshot = ends.deck.snapshot.read();
     for (band, seq) in accepted.into_iter().enumerate() {
         assert_eq!(snapshot.eq.program(band), Some(seq));
     }
-    assert_eq!(snapshot.eq.program(16), None);
-    assert_eq!(snapshot.eq.gain(16), Some(GainDb::DEFAULT));
+    assert_eq!(snapshot.eq.program(16), Some(refused));
+    assert_eq!(snapshot.eq.gain(16), GainDb::checked(-12.0));
     assert_eq!(snapshot.metrics.underruns(), 0);
 }
 
 #[kithara::test]
 fn a_future_curve_cannot_control_an_eq_layout_that_replaced_its_binding() {
     let (mut mixer, mut ends) = prepared(1);
-    let kill = EqGainProgram::new(
+    let kill = eq_program(
         0,
         vec![ParameterKnot::new(frame_at(BLOCK + 20), -24.0, CurveShape::HOLD).expect("kill")],
-    )
-    .expect("prepared kill");
+    );
     let stale = part(&mut ends, kill);
     let stale = send(&mut ends, at(BLOCK + 20), vec![stale]);
     send(
@@ -258,7 +432,9 @@ fn a_future_curve_cannot_control_an_eq_layout_that_replaced_its_binding() {
     let replies = receipts(&mut ends);
     assert!(matches!(
         outcome_of(&replies, stale),
-        Outcome::Rejected(Rejection::Refused(DeckRefusal::EqOutdated { band: 0 }))
+        Outcome::Rejected(Rejection::Refused(DeckRefusal::ParameterOutdated {
+            parameter: DeckParameter::EqBand { band: 0, .. }
+        }))
     ));
     let snapshot = ends.deck.snapshot.read();
     assert_eq!(snapshot.eq.gain(0), Some(GainDb::DEFAULT));
@@ -289,11 +465,13 @@ fn a_refused_band_preserves_the_running_eq_curve_and_returns_storage() {
     assert_eq!(replies.len(), 1);
     assert!(matches!(
         outcome_of(&replies, refused),
-        Outcome::Rejected(Rejection::Refused(DeckRefusal::EqUnavailable { band: 99 }))
+        Outcome::Rejected(Rejection::Refused(DeckRefusal::ParameterUnavailable {
+            parameter: DeckParameter::EqBand { band: 99, .. }
+        }))
     ));
     assert!(matches!(
         replies.first().and_then(|(_, _, parts)| parts.first()),
-        Some(DeckPart::EqProgram { .. })
+        Some(DeckPart::Program { .. })
     ));
     let snapshot = ends.deck.snapshot.read();
     assert_eq!(snapshot.eq.program(0), Some(running));
@@ -314,7 +492,7 @@ fn completed_eq_programs_release_credit_before_the_next_admission() {
         assert_applied_at(outcome_of(&replies, seq), start);
         assert!(matches!(
             replies.first().and_then(|(_, _, parts)| parts.first()),
-            Some(DeckPart::EqProgram { .. })
+            Some(DeckPart::Returned(Returned::Program(_)))
         ));
         assert_eq!(ends.deck.snapshot.read().eq.gain(0), Some(GainDb::DEFAULT));
         assert_eq!(ends.deck.snapshot.read().eq.program(0), Some(seq));
@@ -341,7 +519,7 @@ fn closing_the_parameter_owner_confirms_only_rendered_values_and_returns_knots()
     assert_applied_at(outcome_of(&replies, seq), BLOCK);
     assert!(matches!(
         replies.first().and_then(|(_, _, parts)| parts.first()),
-        Some(DeckPart::EqProgram { .. })
+        Some(DeckPart::Returned(Returned::Program(_)))
     ));
     let snapshot = ends.deck.snapshot.read();
     let last = GainDb::checked(-12.0 + 12.0 * 15.0 / 128.0).expect("last rendered gain");
@@ -350,21 +528,21 @@ fn closing_the_parameter_owner_confirms_only_rendered_values_and_returns_knots()
         .find(|(answered, _, _)| *answered == seq)
         .and_then(|(_, _, parts)| {
             parts.iter().find_map(|part| match part {
-                DeckPart::EqProgram { program, .. } => Some(program),
+                DeckPart::Returned(Returned::Program(program)) => Some(program),
                 _ => None,
             })
         })
         .expect("terminal program storage");
     assert_eq!(returned.start(), frame_at(BLOCK));
     assert_eq!(returned.end(), frame_at(BLOCK + 128));
-    assert_eq!(returned.curve().segment_at(128), (0.0, 0.0, 0.0));
+    assert_eq!(value_at(returned.curve(), returned.end()), 0.0);
     assert_eq!(snapshot.eq.gain(0), Some(last));
     assert_ne!(
         snapshot.eq.gain(0),
         Some(GainDb::DEFAULT),
         "unrendered endpoint is not confirmed"
     );
-    assert_eq!(snapshot.eq.binding(), None);
+    assert_eq!(snapshot.eq.layout(), None);
     assert_eq!(snapshot.eq.program(0), None);
 }
 
@@ -433,7 +611,7 @@ fn future_eq_programs_do_not_shift_a_slots_resume_boundary() {
 fn mixed_shape_eq_knots_preserve_each_pcm_frame_across_render_subdivisions() {
     for block in [1, 7, 13, 128] {
         let (mut mixer, mut ends) = prepared(1);
-        let curve = EqGainProgram::new(
+        let curve = eq_program(
             0,
             [
                 (17, 0.0, CurveShape::cubic(0.0, 1.0).expect("S shape")),
@@ -446,8 +624,7 @@ fn mixed_shape_eq_knots_preserve_each_pcm_frame_across_render_subdivisions() {
                 ParameterKnot::new(frame_at(BLOCK + at), value, shape).expect("finite knot")
             })
             .collect(),
-        )
-        .expect("mixed shape program");
+        );
         let curve = part(&mut ends, curve);
         let seq = send(&mut ends, at(BLOCK + 17), vec![curve]);
         let mut pcm = Vec::new();
@@ -497,14 +674,10 @@ fn eq_refusals_preserve_running_pcm_and_return_the_original_program(#[case] kind
         &mut ends,
         program(band, start, BLOCK + 24, CurveShape::HOLD),
     );
-    if let DeckPart::EqProgram { binding, .. } = &mut replacement
+    if let DeckPart::Program { epoch, .. } = &mut replacement
         && kind == 1
     {
-        *binding = crate::bridge::EqBinding::new(
-            binding.scope(),
-            binding.instance(),
-            SessionEpoch::new(1),
-        );
+        *epoch = SessionEpoch::new(1);
     }
     let mut commands = vec![replacement];
     if kind == 2 {
@@ -529,25 +702,26 @@ fn eq_refusals_preserve_running_pcm_and_return_the_original_program(#[case] kind
     assert_eq!(pcm, expected);
     let replies = receipts(&mut ends);
     assert_eq!(replies.len(), 1);
-    let reason = match kind {
-        0 => DeckRefusal::EqProgramClock { band: 0 },
-        1 => DeckRefusal::AxisRestarted,
-        _ => DeckRefusal::EqUnavailable { band: 99 },
-    };
     assert!(
-        matches!(outcome_of(&replies, rejected), Outcome::Rejected(Rejection::Refused(found)) if *found == reason)
+        matches!(outcome_of(&replies, rejected), Outcome::Rejected(Rejection::Refused(found)) if match kind {
+            0 => matches!(found, DeckRefusal::ProgramClock { parameter: DeckParameter::EqBand { band: 0, .. } }),
+            1 => *found == DeckRefusal::AxisRestarted,
+            _ => matches!(found, DeckRefusal::ParameterUnavailable { parameter: DeckParameter::EqBand { band: 99, .. } }),
+        })
     );
     let returned = replies
         .iter()
         .find(|(seq, ..)| *seq == rejected)
         .and_then(|(_, _, parts)| {
             parts.iter().find_map(|part| match part {
-                DeckPart::EqProgram { program, .. } => Some(program),
+                DeckPart::Program { program, .. } => Some(program),
                 _ => None,
             })
         })
         .expect("refused programme storage returned");
-    assert_eq!(returned.band(), band);
+    assert!(
+        matches!(returned.parameter(), DeckParameter::EqBand { band: actual, .. } if actual == band)
+    );
     assert_eq!(returned.start(), frame_at(start));
     assert_eq!(returned.end(), frame_at(BLOCK + 24));
     let snapshot = ends.deck.snapshot.read();
@@ -560,10 +734,10 @@ fn eq_refusals_preserve_running_pcm_and_return_the_original_program(#[case] kind
 }
 
 #[kithara::test]
-fn neutral_capacity_admission_and_refusal_leave_the_pcm_unchanged() {
+fn neutral_programs_on_every_band_leave_the_pcm_unchanged() {
     let (mut mixer, mut ends) = prepared(17);
-    for band in 0..EqGainProgram::MAX_ACTIVE {
-        let curve = EqGainProgram::new(
+    for band in 0..16 {
+        let curve = eq_program(
             band,
             [BLOCK, BLOCK + 64]
                 .into_iter()
@@ -571,14 +745,13 @@ fn neutral_capacity_admission_and_refusal_leave_the_pcm_unchanged() {
                     ParameterKnot::new(frame_at(at), 0.0, CurveShape::HOLD).expect("neutral knot")
                 })
                 .collect(),
-        )
-        .expect("neutral curve");
+        );
         let curve = part(&mut ends, curve);
         send(&mut ends, at(BLOCK), vec![curve]);
     }
     assert_eq!(render_frames(&mut mixer, BLOCK, 1), [1.0]);
     assert!(receipts(&mut ends).is_empty());
-    let curve = EqGainProgram::new(
+    let curve = eq_program(
         16,
         [BLOCK + 1, BLOCK + 65]
             .into_iter()
@@ -586,18 +759,17 @@ fn neutral_capacity_admission_and_refusal_leave_the_pcm_unchanged() {
                 ParameterKnot::new(frame_at(at), 0.0, CurveShape::HOLD).expect("neutral knot")
             })
             .collect(),
-    )
-    .expect("neutral excess");
+    );
     let curve = part(&mut ends, curve);
     let excess = send(&mut ends, at(BLOCK + 1), vec![curve]);
     assert_eq!(render_frames(&mut mixer, BLOCK + 1, 1), [1.0]);
-    assert!(matches!(
-        outcome_of(&receipts(&mut ends), excess),
-        Outcome::Rejected(Rejection::Refused(DeckRefusal::EqProgramCapacity))
-    ));
+    assert!(
+        receipts(&mut ends).is_empty(),
+        "every neutral band program is admitted"
+    );
     let snapshot = ends.deck.snapshot.read();
     assert_eq!(snapshot.eq.gain(16), Some(GainDb::DEFAULT));
-    assert_eq!(snapshot.eq.program(16), None);
+    assert_eq!(snapshot.eq.program(16), Some(excess));
     assert_eq!(snapshot.metrics.underruns(), 0);
 }
 
