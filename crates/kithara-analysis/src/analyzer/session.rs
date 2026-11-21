@@ -1,9 +1,10 @@
 use std::{
-    num::{NonZeroU32, NonZeroU64},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     ops::Range,
 };
 
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_key::KeyError;
 use kithara_platform::time::Duration;
 use kithara_resampler::ResamplerBackend;
 #[cfg(feature = "analysis-beat")]
@@ -20,7 +21,7 @@ use crate::{
     slots::{
         Intake, Opens,
         beat::{self, Slot},
-        waveform,
+        key, waveform,
     },
 };
 
@@ -50,6 +51,7 @@ where
     pub(super) coverage: RangeSet<u64>,
     pub(super) beat: Slot<B>,
     pub(super) waveform: waveform::Slot,
+    pub(super) key: key::Slot,
     pub(super) settled: bool,
     pub(super) revision: u64,
 }
@@ -118,22 +120,34 @@ where
     fn ingest(
         &mut self,
         pcm: &[f32],
-        channels: usize,
+        channels: NonZeroUsize,
         range: Range<u64>,
         opens: Opens,
         extent: &mut Extent,
         detector: Option<&mut beat::Detector>,
-    ) -> Ingest {
+    ) -> Result<Ingest, KeyError> {
         extent.deliver(&range);
         let seen = self.coverage.covers(&range);
         if !seen {
             self.coverage.insert(range.clone());
-            waveform::push(&mut self.waveform, &self.pools, pcm, channels, range.start);
+            waveform::push(
+                &mut self.waveform,
+                &self.pools,
+                pcm,
+                channels.get(),
+                range.start,
+            );
+            self.key.push(&self.pools, pcm, channels, range.start)?;
         }
         let analysed = self.beat.coverage(&self.coverage).covers(&range);
-        let took = self
-            .beat
-            .push(&self.pools, pcm, channels, range.start, opens, detector);
+        let took = self.beat.push(
+            &self.pools,
+            pcm,
+            channels.get(),
+            range.start,
+            opens,
+            detector,
+        );
         tracing::debug!(
             ?range,
             seen,
@@ -143,12 +157,12 @@ where
             "analysis: PCM admission completed"
         );
         if took || !seen {
-            return Ingest::Accepted;
+            return Ok(Ingest::Accepted);
         }
         if analysed {
-            return Ingest::Covered;
+            return Ok(Ingest::Covered);
         }
-        Ingest::Deferred
+        Ok(Ingest::Deferred)
     }
 
     pub(crate) fn prepare_detection(&mut self, trailing: bool) -> Option<beat::DetectRequest> {
@@ -161,20 +175,22 @@ where
         ending: bool,
         chunk_frames: NonZeroU64,
         extent: Option<u64>,
-    ) -> AnalysisProgress {
-        let analysis = self.snapshot(detector, ending, extent);
+    ) -> Result<AnalysisProgress, KeyError> {
+        let analysis = self.snapshot(detector, ending, extent)?;
         let resume = if analysis.is_settled() {
             None
         } else {
             let waveform = waveform::write_resume(&self.waveform);
             let beat = self.beat.write_resume();
+            let key = self.key.write_resume();
             Some(AnalysisResume::capture(
                 chunk_frames,
                 waveform.as_deref(),
                 beat.as_deref(),
+                key.as_deref(),
             ))
         };
-        AnalysisProgress::new(analysis, resume)
+        Ok(AnalysisProgress::new(analysis, resume))
     }
 
     pub(crate) fn push(
@@ -182,7 +198,7 @@ where
         chunk: &AudioChunk,
         extent: &mut Extent,
         detector: Option<&mut beat::Detector>,
-    ) -> Ingest {
+    ) -> Result<Ingest, KeyError> {
         let rate = chunk.spec().sample_rate;
         if rate != self.source_sample_rate {
             warn!(
@@ -190,13 +206,14 @@ where
                 rate = rate.get(),
                 "analysis: chunk rate differs from the pass axis; range dropped"
             );
-            return Ingest::ForeignRate;
+            return Ok(Ingest::ForeignRate);
         }
 
         if !self.take_origins(chunk.meta.media_origin, chunk.meta.visible_origin) {
-            return Ingest::ForeignClock;
+            return Ok(Ingest::ForeignClock);
         }
-        let channels = usize::from(chunk.spec().channels.max(1));
+        let channels =
+            NonZeroUsize::new(usize::from(chunk.spec().channels)).unwrap_or(NonZeroUsize::MIN);
         let range = chunk.meta.frame_range();
         self.ingest(
             &chunk.samples[..],
@@ -214,14 +231,14 @@ where
         span: crate::producer::ring::Span,
         extent: &mut Extent,
         detector: Option<&mut beat::Detector>,
-    ) -> Ingest {
+    ) -> Result<Ingest, KeyError> {
         if !self.take_origins(span.media_origin, span.visible_origin) {
-            return Ingest::ForeignClock;
+            return Ok(Ingest::ForeignClock);
         }
         let frames = (pcm.len() / span.channels).to_u64().unwrap_or(0);
         self.ingest(
             pcm,
-            span.channels,
+            NonZeroUsize::new(span.channels).unwrap_or(NonZeroUsize::MIN),
             span.start..span.start + frames,
             Opens::Extends,
             extent,
@@ -249,6 +266,7 @@ where
         let waveform_resume = resume.waveform;
         waveform::restore(&mut self.waveform, &self.pools, waveform_resume)?;
         self.beat.restore(&self.pools, resume.beat)?;
+        self.key.restore(&self.pools, resume.key)?;
         self.coverage = analysis.coverage().clone();
         self.media_origin = analysis.media_origin();
         self.settled = false;
@@ -264,7 +282,8 @@ where
         detector: Option<&mut beat::Detector>,
         ending: bool,
         extent: Option<u64>,
-    ) -> TrackAnalysis {
+    ) -> Result<TrackAnalysis, KeyError> {
+        let key = self.key.snapshot(self.settled, extent)?;
         self.revision = self.revision.saturating_add(1);
 
         let waveform = waveform::snapshot(&mut self.waveform, extent);
@@ -274,7 +293,7 @@ where
             .snapshot(&self.pools, detector, ending, extent)
             .map(|(grid, unanalysed)| BeatSnapshot::new(grid, state, unanalysed));
 
-        TrackAnalysis::builder()
+        Ok(TrackAnalysis::builder()
             .token(self.token.clone())
             .revision(self.revision)
             .source_sample_rate(self.source_sample_rate)
@@ -284,8 +303,9 @@ where
             .fingerprint(self.fingerprint.clone())
             .settled(self.settled)
             .maybe_waveform(waveform)
+            .maybe_key(key)
             .maybe_beat(beat)
-            .build()
+            .build())
     }
 
     delegate::delegate! {

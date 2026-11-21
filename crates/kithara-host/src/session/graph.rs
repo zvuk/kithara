@@ -2,7 +2,7 @@ use firewheel::node::NodeID;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
-use kithara_render::bridge::MixerInputs;
+use kithara_render::rt::MixerInputs;
 use kithara_warp::MapAxis;
 use tracing::{debug, warn};
 
@@ -10,7 +10,9 @@ use super::{
     SessionError,
     context::GraphError,
     queue::settle_root_receipts,
-    state::{DeckNode, RetiredDeck, SessionState, TapSlot, add_graph_node, ensure_ctx},
+    state::{
+        DeckNode, OutputPhase, RetiredDeck, SessionState, TapSlot, add_graph_node, ensure_ctx,
+    },
     transport::TransportState,
 };
 use crate::{
@@ -178,7 +180,7 @@ pub(crate) fn idle<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionEr
         .as_mut()
         .ok_or(SessionError::NoContext)?
         .request_deactivate();
-    state.stream_needs_restart = false;
+    state.output_phase = OutputPhase::Idle;
     state.publish_root();
     Ok(())
 }

@@ -1,5 +1,7 @@
 use arc_swap::ArcSwap;
 use iced::window::Id;
+#[cfg(feature = "broadcast")]
+use kithara::worker::{Worker, WorkerConfig};
 use kithara::{
     host::{HostConfig, HostOwned},
     platform::{
@@ -15,6 +17,7 @@ use kithara::{
             },
         },
     },
+    queue::QueueConfigPatch,
     signal::AudioSpec,
     ui::render::{ControlAction, Published, ReadValue, Reads, Walk},
 };
@@ -237,12 +240,25 @@ impl Rig {
     }
 
     pub(crate) fn playback() -> Self {
-        Self::playback_with(AnalysisHandle::channel(watch::channel(Arc::default()).1).0)
+        Self::playback_on(QueueConfigPatch::default())
+    }
+
+    /// A playback rig whose decks apply `queue` over the default queue config.
+    pub(crate) fn playback_on(queue: QueueConfigPatch) -> Self {
+        Self::playback_rig(
+            AnalysisHandle::channel(watch::channel(Arc::default()).1).0,
+            queue,
+        )
     }
 
     /// A playback rig whose decks ask `analysis` for their tracks.
     pub(crate) fn playback_with(analysis: AnalysisHandle) -> Self {
-        let (runtime, config) = test_fixture::runtime_and_config();
+        Self::playback_rig(analysis, QueueConfigPatch::default())
+    }
+
+    fn playback_rig(analysis: AnalysisHandle, queue: QueueConfigPatch) -> Self {
+        let (runtime, mut config) = test_fixture::runtime_and_config();
+        config.queue = queue;
         let host = crate::pools::host(HostConfig::offline(config.worker.pools().clone()).build())
             .expect("test host");
         Self::with_host(
@@ -421,8 +437,6 @@ impl Rig {
 
 #[cfg(feature = "broadcast")]
 fn idle_broadcast(config: &AppConfig) -> AppBroadcastConfig {
-    use kithara::worker::{Worker, WorkerConfig};
-
     AppBroadcastConfig::builder(
         Worker::new(WorkerConfig::new()),
         config.worker.pools().clone(),

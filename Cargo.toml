@@ -35,6 +35,7 @@ members = [
     "crates/kithara-fixture-media",
     "crates/kithara-hls",
     "crates/kithara-host",
+    "crates/kithara-key",
     "crates/kithara-link",
     "crates/kithara-mp4",
     "crates/kithara-mpa",
@@ -81,6 +82,7 @@ members = [
     "tests/crates/file",
     "tests/crates/harness",
     "tests/crates/hls",
+    "tests/crates/hls-keys",
     "tests/crates/host",
     "tests/crates/play",
     "tests/crates/queue",
@@ -90,6 +92,8 @@ members = [
     "tests/crates/sync",
     "tests/crates/warp",
     "tests/fuzz",
+    "tests/wasm-runner",
+    "tests/wasm-runner-fixture",
     "xtask",
 ]
 default-members = [
@@ -117,6 +121,7 @@ default-members = [
     "crates/kithara-fixture-media",
     "crates/kithara-hls",
     "crates/kithara-host",
+    "crates/kithara-key",
     "crates/kithara-derive",
     "crates/kithara-mp4",
     "crates/kithara-mpa",
@@ -163,6 +168,7 @@ default-members = [
     "tests/crates/file",
     "tests/crates/harness",
     "tests/crates/hls",
+    "tests/crates/hls-keys",
     "tests/crates/host",
     "tests/crates/play",
     "tests/crates/queue",
@@ -327,6 +333,7 @@ kithara-fixture-media = { path = "crates/kithara-fixture-media", version = "0.0.
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha5", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha5", default-features = false }
 kithara-integration-tests = { path = "tests", default-features = false }
+kithara-key = { path = "crates/kithara-key", version = "0.0.1-alpha5" }
 kithara-link = { path = "crates/kithara-link", version = "0.0.1-alpha5", default-features = false }
 kithara-mp4 = { path = "crates/kithara-mp4", version = "0.0.1-alpha5" }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha5" }
@@ -405,6 +412,7 @@ block2 = "0.6.2"
 bon = "3.10"
 brotli = "8.0.4"
 bungee-sys = "0.1.1"
+bytemuck = "1.25.2"
 bytes = "1.12.1"
 cargo_metadata = "0.23"
 cbc = "0.2.1"
@@ -428,6 +436,7 @@ dbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rus
 delegate = "0.13"
 derive-where = "1.7"
 derive_more = { version = "2.1", features = ["debug", "deref", "deref_mut", "display", "error", "from", "into"] }
+dirs-next = "2.0"
 fast-interleave = "0.1"
 fdk-aac-sys = "0.5.0"
 fearless_simd = "1.0"
@@ -440,6 +449,7 @@ firewheel-web-audio = { version = "0.6.0", default-features = false }
 flate2 = "1.1.10"
 foldhash = { version = "0.2", default-features = false }
 fs4 = "1.1.0"
+fundu-core = { version = "=0.4.1", default-features = false }
 futures = "0.3.34"
 
 # proc macros
@@ -449,6 +459,7 @@ glob = "0.3"
 gloo-timers = { version = "0.4", features = ["futures"] }
 # The package graph `nextest-filtering` parses a filterset against.
 guppy = "0.19.1"
+half = "2.7.1"
 
 # hex encoding
 hex = "0.4"
@@ -456,8 +467,6 @@ hls_m3u8 = "0.7.0"
 # 0.23.2 introduced an Android thread-profiler compilation regression.
 hotpath = "=0.23.1"
 http = "1.5.0"
-humantime = "2.4.0"
-humantime-serde = "1.1.1"
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
 
 # UI frameworks
@@ -545,6 +554,7 @@ serde_json = "1.0"
 serde_yaml_ng = { package = "yaml_serde", version = "0.10.7" }
 serial_test = "4.0.1"
 sha2 = "0.11.1"
+shlex = "2.0.1"
 signal-hook = "0.4"
 # Time-stretch backends: C++ FFI, native-only, behind `stretch-*` features.
 signalsmith-stretch = "0.1.3"
@@ -561,6 +571,7 @@ tempfile = "3.27.0"
 thirtyfour = { version = "0.37.10", default-features = false, features = ["bidi", "cdp", "component", "reqwest", "rustls"] }
 thiserror = "2.0.21"
 thunderdome = { version = "0.6.1", default-features = false }
+time = { version = "0.3.55", default-features = false, features = ["parsing"] }
 tiny_http = "0.12.0"
 tokio = { version = "1.53.3", default-features = false }
 tokio_with_wasm = { version = "0.9.2", features = ["full"] }
@@ -590,13 +601,16 @@ velato = { version = "0.8", default-features = false }
 vello = { version = "0.6", default-features = false }
 # Dev-only scene inspector; must stay on the vello fork rev patched in .cargo/config.toml.
 vello_encoding = { version = "0.6", default-features = false }
+walrus = "0.26.1"
 # Exact, because `wasm-bindgen` refuses a Wasm file whose bindgen schema differs from the
-# CLI's, and the CI image carries `wasm-bindgen-cli` 0.2.120. The UI stack added here
-# (wgpu 27, winit, softbuffer, bevy_platform) accepts `js-sys`/`web-sys` 0.3.103, which
-# pulls bindgen 0.2.126; the browser lane then rejects every Wasm file it is handed and
-# reports nothing rather than failing loudly. Caret ranges cannot express "whatever the
-# image installed", so the three move together and only with the image.
+# generator's, and the browser test runner generates with `wasm-bindgen-cli-support`. The UI
+# stack added here (wgpu 27, winit, softbuffer, bevy_platform) accepts `js-sys`/`web-sys`
+# 0.3.103, which pulls bindgen 0.2.126; the browser lane then rejects every Wasm file it is
+# handed and reports nothing rather than failing loudly. The runner's lock test fails when
+# `wasm-bindgen`, `wasm-bindgen-test` and the generator resolve to different bindgen
+# versions, so they move together.
 wasm-bindgen = "=0.2.120"
+wasm-bindgen-cli-support = "=0.2.120"
 wasm-bindgen-futures = "=0.4.70"
 wasm-bindgen-test = "=0.3.70"
 wasm_safe_thread = "0.1.1"
@@ -777,6 +791,9 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-hls-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-hls-keys-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-integration-tests]

@@ -195,17 +195,17 @@ impl<P> ThreadProbe<P> {
 }
 
 impl<S, P: HostedDeck<S>> HostedDeck<S> for ThreadProbe<P> {
-    fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
+    fn close(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError> {
         self.note(Call::Close);
         self.inner.close(out)
     }
 
-    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         self.note(Call::Drain);
         self.inner.drain(pass, out);
     }
 
-    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         self.note(Call::Tick);
         self.inner.tick(pass, out);
     }
@@ -214,7 +214,7 @@ impl<S, P: HostedDeck<S>> HostedDeck<S> for ThreadProbe<P> {
         to self.inner {
             fn worker(&self) -> Option<&PlayWorker<S>>;
             fn mixer_config(&self) -> DeckMixerConfig;
-            fn settle(&mut self, receipt: TrackReceipt<'_, S>, pass: DeckPass<'_>, out: &mut Outbox<'_, S>);
+            fn settle(&mut self, receipt: TrackReceipt<'_>, pass: DeckPass<'_>, out: &mut Outbox<'_>);
             fn hold(&mut self, waker: Waker);
             fn release(&mut self);
         }

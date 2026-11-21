@@ -1,4 +1,4 @@
-use std::num::NonZeroU128;
+use std::{cmp::Ordering, num::NonZeroU128};
 
 use num_traits::Float;
 
@@ -161,6 +161,30 @@ impl Ratio {
     pub(super) fn source_frame(self) -> Option<u64> {
         u64::try_from(quotient(self.numerator, self.denominator)).ok()
     }
+
+    /// Exact order by continued-fraction terms: no cross product can overflow.
+    pub(super) fn compare(self, other: Self) -> Ordering {
+        let mut first = (self.numerator, self.denominator.get());
+        let mut second = (other.numerator, other.denominator.get());
+        let mut reversed = false;
+        loop {
+            let order = (first.0 / first.1).cmp(&(second.0 / second.1));
+            let rests = (first.0 % first.1, second.0 % second.1);
+            let order = match (order, rests) {
+                (Ordering::Equal, (0, 0)) => Ordering::Equal,
+                (Ordering::Equal, (0, _)) => Ordering::Less,
+                (Ordering::Equal, (_, 0)) => Ordering::Greater,
+                (Ordering::Equal, (rest, other_rest)) => {
+                    first = (first.1, rest);
+                    second = (second.1, other_rest);
+                    reversed = !reversed;
+                    continue;
+                }
+                (order, _) => order,
+            };
+            return if reversed { order.reverse() } else { order };
+        }
+    }
 }
 
 impl TryFrom<f64> for Ratio {
@@ -230,6 +254,37 @@ mod tests {
     }
 
     #[kithara::test]
+    fn compare_matches_cross_products_without_overflowing_them() {
+        let ratio = |numerator, denominator| {
+            Ratio::new(
+                numerator,
+                NonZeroU128::new(denominator).expect("denominator"),
+            )
+            .expect("ratio")
+        };
+        for (first, second) in (0..12).flat_map(|numerator| {
+            (1..12).flat_map(move |denominator| {
+                (0..12).flat_map(move |other| {
+                    (1..12).map(move |other_denominator| {
+                        ((numerator, denominator), (other, other_denominator))
+                    })
+                })
+            })
+        }) {
+            assert_eq!(
+                ratio(first.0, first.1).compare(ratio(second.0, second.1)),
+                (first.0 * second.1).cmp(&(second.0 * first.1)),
+                "{first:?} against {second:?}"
+            );
+        }
+        let wide = ratio(u128::MAX, u128::MAX - 1);
+        let wider = ratio(u128::MAX - 1, u128::MAX - 2);
+        assert_eq!(wide.compare(wider), Ordering::Less);
+        assert_eq!(wider.compare(wide), Ordering::Greater);
+        assert_eq!(wide.compare(wide), Ordering::Equal);
+    }
+
+    #[kithara::test]
     fn binary_divisor_matches_euclid_across_full_width() {
         fn euclid(mut first: u128, mut second: u128) -> u128 {
             while second != 0 {
@@ -253,11 +308,11 @@ mod tests {
             u128::MAX - 1,
             u128::MAX,
         ];
-        let mut state = 0x9E37_79B9_7F4A_7C15_F39C_C060_5CED_C834_u128;
+        let mut state = 0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c834_u128;
         for _ in 0..64 {
             state = state
-                .wrapping_mul(0x2360_ED05_1FC6_5DA4_4385_DF64_9FCC_F645)
-                .wrapping_add(0x5851_F42D_4C95_7F2D_1405_7B7E_F767_814F);
+                .wrapping_mul(0x2360_ed05_1fc6_5da4_4385_df64_9fcc_f645)
+                .wrapping_add(0x5851_f42d_4c95_7f2d_1405_7b7e_f767_814f);
             values.push(state >> (state % 127));
             values.push((state >> 96) * 44_100 * 48_000);
         }
@@ -297,11 +352,11 @@ mod tests {
             u128::MAX >> 1,
             u128::MAX,
         ];
-        let mut state = 0x2545_F491_4F6C_DD1D_9E37_79B9_7F4A_7C15_u128;
+        let mut state = 0x2545_f491_4f6c_dd1d_9e37_79b9_7f4a_7c15_u128;
         for _ in 0..24 {
             state = state
-                .wrapping_mul(0x2360_ED05_1FC6_5DA4_4385_DF64_9FCC_F645)
-                .wrapping_add(0x5851_F42D_4C95_7F2D_1405_7B7E_F767_814F);
+                .wrapping_mul(0x2360_ed05_1fc6_5da4_4385_df64_9fcc_f645)
+                .wrapping_add(0x5851_f42d_4c95_7f2d_1405_7b7e_f767_814f);
             components.push((state >> (state % 125)).max(1));
         }
         let ratios: Vec<_> = components

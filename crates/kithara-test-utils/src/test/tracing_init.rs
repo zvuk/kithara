@@ -1,6 +1,10 @@
 use tracing_subscriber::EnvFilter;
 
-use crate::consts;
+#[cfg(not(rtsan))]
+mod consts {
+    /// Verbosity order, so a merge can take the wider of two levels.
+    pub(super) const LEVELS: [&str; 6] = ["off", "error", "warn", "info", "debug", "trace"];
+}
 
 pub fn setup_tracing() {
     setup_tracing_with_filter("warn");

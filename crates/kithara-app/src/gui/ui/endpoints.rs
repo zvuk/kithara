@@ -96,6 +96,42 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
+        id: "deck.track.key",
+        value: ValueKind::Text,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.key.sounding",
+        value: ValueKind::Text,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.key.color",
+        value: ValueKind::Color,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.track.key_color",
+        value: ValueKind::Color,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.key.sounding_hidden",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.key.transpose_hidden",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
         id: "deck.playback.tempo",
         value: ValueKind::Text,
         scopes: Endpoint::DECK,
@@ -535,6 +571,24 @@ static ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         category: EndpointCategory::Telemetry,
         id: "deck.stream.quality_hidden",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.stream.error_hidden",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.stream.quality_ready",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.stream.auto_hidden",
         value: ValueKind::Bool,
         scopes: Endpoint::DECK,
     },

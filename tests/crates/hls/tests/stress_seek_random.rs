@@ -23,7 +23,7 @@ use tracing::info;
 
 /// `count` seeded-random seek positions in `[1, max_seek)`.
 fn random_seek_positions(max_seek: u64, count: usize) -> Vec<u64> {
-    let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
+    let mut rng = Xorshift64::new(0xdead_beef_cafe_1337);
     let seek_positions: Vec<u64> = (0..count).map(|_| rng.range_u64(1, max_seek)).collect();
     info!(
         count = seek_positions.len(),
@@ -236,7 +236,7 @@ async fn stress_random_seek_read_hls(
         .segment_size(segment_size);
     if with_init {
         let mut init = b"V0-INIT:".to_vec();
-        init.resize(1024, 0xFF);
+        init.resize(1024, 0xff);
         ladder = ladder.init_data_per_variant(vec![Arc::new(init)]);
     }
     if with_encryption {

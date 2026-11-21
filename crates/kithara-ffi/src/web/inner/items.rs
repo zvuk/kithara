@@ -231,7 +231,7 @@ mod tests {
     use std::{num::NonZeroU32, sync::OnceLock};
 
     use ::kithara::{
-        platform::{sync::Mutex, tokio::sync::oneshot::error::TryRecvError},
+        platform::{sync::Mutex, thread, tokio::sync::oneshot::error::TryRecvError},
         play::{
             DeckMixSettings, DeckPass, DeckProtocol, DeckSnapshot, DispatcherProtocol, HostedDeck,
             Outbox, PlayError, PlayWorker, PlayWorkerConfig, ResourceLoad, ResourcePrep,
@@ -250,6 +250,7 @@ mod tests {
     };
 
     fn queue() -> FfiQueue {
+        thread::set_wasm_shim_name("wasm-bindgen-test");
         let worker = PlayWorker::new(
             PlayWorkerConfig::builder(crate::pools::build().expect("queue pools")).build(),
         );
@@ -273,10 +274,10 @@ mod tests {
         );
         let scope = ring.open(config.slots().get()).expect("open deck scope");
         let (mut dispatcher, _opens) =
-            channel::<DispatcherProtocol<ResourceLoad<FfiPools>>>(ChannelConfig::builder().build());
+            channel::<DispatcherProtocol<ResourceLoad>>(ChannelConfig::builder().build());
         let rate = NonZeroU32::new(48_000).expect("sample rate");
         let output = SessionOutputView::new(rate).get();
-        let mut deck = DeckSnapshot::new(config);
+        let mut deck = DeckSnapshot::new(config.slots(), config.eq_bands(), config.fx_units());
         deck.sample_rate = rate.get();
         let pass = DeckPass {
             mix: DeckMixSettings::default(),

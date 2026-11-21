@@ -38,6 +38,28 @@ pub(crate) const WASM_TEST_ARGS: &[&str] = &[
     "build-std-features=optimize_for_size",
 ];
 
+/// The minimal `wasm-bindgen-test` binaries, one per runner mode, that the
+/// runner's protocol test drives, and the variables that name them to it.
+pub(crate) const WASM_RUNNER_FIXTURES: &[&str] = &[
+    "-p",
+    "kithara-wasm-runner-fixture",
+    "--test",
+    "browser",
+    "--test",
+    "worker",
+];
+pub(crate) const WASM_RUNNER_FIXTURE_VARIABLES: &[(&str, &str)] = &[
+    ("browser", "KITHARA_WASM_RUNNER_FIXTURE_BROWSER"),
+    ("worker", "KITHARA_WASM_RUNNER_FIXTURE_WORKER"),
+];
+pub(crate) const WASM_RUNNER_PROTOCOL_TEST: &[&str] = &[
+    "test",
+    "-p",
+    "kithara-wasm-test-runner",
+    "--test",
+    "protocol",
+];
+
 pub(crate) const WASM_ENCODER_TEST: &[&str] = &[
     "-p",
     "kithara-encode",
@@ -639,6 +661,10 @@ pub(crate) const TEST_SERVER_PORT: u16 = 3444;
 /// job's own temporary copy, told only when that build wrote one.
 pub(crate) const LANE_TIMINGS_ENV: &str = "KITHARA_LANE_TIMINGS";
 
+/// Where `ci lane` tells the job's later steps its copy of a lane's report
+/// is, told only once every file of it is copied.
+pub(crate) const LANE_REPORT_ENV: &str = "KITHARA_LANE_REPORT";
+
 /// Cargo's timing reports at the top of each target directory.
 pub(crate) const CARGO_TIMINGS_DIR: &str = "cargo-timings";
 
@@ -799,7 +825,8 @@ pub(crate) const REPORT_DIR: &str = ".ci-artifacts/junit";
 /// catalog already validates by name for the same reason: the executor's enum
 /// lives in `ci::run`, and a lane is refused at configuration load, before any
 /// executor is consulted. `lane_config.rs` pins the two lists together.
-pub(crate) const PIPELINE_KINDS: [&str; 8] = [
+pub(crate) const PIPELINE_KINDS: [&str; 9] = [
+    "bench",
     "branch",
     "platforms",
     "merge-request",

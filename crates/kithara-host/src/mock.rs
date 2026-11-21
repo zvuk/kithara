@@ -63,7 +63,7 @@ mod fixture {
         }
     }
 
-    pub(crate) type Command = HostCommand<TestPools, Queue<TestPools>>;
+    pub(crate) type Command = HostCommand<Queue<TestPools>>;
 
     pub(crate) struct Inbox(
         pub(crate) kithara_platform::sync::Mutex<kithara_platform::sync::mpsc::Sender<DeckMsg>>,
@@ -120,7 +120,7 @@ mod fixture {
 
     pub(crate) fn ask<D: HostedDeck<TestPools>>(
         state: &mut TestState<D>,
-        command: HostCommand<TestPools, D>,
+        command: HostCommand<D>,
     ) -> Result<(), PlayError> {
         ask_for_seq(state, command).map(drop)
     }
@@ -129,7 +129,7 @@ mod fixture {
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub(crate) fn ask_for_seq<D: HostedDeck<TestPools>>(
         state: &mut TestState<D>,
-        command: HostCommand<TestPools, D>,
+        command: HostCommand<D>,
     ) -> Result<Option<Seq>, PlayError> {
         kithara_platform::flash::participate_sync(|| {
             hang_tick!();

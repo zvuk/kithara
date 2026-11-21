@@ -1,24 +1,27 @@
 #![cfg(all(feature = "dsp", not(target_arch = "wasm32")))]
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroU32;
+
 use kithara_test_fixtures::analysis_fixtures::{
     analysis_silence, waveform_mix, waveform_peak_clicks, waveform_peak_tones,
 };
 use kithara_test_utils::{bufpool::pools, kithara};
-use kithara_waveform::{
-    AnalysisParams, Bucket, MAX_BUCKETS, Waveform, WaveformAnalyzer, WaveformResume,
-};
+use kithara_waveform::{AnalysisParams, Bucket, Waveform, WaveformAnalyzer, WaveformResume};
 use num_traits::ToPrimitive;
 
 const RATE: u32 = 44_100;
 
-fn analyse(pcm: &[f32], channels: usize, buckets: usize) -> Waveform {
+fn analyse(pcm: &[f32], channels: usize, fold: usize) -> Waveform {
     let pools = pools();
     let mut pass =
         WaveformAnalyzer::new(RATE, AnalysisParams::default(), &pools).expect("valid setup");
     pass.push(&pools, pcm, channels, 0).expect("finite source");
     pass.snapshot(
-        buckets,
+        u32::try_from(fold)
+            .ok()
+            .and_then(NonZeroU32::new)
+            .expect("positive fold factor"),
         Some(u64::try_from(pcm.len() / channels).expect("bounded fixture")),
     )
     .expect("finite windows")
@@ -37,7 +40,7 @@ fn clicks_have_no_early_columns_and_five_ms_clicks_stay_separate(waveform_peak_c
     let at = 88_211;
     let next = at + 221;
     let pcm = waveform_peak_clicks;
-    let wave = analyse(&pcm, 1, MAX_BUCKETS);
+    let wave = analyse(&pcm, 1, 1);
     let heights: Vec<_> = wave.buckets().map(height).collect();
     assert!(heights[..at / 64].iter().all(|height| *height == 0.0));
     let first = heights[at / 64].max(heights[at / 64 + 1]);
@@ -48,8 +51,10 @@ fn clicks_have_no_early_columns_and_five_ms_clicks_stay_separate(waveform_peak_c
             .iter()
             .any(|height| *height < first.min(second))
     );
+    let folded = analyse(&pcm, 1, pcm.len().div_ceil(64).div_ceil(10));
+    assert!(folded.len() <= 10);
     assert!(
-        analyse(&pcm, 1, 10)
+        folded
             .buckets()
             .map(height)
             .any(|height| height >= first.max(second))
@@ -65,10 +70,7 @@ fn burst_and_held_tone_have_equal_peaks(waveform_peak_tones: [Vec<f32>; 5]) {
             .map(|bucket| bucket.left()[1])
             .fold(0.0, f32::max)
     };
-    assert!(
-        (peak(analyse(burst, 1, MAX_BUCKETS)) - peak(analyse(held, 1, MAX_BUCKETS))).abs()
-            <= 1.0 / 255.0
-    );
+    assert!((peak(analyse(burst, 1, 1)) - peak(analyse(held, 1, 1))).abs() <= 1.0 / 255.0);
 }
 
 #[kithara::test]
@@ -81,10 +83,10 @@ fn heights_are_absolute(waveform_mix: Vec<f32>) {
             .unzip();
         let mut extended = quiet.clone();
         extended.extend(vec![level; 9_216]);
-        let alone = analyse(&quiet, 1, MAX_BUCKETS);
-        let later = analyse(&extended, 1, MAX_BUCKETS);
+        let alone = analyse(&quiet, 1, 1);
+        let later = analyse(&extended, 1, 1);
         assert!(alone.buckets().eq(later.buckets().take(alone.len())));
-        let loud = analyse(&music, 1, MAX_BUCKETS);
+        let loud = analyse(&music, 1, 1);
         let bands = |bucket: Bucket| bucket.left().into_iter().chain(bucket.right());
         let quiet = alone.buckets().flat_map(bands);
         let loud = loud.buckets().flat_map(bands);
@@ -103,26 +105,26 @@ fn channels_stay_apart_including_antiphase_and_multichannel(waveform_peak_tones:
         .iter()
         .flat_map(|sample| [*sample, -*sample, 0.0, 1.0])
         .collect();
-    let mono_wave = analyse(mono, 1, MAX_BUCKETS);
+    let mono_wave = analyse(mono, 1, 1);
     assert!(
         mono_wave
             .buckets()
             .all(|bucket| bucket.left() == bucket.right())
     );
     assert!(
-        analyse(&left, 2, MAX_BUCKETS)
+        analyse(&left, 2, 1)
             .buckets()
             .all(|bucket| bucket.right() == [0.0; 4])
     );
-    let stereo = analyse(&opposed, 2, MAX_BUCKETS);
+    let stereo = analyse(&opposed, 2, 1);
     assert!(stereo.buckets().eq(mono_wave.buckets()));
-    assert_eq!(analyse(&multi, 4, MAX_BUCKETS), stereo);
+    assert_eq!(analyse(&multi, 4, 1), stereo);
 }
 
 #[kithara::test]
 fn range_order_resume_and_partial_columns_are_stable(waveform_peak_tones: [Vec<f32>; 5]) {
     let pcm = &waveform_peak_tones[0][..44_100];
-    let expected = analyse(pcm, 1, MAX_BUCKETS);
+    let expected = analyse(pcm, 1, 1);
     let pools = pools();
     let mut shuffled =
         WaveformAnalyzer::new(RATE, AnalysisParams::default(), &pools).expect("setup");
@@ -139,7 +141,7 @@ fn range_order_resume_and_partial_columns_are_stable(waveform_peak_tones: [Vec<f
     }
     assert_eq!(
         shuffled
-            .snapshot(MAX_BUCKETS, Some(44_100))
+            .snapshot(NonZeroU32::MIN, Some(44_100))
             .expect("snapshot"),
         expected
     );
@@ -149,7 +151,7 @@ fn range_order_resume_and_partial_columns_are_stable(waveform_peak_tones: [Vec<f
         .push(&pools, &pcm[..22_050], 1, 0)
         .expect("head");
     let early = interrupted
-        .snapshot(MAX_BUCKETS, Some(44_100))
+        .snapshot(NonZeroU32::MIN, Some(44_100))
         .expect("early snapshot");
     let mut bytes = Vec::new();
     interrupted.write_resume(&mut bytes);
@@ -163,21 +165,21 @@ fn range_order_resume_and_partial_columns_are_stable(waveform_peak_tones: [Vec<f
         .push(&pools, &pcm[22_050..], 1, 22_050)
         .expect("tail");
     let late = restored
-        .snapshot(MAX_BUCKETS, Some(44_100))
+        .snapshot(NonZeroU32::MIN, Some(44_100))
         .expect("late snapshot");
     assert_eq!(late, expected);
     let mut growing =
         WaveformAnalyzer::new(RATE, AnalysisParams::default(), &pools).expect("setup");
     growing.push(&pools, &pcm[..22_050], 1, 0).expect("head");
     growing
-        .snapshot(MAX_BUCKETS, Some(22_050))
+        .snapshot(NonZeroU32::MIN, Some(22_050))
         .expect("temporary extent");
     growing
         .push(&pools, &pcm[22_050..], 1, 22_050)
         .expect("tail");
     assert_eq!(
         growing
-            .snapshot(MAX_BUCKETS, Some(44_100))
+            .snapshot(NonZeroU32::MIN, Some(44_100))
             .expect("grown extent"),
         expected
     );
@@ -202,7 +204,7 @@ fn eq_centres_reject_other_bands_by_thirty_db(
     waveform_peak_tones: [Vec<f32>; 5],
 ) {
     let pcm = &waveform_peak_tones[[0, 2, 3, 4][dominant]][..44_100];
-    let wave = analyse(pcm, 1, MAX_BUCKETS);
+    let wave = analyse(pcm, 1, 1);
     // Companding halves the dB distance; compare decoded peak amplitudes.
     let mut peaks = [0.0_f32; 4];
     for bucket in wave.buckets().skip(48) {
@@ -228,7 +230,7 @@ fn lane_peaks_match_a_double_precision_causal_reference(waveform_peak_tones: [Ve
     use kithara_dsp::filter::{Coefficients, Hertz, Type};
     let edges = AnalysisParams::default().band_edges_hz();
     let source = &waveform_peak_tones[1][..12_000];
-    let actual = analyse(source, 1, MAX_BUCKETS);
+    let actual = analyse(source, 1, 1);
     let mut expected = Vec::new();
     for body in 0..4 {
         let start = if body == 0 { 0 } else { body * 3_072 - 1_024 };
@@ -306,7 +308,13 @@ fn source_rate_scales_columns_without_exceeding_two_ms(
         WaveformAnalyzer::new(rate, AnalysisParams::default(), &pools).expect("supported rate");
     pass.push(&pools, &analysis_silence[..10_000], 1, 0)
         .expect("silence");
-    let wave = pass.snapshot(MAX_BUCKETS, Some(10_000)).expect("snapshot");
+    let wave = pass
+        .snapshot(NonZeroU32::MIN, Some(10_000))
+        .expect("snapshot");
     assert_eq!(wave.len(), 10_000_usize.div_ceil(frames_per_column));
+    assert_eq!(
+        wave.span_frames().get(),
+        u64::try_from(frames_per_column).expect("bounded column length")
+    );
     assert!(f64::from(rate) * 0.002 >= frames_per_column.to_f64().expect("bounded column length"));
 }

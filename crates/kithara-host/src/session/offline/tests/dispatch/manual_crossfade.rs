@@ -5,8 +5,8 @@ use kithara_command::{Live, Outcome, ScopedReceipt, Seq};
 use kithara_events::TrackId;
 use kithara_play::{
     CrossfadeCurve, CrossfadeSettings, DeckMixerConfig, DeckPass, HostedDeck, Outbox, Player,
-    PlayerConfig, PlayerImpl, ResourceConfig, ResourceLoad, ResourceSrc, Settled, Track,
-    TrackCommand, TrackReceipt, TrackSettings, TrackStatus,
+    PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, Settled, Track, TrackCommand,
+    TrackReceipt, TrackSettings, TrackStatus,
 };
 use kithara_render::{
     Dispatched,
@@ -22,7 +22,7 @@ use super::*;
 use crate::{HostSettings, MetronomeConfig, session::queue::HostPart};
 
 struct ManualDeck {
-    tracks: [PlayerImpl<TestPools>; 2],
+    tracks: [PlayerImpl; 2],
     loads: [Option<Seq>; 2],
     prep: ResourcePrep<TestPools>,
     mixer: DeckMixerConfig,
@@ -64,14 +64,9 @@ impl HostedDeck<TestPools> for ManualDeck {
         self.mixer
     }
 
-    fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {}
+    fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_>) {}
 
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, TestPools>,
-        _pass: DeckPass<'_>,
-        out: &mut Outbox<'_, TestPools>,
-    ) {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, _pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         match receipt {
             TrackReceipt::Loaded(receipt) => {
                 if let Some(index) = self
@@ -145,13 +140,13 @@ impl HostedDeck<TestPools> for ManualDeck {
         }
     }
 
-    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, TestPools>) {
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         for track in &mut self.tracks {
             track.tick(pass.now, out);
         }
     }
 
-    fn close(&mut self, out: &mut Outbox<'_, TestPools>) -> Result<(), PlayError> {
+    fn close(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError> {
         for track in &mut self.tracks {
             track.apply(TrackCommand::Release, out)?;
         }
@@ -331,24 +326,26 @@ impl ManualHosts {
                     .into_iter()
                     .enumerate()
                 {
-                    let config = ResourceConfig::for_src(ResourceSrc::Path(path.to_owned()))
-                        .store(
-                            kithara_assets::AssetStore::builder(pools())
-                                .backend(kithara_assets::StorageBackend::Memory)
-                                .build(),
-                        )
-                        .build();
-                    let prepared = deck
+                    let config =
+                        ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path.to_owned()))
+                            .store(
+                                kithara_assets::AssetStore::builder(pools())
+                                    .backend(kithara_assets::StorageBackend::Memory)
+                                    .build(),
+                            )
+                            .build();
+                    let (_, item) = deck
                         .prep
-                        .prepare(config, pass.output)
+                        .prepare(
+                            config,
+                            pass.output,
+                            Box::new(AudioObserverSlot::default().relay()),
+                        )
                         .expect("prepared real source");
                     let seq = deck.tracks[index]
                         .apply(
                             TrackCommand::Load {
-                                item: ResourceLoad::new(
-                                    prepared,
-                                    Box::new(AudioObserverSlot::default().relay()),
-                                ),
+                                item,
                                 position: Duration::ZERO,
                             },
                             out,
@@ -360,9 +357,6 @@ impl ManualHosts {
                         "each source opens once"
                     );
                 }
-                deck.tracks[0]
-                    .apply(TrackCommand::Play { at: When::Next }, out)
-                    .expect("A starts through its real player");
             })
             .expect("load through the manual holder's borrowed outbox");
         Self {
@@ -382,6 +376,7 @@ impl ManualHosts {
         let mut reference_clock = 0;
         let mut outgoing_basis = None;
         let mut incoming_basis = None;
+        let mut started = false;
         let deadline = kithara_platform::time::WallInstant::now() + Duration::from_secs(5);
         loop {
             self.state.owner.begin_pass();
@@ -401,15 +396,32 @@ impl ManualHosts {
             let mut ready = false;
             self.state
                 .owner
-                .with_deck(id, &mut |deck, _, _| {
-                    ready = deck.tracks.iter().any(|track| {
-                        let snapshot = track.snapshot();
-                        snapshot.item == outgoing_id
-                            && matches!(snapshot.status, TrackStatus::Playing { .. })
-                    }) && deck.tracks.iter().any(|track| {
-                        let snapshot = track.snapshot();
-                        snapshot.item == incoming_id && snapshot.status == TrackStatus::Loaded
-                    });
+                .with_deck(id, &mut |deck, out, _| {
+                    let status = |tracks: &[PlayerImpl], item: TrackId| {
+                        tracks
+                            .iter()
+                            .map(Player::snapshot)
+                            .find(|snapshot| snapshot.item == item)
+                            .map(|snapshot| snapshot.status)
+                    };
+                    let incoming_loaded =
+                        status(&deck.tracks, incoming_id) == Some(TrackStatus::Loaded);
+                    // A starts only once both sources are loaded, so the frames it
+                    // plays before the take do not depend on how long loading took.
+                    if !started
+                        && incoming_loaded
+                        && status(&deck.tracks, outgoing_id) == Some(TrackStatus::Loaded)
+                    {
+                        deck.tracks[0]
+                            .apply(TrackCommand::Play { at: When::Next }, out)
+                            .expect("A starts through its real player");
+                        started = true;
+                    }
+                    ready = incoming_loaded
+                        && matches!(
+                            status(&deck.tracks, outgoing_id),
+                            Some(TrackStatus::Playing { .. })
+                        );
                 })
                 .expect("observe both real loaded tracks");
             if ready {

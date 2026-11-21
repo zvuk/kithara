@@ -1,10 +1,13 @@
 use std::num::NonZeroU32;
 
+use kithara_command::{Live, When};
+use kithara_config::ConfigOwner;
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_play::{
-    DeckMixerConfig, DeckPass, EqBandConfig, HostedDeck, Outbox, Pitch, PitchStep, PlayError,
-    Player, Position, Semitones, TrackReceipt, mock,
+    DeckMixSettings, DeckMixSettingsChange, DeckMixerConfig, DeckPass, DeckProtocol, EqBandConfig,
+    HostedDeck, Outbox, Pitch, PitchStep, PlayError, Player, Position, Semitones, TrackReceipt,
+    TrackSettingsChange, WarpControlsChange, mock,
 };
 use kithara_render::rt::StreamShape;
 use kithara_signal::{FrameCount, SessionFrame};
@@ -44,18 +47,20 @@ fn drive_call(
 }
 
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-fn eq_call(
+fn mixer_call(
     queue: &mut Queue<TestPools>,
     mixer: &mut mock::MixerRig,
     loads: &mut mock::DeckRig<TestPools>,
     control: QueueControl<TestPools>,
     call: impl FnOnce(QueueControl<TestPools>) -> Result<(), QueueError> + Send + 'static,
 ) {
+    let before = queue.deck.mix;
+    let mut mix = Live::<DeckMixSettings, DeckProtocol>::new(before).expect("applied mix");
     drive_call(queue, control, call, |queue| {
         let output = mock::output(None).get();
         let deck = mixer.ends.snapshot.read();
         let pass = DeckPass {
-            mix: queue.deck.mix,
+            mix: *mix.config(),
             suspended: false,
             now: SessionFrame::new(0),
             delivery: FrameCount::new(128),
@@ -65,10 +70,17 @@ fn eq_call(
             planned_tempo: &mock::planned_tempo(),
         };
         let mut scope = mixer.ring.scope(mixer.scope).expect("mixer scope");
-        let mut out = Outbox::new(&mut scope, &mut loads.dispatcher).in_pass(pass);
+        let mut out = Outbox::new(&mut scope, &mut loads.dispatcher)
+            .in_pass(pass)
+            .lend_mix(&mut mix);
         HostedDeck::drain(queue, pass, &mut out);
     })
-    .expect("EQ command accepted");
+    .expect("mixer command accepted");
+    assert_eq!(
+        queue.control().mix_settings(),
+        before,
+        "mix waits for its receipt"
+    );
     let mut left = [0.0; 128];
     let mut right = [0.0; 128];
     mixer
@@ -76,8 +88,8 @@ fn eq_call(
         .expect("real EQ executor block");
     let output = mock::output(None).get();
     let deck = mixer.ends.snapshot.read();
-    let pass = DeckPass {
-        mix: queue.deck.mix,
+    let mut pass = DeckPass {
+        mix: *mix.config(),
         suspended: false,
         now: SessionFrame::new(0),
         delivery: FrameCount::new(128),
@@ -88,10 +100,14 @@ fn eq_call(
     };
     while let Some(kithara_command::ScopedReceipt::Scope(_, receipt)) = mixer.ring.receipt() {
         hang_tick!();
+        let _ = mix.settle(&receipt);
+        pass.mix = *mix.config();
         let seq = receipt.seq();
         let (outcome, mut batch) = receipt.into();
         let mut scope = mixer.ring.scope(mixer.scope).expect("mixer scope");
-        let mut out = Outbox::new(&mut scope, &mut loads.dispatcher).in_pass(pass);
+        let mut out = Outbox::new(&mut scope, &mut loads.dispatcher)
+            .in_pass(pass)
+            .lend_mix(&mut mix);
         HostedDeck::settle(
             queue,
             TrackReceipt::Deck {
@@ -105,7 +121,9 @@ fn eq_call(
         hang_reset!();
     }
     let mut scope = mixer.ring.scope(mixer.scope).expect("mixer scope");
-    let mut out = Outbox::new(&mut scope, &mut loads.dispatcher).in_pass(pass);
+    let mut out = Outbox::new(&mut scope, &mut loads.dispatcher)
+        .in_pass(pass)
+        .lend_mix(&mut mix);
     HostedDeck::tick(queue, pass, &mut out);
 }
 
@@ -126,14 +144,14 @@ fn a_handle_clone_sees_the_replacement_band_array(#[by_ref] worker_owner: &Worke
     let mut loads = mock::DeckRig::new(config).expect("dispatcher");
     let eq = queue.control();
     let handle = eq.clone();
-    eq_call(&mut queue, &mut mixer, &mut loads, eq.clone(), |control| {
+    mixer_call(&mut queue, &mut mixer, &mut loads, eq.clone(), |control| {
         control.set_eq_layout(
             [0.0; 3]
                 .map(|gain| EqBandConfig::builder().gain_db(gain.into()).build())
                 .to_vec(),
         )
     });
-    eq_call(&mut queue, &mut mixer, &mut loads, eq.clone(), |control| {
+    mixer_call(&mut queue, &mut mixer, &mut loads, eq.clone(), |control| {
         control.set_eq_gain(1, 4.0)
     });
     assert_eq!(
@@ -149,7 +167,7 @@ fn a_handle_clone_sees_the_replacement_band_array(#[by_ref] worker_owner: &Worke
             .collect::<Vec<_>>(),
         vec![0.0, 4.0, 0.0]
     );
-    eq_call(&mut queue, &mut mixer, &mut loads, eq.clone(), |control| {
+    mixer_call(&mut queue, &mut mixer, &mut loads, eq.clone(), |control| {
         control.set_eq_layout(
             [-6.0, -2.0, 2.0, 5.0]
                 .map(|gain| EqBandConfig::builder().gain_db(gain.into()).build())
@@ -158,7 +176,7 @@ fn a_handle_clone_sees_the_replacement_band_array(#[by_ref] worker_owner: &Worke
     });
     assert_eq!(handle.eq_band_count(), 4);
     assert_eq!(handle.eq_gain(2), Some(2.0));
-    eq_call(&mut queue, &mut mixer, &mut loads, handle, |control| {
+    mixer_call(&mut queue, &mut mixer, &mut loads, handle, |control| {
         control.set_eq_gain(3, 1.0)
     });
     assert_eq!(
@@ -174,6 +192,14 @@ fn a_handle_clone_sees_the_replacement_band_array(#[by_ref] worker_owner: &Worke
             .collect::<Vec<_>>(),
         vec![-6.0, -2.0, 2.0, 1.0]
     );
+    mixer_call(&mut queue, &mut mixer, &mut loads, eq, |control| {
+        control.set_eq_layout(vec![EqBandConfig::builder().gain_db((-9.0).into()).build()])?;
+        control.reset_eq()
+    });
+    let rendered = mixer.ends.snapshot.read();
+    assert_eq!(rendered.eq.bands(), 1);
+    assert_eq!(rendered.eq.gain(0), Some(kithara_play::GainDb::DEFAULT));
+    assert_eq!(rendered.eq.killed(0), Some(false));
 }
 
 #[kithara::test(tokio)]
@@ -273,7 +299,7 @@ async fn keylock_toggled_on_a_playing_queue_reads_back_and_reaches_a_track_appen
     let (mut queue, _, _, mut rig, dir) = selected(&worker_owner.0, FixtureSource::Synthetic).await;
     let control = queue.control();
     assert_eq!(
-        control.pitch(),
+        control.warp_controls().map(|controls| controls.pitch()),
         Some(Pitch::default()),
         "the queue starts with keylock off"
     );
@@ -291,13 +317,17 @@ async fn keylock_toggled_on_a_playing_queue_reads_back_and_reaches_a_track_appen
     .expect("keylock accepted");
     let held = Pitch::HELD;
     assert_eq!(
-        control.pitch(),
+        control.warp_controls().map(|controls| controls.pitch()),
         Some(held),
         "the step reads back once accepted"
     );
 
     let start = append_and_select(&mut queue, &mut rig, &dir);
-    assert_eq!(start.pitch, held, "the next track starts with keylock");
+    assert_eq!(
+        start.controls.pitch(),
+        held,
+        "the next track starts with keylock"
+    );
     drop((queue, rig));
     dir.finish().await;
 }
@@ -322,13 +352,88 @@ async fn two_pitch_steps_in_one_pass_read_back_and_reach_a_track_appended_after_
     let raised = Pitch::Vinyl {
         shift: Semitones::checked(2).expect("fixture shift is in range"),
     };
-    assert_eq!(control.pitch(), Some(raised), "both steps read back");
+    assert_eq!(
+        control.warp_controls().map(|controls| controls.pitch()),
+        Some(raised),
+        "both steps read back"
+    );
 
     let start = append_and_select(&mut queue, &mut rig, &dir);
     assert_eq!(
-        start.pitch, raised,
+        start.controls.pitch(),
+        raised,
         "the next track starts at the deck's pitch: {start:?}"
     );
+    drop((queue, rig));
+    dir.finish().await;
+}
+
+#[kithara::test(native)]
+fn grouped_mix_is_observed_after_the_deck_receipt(#[by_ref] worker_owner: &WorkerOwner) {
+    let region = pools();
+    let config = DeckMixerConfig::default();
+    let prep = kithara_play::ResourcePrep::builder()
+        .worker(kithara_play::PlayWorker::new(
+            kithara_play::PlayWorkerConfig::builder(region.clone())
+                .worker(worker_owner.0.clone())
+                .build(),
+        ))
+        .build();
+    let mut queue = Queue::new(QueueConfig::builder().prep(prep).mixer(config).build());
+    let shape = StreamShape::new(NonZeroU32::new(128).expect("block size"), mock::SAMPLE_RATE);
+    let mut mixer = mock::MixerRig::new(config, shape, &region).expect("mixer");
+    let mut loads = mock::DeckRig::new(config).expect("dispatcher");
+    let control = queue.control();
+    mixer_call(
+        &mut queue,
+        &mut mixer,
+        &mut loads,
+        control.clone(),
+        |control| control.mix(When::Next, DeckMixSettingsChange::Muted(true)),
+    );
+    assert!(control.mix_settings().muted());
+    assert_eq!(
+        control.mix_settings(),
+        DeckMixSettings::builder().muted(true).build()
+    );
+}
+
+#[kithara::test(tokio)]
+async fn grouped_track_changes_are_read_whole_and_refused_before_broadcast(
+    #[by_ref] worker_owner: &WorkerOwner,
+) {
+    let (mut queue, _, _, mut rig, dir) = selected(&worker_owner.0, FixtureSource::Synthetic).await;
+    let control = queue.control();
+    drive_call(
+        &mut queue,
+        control.clone(),
+        |control| control.configure_track(WarpControlsChange::Pitch(Pitch::HELD).into()),
+        |queue| {
+            state::tests::with_outbox(queue, &mut rig, |queue, pass, out| {
+                HostedDeck::drain(queue, pass, out);
+            });
+        },
+    )
+    .expect("owner change accepted");
+    let initial = control.track_settings();
+    assert_eq!(initial.controls().pitch(), Pitch::HELD);
+    let result = drive_call(
+        &mut queue,
+        control.clone(),
+        |control| control.configure_track(TrackSettingsChange::Speed(f32::NAN)),
+        |queue| {
+            state::tests::with_outbox(queue, &mut rig, |queue, pass, out| {
+                HostedDeck::drain(queue, pass, out);
+            });
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(QueueError::Play(PlayError::InvalidParameter { .. }))
+    ));
+    assert_eq!(control.track_settings(), initial);
+    let start = append_and_select(&mut queue, &mut rig, &dir);
+    assert_eq!(start.controls, initial.controls());
     drop((queue, rig));
     dir.finish().await;
 }

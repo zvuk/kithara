@@ -19,20 +19,24 @@ use firewheel::{
 use kithara_assets::AssetStore;
 use kithara_audio::AudioObserverSlot;
 use kithara_command::{
-    Batch, ChannelConfig, LevelInbox, Port, ScopeId, ScopedConfig, ScopedInbox, ScopedSender, When,
-    scoped_channel,
+    Batch, ChannelConfig, LevelInbox, Port, ScopeId, ScopedConfig, ScopedInbox, ScopedReceipt,
+    ScopedSender, When, scoped_channel,
 };
 use kithara_platform::time::Duration;
 use kithara_play::{
-    CrossfadeSettings, PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceLoad, ResourceSrc,
-    TrackSettings,
+    CrossfadeSettings, CurveShape, DeckParameter, DeckProgram, ParameterKnot, PlayWorker,
+    PlayWorkerConfig, ResourceConfig, ResourceLoad, ResourceSrc, TrackSettings,
 };
 use kithara_render::{
-    Open,
-    bridge::{DeckPart, DeckProtocol, Fade, FadeDir, SessionInbox, Slot, scope_channels},
-    rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
+    Open, PcmPacket,
+    bridge::{DeckPart, DeckProtocol, Fade, FadeDir, Returned, SessionInbox, Slot},
+    mock::{PacketRing, chunk},
+    rt::{
+        DeckMixer, DeckMixerConfig, MixerInputs, StreamShape, install_render_context,
+        publish_render_context,
+    },
 };
-use kithara_signal::{OutputContext, SegmentId, SessionEpoch, SessionFrame};
+use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_fixtures::assets;
 use kithara_test_utils::{
     TestTempDir,
@@ -70,7 +74,9 @@ impl SessionInbox for TestSessionInbox {
 
 #[kithara::test(tokio)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
-async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
+#[case::manual(false)]
+#[case::all_bands(true)]
+async fn a_deck_attaches_fades_and_retires_without_allocating(#[case] programs: bool) {
     let (mut ring, inbox) = scoped_channel(
         ScopedConfig::builder()
             .scope(ChannelConfig::builder().targets(ABSENT_FADES + 2).build())
@@ -84,7 +90,7 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
         .slots(NonZeroUsize::new(ABSENT_FADES + 2).expect("held and absent slots"))
         .build();
     let scope = ring.open(config.slots().get()).expect("deck scope");
-    let (_ends, inputs) = scope_channels(scope, config);
+    let (mut ends, inputs) = MixerInputs::new(scope, config);
     let mut deck =
         DeckMixer::<TestSessionInbox>::new(inputs, shape, &pools()).expect("mixer pools");
     let settings = CrossfadeSettings::default();
@@ -96,20 +102,25 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
     )
     .expect("prepared float WAV");
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-    let load: ResourceLoad<TestPools> = ResourceLoad::new(
-        ResourceConfig::for_src(ResourceSrc::Path(path))
-            .store(AssetStore::builder(pools()).build())
-            .worker(worker.clone())
-            .host_sample_rate(SAMPLE_RATE)
-            .build(),
-        Box::new(AudioObserverSlot::default().relay()),
-    );
+    let load: ResourceLoad = kithara_play::ResourcePrep::builder()
+        .worker(worker.clone())
+        .build()
+        .prepare(
+            ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
+                .store(AssetStore::builder(pools()).build())
+                .host_sample_rate(SAMPLE_RATE)
+                .build(),
+            &kithara_play::SessionOutputView::new(SAMPLE_RATE).get(),
+            Box::new(AudioObserverSlot::default().relay()),
+        )
+        .expect("prepared source load")
+        .1;
     let (_sender, lane_inbox) = worker.lane_channel();
-    let (opened, _lane, _latency) = {
+    let (opened, mut lane, _latency) = {
         // WHY: Disk preparation runs on a real worker, outside the virtual scheduler.
         let _real_io = kithara_platform::flash::real_io();
         hang_tick!("allocation fixture awaits its source open".to_owned());
-        let (opened, _lane, _latency) = kithara_platform::time::timeout(
+        kithara_platform::time::timeout(
             __hang_detector.remaining(),
             load.open(
                 Duration::ZERO,
@@ -119,9 +130,13 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
         )
         .await
         .expect("allocation fixture opens within the watchdog budget")
-        .expect("URI source opens");
-        (opened, _lane, _latency)
+        .expect("URI source opens")
     };
+    if programs {
+        kithara_play::mock::preload_lane(&mut lane)
+            .await
+            .expect("PCM preloaded before allocation measurement");
+    }
     hang_reset!();
     let held = Slot::new(0);
     let mut store = ProcStore::with_capacity(2);
@@ -173,22 +188,23 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
     let frames = usize::try_from(BLOCK.get()).expect("a block fits in memory");
     let mut out_l = vec![0.0f32; frames];
     let mut out_r = vec![0.0f32; frames];
-    let mut render =
-        |deck: &mut DeckMixer<TestSessionInbox>, info: &ProcInfo, extra: &mut ProcExtra| {
-            let inputs: [&[f32]; 0] = [];
-            let mut outputs = [&mut out_l[..], &mut out_r[..]];
-            let buffers = ProcBuffers {
-                inputs: &inputs,
-                outputs: &mut outputs,
-            };
-            extra
-                .store
-                .try_get_mut::<TestSessionInbox>()
-                .expect("session inbox")
-                .0
-                .drain();
-            let _ = deck.process(info, buffers, extra);
+    let render = |deck: &mut DeckMixer<TestSessionInbox>,
+                  info: &ProcInfo,
+                  extra: &mut ProcExtra,
+                  mut outputs: [&mut [f32]; 2]| {
+        let inputs: [&[f32]; 0] = [];
+        let buffers = ProcBuffers {
+            inputs: &inputs,
+            outputs: &mut outputs,
         };
+        extra
+            .store
+            .try_get_mut::<TestSessionInbox>()
+            .expect("session inbox")
+            .0
+            .drain();
+        let _ = deck.process(info, buffers, extra);
+    };
 
     send(
         &mut ring,
@@ -209,7 +225,10 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
         },
     );
     ring.publish().expect("publish loaded deck");
-    render(&mut deck, &info, &mut extra);
+    let dispatch = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    tracing::dispatcher::with_default(&dispatch, || {
+        assert_no_alloc(|| render(&mut deck, &info, &mut extra, [&mut out_l, &mut out_r]));
+    });
 
     send(
         &mut ring,
@@ -230,6 +249,31 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
             },
         );
     }
+    if programs {
+        let snapshot = ends.snapshot.read();
+        let layout = snapshot.eq.layout().expect("observed EQ layout");
+        let first = SessionFrame::new(i64::from(BLOCK.get()));
+        let last = SessionFrame::new(i64::from(BLOCK.get()) * 3);
+        for band in 0..config.eq_bands() {
+            let program = DeckProgram::new(
+                DeckParameter::EqBand { band, layout },
+                vec![
+                    ParameterKnot::new(first, 0.0, CurveShape::LINEAR).expect("start"),
+                    ParameterKnot::new(last, -6.0, CurveShape::HOLD).expect("end"),
+                ],
+            )
+            .expect("prepared band program");
+            send(
+                &mut ring,
+                scope,
+                DeckPart::Program {
+                    epoch: snapshot.epoch.expect("live output axis"),
+                    authority: snapshot.eq.authority(band),
+                    program,
+                },
+            );
+        }
+    }
     ring.publish().expect("publish absent-track fades");
     info.clock_samples = InstantSamples(i64::from(BLOCK.get()));
     info.duration_since_stream_start =
@@ -246,8 +290,102 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating() {
         .expect("next output block"),
     )
     .expect("publish next host context");
-    let dispatch = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     tracing::dispatcher::with_default(&dispatch, || {
-        assert_no_alloc(|| render(&mut deck, &info, &mut extra));
+        assert_no_alloc(|| render(&mut deck, &info, &mut extra, [&mut out_l, &mut out_r]));
     });
+    if programs {
+        let snapshot = ends.snapshot.read();
+        for band in 0..config.eq_bands() {
+            assert!(snapshot.eq.program(band).is_some(), "active band");
+            assert_ne!(snapshot.eq.gain(band), Some(kithara_play::GainDb::DEFAULT));
+        }
+        assert!(out_l.iter().any(|sample| *sample != 0.0), "measured PCM");
+    }
+    while ring.receipt().is_some() {}
+
+    let spec = AudioSpec::new(2, SAMPLE_RATE);
+    let mut packets = PacketRing::new(spec, Duration::from_secs(1), 1);
+    let mut receiver = Box::new(packets.receiver.take().expect("receiver"));
+    receiver
+        .recycle(PcmPacket::Chunk(Box::new(chunk(
+            spec,
+            SegmentId::FIRST,
+            0,
+            0,
+            &[0.25, -0.25],
+        ))))
+        .expect("fill the reverse ring");
+    let packet = Box::new(chunk(spec, SegmentId::FIRST, 0, 0, &vec![0.5; frames * 2]));
+    let packet_ptr = std::ptr::from_ref(packet.as_ref());
+    let receiver_ptr = std::ptr::from_ref(receiver.as_ref());
+    packets.push(PcmPacket::Chunk(packet));
+    for (index, commands) in [
+        vec![DeckPart::Detach { slot: held }],
+        vec![
+            DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
+                slot: held,
+                pcm: receiver,
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Start {
+                slot: held,
+                fade: Fade::Declick,
+            },
+        ],
+        vec![DeckPart::Detach { slot: held }],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for command in commands {
+            send(&mut ring, scope, command);
+        }
+        ring.publish().expect("publish PCM transfer");
+        info.clock_samples.0 += i64::from(BLOCK.get());
+        let start = info.clock_samples.0;
+        publish_render_context(
+            &mut extra.store,
+            OutputContext::new(
+                SessionFrame::new(start)..SessionFrame::new(start + i64::from(BLOCK.get())),
+                SAMPLE_RATE,
+                SessionEpoch::new(0),
+                None,
+            )
+            .expect("transfer block"),
+        )
+        .expect("publish transfer context");
+        tracing::dispatcher::with_default(&dispatch, || {
+            assert_no_alloc(|| render(&mut deck, &info, &mut extra, [&mut out_l, &mut out_r]));
+        });
+        let mut returned = false;
+        while let Some(receipt) = ring.receipt() {
+            let ScopedReceipt::Scope(_, receipt) = receipt else {
+                panic!("deck receipt");
+            };
+            if index == 2 {
+                let [
+                    DeckPart::Returned(Returned::Pcm {
+                        slot,
+                        pcm,
+                        packet: Some(PcmPacket::Chunk(packet)),
+                    }),
+                ] = receipt.batch().commands.as_slice()
+                else {
+                    panic!("detach must return its held PCM packet");
+                };
+                assert_eq!(*slot, held);
+                assert!(std::ptr::eq(pcm.as_ref(), receiver_ptr));
+                assert!(std::ptr::eq(packet.as_ref(), packet_ptr));
+                returned = true;
+            }
+        }
+        if index == 2 {
+            assert!(returned, "retirement completes with a full reverse ring");
+        }
+    }
+    assert!(
+        packets.returned().is_some(),
+        "the reverse entry stayed owned"
+    );
 }

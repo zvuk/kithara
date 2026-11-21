@@ -1,0 +1,46 @@
+[package]
+name = "kithara-wasm-test-runner"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[[bin]]
+name = "wasm_test_runner"
+path = "src/main.rs"
+
+[dependencies]
+kithara-platform = { workspace = true, features = ["tokio-net"] }
+kithara-test-utils = { workspace = true, features = ["http-server"] }
+
+anyhow = { workspace = true }
+axum = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tower-http = { workspace = true }
+walrus = { workspace = true }
+wasm-bindgen-cli-support = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "net"] }
+toml = { workspace = true }
+
+[[test]]
+name = "lock"
+path = "tests/lock.rs"
+
+# Needs a browser, a WebDriver binary and the fixture Wasm files the browser
+# lane builds, so only that lane selects it.
+[[test]]
+name = "protocol"
+path = "tests/protocol.rs"
+test = false
+
+[lints]
+workspace = true

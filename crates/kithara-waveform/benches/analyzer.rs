@@ -8,8 +8,9 @@ use kithara_test_utils::bufpool::pools;
 use kithara_waveform::{AnalysisParams, WaveformAnalyzer};
 
 mod consts {
-    /// Columns one snapshot folds the band series into.
-    pub(super) const BUCKETS: usize = 512;
+    use std::num::NonZeroU32;
+    /// Native analysis windows per bucket.
+    pub(super) const FOLD: NonZeroU32 = NonZeroU32::MIN;
     /// Interleaved channels of the excerpt.
     pub(super) const CHANNELS: usize = 2;
     /// Frames in the excerpt: 10 s at [`RATE`].
@@ -54,7 +55,7 @@ fn waveform_analyzer(c: &mut Criterion) {
                 .expect("the excerpt fits the region");
             black_box(
                 analyzer
-                    .snapshot(consts::BUCKETS, Some(extent))
+                    .snapshot(consts::FOLD, Some(extent))
                     .expect("finite fixture"),
             )
         });

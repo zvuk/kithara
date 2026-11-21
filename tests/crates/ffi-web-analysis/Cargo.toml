@@ -12,6 +12,7 @@ browser = [
     "dep:js-sys",
     "dep:kithara",
     "dep:kithara-ffi",
+    "dep:kithara-test-utils",
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-test",
     "dep:web-sys",
@@ -20,6 +21,7 @@ browser = [
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara = { workspace = true, optional = true, features = ["test", "platform"] }
 kithara-ffi = { workspace = true, default-features = false, optional = true, features = ["wasm", "analysis"] }
+kithara-test-utils = { workspace = true, optional = true, features = ["test"] }
 
 js-sys = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }

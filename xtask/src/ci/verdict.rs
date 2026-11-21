@@ -9,14 +9,16 @@ use std::{
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use kithara_devtools::{
+    common::project::TestCommandConfig,
     junit::{CaseTiming, parse_junit},
     lock::{FileLock, Wait},
+    test::selection_receipt,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use super::run::PipelineKind;
-use crate::consts;
+use crate::{config::CiProjectConfig, consts};
 
 #[derive(Debug, Args)]
 pub(crate) struct VerdictArgs {
@@ -85,7 +87,8 @@ enum JournalAction {
 const fn journal_action(kind: PipelineKind) -> JournalAction {
     match kind {
         PipelineKind::Main | PipelineKind::Nightly => JournalAction::Record,
-        PipelineKind::Branch
+        PipelineKind::Bench
+        | PipelineKind::Branch
         | PipelineKind::Platforms
         | PipelineKind::MergeRequest
         | PipelineKind::Quarantine
@@ -249,68 +252,81 @@ fn case_id(case: &CaseTiming, aliases: &BTreeMap<String, String>) -> String {
     canonical_id(&format!("{}::{}", case.suite, case.name), aliases)
 }
 
-/// The report a lane writes, before it is collected. A lane that writes none
-/// still leaves a marker when it fails, which is how a browser suite or a
-/// sanitiser run — neither of which can name a test — still holds a merge
-/// request.
+/// The raw report relative to the producer's target. Lanes without a
+/// report still leave a failure marker.
 pub(crate) fn produced_report(lane: &str) -> Option<&'static str> {
     match lane {
         "apple-test"
+        | "apple-net-units"
         | "apple-test-flash-off"
         | "linux-test-simulated-clock"
         | "windows-arm64"
-        | "windows-x64" => Some("target/nextest/ci/junit.xml"),
-        "android-test" => Some("target/android-test/junit.xml"),
-        "apple-ios-test" => Some("target/xcresult/ios-test.junit.xml"),
-        "apple-swift-test" => Some("target/xcresult/swift-test.junit.xml"),
+        | "windows-x64" => Some("nextest/ci/junit.xml"),
+        "android-test" => Some("android-test/junit.xml"),
+        "apple-ios-test" => Some("xcresult/ios-test.junit.xml"),
+        "apple-swift-test" => Some("xcresult/swift-test.junit.xml"),
         _ => None,
     }
 }
 
-/// The build directory survives between jobs on this executor. Producers empty
-/// the artifact staging directory as well as their raw report. The staging path
-/// is outside the persistent Cargo targets, so checkout cleanup removes absent
-/// evidence before `GitLab` downloads a verdict's needs.
+/// Clear job-local staging. The verdict keeps the reports downloaded as needs.
 pub(crate) fn clear(root: &Path, lane: &str) -> Result<()> {
     let directory = root.join(consts::REPORT_DIR);
-    if lane != "verdict" && directory.exists() {
+    if lane == "verdict" {
+        remove_evidence(&directory.join("verdict.xml"))?;
+        remove_evidence(&directory.join("verdict.failed"))?;
+    } else if directory.exists() {
         fs::remove_dir_all(&directory)
             .with_context(|| format!("removing {}", directory.display()))?;
-    }
-    for extension in ["xml", "failed"] {
-        let evidence = directory.join(format!("{lane}.{extension}"));
-        if evidence.exists() {
-            fs::remove_file(&evidence)
-                .with_context(|| format!("removing {}", evidence.display()))?;
-        }
-    }
-    let Some(report) = produced_report(lane) else {
-        return Ok(());
-    };
-    let path = root.join(report);
-    if path.exists() {
-        fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
     }
     Ok(())
 }
 
-/// Collect what this lane produced into the one directory the verdict reads,
-/// and record a bare failure for a lane that cannot name its tests.
-pub(crate) fn gather(root: &Path, lane: &str, failed: bool) -> Result<()> {
+fn remove_evidence(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("removing {}", path.display())),
+    }
+}
+
+pub(crate) fn mark_failed(root: &Path, lane: &str) -> Result<()> {
     let directory = root.join(consts::REPORT_DIR);
     fs::create_dir_all(&directory).with_context(|| format!("creating {}", directory.display()))?;
-    if let Some(report) = produced_report(lane) {
-        let from = root.join(report);
-        if from.exists() {
-            let to = directory.join(format!("{lane}.xml"));
-            fs::copy(&from, &to)
-                .with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
+    let marker = directory.join(format!("{lane}.failed"));
+    fs::write(&marker, "").with_context(|| format!("writing {}", marker.display()))
+}
+
+/// The caller holds the producer's target through both raw report operations.
+pub(crate) fn with_report(
+    root: &Path,
+    lane: &str,
+    raw: &Path,
+    dispatch: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    remove_evidence(raw)?;
+    let outcome = dispatch();
+    let staged = stage_report(root, lane, raw);
+    if outcome.is_err() {
+        if let Err(error) = staged {
+            warn!(%error, %lane, "could not collect the failing lane's test report");
         }
+        return outcome;
     }
-    if failed {
-        let marker = directory.join(format!("{lane}.failed"));
-        fs::write(&marker, "").with_context(|| format!("writing {}", marker.display()))?;
+    staged
+}
+
+fn stage_report(root: &Path, lane: &str, raw: &Path) -> Result<()> {
+    if !raw
+        .try_exists()
+        .with_context(|| format!("reading {}", raw.display()))?
+    {
+        return Ok(());
     }
+    let directory = root.join(consts::REPORT_DIR);
+    fs::create_dir_all(&directory).with_context(|| format!("creating {}", directory.display()))?;
+    let to = directory.join(format!("{lane}.xml"));
+    fs::copy(raw, &to).with_context(|| format!("copying {} to {}", raw.display(), to.display()))?;
     Ok(())
 }
 
@@ -326,33 +342,56 @@ pub(crate) fn lane(
     root: &Path,
     shared_root: &Path,
     kind: PipelineKind,
-    aliases: &BTreeMap<String, String>,
+    ci: &CiProjectConfig,
+    test: &TestCommandConfig,
 ) -> Result<()> {
     let common = Common {
         reports: root.join(consts::REPORT_DIR),
         journal: journal_path(shared_root),
         base: std::env::var("CI_MERGE_REQUEST_DIFF_BASE_SHA").ok(),
     };
+    judge(
+        &common,
+        kind,
+        ci,
+        test,
+        std::env::var("CI_COMMIT_SHA").ok().as_deref(),
+    )
+}
+
+fn judge(
+    common: &Common,
+    kind: PipelineKind,
+    ci: &CiProjectConfig,
+    test: &TestCommandConfig,
+    sha: Option<&str>,
+) -> Result<()> {
+    let expected = expected_producers(ci, test, kind)?;
+    let aliases = &ci.verdict.id_aliases;
     match journal_action(kind) {
         JournalAction::Record => {
-            let sha = std::env::var("CI_COMMIT_SHA")
-                .context("CI_COMMIT_SHA names the run being recorded")?;
-            record(&common, &sha, aliases)
+            let sha = sha.context("CI_COMMIT_SHA names the run being recorded")?;
+            record(common, sha, aliases, &expected)
         }
-        JournalAction::Check => check(&common, aliases, expected_producers(kind)),
+        JournalAction::Check => check(common, aliases, &expected),
     }
 }
 
 pub(crate) fn run(args: &VerdictArgs) -> Result<()> {
     let aliases = BTreeMap::new();
     match &args.command {
-        VerdictCommand::Record { common, sha } => record(common, sha, &aliases),
+        VerdictCommand::Record { common, sha } => record(common, sha, &aliases, &[]),
         VerdictCommand::Check { common } => check(common, &aliases, &[]),
     }
 }
 
-fn record(common: &Common, sha: &str, aliases: &BTreeMap<String, String>) -> Result<()> {
-    let observed = observe(common, aliases, &[])?;
+fn record(
+    common: &Common,
+    sha: &str,
+    aliases: &BTreeMap<String, String>,
+    expected: &[ExpectedProducer<'_>],
+) -> Result<()> {
+    let observed = observe(common, aliases, expected)?;
     let remembered = JournalFile::new(common.journal.clone()).update(|journal| {
         journal.record(Run {
             sha: sha.to_owned(),
@@ -370,7 +409,11 @@ fn record(common: &Common, sha: &str, aliases: &BTreeMap<String, String>) -> Res
     Ok(())
 }
 
-fn check(common: &Common, aliases: &BTreeMap<String, String>, expected: &[&str]) -> Result<()> {
+fn check(
+    common: &Common,
+    aliases: &BTreeMap<String, String>,
+    expected: &[ExpectedProducer<'_>],
+) -> Result<()> {
     let observed = observe(common, aliases, expected)?;
     let journal = JournalFile::new(common.journal.clone()).load()?;
     if journal.runs.is_empty() {
@@ -500,7 +543,7 @@ struct Observed {
 fn observe(
     common: &Common,
     aliases: &BTreeMap<String, String>,
-    expected: &[&str],
+    expected: &[ExpectedProducer<'_>],
 ) -> Result<Observed> {
     let cases = collect(&common.reports)?;
     let jobs = failed_markers(&common.reports)?;
@@ -523,20 +566,60 @@ fn observe(
     })
 }
 
-const fn expected_producers(kind: PipelineKind) -> &'static [&'static str] {
-    match kind {
-        PipelineKind::Branch => &["apple-test"],
-        _ => &[],
+struct ExpectedProducer<'a> {
+    lane: &'a str,
+    test_lane: &'a str,
+    prefix: Option<&'a str>,
+    draft: bool,
+}
+
+fn expected_producers<'a>(
+    ci: &'a CiProjectConfig,
+    test: &'a TestCommandConfig,
+    kind: PipelineKind,
+) -> Result<Vec<ExpectedProducer<'a>>> {
+    let mut producers = Vec::new();
+    for (name, lane) in &ci.lanes {
+        if !lane.kinds.iter().any(|candidate| candidate == kind.name()) {
+            continue;
+        }
+        for step in &lane.steps {
+            let Some(args) = step.suite_request(lane, step.args_in(kind.name())) else {
+                continue;
+            };
+            let Some((receipt, test_lane)) = selection_receipt(test, args)? else {
+                continue;
+            };
+            let path = format!("{}/{name}.selection.json", consts::REPORT_DIR);
+            if receipt != Path::new(&path) || produced_report(name).is_none() {
+                bail!(
+                    "invalid selection receipt for producer `{name}`: {}",
+                    receipt.display()
+                );
+            }
+            producers.push(ExpectedProducer {
+                lane: name,
+                test_lane,
+                prefix: test.required_case_prefixes.get(&path).map(String::as_str),
+                draft: kind == PipelineKind::Branch,
+            });
+        }
     }
+    Ok(producers)
 }
 
 fn no_applicable_suites(
     reports: &Path,
-    expected: &[&str],
+    expected: &[ExpectedProducer<'_>],
     failed: &BTreeSet<String>,
 ) -> Result<bool> {
     let mut empty = !expected.is_empty();
-    for &lane in expected {
+    for producer in expected {
+        let lane = producer.lane;
+        let strict = producer.prefix.is_some();
+        if strict && failed.contains(lane) {
+            bail!("producer `{lane}` failed");
+        }
         let path = reports.join(format!("{lane}.selection.json"));
         let text = match fs::read_to_string(&path) {
             Ok(text) => text,
@@ -548,10 +631,33 @@ fn no_applicable_suites(
         };
         let selected: Vec<String> =
             serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-        if !selected.is_empty() && collect(&reports.join(format!("{lane}.xml")))?.is_empty() {
+        let report = reports.join(format!("{lane}.xml"));
+        if selected.is_empty() {
+            if !producer.draft || (strict && report.try_exists()?) {
+                bail!("invalid empty selection for producer `{lane}`");
+            }
+            continue;
+        }
+        let cases = if strict {
+            if selected != [producer.test_lane] {
+                bail!("invalid selection for producer `{lane}`: {selected:?}");
+            }
+            read_report(&report)?
+        } else {
+            collect(&report)?
+        };
+        if cases.is_empty() {
             bail!("selected producer `{lane}` has no test cases in its JUnit report");
         }
-        empty &= selected.is_empty();
+        if let Some(prefix) = producer.prefix {
+            if !cases.iter().any(|case| case.name.starts_with(prefix)) {
+                bail!("producer `{lane}` executed no cases starting with `{prefix}`");
+            }
+            if cases.iter().any(CaseTiming::failing) {
+                bail!("producer `{lane}` has a failed test attempt");
+            }
+        }
+        empty = false;
     }
     Ok(empty)
 }
@@ -590,13 +696,15 @@ fn collect(root: &Path) -> Result<Vec<CaseTiming>> {
                 stack.push(entry.context("reading a report directory entry")?.path());
             }
         } else if path.extension().is_some_and(|kind| kind == "xml") {
-            let text =
-                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-            cases
-                .extend(parse_junit(&text).with_context(|| format!("parsing {}", path.display()))?);
+            cases.extend(read_report(&path)?);
         }
     }
     Ok(cases)
+}
+
+fn read_report(path: &Path) -> Result<Vec<CaseTiming>> {
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    parse_junit(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
 #[cfg(test)]
@@ -604,6 +712,14 @@ mod tests {
     use std::{io::Read, sync::mpsc, thread};
 
     use super::*;
+
+    const LEGACY_BRANCH: &[ExpectedProducer<'static>] = &[ExpectedProducer {
+        lane: "apple-test",
+        test_lane: "workspace",
+        prefix: None,
+        draft: true,
+    }];
+    const APPLE_NET_UNITS: &str = "apple-net-units";
 
     fn run_of(sha: &str, tests: &[&str], jobs: &[&str]) -> Run {
         Run {
@@ -703,20 +819,18 @@ mod tests {
     #[test]
     fn a_lane_that_produced_nothing_publishes_nothing() {
         let directory = tempfile::tempdir().unwrap();
-        gather(directory.path(), "apple-lint", false).unwrap();
-        assert!(directory.path().join(consts::REPORT_DIR).exists());
-        assert!(
-            fs::read_dir(directory.path().join(consts::REPORT_DIR))
-                .unwrap()
-                .next()
-                .is_none()
-        );
+        let reports = directory.path().join(consts::REPORT_DIR);
+        fs::create_dir_all(&reports).unwrap();
+        fs::write(reports.join("apple-test.xml"), "<testsuites/>").unwrap();
+        clear(directory.path(), "apple-lint").unwrap();
+        assert_eq!(produced_report("apple-lint"), None);
+        assert!(!reports.exists());
     }
 
     #[test]
     fn a_failing_lane_leaves_its_name_even_without_a_report() {
         let directory = tempfile::tempdir().unwrap();
-        gather(directory.path(), "web-chromium", true).unwrap();
+        mark_failed(directory.path(), "web-chromium").unwrap();
         assert_eq!(
             failed_markers(&directory.path().join(consts::REPORT_DIR)).unwrap(),
             BTreeSet::from(["web-chromium".to_owned()])
@@ -740,12 +854,7 @@ mod tests {
         journal.record(run_of("base", &[], &[]));
         journal.store(&common.journal).unwrap();
 
-        check(
-            &common,
-            &BTreeMap::new(),
-            expected_producers(PipelineKind::Branch),
-        )
-        .unwrap();
+        check(&common, &BTreeMap::new(), LEGACY_BRANCH).unwrap();
         assert!(check(&common, &BTreeMap::new(), &[]).is_err());
     }
 
@@ -762,6 +871,7 @@ mod tests {
         journal.store(&common.journal).unwrap();
         let report = directory
             .path()
+            .join("target")
             .join(produced_report("apple-test").unwrap());
         fs::create_dir_all(report.parent().unwrap()).unwrap();
         fs::write(
@@ -769,7 +879,7 @@ mod tests {
             "<testsuites><testsuite name=\"suite\"><testcase classname=\"suite\" name=\"retry\" time=\"0.1\"/></testsuite></testsuites>",
         )
         .unwrap();
-        gather(directory.path(), "apple-test", false).unwrap();
+        stage_report(directory.path(), "apple-test", &report).unwrap();
         check(&common, &BTreeMap::new(), &[]).unwrap();
 
         for outcome in ["failure", "error", "flakyFailure", "flakyError"] {
@@ -780,7 +890,8 @@ mod tests {
                 ),
             )
             .unwrap();
-            gather(directory.path(), "apple-test", true).unwrap();
+            stage_report(directory.path(), "apple-test", &report).unwrap();
+            mark_failed(directory.path(), "apple-test").unwrap();
             let error = check(&common, &BTreeMap::new(), &[]).unwrap_err();
             assert_eq!(
                 error.to_string(),
@@ -790,22 +901,78 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
-    fn a_report_left_by_an_earlier_job_is_not_collected_as_this_ones() {
-        let directory = tempfile::tempdir().unwrap();
-        let stale = directory.path().join("target/nextest/ci/junit.xml");
-        fs::create_dir_all(stale.parent().unwrap()).unwrap();
-        fs::write(&stale, "<testsuites/>").unwrap();
+    fn a_failed_producer_never_collects_stale_reports_from_either_slot() {
+        use crate::ci::build_dir::{LaneTarget, Target, fixture::git_checkout};
 
-        clear(directory.path(), "apple-test").unwrap();
-        gather(directory.path(), "apple-test", false).unwrap();
-        assert!(
-            !directory
-                .path()
-                .join(consts::REPORT_DIR)
-                .join("apple-test.xml")
-                .exists(),
-            "the build directory survives between jobs, so a stale report must not travel"
+        let checkout = git_checkout(&[]);
+        let builds = tempfile::tempdir().unwrap();
+        let other = builds.path().join("apple-test-0");
+        let own = builds.path().join("apple-net-units-0");
+        let report = produced_report(APPLE_NET_UNITS).unwrap();
+        for slot in [&other, &own] {
+            let path = slot.join(report);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "<testsuites/>").unwrap();
+        }
+        let root = checkout.path();
+        std::os::unix::fs::symlink(&other, root.join("target")).unwrap();
+
+        clear(root, APPLE_NET_UNITS).unwrap();
+        mark_failed(root, APPLE_NET_UNITS).unwrap();
+        let staged = root.join(consts::REPORT_DIR);
+        let marker = staged.join("apple-net-units.failed");
+        assert!(marker.is_file());
+        assert!(!staged.join("apple-net-units.xml").exists());
+        assert!(other.join(report).is_file());
+        assert!(own.join(report).is_file());
+
+        clear(root, APPLE_NET_UNITS).unwrap();
+        assert!(!marker.exists());
+        let target = Target::enter(
+            root,
+            LaneTarget {
+                name: APPLE_NET_UNITS,
+                window: consts::DAY,
+            },
+            &|var| match var {
+                "CI" => Some("true".into()),
+                "CARGO_TARGET_DIR" => Some(builds.path().as_os_str().to_owned()),
+                _ => None,
+            },
+        )
+        .unwrap();
+        let Target::Alias { build, .. } = &target else {
+            panic!("the CI producer must hold its own slot");
+        };
+        assert_eq!(build.path(), &own);
+        let raw = build.path().join(report);
+        let outcome = with_report(root, APPLE_NET_UNITS, &raw, || {
+            assert!(!raw.exists());
+            bail!("tool preflight failed");
+        });
+        assert!(outcome.is_err());
+        mark_failed(root, APPLE_NET_UNITS).unwrap();
+
+        assert!(marker.is_file());
+        assert!(!staged.join("apple-net-units.xml").exists());
+        assert!(other.join(report).is_file());
+        assert!(!raw.exists());
+
+        clear(root, APPLE_NET_UNITS).unwrap();
+        with_report(root, APPLE_NET_UNITS, &raw, || {
+            fs::write(
+                root.join("target").join(report),
+                "<testsuites tests=\"1\"/>",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(!marker.exists());
+        assert_eq!(
+            fs::read(staged.join("apple-net-units.xml")).unwrap(),
+            fs::read(&raw).unwrap()
         );
     }
 
@@ -823,7 +990,7 @@ mod tests {
         let fresh = directory.path().join("target/xcresult/ios-test.junit.xml");
         fs::create_dir_all(fresh.parent().unwrap()).unwrap();
         fs::write(&fresh, "<testsuites tests=\"1\"/>").unwrap();
-        gather(directory.path(), "apple-ios-test", false).unwrap();
+        stage_report(directory.path(), "apple-ios-test", &fresh).unwrap();
 
         let mut entries = fs::read_dir(&reports)
             .unwrap()
@@ -1007,6 +1174,106 @@ mod tests {
         }
 
         #[test]
+        fn the_apple_net_producer_is_strict_before_check_and_record() {
+            let ci = crate::config::KitharaExt::load(&crate::testing::workspace::root())
+                .unwrap()
+                .ci;
+            ci.validate().unwrap();
+            let project = kithara_devtools::common::project::ProjectConfig::load(
+                &crate::testing::workspace::root(),
+            )
+            .unwrap();
+            let apple = PASSING.replace("name=\"pass\"", "name=\"backend::apple::tests::pass\"");
+            let wrong = format!(
+                "<testsuites><testsuite name=\"kithara-net\">{}</testsuite></testsuites>",
+                (0..90)
+                    .map(|n| format!(
+                        "<testcase classname=\"kithara-net\" name=\"generic::{n}\" time=\"0.1\"/>"
+                    ))
+                    .collect::<String>()
+            );
+            let skipped = apple.replace("/>", "><skipped/></testcase>");
+            let retried = apple.replace("/>", "><flakyFailure/></testcase>");
+            let failing = apple.replace("/>", "><failure/></testcase>");
+            for kind in [
+                PipelineKind::Branch,
+                PipelineKind::MergeRequest,
+                PipelineKind::Quarantine,
+                PipelineKind::Platforms,
+                PipelineKind::Main,
+                PipelineKind::Nightly,
+                PipelineKind::Release,
+            ] {
+                let (directory, common) = fixture(&[APPLE_NET_UNITS]);
+                snapshot(&common, true);
+                fs::write(common.reports.join("apple-test.xml"), PASSING).unwrap();
+                let selection = common.reports.join("apple-net-units.selection.json");
+                let report = common.reports.join("apple-net-units.xml");
+                let marker = common.reports.join("apple-net-units.failed");
+                let before = fs::read(&common.journal).unwrap();
+                for (selected, xml, failed, passes) in [
+                    (None, Some(PASSING), false, false),
+                    (Some("{"), Some(PASSING), false, false),
+                    (Some(r#"["other"]"#), Some(PASSING), false, false),
+                    (Some(r#"["workspace"]"#), None, false, false),
+                    (Some(r#"["workspace"]"#), Some("<"), false, false),
+                    (
+                        Some(r#"["workspace"]"#),
+                        Some("<testsuites/>"),
+                        false,
+                        false,
+                    ),
+                    (
+                        Some(r#"["workspace"]"#),
+                        Some(skipped.as_str()),
+                        false,
+                        false,
+                    ),
+                    (
+                        Some(r#"["workspace"]"#),
+                        Some(retried.as_str()),
+                        false,
+                        false,
+                    ),
+                    (
+                        Some(r#"["workspace"]"#),
+                        Some(failing.as_str()),
+                        false,
+                        false,
+                    ),
+                    (Some(r#"["workspace"]"#), Some(PASSING), true, false),
+                    (Some("[]"), Some(PASSING), false, false),
+                    (Some("[]"), None, true, false),
+                    (Some("[]"), None, false, kind == PipelineKind::Branch),
+                    (Some(r#"["workspace"]"#), Some(wrong.as_str()), false, false),
+                    (Some(r#"["workspace"]"#), Some(apple.as_str()), false, true),
+                ] {
+                    for path in [&selection, &report, &marker] {
+                        remove_evidence(path).unwrap();
+                    }
+                    if let Some(selected) = selected {
+                        fs::write(&selection, selected).unwrap();
+                    }
+                    if let Some(xml) = xml {
+                        fs::write(&report, xml).unwrap();
+                    }
+                    if failed {
+                        mark_failed(directory.path(), APPLE_NET_UNITS).unwrap();
+                    }
+                    let result = judge(&common, kind, &ci, &project.test, Some("current"));
+                    assert_eq!(
+                        result.is_ok(),
+                        passes,
+                        "{kind:?} {selected:?} {xml:?} {failed}: {result:?}"
+                    );
+                    if !passes {
+                        assert_eq!(fs::read(&common.journal).unwrap(), before);
+                    }
+                }
+            }
+        }
+
+        #[test]
         fn a_selected_producer_requires_its_own_test_cases() {
             for (name, report, passes) in [
                 ("apple-test.xml", "", false),
@@ -1020,12 +1287,7 @@ mod tests {
                     fs::write(common.reports.join(name), report).unwrap();
                 }
                 assert_eq!(
-                    check(
-                        &common,
-                        &BTreeMap::new(),
-                        expected_producers(PipelineKind::Branch)
-                    )
-                    .is_ok(),
+                    check(&common, &BTreeMap::new(), LEGACY_BRANCH).is_ok(),
                     passes,
                     "{name}: {report}"
                 );
@@ -1050,12 +1312,7 @@ mod tests {
                     fs::write(common.reports.join("apple-test.selection.json"), evidence).unwrap();
                 }
                 assert!(
-                    check(
-                        &common,
-                        &BTreeMap::new(),
-                        expected_producers(PipelineKind::Branch)
-                    )
-                    .is_err(),
+                    check(&common, &BTreeMap::new(), LEGACY_BRANCH).is_err(),
                     "invalid selection: {evidence:?}"
                 );
             }
@@ -1076,12 +1333,7 @@ mod tests {
                 snapshot(&common, false);
                 fs::write(common.reports.join(name), contents).unwrap();
                 assert!(
-                    check(
-                        &common,
-                        &BTreeMap::new(),
-                        expected_producers(PipelineKind::Branch)
-                    )
-                    .is_err(),
+                    check(&common, &BTreeMap::new(), LEGACY_BRANCH).is_err(),
                     "{name}: {contents}"
                 );
             }
@@ -1092,14 +1344,7 @@ mod tests {
             let (_directory, common) = fixture(&["apple-test"]);
             snapshot(&common, true);
             fs::write(common.reports.join("apple-test.failed"), "").unwrap();
-            assert!(
-                check(
-                    &common,
-                    &BTreeMap::new(),
-                    expected_producers(PipelineKind::Branch)
-                )
-                .is_err()
-            );
+            assert!(check(&common, &BTreeMap::new(), LEGACY_BRANCH).is_err());
         }
 
         #[test]
@@ -1108,12 +1353,7 @@ mod tests {
                 let (_directory, common) = fixture(known);
                 fs::write(common.reports.join("apple-test.failed"), "").unwrap();
                 assert_eq!(
-                    check(
-                        &common,
-                        &BTreeMap::new(),
-                        expected_producers(PipelineKind::Branch)
-                    )
-                    .is_ok(),
+                    check(&common, &BTreeMap::new(), LEGACY_BRANCH).is_ok(),
                     passes
                 );
             }
@@ -1124,14 +1364,7 @@ mod tests {
             let (_directory, common) = fixture(&[]);
             snapshot(&common, false);
             fs::remove_file(&common.journal).unwrap();
-            assert!(
-                check(
-                    &common,
-                    &BTreeMap::new(),
-                    expected_producers(PipelineKind::Branch)
-                )
-                .is_err()
-            );
+            assert!(check(&common, &BTreeMap::new(), LEGACY_BRANCH).is_err());
         }
     }
 }

@@ -27,3 +27,5 @@ pub(crate) const SILENT_PEAK: f32 = 1.0e-9;
 pub(crate) const SECTION_MEMORY: usize = 2;
 
 pub(crate) const BIQUAD_IDENTITY: [f32; 5] = [1.0, 0.0, 0.0, 0.0, 0.0];
+/// Reciprocal Butterworth Q, preserving the crossover design's rounding.
+pub(crate) const CROSSOVER_DAMPING: f64 = 1.0 / std::f64::consts::FRAC_1_SQRT_2;

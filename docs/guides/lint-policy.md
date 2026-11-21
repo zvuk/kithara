@@ -12,6 +12,7 @@ Forbidden in production code:
 - `#[expect(...)]`;
 - `#![allow(...)]`;
 - `// xtask-lint-ignore:`;
+- `#[rustfmt::skip]`;
 - baseline growth.
 
 An unavoidable lint means STOP and fix the underlying code. Do not make a commit
@@ -32,6 +33,23 @@ There are exactly two flash-ON-scoped expects in `kithara-platform/src/lib.rs`:
 They cover known flash-ON facade false positives and inert control surfaces. The
 OFF lane keeps full lint coverage. Unfulfilled expectations should be removed
 when the corresponding flash wrappers consume the code.
+
+`smoothing_primitive_sites.exempt_crates` in `.config/arch/thresholds.toml`
+lists test and tooling crates plus exactly one production crate,
+`kithara-abr`.
+
+- Why: the crate owns network throughput statistics. Its bandwidth estimator is
+  an `f64` EWMA with a sample-dependent weight and bias correction, which no
+  structural rule can tell apart from audio-parameter smoothing. Rewriting it
+  onto the audio smoothing primitive would change the algorithm.
+- Scope: the mechanism skips the whole crate, including code added later, not
+  only the estimator. The check therefore no longer catches hand-rolled
+  audio-parameter smoothing inside `kithara-abr`; adding any audio-parameter
+  processing to that crate requires revisiting this exception first.
+- Unchanged: every other crate, including any new one, stays checked by
+  default. The same EWMA shape outside `kithara-abr` is still reported.
+- This exception authorizes no other configuration entry, allowed file,
+  baseline change, or source suppression.
 
 ## Shared Configuration
 

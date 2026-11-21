@@ -1,13 +1,13 @@
 use std::{
     convert::Infallible,
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
 };
 
 use ::kithara::{
     analysis::{
         AnalysisFingerprint, AnalysisProgress, AnalysisToken, BeatArtifact, BeatGridModel,
-        BeatGridState, BeatSnapshot, BeatState, Bucket, GRID_SCHEMA_VERSION, GridBeat, RangeSet,
-        RawBeatGrid, Waveform,
+        BeatGridState, BeatSnapshot, BeatState, Bucket, GRID_SCHEMA_VERSION, GridBeat, Mode,
+        MusicalKey, PitchClass, RangeSet, RawBeatGrid, Waveform,
     },
     assets::StorageBackend,
     download::{Downloader, DownloaderConfig},
@@ -25,8 +25,7 @@ use ::kithara::{
             task,
         },
     },
-    play::{PlayWorkerConfig, ResourcePrep, policy::DomainKeyPolicy},
-    prelude::{ArtifactSource, ResourceSrc},
+    play::{ArtifactSource, PlayWorkerConfig, ResourcePrep, ResourceSrc, policy::DomainKeyPolicy},
     queue::QueueConfig,
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
 };
@@ -71,15 +70,19 @@ pub(crate) fn other_axis() -> NonZeroU32 {
 }
 
 pub(crate) fn fingerprint() -> AnalysisFingerprint {
-    AnalysisFingerprint::new(None, Some("wave:test:v1"))
+    AnalysisFingerprint::builder()
+        .waveform("wave:test:v1")
+        .build()
 }
 
 pub(crate) fn progress(analysis: TrackAnalysis) -> AnalysisProgress {
     AnalysisProgress::try_from(analysis).expect("settled fixture is valid progress")
 }
 
+/// One bucket of 0.5 band heights on both sides.
 pub(crate) fn one_bucket_wave() -> Waveform {
-    Waveform::try_from(vec![Bucket::new([0.5; 4], [0.5; 4])]).expect("valid heights")
+    Waveform::try_new(vec![Bucket::new([0.5; 4], [0.5; 4])], NonZeroU64::MIN)
+        .expect("hand-built buckets are valid")
 }
 
 pub(crate) fn grid() -> BeatSnapshot {
@@ -236,14 +239,19 @@ pub(crate) fn served_grid() -> BeatGridModel {
 
 /// A waveform the caller hands over.
 pub(crate) fn served_waveform() -> Waveform {
-    Waveform::try_from(vec![
-        Bucket::new(
-            [0.25, 0.5, 0.5, 0.75],
-            [0.25, 0.5, 0.5, 0.75]
-        );
-        8
-    ])
+    Waveform::try_new(
+        vec![Bucket::new([0.25, 0.5, 0.5, 0.75], [0.25, 0.5, 0.5, 0.75]); 8],
+        NonZeroU64::MIN,
+    )
     .expect("fixture bands are in range")
+}
+
+/// A key the caller hands over.
+pub(crate) const fn served_key() -> MusicalKey {
+    MusicalKey {
+        tonic: PitchClass::D,
+        mode: Mode::Major,
+    }
 }
 
 /// Append a track the caller opened with artifacts already in hand.
@@ -254,6 +262,7 @@ pub(crate) async fn track_prepared(
     app: &AppConfig,
     beat_grid: Option<BeatGridModel>,
     waveform: Option<Waveform>,
+    key: Option<MusicalKey>,
 ) -> (TrackId, AppTrackSource) {
     track_sourced(
         host,
@@ -262,6 +271,7 @@ pub(crate) async fn track_prepared(
         app,
         beat_grid.map(|grid| ArtifactSource::from(Arc::new(grid))),
         waveform.map(|wave| ArtifactSource::from(Arc::new(wave))),
+        key.map(|key| ArtifactSource::from(Arc::new(key))),
     )
     .await
 }
@@ -275,12 +285,12 @@ pub(crate) async fn track_sourced(
     app: &AppConfig,
     beat_grid: Option<ArtifactSource<BeatGridModel>>,
     waveform: Option<ArtifactSource<Waveform>>,
+    key: Option<ArtifactSource<MusicalKey>>,
 ) -> (TrackId, AppTrackSource) {
     let track_id = TrackId::from(id);
     let src = ResourceSrc::parse(url).expect("fixture url parses");
     let config = AppResourceConfig::for_src(src)
         .downloader(app.downloader.clone())
-        .worker(app.worker.clone())
         .store(app.store.clone())
         .audio(app.audio.clone())
         .maybe_preload_chunks(app.preload_chunks)
@@ -289,6 +299,7 @@ pub(crate) async fn track_sourced(
         .file(app.file.clone())
         .maybe_beat_grid(beat_grid)
         .maybe_waveform(waveform)
+        .maybe_key(key)
         .build();
     host.call(move |(_, queue)| {
         queue
@@ -374,8 +385,18 @@ pub(crate) fn tone_mp3() -> String {
 }
 
 #[kithara::fixture]
+pub(crate) fn tone_short_mp3() -> String {
+    asset_url(&assets::sine_mp3_a440_half_s())
+}
+
+#[kithara::fixture]
 pub(crate) fn rhythm_a_mp3() -> String {
     asset_url(&assets::rhythm_mp3_deck_a_120bpm_48k())
+}
+
+#[kithara::fixture]
+pub(crate) fn rhythm_a_short_mp3() -> String {
+    asset_url(&assets::rhythm_mp3_deck_a_120bpm_48k_half_s())
 }
 
 #[kithara::fixture]
@@ -485,6 +506,7 @@ pub(crate) fn supplied(grid: BeatGridModel) -> TrackArtifacts {
         None,
         super::supply::Prepared {
             beat_grid: super::supply::Supply::Ready(Arc::new(grid)),
+            key: super::supply::Supply::Missing,
             waveform: super::supply::Supply::Missing,
         },
         false,
@@ -497,6 +519,7 @@ pub(crate) fn refused() -> TrackArtifacts {
         None,
         super::supply::Prepared {
             beat_grid: super::supply::Supply::Failed,
+            key: super::supply::Supply::Missing,
             waveform: super::supply::Supply::Missing,
         },
         false,

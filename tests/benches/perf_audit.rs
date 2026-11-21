@@ -29,7 +29,10 @@ use kithara::{
             task::spawn,
         },
     },
-    play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, TrackConfig, WarpControls,
+        WarpControlsChange,
+    },
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
     stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine},
@@ -52,7 +55,6 @@ use tempfile::TempDir;
 mod consts {
     pub(super) const CHANNELS: usize = 2;
     pub(super) const SAMPLE_RATE: u32 = 44_100;
-    pub(super) const ANALYSIS_BUCKETS: usize = 2_000;
     pub(super) const ANALYSIS_CHUNK_SECONDS: u64 = 16;
     pub(super) const DECODE_READ_LIMIT: usize = 16_384;
     pub(super) const STRETCH_FRAMES: usize = 8_192;
@@ -202,9 +204,12 @@ fn bench_gapless_trim(c: &mut Criterion) {
                     .hint("mp3".to_string())
                     .build();
                 let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-                let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-                    .await
-                    .unwrap_or_else(|e| panic!("audio init failed: {e}"));
+                let mut audio = kithara_integration_tests::mock::load_audio(
+                    &worker,
+                    (config, TrackConfig::default()),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("audio init failed: {e}"));
                 let mut buf = [0.0_f32; 8_192];
                 let mut total = 0_usize;
                 let mut reached_eof = false;
@@ -241,9 +246,10 @@ async fn analyze_track(
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint("mp3".to_owned())
         .build();
-    let reader = kithara_integration_tests::mock::load_audio(play_worker, config)
-        .await
-        .unwrap_or_else(|error| panic!("analysis benchmark reader failed to open: {error}"));
+    let reader =
+        kithara_integration_tests::mock::load_audio(play_worker, (config, TrackConfig::default()))
+            .await
+            .unwrap_or_else(|error| panic!("analysis benchmark reader failed to open: {error}"));
     let rate = reader.spec().sample_rate;
     let (mut results, _producer) = analysis_worker
         .analyze(
@@ -307,7 +313,7 @@ fn bench_analysis_worker(c: &mut Criterion) {
     let builder = AnalyzerBuilder::<PlaybackResamplerBackend, TestPools>::new(pools.clone())
         .with_beat_config(BeatAnalysisConfig::default())
         .with_beat()
-        .with_waveform(consts::ANALYSIS_BUCKETS);
+        .with_waveform(NonZeroU32::MIN);
     let analysis_worker = AnalysisWorker::new(AnalysisWorkerConfig::for_builder(builder).build());
     let token = AnalysisToken::from("perf-audit-track");
 
@@ -555,7 +561,7 @@ fn bench_stretch_process(c: &mut Criterion) {
         let config = WarpConfig::builder()
             .speed(0.8)
             .backend(backend)
-            .pitch(Pitch::HELD)
+            .controls(WarpControls::builder().pitch(Pitch::HELD).build())
             .build();
         let backend_label = backend.to_string().to_ascii_lowercase();
         group.bench_function(format!("{backend_label}_ratio_1_25"), |b| {
@@ -622,9 +628,10 @@ async fn quality_switch(helper: &TestServerHelper, server: &CreatedHls) -> usize
         )
         .events(bus)
         .build();
-    let config = kithara::play::TrackConfig::for_audio(config)
-        .block_on_underrun(true)
-        .build();
+    let config = (
+        config,
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
@@ -725,7 +732,7 @@ fn bench_warp_transition(c: &mut Criterion) {
                     (),
                     &WarpConfig::builder()
                         .speed(0.5)
-                        .pitch(Pitch::HELD)
+                        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
                         .backend(StretchKind::Signalsmith)
                         .build(),
                 )
@@ -736,10 +743,10 @@ fn bench_warp_transition(c: &mut Criterion) {
                 let mut produced = 0;
                 for block in 0..12 {
                     if block == 4 {
-                        renderer.set_pitch(Pitch::default());
+                        renderer.apply(WarpControlsChange::Pitch(Pitch::default()));
                     }
                     if block == 8 {
-                        renderer.set_pitch(Pitch::HELD);
+                        renderer.apply(WarpControlsChange::Pitch(Pitch::HELD));
                     }
                     renderer.prepare(spec);
                     renderer
@@ -773,14 +780,14 @@ fn bench_warp_transition(c: &mut Criterion) {
                     (),
                     &WarpConfig::builder()
                         .speed(0.5)
-                        .pitch(Pitch::HELD)
+                        .controls(WarpControls::builder().pitch(Pitch::HELD).build())
                         .backend(StretchKind::Signalsmith)
                         .build(),
                 )
                 .renderer(spec, pools.clone());
                 let resumed = render_windows(&mut replacement, &pools, spec, &pcm[..16_384]);
                 replacement.prepare(spec);
-                replacement.set_pitch(Pitch::default());
+                replacement.apply(WarpControlsChange::Pitch(Pitch::default()));
                 replacement
                     .set_speed(SpeedCurve::Constant(1.0), 1)
                     .expect("unity replacement rate");

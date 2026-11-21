@@ -375,6 +375,7 @@ fn declared_source_prepares_only_immutable_matching_geometry() {
 struct PrefixPlan {
     latest: bool,
     initial_media: Duration,
+    origin: Option<f64>,
     offsets: Vec<(u64, f64)>,
     terminal: u64,
     parts: Vec<(u64, ExponentialApproach)>,
@@ -382,6 +383,17 @@ struct PrefixPlan {
     limit: u64,
     boundaries: Vec<u64>,
     previous_offset: f64,
+}
+
+impl PrefixPlan {
+    fn law_at(&self, at: u64) -> Result<(u64, ExponentialApproach), String> {
+        self.parts
+            .iter()
+            .rev()
+            .find(|(law_at, _)| *law_at <= at)
+            .copied()
+            .ok_or_else(|| "Applied law has no analytic interval at the executed frame".to_owned())
+    }
 }
 
 type PrefixProof = (
@@ -1418,14 +1430,14 @@ impl AppliedCurve<'_> {
     }
 
     fn source_phase(
-        &self,
         model: &BeatGridModel,
         host: &TempoTrajectory,
         initial_beat: f64,
+        at: SessionFrame,
     ) -> Result<f64, String> {
         let (meter_origin, source_stride, host_stride) = phase_axes(model, 4)?;
         let phase = ((initial_beat - meter_origin).rem_euclid(source_stride)
-            - f64::from(host.beat_at(self.at)).rem_euclid(host_stride))
+            - f64::from(host.beat_at(at)).rem_euclid(host_stride))
         .rem_euclid(host_stride)
         .rem_euclid(1.0);
         let phase = if phase > 0.5 { phase - 1.0 } else { phase };
@@ -1436,12 +1448,12 @@ impl AppliedCurve<'_> {
         &self,
         host: &TempoTrajectory,
         source_progress: f64,
-        frame: SessionFrame,
+        interval: std::ops::Range<SessionFrame>,
         terminal: u64,
         maximum_slope: f64,
         failures: &mut Vec<String>,
     ) -> Result<(u64, f64), String> {
-        let residual = source_progress - host_progress(host, self.at, frame)?;
+        let residual = source_progress - host_progress(host, interval.start, interval.end)?;
         let length = (residual.abs() * f64::from(host.sample_rate().get()) * maximum_slope
             / f64::from(LinkConfig::default().epsilon()))
         .ceil()
@@ -1467,6 +1479,58 @@ impl AppliedCurve<'_> {
         ))
     }
 
+    fn nominal_opening(
+        &self,
+        geometry: &SourceGeometry,
+        host: &TempoTrajectory,
+        position: f64,
+        at: SessionFrame,
+        predecessor: f64,
+        commanded: bool,
+    ) -> Result<f64, String> {
+        let source = &geometry.source;
+        let rate = host.sample_rate();
+        let beat = grid_beat_at(source, media_seconds_position(position, rate)?)?;
+        let slope = source_slope(source, position, rate)?;
+        let base = host.anchor_at(at).tempo_at(at) * slope;
+        let offsets = slew_offsets(predecessor, base, rate, commanded)?;
+        let terminal = offsets
+            .last()
+            .ok_or_else(|| "declared slew is empty".to_owned())?
+            .0;
+        let (media_offset, beat_offset) = if terminal == 0 && !commanded {
+            let phase = Self::source_phase(geometry.model.as_ref(), host, beat, at)?;
+            let mut failures = Vec::new();
+            let (_, offset) = self.terminal_offset(
+                host,
+                phase,
+                at..at,
+                0,
+                geometry.maximum_slope,
+                &mut failures,
+            )?;
+            if !failures.is_empty() {
+                return Err(failures.join("; "));
+            }
+            (None, offset)
+        } else {
+            (Some(offsets[0].1), offsets[0].1 / slope)
+        };
+        let law = declared_law(host, at, slope, beat_offset)?;
+        let next_beat = beat
+            + declared_law(host, at, 1.0, beat_offset)?
+                .advance(1.0)
+                .ok_or_else(|| "declared opening area is not finite".to_owned())?
+                / f64::from(rate.get());
+        if ordinary_span_is_local(source, beat, next_beat, rate, false)? {
+            Ok(law.initial())
+        } else {
+            let (end, _) =
+                crossing_target(source, host, at, beat, media_offset, beat_offset, rate)?;
+            Ok((end - position) * f64::from(rate.get()))
+        }
+    }
+
     fn ordinary_coefficients(
         &self,
         source: &BeatGridSnapshot,
@@ -1481,44 +1545,51 @@ impl AppliedCurve<'_> {
             .last()
             .ok_or_else(|| "ordinary law has no checked prefix".to_owned())?
             .0;
-        let parts = analytic_parts(&command.curve)?;
-        let (law_at, law) = parts
-            .iter()
-            .rev()
-            .find(|(law_at, _)| *law_at <= at)
-            .ok_or_else(|| {
-                "Applied law has no analytic interval at the executed frame".to_owned()
-            })?;
+        let (law_at, law) = plan.law_at(at)?;
+        let (original_at, actual) = if plan.origin.is_some() && at > 0 && law_at == 0 {
+            let initial = law
+                .rate_at(at.as_())
+                .ok_or_else(|| "Applied initial law has no finite continued rate".to_owned())?;
+            let continued = ExponentialApproach::new(initial, law.target(), law.time_constant())
+                .ok_or_else(|| "Applied initial law cannot be rebased".to_owned())?;
+            (at, continued)
+        } else {
+            (law_at, law)
+        };
         let correcting = command.landing.is_none();
         let terminal = plan.terminal;
         let deadline = plan.deadline;
         let original_position = prefixes
             .iter()
-            .find_map(|(at, position)| (*at == *law_at).then_some(*position))
+            .find_map(|(at, position)| (*at == original_at).then_some(*position))
             .ok_or_else(|| {
                 "ordinary law has no independently checked original source anchor".to_owned()
             })?;
         let original_slope = source_slope(source, original_position, rate)?;
-        let original_offset = if correcting && *law_at < terminal {
+        let original_offset = if correcting && original_at < terminal {
             plan.offsets
                 .iter()
                 .rev()
-                .find(|(at, _)| *at <= *law_at)
+                .find(|(at, _)| *at <= original_at)
                 .ok_or_else(|| "ordinary head law has no declared step".to_owned())?
                 .1
                 / original_slope
-        } else if deadline.is_some_and(|end| *law_at < end) && *law_at >= terminal {
+        } else if deadline.is_some_and(|end| original_at < end) && original_at >= terminal {
             q.ok_or_else(|| "ordinary terminal law has no independently checked prefix".to_owned())?
         } else {
             0.0
         };
-        let original = declared_law(
-            host,
-            frame_after(self.at, *law_at)?,
-            original_slope,
-            original_offset,
-        )?;
-        Ok((*law != original).then(|| format!("Applied {:?} frame {law_at}: analytic law {:?} differs from declared source/Host law {:?}", command.seq, law, original)))
+        let original = match plan.origin.filter(|_| original_at == 0) {
+            Some(from) => ExponentialApproach::new(from, from, 0.0)
+                .ok_or_else(|| "declared initial speed is not finite".to_owned())?,
+            None => declared_law(
+                host,
+                frame_after(self.at, original_at)?,
+                original_slope,
+                original_offset,
+            )?,
+        };
+        Ok((actual != original).then(|| format!("Applied {:?} frame {original_at}: analytic law {:?} differs from declared source/Host law {:?}", command.seq, actual, original)))
     }
 
     fn check_partial_area(
@@ -1624,13 +1695,14 @@ impl AppliedCurve<'_> {
 
     fn prefix_plan(
         &self,
-        source: &BeatGridSnapshot,
+        geometry: &SourceGeometry,
         host: &TempoTrajectory,
         horizon: std::ops::Bound<SessionFrame>,
         predecessor: f64,
         commanded: bool,
     ) -> Result<PrefixPlan, String> {
         let command = self.command;
+        let source = &geometry.source;
         let rate = host.sample_rate();
         let (horizon, latest) = match horizon {
             std::ops::Bound::Included(frame) => (frame, true),
@@ -1643,17 +1715,60 @@ impl AppliedCurve<'_> {
         let base = host.anchor_at(self.at).tempo_at(self.at)
             * source_slope(source, initial_media.as_secs_f64(), rate)?;
         let correcting = command.landing.is_none();
-        let offsets = if correcting {
-            slew_offsets(predecessor, base, rate, commanded)?
+        let epsilon = f64::from(LinkConfig::default().epsilon());
+        let native_nudge = (base - epsilon)
+            .to_f32()
+            .zip((base + epsilon).to_f32())
+            .zip(predecessor.to_f32())
+            .is_some_and(|((lower, upper), from)| (lower..=upper).contains(&from));
+        let origin = if correcting
+            && (!commanded || native_nudge)
+            && self.nominal_opening(
+                geometry,
+                host,
+                initial_media.as_secs_f64(),
+                self.at,
+                predecessor,
+                commanded,
+            )? != predecessor
+        {
+            Some(predecessor)
+        } else {
+            None
+        };
+        let elapsed = u64::from(origin.is_some());
+        let (position, at) = match origin {
+            Some(from) => (
+                initial_media.as_secs_f64() + from / f64::from(rate.get()),
+                frame_after(self.at, elapsed)?,
+            ),
+            None => (initial_media.as_secs_f64(), self.at),
+        };
+        let reference = host.anchor_at(at).tempo_at(at) * source_slope(source, position, rate)?;
+        let mut offsets = if correcting {
+            slew_offsets(predecessor, reference, rate, commanded)?
         } else {
             vec![(0, 0.0)]
         };
+        for (at, _) in &mut offsets {
+            *at = at
+                .checked_add(elapsed)
+                .ok_or_else(|| "declared anchored slew overflows".to_owned())?;
+        }
+        let previous_offset = if commanded || !correcting {
+            0.0
+        } else {
+            predecessor - reference
+        };
+        if origin.is_some() {
+            offsets.insert(0, (0, previous_offset));
+        }
         let last = offsets
             .last()
             .ok_or_else(|| "declared slew is empty".to_owned())?
             .0;
         let terminal = if commanded && correcting {
-            last.max(1)
+            last.max(elapsed + 1)
         } else {
             last
         };
@@ -1663,14 +1778,10 @@ impl AppliedCurve<'_> {
             .frames_since(self.at)
             .ok_or_else(|| "executed replacement precedes Applied".to_owned())?;
         let boundaries = self.prefix_boundaries(host, horizon, &parts, &offsets, terminal)?;
-        let previous_offset = if commanded || !correcting {
-            0.0
-        } else {
-            predecessor - base
-        };
         Ok(PrefixPlan {
             latest,
             initial_media,
+            origin,
             offsets,
             terminal,
             parts,
@@ -1681,6 +1792,31 @@ impl AppliedCurve<'_> {
         })
     }
 
+    fn correction_origin(
+        &self,
+        geometry: &SourceGeometry,
+        host: &TempoTrajectory,
+        plan: &PrefixPlan,
+        initial_beat: f64,
+    ) -> Result<(SessionFrame, f64, f64), String> {
+        let rate = host.sample_rate();
+        let (at, beat) = match plan.origin {
+            Some(from) => (
+                frame_after(self.at, 1)?,
+                grid_beat_at(
+                    &geometry.source,
+                    media_seconds_position(
+                        plan.initial_media.as_secs_f64() + from / f64::from(rate.get()),
+                        rate,
+                    )?,
+                )?,
+            ),
+            None => (self.at, initial_beat),
+        };
+        let phase = Self::source_phase(geometry.model.as_ref(), host, beat, at)?;
+        Ok((at, beat, phase))
+    }
+
     fn verify_prefix(
         &self,
         geometry: &SourceGeometry,
@@ -1689,18 +1825,14 @@ impl AppliedCurve<'_> {
         predecessor: f64,
         commanded: bool,
     ) -> Result<PrefixProof, String> {
-        let model = geometry.model.as_ref();
         let source = &geometry.source;
-        let command = self.command;
         let rate = host.sample_rate();
-        let mut plan = self.prefix_plan(source, host, horizon, predecessor, commanded)?;
-        let mut previous_offset = plan.previous_offset;
-        let correcting = command.landing.is_none();
+        let mut plan = self.prefix_plan(geometry, host, horizon, predecessor, commanded)?;
         let mut failures = Vec::new();
         let mut position = plan.initial_media.as_secs_f64();
-        let initial_beat = grid_beat_at(source, media_seconds_position(position, rate)?)?;
-        let mut beat = initial_beat;
-        let phase = self.source_phase(model, host, initial_beat)?;
+        let mut beat = grid_beat_at(source, media_seconds_position(position, rate)?)?;
+        let (correction_at, correction_beat, phase) =
+            self.correction_origin(geometry, host, &plan, beat)?;
         let mut q = None;
         let mut prefixes = Vec::new();
         let mut diagnostics = Vec::new();
@@ -1712,18 +1844,18 @@ impl AppliedCurve<'_> {
             }
             let frame = frame_after(self.at, at)?;
             let before_failures = failures.len();
-            if let Some((landing, landing_at)) = command.landing
+            if let Some((landing, landing_at)) = self.command.landing
                 && frame == landing_at
             {
                 position = landing.as_secs_f64();
                 beat = grid_beat_at(source, media_seconds_position(position, rate)?)?;
             }
             prefixes.push((at, source_media_for_beat(source, beat, rate)?));
-            if correcting && at == plan.terminal {
+            if self.command.landing.is_none() && at == plan.terminal {
                 let (deadline, offset) = self.terminal_offset(
                     host,
-                    phase + beat - initial_beat,
-                    frame,
+                    phase + beat - correction_beat,
+                    correction_at..frame,
                     plan.terminal,
                     geometry.maximum_slope,
                     &mut failures,
@@ -1741,14 +1873,7 @@ impl AppliedCurve<'_> {
             if frames == 0 {
                 continue;
             }
-            let (law_at, law) = plan
-                .parts
-                .iter()
-                .rev()
-                .find(|(law_at, _)| *law_at <= at)
-                .ok_or_else(|| {
-                    "Applied law has no analytic interval at the executed frame".to_owned()
-                })?;
+            let (law_at, law) = plan.law_at(at)?;
             let law_elapsed = at - law_at;
             let advance = law
                 .advance_over(law_elapsed.as_(), frames.as_())
@@ -1757,9 +1882,15 @@ impl AppliedCurve<'_> {
             let slope = source_slope(source, source_media_for_beat(source, beat, rate)?, rate)?;
             let (media_offset, beat_offset) = self.interval_offsets(&plan, q, at)?;
             let offset = media_offset.unwrap_or(beat_offset * slope);
-            let next_beat =
-                self.interval_beat(host, beat, slope, at..end, media_offset, beat_offset)?;
-            let bridge = frames == 1
+            let origin = plan.origin.filter(|_| at == 0);
+            let next_beat = match origin {
+                Some(_) => correction_beat,
+                None => {
+                    self.interval_beat(host, beat, slope, at..end, media_offset, beat_offset)?
+                }
+            };
+            let bridge = origin.is_none()
+                && frames == 1
                 && law_elapsed == 0
                 && law.time_constant() == 0.0
                 && !ordinary_span_is_local(source, beat, next_beat, rate, true)?;
@@ -1771,29 +1902,35 @@ impl AppliedCurve<'_> {
                 if ((position + advance) * f64::from(rate.get())).round()
                     != (expected * f64::from(rate.get())).round()
                 {
-                    failures.push(format!("Applied {:?} frame {at}: crossing consumes asset frame {}, declared inverse geometry requires {}", command.seq,
+                    failures.push(format!("Applied {:?} frame {at}: crossing consumes asset frame {}, declared inverse geometry requires {}", self.command.seq,
                         (position + advance) * f64::from(rate.get()), expected * f64::from(rate.get())));
                 }
             } else {
-                let expected = declared_law(
-                    host,
-                    frame,
-                    slope,
-                    media_offset.map_or(beat_offset, |offset| offset / slope),
-                )?;
+                let expected = match origin {
+                    Some(from) => ExponentialApproach::new(from, from, 0.0)
+                        .ok_or_else(|| "declared initial speed is not finite".to_owned())?,
+                    None => declared_law(
+                        host,
+                        frame,
+                        slope,
+                        media_offset.map_or(beat_offset, |offset| offset / slope),
+                    )?,
+                };
                 if let Some(failure) =
                     self.ordinary_coefficients(source, host, &prefixes, &plan, q)?
                 {
                     failures.push(failure);
                 }
                 self.check_partial_area(expected, position, advance, at..end, host, &mut failures)?;
-                if !ordinary_span_is_local(source, beat, next_beat, rate, false)? {
-                    failures.push(format!("Applied {:?} frame {at}: an ordinary analytic interval crosses the declared source slope", command.seq));
+                if origin.is_none()
+                    && !ordinary_span_is_local(source, beat, next_beat, rate, false)?
+                {
+                    failures.push(format!("Applied {:?} frame {at}: an ordinary analytic interval crosses the declared source slope", self.command.seq));
                 }
                 beat = next_beat;
             }
-            if correcting {
-                self.check_epsilon(previous_offset, offset, at, &mut failures);
+            if self.command.landing.is_none() {
+                self.check_epsilon(plan.previous_offset, offset, at, &mut failures);
             }
             if failures.len() > before_failures {
                 let from_position = source_media_for_beat(source, from_beat, rate)
@@ -1808,6 +1945,7 @@ impl AppliedCurve<'_> {
                     .map(|position| source.region_at(MapPoint::new(source.stamp(), *position)));
                 diagnostics.push(serde_json::json!({
                     "at": at, "end": end, "frames": frames, "limit": plan.limit,
+                    "held_origin": plan.origin,
                     "law_at": law_at, "law_elapsed": law_elapsed,
                     "from_beat": from_beat, "to_beat": beat,
                     "from_position": format!("{from_position:?}"),
@@ -1826,7 +1964,7 @@ impl AppliedCurve<'_> {
                     "failures": &failures[before_failures..],
                 }));
             }
-            previous_offset = offset;
+            plan.previous_offset = offset;
             position += advance;
         }
         let reference = declared_binding_at(source, host, beat, frame_after(self.at, plan.limit)?)?;
@@ -2484,14 +2622,11 @@ impl QueueLaw {
             return Err("Queue planned(C) differs from independent prior source law".to_owned());
         }
         let cause = if commanded {
-            SlewCause::Commanded
+            SlewCause::Commanded { from: planned.1 }
         } else {
-            SlewCause::Drift {
-                from: planned.1,
-                limit: LinkConfig::default().slew_limit(),
-            }
+            SlewCause::Drift { from: planned.1 }
         };
-        let Some(Slew::Closes {
+        let Some(Slew::Corrects {
             curve,
             frames: deadline,
             ..
@@ -4605,6 +4740,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
             speed: 1.0,
             position: Duration::ZERO,
             duration: Some(Duration::from_secs(12)),
+            cached: Duration::ZERO,
             abr: None,
             metadata: kithara::decode::TrackMetadata::default(),
             mark: consumed.mark,
@@ -4745,6 +4881,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
         speed: 1.0,
         position: Duration::from_millis(2),
         duration: Some(Duration::from_secs(1)),
+        cached: Duration::ZERO,
         abr: None,
         metadata: kithara::decode::TrackMetadata::default(),
         mark: Some(mark),
@@ -4939,6 +5076,178 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
         );
     }
 
+    let source_grid = sync_source_grid(&model, rate, None).expect("declared source geometry");
+    let media = Duration::from_nanos(10_137);
+    for (commanded, from) in [
+        (true, 1.0005_f64),
+        (false, 1.0),
+        (false, 1.0005),
+        (true, 1.05),
+    ] {
+        let cause = if commanded {
+            SlewCause::Commanded { from }
+        } else {
+            SlewCause::Drift { from }
+        };
+        let Some(Slew::Corrects { curve, .. }) = slew(
+            &host,
+            &source_grid,
+            media,
+            SessionFrame::new(0),
+            LinkConfig::default().epsilon(),
+            cause,
+            plan_horizon(&host),
+        ) else {
+            panic!("declared phase correction");
+        };
+        terminal.at = When::At(SessionFrame::new(0));
+        terminal.curve = curve;
+        terminal.planned = Some(Ok((media, from)));
+        terminal.landing = None;
+        let verify = |command: &LinkSpeed, end| {
+            AppliedCurve {
+                command,
+                at: SessionFrame::new(0),
+            }
+            .verify_prefix(
+                &geometry,
+                &host,
+                std::ops::Bound::Included(SessionFrame::new(end)),
+                from,
+                commanded,
+            )
+            .expect("independent anchored prefix")
+            .2
+        };
+        let failures = verify(&terminal, 4);
+        assert!(
+            failures.is_empty(),
+            "commanded={commanded}, from={from}: {failures:?}"
+        );
+        if from == 1.05 {
+            assert_eq!(
+                analytic_parts(&terminal.curve).expect("legacy law")[0]
+                    .1
+                    .initial(),
+                1.0
+            );
+            continue;
+        }
+        let original = terminal.curve.clone();
+        let SpeedCurve::ApproachSteps(parts) = &mut terminal.curve else {
+            panic!("held frame has a remainder");
+        };
+        assert_eq!(parts[0].0, 0);
+        assert_eq!(
+            parts[0].1,
+            ExponentialApproach::new(from, from, 0.0).expect("held initial law")
+        );
+        assert_eq!(parts[1].0, 1);
+        Arc::make_mut(parts)[0].1 =
+            ExponentialApproach::new(from + 0.25, from + 0.25, 0.0).expect("wrong initial law");
+        let failures = verify(&terminal, 1);
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.contains("analytic law")),
+            "{failures:?}"
+        );
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.contains("partial area")),
+            "{failures:?}"
+        );
+        terminal.curve = original;
+        let SpeedCurve::ApproachSteps(parts) = &mut terminal.curve else {
+            panic!("held frame has a remainder");
+        };
+        *parts = parts
+            .iter()
+            .copied()
+            .filter(|(at, _)| *at != 1)
+            .collect::<Vec<_>>()
+            .into();
+        let failures = verify(&terminal, 2);
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.contains("analytic law")),
+            "{failures:?}"
+        );
+    }
+
+    let mut coalesced_raw = model.as_raw().clone();
+    coalesced_raw.beats = [
+        0.0, 0.5, 0.875, 1.25, 1.625, 2.0, 2.375, 2.75, 3.125, 3.5, 3.875, 4.25,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(ordinal, at)| GridBeat {
+        at,
+        ordinal: i64::try_from(ordinal).expect("fixture ordinal"),
+        confidence: None,
+    })
+    .collect();
+    coalesced_raw.downbeats.clear();
+    coalesced_raw.meter = None;
+    let coalesced_model = BeatGridModel::try_from(coalesced_raw).expect("equal-law crossing");
+    let coalesced_geometry = SourceGeometry::new(Arc::new(coalesced_model.clone()), rate, None)
+        .expect("equal-law source geometry");
+    let coalesced_grid =
+        sync_source_grid(&coalesced_model, rate, None).expect("equal-law source grid");
+    let coalesced_at = SessionFrame::new(23_999);
+    let coalesced_media = Duration::from_nanos(499_984_375);
+    let from = 0.75;
+    let Some(Slew::Corrects { curve, .. }) = slew(
+        &host,
+        &coalesced_grid,
+        coalesced_media,
+        coalesced_at,
+        LinkConfig::default().epsilon(),
+        SlewCause::Drift { from },
+        plan_horizon(&host),
+    ) else {
+        panic!("equal-law correction");
+    };
+    let SpeedCurve::ApproachSteps(parts) = curve else {
+        panic!("held source crossing has a remainder");
+    };
+    assert_eq!(parts[0].0, 0);
+    assert_eq!(parts[1].0, 1);
+    assert_eq!(
+        parts[0].1, parts[1].1,
+        "the held law and remainder are equal"
+    );
+    terminal.at = When::At(coalesced_at);
+    terminal.planned = Some(Ok((coalesced_media, from)));
+    terminal.landing = None;
+    terminal.curve = SpeedCurve::ApproachSteps(
+        parts
+            .iter()
+            .copied()
+            .filter(|(at, _)| *at != 1)
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    let proof = AppliedCurve {
+        command: &terminal,
+        at: coalesced_at,
+    }
+    .verify_prefix(
+        &coalesced_geometry,
+        &host,
+        std::ops::Bound::Included(coalesced_at + kithara::signal::FrameCount::new(4)),
+        from,
+        false,
+    )
+    .expect("coalesced constant prefix");
+    assert!(
+        proof.2.is_empty(),
+        "equal adjacent laws need no boundary: {:?}",
+        proof.2
+    );
+
     let mut raw = model.as_raw().clone();
     raw.beats = [0.0, 0.5, 0.75]
         .into_iter()
@@ -4966,7 +5275,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
     );
     let start = SessionFrame::new(23_998);
     let media = Duration::from_nanos(499_958_333);
-    let Some(Slew::Closes {
+    let Some(Slew::Corrects {
         curve, frames: end, ..
     }) = slew(
         &host,
@@ -4974,7 +5283,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
         media,
         start,
         LinkConfig::default().epsilon(),
-        SlewCause::Commanded,
+        SlewCause::Commanded { from: 1.0 },
         plan_horizon(&host),
     )
     else {

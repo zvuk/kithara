@@ -1668,9 +1668,10 @@ fn a_newer_dispatch_of_one_selection_supersedes_the_older() {
             "the dispatch group omits `{part}`: {group}"
         );
     }
+    assert!(group.ends_with("${{ (inputs.bench_preflight || '') != '' && '-preflight' || '' }}"));
     assert_eq!(
-        mapping_field(concurrency, "cancel-in-progress").as_bool(),
-        Some(true)
+        mapping_field(concurrency, "cancel-in-progress").as_str(),
+        Some("${{ (inputs.bench_preflight || '') == '' }}")
     );
 }
 
@@ -2241,6 +2242,72 @@ fn a_dispatched_narrowing_reaches_every_lane_it_runs() {
 }
 
 #[test]
+fn bench_parameters_reach_the_common_executor_as_data() {
+    let calls = local_workflow_calls();
+    let workflow = github_workflow("lane.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "run");
+    let step = named_step(job, "Run the lane");
+    let env = mapping_field(step, "env").as_mapping().unwrap();
+    let forwarding: Vec<_> = calls
+        .iter()
+        .filter(|(caller, job, callee, _)| {
+            (caller == "dispatch.yml" && callee == "run.yml" && job == "deep")
+                || (caller == "run.yml" && callee == "lane.yml")
+        })
+        .collect();
+    assert!(
+        forwarding
+            .iter()
+            .any(|(caller, _, _, _)| caller == "dispatch.yml")
+    );
+    assert!(
+        forwarding
+            .iter()
+            .any(|(caller, _, _, _)| caller == "run.yml")
+    );
+    for parameter in [
+        "bench_target",
+        "bench_filter",
+        "bench_ref",
+        "bench_base_ref",
+        "bench_preflight",
+    ] {
+        let dispatch = github_workflow("dispatch.yml");
+        assert_eq!(
+            dispatch["on"]["workflow_dispatch"]["inputs"][parameter]["default"].as_str(),
+            Some("")
+        );
+        for (caller, job, _, with) in &forwarding {
+            if parameter == "bench_preflight" && caller == "run.yml" && job != "run" {
+                assert!(!with.contains_key(parameter), "{caller}/{job}");
+                continue;
+            }
+            let expected = if caller == "dispatch.yml" {
+                format!("${{{{ inputs.{parameter} || '' }}}}")
+            } else {
+                format!("${{{{ inputs.{parameter} }}}}")
+            };
+            assert_eq!(
+                with.get(parameter).and_then(Value::as_str),
+                Some(expected.as_str()),
+                "{caller}/{job}"
+            );
+        }
+        let expected = format!("${{{{ inputs.{parameter} }}}}");
+        assert_eq!(
+            env.get(parameter.to_ascii_uppercase())
+                .and_then(Value::as_str),
+            Some(expected.as_str())
+        );
+    }
+    let script = mapping_field(step, "run").as_str().unwrap();
+    assert!(script.contains(
+        r#"if [ -n "$BENCH_TARGET" ] && [ -z "$BENCH_PREFLIGHT" ]; then export RUN_BENCHMARKS=1; fi"#
+    ));
+    assert!(!script.contains("inputs.bench_"));
+}
+
+#[test]
 fn a_request_for_one_lane_starts_nothing_beside_it() {
     let workflow = github_workflow("dispatch.yml");
     let jobs = workflow_jobs(&workflow);
@@ -2436,6 +2503,33 @@ fn a_checkout_never_fetches_every_branch() {
 }
 
 #[test]
+fn dependent_lane_downloads_only_selected_report_artifacts() {
+    let workflow = github_workflow("run.yml");
+    let dependent = workflow_job(workflow_jobs(&workflow), "dependent");
+    assert_eq!(
+        dependent["with"]["download"].as_str(),
+        Some("${{ join(matrix.download, '|') }}")
+    );
+
+    let workflow = github_workflow("lane.yml");
+    let download = named_step(
+        workflow_job(workflow_jobs(&workflow), "run"),
+        "Fetch what this lane reads",
+    );
+    assert_eq!(
+        download["if"].as_str(),
+        Some("${{ inputs.download != '' }}")
+    );
+    assert_action_repository(download, "actions/download-artifact");
+    assert_eq!(download["with"]["path"].as_str(), Some("artifacts"));
+    assert_eq!(
+        download["with"]["pattern"].as_str(),
+        Some("${{ format('@({0})-{1}-{2}', inputs.download, github.run_id, github.run_attempt) }}")
+    );
+    assert_ne!(download["with"]["merge-multiple"].as_bool(), Some(true));
+}
+
+#[test]
 fn lane_uploads_bootstrap_evidence_when_the_lane_has_not_started() {
     let workflow = github_workflow("lane.yml");
     let upload = named_step(
@@ -2573,6 +2667,306 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
         mapping_field(upload_inputs, "name").as_str(),
         Some("${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}")
     );
+}
+
+/// A report lane's executor names its job's copy only once it is copied, so
+/// the upload reads that copy alone, and a wanted report it did not name fails
+/// its own step instead of being skipped or read from the shared build.
+/// Whether the report is wanted is the lane step's own outcome, and the upload
+/// takes only the path the check step passed.
+#[cfg(unix)]
+#[test]
+fn a_report_lane_uploads_its_job_copy_and_fails_a_missing_one() -> anyhow::Result<()> {
+    let workflow = github_workflow("lane.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "run");
+    assert_eq!(
+        mapping_field(named_step(job, "Run the lane"), "id").as_str(),
+        Some("lane")
+    );
+    let check = named_step(job, "Check the lane's report");
+    assert_eq!(mapping_field(check, "id").as_str(), Some("report"));
+    let upload = named_step(job, "Upload the lane's report");
+    let with = mapping_field(upload, "with")
+        .as_mapping()
+        .expect("the lane upload has inputs");
+    assert_eq!(
+        mapping_field(with, "if-no-files-found").as_str(),
+        Some("error")
+    );
+    assert!(
+        step_position(job, "Run the lane") < step_position(job, "Check the lane's report")
+            && step_position(job, "Check the lane's report")
+                < step_position(job, "Upload the lane's report")
+    );
+    for step in [check, upload] {
+        assert!(
+            !mapping_field(step, "if")
+                .as_str()
+                .is_some_and(|condition| condition.contains("inputs.lane")),
+            "the executor picks a report by the catalog's field, not by a lane's name"
+        );
+    }
+
+    let copy = "/runner/temp/web-chromium-report-a1B2c3.chromium";
+    let mut cases = Vec::new();
+    for (outcome, when, failure, checked, report, uploaded) in [
+        // A failed lane wants its report and uploads only a copy that passed.
+        ("failure", "failure", true, true, "success", Some(copy)),
+        ("failure", "failure", true, true, "failure", None),
+        // A passing lane discarded the report, even when a later upload failed.
+        ("success", "failure", false, false, "skipped", None),
+        ("success", "failure", true, false, "skipped", None),
+        // A lane that never ran wrote nothing.
+        ("skipped", "failure", true, false, "skipped", None),
+        ("cancelled", "always", true, false, "skipped", None),
+        // A report wanted always is wanted from a passing lane too.
+        ("success", "always", false, true, "success", Some(copy)),
+        ("success", "always", false, true, "failure", None),
+        ("failure", "always", true, true, "success", Some(copy)),
+    ] {
+        cases.push(serde_json::json!({
+            "context": {
+                "steps.lane.outcome": outcome,
+                "steps.report.outcome": report,
+                "steps.report.outputs.path": if report == "success" { copy } else { "" },
+                // A short write left an ancestor ending as a report's name;
+                // only the check's own outcome and path decide the upload.
+                "env.KITHARA_LANE_REPORT": "/runner/job.chromium",
+                "inputs.artifact-when": when,
+                "inputs.artifact-report": "chromium",
+                "inputs.artifact-path": "",
+            },
+            "failure": failure,
+            "check": checked,
+            "uploaded": uploaded,
+        }));
+    }
+    // A path artifact keeps the job's failure as its signal.
+    for (outcome, when, failure, uploaded) in [
+        ("success", "failure", false, None),
+        ("failure", "failure", true, Some("target/log")),
+        ("success", "always", false, Some("target/log")),
+    ] {
+        cases.push(serde_json::json!({
+            "context": {
+                "steps.lane.outcome": outcome,
+                "steps.report.outcome": "skipped",
+                "steps.report.outputs.path": "",
+                "inputs.artifact-when": when,
+                "inputs.artifact-report": "",
+                "inputs.artifact-path": "target/log",
+            },
+            "failure": failure,
+            "check": false,
+            "uploaded": uploaded,
+        }));
+    }
+    let expression = |step: &Mapping, key: &str| {
+        mapping_field(step, key)
+            .as_str()
+            .expect("a workflow expression")
+            .trim_start_matches("${{ ")
+            .trim_end_matches(" }}")
+            .to_owned()
+    };
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            r#"import json
+import os
+
+for case in json.loads(os.environ["CASES"]):
+    functions = {
+        "always": lambda: True,
+        "failure": lambda: case["failure"],
+    }
+
+    def evaluate(expression):
+        for name, value in case["context"].items():
+            expression = expression.replace(name, repr(value))
+        expression = expression.replace("&&", " and ").replace("||", " or ")
+        return eval(expression, {"__builtins__": {}, **functions})
+
+    assert bool(evaluate(os.environ["CHECK"])) == case["check"], case
+    uploads = bool(evaluate(os.environ["UPLOAD"]))
+    assert uploads == (case["uploaded"] is not None), case
+    if uploads:
+        assert evaluate(os.environ["UPLOAD_PATH"]) == case["uploaded"], case
+"#,
+        ])
+        .env("CHECK", expression(check, "if"))
+        .env("UPLOAD", expression(upload, "if"))
+        .env("UPLOAD_PATH", expression(with, "path"))
+        .env("CASES", serde_json::to_string(&cases)?)
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    Ok(())
+}
+
+/// The report check passes only the whole copy the lane made in this job's
+/// `RUNNER_TEMP`, and tells the upload that path alone. The job's storage sits
+/// under directories whose names end as a report's does, so a value cut short
+/// at an ancestor ends that way too. A copy the check cannot read through is
+/// not whole, and a `RUNNER_TEMP` whose name reads as a pattern still holds
+/// a whole copy, told to the upload escaped for its glob.
+#[cfg(unix)]
+#[test]
+fn a_report_check_passes_only_the_whole_copy_in_the_jobs_storage() -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let workflow = github_workflow("lane.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "run");
+    let check = named_step(job, "Check the lane's report");
+    let script = mapping_field(check, "run")
+        .as_str()
+        .expect("the report check runs a script");
+    let root = tempfile::tempdir()?;
+    let job_root = root.path().canonicalize()?.join("job.chromium");
+    let temp = job_root.join("temp.chromium");
+    let whole = temp.join("web-chromium-report-a1B2c3.chromium");
+    fs::create_dir_all(whole.join("web-chromium-netlog"))?;
+    fs::write(whole.join("web-chromium.log"), "driver")?;
+    fs::write(whole.join("web-chromium-netlog/web_observer.jsonl"), "net")?;
+    // In the job's own storage, named as a copy is, yet not a whole report.
+    let shaped = |name: &str, files: &[(&str, &str)]| -> anyhow::Result<String> {
+        let dir = temp.join(name);
+        fs::create_dir(&dir)?;
+        for (file, bytes) in files {
+            let path = dir.join(file);
+            fs::create_dir_all(path.parent().expect("a file in the copy"))?;
+            fs::write(path, bytes)?;
+        }
+        Ok(dir.display().to_string())
+    };
+    let unrelated = shaped("unrelated.chromium", &[("payload.txt", "payload")])?;
+    let no_driver = shaped(
+        "web-chromium-report-p6Q7r8.chromium",
+        &[("web-chromium-netlog/web_observer.jsonl", "net")],
+    )?;
+    let empty_driver = shaped(
+        "web-chromium-report-s9T0u1.chromium",
+        &[
+            ("web-chromium.log", ""),
+            ("web-chromium-netlog/web_observer.jsonl", "net"),
+        ],
+    )?;
+    let extra = shaped(
+        "web-chromium-report-v2W3x4.chromium",
+        &[
+            ("web-chromium.log", "driver"),
+            ("web-chromium-netlog/web_observer.jsonl", "net"),
+            ("payload.txt", "payload"),
+        ],
+    )?;
+    let empty_netlog = shaped(
+        "web-chromium-report-y5Z6a7.chromium",
+        &[
+            ("web-chromium.log", "driver"),
+            ("web-chromium-netlog/web_observer.jsonl", ""),
+        ],
+    )?;
+    let empty = temp.join("web-chromium-report-d4E5f6.chromium");
+    fs::create_dir(&empty)?;
+    let linked = temp.join("web-chromium-report-g7H8i9.chromium");
+    std::os::unix::fs::symlink(&whole, &linked)?;
+    let missing = temp.join("web-chromium-report-m3N4o5.chromium");
+    let foreign = root
+        .path()
+        .canonicalize()?
+        .join("web-chromium-report-j0K1l2.chromium");
+    fs::create_dir(&foreign)?;
+    fs::write(foreign.join("web-chromium.log"), "foreign")?;
+    // Unreadable to the check, though it holds a whole network log.
+    let unreadable = shaped(
+        "web-chromium-report-b8C9d0.chromium",
+        &[
+            ("web-chromium.log", "driver"),
+            ("web-chromium-netlog/web_observer.jsonl", "net"),
+        ],
+    )?;
+    let locked = Path::new(&unreadable).join("web-chromium-netlog");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))?;
+    // A whole copy in a RUNNER_TEMP whose name the upload's glob would read
+    // as a pattern, told escaped so the glob reads it back as written.
+    let patterned = |name: &str, escaped: &str| -> anyhow::Result<_> {
+        let runner_temp = root.path().canonicalize()?.join(name);
+        let copy = runner_temp.join("web-chromium-report-e1F2g3.chromium");
+        fs::create_dir_all(copy.join("web-chromium-netlog"))?;
+        fs::write(copy.join("web-chromium.log"), "driver")?;
+        fs::write(copy.join("web-chromium-netlog/web_observer.jsonl"), "net")?;
+        let glob = format!(
+            "path={}/{escaped}/web-chromium-report-e1F2g3.chromium\n",
+            root.path().canonicalize()?.display()
+        );
+        Ok((runner_temp, copy.display().to_string(), Some(glob)))
+    };
+    let whole_text = whole.to_str().expect("a UTF-8 path").to_owned();
+    let cases = [
+        (whole_text.clone(), true),
+        (String::new(), false),
+        (
+            whole_text[..whole_text.len() - ".chromium".len()].to_owned(),
+            false,
+        ),
+        (whole_text[..whole_text.len() - 3].to_owned(), false),
+        (temp.display().to_string(), false),
+        (job_root.display().to_string(), false),
+        (empty.display().to_string(), false),
+        (missing.display().to_string(), false),
+        (linked.display().to_string(), false),
+        (foreign.display().to_string(), false),
+        (unrelated, false),
+        (no_driver, false),
+        (empty_driver, false),
+        (extra, false),
+        (empty_netlog, false),
+        (unreadable, false),
+    ]
+    .map(|(named, passes)| {
+        let told = passes.then(|| format!("path={named}\n"));
+        (temp.clone(), named, told)
+    })
+    .into_iter()
+    .chain([
+        patterned("temp[1]", "temp[[]1]")?,
+        patterned(r"t*e?m\p[x] y", r"t[*]e[?]m\\p[[]x] y")?,
+    ]);
+    let github_output = root.path().join("output");
+    let checked = cases
+        .map(|(runner_temp, named, expected)| {
+            fs::write(&github_output, "")?;
+            let status = Command::new("bash")
+                .args([
+                    "--noprofile",
+                    "--norc",
+                    "-e",
+                    "-o",
+                    "pipefail",
+                    "-c",
+                    script,
+                ])
+                .env("REPORT", "chromium")
+                .env("RUNNER_TEMP", &runner_temp)
+                .env("GITHUB_OUTPUT", &github_output)
+                .env("KITHARA_LANE_REPORT", &named)
+                .output()?;
+            Ok((named, expected, status, fs::read_to_string(&github_output)?))
+        })
+        .collect::<anyhow::Result<Vec<_>>>();
+    // Readable again before any case is judged, so the fixture can go.
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755))?;
+    let wrong: Vec<_> = checked?
+        .into_iter()
+        .filter(|(_, expected, status, told)| {
+            status.status.success() != expected.is_some()
+                || told != expected.as_deref().unwrap_or_default()
+        })
+        .map(|(named, expected, status, told)| {
+            format!("{named}: should tell {expected:?}, told {told:?}, {status:?}")
+        })
+        .collect();
+    assert!(wrong.is_empty(), "judged wrongly:\n{}", wrong.join("\n"));
+    Ok(())
 }
 
 #[test]
@@ -2783,6 +3177,11 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         assert!(
             with.get("isolated-target").is_none(),
             "the fan-out still decides where a lane builds"
+        );
+        assert_eq!(
+            mapping_field(with, "artifact-report").as_str(),
+            Some("${{ matrix.artifact.report || '' }}"),
+            "the fan-out loses the lane's report"
         );
     }
     assert_eq!(
@@ -3075,6 +3474,161 @@ fn windows_runner_context_is_bound_only_after_runner_assignment() {
                 .unwrap()
                 .contains("runner.temp")
         );
+    }
+}
+
+const HANG_DUMP_DIR: &str = "KITHARA_HANG_DUMP_DIR";
+const HANG_PREKILL: &str = "KITHARA_HANG_PREKILL_SECS";
+
+/// Why a Linux lane would lose its hang dumps or mix in another job's.
+///
+/// A step that names a dump directory, or arms the pre-kill dump, writes
+/// dumps. They belong in the job's own checkout and in the lane's artifact.
+/// The checkout's `target` is a link into a lane slot that the job releases
+/// before its artifacts upload and that later jobs of the lane reuse.
+fn hang_dump_violations(name: &str, lane: &toml::Value) -> Vec<String> {
+    let uploaded: Vec<&Path> = lane
+        .get("artifact")
+        .and_then(|artifact| artifact.get("path"))
+        .and_then(toml::Value::as_str)
+        .into_iter()
+        .flat_map(str::lines)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(Path::new)
+        .collect();
+    let mut violations = Vec::new();
+    for env in lane
+        .get("steps")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|step| step.get("env"))
+    {
+        let Some(dir) = env.get(HANG_DUMP_DIR).and_then(toml::Value::as_str) else {
+            if env.get(HANG_PREKILL).is_some() {
+                violations.push(format!(
+                    "`{name}` arms the pre-kill dump without {HANG_DUMP_DIR}"
+                ));
+            }
+            continue;
+        };
+        let Some(relative) = dir.strip_prefix("{root}/").map(Path::new) else {
+            violations.push(format!(
+                "`{name}` writes hang dumps outside its checkout: {dir}"
+            ));
+            continue;
+        };
+        if relative.starts_with("target") {
+            violations.push(format!(
+                "`{name}` writes hang dumps into the shared build slot: {dir}"
+            ));
+        }
+        if !uploaded.iter().any(|path| relative.starts_with(path)) {
+            violations.push(format!(
+                "`{name}` does not upload its hang dumps from {}",
+                relative.display()
+            ));
+        }
+    }
+    violations
+}
+
+fn runs_on_linux(lane: &toml::Value) -> bool {
+    match lane.get("os") {
+        Some(toml::Value::String(os)) => os == "linux",
+        Some(toml::Value::Array(os)) => os.iter().any(|os| os.as_str() == Some("linux")),
+        _ => false,
+    }
+}
+
+#[test]
+fn every_linux_lane_uploads_its_own_hang_dumps() {
+    let root = workspace_root();
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let lanes = config["ext"]["ci"]["lanes"]
+        .as_table()
+        .expect("the catalog is a table");
+
+    let mut writers = BTreeSet::new();
+    let mut violations = Vec::new();
+    for (name, lane) in lanes.iter().filter(|(_, lane)| runs_on_linux(lane)) {
+        let writes = lane
+            .get("steps")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|step| step.get("env"))
+            .any(|env| env.get(HANG_DUMP_DIR).is_some() || env.get(HANG_PREKILL).is_some());
+        if writes {
+            writers.insert(name.as_str());
+        }
+        violations.extend(hang_dump_violations(name, lane));
+    }
+
+    assert!(!writers.is_empty(), "no Linux lane writes hang dumps");
+    assert!(violations.is_empty(), "{violations:#?}");
+}
+
+#[test]
+fn a_linux_lane_that_loses_or_mixes_its_hang_dumps_is_named() {
+    for (lane, expected) in [
+        (
+            r#"
+            artifact = { name = "dumps", path = ".ci-artifacts/hang", when = "failure" }
+            steps = [{ args = ["test", "run"], env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang", KITHARA_HANG_PREKILL_SECS = "110" } }]
+            "#,
+            None,
+        ),
+        (
+            r#"
+            artifact = { name = "dumps", path = ".ci-artifacts/hang", when = "failure" }
+            steps = [{ args = ["test", "run"], env = { KITHARA_HANG_PREKILL_SECS = "110" } }]
+            "#,
+            Some("arms the pre-kill dump without KITHARA_HANG_DUMP_DIR"),
+        ),
+        (
+            r#"
+            artifact = { name = "dumps", path = "target/hang", when = "failure" }
+            steps = [{ args = ["test", "run"], env = { KITHARA_HANG_DUMP_DIR = "{root}/target/hang" } }]
+            "#,
+            Some("writes hang dumps into the shared build slot"),
+        ),
+        (
+            r#"
+            artifact = { name = "dumps", path = ".ci-artifacts/hang", when = "failure" }
+            steps = [{ args = ["test", "run"], env = { KITHARA_HANG_DUMP_DIR = "/tmp/hang" } }]
+            "#,
+            Some("writes hang dumps outside its checkout"),
+        ),
+        (
+            r#"
+            artifact = { name = "dumps", path = ".ci-artifacts/junit", when = "failure" }
+            steps = [{ args = ["test", "run"], env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } }]
+            "#,
+            Some("does not upload its hang dumps"),
+        ),
+        (
+            r#"
+            steps = [{ args = ["test", "run"], env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } }]
+            "#,
+            Some("does not upload its hang dumps"),
+        ),
+    ] {
+        let lane: toml::Value = toml::from_str(lane).expect("the case is valid TOML");
+        let violations = hang_dump_violations("case", &lane);
+        match expected {
+            None => assert!(violations.is_empty(), "{violations:#?}"),
+            Some(expected) => assert!(
+                violations
+                    .iter()
+                    .any(|violation| violation.contains(expected)),
+                "expected `{expected}` in {violations:#?}"
+            ),
+        }
     }
 }
 

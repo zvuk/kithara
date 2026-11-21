@@ -2,8 +2,8 @@ use kithara_command::{
     Batch, Live, LiveError, Outcome, Port, Receipt, Rejection, SendError, Sender, Seq, When,
 };
 use kithara_render::{
-    DispatcherCommand, DispatcherProtocol, LaneCommand, LaneFrame, LaneId, LaneProtocol,
-    LoadRequest, ServiceClass,
+    DispatcherCommand, DispatcherProtocol, LaneFrame, LaneId, LaneProtocol, LoadRequest,
+    ServiceClass,
     bridge::{DeckEvent, DeckPart, DeckProtocol, Slot},
 };
 pub use kithara_signal::Bound;
@@ -17,7 +17,7 @@ use crate::{
 /// One loaded track or a deck built of them: it changes its own state on the
 /// owner's thread and reaches the executors only through the [`Outbox`] it is
 /// lent.
-pub trait Player<S> {
+pub trait Player {
     /// What the player is told to do.
     type Command;
     /// What the player shows of itself.
@@ -36,16 +36,16 @@ pub trait Player<S> {
     fn apply(
         &mut self,
         command: Self::Command,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError>;
 
     /// Takes what an executor answered: what the player holds from it moves in,
     /// and the outcome goes up.
-    fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled;
+    fn settle(&mut self, receipt: TrackReceipt<'_>, out: &mut Outbox<'_>) -> Settled;
 
     /// One step of session time: deadlines and the receipts of the player's
     /// own lane.
-    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>);
+    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_>);
 
     fn snapshot(&self) -> Self::Snapshot;
 }
@@ -55,9 +55,9 @@ pub trait Player<S> {
 ///
 /// Inside [`Outbox::together`] every deck part goes into one batch, so the
 /// halves of a transition two players send apply on one frame or not at all.
-pub struct Outbox<'a, S> {
+pub struct Outbox<'a> {
     deck: &'a mut dyn Port<DeckProtocol>,
-    dispatcher: &'a mut Sender<DispatcherProtocol<ResourceLoad<S>>>,
+    dispatcher: &'a mut Sender<DispatcherProtocol<ResourceLoad>>,
     group: Option<Group>,
     pass: Option<DeckPass<'a>>,
     dispatches: Option<&'a mut Vec<Seq>>,
@@ -74,30 +74,31 @@ struct Group {
 
 type GroupResult<R> = Result<(R, Option<Seq>), (PlayError, Vec<DeckPart>)>;
 
-impl<'a, S> Outbox<'a, S> {
+impl<'a> Outbox<'a> {
     pub(crate) fn lane(
         sender: &mut Sender<LaneProtocol>,
         at: When<LaneFrame>,
-        commands: Vec<LaneCommand>,
-    ) -> Result<Seq, PlayError> {
-        sender
+        batch: Batch<LaneProtocol>,
+    ) -> Result<(Seq, Batch<LaneProtocol>), PlayError> {
+        let seq = sender
             .send(
                 at,
                 Batch {
-                    basis: Vec::new(),
-                    commands,
+                    basis: batch.basis.clone(),
+                    commands: batch.commands.clone(),
                 },
             )
             .map_err(|error| match error {
                 SendError::Full(_) => PlayError::Full("lane"),
                 SendError::Target(_) | SendError::Closed(_) => PlayError::Closed,
-            })
+            })?;
+        Ok((seq, batch))
     }
 
     #[must_use]
     pub fn new(
         deck: &'a mut dyn Port<DeckProtocol>,
-        dispatcher: &'a mut Sender<DispatcherProtocol<ResourceLoad<S>>>,
+        dispatcher: &'a mut Sender<DispatcherProtocol<ResourceLoad>>,
     ) -> Self {
         Self {
             deck,
@@ -139,7 +140,7 @@ impl<'a, S> Outbox<'a, S> {
     }
 }
 
-impl<'a, S> Outbox<'a, S> {
+impl<'a> Outbox<'a> {
     pub fn mix(
         &mut self,
         at: When<SessionFrame>,
@@ -175,57 +176,57 @@ impl<'a, S> Outbox<'a, S> {
     }
 
     pub fn eq(&mut self, parts: Vec<DeckEqChange>) -> Result<Option<Seq>, PlayError> {
-        self.deck(When::Next, parts.into_iter().map(DeckPart::Eq).collect())
+        self.eq_at(When::Next, parts)
     }
 
-    /// Submit a filter knob program against the observed output stream and knob authority.
+    /// Sends an atomic EQ batch for the requested mixer frame.
     /// # Errors
-    /// Refuses unavailable output state, insufficient delivery lead or command capacity.
-    pub fn filter_program(
+    /// Returns an admission failure when the deck cannot accept the batch.
+    pub fn eq_at(
         &mut self,
-        program: crate::FilterProgram,
+        at: When<SessionFrame>,
+        parts: Vec<DeckEqChange>,
     ) -> Result<Option<Seq>, PlayError> {
+        self.deck(at, parts.into_iter().map(DeckPart::Eq).collect())
+    }
+
+    /// Sends channel programs as one atomic batch on the observed mixer axis.
+    /// # Errors
+    /// Refuses unavailable parameters or output axes, late starts and full delivery.
+    pub fn deck_programs(
+        &mut self,
+        programs: Vec<crate::DeckProgram>,
+    ) -> Result<Option<Seq>, PlayError> {
+        let Some(at) = programs.first().map(crate::DeckProgram::start) else {
+            return Ok(None);
+        };
         let pass = self.pass.ok_or(PlayError::NotReady)?;
-        let binding = pass.deck.filter.binding().ok_or(PlayError::NotReady)?;
-        let authority = pass.deck.filter.authority();
-        self.deck(
-            When::At(program.start()),
-            vec![DeckPart::FilterProgram {
-                binding,
-                authority,
+        let epoch = pass.deck.epoch.ok_or(PlayError::NotReady)?;
+        let mut parts: Vec<DeckPart> = Vec::with_capacity(programs.len());
+        for program in programs {
+            if let crate::DeckParameter::EqBand { band, .. } = program.parameter()
+                && band >= pass.deck.eq.bands()
+            {
+                return Err(PlayError::EqBandOutOfRange {
+                    band,
+                    bands: pass.deck.eq.bands(),
+                });
+            }
+            let field = pass
+                .deck
+                .parameter(program.parameter())
+                .ok_or(PlayError::NotReady)?;
+            parts.push(DeckPart::Program {
+                epoch,
+                authority: field.authority(),
                 program,
-            }],
-        )
-    }
-
-    /// Send an EQ trajectory on the layout and authority last observed by this pass.
-    /// # Errors
-    /// Refuses an unavailable band/layout/clock or insufficient command delivery lead.
-    pub fn eq_gain_program(
-        &mut self,
-        program: crate::EqGainProgram,
-    ) -> Result<Option<Seq>, PlayError> {
-        let pass = self.pass.ok_or(PlayError::NotReady)?;
-        let band = program.band();
-        if band >= pass.deck.eq.bands() {
-            return Err(PlayError::EqBandOutOfRange {
-                band,
-                bands: pass.deck.eq.bands(),
             });
         }
-        let binding = pass.deck.eq.binding().ok_or(PlayError::NotReady)?;
-        let authority = pass.deck.eq.authority(band);
-        self.deck(
-            When::At(program.start()),
-            vec![DeckPart::EqProgram {
-                binding,
-                authority,
-                program,
-            }],
-        )
+        self.deck_owned(When::At(at), parts)
+            .map_err(|(error, _parts)| error)
     }
 
-    pub fn eq_layout(
+    pub fn eq_layout<S>(
         &mut self,
         pools: &kithara_bufpool::PoolRegion<S>,
         bands: &[crate::EqBandConfig],
@@ -240,7 +241,7 @@ impl<'a, S> Outbox<'a, S> {
     }
 }
 
-impl<'a, S> Outbox<'a, S> {
+impl<'a> Outbox<'a> {
     pub fn notify_interruption(&mut self, kind: InterruptionKind) -> Result<bool, PlayError> {
         let (suspended_at, bus, blocks) = self.session.as_mut().ok_or(PlayError::NotReady)?;
         if matches!(kind, InterruptionKind::Began) {
@@ -275,10 +276,10 @@ impl<'a, S> Outbox<'a, S> {
         self.dispatcher.available()
     }
 
-    fn check_when(&self, at: When<SessionFrame>) -> Result<(), PlayError> {
+    pub(super) fn check_when(&self, at: When<SessionFrame>) -> Result<(), PlayError> {
         if let When::At(frame) = at {
             let pass = self.pass.ok_or(PlayError::Untimed)?;
-            if frame < pass.deck_earliest() {
+            if frame < pass.deck.at {
                 return Err(PlayError::Late);
             }
         }
@@ -438,7 +439,7 @@ impl<'a, S> Outbox<'a, S> {
     /// # Errors
     ///
     /// Returns [`PlayError::Full`] when the dispatcher has no room.
-    pub(crate) fn load(&mut self, request: LoadRequest<ResourceLoad<S>>) -> Result<Seq, PlayError> {
+    pub(crate) fn load(&mut self, request: LoadRequest<ResourceLoad>) -> Result<Seq, PlayError> {
         self.dispatch(DispatcherCommand::Load(Box::new(request)))
     }
 
@@ -455,7 +456,7 @@ impl<'a, S> Outbox<'a, S> {
         self.dispatch(DispatcherCommand::SetPriority(lane, class))
     }
 
-    fn dispatch(&mut self, command: DispatcherCommand<ResourceLoad<S>>) -> Result<Seq, PlayError> {
+    fn dispatch(&mut self, command: DispatcherCommand<ResourceLoad>) -> Result<Seq, PlayError> {
         let batch = Batch {
             basis: Vec::new(),
             commands: vec![command],
@@ -471,6 +472,26 @@ impl<'a, S> Outbox<'a, S> {
             dispatches.push(seq);
         }
         Ok(seq)
+    }
+
+    /// Aligns a replacement to the sounding track in the current timed batch.
+    ///
+    /// # Errors
+    /// Requires a timed group owned by the source change.
+    pub fn continue_source(&mut self, from: Slot, to: Slot) -> Result<(), PlayError> {
+        let at = self.group.as_ref().ok_or(PlayError::Untimed)?.at;
+        let window = self.pass().ok_or(PlayError::Untimed)?.deck_delivery;
+        self.deck(at, vec![DeckPart::ContinueSource { from, to, window }])?;
+        Ok(())
+    }
+
+    /// The explicit source-entry role of the current timed group, if any.
+    #[must_use]
+    pub fn source_continuation(&self) -> Option<(Slot, Slot)> {
+        let DeckPart::ContinueSource { from, to, .. } = self.group.as_ref()?.parts.first()? else {
+            return None;
+        };
+        Some((*from, *to))
     }
 
     pub fn chain(&mut self, from: Slot, to: Slot) -> Result<Seq, PlayError> {
@@ -509,13 +530,14 @@ pub(crate) fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
         | DeckPart::Fade { slot, .. }
         | DeckPart::Adopt { slot, .. }
         | DeckPart::Replace { slot, .. } => (Some(slot), None),
-        DeckPart::Chain { from, to } => (Some(from), Some(to)),
+        DeckPart::Chain { from, to } | DeckPart::ContinueSource { from, to, .. } => {
+            (Some(from), Some(to))
+        }
         DeckPart::Clock { .. }
         | DeckPart::Mix(_)
         | DeckPart::Eq(_)
         | DeckPart::Fx(_)
-        | DeckPart::FilterProgram { .. }
-        | DeckPart::EqProgram { .. }
+        | DeckPart::Program { .. }
         | DeckPart::GainProgram { .. }
         | DeckPart::Returned(_) => (None, None),
     };
@@ -547,12 +569,12 @@ fn deck_sent_owned(
 
 /// What became of a batch, as a player reports it up.
 #[derive(Clone, Debug)]
-pub enum Settled {
+pub enum Settled<At = SessionFrame> {
     /// The receipt is not about this player, or its outcome has not come yet.
     Pending,
     Applied {
         seq: Seq,
-        at: SessionFrame,
+        at: At,
     },
     Rejected {
         seq: Seq,
@@ -580,17 +602,17 @@ impl SeekBatch {
 /// What comes back to a player: a receipt of its deck's mixer, shared by every
 /// player whose slot the batch names; a receipt of the dispatcher; or an event
 /// of its slot. Its own lane's receipts it reads itself.
-pub enum TrackReceipt<'r, S> {
+pub enum TrackReceipt<'r> {
     Deck {
         seq: Seq,
         outcome: &'r Outcome<DeckProtocol>,
         batch: &'r mut Batch<DeckProtocol>,
     },
-    Loaded(Receipt<DispatcherProtocol<ResourceLoad<S>>>),
+    Loaded(Receipt<DispatcherProtocol<ResourceLoad>>),
     Event(DeckEvent),
 }
 
-impl<S> TrackReceipt<'_, S> {
+impl TrackReceipt<'_> {
     /// Whether this is about `slot`: a deck batch whose basis names it, or an
     /// event of it.
     #[must_use]

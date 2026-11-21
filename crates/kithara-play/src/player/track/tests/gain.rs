@@ -21,7 +21,7 @@ fn knot(at: i64, value: f64, shape: CurveShape) -> ParameterKnot {
 fn settle_outputs(
     tracks: &mut [Track],
     mixer: &mut mock::MixerRig,
-    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad>>,
     at: SessionFrame,
 ) {
     while let Some(reply) = mixer.ring.receipt() {
@@ -47,7 +47,7 @@ fn settle_outputs(
 
 struct PreparedOutputs {
     mixer: mock::MixerRig,
-    dispatcher: Sender<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    dispatcher: Sender<DispatcherProtocol<ResourceLoad>>,
     tracks: [Track; 2],
     _lanes: [Inbox<LaneProtocol>; 2],
 }
@@ -73,7 +73,7 @@ fn prepared_outputs() -> PreparedOutputs {
                 DeckPart::Attach {
                     slot,
                     item_id: track.item,
-                    pcm: pcm_samples("prepared combined PCM", 1.0, &[sample; 512], true),
+                    pcm: pcm_samples(1.0, &[sample; 512], true),
                     segment: SegmentId::FIRST,
                 },
             )
@@ -314,11 +314,20 @@ fn future_gain_program_cannot_mute_a_reused_attachment() {
             DeckPart::Replace {
                 slot: A,
                 item_id: tracks[0].item,
-                pcm: pcm_samples("replacement PCM", 1.0, &[0.125; 512], true),
+                pcm: pcm_samples(1.0, &[0.125; 512], true),
                 segment: SegmentId::FIRST,
             },
         )
         .expect("replacement in the same slot and segment");
+    let start = mixer
+        .send(
+            When::At(frame(ORIGIN + 4)),
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        )
+        .expect("the replacement's own start");
     let (mut left, mut right) = ([0.0; 8], [0.0; 8]);
     assert_no_alloc::assert_no_alloc(|| {
         mixer
@@ -341,8 +350,13 @@ fn future_gain_program_cannot_mute_a_reused_attachment() {
         let (outcome, _batch) = receipt.into();
         received.push((seq, outcome));
     }
-    assert_eq!(received.len(), 2);
+    assert_eq!(received.len(), 3);
     assert!(received.iter().any(|(seq, outcome)| *seq == replacement && matches!(outcome, Outcome::Applied { .. })));
+    assert!(
+        received
+            .iter()
+            .any(|(seq, outcome)| *seq == start && matches!(outcome, Outcome::Applied { .. }))
+    );
     assert!(received.iter().any(|(seq, outcome)| *seq == stale
         && matches!(outcome, Outcome::Rejected(Rejection::Refused(DeckRefusal::Outdated { slot })) if *slot == A)));
     assert_eq!(mixer.ends.snapshot.read().slots[0].output.gain(), 1.0);
@@ -517,11 +531,20 @@ fn muted_complete_output_stays_muted_in_the_evicted_consumer_tail() {
             DeckPart::Replace {
                 slot: A,
                 item_id: tracks[0].item,
-                pcm: pcm_samples("unmuted replacement", 1.0, &[0.125; 512], true),
+                pcm: pcm_samples(1.0, &[0.125; 512], true),
                 segment: SegmentId::FIRST,
             },
         )
         .expect("new source after the old complete output was muted");
+    mixer
+        .send(
+            When::At(frame(ORIGIN + 7)),
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        )
+        .expect("the new source's own start");
     let (mut left, mut right) = ([0.0; 16], [0.0; 16]);
     assert_no_alloc::assert_no_alloc(|| {
         mixer

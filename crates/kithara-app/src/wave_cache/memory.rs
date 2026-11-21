@@ -136,10 +136,15 @@ impl TrackAnalysisCache {
     }
 
     /// An analysis with no meaningful slots would otherwise be served as emptiness forever on later
-    /// hits, so it is skipped rather than memoized in either tier.
+    /// hits, so it is skipped rather than memoized in either tier. A key tag is a meaningful slot:
+    /// it settles the key whether or not the pass heard one.
     pub(crate) fn put(&mut self, target: AnalysisTarget, progress: AnalysisProgress) {
         let analysis = progress.analysis();
-        if analysis.waveform().is_none() && analysis.beat().is_none() && !progress.is_resumable() {
+        if analysis.waveform().is_none()
+            && analysis.beat().is_none()
+            && analysis.fingerprint().key().is_none()
+            && !progress.is_resumable()
+        {
             return;
         }
         self.remember(target, progress);
@@ -202,7 +207,7 @@ mod tests {
         },
         bufpool::{OverallBudget, PoolConfig},
         file::File,
-        prelude::ResourceSrc,
+        play::ResourceSrc,
     };
     use kithara_test_utils::kithara;
 
@@ -213,13 +218,16 @@ mod tests {
     };
 
     fn fingerprint(wave: &str, beat: &str) -> AnalysisFingerprint {
-        AnalysisFingerprint::new(Some(beat), Some(wave))
+        AnalysisFingerprint::builder()
+            .beat(beat)
+            .waveform(wave)
+            .build()
     }
 
     fn fp() -> AnalysisFingerprint {
         const BEAT_TAG: &str = "beat:test:v1";
 
-        fingerprint("wave:native:max1500:v2", BEAT_TAG)
+        fingerprint("wave:fold1:v3", BEAT_TAG)
     }
 
     fn rate() -> NonZeroU32 {
@@ -600,6 +608,26 @@ mod tests {
             cache.get(&target, rate()).is_none(),
             "an analysis with no slots must not be served from the cache"
         );
+    }
+
+    #[kithara::test]
+    fn a_settled_key_answer_without_a_key_is_memoized() {
+        let store = memory_store();
+        let target = target(&store, "root_silent");
+        let mut cache = analysis_cache();
+        let silent = TrackAnalysis::builder()
+            .token("assets/track.analysis".into())
+            .revision(7)
+            .source_sample_rate(rate())
+            .extent(1_000)
+            .settled(true)
+            .fingerprint(AnalysisFingerprint::builder().key("key:test:v1").build())
+            .build();
+        cache.put(target.clone(), progress(silent));
+        let served = cache
+            .get(&target, rate())
+            .expect("a settled key answer is served, so the silent track is not analysed again");
+        assert_eq!(served.analysis().key(), None);
     }
 
     #[kithara::test]

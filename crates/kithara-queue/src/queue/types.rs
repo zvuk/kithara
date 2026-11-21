@@ -82,6 +82,9 @@ pub(super) enum Continuation {
     Load(Seq),
     Entry(Seq),
     Pause(Seq),
+    /// A replacement seated stopped on its slot: the executor owns the
+    /// exchange until its receipt settles.
+    Seat(Seq),
     Removal {
         seq: Seq,
         handover: Seq,
@@ -93,9 +96,11 @@ pub(super) enum Continuation {
 impl Continuation {
     pub(super) fn seq(self) -> Seq {
         match self {
-            Self::Load(seq) | Self::Entry(seq) | Self::Pause(seq) | Self::Removal { seq, .. } => {
-                seq
-            }
+            Self::Load(seq)
+            | Self::Entry(seq)
+            | Self::Pause(seq)
+            | Self::Seat(seq)
+            | Self::Removal { seq, .. } => seq,
         }
     }
 }
@@ -120,11 +125,21 @@ pub(super) struct Target {
 
 impl Target {
     pub(super) fn set_playing(&mut self, playing: bool) {
-        if self.playing != playing && !matches!(self.continued, Some(Continuation::Removal { .. }))
+        if self.playing != playing
+            && !matches!(
+                self.continued,
+                Some(Continuation::Removal { .. } | Continuation::Seat(_))
+            )
         {
             self.continued = None;
         }
         self.playing = playing;
+    }
+
+    /// Whether a replacement seat is in flight; its receipt alone applies
+    /// the requested play state.
+    pub(super) fn seated(&self) -> bool {
+        matches!(self.continued, Some(Continuation::Seat(_)))
     }
 }
 

@@ -17,9 +17,10 @@ use kithara_play::{
     DeckMixSettings, DeckMixerConfig, DeckPart, DeckPass, HostedDeck, Outbox, PlayWorker, Player,
     ResourceConfig, ResourceLoad, ResourcePrep, ResourceSrc, TrackReceipt, mock, mock::DeckRig,
 };
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_render::{Dispatched, DispatcherCommand, PcmPacket, mock::PacketRing};
+use kithara_signal::{AudioChunk, FrameCount, SessionFrame};
 pub(crate) use kithara_test_utils::bufpool::{TestPools, pools};
-use kithara_test_utils::{TestTempDir, kithara};
+use kithara_test_utils::{TestTempDir, bufpool::sample_buffer, kithara};
 use kithara_warp::WarpConfig;
 use kithara_worker::Worker;
 
@@ -99,7 +100,7 @@ pub(crate) fn with_outbox<Value, Run>(
     run: Run,
 ) -> Value
 where
-    Run: FnOnce(&mut Queue<TestPools>, &mut Outbox<'_, TestPools>) -> Value,
+    Run: FnOnce(&mut Queue<TestPools>, &mut Outbox<'_>) -> Value,
 {
     let output = mock::output(None).get();
     let deck = queue.deck.mixer.clone();
@@ -253,14 +254,18 @@ async fn decoded_fixture(
         &source,
         kithara_test_fixtures::assets::fixed_constant_wav_cd_half_1024().bytes(),
     );
-    let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
-        .downloader(downloader())
-        .store(store)
-        .build();
-    let prepared = prep
-        .prepare(config, &mock::output(None).get())
+    let config =
+        ResourceConfig::<TestPools>::for_src(ResourceSrc::parse(&source).expect("fixture URI"))
+            .downloader(downloader())
+            .store(store)
+            .build();
+    let (_, item) = prep
+        .prepare(
+            config,
+            &mock::output(None).get(),
+            Box::new(AudioObserverSlot::default().relay()),
+        )
         .expect("prepared fixture");
-    let item = ResourceLoad::new(prepared, Box::new(AudioObserverSlot::default().relay()));
     let mut opening = std::pin::pin!(rig.load_fixture(worker, item, Duration::ZERO));
     loop {
         hang_tick!();
@@ -282,16 +287,8 @@ pub(crate) fn synthetic_loaded(
     source: kithara_signal::AudioChunkInfo,
 ) -> (
     kithara_render::Loaded<kithara_play::OpenedTrack>,
-    kithara_render::mock::PacketRing,
+    PacketRing,
 ) {
-    use kithara_render::{
-        PcmPacket,
-        mock::PacketRing,
-        rt::track::{PcmConsumer, PlayerResource},
-    };
-    use kithara_signal::AudioChunk;
-    use kithara_test_utils::bufpool::sample_buffer;
-
     let frames = usize::try_from(source.frames).expect("fixture frames fit usize");
     let samples = vec![0.5; frames * usize::from(source.spec.channels)];
     let region = pools();
@@ -301,12 +298,11 @@ pub(crate) fn synthetic_loaded(
         sample_buffer(&region, &samples),
     ))));
     let receiver = packets.receiver.take().expect("fixture receiver");
-    let pcm = Box::new(
-        PlayerResource::new(PcmConsumer::new(receiver), src.into(), &region)
-            .expect("fixture playback resource"),
-    );
+    let pcm = Box::new(receiver);
     let opened = kithara_play::OpenedTrack {
         pcm,
+        src: src.into(),
+        playhead: packets.playhead(),
         abr: None,
         metadata: kithara_decode::TrackMetadata::default(),
     };
@@ -374,9 +370,7 @@ pub(crate) fn load_seq(queue: &Queue<TestPools>, id: TrackId) -> Seq {
 pub(crate) fn requested_load(
     rig: &mut DeckRig<TestPools>,
     seq: Seq,
-) -> kithara_render::LoadRequest<ResourceLoad<TestPools>> {
-    use kithara_render::DispatcherCommand;
-
+) -> kithara_render::LoadRequest<ResourceLoad> {
     rig.opens.drain();
     while let Some(due) = rig.opens.next_due((), 1) {
         hang_tick!();
@@ -426,7 +420,7 @@ pub(crate) fn synthetic_request(
     source: kithara_signal::AudioChunkInfo,
 ) -> (
     kithara_render::Loaded<kithara_play::OpenedTrack>,
-    kithara_render::mock::PacketRing,
+    PacketRing,
 ) {
     let request = requested_load(rig, seq);
     rig.hold_lane(request.inbox);
@@ -448,7 +442,7 @@ fn load_src(queue: &Queue<TestPools>, seq: Seq) -> String {
                 .map(|parked| parked.item)
         })
         .expect("load has a track");
-    match queue.tracks.source(id).expect("queued track source") {
+    match queue.tracks.load_spec(id).expect("queued track source").0 {
         TrackSource::Uri(uri) => ResourceSrc::parse(&uri).expect("fixture URI").to_string(),
         TrackSource::Config(config) => config.source().to_string(),
     }
@@ -464,8 +458,6 @@ pub(crate) fn answer_loaded(
     rig: &mut DeckRig<TestPools>,
     loaded: kithara_render::Loaded<kithara_play::OpenedTrack>,
 ) {
-    use kithara_render::{Dispatched, DispatcherCommand};
-
     rig.opens.drain();
     let wanted = selected_load_seq(queue);
     loop {

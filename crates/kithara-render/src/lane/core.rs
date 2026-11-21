@@ -1,18 +1,17 @@
 //! Commands executed at segment-relative output frames.
 use std::{
     cmp::Ordering,
-    convert::Infallible,
     num::{NonZeroU32, NonZeroU128, NonZeroUsize},
 };
 
 use kithara_audio::{AudioSource, TrackFailureKind};
 use kithara_bufpool::HasPool;
-use kithara_command::{Inbox, Protocol, Seq};
+use kithara_command::{Inbox, Protocol, Seq, Target};
 use kithara_dsp::param::SmootherConfig;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SegmentId, SourceSpan};
 use kithara_sync::SpeedCurve;
-use kithara_warp::{Pitch, WarpRenderError, WarpRenderer};
+use kithara_warp::{WarpControlsChange, WarpRenderError, WarpRenderer};
 use num_traits::ToPrimitive;
 
 #[path = "commands.rs"]
@@ -21,6 +20,18 @@ mod commands;
 /// Commands and receipts of one producer lane.
 #[derive(Debug)]
 pub enum LaneProtocol {}
+
+/// A lane programme whose later commands depend on its preceding law.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LaneTarget {
+    Speed,
+}
+
+impl Target for LaneTarget {
+    fn index(self) -> usize {
+        self as usize
+    }
+}
 
 /// An output frame within a lane segment.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -42,8 +53,8 @@ pub enum LaneCommand {
         from: Duration,
         speed: SpeedCurve,
     },
-    /// The pitch from here on.
-    SetPitch(Pitch),
+    /// Renderer controls from here on.
+    Warp(WarpControlsChange),
     SetHostRate {
         id: SegmentId,
         rate: NonZeroU32,
@@ -64,7 +75,7 @@ impl Protocol for LaneProtocol {
     type Clock = LaneFrame;
     type Command = LaneCommand;
     type Refusal = TrackFailureKind;
-    type Target = Infallible;
+    type Target = LaneTarget;
 
     fn frames_since(at: LaneFrame, start: LaneFrame) -> Option<u64> {
         match at.segment.cmp(&start.segment) {
@@ -229,7 +240,7 @@ impl Lane {
     }
 
     pub(crate) fn declick_frames(&self, sample_rate: NonZeroU32) -> FrameCount {
-        crate::rt::declick_frame_count(self.state.declick, sample_rate)
+        FrameCount::for_seconds(self.state.declick.smooth_seconds, sample_rate)
     }
 
     pub(crate) fn is_preloaded(&self) -> bool {

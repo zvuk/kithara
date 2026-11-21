@@ -19,7 +19,7 @@ use kithara::{
     audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
     file::{File, FileConfig, FileSrc},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorkerConfig, ResourceSrc},
+    play::{PlayWorkerConfig, ResourceSrc, TrackConfig},
     stream::Stream,
 };
 use kithara_app::{
@@ -31,8 +31,6 @@ use kithara_test_fixtures::integration_fixtures::audio_wav_44100;
 
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
-
-const WAVEFORM_BUCKETS: usize = 100;
 
 #[derive(Clone)]
 struct CountState {
@@ -85,13 +83,12 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
         AppResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("waveform url"))
             .downloader(server.downloader())
             .store(store.clone())
-            .worker(worker.clone())
             .build();
 
     // Player consumer of the same URL through the same shared store. Built
     // with `block_on_underrun(true)` so the drain parks on the virtual clock
     // until the worker delivers, instead of sleep-polling on `Pending`.
-    let player_cfg = kithara::play::TrackConfig::for_audio(
+    let player_cfg = (
         AudioConfig::<File<AppPools>>::for_stream(
             FileConfig::for_src(FileSrc::Remote(url.clone()))
                 .downloader(server.downloader())
@@ -99,9 +96,8 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
                 .build(),
         )
         .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
 
     // Run both concurrently so they cooperate on one download.
     let master = CancelToken::never();
@@ -109,7 +105,7 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
         &master,
         None,
         CHUNK_SECONDS,
-        WAVEFORM_BUCKETS,
+        NonZeroU32::MIN,
         BeatAnalysisConfig::default(),
         pools,
     );
@@ -148,11 +144,8 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
     let player_ok = player_drain.await.expect("player drain task");
 
     assert!(player_ok, "player must decode the shared WAV to EOF");
-    assert!(
-        (1..=WAVEFORM_BUCKETS).contains(&envelope.len()),
-        "waveform analysis must produce native-resolution buckets capped by request, got {}",
-        envelope.len()
-    );
+    assert_eq!(envelope.len(), 40, "one second carries 40 native windows");
+    assert_eq!(envelope.span_frames().get(), 1024);
     assert_eq!(
         gets.load(Ordering::SeqCst),
         1,

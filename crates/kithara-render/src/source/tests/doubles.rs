@@ -15,7 +15,7 @@ use kithara_sync::SpeedCurve;
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara_test_fixtures::signal::{mean_abs, rms};
 use kithara_test_utils::{bufpool::TestPools, kithara};
-use kithara_warp::{StretchKind, WarpCapabilities};
+use kithara_warp::{StretchKind, WarpCapabilities, WarpControls};
 
 use super::{consts, *};
 use crate::{LaneCommand, LaneProtocol};
@@ -354,7 +354,10 @@ pub(in crate::source) fn lane_over<'a>(
     let (lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
     let config = kithara_warp::WarpConfig::builder()
         .speed(speed)
-        .maybe_pitch(keylock.then_some(kithara_warp::Pitch::HELD))
+        .maybe_controls(
+            (keylock.then_some(kithara_warp::Pitch::HELD))
+                .map(|pitch| WarpControls::builder().pitch(pitch).build()),
+        )
         .backend(backend)
         .render_quantum_frames(NonZeroUsize::new(256).expect("test quantum is non-zero"))
         .build();

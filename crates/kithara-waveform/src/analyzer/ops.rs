@@ -1,6 +1,7 @@
 use std::collections::btree_map::Entry;
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_dsp::filter::FilterError;
 use kithara_signal::FrameCoverage;
 use rangemap::RangeSet;
 use tracing::debug;
@@ -81,8 +82,7 @@ impl WaveformAnalyzer {
         if !held.written.covers(&(start..extent)) {
             return Ok(None);
         }
-        let frames =
-            usize::try_from(extent - start).map_err(|_| kithara_dsp::filter::FilterError::Shape)?;
+        let frames = usize::try_from(extent - start).map_err(|_| FilterError::Shape)?;
         Ok(Some((
             index,
             self.envelope.reduce(&held.samples, index == 0, frames)?,
@@ -141,16 +141,17 @@ impl WaveformAnalyzer {
         Ok(())
     }
 
-    pub(super) fn column_count(&self, extent: Option<u64>) -> usize {
-        let count = extent.map_or_else(
-            || {
-                self.columns
-                    .keys()
-                    .next_back()
-                    .map_or(0, |last| (body(*last) + 1).saturating_mul(48))
-            },
-            |extent| extent.div_ceil(u64::try_from(self.column_frames).unwrap_or(1)),
-        );
-        usize::try_from(count).unwrap_or(usize::MAX)
+    pub(super) fn column_count(&self, extent: Option<u64>) -> Result<u64, AnalyzerError> {
+        if let Some(extent) = extent {
+            let frames = u64::try_from(self.column_frames).map_err(|_| FilterError::Shape)?;
+            return Ok(extent.div_ceil(frames));
+        }
+        let Some(last) = self.columns.keys().next_back() else {
+            return Ok(0);
+        };
+        body(*last)
+            .checked_add(1)
+            .and_then(|count| count.checked_mul(consts::COLUMNS as u64))
+            .ok_or_else(|| FilterError::Shape.into())
     }
 }

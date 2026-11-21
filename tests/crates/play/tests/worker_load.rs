@@ -104,7 +104,7 @@ async fn a_load_opens_its_source_once_and_a_load_past_capacity_opens_nothing(
     assert_eq!(opened(&trace), 2, "the next load opens its own source");
 }
 
-type Loads = DispatcherProtocol<ResourceLoad<TestPools>>;
+type Loads = DispatcherProtocol<ResourceLoad>;
 
 /// A one-load batch opening a local MP3 from its own file under `dir`.
 fn load(worker: &PlayWorker<TestPools>, dir: &TestTempDir, name: &str) -> Batch<Loads> {
@@ -115,17 +115,25 @@ fn load(worker: &PlayWorker<TestPools>, dir: &TestTempDir, name: &str) -> Batch<
         })
         .build();
     let warp = WarpConfig::builder().build();
-    let start = LaneStart::new(warp.speed(), warp.pitch());
-    let config = ResourceConfig::for_src(ResourceSrc::Path(path))
+    let start = LaneStart::new(warp.speed(), warp.controls());
+    let config = ResourceConfig::<TestPools>::for_src(ResourceSrc::Path(path))
         .store(store)
-        .worker(worker.clone())
-        .warp(warp)
         .build();
     Batch {
         basis: Vec::new(),
         commands: vec![DispatcherCommand::Load(Box::new(LoadRequest {
             class: ServiceClass::Warm,
-            item: ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay())),
+            item: kithara::play::ResourcePrep::builder()
+                .worker(worker.clone())
+                .warp(warp)
+                .build()
+                .prepare(
+                    config,
+                    &kithara::play::mock::output(None).get(),
+                    Box::new(AudioObserverSlot::default().relay()),
+                )
+                .expect("prepared source load")
+                .1,
             position: Duration::ZERO,
             start,
             inbox: worker.lane_channel().1,
@@ -271,7 +279,7 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
         dispatcher: &mut Sender<Loads>,
         output: &OutputSnapshot,
         now: SessionFrame,
-        run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R,
+        run: impl FnOnce(&mut Outbox<'_>) -> R,
     ) -> R {
         let deck = mixer.ends.snapshot.read();
         let mut scope = mixer.ring.scope(mixer.scope).expect("live mixer scope");
@@ -310,7 +318,6 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
             .backend(StorageBackend::Memory)
             .build(),
     )
-    .worker(worker.clone())
     .host_sample_rate(rate)
     .events(bus)
     .decoder(
@@ -320,7 +327,17 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
             .build(),
     )
     .build();
-    let item = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
+    let item = kithara::play::ResourcePrep::builder()
+        .worker(worker.clone())
+        .gapless_mode(GaplessMode::MediaOnly)
+        .build()
+        .prepare(
+            config,
+            &SessionOutputView::new(rate).get(),
+            Box::new(AudioObserverSlot::default().relay()),
+        )
+        .expect("prepared source load")
+        .1;
     let (mut dispatcher, inbox) = channel::<Loads>(ChannelConfig::builder().build());
     let _driver = worker
         .start_dispatcher(inbox)
@@ -330,7 +347,7 @@ async fn a_nonzero_initial_media_load_reaches_its_raw_source_target_without_reop
     let mut mixer =
         mock::MixerRig::new(DeckMixerConfig::default(), shape, worker.pools()).expect("real mixer");
     let slot = Slot::new(0);
-    let mut player = PlayerImpl::<TestPools>::new(PlayerConfig {
+    let mut player = PlayerImpl::new(PlayerConfig {
         item: TrackId::allocate(),
         slot: Some(slot),
         settings: TrackSettings::default(),
@@ -566,7 +583,7 @@ async fn a_nonzero_initial_hls_load_returns_while_its_segment_is_pending_and_adm
                     class: ServiceClass::Warm,
                     item: initial_hls::ObservedLoad { item, returned },
                     position: target,
-                    start: LaneStart::new(warp.speed(), warp.pitch()),
+                    start: LaneStart::new(warp.speed(), warp.controls()),
                     inbox: lane_inbox,
                 }))],
             },
@@ -696,7 +713,7 @@ mod initial_hls {
     };
 
     pub(super) struct ObservedLoad {
-        pub(super) item: ResourceLoad<TestPools>,
+        pub(super) item: ResourceLoad,
         pub(super) returned: oneshot::Sender<()>,
     }
 
@@ -710,8 +727,8 @@ mod initial_hls {
     }
 
     impl Open for ObservedLoad {
-        type Opened = <ResourceLoad<TestPools> as Open>::Opened;
-        type Lane = <ResourceLoad<TestPools> as Open>::Lane;
+        type Opened = <ResourceLoad as Open>::Opened;
+        type Lane = <ResourceLoad as Open>::Lane;
 
         async fn open(
             self,
@@ -792,14 +809,13 @@ mod initial_hls {
         path: &Path,
         rate: NonZeroU32,
         bus: EventBus,
-    ) -> ResourceLoad<TestPools> {
+    ) -> ResourceLoad {
         let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
             ResourceSrc::parse(hls.master_url().as_str()).expect("HLS master URL"),
         )
         .store(kithara_integration_tests::disk_asset_store(path))
         .downloader(create_test_downloader())
         .initial_abr_mode(AbrMode::manual(0))
-        .worker(worker.clone())
         .host_sample_rate(rate)
         .events(bus)
         .decoder(
@@ -809,7 +825,17 @@ mod initial_hls {
                 .build(),
         )
         .build();
-        ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()))
+        kithara::play::ResourcePrep::builder()
+            .worker(worker.clone())
+            .gapless_mode(GaplessMode::Disabled)
+            .build()
+            .prepare(
+                config,
+                &kithara::play::SessionOutputView::new(rate).get(),
+                Box::new(AudioObserverSlot::default().relay()),
+            )
+            .expect("prepared source load")
+            .1
     }
 
     pub(super) fn assert_held_events(events: &mut EventReceiver<AudioEvent>) {

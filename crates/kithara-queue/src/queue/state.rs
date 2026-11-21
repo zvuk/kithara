@@ -44,7 +44,7 @@ where
 pub struct Queue<S, F = PlayerFactory>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(super) config: QueueConfig<S, F>,
     pub(super) tracks: Tracks<S>,
@@ -68,7 +68,7 @@ where
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     /// Builds the owner; its host checks registration before driving it.
     #[must_use]
@@ -108,7 +108,7 @@ where
             &navigation,
             config.settings,
             config.track,
-            config.pitch(),
+            config.warp_controls(),
             config.action_at_item_end,
             deck.clone(),
         );
@@ -320,7 +320,7 @@ where
 impl<S, F> Drop for Queue<S, F>
 where
     S: HasPool<u8> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     fn drop(&mut self) {
         self.shutdown.cancel();
@@ -432,18 +432,19 @@ pub(crate) mod tests {
                 .loader
                 .as_ref()
                 .expect("prepared queue has a loader")
-                .build_config(
+                .prepare_source(
                     TrackId(id),
                     crate::TrackSource::Uri("https://example.com/track.mp3".into()),
                     &output,
+                    Box::new(kithara_audio::AudioObserverSlot::default().relay()),
                 )
                 .expect("build a bare URI track config")
         };
         let first = queue(None);
         let second = queue(None);
-        let first_track = track_config(&first, 1);
-        let next_track = track_config(&first, 2);
-        let second_track = track_config(&second, 3);
+        let (first_track, _first_track_load) = track_config(&first, 1);
+        let (next_track, _next_track_load) = track_config(&first, 2);
+        let (second_track, _second_track_load) = track_config(&second, 3);
         assert!(first_track.store().is_same(next_track.store()));
         assert_ne!(
             first_track.store().root_dir(),
@@ -453,6 +454,7 @@ pub(crate) mod tests {
         let shared = queue(Some(first_track.store().clone()));
         assert!(
             track_config(&shared, 4)
+                .0
                 .store()
                 .is_same(first_track.store())
         );
@@ -461,7 +463,7 @@ pub(crate) mod tests {
     pub(in crate::queue) fn with_outbox<Value>(
         queue: &mut Queue<TestPools>,
         rig: &mut DeckRig<TestPools>,
-        run: impl FnOnce(&mut Queue<TestPools>, DeckPass<'_>, &mut Outbox<'_, TestPools>) -> Value,
+        run: impl FnOnce(&mut Queue<TestPools>, DeckPass<'_>, &mut Outbox<'_>) -> Value,
     ) -> Value {
         let output = mock::output(None).get();
         let deck = queue.deck.mixer.clone();

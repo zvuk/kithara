@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_bufpool::HasPool;
 use kithara_command::{Seq, When};
 use kithara_play::{
@@ -14,13 +16,13 @@ use super::super::{
 impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    F: TrackFactory<S>,
+    F: TrackFactory,
 {
     pub(in crate::queue) fn send_transition(
         &mut self,
         incoming: usize,
         frame: SessionFrame,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         if self.pending_handover.is_some() {
             return Ok(None);
@@ -63,6 +65,9 @@ where
             self.fade_transition(incoming, outgoing, at, target.settings, out)?
         };
         if let Some(seq) = sent {
+            if self.tracks.is_changing_source(target.to) {
+                tracing::debug!(id = ?target.to, ?seq, ?slot, ?at, "source continuation submitted");
+            }
             self.pending_handover = Some(PendingHandover {
                 seq,
                 item: target.to,
@@ -80,21 +85,34 @@ where
         &mut self,
         incoming: usize,
         frame: SessionFrame,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<bool, PlayError> {
         if out.deck_available() == 0 {
             return Err(PlayError::Full("deck"));
         }
-        if !self
+        let id = self
+            .active
+            .get(incoming)
+            .ok_or(PlayError::NoActiveSlot)?
+            .item;
+        let anchor = if self.tracks.is_changing_source(id)
+            && let Some(current) = self.current_track().filter(|track| track.follows_host())
+        {
+            let rate = NonZeroU32::new(self.deck.mixer.sample_rate).ok_or(PlayError::Untimed)?;
+            let (position, _) = current.planned(frame, rate)?;
+            Some((position, current.planned_law(frame)?))
+        } else {
+            None
+        };
+        let track = &mut self
             .active
             .get_mut(incoming)
             .ok_or(PlayError::NoActiveSlot)?
-            .track
-            .prepare_entry(frame, out)?
-        {
-            return Ok(false);
+            .track;
+        match anchor {
+            Some((position, law)) => track.prepare_source_continuation(frame, position, law, out),
+            None => track.prepare_entry(frame, out),
         }
-        Ok(true)
     }
 
     fn chain_predecessor(&self, target: Target, replacement: bool) -> Option<Slot> {
@@ -135,7 +153,7 @@ where
         outgoing: Option<usize>,
         at: When<SessionFrame>,
         settings: CrossfadeSettings,
-        out: &mut Outbox<'_, S>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let slot = self
             .active
@@ -143,7 +161,26 @@ where
             .ok_or(PlayError::NoActiveSlot)?
             .slot;
         let replacement = self.active.is_replacement(incoming);
+        let source = self
+            .active
+            .get(incoming)
+            .ok_or(PlayError::NoActiveSlot)?
+            .item;
+        let continuation = if self.tracks.is_changing_source(source) {
+            let current = self.active_current_index().ok_or(PlayError::NoActiveSlot)?;
+            Some(
+                self.active
+                    .get(current)
+                    .ok_or(PlayError::NoActiveSlot)?
+                    .slot,
+            )
+        } else {
+            None
+        };
         let result = out.together_owned(at, |out| {
+            if let Some(from) = continuation {
+                out.continue_source(from, slot)?;
+            }
             let active = self
                 .active
                 .get_mut(incoming)

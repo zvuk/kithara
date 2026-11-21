@@ -7,6 +7,7 @@ use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_file::File;
 use kithara_hls::Hls;
+use kithara_key::MusicalKey;
 use kithara_platform::CancelToken;
 use kithara_waveform::Waveform;
 
@@ -101,10 +102,10 @@ where
         self.discriminator.as_deref()
     }
 
-    /// Preferred peak bitrate cap for normal networks.
+    /// The prepared musical key this track was opened with, when it has one.
     #[must_use]
-    pub const fn preferred_peak_bitrate(&self) -> f64 {
-        self.preferred_peak_bitrate
+    pub const fn key(&self) -> Option<&ArtifactSource<MusicalKey>> {
+        self.key.as_ref()
     }
 
     /// Replace the event bus attached to this resource.

@@ -4,7 +4,7 @@ use kithara_audio::{AudioObserver, AudioObserverSlot};
 use kithara_bufpool::HasPool;
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_play::{Position, ResourceConfig, ResourceSrc};
 use tracing::debug;
 
@@ -33,6 +33,10 @@ pub struct TrackEntry {
     pub id: TrackId,
     /// Current loading status.
     pub status: TrackStatus,
+    /// A replacement source has not yet entered playback.
+    pub source_changing: bool,
+    /// The most recent replacement source failed to load.
+    pub source_failed: bool,
 }
 
 /// Cloneable input to [`QueueControl::append`](crate::QueueControl::append) and [`QueueControl::insert`](crate::QueueControl::insert).
@@ -111,6 +115,9 @@ where
     pub(crate) metadata: TrackMetadata,
     pub(crate) id: TrackId,
     pub(crate) source: TrackSource<S>,
+    source_change: Option<SourceChange<S>>,
+    source_failed: bool,
+    logical_duration: Option<Duration>,
     pub(crate) initial_position: Position,
     pub(crate) status: TrackStatus,
     observer: AudioObserverSlot,
@@ -133,6 +140,9 @@ where
             url: source.uri().map(str::to_string),
             status: TrackStatus::Pending,
             source,
+            source_change: None,
+            source_failed: false,
+            logical_duration: None,
             initial_position,
             load: None,
             observer: AudioObserverSlot::default(),
@@ -146,6 +156,8 @@ where
             metadata: self.metadata.clone(),
             url: self.url.clone(),
             status: self.status.clone(),
+            source_changing: self.source_change.is_some(),
+            source_failed: self.source_failed,
         }
     }
 
@@ -155,6 +167,15 @@ where
             .as_ref()
             .is_some_and(|load| load.token().is_cancelled())
     }
+}
+
+struct SourceChange<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    source: TrackSource<S>,
+    position: Position,
+    previous_status: TrackStatus,
 }
 
 /// One track as the queue's handles read it: what [`TrackEntry`] shows, the
@@ -226,14 +247,87 @@ where
             #[expr($.map(|record| Box::new(record.observer.relay()) as Box<dyn AudioObserver>))]
             #[call(find)]
             pub(crate) fn observer(&self, id: TrackId) -> Option<Box<dyn AudioObserver>>;
-            /// Original source for `id`, if still queued.
-            #[expr($.map(|record| record.source.clone()))]
+            #[expr($.is_some_and(|record| record.source_change.is_some()))]
             #[call(find)]
-            pub(crate) fn source(&self, id: TrackId) -> Option<TrackSource<S>>;
-            #[expr($.map(|record| record.initial_position))]
+            pub(crate) fn is_changing_source(&self, id: TrackId) -> bool;
+            #[expr($.map(|record| &record.status))]
             #[call(find)]
-            pub(crate) fn initial_position(&self, id: TrackId) -> Option<Position>;
+            pub(crate) fn status(&self, id: TrackId) -> Option<&TrackStatus>;
         }
+    }
+
+    pub(crate) fn load_spec(&self, id: TrackId) -> Option<(TrackSource<S>, Position)> {
+        self.find(id).map(|record| {
+            record.source_change.as_ref().map_or_else(
+                || (record.source.clone(), record.initial_position),
+                |change| (change.source.clone(), change.position),
+            )
+        })
+    }
+
+    pub(crate) fn stage_source(
+        &mut self,
+        id: TrackId,
+        source: TrackSource<S>,
+        position: Position,
+    ) -> Result<(), QueueError> {
+        let record = self.record_mut(id).ok_or(QueueError::UnknownTrackId(id))?;
+        if record.source_change.is_some() {
+            return Err(QueueError::NotReady(id));
+        }
+        record.source_change = Some(SourceChange {
+            source,
+            position,
+            previous_status: record.status.clone(),
+        });
+        record.source_failed = false;
+        Ok(())
+    }
+
+    pub(crate) fn fail_source(&mut self, id: TrackId) {
+        self.restore_source(id);
+        if let Some(record) = self.record_mut(id) {
+            record.source_failed = true;
+        }
+    }
+
+    pub(crate) fn commit_source(&mut self, id: TrackId, duration: Option<Duration>) -> bool {
+        let Some(record) = self.record_mut(id) else {
+            return false;
+        };
+        let Some(change) = record.source_change.take() else {
+            return false;
+        };
+        record.url = change.source.uri().map(str::to_owned);
+        record.source = change.source;
+        record.logical_duration = duration.or(record.logical_duration);
+        true
+    }
+
+    /// The end `id` shows: its source's own end once known, which then
+    /// replaces any end carried over from a previous source.
+    pub(crate) fn known_duration(
+        &mut self,
+        id: TrackId,
+        own: Option<Duration>,
+    ) -> Option<Duration> {
+        let record = self.record_mut(id)?;
+        if own.is_some() {
+            record.logical_duration = own;
+        }
+        record.logical_duration
+    }
+
+    pub(crate) fn restore_source(&mut self, id: TrackId) -> bool {
+        let Some(record) = self.record_mut(id) else {
+            return false;
+        };
+        let Some(change) = record.source_change.take() else {
+            return false;
+        };
+        drop(record.load.take());
+        self.set_status(id, change.previous_status);
+        true
     }
 
     /// `id` loads under `load`: a load it replaces is cancelled.
@@ -483,6 +577,21 @@ mod tests {
         tracks
     }
 
+    #[kithara::test]
+    fn a_changed_source_carries_its_end_until_its_own_is_known() {
+        let mut tracks = two_tracks();
+        let (first, second) = (TrackId(1), TrackId(2));
+        let secs = Duration::from_secs;
+        tracks
+            .stage_source(first, "https://x/alternate.mp3".into(), Position::ZERO)
+            .expect("the first track accepts a source change");
+        assert!(tracks.commit_source(first, Some(secs(64))));
+        assert_eq!(tracks.known_duration(first, None), Some(secs(64)));
+        assert_eq!(tracks.known_duration(first, Some(secs(70))), Some(secs(70)));
+        assert_eq!(tracks.known_duration(first, None), Some(secs(70)));
+        assert_eq!(tracks.known_duration(second, None), None);
+    }
+
     /// The slot a load of `id` hands its decoder.
     fn slot(tracks: &Tracks<TestPools>, id: TrackId) -> &AudioObserverSlot {
         &tracks.find(id).expect("the track is queued").observer
@@ -533,9 +642,9 @@ mod tests {
 
         assert_eq!(
             tracks
-                .source(TrackId(2))
+                .load_spec(TrackId(2))
                 .as_ref()
-                .and_then(TrackSource::uri),
+                .and_then(|(source, _)| source.uri()),
             Some("https://x/second.mp3")
         );
     }
@@ -544,7 +653,7 @@ mod tests {
     fn an_unqueued_track_has_no_source() {
         let tracks = two_tracks();
 
-        assert!(tracks.source(TrackId(3)).is_none());
+        assert!(tracks.load_spec(TrackId(3)).is_none());
     }
 
     /// Nobody waits for the load the network refused for now: its track fails

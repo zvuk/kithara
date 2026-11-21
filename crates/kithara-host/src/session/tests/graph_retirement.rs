@@ -24,6 +24,7 @@ use crate::{
         context::SessionGraph,
         dispatch::{invalidate_audio_route, tick_session},
         processor::SessionProcessor,
+        state::OutputPhase,
         tests::graph::{GraphSession, committed_transport, state as test_state},
     },
 };
@@ -225,6 +226,112 @@ fn a_session_that_retains_its_output_keeps_it_when_the_last_deck_leaves() {
     );
 }
 
+#[kithara::test]
+fn an_idle_retained_output_is_not_a_dead_stream() {
+    device(|dev| *dev = AudioDevice::default());
+    let mut state = test_state(start_test_stream);
+    state.retains_output = true;
+    let deck = insert(&mut state);
+    render_and_read_session_grid(&mut state);
+    remove(&mut state, deck);
+    assert!(state.stream.is_none());
+    assert!(!state.ctx.as_ref().expect("retained context").is_active());
+    let stopped = state
+        .transport_observation
+        .as_mut()
+        .expect("retained transport observation")
+        .read()
+        .session_grid();
+    assert_eq!(
+        Some(stopped),
+        state.reserved_session_grid,
+        "the stopped processor reached the reserved route boundary"
+    );
+    let idle = state.root.grid().clone();
+    let streams = device(|dev| dev.next_stream);
+
+    for _ in 0..3 {
+        tick_session(&mut state).expect("idle session tick");
+        assert!(state.stream.is_none(), "idle ticks do not start a stream");
+        assert_eq!(state.root.grid().clone(), idle);
+        assert_eq!(device(|dev| dev.next_stream), streams);
+    }
+
+    insert(&mut state);
+    let before = processed_frames(&state);
+    assert!(
+        deliver_one_block(),
+        "the next deck receives the retained output"
+    );
+    assert!(processed_frames(&state) > before);
+}
+
+#[kithara::test]
+fn a_retained_output_waits_for_its_stopped_processor_before_restarting() {
+    device(|dev| {
+        *dev = AudioDevice::default();
+        dev.defer_processor_drop = true;
+    });
+    let mut state = test_state(start_test_stream);
+    state.retains_output = true;
+    let deck = insert(&mut state);
+    render_and_read_session_grid(&mut state);
+    remove(&mut state, deck);
+    let idle = state.root.grid().clone();
+    assert!(state.stream.is_none());
+    assert!(state.ctx.as_ref().expect("retained context").is_active());
+
+    insert(&mut state);
+
+    assert!(state.stream.is_none());
+    assert!(
+        state.output_phase == OutputPhase::Starting,
+        "the requested restart remains pending"
+    );
+    assert_eq!(
+        state.root.grid().clone(),
+        idle,
+        "idle already ended the old axis"
+    );
+    for _ in 0..3 {
+        tick_session(&mut state).expect("pending processor return");
+        assert!(state.stream.is_none());
+        assert_eq!(state.root.grid().clone(), idle);
+    }
+    device(|dev| dev.retired_processors.clear());
+    tick_session(&mut state).expect("restart after processor return");
+    assert!(state.stream.is_some());
+    let before = processed_frames(&state);
+    assert!(
+        deliver_one_block(),
+        "the new deck receives the resumed stream"
+    );
+    assert!(processed_frames(&state) > before);
+}
+
+#[kithara::test]
+fn an_unexpectedly_stopped_live_stream_is_restarted() {
+    device(|dev| *dev = AudioDevice::default());
+    let mut state = test_state(start_test_stream);
+    insert(&mut state);
+    render_and_read_session_grid(&mut state);
+    let streams = device(|dev| dev.next_stream);
+    device(|dev| drop(dev.processor.take()));
+    assert!(state.stream.is_some());
+    assert!(!state.ctx.as_ref().expect("live context").is_active());
+
+    tick_session(&mut state).expect("lost stream restart");
+
+    assert!(state.stream.is_some());
+    assert_eq!(device(|dev| dev.next_stream), streams + 1);
+    let before = processed_frames(&state);
+    assert!(
+        deliver_one_block(),
+        "the restarted stream receives a callback"
+    );
+    assert!(processed_frames(&state) > before);
+}
+
 /// A removed deck takes its slot node out of the graph the other decks
 /// keep rendering.
 #[kithara::test]
@@ -337,7 +444,7 @@ fn idle_context_recreation_advances_generation_before_deferred_processor_drop() 
             .expect("the deferred route reservation has a revision"),
         route_boundary.stamp()
     );
-    assert!(state.stream_needs_restart);
+    assert_eq!(state.output_phase, OutputPhase::Starting);
 
     remove(&mut state, first_player);
     let unavailable = state.root.grid().clone();
@@ -489,7 +596,7 @@ fn deferred_route_restart_converges_before_unrendered_idle_shutdown() {
             .expect("the route reservation has a revision"),
         reserved.stamp()
     );
-    assert!(state.stream_needs_restart);
+    assert_eq!(state.output_phase, OutputPhase::Starting);
     let rate = state.root_view.sample_rate();
     assert_eq!(
         rate.measured, None,
@@ -524,7 +631,7 @@ fn deferred_route_restart_converges_before_unrendered_idle_shutdown() {
         dev.defer_processor_drop = false;
     });
     assert!(tick_session(&mut state).is_ok());
-    assert!(!state.stream_needs_restart);
+    assert_eq!(state.output_phase, OutputPhase::Running);
     assert!(state.reserved_session_grid.is_none());
     let converged = state
         .transport_observation

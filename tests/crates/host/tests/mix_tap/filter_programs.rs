@@ -4,7 +4,10 @@ use kithara::{
     assets::AssetStore,
     effects::filter::{FilterEffect, FilterKnob, FilterSettings},
     host::Tap,
-    play::{CurveShape, FilterProgram, ParameterKnot, PlayError, ResourceConfig, ResourceSrc},
+    play::{
+        CurveShape, DeckMixSettingsChange, DeckParameter, DeckProgram, ParameterKnot, PlayError,
+        ResourceConfig, ResourceSrc,
+    },
     queue::{QueueError, TrackSource},
     signal::SessionFrame,
     warp::WarpConfig,
@@ -39,11 +42,14 @@ fn s_curve(at: u64, start: u64, frames: u64, left: f64, right: f64) -> f64 {
     left + (right - left) * (3.0 * t * t - 2.0 * t * t * t)
 }
 
-fn s_program(start: u64, frames: u64, left: f64, right: f64) -> FilterProgram {
-    FilterProgram::new(vec![
-        point(start, left, CurveShape::cubic(0.0, 1.0).expect("S shape")),
-        point(start + frames, right, CurveShape::HOLD),
-    ])
+fn s_program(start: u64, frames: u64, left: f64, right: f64) -> DeckProgram {
+    DeckProgram::new(
+        DeckParameter::Filter,
+        vec![
+            point(start, left, CurveShape::cubic(0.0, 1.0).expect("S shape")),
+            point(start + frames, right, CurveShape::HOLD),
+        ],
+    )
     .expect("knob program")
 }
 
@@ -65,7 +71,7 @@ fn bits(pcm: &[f32]) -> Vec<u32> {
 
 async fn loaded_filter_source(source: String) -> (OfflinePlayer, Underruns) {
     let options = OfflinePlayerOptions::builder()
-        .block_on_underrun(false)
+        .block_on_underrun(true)
         .output_block_frames(NonZeroU32::new(64).expect("callback"))
         .warp(
             WarpConfig::builder()
@@ -109,7 +115,12 @@ async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u
     let start = harness.host().position();
     let turn = start + 529 + phase;
     harness
-        .with_queue(move |queue| queue.filter(When::At(frame(turn)), knob(-0.5)))
+        .with_queue(move |queue| {
+            queue.mix(
+                When::At(frame(turn)),
+                DeckMixSettingsChange::Filter(knob(-0.5)),
+            )
+        })
         .await
         .expect("public knob turn");
     let mut tap = harness
@@ -120,40 +131,47 @@ async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u
     let mut take = render_effect_window(&harness, 1024).await;
     assert_eq!(tap.drain(), take);
     assert_eq!(tap.drops(), 0);
-    let turned = harness.deck_snapshot().filter;
-    assert!(turned.binding().is_some());
+    let turned_deck = harness.deck_snapshot();
+    let turned = turned_deck.filter;
+    assert!(turned_deck.epoch.is_some());
     assert!(turned.authority().is_some());
     underruns.checkpoint(harness.metrics(), true, "Filter turn");
 
     let curve = harness.host().position() + 529 + phase;
     let manual = curve + 129;
     harness
-        .with_queue(move |queue| queue.filter_program(s_program(curve, 512, -0.2, -0.8)))
+        .with_queue(move |queue| queue.deck_programs(vec![s_program(curve, 512, -0.2, -0.8)]))
         .await
         .expect("public S-shaped program");
     harness
-        .with_queue(move |queue| queue.filter(When::At(frame(manual)), knob(0.25)))
+        .with_queue(move |queue| {
+            queue.mix(
+                When::At(frame(manual)),
+                DeckMixSettingsChange::Filter(knob(0.25)),
+            )
+        })
         .await
         .expect("public manual takeover");
     let stale = s_program(curve + 256, 64, 1.0, 1.0);
     harness
-        .with_queue(move |queue| queue.filter_program(stale))
+        .with_queue(move |queue| queue.deck_programs(vec![stale]))
         .await
         .expect("stale request is queued before manual authority applies");
     let late = s_program(start, 64, 0.5, 0.5);
     assert!(matches!(
         harness
-            .with_queue(move |queue| queue.filter_program(late))
+            .with_queue(move |queue| queue.deck_programs(vec![late]))
             .await,
         Err(QueueError::Play(PlayError::Late))
     ));
     let sweep = render_effect_window(&harness, 2048).await;
     assert_eq!(tap.drain(), sweep);
     take.extend(sweep);
-    let snapshot = harness.deck_snapshot().filter;
+    let current_deck = harness.deck_snapshot();
+    let snapshot = current_deck.filter;
     assert_ne!(snapshot.authority(), turned.authority());
     assert_eq!(snapshot.program(), None);
-    assert_eq!(snapshot.binding(), turned.binding());
+    assert_eq!(current_deck.epoch, turned_deck.epoch);
     underruns.checkpoint(
         harness.metrics(),
         true,
@@ -162,7 +180,12 @@ async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u
 
     let center = harness.host().position() + 529 + phase;
     harness
-        .with_queue(move |queue| queue.filter(When::At(frame(center)), FilterKnob::DEFAULT))
+        .with_queue(move |queue| {
+            queue.mix(
+                When::At(frame(center)),
+                DeckMixSettingsChange::Filter(FilterKnob::DEFAULT),
+            )
+        })
         .await
         .expect("public return to center");
     // The manual glide to center lasts 62 ms, about 2734 frames.
@@ -195,10 +218,10 @@ async fn public_knob_turns_programs_and_takeover_reach_the_host(#[case] phase: u
         vec![0.5; expected.len()],
         "the oracle hears the turn, the program and the takeover"
     );
-    assert_eq!(bits(&take), bits(&expected));
     assert_eq!(tap.drops(), 0);
     underruns.checkpoint(harness.metrics(), true, "Filter final complete edges");
     assert_eq!(harness.metrics().underruns(), 0);
+    assert_eq!(bits(&take), bits(&expected));
     harness.close().await;
 }
 
@@ -215,7 +238,12 @@ async fn filter_tail_and_programme_outlive_source_eof_and_close_while_owned() {
     let start = harness.host().position();
     let turn = start + 529;
     harness
-        .with_queue(move |queue| queue.filter(When::At(frame(turn)), knob(-0.5)))
+        .with_queue(move |queue| {
+            queue.mix(
+                When::At(frame(turn)),
+                DeckMixSettingsChange::Filter(knob(-0.5)),
+            )
+        })
         .await
         .expect("turn the knob");
     let mut tap = harness
@@ -246,7 +274,7 @@ async fn filter_tail_and_programme_outlive_source_eof_and_close_while_owned() {
     let source_end = source_start + 4410;
     let curve = harness.host().position() + 529;
     harness
-        .with_queue(move |queue| queue.filter_program(s_program(curve, 4096, -0.2, -0.8)))
+        .with_queue(move |queue| queue.deck_programs(vec![s_program(curve, 4096, -0.2, -0.8)]))
         .await
         .expect("public programme");
     let drained = render_effect_window(&harness, 8192).await;
@@ -292,7 +320,7 @@ async fn filter_tail_and_programme_outlive_source_eof_and_close_while_owned() {
     assert!(snapshot.filter.program().is_some());
     let future = harness.host().position() + 529;
     harness
-        .with_queue(move |queue| queue.filter_program(s_program(future, 8192, -0.8, -0.8)))
+        .with_queue(move |queue| queue.deck_programs(vec![s_program(future, 8192, -0.8, -0.8)]))
         .await
         .expect("programme on empty deck");
     let empty = render_effect_window(&harness, 640).await;

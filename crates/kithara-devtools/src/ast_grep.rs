@@ -418,7 +418,7 @@ fn print_grouped(groups: &BTreeMap<String, RuleGroup>) {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, process::Command};
+    use std::{collections::BTreeMap, fs, path::PathBuf, process::Command};
 
     use tempfile::tempdir;
 
@@ -500,6 +500,33 @@ mod tests {
                 .downcast_ref::<crate::verdict::NotClean>()
                 .expect("lint verdict");
             assert_eq!(findings.findings, Some(1));
+        }
+    }
+
+    #[test]
+    fn grouped_scan_judges_style_rules_on_production_code_only() {
+        let body = "struct Probe;\n\
+                    impl Probe { fn get_value(&self) -> u8 { 0 } }\n";
+        let rules = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.config/ast-grep");
+        for (source, findings) in [
+            (format!("#[cfg(test)]\nmod tests {{\n{body}}}\n"), None),
+            (body.to_owned(), Some(1)),
+        ] {
+            let (root, ctx, args) = grouped_fixture(&source, "error");
+            let rule = "style.no-get-prefix-getter.yml";
+            fs::copy(
+                rules.join(rule),
+                root.path().join(".config/ast-grep").join(rule),
+            )
+            .expect("copy rule");
+            let verdict = run_grouped(&args, &ctx);
+            let reported = verdict.err().map(|error| {
+                error
+                    .downcast_ref::<crate::verdict::NotClean>()
+                    .expect("lint verdict")
+                    .findings
+            });
+            assert_eq!(reported.flatten(), findings);
         }
     }
 
@@ -935,7 +962,265 @@ fn target_function() {
 
         assert_eq!(
             rule_hits("style.no-local-use-in-prod-functions.yml", source),
+            2
+        );
+    }
+
+    #[test]
+    fn rustfmt_skip_rule_reports_every_attribute_form() {
+        let source = r#"
+#[rustfmt::skip]
+fn outer() {}
+
+#[cfg_attr(feature = "x", rustfmt::skip)]
+fn conditional() {}
+
+mod inner {
+    #![rustfmt::skip]
+}
+
+#[allow(dead_code)]
+fn formatted() {}
+"#;
+
+        assert_eq!(rule_hits("style.no-rustfmt-skip.yml", source), 3);
+    }
+
+    #[test]
+    fn glob_import_rule_allows_reexports_inline_super_preludes_and_function_bodies() {
+        let source = r#"
+use crate::state::*;
+use crate::{geometry::*, settings};
+pub use kithara_audio::*;
+pub(crate) use crate::types::*;
+use bevy::prelude::*;
+
+mod inline {
+    use super::*;
+}
+
+fn classify(mode: Mode) {
+    use Mode::*;
+}
+"#;
+
+        assert_eq!(rule_hits("style.no-glob-import.yml", source), 2);
+    }
+
+    #[test]
+    fn prelude_rule_reports_inline_and_file_modules() {
+        let source = r#"
+pub mod prelude {
+    pub use crate::Player;
+}
+
+mod prelude;
+
+mod preludes {}
+"#;
+
+        assert_eq!(rule_hits("style.no-prelude-module.yml", source), 2);
+    }
+
+    #[test]
+    fn getter_rule_skips_lookups_and_trait_implementations() {
+        let source = r#"
+impl Ewma {
+    fn get_estimate(&self) -> f64 { 0.0 }
+    fn get_buffer(&mut self) -> &mut Vec<u8> { &mut self.buffer }
+    fn get_raw_key(&self, url: &Url) -> Key { todo!() }
+    fn estimate(&self) -> f64 { 0.0 }
+}
+
+trait Source {
+    fn get_len(&self) -> usize;
+}
+
+impl CredentialApi for Secret {
+    fn get_secret(&self) -> Vec<u8> { Vec::new() }
+}
+
+fn get_free(value: &Ewma) -> f64 { 0.0 }
+"#;
+
+        assert_eq!(rule_hits("style.no-get-prefix-getter.yml", source), 3);
+    }
+
+    #[test]
+    fn style_scan_accepts_consumers_requiring_type_information() {
+        let source = r#"
+fn parallel(items: &[Item]) {
+    items.par_iter().for_each(work);
+    let jobs = items.par_iter();
+    jobs.for_each(work);
+}
+
+fn custom(queue: JobQueue) {
+    queue.for_each(work);
+}
+
+async fn drain(stream: Stream) {
+    stream.for_each(work).await;
+}
+
+fn fallible(items: &[Item]) -> Result<(), Error> {
+    items.iter().try_for_each(check)
+}
+"#;
+
+        let (root, ctx, args) = grouped_fixture(source, "error");
+        fs::rename(
+            root.path().join("crates/example/src/lib.rs"),
+            root.path().join("crates/example/src/consumer.rs"),
+        )
+        .expect("consumer source");
+        let rules = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.config/ast-grep");
+        for entry in fs::read_dir(rules).expect("rule directory") {
+            let entry = entry.expect("rule entry");
+            if entry.file_name().to_string_lossy().starts_with("style.") {
+                fs::copy(
+                    entry.path(),
+                    root.path().join(".config/ast-grep").join(entry.file_name()),
+                )
+                .expect("copy style rule");
+            }
+        }
+        run_grouped(&args, &ctx).expect("type-dependent consumers remain valid");
+    }
+
+    #[test]
+    fn string_rules_report_text_chains_and_literal_templates_only() {
+        let source = r#"
+fn compose(prefix: String, name: &str, a: u64, b: u64, host: &str) {
+    let path = prefix + "/" + name;
+    let sum = a + b + 1;
+    let call = path + &label("x") + name;
+    let page = "{host}/api".replace("{host}", host);
+    let cleaned = name.replace("-", "_");
+}
+"#;
+
+        assert_eq!(rule_hits("style.no-string-concat-chain.yml", source), 1);
+        assert_eq!(rule_hits("style.no-literal-replace.yml", source), 1);
+    }
+
+    #[test]
+    fn lifetime_rule_reports_type_level_single_letters_only() {
+        let source = r#"
+struct Reader<'a> { buf: &'a [u8] }
+enum Token<'src> { Word(&'src str) }
+trait Visit<'a> {}
+type Slice<'a> = &'a [u8];
+struct Borrowed<'_x>;
+
+impl<'a> Reader<'a> {
+    fn peek<'b>(&'b self) -> &'b [u8] { self.buf }
+}
+
+fn split<'a>(text: &'a str) -> &'a str { text }
+"#;
+
+        assert_eq!(rule_hits("style.descriptive-type-lifetimes.yml", source), 3);
+    }
+
+    #[test]
+    fn try_new_rule_reports_fallible_new_only() {
+        let source = r#"
+impl File {
+    pub fn new(path: &Path) -> Result<Self> { todo!() }
+    fn new_io() -> io::Result<Self> { todo!() }
+    pub fn new_unchecked() -> Self { todo!() }
+}
+
+impl Config {
+    pub fn new() -> Self { Self }
+    pub fn try_new() -> Result<Self, Error> { Ok(Self) }
+}
+"#;
+
+        assert_eq!(rule_hits("style.prefer-try-new.yml", source), 1);
+    }
+
+    #[test]
+    fn for_header_rule_reports_closures_in_the_iterated_expression() {
+        let source = r#"
+fn walk(items: &[Item]) {
+    for item in items.iter().filter(|item| item.ok) {}
+    let ready = items.iter().filter(|item| item.ok);
+    for item in ready {}
+    for item in items {}
+}
+"#;
+
+        assert_eq!(rule_hits("style.no-closure-in-for-header.yml", source), 1);
+    }
+
+    #[test]
+    fn named_fields_rule_counts_positional_fields_not_commas() {
+        let source = r#"
+struct Span(u64, u64);
+struct Pair(#[serde(rename = "a")] u64, u32);
+struct Id(u64);
+pub(crate) struct Wrapper(pub(crate) Vec<(u8, u8)>);
+struct Named { start: u64, end: u64 }
+"#;
+
+        assert_eq!(rule_hits("style.prefer-named-fields.yml", source), 2);
+    }
+
+    #[test]
+    fn bool_param_rule_reports_public_functions_except_setters() {
+        let source = r#"
+pub fn open(path: &Path, create: bool) {}
+pub fn set_enabled(&mut self, enabled: bool) {}
+pub(crate) fn internal(flag: bool) {}
+fn private(flag: bool) {}
+pub fn by_mode(mode: Mode) {}
+"#;
+
+        assert_eq!(
+            rule_hits("style.prefer-enum-over-bool-param.yml", source),
             1
+        );
+    }
+
+    #[test]
+    fn turbofish_rule_reports_untyped_lets_for_inferable_conversions() {
+        let source = r#"
+fn load(rows: &[Row], text: &str) -> Result<(), Error> {
+    let ids = rows.iter().map(id).collect::<Vec<_>>();
+    let count = text.parse::<u32>()?;
+    let typed: Vec<_> = rows.iter().map(id).collect();
+    let sized = mem::size_of::<u64>();
+    let first = rows.iter().map(id).collect::<Vec<_>>().len();
+    Ok(())
+}
+"#;
+
+        assert_eq!(
+            rule_hits("style.prefer-typed-let-over-turbofish.yml", source),
+            2
+        );
+    }
+
+    #[test]
+    fn non_exhaustive_rule_reports_open_public_enums_and_named_structs() {
+        let source = r#"
+pub enum Mode { A, B }
+
+/// Settled.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Settled { A }
+
+pub(crate) enum Internal { A }
+pub struct Config { pub rate: u32 }
+pub struct Newtype(u32);
+"#;
+
+        assert_eq!(
+            rule_hits("style.prefer-non-exhaustive-pub-type.yml", source),
+            2
         );
     }
 

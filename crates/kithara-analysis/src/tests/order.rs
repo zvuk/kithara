@@ -16,7 +16,7 @@ use crate::{
 fn analyse(samples: &[f32], blocks: &[(u64, usize, usize)]) -> Artifacts {
     let pools = pools();
     let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
-        .with_waveform(consts::HOLD_BUCKETS)
+        .with_waveform(consts::HOLD_FOLD)
         .with_beat_detector(beat_detector(), GridParams::default());
     let mut beat = builder.take_detector();
     let mut extent = Extent::default();
@@ -31,11 +31,17 @@ fn analyse(samples: &[f32], blocks: &[(u64, usize, usize)]) -> Artifacts {
 
     for (at, from, to) in blocks {
         let part = samples.get(*from..*to).unwrap_or_default();
-        analyzers.push(&chunk(&pools, part, *at), &mut extent, beat.as_mut());
+        analyzers
+            .push(&chunk(&pools, part, *at), &mut extent, beat.as_mut())
+            .expect("key estimation succeeds");
     }
 
     let frames = u64::try_from(samples.len() / usize::from(consts::CH)).unwrap_or(0);
-    artifacts(&analyzers.snapshot(beat.as_mut(), true, Some(frames)))
+    artifacts(
+        &analyzers
+            .snapshot(beat.as_mut(), true, Some(frames))
+            .expect("key estimation succeeds"),
+    )
 }
 
 fn blocks(frames: usize, count: usize) -> Vec<(u64, usize, usize)> {

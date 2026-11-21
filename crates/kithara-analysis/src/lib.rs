@@ -31,6 +31,9 @@ pub use artifact::{
     ORDINAL_TOLERANCE_BEATS, TrackAnalysis,
 };
 pub use kithara_blob::BlobError;
+/// The key result, re-exported from its owner so a consumer can name what
+/// [`TrackAnalysis::key`] hands it.
+pub use kithara_key::{KeyEstimate, Mode, MusicalKey, PitchClass};
 /// Frame-range coverage, re-exported from its owners so a consumer can name
 /// what a publication reports without depending on the analyzer: the set it is
 /// kept in, and the frame reading of it.

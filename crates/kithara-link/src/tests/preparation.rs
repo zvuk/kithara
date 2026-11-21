@@ -7,7 +7,7 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::fixtures::{
-    Command, Rig, answer, deck, grid, horizon, load, position, source_grid, trajectory,
+    Command, Rig, answer, deck, grid, horizon, load, position, sound, source_grid, trajectory,
 };
 use crate::{LinkedPlayer, SyncStatus};
 
@@ -173,6 +173,133 @@ fn owner_entry_preparation_waits_for_the_replacement_without_starting() {
 }
 
 #[kithara::test]
+#[case::applied(true)]
+#[case::stale(false)]
+fn a_source_continuation_keeps_its_cue_and_rebinds_at_the_native_cut(#[case] applied: bool) {
+    use kithara_command::{Outcome, Rejection};
+    use kithara_play::{CrossfadeSettings, FadeDir, Settled};
+    use kithara_render::{
+        LaneFrame,
+        bridge::{DeckPart, Returned, Slot, SlotMark},
+    };
+    use kithara_signal::{ExponentialApproach, SegmentId};
+    use kithara_sync::SpeedCurve;
+
+    let model = grid(24_000, 0, None, 480_000);
+    let (mut deck, control, mut rig, _) = super::fixtures::loaded(model.clone());
+    let cue = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync")
+        .expect("initial cue");
+    rig.apply(&mut deck, cue, 0);
+    control.clear();
+
+    let requested = SessionFrame::new(24_000);
+    let position = position(6_000);
+    let host = trajectory(120.0, 4);
+    let law = SpeedCurve::ApproachSteps(
+        vec![
+            (0, ExponentialApproach::new(1.0, 1.0, 0.0).expect("level")),
+            (
+                255,
+                ExponentialApproach::new(1.0, 1.04, 240.0).expect("approach"),
+            ),
+        ]
+        .into(),
+    );
+    assert!(
+        !rig.run(|out| deck.prepare_source_continuation(requested, position, law.clone(), out))
+            .expect("prepare")
+    );
+    let commands = control.commands();
+    let prepared = commands[0].0;
+    assert_eq!(
+        commands,
+        [
+            (prepared, Command::Speed(law.clone(), When::Next)),
+            (prepared, Command::Seek(position)),
+        ]
+    );
+    rig.apply(&mut deck, prepared, 0);
+    assert!(
+        rig.run(|out| deck.prepare_source_continuation(requested, position, law.clone(), out))
+            .expect("ready")
+    );
+
+    let slot = Slot::new(0);
+    control.clear();
+    let at = When::At(requested);
+    rig.run(|out| {
+        out.together(at, |out| {
+            out.continue_source(slot, slot)?;
+            deck.apply(
+                TrackCommand::Fade {
+                    at,
+                    settings: CrossfadeSettings::default(),
+                    dir: FadeDir::In,
+                },
+                out,
+            )
+        })
+    })
+    .expect("continuation group");
+    let submitted = control.commands()[0].0;
+    deck.finish_group(Ok(submitted));
+    control.clear();
+
+    let actual = SessionFrame::new(34_000);
+    let mut revised = host;
+    revised
+        .push(actual, Tempo::new(126.0).expect("tempo"))
+        .expect("accepted tempo");
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &revised, &[actual], out));
+    assert!(
+        control.commands().is_empty(),
+        "retime must keep the prepared lane"
+    );
+
+    let trimmed = 7_000;
+    let media_origin = kithara_play::Position::from_millis(25);
+    let mark = SlotMark {
+        session: actual,
+        lane: LaneFrame {
+            segment: SegmentId::FIRST.next(),
+            frame: trimmed,
+        },
+        position: position + media_origin,
+    };
+    if applied {
+        control.edit(|script| {
+            script.snapshot.status = TrackStatus::Playing { since: actual };
+            script.snapshot.mark = Some(mark);
+        });
+        assert!(matches!(rig.settle_parts(
+            &mut deck, submitted, &Outcome::Applied { at: actual, data: () },
+            vec![DeckPart::Returned(Returned::SourceContinued { to: slot, mark, media_origin })],
+        ), Settled::Applied { at, .. } if at == actual));
+        assert_eq!(deck.snapshot().sync, SyncStatus::On);
+    } else {
+        assert!(matches!(
+            rig.settle_parts(
+                &mut deck,
+                submitted,
+                &Outcome::Rejected(Rejection::Stale),
+                vec![DeckPart::ContinueSource {
+                    from: slot,
+                    to: slot,
+                    window: rig.delivery,
+                }],
+            ),
+            Settled::Rejected {
+                reason: Rejection::Stale,
+                ..
+            }
+        ));
+        assert_eq!(deck.snapshot().sync, SyncStatus::On);
+    }
+}
+
+#[kithara::test]
 fn a_synchronized_replay_prepares_zero_with_the_actual_entry_law() {
     let model = grid(24_000, 0, None, 480_000);
     let (mut deck, control, mut rig, _) = super::fixtures::loaded(model.clone());
@@ -229,7 +356,7 @@ fn a_synchronized_replay_prepares_zero_with_the_actual_entry_law() {
 }
 
 #[kithara::test]
-fn a_silent_retime_keeps_the_callers_frame_and_latest_native_cue() {
+fn a_silent_retime_waits_for_its_latest_native_cue() {
     let (mut deck, control, mut rig, _) = super::fixtures::loaded(grid(24_000, 0, None, 480_000));
     let prepared = rig
         .run(|out| LinkedPlayer::sync(&mut deck, true, out))
@@ -247,15 +374,16 @@ fn a_silent_retime_keeps_the_callers_frame_and_latest_native_cue() {
     rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[frame], out));
     let latest = control.commands()[0].0;
     assert_ne!(first, latest);
-    assert_eq!(LinkedPlayer::retime_applied(&mut deck, frame), None);
+    let bound = Bound::AtOrAfter(frame);
+    assert_eq!(deck.entry(bound), None);
     rig.apply(&mut deck, first, 0);
     assert_eq!(
-        LinkedPlayer::retime_applied(&mut deck, frame),
+        deck.entry(bound),
         None,
-        "the replaced cue cannot credit the caller's retime"
+        "the replaced cue cannot ready the track"
     );
     rig.apply(&mut deck, latest, 0);
-    assert_eq!(LinkedPlayer::retime_applied(&mut deck, frame), Some(true));
+    assert!(deck.entry(bound).is_some());
 }
 
 #[kithara::test]
@@ -263,10 +391,7 @@ fn a_silent_retime_keeps_the_callers_frame_and_latest_native_cue() {
 #[case::preparation_between_callers(100_000, false)]
 #[case::cue_before_callers(0, true)]
 #[case::cue_between_callers(100_000, true)]
-fn an_entry_replacement_transfers_all_retime_callers_to_its_current_receipt(
-    #[case] at: i64,
-    #[case] explicit_cue: bool,
-) {
+fn an_entry_replacement_waits_for_its_current_receipt(#[case] at: i64, #[case] explicit_cue: bool) {
     let model = grid(24_000, 0, None, 480_000);
     let (mut deck, control, mut rig, _) = super::fixtures::loaded(model.clone());
     let prepared = rig
@@ -286,7 +411,7 @@ fn an_entry_replacement_transfers_all_retime_callers_to_its_current_receipt(
         rig.run(|out| LinkedPlayer::retime(&mut deck, &host, &[caller], out));
         let seq = control.commands()[0].0;
         rig.apply(&mut deck, seq, 0);
-        assert_eq!(LinkedPlayer::retime_applied(&mut deck, caller), Some(true));
+        assert!(deck.entry(Bound::AtOrAfter(caller)).is_some());
         previous = Some(seq);
     }
     let previous = previous.expect("last retime receipt");
@@ -319,21 +444,16 @@ fn an_entry_replacement_transfers_all_retime_callers_to_its_current_receipt(
     let current = commands[0].0;
     assert_ne!(current, previous);
     assert_eq!(commands[1].1, Command::Seek(position(0)));
-    for caller in callers {
-        assert_eq!(LinkedPlayer::retime_applied(&mut deck, caller), None);
-    }
+    let bound = Bound::AtOrAfter(at);
+    assert_eq!(deck.entry(bound), None);
     rig.apply(&mut deck, previous, 0);
-    for caller in callers {
-        assert_eq!(
-            LinkedPlayer::retime_applied(&mut deck, caller),
-            None,
-            "a discarded segment cannot credit its replacement"
-        );
-    }
+    assert_eq!(
+        deck.entry(bound),
+        None,
+        "a discarded segment cannot ready its replacement"
+    );
     rig.apply(&mut deck, current, 0);
-    for caller in callers {
-        assert_eq!(LinkedPlayer::retime_applied(&mut deck, caller), Some(true));
-    }
+    assert!(deck.entry(bound).is_some());
 }
 
 #[kithara::test]
@@ -578,11 +698,7 @@ fn preparation_preserves_both_phase_error_directions(
 fn audible_exact_beat_selects_a_reachable_future_cue() {
     let (mut deck, control, mut rig, _) = super::fixtures::loaded(grid(24_000, 0, None, 480_000));
     rig.delivery = FrameCount::new(24_000);
-    control.edit(|script| {
-        script.snapshot.status = TrackStatus::Playing {
-            since: SessionFrame::new(0),
-        }
-    });
+    sound(&control, &mut rig, 0, 0);
     rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("align");
     let commands = control.commands();
@@ -605,12 +721,8 @@ fn audible_exact_beat_selects_a_reachable_future_cue() {
 fn audible_manual_speed_selects_the_cue_the_faster_stream_reaches() {
     let (mut deck, control, mut rig, _) = super::fixtures::loaded(grid(24_000, 0, None, 480_000));
     rig.delivery = FrameCount::new(24_000);
-    control.edit(|script| {
-        script.snapshot.status = TrackStatus::Playing {
-            since: SessionFrame::new(0),
-        };
-        script.snapshot.speed = 2.0;
-    });
+    sound(&control, &mut rig, 0, 0);
+    control.edit(|script| script.snapshot.speed = 2.0);
     rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("align");
     let commands = control.commands();
@@ -635,12 +747,7 @@ fn audible_alignment_seeks_ahead_of_the_live_source_at_the_next_host_downbeat() 
         super::fixtures::loaded(grid(24_000, 0, Some((4, 0)), 960_000));
     rig.now = SessionFrame::new(60_768);
     rig.delivery = FrameCount::new(35_232);
-    control.edit(|script| {
-        script.snapshot.position = position(383_872);
-        script.snapshot.status = TrackStatus::Playing {
-            since: SessionFrame::new(60_768),
-        };
-    });
+    sound(&control, &mut rig, 60_768, 383_872);
     rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
         .expect("align");
     let commands = control.commands();

@@ -143,6 +143,7 @@ fn value_for(kind: ValueKind, value: ReadValue<'_>) -> Option<Option<[f32; 4]>> 
 
 const fn kind_of(value: ReadValue<'_>) -> &'static str {
     match value {
+        ReadValue::Color(_) => "Color",
         ReadValue::Text(_) => "Text",
         ReadValue::Image(_) => "Image",
         ReadValue::Bool(_) => "Bool",

@@ -154,7 +154,7 @@ where
 
 #[cfg(feature = "analysis-waveform")]
 fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
-    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_waveform(consts::NODE_BUCKETS)
+    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_waveform(consts::NODE_FOLD)
 }
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -173,7 +173,7 @@ fn beat_waveform(
     AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
         .with_beat_config(config)
         .with_beat_detector(detector, GridParams::default())
-        .with_waveform(consts::NODE_BUCKETS)
+        .with_waveform(consts::NODE_FOLD)
 }
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -842,7 +842,7 @@ async fn matches_direct_waveform_analyzer_over_chunked_stream(analysis_pcm: &'st
         .push(&pools, samples, usize::from(consts::CH), 0)
         .expect("waveform buffers fit the test region");
     let want = direct
-        .snapshot(consts::NODE_BUCKETS, Some(frames))
+        .snapshot(consts::NODE_FOLD, Some(frames))
         .expect("finite fixture");
 
     let reader = Box::new(FakeReader::chunked(&pools, samples, 4));

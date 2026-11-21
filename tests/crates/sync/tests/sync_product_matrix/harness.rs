@@ -3,11 +3,11 @@ use kithara::{
         AudioDecoderConfig, DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent,
     },
     decode::DecoderBackend,
-    events::{EventBus, TrackId},
-    play::Settled,
+    events::TrackId,
+    play::{DeckMixSettingsChange, Settled},
     signal::SegmentId,
 };
-use kithara_command::Seq;
+use kithara_command::{Seq, When};
 use kithara_integration_tests::offline::linked::{LinkReceiptOrigin, LinkSpeed};
 use kithara_render::bridge::{Slot, SlotSnapshot};
 use num_traits::ToPrimitive;
@@ -44,7 +44,7 @@ pub(crate) struct ProductHarness {
     operation_grid: Option<kithara::warp::BeatGridSnapshot>,
     capture_marks: Vec<(SessionFrame, TrackId, SlotSnapshot)>,
     host_grids: Vec<(SessionFrame, kithara::warp::BeatGridSnapshot)>,
-    decoded: Vec<Arc<Mutex<super::control::DecodedRecorder>>>,
+    pub(super) decoded: Vec<Arc<Mutex<super::control::DecodedRecorder>>>,
     source_uris: Vec<String>,
     /// The second each deck's start opens it at, before its stagger.
     cues: Vec<f64>,
@@ -567,7 +567,7 @@ impl ProductHarness {
             .initial_abr_mode(AbrMode::manual(0))
             .discriminator(format!("{}-{provider:?}-{index}", case.id))
             .maybe_beat_grid(case.gridded.then(|| prepared.beat_grid(index)));
-            let events = EventBus::default();
+            let events = deck.bus().scoped();
             decoder_receivers.push(events.subscribe::<DecoderEvent>());
             let config = config.events(events);
             let config = if let Some(backend) = decoder {
@@ -582,7 +582,9 @@ impl ProductHarness {
             let (reference, observer) = super::control::DecodedRecorder::open();
             let id = host
                 .run(move || {
-                    control.set_muted(muted).expect("deck mute");
+                    control
+                        .mix(When::Next, DeckMixSettingsChange::Muted(muted))
+                        .expect("deck mute");
                     let item = control.append(TrackSource::Config(Box::new(config)))?;
                     control.attach_observer(item, observer);
                     Ok::<_, kithara::queue::QueueError>(item)
@@ -658,7 +660,9 @@ impl ProductHarness {
                 });
             harness.decoder_rates.push(rates);
         }
-        harness.deliver_grids(case).await;
+        if !case.defer_grid {
+            harness.deliver_grids(case).await;
+        }
         harness.set_tempo(case, case.start_bpm(), true).await;
         harness.warm_up_transport(case).await;
         if !case.paused {
@@ -790,7 +794,7 @@ impl ProductHarness {
     /// Ticks every deck from the host owner thread, as the app update loop
     /// would.
     async fn tick_all(&self, case: SyncCase) -> kithara::warp::BeatGridSnapshot {
-        use kithara::warp::BeatGrid;
+        use ::kithara::warp::BeatGrid;
         let controls: Vec<_> = self
             .decks
             .iter()
@@ -1159,7 +1163,7 @@ impl ProductHarness {
         first_speed: usize,
         jump: Option<SessionFrame>,
     ) -> Vec<String> {
-        use kithara::play::Settled;
+        use ::kithara::play::Settled;
         use kithara_command::When;
 
         let host_grid = self.host.session_grid().await;
@@ -1389,7 +1393,7 @@ impl ProductHarness {
     }
 
     pub(crate) async fn grid_binding_failures(&mut self, case: SyncCase) -> Vec<String> {
-        use kithara::play::TrackStatus as OwnerTrackStatus;
+        use ::kithara::play::TrackStatus as OwnerTrackStatus;
         let host_grid = self.host.session_grid().await;
         let mut failures = Vec::new();
         let mut evidence = Vec::new();
@@ -1544,7 +1548,7 @@ impl ProductHarness {
         case: SyncCase,
         required_placements: Option<usize>,
     ) -> Vec<String> {
-        use kithara::play::Settled;
+        use ::kithara::play::Settled;
         use kithara_integration_tests::offline::linked::LinkReceiptOrigin;
 
         let host_grid = self.host.session_grid().await;

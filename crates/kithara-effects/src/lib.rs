@@ -4,12 +4,15 @@
 //! Deck and master audio effects.
 
 mod deck_effect;
+pub mod delay;
 mod dsp;
 pub mod eq;
 pub mod filter;
 mod gain_db;
 mod limiter;
 pub mod node;
+/// Prepared stereo reverb and its ranged controls.
+pub mod reverb;
 
 pub use deck_effect::{DeckEffect, FxParamChange, FxParamDescriptor, FxParamMapping, FxParamUnit};
 pub use gain_db::GainDb;

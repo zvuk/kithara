@@ -15,7 +15,13 @@ use ::kithara::ui::{
     source::{FillDocument, SourceResolver, UiConfig},
     view::{self, ViewState},
 };
+#[cfg(feature = "zvuk")]
+use keyring_core::mock::Store;
+#[cfg(feature = "zvuk")]
+use kithara_app_library::{Context, Environment, Secrets};
 use kithara_app_library::{Document, Endpoint, PAGES, Registration, SourcePage};
+#[cfg(feature = "zvuk")]
+use kithara_app_zvuk::Source;
 use kithara_test_utils::kithara;
 
 use super::{
@@ -1091,6 +1097,7 @@ fn every_keylock_chip_binds_to_its_deck() {
                 "down-icon",
                 "chip/toggle",
                 "chip/icon",
+                "chip/key",
                 "chip/readout",
                 "up",
                 "up-icon",
@@ -2147,10 +2154,10 @@ mod answered {
             rig.ui.refresh();
         }
 
-        if let (Some(letter), Some(slot)) = (
-            deck,
-            scope.get("variant").and_then(|slot| slot.parse().ok()),
-        ) {
+        if let (Some(letter), "deck.stream.select_variant", Some(variant)) =
+            (deck, id, scope.get("variant"))
+        {
+            let slot = variant.parse::<usize>().unwrap_or(0);
             rig.shows(letter, |shown| {
                 shown.abr_variants = (0..=slot)
                     .map(|index| AbrVariant {
@@ -2386,4 +2393,57 @@ fn a_source_page_gesture_reaches_its_source_through_the_app_dispatch() {
         Walk::new(&ReadRoot::new(&state)).get("source.query@source=probe"),
         Some(ReadValue::Text("needle"))
     );
+}
+
+#[cfg(feature = "zvuk")]
+#[kithara::test(native, flash(false))]
+fn zvuk_documents_bind_search_and_streaming_to_their_source() {
+    let runtime = test_fixture::runtime();
+    let config = test_fixture::config(runtime.handle());
+    let environment = Environment::new(
+        runtime.handle().clone(),
+        config.net.clone(),
+        Secrets::new(Store::new()),
+    );
+    let entry = serde_yaml_ng::from_str("{user_agent: synthetic-agent}").unwrap();
+    let context = Context::new(config.shutdown.child(), entry);
+    let registration = (Source::FACTORY.register)(&environment, context).unwrap();
+    let (package, _library) = test_fixture::mount(None, vec![registration]).unwrap();
+    for layout in LAYOUTS {
+        let ui = compile_package(&package, layout).unwrap();
+        let controls = controls(&ui);
+        let toggles = controls
+            .iter()
+            .filter(|(path, _)| path.ends_with("streaming-toggle"))
+            .collect::<Vec<_>>();
+        assert!(!toggles.is_empty());
+        for (_, bindings) in toggles {
+            assert_eq!(
+                bindings,
+                &[
+                    "source.adaptive_streaming@source=zvuk",
+                    "source.adaptive_streaming@source=zvuk"
+                ]
+            );
+        }
+        for (suffix, binding) in [
+            ("scope-tracks", "source.scope_tracks@source=zvuk"),
+            ("scope-artists", "source.scope_artists@source=zvuk"),
+            ("scope-albums", "source.scope_albums@source=zvuk"),
+            ("suggestion-0-press", "source.suggestion_0@source=zvuk"),
+            ("back", "source.back@source=zvuk"),
+            ("load-more", "source.load_more@source=zvuk"),
+        ] {
+            let found = controls
+                .iter()
+                .filter(|(path, _)| path.contains("library/pages/zvuk/") && path.ends_with(suffix))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                found.len(),
+                1,
+                "missing or ambiguous Zvuk control `{suffix}`"
+            );
+            assert_eq!(found[0].1, [binding], "wrong binding for `{suffix}`");
+        }
+    }
 }

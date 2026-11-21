@@ -3,7 +3,7 @@ use kithara::{
     bufpool::{PoolError, SampleBuffer},
     download::Downloader,
     effects::LimiterConfig,
-    play::{DeckMixSettings, Position, Settled},
+    play::{DeckMixSettings, Position, Settled, TrackSettingsChange},
     signal::{AudioChunk, AudioChunkInfo, SourceInverse, SourceSpan},
 };
 use kithara_integration_tests::{
@@ -546,13 +546,13 @@ fn source_samples<const N: usize>(
     mapped_samples(position, f64::from(speed), |offset| {
         let frame = source
             .checked_add(offset)
-            .and_then(|frame| usize::try_from(frame).ok());
+            .and_then(|frame| usize::try_from(frame).ok())
+            .and_then(|frame| frame.checked_mul(usize::from(reference.channels)))
+            .and_then(|index| reference.samples.get(index..));
         let mut samples = [0.0; N];
         for (sample, channel) in samples.iter_mut().zip(channels) {
             *sample = frame
-                .and_then(|frame| frame.checked_mul(usize::from(reference.channels)))
-                .and_then(|index| index.checked_add(channel))
-                .and_then(|index| reference.samples.get(index))
+                .and_then(|frame| frame.get(channel))
                 .copied()
                 .filter(|sample| sample.is_finite())
                 .ok_or_else(|| {
@@ -774,7 +774,7 @@ pub(in super::super) async fn capture(
     let _ = harness.render(BLOCK_FRAMES).await;
     let rate: f32 = (target_bpm / native_bpm).as_();
     harness
-        .with_queue(move |control| control.set_default_rate(rate))
+        .with_queue(move |control| control.configure_track(TrackSettingsChange::Speed(rate)))
         .await
         .expect("control rate");
     let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("control source"))
@@ -945,7 +945,7 @@ type SampleResult<const N: usize> = Result<[f32; N], String>;
 
 #[derive(Clone, Default)]
 pub(in super::super) struct DecodedCapture {
-    chunks: std::collections::BTreeMap<(u64, u64), DecodedChunk>,
+    pub(in super::super) chunks: std::collections::BTreeMap<(u64, u64), DecodedChunk>,
     samples: usize,
     rejected: bool,
 }

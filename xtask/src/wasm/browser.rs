@@ -93,8 +93,31 @@ fn environment(args: &TestArgs, target: &Path) -> Result<BTreeMap<OsString, OsSt
             "wasm_test_runner".into(),
         ),
         ("WASM_BINDGEN_TEST_TIMEOUT".into(), "300".into()),
-        ("WASM_BINDGEN_USE_BROWSER".into(), "1".into()),
     ]))
+}
+
+/// The fixture binaries cargo reported building, keyed by the variable that
+/// names each one to the runner's protocol test.
+fn fixture_binaries(messages: &str) -> Result<BTreeMap<OsString, OsString>> {
+    let mut binaries = BTreeMap::new();
+    for message in messages
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+    {
+        let target = message.pointer("/target/name").and_then(Value::as_str);
+        let executable = message.get("executable").and_then(Value::as_str);
+        if let (Some(target), Some(executable)) = (target, executable)
+            && let Some((_, variable)) = consts::WASM_RUNNER_FIXTURE_VARIABLES
+                .iter()
+                .find(|(name, _)| *name == target)
+        {
+            binaries.insert(OsString::from(variable), OsString::from(executable));
+        }
+    }
+    if binaries.len() != consts::WASM_RUNNER_FIXTURE_VARIABLES.len() {
+        anyhow::bail!("cargo did not report every runner protocol fixture binary: {binaries:?}");
+    }
+    Ok(binaries)
 }
 
 fn execute(args: &TestArgs, ctx: &Ctx, process: &Process) -> Result<()> {
@@ -112,22 +135,46 @@ fn execute(args: &TestArgs, ctx: &Ctx, process: &Process) -> Result<()> {
             .map(|p| (p.name.as_str(), &p.metadata)),
     )?;
     let cargo = ctx.config.tools.program("cargo");
-    let mut build = process.command(cargo);
-    build.args([
-        "build",
-        "-p",
-        "kithara-integration-tests",
-        "--features",
-        "all",
-        "--bin",
-        "test_server",
-        "--bin",
-        "wasm_test_runner",
-    ]);
-    process.run_command(&mut build, "build browser fixture server and runner")?;
+    process.run(
+        cargo,
+        &[
+            "build",
+            "-p",
+            "kithara-integration-tests",
+            "--features",
+            "all",
+            "--bin",
+            "test_server",
+        ],
+        "build browser fixture server",
+    )?;
+    process.run(
+        cargo,
+        &[
+            "build",
+            "-p",
+            "kithara-wasm-test-runner",
+            "--bin",
+            "wasm_test_runner",
+        ],
+        "build browser test runner",
+    )?;
 
     let vars = environment(args, metadata.target_directory.as_std_path())?;
     let toolchain = format!("+{}", nightly_toolchain());
+    let mut fixtures = process.command(cargo);
+    fixtures
+        .arg(&toolchain)
+        .args(consts::WASM_TEST_ARGS)
+        .args(consts::WASM_RUNNER_FIXTURES)
+        .args(["--no-run", "--message-format=json"]);
+    let built = process.capture_command(&mut fixtures, "build runner protocol fixtures")?;
+    let mut protocol = process.command(cargo);
+    protocol
+        .args(consts::WASM_RUNNER_PROTOCOL_TEST)
+        .envs(&vars)
+        .envs(fixture_binaries(&built)?);
+    process.run_command(&mut protocol, "wasm runner protocol")?;
     let run = |label: &str, selection: &[&str]| {
         let mut command = process.command(cargo);
         command
@@ -229,12 +276,73 @@ mod tests {
         (root, ctx)
     }
 
+    /// What `cargo --message-format=json` reports for the two fixture tests,
+    /// among lines for their dependencies.
+    const FIXTURE_MESSAGES: &str = concat!(
+        r#"{"reason":"compiler-artifact","target":{"name":"wasm_bindgen_test","kind":["lib"]},"executable":null}"#,
+        "\n",
+        r#"{"reason":"compiler-artifact","target":{"name":"browser","kind":["test"]},"executable":"/deps/browser-1.wasm"}"#,
+        "\n",
+        r#"{"reason":"compiler-artifact","target":{"name":"worker","kind":["test"]},"executable":"/deps/worker-2.wasm"}"#,
+        "\n",
+        r#"{"reason":"build-finished","success":true}"#,
+    );
+
+    #[test]
+    fn protocol_fixtures_need_both_modes() {
+        let found = fixture_binaries(FIXTURE_MESSAGES).unwrap();
+        assert_eq!(found.len(), 2);
+        let browser_only = FIXTURE_MESSAGES
+            .lines()
+            .filter(|line| !line.contains("worker-2"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(fixture_binaries(&browser_only).is_err());
+    }
+
     fn values<'a>(step: &'a Step, flag: &'a str) -> Vec<&'a str> {
         step.args
             .windows(2)
             .filter(|pair| pair[0] == flag)
             .map(|pair| pair[1].as_str())
             .collect()
+    }
+
+    /// The runner and its fixture server are built, then the runner's protocol
+    /// test runs on both fixture binaries, before any browser suite.
+    fn prepares_the_runner(steps: &[Step], target: &Path) {
+        let builds = &steps[..2];
+        assert_eq!(values(&builds[0], "-p"), ["kithara-integration-tests"]);
+        assert_eq!(values(&builds[0], "--bin"), ["test_server"]);
+        assert_eq!(values(&builds[1], "-p"), ["kithara-wasm-test-runner"]);
+        assert_eq!(values(&builds[1], "--bin"), ["wasm_test_runner"]);
+        for build in builds {
+            assert_eq!(build.args[0], "build");
+            assert!(
+                !build
+                    .env
+                    .contains_key("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER")
+            );
+        }
+        let fixtures = &steps[2];
+        assert_eq!(values(fixtures, "-p"), ["kithara-wasm-runner-fixture"]);
+        assert_eq!(values(fixtures, "--target"), ["wasm32-unknown-unknown"]);
+        assert!(fixtures.args.iter().any(|arg| arg == "--no-run"));
+        let protocol = &steps[3];
+        assert_eq!(values(protocol, "-p"), ["kithara-wasm-test-runner"]);
+        assert_eq!(values(protocol, "--test"), ["protocol"]);
+        assert_eq!(
+            protocol.env["KITHARA_WASM_RUNNER_FIXTURE_BROWSER"],
+            "/deps/browser-1.wasm"
+        );
+        assert_eq!(
+            protocol.env["KITHARA_WASM_RUNNER_FIXTURE_WORKER"],
+            "/deps/worker-2.wasm"
+        );
+        assert_eq!(
+            env::split_paths(&protocol.env["PATH"]).next().unwrap(),
+            target
+        );
     }
 
     #[test]
@@ -259,26 +367,22 @@ mod tests {
                 suite,
                 audio_route,
             };
-            let process = Process::recording(&ctx.root, Recording::default());
+            let process = Process::recording(
+                &ctx.root,
+                Recording::default()
+                    .with_reply(&[ctx.config.tools.program("cargo")], FIXTURE_MESSAGES),
+            );
             execute(&args, &ctx, &process).unwrap();
             let recording = process.recorded().unwrap();
             let steps = recording.steps();
-            let first = &steps[0];
-            assert_eq!(first.args[0], "build");
-            assert_eq!(values(first, "--bin"), ["test_server", "wasm_test_runner"]);
-            assert!(
-                !first
-                    .env
-                    .contains_key("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER")
-            );
-            let tests = &steps[1..];
+            prepares_the_runner(&steps[..4], &target);
+            let tests = &steps[4..];
             for step in tests {
                 assert_eq!(
                     step.env["CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER"],
                     "wasm_test_runner"
                 );
                 assert_eq!(step.env["WASM_BINDGEN_TEST_TIMEOUT"], "300");
-                assert_eq!(step.env["WASM_BINDGEN_USE_BROWSER"], "1");
                 assert_eq!(env::split_paths(&step.env["PATH"]).next().unwrap(), target);
                 assert_eq!(values(step, "--target"), ["wasm32-unknown-unknown"]);
                 assert_eq!(values(step, "--profile"), ["test-release"]);

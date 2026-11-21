@@ -10,6 +10,14 @@ pub(crate) const NYQUIST_FACTOR: f32 = 2.0;
 /// and up.
 pub(crate) const NYQUIST_SHARE: f64 = 0.45;
 
+/// Frames of stack scratch per feedback-comb channel.
+pub(crate) const COMB_CHUNK: usize = 256;
+/// The -120 dBFS write floor used by the feedback-comb tail policy.
+pub(crate) const COMB_FLOOR: f32 = 1e-6;
+
+/// Seconds a delay time change crosses from the old read to the new one.
+pub(crate) const DELAY_RAMP_SECONDS: f64 = 0.02;
+
 pub(crate) const PASSTHROUGH: Coefficients<f32> = Coefficients {
     a1: 0.0,
     a2: 0.0,
@@ -64,3 +72,14 @@ pub(crate) const STEP_OVERSHOOT: f32 = 1.1351;
 #[cfg(test)]
 pub(crate) const TEST_RATE: core::num::NonZeroU32 =
     core::num::NonZeroU32::new(48_000).expect("a non-zero rate");
+
+pub(crate) const REVERB_COMB_LENGTHS: [u32; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617];
+pub(crate) const REVERB_DIFFUSER_LENGTHS: [u32; 4] = [31, 47, 73, 101];
+pub(crate) const REVERB_COMBS: usize = REVERB_COMB_LENGTHS.len();
+pub(crate) const REVERB_SCRATCH: usize = 128;
+pub(crate) const REVERB_REFERENCE_RATE: f64 = 44_100.0;
+pub(crate) const REVERB_STEREO_SPREAD: u32 = 13;
+pub(crate) const REVERB_DIFFUSION: f32 = 0.5;
+pub(crate) const REVERB_DAMPING_SCALE: f64 = 0.4;
+pub(crate) const REVERB_TAIL_RT60_MULTIPLIER: f64 = 2.0;
+pub(crate) const REVERB_TAIL_THRESHOLD: f64 = 1e-6;

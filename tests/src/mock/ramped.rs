@@ -20,15 +20,13 @@ use kithara::{
 use kithara_command::{Seq, When};
 use kithara_render::bridge::DeckPart;
 
-use crate::bufpool_ext::TestPools;
-
 pub struct RampedFactory(pub NonZeroU64);
 
 #[derive(Clone, Default)]
-pub struct InjectedFactory(Arc<Mutex<BTreeMap<TrackId, ResourceLoad<TestPools>>>>);
+pub struct InjectedFactory(Arc<Mutex<BTreeMap<TrackId, ResourceLoad>>>);
 
 impl InjectedFactory {
-    pub fn insert(&self, id: TrackId, load: ResourceLoad<TestPools>) {
+    pub fn insert(&self, id: TrackId, load: ResourceLoad) {
         assert!(
             self.0.lock().insert(id, load).is_none(),
             "one explicit fixture load per item"
@@ -36,7 +34,7 @@ impl InjectedFactory {
     }
 }
 
-impl TrackFactory<TestPools> for InjectedFactory {
+impl TrackFactory for InjectedFactory {
     type Track = RampedTrack;
 
     fn track(&self, config: PlayerConfig) -> Result<Self::Track, PlayError> {
@@ -50,13 +48,13 @@ impl TrackFactory<TestPools> for InjectedFactory {
 }
 
 pub struct RampedTrack {
-    inner: PlayerImpl<TestPools>,
+    inner: PlayerImpl,
     item: TrackId,
     frames: Option<NonZeroU64>,
     loads: Option<InjectedFactory>,
 }
 
-impl TrackFactory<TestPools> for RampedFactory {
+impl TrackFactory for RampedFactory {
     type Track = RampedTrack;
 
     fn track(&self, config: PlayerConfig) -> Result<Self::Track, PlayError> {
@@ -69,14 +67,14 @@ impl TrackFactory<TestPools> for RampedFactory {
     }
 }
 
-impl Player<TestPools> for RampedTrack {
-    type Command = TrackCommand<TestPools>;
+impl Player for RampedTrack {
+    type Command = TrackCommand;
     type Snapshot = TrackSnapshot;
 
     fn apply(
         &mut self,
         command: Self::Command,
-        out: &mut Outbox<'_, TestPools>,
+        out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let command = match (command, self.frames) {
             (
@@ -105,28 +103,30 @@ impl Player<TestPools> for RampedTrack {
     delegate::delegate! {
         to self.inner {
             fn entry(&self, bound: Bound) -> Option<SessionFrame>;
-            fn settle(&mut self, receipt: TrackReceipt<'_, TestPools>, out: &mut Outbox<'_, TestPools>) -> Settled;
-            fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, TestPools>);
+            fn settle(&mut self, receipt: TrackReceipt<'_>, out: &mut Outbox<'_>) -> Settled;
+            fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_>);
             fn snapshot(&self) -> Self::Snapshot;
         }
     }
 }
 
-impl Track<TestPools> for RampedTrack {
+impl Track for RampedTrack {
     delegate::delegate! {
         to self.inner {
-            fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_, TestPools>) -> Result<Option<usize>, PlayError>;
+            fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_>) -> Result<Option<usize>, PlayError>;
             fn projected(&self) -> TrackSettings;
+            fn source_request(&self) -> Option<Seq>;
+            fn source_closed(&self) -> bool;
             fn prepared_speed(&self) -> Option<&SpeedCurve>;
-            fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_, TestPools>) -> Result<bool, PlayError>;
+            fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_>) -> Result<bool, PlayError>;
             fn planned(&self, at: SessionFrame, sample_rate: NonZeroU32) -> Result<(Duration, f64), PlayError>;
+            fn planned_law(&self, at: SessionFrame) -> Result<SpeedCurve, PlayError>;
             fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;
-            fn speed_receipt(&mut self) -> Option<Settled>;
-            fn speed_applied(&mut self, seq: Seq) -> Option<bool>;
-            fn seek(&mut self, to: Duration, out: &mut Outbox<'_, TestPools>) -> Result<Option<SeekBatch>, PlayError>;
+            fn lane_receipt(&mut self) -> Option<Settled<kithara_render::LaneFrame>>;
+            fn seek(&mut self, to: Duration, out: &mut Outbox<'_>) -> Result<Option<SeekBatch>, PlayError>;
             fn seek_applied(&mut self, seq: Seq) -> Option<bool>;
             fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);
-            fn cue(&mut self, position: Duration, speed: SpeedCurve, out: &mut Outbox<'_, TestPools>) -> Result<Option<Seq>, PlayError>;
+            fn cue(&mut self, position: Duration, speed: SpeedCurve, out: &mut Outbox<'_>) -> Result<Option<Seq>, PlayError>;
         }
     }
 }

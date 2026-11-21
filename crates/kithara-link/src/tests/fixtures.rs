@@ -20,6 +20,7 @@ use kithara_play::{
     mock::DeckRig,
 };
 use kithara_render::{
+    LaneFrame,
     bridge::{DeckPart, DeckProtocol, DeckSnapshot, Slot, SlotMark},
     rt::DeckMixerConfig,
 };
@@ -100,15 +101,23 @@ pub(super) fn grid(
     .expect("consistent test grid")
 }
 
-pub(super) fn resource() -> ResourceLoad<TestPools> {
-    ResourceLoad::new(
-        ResourceConfig::for_src(
-            ResourceSrc::parse("https://example.com/track.mp3").expect("test source"),
+pub(super) fn resource() -> ResourceLoad {
+    kithara_play::ResourcePrep::builder()
+        .worker(PlayWorker::new(
+            kithara_play::PlayWorkerConfig::builder(pools()).build(),
+        ))
+        .build()
+        .prepare(
+            ResourceConfig::<TestPools>::for_src(
+                ResourceSrc::parse("https://example.com/track.mp3").expect("test source"),
+            )
+            .store(AssetStore::builder(pools()).build())
+            .build(),
+            &kithara_play::mock::output(None).get(),
+            Box::new(AudioObserverSlot::default().relay()),
         )
-        .store(AssetStore::builder(pools()).build())
-        .build(),
-        Box::new(AudioObserverSlot::default().relay()),
-    )
+        .expect("prepared source load")
+        .1
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -133,8 +142,8 @@ pub(super) struct Script {
     /// SYNC reconciles it on every pass.
     pub clock: TrackClock,
     pub clock_refusal: Option<PlayError>,
-    pending: Vec<(Seq, Vec<Command>, bool)>,
-    speeds: VecDeque<Settled>,
+    pending: Vec<(Seq, Vec<Command>, bool, SlotMark)>,
+    pub(super) speeds: VecDeque<Settled<LaneFrame>>,
     verdicts: Vec<(Seq, bool)>,
 }
 
@@ -210,7 +219,16 @@ impl ScriptedTrack {
             script
                 .sent
                 .extend(commands.iter().cloned().map(|command| (seq, command)));
-            script.pending.push((seq, commands, true));
+            // The scripted lane starts at the session origin before its first mark.
+            let mark = script.snapshot.mark.unwrap_or(SlotMark {
+                session: SessionFrame::new(0),
+                lane: LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: 0,
+                },
+                position: Position::ZERO,
+            });
+            script.pending.push((seq, commands, true, mark));
             Ok(Some(seq))
         })?;
         if let Some(seq) = sent {
@@ -219,10 +237,29 @@ impl ScriptedTrack {
         }
         Ok(sent)
     }
+
+    fn prepare_source(&mut self, sent: Option<Seq>) {
+        self.lane_commands.retain(|(seq, _, _)| Some(*seq) == sent);
+        self.control.edit(|script| {
+            for (seq, commands, current, _) in &mut script.pending {
+                if commands
+                    .iter()
+                    .any(|command| matches!(command, Command::Play(_)))
+                    || (Some(*seq) != sent
+                        && commands
+                            .iter()
+                            .any(|command| matches!(command, Command::Seek(_))))
+                {
+                    *current = false;
+                }
+            }
+            script.snapshot.pending_lane = true;
+        });
+    }
 }
 
-impl Player<TestPools> for ScriptedTrack {
-    type Command = TrackCommand<TestPools>;
+impl Player for ScriptedTrack {
+    type Command = TrackCommand;
     type Snapshot = TrackSnapshot;
 
     fn entry(&self, bound: Bound) -> Option<SessionFrame> {
@@ -242,8 +279,16 @@ impl Player<TestPools> for ScriptedTrack {
     fn apply(
         &mut self,
         command: Self::Command,
-        _out: &mut Outbox<'_, TestPools>,
+        _out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
+        let held_speed = match &command {
+            TrackCommand::Seek { .. }
+                if !matches!(self.snapshot().status, TrackStatus::Playing { .. }) =>
+            {
+                Some(SpeedCurve::Constant(self.projected().speed()))
+            }
+            _ => None,
+        };
         let command = match command {
             TrackCommand::Align { to, speed, at } => {
                 return self.send(vec![
@@ -286,21 +331,20 @@ impl Player<TestPools> for ScriptedTrack {
         let sent = self.send(vec![command.clone()])?;
         if load {
             self.control.edit(|script| {
-                script.pending.retain(|(seq, _, _)| Some(*seq) == sent);
+                script.pending.retain(|(seq, _, _, _)| Some(*seq) == sent);
                 script.snapshot.status = TrackStatus::Loading;
                 if let Command::Load(position) = command {
                     script.snapshot.position = position;
                 }
             });
+        } else if let (Some(seq), Some(speed)) = (sent, held_speed) {
+            self.lane_commands.push((seq, speed, When::Next));
+            self.prepare_source(sent);
         }
         Ok(sent)
     }
 
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, TestPools>,
-        _out: &mut Outbox<'_, TestPools>,
-    ) -> Settled {
+    fn settle(&mut self, receipt: TrackReceipt<'_>, _out: &mut Outbox<'_>) -> Settled {
         let TrackReceipt::Deck { seq, outcome, .. } = receipt else {
             return Settled::Pending;
         };
@@ -308,20 +352,35 @@ impl Player<TestPools> for ScriptedTrack {
             let Some(index) = script
                 .pending
                 .iter()
-                .position(|(pending, _, _)| *pending == seq)
+                .position(|(pending, _, _, _)| *pending == seq)
             else {
                 return Settled::Pending;
             };
-            let (_, commands, current) = script.pending.remove(index);
+            let (_, commands, current, mark) = script.pending.remove(index);
             if !current {
                 return Settled::Rejected {
                     seq,
                     reason: Rejection::Stale,
                 };
             }
-            let speed = commands
-                .iter()
-                .any(|command| matches!(command, Command::Speed(..)));
+            let lane = commands.iter().any(|command| {
+                matches!(
+                    command,
+                    Command::Speed(..)
+                        | Command::Seek(_)
+                        | Command::Jump(..)
+                        | Command::ConfigureSpeed(..)
+                        | Command::Rate(_)
+                )
+            });
+            let timed = commands.iter().any(|command| {
+                matches!(
+                    command,
+                    Command::Speed(_, When::At(_))
+                        | Command::Jump(..)
+                        | Command::ConfigureSpeed(_, When::At(_))
+                )
+            });
             let settled = match outcome {
                 Outcome::Applied { at, .. } => {
                     for command in commands {
@@ -379,11 +438,28 @@ impl Player<TestPools> for ScriptedTrack {
                     },
                 },
             };
-            if speed {
+            if lane {
                 script
                     .verdicts
                     .push((seq, matches!(settled, Settled::Applied { .. })));
-                script.speeds.push_back(settled.clone());
+                script.speeds.push_back(match &settled {
+                    Settled::Applied { seq, at } => Settled::Applied {
+                        seq: *seq,
+                        at: if timed {
+                            mark.lane_at(*at).expect("actual lane frame")
+                        } else {
+                            LaneFrame {
+                                segment: SegmentId::FIRST,
+                                frame: 0,
+                            }
+                        },
+                    },
+                    Settled::Rejected { seq, reason } => Settled::Rejected {
+                        seq: *seq,
+                        reason: reason.clone(),
+                    },
+                    Settled::Pending => Settled::Pending,
+                });
             }
             settled
         });
@@ -393,19 +469,19 @@ impl Player<TestPools> for ScriptedTrack {
         settled
     }
 
-    fn tick(&mut self, _now: SessionFrame, _out: &mut Outbox<'_, TestPools>) {}
+    fn tick(&mut self, _now: SessionFrame, _out: &mut Outbox<'_>) {}
 
     fn snapshot(&self) -> Self::Snapshot {
         self.control.edit(|script| script.snapshot.clone())
     }
 }
 
-impl Track<TestPools> for ScriptedTrack {
+impl Track for ScriptedTrack {
     fn admit(
         &mut self,
         _change: TrackSettingsChange,
         _at: When<SessionFrame>,
-        _out: &Outbox<'_, TestPools>,
+        _out: &Outbox<'_>,
     ) -> Result<Option<usize>, PlayError> {
         Ok(Some(0))
     }
@@ -416,8 +492,8 @@ impl Track<TestPools> for ScriptedTrack {
                 .pending
                 .iter()
                 .rev()
-                .filter(|(_, _, current)| *current)
-                .flat_map(|(_, commands, _)| commands.iter().rev())
+                .filter(|(_, _, current, _)| *current)
+                .flat_map(|(_, commands, _, _)| commands.iter().rev())
                 .find_map(|command| match command {
                     Command::Speed(SpeedCurve::Constant(speed), _)
                     | Command::ConfigureSpeed(speed, _) => Some(*speed),
@@ -449,7 +525,7 @@ impl Track<TestPools> for ScriptedTrack {
     fn prepare_entry(
         &mut self,
         at: SessionFrame,
-        _out: &mut Outbox<'_, TestPools>,
+        _out: &mut Outbox<'_>,
     ) -> Result<bool, PlayError> {
         Ok(self.entry(Bound::AtOrAfter(at)).is_some())
     }
@@ -473,49 +549,54 @@ impl Track<TestPools> for ScriptedTrack {
         Ok((track.position + elapsed, f64::from(track.speed)))
     }
 
+    fn planned_law(&self, _at: SessionFrame) -> Result<SpeedCurve, PlayError> {
+        Ok(SpeedCurve::Constant(self.snapshot().speed))
+    }
+
     fn planned_end(&self, _rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError> {
         Ok(None)
     }
-    fn speed_receipt(&mut self) -> Option<Settled> {
+    fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>> {
         self.control.edit(|script| script.speeds.pop_front())
     }
-    fn speed_applied(&mut self, seq: Seq) -> Option<bool> {
+    fn seek_applied(&mut self, seq: Seq) -> Option<bool> {
         self.control.edit(|script| {
-            script
-                .verdicts
+            if script
+                .pending
                 .iter()
-                .find(|(named, _)| *named == seq)
-                .map(|(_, applied)| *applied)
+                .any(|(pending, _, _, _)| *pending == seq)
+            {
+                return None;
+            }
+            Some(
+                script
+                    .verdicts
+                    .iter()
+                    .find(|(named, _)| *named == seq)
+                    .is_some_and(|(_, applied)| *applied),
+            )
         })
     }
+    fn source_request(&self) -> Option<Seq> {
+        None
+    }
+    fn source_closed(&self) -> bool {
+        true
+    }
+
     fn finish_group(&mut self, _result: Result<Seq, &mut Vec<DeckPart>>) {}
 
     fn cue(
         &mut self,
         position: Position,
         speed: SpeedCurve,
-        _out: &mut Outbox<'_, TestPools>,
+        _out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
         let sent = self.send(vec![
             Command::Speed(speed, When::Next),
             Command::Seek(position),
         ])?;
-        self.lane_commands.retain(|(seq, _, _)| Some(*seq) == sent);
-        self.control.edit(|script| {
-            for (seq, commands, current) in &mut script.pending {
-                if commands
-                    .iter()
-                    .any(|command| matches!(command, Command::Play(_)))
-                    || (Some(*seq) != sent
-                        && commands
-                            .iter()
-                            .any(|command| matches!(command, Command::Seek(_))))
-                {
-                    *current = false;
-                }
-            }
-            script.snapshot.pending_lane = true;
-        });
+        self.prepare_source(sent);
         Ok(sent)
     }
 }
@@ -527,19 +608,14 @@ impl HostedDeck<TestPools> for ScriptedTrack {
     fn mixer_config(&self) -> DeckMixerConfig {
         DeckMixerConfig::default()
     }
-    fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {}
-    fn settle(
-        &mut self,
-        receipt: TrackReceipt<'_, TestPools>,
-        _pass: DeckPass<'_>,
-        out: &mut Outbox<'_, TestPools>,
-    ) {
+    fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_>) {}
+    fn settle(&mut self, receipt: TrackReceipt<'_>, _pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         Player::settle(self, receipt, out);
     }
-    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, TestPools>) {
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_>) {
         Player::tick(self, pass.now, out);
     }
-    fn close(&mut self, out: &mut Outbox<'_, TestPools>) -> Result<(), PlayError> {
+    fn close(&mut self, out: &mut Outbox<'_>) -> Result<(), PlayError> {
         self.apply(TrackCommand::Release, out).map(|_| ())
     }
     fn hold(&mut self, _waker: Waker) {}
@@ -570,13 +646,13 @@ impl Rig {
         }
     }
 
-    pub(super) fn run<R>(&mut self, run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R) -> R {
+    pub(super) fn run<R>(&mut self, run: impl FnOnce(&mut Outbox<'_>) -> R) -> R {
         self.run_pass(|out, _pass| run(out))
     }
 
     pub(super) fn run_pass<R>(
         &mut self,
-        run: impl FnOnce(&mut Outbox<'_, TestPools>, DeckPass<'_>) -> R,
+        run: impl FnOnce(&mut Outbox<'_>, DeckPass<'_>) -> R,
     ) -> R {
         let mut port = self
             .queues
@@ -605,9 +681,19 @@ impl Rig {
         seq: Seq,
         outcome: &Outcome<DeckProtocol>,
     ) -> Settled {
+        self.settle_parts(deck, seq, outcome, Vec::new())
+    }
+
+    pub(super) fn settle_parts(
+        &mut self,
+        deck: &mut Deck,
+        seq: Seq,
+        outcome: &Outcome<DeckProtocol>,
+        commands: Vec<DeckPart>,
+    ) -> Settled {
         let mut batch = Batch {
             basis: vec![(Slot::new(0), None)],
-            commands: Vec::new(),
+            commands,
         };
         self.run(|out| {
             Player::settle(
@@ -644,6 +730,7 @@ pub(super) fn ordinary() -> (ScriptedTrack, Control) {
             speed: 1.0,
             position: Position::ZERO,
             duration: None,
+            cached: Position::ZERO,
             abr: None,
             metadata: TrackMetadata::default(),
             mark: None,
@@ -757,7 +844,7 @@ pub(super) fn sound(control: &Control, rig: &mut Rig, now: u32, at: u32) {
         script.snapshot.position = position(at);
         script.snapshot.mark = Some(SlotMark {
             session: rig.now,
-            lane: kithara_render::LaneFrame {
+            lane: LaneFrame {
                 segment: SegmentId::FIRST,
                 frame: u64::from(at),
             },

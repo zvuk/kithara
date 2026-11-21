@@ -1,4 +1,8 @@
-use std::{array, collections::BTreeMap};
+use std::{
+    array,
+    collections::BTreeMap,
+    num::{NonZeroU32, NonZeroU64},
+};
 
 use kithara_blob::{BlobError, Writer};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
@@ -7,10 +11,7 @@ use kithara_signal::CoverageWrite;
 use rangemap::RangeSet;
 
 use super::envelope::Envelope;
-use crate::{
-    AnalysisParams, AnalyzerError, MAX_BUCKETS, Waveform, WaveformResume, bucketize::bucketize,
-    consts,
-};
+use crate::{AnalysisParams, AnalyzerError, MAX_BUCKETS, Waveform, WaveformResume, consts};
 
 pub(super) type Columns = [[u8; 8]; consts::COLUMNS];
 
@@ -152,37 +153,53 @@ impl WaveformAnalyzer {
         Ok(())
     }
 
-    /// Folds absolute columns by peak, with stable positions for a known extent.
+    /// Folds absolute columns by peak, leaving the pass able to accept further
+    /// ranges. Each bucket folds `fold` consecutive columns, coarsened only to
+    /// fit the format limit. `extent` is the source length in frames when known
+    /// and sets the column count, including gaps; uncovered columns read as zero
+    /// and are never materialised.
     ///
     /// # Errors
-    /// Failed filtering of a completely covered final partial window.
+    /// Unrepresentable source coordinates or failed filtering of a final partial window.
     pub fn snapshot(
         &mut self,
-        buckets: usize,
+        fold: NonZeroU32,
         extent: Option<u64>,
     ) -> Result<Waveform, AnalyzerError> {
         let tail = self.tail_columns(extent)?;
-        let total = self.column_count(extent);
-        let raw = self
+        let total = self.column_count(extent)?;
+        let fold = NonZeroU64::from(fold);
+        let stride = NonZeroU64::new(fold.get().max(total.div_ceil(MAX_BUCKETS as u64)))
+            .ok_or(FilterError::Shape)?;
+        let column_frames = u64::try_from(self.column_frames).map_err(|_| FilterError::Shape)?;
+        let column_frames = NonZeroU64::new(column_frames).ok_or(FilterError::Shape)?;
+        let span_frames = stride
+            .checked_mul(column_frames)
+            .ok_or(FilterError::Shape)?;
+        let count =
+            usize::try_from(total.div_ceil(stride.get())).map_err(|_| FilterError::Shape)?;
+        let mut out = vec![[0_u8; 8]; count];
+        let covered = self
             .columns
             .iter()
             .map(|(&index, columns)| (index, columns))
-            .chain(tail.as_ref().map(|(index, columns)| (*index, columns)))
-            .flat_map(|(index, columns)| {
-                let start = usize::try_from(body(index))
-                    .unwrap_or(usize::MAX)
-                    .saturating_mul(consts::COLUMNS);
-                columns
-                    .iter()
-                    .copied()
-                    .enumerate()
-                    .map(move |(offset, column)| (start.saturating_add(offset), column))
-            });
-        let count = buckets.min(MAX_BUCKETS).min(total);
-        let peak = |a: [u8; 8], b: [u8; 8]| array::from_fn(|i| a[i].max(b[i]));
-        Ok(Waveform::analysed(bucketize(
-            raw, total, count, [0; 8], peak,
-        )))
+            .chain(tail.as_ref().map(|(index, columns)| (*index, columns)));
+        for (index, columns) in covered {
+            let start = body(index)
+                .checked_mul(consts::COLUMNS as u64)
+                .ok_or(FilterError::Shape)?;
+            for (offset, column) in columns.iter().enumerate() {
+                let position = start.checked_add(offset as u64).ok_or(FilterError::Shape)?;
+                if position >= total {
+                    break;
+                }
+                let bucket =
+                    usize::try_from(position / stride.get()).map_err(|_| FilterError::Shape)?;
+                let bucket = out.get_mut(bucket).ok_or(FilterError::Shape)?;
+                *bucket = array::from_fn(|band| bucket[band].max(column[band]));
+            }
+        }
+        Ok(Waveform::analysed(out, span_frames))
     }
 
     pub fn write_resume(&self, out: &mut Vec<u8>) {
@@ -209,11 +226,13 @@ pub(super) const fn selected(index: u64) -> bool {
     index == 0 || index % 3 == 2
 }
 pub(super) const fn body(index: u64) -> u64 {
-    index.saturating_add(1) / 3
+    index / 3 + (index % 3 + 1) / 3
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use std::num::NonZeroU32;
+
     use kithara_blob::BlobError;
     use kithara_test_fixtures::analysis_fixtures::{
         analysis_silence, waveform_half, waveform_high, waveform_low, waveform_mid, waveform_mix,
@@ -252,15 +271,19 @@ mod tests {
                 .expect("waveform buffers fit the test region");
         }
 
-        fn whole(&mut self, pcm: &[f32], channels: usize, buckets: usize) -> Vec<Bucket> {
+        fn whole(&mut self, pcm: &[f32], channels: usize, fold: u32) -> Vec<Bucket> {
             self.push(pcm, channels, 0);
             let extent = u64::try_from(pcm.len() / channels).unwrap_or(0);
             self.analyzer
-                .snapshot(buckets, Some(extent))
+                .snapshot(factor(fold), Some(extent))
                 .expect("finite windows")
                 .buckets()
                 .collect::<Vec<_>>()
         }
+    }
+
+    fn factor(fold: u32) -> NonZeroU32 {
+        NonZeroU32::new(fold).expect("a test factor is nonzero")
     }
 
     macro_rules! flat {
@@ -318,7 +341,7 @@ mod tests {
         let stopped = interrupted_pass(&waveform_tone);
         let expected = Pass::new(flat!())
             .analyzer
-            .snapshot(0, None)
+            .snapshot(NonZeroU32::MIN, None)
             .expect("finite windows");
         assert!(expected.is_empty(), "a fresh pass has nothing to show");
 
@@ -332,11 +355,11 @@ mod tests {
         assert_eq!(
             resumed
                 .analyzer
-                .snapshot(8, Some(extent))
+                .snapshot(NonZeroU32::MIN, Some(extent))
                 .expect("finite windows"),
             stopped
                 .analyzer
-                .snapshot(8, Some(extent))
+                .snapshot(NonZeroU32::MIN, Some(extent))
                 .expect("finite windows"),
             "a resumed pass stands exactly where the stopped one did"
         );
@@ -462,21 +485,15 @@ mod tests {
         assert!(
             Pass::new(AnalysisParams::default())
                 .analyzer
-                .snapshot(8, None)
+                .snapshot(NonZeroU32::MIN, None)
                 .expect("finite windows")
                 .is_empty()
         );
     }
 
     #[kithara::test]
-    fn zero_buckets_snapshots_empty(waveform_half: Vec<f32>) {
-        let mut pass = Pass::new(AnalysisParams::default());
-        assert!(pass.whole(&waveform_half, 1, 0).is_empty());
-    }
-
-    #[kithara::test]
     fn silence_is_all_zero(analysis_silence: Vec<f32>) {
-        let wave = Pass::new(AnalysisParams::default()).whole(&analysis_silence[..16_384], 1, 8);
+        let wave = Pass::new(AnalysisParams::default()).whole(&analysis_silence[..16_384], 1, 32);
         assert_eq!(wave.len(), 8);
         for b in &wave {
             assert_eq!(*b, Bucket::default(), "silence -> all-zero bucket: {b:?}");
@@ -484,9 +501,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn fewer_frames_than_buckets_stays_finite(waveform_tiny: Vec<f32>) {
-        let wave = Pass::new(AnalysisParams::default()).whole(&waveform_tiny, 1, 5);
-        assert!(!wave.is_empty() && wave.len() <= 5, "len {}", wave.len());
+    fn fewer_frames_than_a_window_stays_finite(waveform_tiny: Vec<f32>) {
+        let wave = Pass::new(AnalysisParams::default()).whole(&waveform_tiny, 1, 1);
+        assert_eq!(wave.len(), waveform_tiny.len().div_ceil(64));
         for b in &wave {
             for v in b.left().into_iter().chain(b.right()) {
                 assert!(
@@ -498,36 +515,34 @@ mod tests {
     }
 
     #[kithara::test]
-    fn output_is_native_window_resolution_capped(waveform_tone: Vec<f32>) {
+    fn a_factor_counts_native_columns(waveform_tone: Vec<f32>) {
         // A source span spanning several pre-rolled windows.
         let samples = 4096 + 1024 * 9;
         let pcm = &waveform_tone[..samples];
 
-        // Above the column count: native resolution, never fabricated.
         assert_eq!(
-            Pass::new(flat!()).whole(pcm, 1, 100_000).len(),
+            Pass::new(flat!()).whole(pcm, 1, 1).len(),
             samples.div_ceil(64),
-            "large = native count"
+            "factor 1 is one bucket per native column"
         );
-        // Below it: still decimates (long-track cap).
         assert_eq!(
             Pass::new(flat!()).whole(pcm, 1, 4).len(),
-            4,
-            "small request decimates"
+            samples.div_ceil(64).div_ceil(4),
+            "factor 4 folds four columns per bucket"
         );
     }
 
     #[kithara::test]
     fn deterministic_for_same_input(waveform_tone: Vec<f32>) {
         let pcm = waveform_tone;
-        let run = || Pass::new(AnalysisParams::default()).whole(&pcm, 1, 64);
+        let run = || Pass::new(AnalysisParams::default()).whole(&pcm, 1, 1);
         assert_eq!(run(), run(), "same PCM must produce the same waveform");
     }
 
     #[kithara::test]
     fn window_split_across_chunks_matches_unsplit(waveform_tone: Vec<f32>) {
         let pcm = waveform_tone;
-        let whole = Pass::new(flat!()).whole(&pcm, 1, 12);
+        let whole = Pass::new(flat!()).whole(&pcm, 1, 1);
 
         // Split at 1500 frames: no boundary lands on a window edge, so every
         // window is assembled from two blocks.
@@ -540,7 +555,7 @@ mod tests {
         assert_eq!(
             split
                 .analyzer
-                .snapshot(12, Some(extent))
+                .snapshot(NonZeroU32::MIN, Some(extent))
                 .expect("finite windows")
                 .buckets()
                 .collect::<Vec<_>>(),
@@ -552,7 +567,7 @@ mod tests {
     #[kithara::test]
     fn shuffled_and_duplicated_blocks_match_ascending(waveform_tone: Vec<f32>) {
         let pcm = waveform_tone;
-        let ascending = Pass::new(flat!()).whole(&pcm, 1, 12);
+        let ascending = Pass::new(flat!()).whole(&pcm, 1, 1);
 
         let blocks: Vec<(u64, &[f32])> = pcm
             .chunks(2048)
@@ -570,7 +585,7 @@ mod tests {
         assert_eq!(
             shuffled
                 .analyzer
-                .snapshot(12, Some(extent))
+                .snapshot(NonZeroU32::MIN, Some(extent))
                 .expect("finite windows")
                 .buckets()
                 .collect::<Vec<_>>(),
@@ -582,7 +597,7 @@ mod tests {
     #[kithara::test]
     fn a_gap_leaves_its_windows_out_until_it_is_filled(waveform_tone: Vec<f32>) {
         let pcm = waveform_tone;
-        let complete = Pass::new(flat!()).whole(&pcm, 1, 12);
+        let complete = Pass::new(flat!()).whole(&pcm, 1, 1);
         let extent = u64::try_from(pcm.len()).unwrap_or(0);
 
         let mut gapped = Pass::new(flat!());
@@ -590,7 +605,7 @@ mod tests {
         gapped.push(&pcm[8192..], 1, 8192);
         let partial = gapped
             .analyzer
-            .snapshot(12, Some(extent))
+            .snapshot(NonZeroU32::MIN, Some(extent))
             .expect("finite windows");
         assert_ne!(
             partial.buckets().collect::<Vec<_>>(),
@@ -602,7 +617,7 @@ mod tests {
         assert_eq!(
             gapped
                 .analyzer
-                .snapshot(12, Some(extent))
+                .snapshot(NonZeroU32::MIN, Some(extent))
                 .expect("finite windows")
                 .buckets()
                 .collect::<Vec<_>>(),
@@ -658,12 +673,12 @@ mod tests {
         pass.push(&pcm[..8192], 1, 0);
         let early = pass
             .analyzer
-            .snapshot(12, Some(extent))
+            .snapshot(NonZeroU32::MIN, Some(extent))
             .expect("finite windows");
         pass.push(&pcm[8192..], 1, 8192);
         let late = pass
             .analyzer
-            .snapshot(12, Some(extent))
+            .snapshot(NonZeroU32::MIN, Some(extent))
             .expect("finite windows");
 
         assert_eq!(early.len(), late.len(), "bucket count must not shift");
@@ -673,7 +688,7 @@ mod tests {
         );
         assert_eq!(
             late.buckets().collect::<Vec<_>>(),
-            Pass::new(flat!()).whole(&pcm, 1, 12),
+            Pass::new(flat!()).whole(&pcm, 1, 1),
             "two snapshots must not change the final result"
         );
     }
@@ -683,8 +698,9 @@ mod tests {
     }
 
     fn dominant(pcm: &[f32]) -> Bucket {
+        let fold = u32::try_from(pcm.len().div_ceil(64).div_ceil(4)).expect("fixture fits u32");
         Pass::new(flat!())
-            .whole(pcm, 1, 4)
+            .whole(pcm, 1, fold)
             .into_iter()
             .max_by(|a, b| peak(a).total_cmp(&peak(b)))
             .unwrap_or_default()
@@ -723,7 +739,7 @@ mod tests {
         // Regression for a band series coarser than the bucket count, which left
         // columns with no bar. Every column of a full-spectrum track must carry
         let pcm = waveform_mix;
-        let wave = Pass::new(AnalysisParams::default()).whole(&pcm, 1, 1500);
+        let wave = Pass::new(AnalysisParams::default()).whole(&pcm, 1, 1);
         let gaps = wave.iter().filter(|bucket| peak(bucket) <= 0.0).count();
         assert_eq!(gaps, 0, "every column must carry a bar");
     }

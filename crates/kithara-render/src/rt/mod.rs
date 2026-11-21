@@ -1,21 +1,21 @@
 mod command;
 mod config;
 mod context;
-mod node;
+mod inputs;
 mod processor;
 mod render;
 mod slots;
 mod tail;
 pub mod track;
 
-pub(crate) use config::declick_frame_count;
 pub use config::{DeckMixerConfig, DeckMixerConfigPatch, DeckMixerConfigPatchError};
 pub use context::{
     install_render_context, invalidate_render_context, publish_render_context, read_render_context,
 };
-pub use node::{PlayerNode, PlayerNodePreparationError};
+pub use inputs::MixerInputs;
 #[cfg(any(test, feature = "mock"))]
 pub(crate) use processor::mock as processor_fixture;
-pub use processor::{BufferGeometryError, DeckMixer, OfflineDeck, OfflineDeckError, StreamShape};
+pub use processor::{BufferGeometryError, DeckMixer, StreamShape};
+pub(crate) use processor::{OfflineProcessor, PreparedDeck};
 pub(crate) use render::RenderPass;
 pub(crate) use slots::TrackSlots;

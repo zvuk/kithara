@@ -1,4 +1,5 @@
 mod command;
+mod continuation;
 mod core;
 mod correction;
 mod geometry;

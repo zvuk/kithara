@@ -1,4 +1,7 @@
-use std::{num::NonZeroUsize, ops::Range};
+use std::{
+    num::{NonZeroU64, NonZeroUsize},
+    ops::Range,
+};
 
 use fearless_simd::{Level, dispatch};
 use kithara_test_fixtures::{
@@ -6,12 +9,17 @@ use kithara_test_fixtures::{
     signal::Wave,
 };
 use kithara_test_utils::kithara;
-use num_traits::ToPrimitive;
+use num_traits::{AsPrimitive, ToPrimitive};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::accelerate;
-use super::{cascade, delay, fade, platform, portable, simd, strided, window};
+use super::{
+    cascade,
+    curve::{self, fade},
+    delay, platform, portable, route, simd, strided, window,
+};
 use crate::{
+    curve::Progression,
     fade::FadeCurve,
     filter::{Coefficients, Hertz, Type},
     interp::{InterpError, Interpolation},
@@ -25,7 +33,7 @@ const STRIDES: [usize; 5] = [1, 2, 3, 6, 9];
 const RATE: u32 = 48_000;
 const UNWRITTEN: f32 = -1.0;
 /// A signaling `NaN`: a plain copy keeps its quiet bit clear.
-const SIGNALING_NAN: u32 = 0x7F80_0001;
+const SIGNALING_NAN: u32 = 0x7f80_0001;
 const SPECIALS: [f32; 9] = [
     0.0,
     -0.0,
@@ -46,6 +54,60 @@ fn finite_admission_matches_scalar_at_every_level() {
             let expected = samples.iter().all(|sample| sample.is_finite());
             assert_eq!(super::all_finite(&samples), expected);
             dispatch!(Level::fallback(), simd => assert_eq!(window::all_finite_kernel(simd, &samples), expected));
+        }
+    }
+}
+
+#[kithara::test]
+fn last_loud_matches_scalar_at_native_and_fallback_levels() {
+    for limit in [-1.0, 0.0, 1e-6, f32::INFINITY, f32::NAN] {
+        for size in SIZES {
+            for offset in OFFSETS {
+                let samples: Vec<_> = [limit.next_down(), limit, -limit, limit.next_up()]
+                    .into_iter()
+                    .chain(SPECIALS)
+                    .cycle()
+                    .take(size.checked_add(offset).expect("bounded fixture length"))
+                    .collect();
+                let samples = samples.get(offset..).expect("fixture includes its offset");
+                let expected = samples.iter().rposition(|sample| sample.abs() > limit);
+                for level in [Level::fallback(), Level::new()] {
+                    let actual =
+                        dispatch!(level, simd => simd::last_loud_kernel(simd, samples, limit));
+                    assert_eq!(
+                        actual, expected,
+                        "size={size} offset={offset} limit={limit}"
+                    );
+                }
+                assert_eq!(crate::last_loud(samples, limit), expected);
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn last_loud_finds_every_position_across_full_blocks_and_a_partial_tail() {
+    for size in SIZES.into_iter().chain([128, 512]) {
+        for offset in OFFSETS {
+            for level in [Level::fallback(), Level::new()] {
+                let mut samples = vec![0.0_f32; size.saturating_add(offset)];
+                let input = samples.get(offset..).expect("fixture contains its offset");
+                assert_eq!(
+                    dispatch!(level, simd => simd::last_loud_kernel(simd, input, 1e-6)),
+                    None
+                );
+                assert_eq!(crate::last_loud(input, 1e-6), None);
+                for position in 0..size {
+                    *samples
+                        .get_mut(offset.saturating_add(position))
+                        .expect("fixture position fits") = -0.25;
+                    let input = samples.get(offset..).expect("fixture contains its offset");
+                    let actual =
+                        dispatch!(level, simd => simd::last_loud_kernel(simd, input, 1e-6));
+                    assert_eq!(actual, Some(position), "size={size} offset={offset}");
+                    assert_eq!(crate::last_loud(input, 1e-6), Some(position));
+                }
+            }
         }
     }
 }
@@ -88,23 +150,21 @@ fn scalar_gain_matches_ieee_multiplication_at_every_level() {
     }
 }
 
-type Diffuse = fn(&mut [f32], &mut [f32], f32, &mut [f32]) -> usize;
+type Diffuse = fn(&mut [f32], &[f32], f32, &mut [f32]) -> usize;
 type DelayBlend = fn(&[f32], &[f32], f32, &mut [f32]) -> usize;
 
-fn delay_kernels() -> [(&'static str, Diffuse, DelayBlend); 3] {
-    [
-        ("platform", platform::delay_diffuse, platform::delay_blend),
-        (
-            "portable-native",
-            portable::delay_diffuse,
-            portable::delay_blend,
-        ),
-        (
-            "portable-fallback",
-            |x, d, g, w| dispatch!(Level::fallback(), simd => delay::diffuse_kernel(simd, x, d, g, w)),
-            |x, d, f, y| dispatch!(Level::fallback(), simd => delay::blend_kernel(simd, x, d, f, y)),
-        ),
-    ]
+/// Measured diffuser forms and the fallback parity reference.
+fn diffusers() -> impl Iterator<Item = (&'static str, Diffuse)> {
+    let fallback: Diffuse =
+        |x, d, g, w| dispatch!(Level::fallback(), simd => delay::diffuse_kernel(simd, x, d, g, w));
+    route::table::delay_diffuse::routes().chain([("fallback", fallback)])
+}
+
+/// Measured delay blend forms and the fallback parity reference.
+fn delay_blends() -> impl Iterator<Item = (&'static str, DelayBlend)> {
+    let fallback: DelayBlend =
+        |x, d, f, y| dispatch!(Level::fallback(), simd => delay::blend_kernel(simd, x, d, f, y));
+    route::table::delay_blend::routes().chain([("fallback", fallback)])
 }
 
 fn assert_delay_bits(name: &str, actual: &[f32], expected: &[f32]) {
@@ -120,7 +180,7 @@ fn assert_delay_bits(name: &str, actual: &[f32], expected: &[f32]) {
 
 #[kithara::test]
 fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
-    for (name, diffuse, _) in delay_kernels() {
+    for (name, diffuse) in diffusers() {
         for frames in SIZES {
             let input: Vec<_> = [0.3, -0.7, -0.0, 0.125, -1.000_488_3]
                 .into_iter()
@@ -133,10 +193,10 @@ fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
                 .take(frames)
                 .collect();
             let mut whole = input.clone();
-            let mut whole_history = history.clone();
+            let whole_history = history.clone();
             let mut writes = vec![0.0; frames];
             assert_eq!(
-                diffuse(&mut whole, &mut whole_history, 0.731, &mut writes),
+                diffuse(&mut whole, &whole_history, 0.731, &mut writes),
                 frames
             );
             let expected: Vec<_> = history.iter().zip(&input).map(|(d, x)| d - x).collect();
@@ -146,10 +206,10 @@ fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
                 .map(|(d, x)| d.mul_add(0.731, *x))
                 .collect();
             assert_delay_bits(name, &whole, &expected);
-            assert_delay_bits(name, &whole_history, &expected);
+            assert_delay_bits(name, &whole_history, &history);
             assert_delay_bits(name, &writes, &expected_writes);
             let mut split = input;
-            let mut split_history = history;
+            let split_history = history;
             let mut split_writes = vec![0.0; frames];
             let mut start = 0_usize;
             for count in [0, 1, 3, 127, 2, 257].into_iter().cycle() {
@@ -157,7 +217,7 @@ fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
                 assert_eq!(
                     diffuse(
                         split.get_mut(start..end).unwrap(),
-                        split_history.get_mut(start..end).unwrap(),
+                        split_history.get(start..end).unwrap(),
                         0.731,
                         split_writes.get_mut(start..end).unwrap()
                     ),
@@ -176,7 +236,7 @@ fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
 
 #[kithara::test]
 fn delay_fraction_native_and_fallback_preserve_fused_scalar_bits() {
-    for (name, _, blend) in delay_kernels() {
+    for (name, blend) in delay_blends() {
         for fraction in [0.0_f32, 0.1, 0.25, 0.731, 0.999_999_94] {
             for frames in SIZES {
                 let newer: Vec<_> = [0.3, -0.7, -0.0, 0.125, -1.000_488_3]
@@ -854,28 +914,17 @@ fn vectors() -> Vec<Vectors> {
     ])
 }
 
-/// The `ramp` kernel at the native and the fallback level: one kernel on
-/// every platform.
-fn ramps() -> [(&'static str, WithScalars); 2] {
-    [
-        ("native", simd::ramp),
-        (
-            "fallback",
-            |output, start, step| dispatch!(Level::fallback(), simd => simd::ramp_kernel(simd, output, start, step)),
-        ),
-    ]
+/// Measured ramp forms and the fallback parity reference.
+fn ramps() -> impl Iterator<Item = (&'static str, WithScalars)> {
+    let fallback: WithScalars = |output, start, step| dispatch!(Level::fallback(), simd => simd::ramp_kernel(simd, output, start, step));
+    route::table::ramp::routes().chain([("fallback", fallback)])
 }
 
-/// The `mul_add` kernel at the native and the fallback level: one kernel on
-/// every platform.
-fn mul_adds() -> [(&'static str, MulAdd); 2] {
-    [
-        ("native", simd::mul_add),
-        (
-            "fallback",
-            |x, y, acc| dispatch!(Level::fallback(), simd => simd::mul_add_kernel(simd, x, y, acc)),
-        ),
-    ]
+/// Measured multiply-add forms and the fallback parity reference.
+fn mul_adds() -> impl Iterator<Item = (&'static str, MulAdd)> {
+    let fallback: MulAdd =
+        |x, y, acc| dispatch!(Level::fallback(), simd => simd::mul_add_kernel(simd, x, y, acc));
+    route::table::mul_add::routes().chain([("fallback", fallback)])
 }
 
 /// Equal bits, or both `NaN`: a `NaN` payload is the backend's to choose.
@@ -1162,10 +1211,9 @@ fn ramp_counts_exactly_at_every_level() {
 #[kithara::test]
 fn div_matches_ieee_division_at_every_level() {
     let fallback = |samples: &mut [f32], divisor: f32| dispatch!(Level::fallback(), simd => simd::div_kernel(simd, samples, divisor));
-    for (name, div) in [
-        ("native", simd::div as fn(&mut [f32], f32) -> usize),
-        ("fallback", fallback),
-    ] {
+    for (name, div) in
+        route::table::div::routes().chain([("fallback", fallback as fn(&mut [f32], f32) -> usize)])
+    {
         for divisor in [3.0, -0.7].into_iter().chain(SPECIALS) {
             for size in SIZES {
                 for offset in OFFSETS {
@@ -1183,6 +1231,56 @@ fn div_matches_ieee_division_at_every_level() {
                     );
                 }
             }
+        }
+    }
+}
+
+#[kithara::test]
+fn routed_vector_forms_keep_bits_and_untouched_tails() {
+    for frames in [0_usize, 1, 3, 7, 31, 128, 129, 512, 513] {
+        let input: Vec<_> = SPECIALS.into_iter().cycle().take(frames).collect();
+        let seed: Vec<_> = input.iter().copied().chain([UNWRITTEN; 3]).collect();
+        let mut expected = seed.clone();
+        simd::ramp(expected.split_at_mut(frames).0, -0.0, 0.125);
+        for (name, kernel) in route::table::ramp::routes() {
+            let mut actual = seed.clone();
+            assert_eq!(kernel(actual.split_at_mut(frames).0, -0.0, 0.125), frames);
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "ramp {name}"
+            );
+        }
+
+        let mut expected = seed.clone();
+        simd::div(expected.split_at_mut(frames).0, 3.0);
+        for (name, kernel) in route::table::div::routes() {
+            let mut actual = seed.clone();
+            assert_eq!(kernel(actual.split_at_mut(frames).0, 3.0), frames);
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "div {name}"
+            );
+        }
+
+        let short = input.split_at(frames.saturating_sub(1)).0;
+        let mut expected = seed.clone();
+        let count = simd::mul_add(&input, short, &mut expected);
+        for (name, kernel) in route::table::mul_add::routes() {
+            let mut actual = seed.clone();
+            assert_eq!(kernel(&input, short, &mut actual), count);
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "mul_add {name}"
+            );
         }
     }
 }
@@ -1730,5 +1828,256 @@ fn fade_gains_track_the_f64_curves_at_every_level() {
             3,
             "{name}: the shortest side bounds the prefix"
         );
+    }
+}
+
+#[kithara::test]
+fn native_and_fallback_interpolation_keep_scalar_order_and_endpoints() {
+    let positions = [
+        -f64::INFINITY,
+        -1.0,
+        -0.0,
+        0.0,
+        1.0 / 6.0,
+        0.25,
+        0.5,
+        0.75,
+        0.9,
+        1.0_f64.next_down(),
+        1.0,
+        1.0_f64.next_up(),
+        2.0,
+        f64::INFINITY,
+    ];
+    for shape in [
+        Progression::Hold,
+        Progression::Linear,
+        Progression::Cubic {
+            first: 0.0,
+            second: 1.0,
+        },
+        Progression::Cubic {
+            first: 0.2,
+            second: 0.6,
+        },
+    ] {
+        let routes: Vec<_> = match shape {
+            Progression::Hold => route::table::parameter_hold::routes().collect(),
+            Progression::Linear => route::table::parameter_linear::routes().collect(),
+            Progression::Cubic { .. } => Vec::new(),
+        };
+        for endpoints in [
+            [0.75, 0.25],
+            [0.25, 0.75],
+            [0.1, 0.9],
+            [-12.0, 0.1],
+            [-0.0, 0.0],
+            [0.0, -0.0],
+            [1.0, 1.0],
+        ] {
+            let expected = positions.map(|time| {
+                let progress = match shape {
+                    Progression::Hold => 0.0,
+                    Progression::Linear => time,
+                    Progression::Cubic { first, second } => {
+                        let remaining = 1.0 - time;
+                        let a = 3.0 * remaining * remaining * time * first;
+                        let b = 3.0 * remaining * time * time * second;
+                        ((a + b) + time * time * time).clamp(0.0, 1.0)
+                    }
+                };
+                let [left, right] = endpoints;
+                if time >= 1.0 {
+                    right
+                } else if time <= 0.0 || left == right || progress == 0.0 {
+                    left
+                } else if progress == 1.0 {
+                    right
+                } else {
+                    left + (right - left) * progress
+                }
+            });
+            for length in [
+                0_usize, 1, 2, 3, 7, 9, 31, 32, 33, 127, 128, 129, 511, 512, 513,
+            ] {
+                for offset in [0_usize, 1] {
+                    let end = offset.saturating_add(length);
+                    let mut native = vec![-91.75; end.saturating_add(3)];
+                    for (slot, value) in native
+                        .get_mut(offset..end)
+                        .expect("prepared prefix")
+                        .iter_mut()
+                        .zip(positions.iter().cycle())
+                    {
+                        *slot = *value;
+                    }
+                    let mut fallback = native.clone();
+                    dispatch!(Level::fallback(), simd => curve::parameter::kernel(simd, shape, fallback.get_mut(offset..end).expect("prepared prefix"), endpoints));
+                    for &(name, kernel) in &routes {
+                        let mut actual = native.clone();
+                        kernel(
+                            actual.get_mut(offset..end).expect("prepared prefix"),
+                            endpoints,
+                        );
+                        assert!(
+                            actual
+                                .iter()
+                                .zip(&fallback)
+                                .all(|(actual, fallback)| actual.to_bits() == fallback.to_bits()),
+                            "{name}: endpoints {endpoints:?}, offset {offset}, length {length}"
+                        );
+                    }
+                    curve::interpolate(
+                        shape,
+                        native.get_mut(offset..end).expect("prepared prefix"),
+                        endpoints,
+                    );
+                    assert!(
+                        native
+                            .get(offset..end)
+                            .expect("prepared prefix")
+                            .iter()
+                            .zip(expected.iter().cycle())
+                            .all(|(actual, expected)| actual.to_bits() == expected.to_bits())
+                    );
+                    assert!(
+                        native
+                            .iter()
+                            .zip(&fallback)
+                            .all(|(actual, fallback)| actual.to_bits() == fallback.to_bits())
+                    );
+                    assert!(
+                        native
+                            .iter()
+                            .take(offset)
+                            .chain(native.iter().skip(end))
+                            .all(|value| value.to_bits() == (-91.75_f64).to_bits())
+                    );
+                }
+            }
+        }
+    }
+}
+#[kithara::test]
+fn native_and_fallback_ratio_and_conversion_keep_integer_precision_and_prefix() {
+    for first in [
+        0,
+        1,
+        (1 << 25) + 3,
+        (1 << 53) - 3,
+        (1 << 53) + 3,
+        (1 << 63) - 3,
+        (1 << 63) + 3,
+        u64::MAX - 3,
+    ] {
+        for denominator in [1, 6, 997, u64::MAX] {
+            for length in [0_usize, 1, 2, 3, 7, 127, 128, 129, 256, 257, 511, 512, 513] {
+                let divisor = NonZeroU64::new(denominator).expect("divisor");
+                let mut native = vec![0.0; length];
+                let mut fallback = native.clone();
+                super::ratio_ramp(&mut native, first, divisor);
+                dispatch!(Level::fallback(), simd => curve::ratio::ratio_kernel(simd, &mut fallback, first, divisor));
+                let expected: Vec<f64> = (0..length)
+                    .map(|index| {
+                        let numerator: f64 = first.saturating_add(index.as_()).as_();
+                        {
+                            let divisor: f64 = denominator.as_();
+                            numerator / divisor
+                        }
+                    })
+                    .collect();
+                assert!(
+                    native
+                        .iter()
+                        .map(|x| x.to_bits())
+                        .eq(expected.iter().map(|x| x.to_bits()))
+                );
+                assert!(
+                    native
+                        .iter()
+                        .map(|x| x.to_bits())
+                        .eq(fallback.iter().map(|x| x.to_bits()))
+                );
+                for (name, kernel) in route::table::ratio_ramp::routes() {
+                    let mut actual = vec![0.0; length];
+                    assert_eq!(kernel(&mut actual, first, divisor), length, "{name}");
+                    assert!(
+                        actual
+                            .iter()
+                            .map(|x| x.to_bits())
+                            .eq(expected.iter().map(|x| x.to_bits())),
+                        "{name}: first {first}, divisor {divisor}, length {length}"
+                    );
+                }
+                let mut narrow = vec![-17.0; length.saturating_add(3)];
+                let mut fallback_narrow = narrow.clone();
+                let mut platform_narrow = narrow.clone();
+                let mut scalar = narrow.clone();
+                for (out, value) in scalar.iter_mut().zip(&expected) {
+                    *out = value.as_();
+                }
+                assert_eq!(portable::narrow_f64(&native, &mut narrow), length);
+                dispatch!(Level::fallback(), simd => simd::narrow_kernel(simd, &native, &mut fallback_narrow));
+                assert_eq!(platform::narrow_f64(&native, &mut platform_narrow), length);
+                let expected: Vec<_> = scalar.into_iter().map(f32::to_bits).collect();
+                for actual in [narrow, fallback_narrow, platform_narrow] {
+                    assert_eq!(
+                        actual.into_iter().map(f32::to_bits).collect::<Vec<_>>(),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn native_and_fallback_narrowing_preserve_ieee_bits_and_untouched_tails() {
+    let input = [
+        0.0,
+        -0.0,
+        f64::MIN_POSITIVE,
+        f64::from(f32::from_bits(1)),
+        f64::from(f32::MIN_POSITIVE),
+        1.0 / 6.0,
+        5.0 / 6.0,
+        f64::MAX,
+        f64::NEG_INFINITY,
+    ];
+    for count in 0..=input.len() {
+        let prefix = input.get(..count).expect("bounded input prefix");
+        let mut native = [17.0; 12];
+        let mut fallback = native;
+        let mut platform_values = native;
+        let mut expected = native;
+        for (output, value) in expected.iter_mut().zip(prefix) {
+            *output = value.as_();
+        }
+        assert_eq!(portable::narrow_f64(prefix, &mut native), count);
+        dispatch!(Level::fallback(), simd => simd::narrow_kernel(simd, prefix, &mut fallback));
+        assert_eq!(platform::narrow_f64(prefix, &mut platform_values), count);
+        for actual in [native, fallback, platform_values] {
+            assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits));
+        }
+    }
+}
+
+#[kithara::test]
+fn native_and_fallback_squared_product_keep_scalar_order_prefix_and_tail() {
+    let input = [0.0, -0.0, 0.7, -0.3, f32::MIN_POSITIVE, 1.0e-20, 0.9];
+    let square = [0.5, 0.8, 0.7, 0.1, 0.9, 1.0e-20, 0.3];
+    let gain = [0.3, 0.1, 0.9, 0.7, 0.8, 0.5, 0.2];
+    for count in 0..=input.len() {
+        let square = square.get(..count).expect("bounded square prefix");
+        let mut expected = input;
+        for ((value, square), gain) in expected.iter_mut().zip(square).zip(gain) {
+            *value = (*value * (square * square)) * gain;
+        }
+        for level in [Level::new(), Level::fallback()] {
+            let mut actual = input;
+            let written = dispatch!(level, simd => simd::multiply_squared_kernel(simd, &mut actual, square, &gain));
+            assert_eq!(written, count);
+            assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits));
+        }
     }
 }

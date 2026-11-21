@@ -65,6 +65,7 @@ pub(crate) struct Dependent {
     pub(crate) timeout: u32,
     pub(crate) history: bool,
     pub(crate) needs: Vec<String>,
+    pub(crate) download: Vec<String>,
     pub(crate) artifact: Option<CiLaneArtifact>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) runner: Option<String>,
@@ -189,6 +190,12 @@ pub(crate) fn render(
             timeout: lane.timeout_minutes,
             history: lane.history,
             needs: lane.needs.clone(),
+            download: matrix
+                .iter()
+                .filter(|producer| lane.needs.contains(&producer.lane))
+                .filter_map(|producer| producer.artifact.as_ref())
+                .map(|artifact| artifact.name.clone())
+                .collect(),
             artifact: lane.artifact.clone(),
             runner: github_runner(lane, args.kind),
         })
@@ -344,16 +351,48 @@ mod tests {
         );
     }
 
+    /// The workflow picks a report's upload from the matrix row alone, so the
+    /// row names the report and no checkout path.
+    #[test]
+    fn a_report_artifact_reaches_the_matrix_without_a_path() {
+        let mut lanes = catalog();
+        lanes.get_mut("linux-lint").unwrap().artifact = Some(CiLaneArtifact {
+            name: "web-chromium-driver".to_owned(),
+            path: None,
+            report: Some(crate::config::LaneReport::Chromium),
+            when: ArtifactWhen::Failure,
+        });
+
+        let selection =
+            render(&lanes, &args("gate", PipelineKind::Main, &[])).expect("the gate role renders");
+
+        assert_eq!(
+            serde_json::to_value(&selection.matrix[0].artifact).unwrap(),
+            serde_json::json!({
+                "name": "web-chromium-driver",
+                "report": "chromium",
+                "when": "failure",
+            })
+        );
+    }
+
     // Asking for one lane must bring what reads its artifact, and nothing else.
     #[test]
     fn selecting_one_lane_brings_only_its_own_dependents() {
         let mut catalog = catalog();
+        catalog.get_mut("deep-stress").unwrap().artifact = Some(CiLaneArtifact {
+            name: "stress-evidence".to_owned(),
+            path: Some("target/stress".to_owned()),
+            report: None,
+            when: ArtifactWhen::Always,
+        });
         let dependent = catalog
             .get_mut("deep-stress-report")
             .expect("the dependent lane is in the catalog");
         dependent.artifact = Some(CiLaneArtifact {
             name: "quality-report".to_owned(),
-            path: "target/consolidated-quality-report.md".to_owned(),
+            path: Some("target/consolidated-quality-report.md".to_owned()),
+            report: None,
             when: ArtifactWhen::Failure,
         });
         let selection = render(
@@ -375,7 +414,7 @@ mod tests {
         assert_eq!(dependent, ["deep-stress-report"]);
         assert_eq!(
             field(&selection, Some(Field::Dependent)).expect("the dependent field renders"),
-            r#"[{"lane":"deep-stress-report","timeout":30,"history":false,"needs":["deep-stress"],"artifact":{"name":"quality-report","path":"target/consolidated-quality-report.md","when":"failure"}}]"#
+            r#"[{"lane":"deep-stress-report","timeout":30,"history":false,"needs":["deep-stress"],"download":["stress-evidence"],"artifact":{"name":"quality-report","path":"target/consolidated-quality-report.md","when":"failure"}}]"#
         );
     }
 
@@ -390,6 +429,41 @@ mod tests {
             .collect();
         assert_eq!(names, ["deep-miri"]);
         assert!(selection.dependent.is_empty());
+    }
+
+    #[test]
+    fn dependent_downloads_exclude_unselected_and_unrelated_producers() {
+        let mut lanes = catalog();
+        for (name, artifact) in [
+            ("deep-stress", "stress-evidence"),
+            ("deep-miri", "miri-junit"),
+        ] {
+            lanes.get_mut(name).unwrap().artifact = Some(CiLaneArtifact {
+                name: artifact.to_owned(),
+                path: Some("target/report".to_owned()),
+                report: None,
+                when: ArtifactWhen::Always,
+            });
+        }
+        let selection = render(&lanes, &args("deep", PipelineKind::Branch, &["all"]))
+            .expect("both producers are selected");
+        assert_eq!(selection.matrix.len(), 2);
+        assert_eq!(selection.dependent[0].download, ["stress-evidence"]);
+
+        lanes
+            .get_mut("deep-stress-report")
+            .unwrap()
+            .needs
+            .push("deep-miri".to_owned());
+        let selection = render(&lanes, &args("deep", PipelineKind::Nightly, &[]))
+            .expect("only the nightly producer is selected");
+        assert_eq!(selection.matrix.len(), 1);
+        assert_eq!(selection.dependent[0].download, ["stress-evidence"]);
+
+        lanes.get_mut("deep-stress").unwrap().artifact = None;
+        let selection = render(&lanes, &args("deep", PipelineKind::Nightly, &[]))
+            .expect("a producer without an artifact still schedules its dependent");
+        assert!(selection.dependent[0].download.is_empty());
     }
 
     #[test]
@@ -670,7 +744,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_feature_parts_are_both_github_gates_and_gitlab_keeps_full() -> Result<()> {
+    fn configured_feature_parts_are_github_gates_and_gitlab_keeps_full() -> Result<()> {
         let ctx = Ctx::load()?;
         let lanes = KitharaExt::from_ctx(&ctx)?.ci.lanes;
         let feature_lanes = lanes
@@ -686,7 +760,7 @@ mod tests {
             .filter(|(_, lane)| lane.kinds.is_empty())
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(parts.len(), 2);
+        assert_eq!(parts.len(), 3);
         let full = feature_lanes
             .iter()
             .filter(|(_, lane)| !lane.kinds.is_empty())

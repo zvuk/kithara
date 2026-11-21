@@ -178,7 +178,9 @@ fn held_gain_program_preserves_another_bands_manual_pcm_transition(
     reference.set_gain(1, target);
     for frame in 0..1024 {
         if frame > 0 {
-            actual.set_gain_explicit(0, held);
+            actual
+                .advance_gains(&[[f64::from(f32::from(held))]], 1)
+                .expect("one explicit gain frame");
         }
         let input = if frame % 3 == 0 { 0.375 } else { -0.25 };
         let (mut left, mut right) = ([input], [-input * 0.5]);
@@ -195,9 +197,11 @@ fn held_gain_program_preserves_another_bands_manual_pcm_transition(
             expected_right[0].to_bits(),
             "right {frame}"
         );
-        let mut targets = [GainDb::DEFAULT; 2];
-        assert_eq!(actual.read_gains(&mut targets), 2);
-        assert_eq!(targets, [held, target]);
+        assert_eq!(actual.band_count(), 2);
+        assert_eq!(
+            [actual.target_gain(0), actual.target_gain(1)],
+            [Some(held), Some(target)]
+        );
     }
 }
 
@@ -206,7 +210,8 @@ fn explicit_gain_has_no_second_ramp_at_routing_boundaries() {
     let config = EqConfig::builder(pools()).build();
     let mut eq = StereoEq::with_layout(&config, TEST_RATE, layout(1));
     for gain in [GainDb::MAX, GainDb::DEFAULT, GainDb::MIN, GainDb::MAX] {
-        eq.set_gain_explicit(0, gain);
+        eq.advance_gains(&[[f64::from(f32::from(gain))]], 1)
+            .expect("one explicit gain frame");
         let (mut left, mut right) = ([0.375; 7], [-0.125; 7]);
         eq.process(&mut left, &mut right);
         let linear = gain.linear();
@@ -252,7 +257,8 @@ fn an_explicit_value_takes_over_its_own_manual_routing_ramp(#[case] gain: GainDb
     let (mut left, mut right) = ([0.375], [-0.125]);
     eq.process(&mut left, &mut right);
     assert_ne!(left[0].to_bits(), expected_left.to_bits());
-    eq.set_gain_explicit(0, gain);
+    eq.advance_gains(&[[f64::from(f32::from(gain))]], 1)
+        .expect("one explicit gain frame");
     let (mut left, mut right) = ([0.375; 7], [-0.125; 7]);
     eq.process(&mut left, &mut right);
     assert!(
@@ -291,7 +297,8 @@ fn explicit_takeover_finishes_owned_routing_after_the_gain_has_settled() {
         "the gain is settled but its routing is half dry"
     );
     assert_ne!(left[0].to_bits(), (0.375 * linear).to_bits());
-    eq.set_gain_explicit(0, gain);
+    eq.advance_gains(&[[f64::from(f32::from(gain))]], 1)
+        .expect("one explicit gain frame");
     let (mut left, mut right) = ([0.375; 7], [-0.125; 7]);
     eq.process(&mut left, &mut right);
     assert!(

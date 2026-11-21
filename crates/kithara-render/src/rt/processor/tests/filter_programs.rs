@@ -2,23 +2,26 @@ use kithara_command::Target;
 use kithara_effects::filter::{FilterEffect, FilterKnob};
 
 use super::{
-    filter::{binding, bits, knob, prepared, reference, turn},
+    filter::{bits, knob, prepared, reference, turn},
     *,
 };
-use crate::bridge::{CurveShape, FilterProgram, ParameterKnot};
+use crate::bridge::{CurveShape, DeckParameter, DeckProgram, ParameterKnot, Returned};
 
-fn linear(start: usize, end: usize, left: f64, right: f64) -> FilterProgram {
-    FilterProgram::new(vec![
-        ParameterKnot::new(frame_at(start), left, CurveShape::LINEAR).expect("left"),
-        ParameterKnot::new(frame_at(end), right, CurveShape::HOLD).expect("right"),
-    ])
+fn linear(start: usize, end: usize, left: f64, right: f64) -> DeckProgram {
+    DeckProgram::new(
+        DeckParameter::Filter,
+        vec![
+            ParameterKnot::new(frame_at(start), left, CurveShape::LINEAR).expect("left"),
+            ParameterKnot::new(frame_at(end), right, CurveShape::HOLD).expect("right"),
+        ],
+    )
     .expect("program")
 }
 
-fn program_part(ends: &mut TestEnds, program: FilterProgram) -> DeckPart {
+fn program_part(ends: &mut TestEnds, program: DeckProgram) -> DeckPart {
     let snapshot = ends.deck.snapshot.read();
-    DeckPart::FilterProgram {
-        binding: snapshot.filter.binding().expect("observed output stream"),
+    DeckPart::Program {
+        epoch: snapshot.epoch.expect("observed output stream"),
         authority: snapshot.filter.authority(),
         program,
     }
@@ -76,7 +79,9 @@ fn a_knob_program_is_frame_exact_in_any_block_partition(#[case] block: usize) {
     assert_applied_at(outcome_of(&replies, seq), origin + 5);
     assert!(matches!(
         outcome_of(&replies, refused_clock),
-        Outcome::Rejected(Rejection::Refused(DeckRefusal::FilterProgramClock))
+        Outcome::Rejected(Rejection::Refused(DeckRefusal::ProgramClock {
+            parameter: DeckParameter::Filter
+        }))
     ));
     let returned = &replies
         .iter()
@@ -84,7 +89,7 @@ fn a_knob_program_is_frame_exact_in_any_block_partition(#[case] block: usize) {
         .expect("sweep receipt")
         .2;
     assert!(
-        matches!(&returned[..], [DeckPart::FilterProgram { program, .. }] if program.start() == frame_at(origin + 5) && program.end() == frame_at(origin + 21))
+        matches!(&returned[..], [DeckPart::Returned(Returned::Program(program))] if program.start() == frame_at(origin + 5) && program.end() == frame_at(origin + 21))
     );
     let snapshot = ends.deck.snapshot.read();
     assert_eq!(snapshot.filter.program(), Some(seq));
@@ -128,7 +133,9 @@ fn a_manual_turn_takes_over_from_the_last_applied_position() {
         if manual_first {
             assert!(matches!(
                 outcome_of(&replies, replacement_seq),
-                Outcome::Rejected(Rejection::Refused(DeckRefusal::FilterOutdated))
+                Outcome::Rejected(Rejection::Refused(DeckRefusal::ParameterOutdated {
+                    parameter: DeckParameter::Filter
+                }))
             ));
         } else {
             assert_applied_at(outcome_of(&replies, replacement_seq), origin + 10);
@@ -137,7 +144,6 @@ fn a_manual_turn_takes_over_from_the_last_applied_position() {
         assert_eq!(snapshot.filter.authority(), Some(manual_seq));
         assert_eq!(snapshot.filter.program(), None);
         assert_eq!(snapshot.filter.knob().to_bits(), filter.knob().to_bits());
-        assert_eq!(binding(&mut ends).instance(), None);
         outputs.push(actual);
     }
     assert_eq!(
@@ -146,12 +152,137 @@ fn a_manual_turn_takes_over_from_the_last_applied_position() {
     );
 }
 
+#[kithara::test]
+fn a_filter_tail_and_program_outlive_eof_until_the_owner_closes() {
+    const SOURCE: usize = 67;
+    const TAKE: usize = 2048;
+    let (mut mixer, mut ends) = mixer_without_declick();
+    let loaded = send(
+        &mut ends,
+        When::Next,
+        vec![
+            DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
+                slot: A,
+                pcm: pcm_samples(1.0, &vec![1.0; SOURCE * 2], true),
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Crossfade(
+                    CrossfadeSettings::new(0.0, CrossfadeCurve::Linear, 1.0, 0.5)
+                        .expect("instant start"),
+                ),
+            },
+        ],
+    );
+    assert_eq!(render_frames(&mut mixer, 0, 1), [1.0]);
+    assert_applied_at(outcome_of(&receipts(&mut ends), loaded), 0);
+    let origin = 1;
+    let start = origin + 5;
+    let end = origin + 1024;
+    let command = program_part(&mut ends, linear(start, end, -0.2, -0.8));
+    let seq = send(&mut ends, at(start), vec![command]);
+    let mut actual = Vec::with_capacity(TAKE);
+    for frame in (origin..origin + TAKE).step_by(32) {
+        actual.extend(render_frames(&mut mixer, frame, 32));
+    }
+    let mut filter = reference(shape().sample_rate, FilterKnob::DEFAULT);
+    let mut expected = Vec::with_capacity(TAKE);
+    for frame in origin..origin + TAKE {
+        let input = if frame < SOURCE { 1.0 } else { 0.0 };
+        let (mut left, mut right) = ([input], [input]);
+        let planes = &mut [&mut left[..], &mut right[..]];
+        if frame < start {
+            filter.process(planes, 0..1).expect("reference center");
+        } else {
+            filter
+                .process_program(planes, 0..1, &[position(frame, start, end, -0.2, -0.8)])
+                .expect("reference programme and tail");
+        }
+        expected.push(left[0]);
+    }
+    assert_eq!(bits(&actual), bits(&expected));
+    assert!(
+        actual[SOURCE - origin..SOURCE - origin + 32]
+            .iter()
+            .any(|sample| *sample != 0.0)
+    );
+    assert!(
+        actual[TAKE - 64..]
+            .iter()
+            .all(|sample| sample.to_bits() == 0)
+    );
+    assert_eq!(
+        ends.events.drain().collect::<Vec<_>>(),
+        [DeckEvent::Ended {
+            slot: A,
+            at: frame_at(SOURCE)
+        }]
+    );
+    assert_applied_at(outcome_of(&receipts(&mut ends), seq), start);
+    {
+        let snapshot = ends.deck.snapshot.read();
+        assert_eq!(snapshot.slots[A.index()].state, SlotState::Ended);
+        assert_eq!(snapshot.filter.program(), Some(seq));
+        assert_eq!(snapshot.filter.knob(), -0.8);
+        assert_eq!(snapshot.metrics.underruns(), 0);
+    }
+    let close_start = origin + TAKE;
+    let command = program_part(
+        &mut ends,
+        linear(close_start, close_start + 128, -0.8, -0.5),
+    );
+    let closing = send(&mut ends, at(close_start), vec![command]);
+    assert!(
+        render_frames(&mut mixer, close_start, 8)
+            .iter()
+            .all(|sample| sample.to_bits() == 0)
+    );
+    assert!(receipts(&mut ends).is_empty());
+    let scope = ends.deck.scope;
+    ends.ring.close(scope).expect("close filter owner");
+    ends.ring.publish().expect("publish close");
+    assert!(
+        render_frames(&mut mixer, close_start + 8, 8)
+            .iter()
+            .all(|sample| sample.to_bits() == 0)
+    );
+    let replies = receipts(&mut ends);
+    assert_eq!(replies.len(), 1);
+    assert_applied_at(outcome_of(&replies, closing), close_start);
+    let returned = replies
+        .iter()
+        .find(|(answered, _, _)| *answered == closing)
+        .and_then(|(_, _, parts)| {
+            parts.iter().find_map(|part| match part {
+                DeckPart::Returned(Returned::Program(program)) => Some(program),
+                _ => None,
+            })
+        })
+        .expect("returned programme storage");
+    assert_eq!(returned.start(), frame_at(close_start));
+    assert_eq!(returned.end(), frame_at(close_start + 128));
+    {
+        let snapshot = ends.deck.snapshot.read();
+        assert_eq!(
+            snapshot.filter.knob(),
+            position(close_start + 15, close_start, close_start + 128, -0.8, -0.5)
+        );
+        assert_ne!(snapshot.filter.knob(), -0.5);
+        assert_eq!(snapshot.epoch, None);
+        assert_eq!(snapshot.filter.program(), None);
+        assert_eq!(snapshot.metrics.underruns(), 0);
+    }
+    assert!(ends.events.drain().next().is_none());
+}
+
 /// A program that slams the knob between both ends for its whole length is
 /// admitted and keeps normalized PCM finite.
 #[kithara::test]
 fn a_program_switching_between_the_knob_ends_is_admitted_and_stays_finite() {
     const PERIOD: usize = 552;
-    const CYCLES: usize = FilterProgram::MAX_KNOTS / 2;
+    const CYCLES: usize = DeckProgram::MAX_KNOTS / 2;
     const TAKE: usize = PERIOD * CYCLES;
     let (mut mixer, mut ends) = mixer_with_config(DeckMixerConfig::default(), 32);
     render_frames(&mut mixer, 0, 1);
@@ -162,12 +293,7 @@ fn a_program_switching_between_the_knob_ends_is_admitted_and_stays_finite() {
             DeckPart::Attach {
                 slot: A,
                 item_id: kithara_events::TrackId::allocate(),
-                pcm: pcm_samples(
-                    "normalized switched filter",
-                    1.0,
-                    &vec![1.0; (TAKE + 2) * 2],
-                    false,
-                ),
+                pcm: pcm_samples(1.0, &vec![1.0; (TAKE + 2) * 2], false),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {
@@ -191,7 +317,7 @@ fn a_program_switching_between_the_knob_ends_is_admitted_and_stays_finite() {
                 .expect("high end"),
         );
     }
-    let program = FilterProgram::new(knots).expect("knob positions");
+    let program = DeckProgram::new(DeckParameter::Filter, knots).expect("knob positions");
     let command = program_part(&mut ends, program);
     let seq = send(&mut ends, at(origin), vec![command]);
     for offset in (0..TAKE).step_by(BLOCK) {

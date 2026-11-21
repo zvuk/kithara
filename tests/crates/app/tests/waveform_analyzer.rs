@@ -9,10 +9,10 @@ use kithara::{
     analysis::{AnalysisDemand, BeatAnalysisConfig, Bucket},
     assets::StorageBackend,
     platform::{CancelToken, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
 };
 use kithara_app::{
-    pools::{AppPools, AppResourceConfig, AppStore, AppWorker, Pools, PoolsSection, build},
+    pools::{AppPools, AppResourceConfig, AppStore, Pools, PoolsSection, build},
     waveform::{TrackAnalysis, TrackAnalysisRunner},
 };
 use kithara_integration_tests::{
@@ -22,10 +22,6 @@ use url::Url;
 
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
-
-fn worker(pools: Pools) -> AppWorker {
-    PlayWorker::new(PlayWorkerConfig::builder(pools).build())
-}
 
 fn memory_store(pools: Pools) -> AppStore {
     AppStore::builder(pools)
@@ -37,13 +33,13 @@ async fn run_analysis(
     master: &CancelToken,
     config: AppResourceConfig,
     pools: Pools,
-    buckets: usize,
+    fold: NonZeroU32,
 ) -> Option<TrackAnalysis> {
     let mut runner = TrackAnalysisRunner::new(
         master,
         None,
         CHUNK_SECONDS,
-        buckets,
+        fold,
         BeatAnalysisConfig::default(),
         pools,
     );
@@ -67,10 +63,7 @@ async fn run_analysis(
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
-#[case(100)]
-#[case(kithara::analysis::MAX_BUCKETS)]
 async fn runner_silent_wav_yields_all_zero_envelope(
-    #[case] buckets: usize,
     #[future(awt)] served_silence: (TestServerHelper, Url),
 ) {
     let (_server, url) = served_silence;
@@ -80,13 +73,11 @@ async fn runner_silent_wav_yields_all_zero_envelope(
     )
     .downloader(create_test_downloader())
     .store(memory_store(pools.clone()))
-    .worker(worker(pools.clone()))
     .build();
 
-    // A silent 1s WAV must decode end to end and finalise to a native-resolution
-    // envelope capped by the requested maximum. No frames are loud, so nothing
-    // normalises up to 1.0.
-    let analysis = run_analysis(&CancelToken::never(), config, pools, buckets)
+    // A silent 1s WAV must decode end to end and finalise to a native-column
+    // envelope at factor 1. No frames are loud, so nothing normalises up to 1.0.
+    let analysis = run_analysis(&CancelToken::never(), config, pools, NonZeroU32::MIN)
         .await
         .expect("silent WAV must decode to a finalised analysis");
     let waveform = analysis
@@ -94,7 +85,8 @@ async fn runner_silent_wav_yields_all_zero_envelope(
         .cloned()
         .expect("the registered waveform analyzer must fill its slot");
 
-    assert_eq!(waveform.len(), 44_100_usize.div_ceil(64).min(buckets));
+    assert_eq!(waveform.len(), 44_100_usize.div_ceil(64));
+    assert_eq!(waveform.span_frames().get(), 64);
     assert!(
         waveform.buckets().all(|b| b == Bucket::default()),
         "a silent source must yield all-zero buckets: {:?}",
@@ -113,13 +105,14 @@ async fn runner_returns_nothing_when_cancelled_upfront(
     )
     .downloader(create_test_downloader())
     .store(memory_store(pools.clone()))
-    .worker(worker(pools.clone()))
     .build();
 
     let master = CancelToken::never();
     master.cancel();
     assert!(
-        run_analysis(&master, config, pools, 100).await.is_none(),
+        run_analysis(&master, config, pools, NonZeroU32::MIN)
+            .await
+            .is_none(),
         "a pre-cancelled analysis must not return an envelope"
     );
 }

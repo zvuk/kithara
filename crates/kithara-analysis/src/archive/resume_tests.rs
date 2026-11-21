@@ -18,7 +18,7 @@ use crate::{
 
 fn configured(pools: Pools) -> (AnalyzerBuilder<NoResamplerBackend, TestPools>, Detector) {
     let mut builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
-        .with_waveform(8)
+        .with_waveform(NonZeroU32::MIN)
         .with_beat_detector(beat_detector(), GridParams::default());
     let detector = builder
         .take_detector()
@@ -68,11 +68,13 @@ fn fold(
     pcm: &[f32],
 ) {
     assert_eq!(
-        analyzers.push(
-            &decoded(pools, at, pcm),
-            &mut Extent::default(),
-            Some(detector)
-        ),
+        analyzers
+            .push(
+                &decoded(pools, at, pcm),
+                &mut Extent::default(),
+                Some(detector)
+            )
+            .expect("key estimation succeeds"),
         Ingest::Accepted,
         "a missing fixed chunk is folded once"
     );
@@ -113,7 +115,9 @@ fn finish(
     analyzers: &mut TrackAnalyzers<NoResamplerBackend, TestPools>,
     detector: &mut Detector,
 ) -> crate::TrackAnalysis {
-    analyzers.snapshot(Some(detector), true, Some(consts::RESUME_TESTS_EXTENT))
+    analyzers
+        .snapshot(Some(detector), true, Some(consts::RESUME_TESTS_EXTENT))
+        .expect("key estimation succeeds")
 }
 
 #[kithara::test(native, flash(false))]
@@ -127,12 +131,14 @@ fn archived_partial_resumes_without_decoding_completed_chunks(archive_tone: Vec<
     for at in seed {
         fold(&pools, &mut partial, &mut detector, at, &archive_tone);
     }
-    let progress = partial.progress(
-        Some(&mut detector),
-        false,
-        chunk_frames(),
-        Some(consts::RESUME_TESTS_EXTENT),
-    );
+    let progress = partial
+        .progress(
+            Some(&mut detector),
+            false,
+            chunk_frames(),
+            Some(consts::RESUME_TESTS_EXTENT),
+        )
+        .expect("key estimation succeeds");
     let partial_revision = progress.analysis().revision();
 
     let bytes = persist(&progress);

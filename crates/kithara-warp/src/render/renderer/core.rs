@@ -15,7 +15,7 @@ use super::{
     super::trajectory::{Fraction, Trajectory},
     target::PreparedTarget,
 };
-use crate::{Pitch, Semitones, WarpConfig, WarpRenderError};
+use crate::{Pitch, Semitones, WarpConfig, WarpControlsChange, WarpRenderError};
 
 /// The speed a renderer renders at and the revision that set it.
 #[derive(Clone, Copy, Debug)]
@@ -63,6 +63,18 @@ struct PitchLayout {
     passthrough: bool,
 }
 
+/// Source phase an outgoing source left past its physical end when its
+/// decoder changed the source clock.
+#[derive(Clone, Copy)]
+pub(in crate::render) struct CarriedPhase {
+    /// Outgoing source frames from the physical end to the next output start.
+    pub(in crate::render) residual: Fraction,
+    /// Decoded sample rate of the outgoing source.
+    pub(in crate::render) rate: NonZeroU32,
+    /// Decoder revision whose first window starts at this phase.
+    pub(in crate::render) revision: u64,
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::render) struct PreparedQuantum {
     pub(in crate::render) source_span: SourceSpan,
@@ -81,6 +93,8 @@ pub struct WarpRenderer<S> {
     pub(in crate::render) trajectory: Trajectory,
     pub(in crate::render) mapped_render: bool,
     pub(in crate::render) terminal_source_end: Option<u64>,
+    /// Phase the next source window starts from after a source clock change.
+    pub(in crate::render) carried_phase: Option<CarriedPhase>,
     pub(in crate::render) projection: Option<super::projected::Projection>,
     pub(in crate::render) spec: AudioSpec,
     pub(in crate::render) backends: ElasticBackendConfig,
@@ -153,7 +167,7 @@ where
     pub(in crate::render) const MAX_OUTPUT_FRAMES: usize = 163_840;
     /// Build the slot at the source `spec` from the construction values of `config`.
     pub(crate) fn new(config: &WarpConfig, spec: AudioSpec, pools: PoolRegion<S>) -> Self {
-        let requested_pitch = config.pitch();
+        let requested_pitch = config.controls().pitch();
         let (current_kind, current_pitch_engine) =
             Self::stretch_for(config.backend(), requested_pitch);
         let speed = config.speed();
@@ -167,6 +181,7 @@ where
             trajectory: Trajectory::new(speed),
             mapped_render: false,
             terminal_source_end: None,
+            carried_phase: None,
             projection: target.projection,
             residency: target.residency,
             backends: config.backends(),
@@ -325,6 +340,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         meta: AudioChunkInfo,
         position: (u128, NonZeroU128),
     ) -> Result<(), WarpRenderError> {
+        self.carried_phase = None;
         self.rebase_source(meta);
         self.trajectory
             .reanchor(meta.frame_offset, meta.spec.sample_rate, position)?;
@@ -554,11 +570,16 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.rebuild_pending = true;
     }
 
-    /// Render from the next prepared quantum on at `pitch`, as far as the
-    /// backend honours it. A change of engine retires the running one's tail
+    /// Applies renderer controls from the next prepared quantum. A change of engine retires the running one's tail
     /// into a crossfade and the new engine re-primes from the source history on
     /// this frame.
-    pub fn set_pitch(&mut self, pitch: Pitch) {
+    pub fn apply(&mut self, change: WarpControlsChange) {
+        match change {
+            WarpControlsChange::Pitch(pitch) => self.set_pitch(pitch),
+        }
+    }
+
+    fn set_pitch(&mut self, pitch: Pitch) {
         let layout = self.pitch_layout();
         self.requested_pitch = pitch;
         self.retarget_pitch(layout);

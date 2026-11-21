@@ -297,6 +297,11 @@ fn inputs() -> Vec<VariantInput> {
     ));
     profiles.push(Profile::new(
         &[AudioCodec::AacLc, AudioCodec::Flac],
+        37,
+        0.8,
+    ));
+    profiles.push(Profile::new(
+        &[AudioCodec::AacLc, AudioCodec::Flac],
         16,
         4.0,
     ));

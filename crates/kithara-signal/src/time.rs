@@ -17,6 +17,37 @@ pub fn rescale_frame_ceil(
     u64::try_from(numerator.div_ceil(u128::from(source_rate.get()))).ok()
 }
 
+/// Rescale a frame count to the nearest target frame, rounding ties upward.
+///
+/// Returns `None` when the target count exceeds `u64::MAX`.
+#[must_use]
+pub fn rescale_frame_round(
+    frames: u64,
+    source_rate: NonZeroU32,
+    target_rate: NonZeroU32,
+) -> Option<u64> {
+    let numerator =
+        u128::from(frames) * u128::from(target_rate.get()) + u128::from(source_rate.get() / 2);
+    u64::try_from(numerator / u128::from(source_rate.get())).ok()
+}
+
+/// Elapsed time on the `sample_rate` frame grid, saturating at zero.
+/// Endpoints within nanosecond precision of whole frames use their frame difference.
+/// Fractional or unrepresentable endpoints retain their time difference.
+pub(super) fn elapsed_since(sample_rate: NonZeroU32, origin: Duration, time: Duration) -> Duration {
+    frame_on_grid(sample_rate, origin)
+        .zip(frame_on_grid(sample_rate, time))
+        .and_then(|(origin, time)| duration_for(sample_rate, time.saturating_sub(origin)).ok())
+        .unwrap_or_else(|| time.saturating_sub(origin))
+}
+
+/// The whole frame `timestamp` represents within nanosecond precision.
+pub(super) fn frame_on_grid(sample_rate: NonZeroU32, timestamp: Duration) -> Option<u64> {
+    let frame = frame_at(sample_rate, timestamp).ok()?;
+    let frame_time = duration_for(sample_rate, frame).ok()?;
+    (timestamp.abs_diff(frame_time) <= Duration::from_nanos(1)).then_some(frame)
+}
+
 pub(super) fn duration_for(sample_rate: NonZeroU32, frames: u64) -> Result<Duration, SignalError> {
     let nanos = u128::from(frames)
         .checked_mul(consts::NANOS_PER_SECOND)

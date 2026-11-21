@@ -42,7 +42,7 @@
                         with: { "deck": "a", "letter": "A" },
                         frame: (top: false, right: true, bottom: true, left: false),
                     )),
-                    (from: 652.0, node: Optional(
+                    (from: 666.0, node: Optional(
                         id: "mixer-block",
                         hidden: Model(id: "ui.module.hidden", with: { "module": "mix" }),
                         node: Module(

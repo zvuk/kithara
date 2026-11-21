@@ -47,6 +47,9 @@ impl Lane {
                 .is_none_or(|frames| frames > 0)
     }
 
+    /// Executes the batches due at the cursor. A control keeps the renderer on
+    /// `spec`, the format the stage renders; only a new source entry takes the
+    /// decoder's format.
     pub(crate) fn execute_due<T, S>(
         &mut self,
         source: &mut T,
@@ -70,8 +73,16 @@ impl Lane {
             }
             let at = due.at();
             let effects =
-                self.state
-                    .execute_commands(&due, source, warp, deferred, declick_frames)?;
+                match self
+                    .state
+                    .execute_commands(&due, source, warp, deferred, declick_frames)
+                {
+                    Ok(effects) => effects,
+                    Err(failure) => {
+                        due.refuse(failure);
+                        return Err(failure);
+                    }
+                };
             let CommandEffects {
                 segment,
                 requested_entry,
@@ -86,10 +97,16 @@ impl Lane {
                 due.refuse(failure);
                 return Err(failure);
             }
-            let next_spec = source.prepare_deferred().unwrap_or(spec);
-            let latency = warp
-                .prepare_engine_latency(next_spec)
-                .map_err(|_| TrackFailureKind::Render)?;
+            let deferred = source.prepare_deferred();
+            let next_spec = if segment.is_some() {
+                deferred.unwrap_or(spec)
+            } else {
+                spec
+            };
+            let Ok(latency) = warp.prepare_engine_latency(next_spec) else {
+                due.refuse(TrackFailureKind::Render);
+                return Err(TrackFailureKind::Render);
+            };
             if segment.is_some() {
                 let seq = due.defer();
                 self.finish_pending(None);
@@ -212,7 +229,7 @@ impl LaneState {
                 LaneCommand::SetSpeed(curve) => warp
                     .set_speed(curve.clone(), revision)
                     .map_err(|_| TrackFailureKind::Render)?,
-                LaneCommand::SetPitch(pitch) => warp.set_pitch(*pitch),
+                LaneCommand::Warp(change) => warp.apply(*change),
                 LaneCommand::Jump { to } => {
                     let gain = self.jump.map_or(1.0, |jump| jump.gain(self.cursor.frame));
                     self.jump = Some(Jump::Down {

@@ -10,8 +10,6 @@
 mod analyzer;
 mod band;
 mod bucket;
-#[cfg(feature = "dsp")]
-mod bucketize;
 mod error;
 mod params;
 mod resume;

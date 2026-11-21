@@ -621,6 +621,33 @@ fn clock_controls_update_source_tempo_grid_and_key_lock() {
         hand.reads.get("deck.key.locked@deck=a"),
         Some(ReadValue::Bool(false))
     );
+    assert_eq!(
+        hand.reads.get("deck.track.key@deck=a"),
+        Some(ReadValue::Text("4m"))
+    );
+    assert_eq!(
+        hand.reads.get("deck.key.sounding@deck=a"),
+        Some(ReadValue::Text("4m"))
+    );
+    hand.press("clock-components/key-lock/up");
+    assert_eq!(
+        hand.reads.get("deck.track.key@deck=a"),
+        Some(ReadValue::Text("4m")),
+        "strip keeps the track key"
+    );
+    assert_eq!(
+        hand.reads.get("deck.key.sounding@deck=a"),
+        Some(ReadValue::Text("11m"))
+    );
+    hand.press("clock-components/key-lock/down");
+    assert_eq!(
+        hand.reads.get("deck.track.key@deck=a"),
+        Some(ReadValue::Text("4m"))
+    );
+    assert_eq!(
+        hand.reads.get("deck.key.sounding@deck=a"),
+        Some(ReadValue::Text("4m"))
+    );
     hand.press("clock-components/master-clock/surface/link-toggle");
     assert_eq!(
         hand.reads.get("clock.link.enabled"),

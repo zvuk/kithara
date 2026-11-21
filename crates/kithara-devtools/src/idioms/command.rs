@@ -489,12 +489,13 @@ mod tests {
         let mut config = IdiomsConfig::default();
         config.thresholds.derivable_event.enabled = true;
         config.thresholds.derivable_event.owner_path = Some("crates/kithara-events".into());
+        let workspace_root = metadata.workspace_root.as_std_path();
         let scope = Scope::default().with_metadata(&metadata);
-        let scan = Scan::new(root);
+        let scan = Scan::new(workspace_root);
         let ctx = Context {
             config: &config,
             metadata: &metadata,
-            workspace_root: root,
+            workspace_root,
             scan: &scan,
             scope: &scope,
         };
@@ -534,9 +535,16 @@ mod tests {
         files: &[(&str, &str)],
         neighbour: (&str, &str),
     ) {
+        // Cargo metadata canonicalizes the workspace root (on macOS, `/var`
+        // is a symlink to `/private/var`), and the driver pairs a source file
+        // with the metadata's spelling of it by path identity. The fixture
+        // must hand the driver the same spelling the metadata returns, or the
+        // pairing degrades identically before and after a neighbour write and
+        // the neighbour's effect on the verdict disappears.
         let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
         let write = |(rel, source): (&str, &str)| {
-            let path = dir.path().join(rel);
+            let path = root.join(rel);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, source).unwrap();
         };
@@ -551,17 +559,17 @@ mod tests {
         write(("crates/one/src/lib.rs", ""));
         files.iter().copied().for_each(write);
         let cache = VerdictCache::open(
-            &dir.path().join("target"),
+            &root.join("target"),
             "idioms",
             &std::env::current_exe().unwrap(),
-            dir.path(),
+            &root,
             "",
         )
         .unwrap();
-        let (_, before) = driver_and_whole(check, dir.path(), &cache);
+        let (_, before) = driver_and_whole(check, &root, &cache);
 
         write(neighbour);
-        let (driver, after) = driver_and_whole(check, dir.path(), &cache);
+        let (driver, after) = driver_and_whole(check, &root, &cache);
 
         assert_ne!(before, after, "the neighbour changes nothing");
         assert_eq!(driver, after, "{}", check.id());
@@ -572,10 +580,13 @@ mod tests {
         use checks::derivable_event::DerivableEvent;
 
         let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("crates/one/src");
+        // See `the_driver_follows_a_neighbour`: one canonical spelling of the
+        // fixture root, the spelling cargo metadata returns.
+        let root = dir.path().canonicalize().unwrap();
+        let src = root.join("crates/one/src");
         fs::create_dir_all(&src).unwrap();
         fs::write(
-            dir.path().join("Cargo.toml"),
+            root.join("Cargo.toml"),
             "[workspace]\nmembers = [\"crates/one\"]\nresolver = \"2\"\n",
         )
         .unwrap();
@@ -590,28 +601,28 @@ mod tests {
         )
         .unwrap();
         let cache = VerdictCache::open(
-            &dir.path().join("target"),
+            &root.join("target"),
             "idioms",
             &std::env::current_exe().unwrap(),
-            dir.path(),
+            &root,
             "",
         )
         .unwrap();
 
         for run in ["cold", "warm"] {
-            let (driver, whole) = driver_and_whole(&DerivableEvent, dir.path(), &cache);
+            let (driver, whole) = driver_and_whole(&DerivableEvent, &root, &cache);
             assert!(whole.is_empty(), "{run}: {whole:?}");
             assert_eq!(driver, whole, "{run}");
         }
 
-        let ffi = dir.path().join("crates/kithara-ffi/src");
+        let ffi = root.join("crates/kithara-ffi/src");
         fs::create_dir_all(&ffi).unwrap();
         fs::write(
             ffi.join("lib.rs"),
             "#[derive(EventSet)] pub enum All { Internal(Internal) }\n",
         )
         .unwrap();
-        let (driver, whole) = driver_and_whole(&DerivableEvent, dir.path(), &cache);
+        let (driver, whole) = driver_and_whole(&DerivableEvent, &root, &cache);
         assert!(whole.is_empty(), "{whole:?}");
         assert_eq!(driver, whole);
 
@@ -620,7 +631,7 @@ mod tests {
             "#[derive(Clone, Debug)] pub struct Internal;\nimpl Event for Internal {}\n",
         )
         .unwrap();
-        let (driver, whole) = driver_and_whole(&DerivableEvent, dir.path(), &cache);
+        let (driver, whole) = driver_and_whole(&DerivableEvent, &root, &cache);
         assert_eq!(
             whole,
             vec![(

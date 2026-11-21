@@ -8,7 +8,7 @@ use kithara::{
         DecoderEvent, ReadOutcome, RubatoBackend,
     },
     platform::time::{self, Duration, WallInstant},
-    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig, WarpControls},
     signal::{AudioChunk, SegmentId},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
     warp::{Pitch, StretchKind, WarpConfig},
@@ -75,9 +75,10 @@ async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(audio_wav_8000);
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .expect("audio construction");
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .expect("audio construction");
 
     let (_audio, frames) = blocking_audio(audio, read_to_eof).await;
     assert!(
@@ -136,20 +137,24 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         .host_sample_rate(source_rate)
         .hint("wav".to_owned())
         .build();
-    let config = TrackConfig::for_audio(audio)
-        .preload_chunks(NonZeroUsize::new(PRELOAD_CHUNKS).expect("preload count is non-zero"))
-        .audio_buffer_chunks(NonZeroUsize::new(RING_CHUNKS).expect("ring count is non-zero"))
-        .warp(
-            WarpConfig::builder()
-                .speed(0.5)
-                .render_quantum_frames(
-                    NonZeroUsize::new(RENDER_QUANTUM_FRAMES).expect("render quantum is non-zero"),
-                )
-                .backend(backend)
-                .pitch(Pitch::HELD)
-                .build(),
-        )
-        .build();
+    let config = (
+        audio,
+        TrackConfig::builder()
+            .preload_chunks(NonZeroUsize::new(PRELOAD_CHUNKS).expect("preload count is non-zero"))
+            .audio_buffer_chunks(NonZeroUsize::new(RING_CHUNKS).expect("ring count is non-zero"))
+            .warp(
+                WarpConfig::builder()
+                    .speed(0.5)
+                    .render_quantum_frames(
+                        NonZeroUsize::new(RENDER_QUANTUM_FRAMES)
+                            .expect("render quantum is non-zero"),
+                    )
+                    .backend(backend)
+                    .controls(WarpControls::builder().pitch(Pitch::HELD).build())
+                    .build(),
+            )
+            .build(),
+    );
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let audio = kithara_integration_tests::mock::load_audio(&worker, config)
@@ -254,9 +259,10 @@ async fn seek_during_active_decode_completes_without_hang(audio_wav_132300: &'st
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(audio_wav_132300);
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .expect("audio construction");
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .expect("audio construction");
     let (audio, _initial_frames) =
         blocking_audio(audio, |audio| read_until_samples(audio, 1)).await;
     let (mut audio, seek_result) =
@@ -300,9 +306,10 @@ async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) 
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(audio_wav_176400);
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .expect("audio construction");
+    let mut audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .expect("audio construction");
     let (next_audio, _) = blocking_audio(audio, |audio| read_until_samples(audio, 1)).await;
     audio = next_audio;
     let mut expected_segments = Vec::with_capacity(SEEK_COUNT);
@@ -352,9 +359,10 @@ async fn truncated_wav_surfaces_decode_error_or_eof(audio_wav_44100: &'static [u
     .hint("wav".to_string())
     .build();
 
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .expect("audio construction");
+    let audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .expect("audio construction");
 
     let audio = kithara_integration_tests::mock::with_blocking_reads(audio);
     let (_audio, saw_terminal) = blocking_audio(audio, read_truncated_to_terminal).await;

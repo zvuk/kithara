@@ -1,15 +1,17 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_audio::{AudioReadError, AudioSource, SeekOutcome, TrackFailureKind, TrackStep};
+use kithara_audio::{
+    AudioReadError, AudioSource, FailureSource, SeekOutcome, TrackFailureKind, TrackStep,
+};
 use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, Seq, When, channel};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
 use kithara_sync::SpeedCurve;
 use kithara_test_utils::kithara;
-use kithara_warp::{Warp, WarpConfig, WarpRenderer};
+use kithara_warp::{Pitch, Warp, WarpConfig, WarpControlsChange, WarpRenderer};
 
 use crate::{
-    LaneCommand, LaneFrame, LaneProtocol,
+    LaneCommand, LaneFrame, LaneProtocol, LaneTarget,
     lane::Lane,
     test_pools::{TestPools, pools, sample_buffer},
 };
@@ -17,6 +19,7 @@ use crate::{
 struct ReadySource {
     position: Duration,
     pending: bool,
+    failure: Option<TrackFailureKind>,
     seeks: Vec<Duration>,
 }
 
@@ -25,6 +28,12 @@ impl AudioSource for ReadySource {
 
     fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
         self.seeks.push(target);
+        if let Some(failure) = self.failure {
+            return Err(AudioReadError::Stream {
+                what: "seek",
+                source: FailureSource::Producer { failure },
+            });
+        }
         if self.pending {
             return Ok(SeekOutcome::Pending {
                 target,
@@ -80,7 +89,7 @@ fn entering(spec: AudioSpec, seq: Seq, from: Duration) -> AudioChunkInfo {
 
 impl LaneFixture {
     fn new() -> Self {
-        let (sender, inbox) = channel(ChannelConfig::builder().build());
+        let (sender, inbox) = channel(ChannelConfig::builder().targets(1).build());
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
         let warp = Warp::new((), &WarpConfig::builder().build());
         Self {
@@ -93,6 +102,7 @@ impl LaneFixture {
             source: ReadySource {
                 position: Duration::ZERO,
                 pending: false,
+                failure: None,
                 seeks: Vec::new(),
             },
             renderer: warp.renderer(spec, pools()),
@@ -151,6 +161,159 @@ impl LaneFixture {
         self.admit();
         self.admit();
     }
+}
+
+#[kithara::test]
+fn an_earlier_alignment_rejects_old_future_speed_and_keeps_fresh_controls() {
+    let mut fixture = LaneFixture::new();
+    let segment = SegmentId::FIRST.next();
+    fixture.begin(segment);
+    fixture.admit_preload();
+    assert!(fixture.sender.receipts().next().is_some());
+    let send = |fixture: &mut LaneFixture, frame, commands: Vec<LaneCommand>| {
+        let when = When::At(LaneFrame { segment, frame });
+        let basis = commands
+            .iter()
+            .any(|command| matches!(command, LaneCommand::SetSpeed(_)))
+            .then(|| {
+                (
+                    LaneTarget::Speed,
+                    fixture.sender.basis(LaneTarget::Speed, when),
+                )
+            })
+            .into_iter()
+            .collect();
+        fixture
+            .sender
+            .send(when, Batch { basis, commands })
+            .expect("lane credit")
+    };
+    let old = send(
+        &mut fixture,
+        1_024,
+        vec![LaneCommand::SetSpeed(SpeedCurve::Constant(1.5))],
+    );
+    let keylock = send(
+        &mut fixture,
+        768,
+        vec![LaneCommand::Warp(WarpControlsChange::Pitch(
+            Pitch::default(),
+        ))],
+    );
+    let aligned = send(
+        &mut fixture,
+        256,
+        vec![
+            LaneCommand::SetSpeed(SpeedCurve::Constant(1.25)),
+            LaneCommand::Jump {
+                to: Duration::from_secs(2),
+            },
+        ],
+    );
+    let fresh = send(
+        &mut fixture,
+        1_280,
+        vec![LaneCommand::SetSpeed(SpeedCurve::Constant(1.3))],
+    );
+    let advance = |fixture: &mut LaneFixture, frames| {
+        let mut chunk = AudioChunk::new(
+            AudioChunkInfo {
+                spec: fixture.spec,
+                frames,
+                ..AudioChunkInfo::default()
+            },
+            sample_buffer(
+                &pools(),
+                &vec![0.25; usize::try_from(frames).expect("small block") * 2],
+            ),
+        );
+        fixture.lane.stamp(&mut chunk);
+        fixture
+            .lane
+            .execute_due(&mut fixture.source, &mut fixture.renderer, fixture.spec)
+            .expect("native lane executes the reached frame");
+    };
+    advance(&mut fixture, 256);
+    assert_eq!(fixture.renderer.render_revision(), aligned.get());
+    assert!(
+        !fixture
+            .lane
+            .anticipate_speed(&mut fixture.renderer)
+            .expect("next command is keylock")
+    );
+    advance(&mut fixture, 512);
+    advance(&mut fixture, 256);
+    assert_eq!(
+        fixture.renderer.render_revision(),
+        aligned.get(),
+        "old-source speed never reaches Warp"
+    );
+    assert_eq!(fixture.source.seeks.last(), Some(&Duration::from_secs(2)));
+    let receipts: Vec<_> = fixture.sender.receipts().collect();
+    assert_eq!(
+        receipts
+            .iter()
+            .filter(|receipt| receipt.seq() == old)
+            .count(),
+        1
+    );
+    assert!(receipts.iter().any(|receipt| receipt.seq() == old
+        && matches!(receipt.outcome(), Outcome::Rejected(Rejection::Stale))));
+    assert!(
+        receipts.iter().any(|receipt| receipt.seq() == keylock
+            && matches!(receipt.outcome(), Outcome::Applied { .. }))
+    );
+    advance(&mut fixture, 256);
+    assert_eq!(fixture.renderer.render_revision(), fresh.get());
+    let receipt = fixture
+        .sender
+        .receipts()
+        .next()
+        .expect("fresh speed outcome");
+    assert_eq!(receipt.seq(), fresh);
+    assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+}
+
+/// A terminal seek error ends the executing segment command with its cause,
+/// instead of leaving the batch unanswered.
+#[kithara::test]
+fn a_terminal_seek_error_refuses_the_segment_command_it_executes() {
+    let mut fixture = LaneFixture::new();
+    fixture.source.failure = Some(TrackFailureKind::SourceCancelled);
+    let seq = fixture
+        .sender
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![LaneCommand::Segment {
+                    id: SegmentId::FIRST.next(),
+                    from: Duration::from_secs(1),
+                    speed: SpeedCurve::Constant(1.0),
+                }],
+            },
+        )
+        .expect("segment command fits the channel");
+
+    let result = fixture
+        .lane
+        .execute_due(&mut fixture.source, &mut fixture.renderer, fixture.spec);
+
+    assert!(matches!(result, Err(TrackFailureKind::SourceCancelled)));
+    let receipt = fixture
+        .sender
+        .receipts()
+        .next()
+        .expect("the executing batch is answered");
+    assert_eq!(receipt.seq(), seq);
+    assert!(
+        matches!(
+            receipt.outcome(),
+            Outcome::Rejected(Rejection::Refused(TrackFailureKind::SourceCancelled))
+        ),
+        "{:?}",
+        receipt.outcome()
+    );
 }
 
 /// Media has no PCM before its visible origin, so a segment positioned ahead of

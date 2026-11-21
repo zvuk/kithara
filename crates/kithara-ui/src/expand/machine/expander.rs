@@ -292,9 +292,23 @@ fn finish_control(
         ControlSpec::Table { columns, .. } => columns,
         _ => &[],
     };
+    #[cfg(feature = "render")]
+    let artworks = match &spec {
+        ControlSpec::Lottie {
+            artwork,
+            active_artwork,
+            ..
+        } => [
+            Some(machine.interner.resolve(*artwork).to_owned()),
+            active_artwork.map(|name| machine.interner.resolve(name).to_owned()),
+        ],
+        _ => [None, None],
+    };
     machine.visit(
         ControlSite {
             columns,
+            #[cfg(feature = "render")]
+            artworks: artworks.each_ref().map(|name| name.as_deref()),
             read: read.as_ref(),
             write: write.as_ref(),
             columns_state: extra.columns_state,
@@ -303,6 +317,7 @@ fn finish_control(
             scope: extra.scope,
             zoom: extra.zoom,
             active: extra.active,
+            color_read: extra.color_read,
             writes: extra.writes,
             ..ControlSite::new(control, path)
         },

@@ -12,13 +12,13 @@ fn eof_during_a_crossfade_answers_the_transition_batch_once() {
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: A,
-                pcm: pcm_samples("outgoing", 1.0, &vec![LEVEL; EOF * 2], true),
+                pcm: pcm_samples(1.0, &vec![LEVEL; EOF * 2], true),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: B,
-                pcm: pcm_samples("incoming", 1.0, &vec![LEVEL; BLOCK * 8], false),
+                pcm: pcm_samples(1.0, &vec![LEVEL; BLOCK * 8], false),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {
@@ -115,7 +115,7 @@ fn eof_during_an_explicit_stop_returns_its_resume_mark_once() {
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: A,
-                pcm: pcm_samples("stopping", 1.0, &vec![LEVEL; EOF * 2], true),
+                pcm: pcm_samples(1.0, &vec![LEVEL; EOF * 2], true),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {
@@ -169,7 +169,7 @@ async fn a_started_slot_sounds_from_its_frame(constant_half: &'static [u8]) {
         vec![DeckPart::Attach {
             item_id: kithara_events::TrackId::allocate(),
             slot: A,
-            pcm: pcm(constant_half, "a", 60.0),
+            pcm: pcm(constant_half, 60.0),
             segment: SegmentId::FIRST,
         }],
     );
@@ -204,7 +204,7 @@ async fn a_crossfade_start_follows_the_incoming_gains(constant_half: &'static [u
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: A,
-                pcm: pcm(constant_half, "a", 60.0),
+                pcm: pcm(constant_half, 60.0),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {
@@ -245,13 +245,13 @@ async fn a_crossfade_start_follows_the_incoming_gains(constant_half: &'static [u
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: A,
-                pcm: pcm_samples("four-second-outgoing", 5.0, &outgoing, true),
+                pcm: pcm_samples(5.0, &outgoing, true),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: B,
-                pcm: pcm_samples("four-second-incoming", 5.0, &incoming, true),
+                pcm: pcm_samples(5.0, &incoming, true),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {
@@ -390,7 +390,7 @@ async fn a_fade_to_silence_stops_the_slot_and_reports_faded(constant_half: &'sta
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: A,
-                pcm: pcm(constant_half, "a", 60.0),
+                pcm: pcm(constant_half, 60.0),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {
@@ -429,17 +429,25 @@ async fn a_fade_to_silence_stops_the_slot_and_reports_faded(constant_half: &'sta
 /// A replace on a frame plays the old consumer's next frames out of the slot's tail, ramped down
 /// to silence under the new consumer that starts on the same frame, and returns the old one.
 #[kithara::test(tokio)]
-async fn a_replace_plays_the_old_consumer_out_of_the_tail(constant_half: &'static [u8]) {
+#[case::different_item(false)]
+#[case::same_item(true)]
+async fn a_replace_plays_the_old_consumer_out_of_the_tail(
+    constant_half: &'static [u8],
+    #[case] same_item: bool,
+) {
     const REPLACE_AT: usize = BLOCK + 100;
     let (mut mixer, mut ends) = mixer_without_declick();
+    let old_item = kithara_events::TrackId::allocate();
+    let old_pcm = pcm(constant_half, 60.0);
+    let old_ptr = std::ptr::from_ref(old_pcm.as_ref());
     send(
         &mut ends,
         When::Next,
         vec![
             DeckPart::Attach {
-                item_id: kithara_events::TrackId::allocate(),
+                item_id: old_item,
                 slot: A,
-                pcm: pcm(constant_half, "old", 60.0),
+                pcm: old_pcm,
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {
@@ -453,12 +461,22 @@ async fn a_replace_plays_the_old_consumer_out_of_the_tail(constant_half: &'stati
         &mut ends,
         at(REPLACE_AT),
         &[(A, None)],
-        vec![DeckPart::Replace {
-            item_id: kithara_events::TrackId::allocate(),
-            slot: A,
-            pcm: pcm(constant_half, "new", 60.0),
-            segment: SegmentId::FIRST,
-        }],
+        vec![
+            DeckPart::Replace {
+                item_id: if same_item {
+                    old_item
+                } else {
+                    kithara_events::TrackId::allocate()
+                },
+                slot: A,
+                pcm: pcm(constant_half, 60.0),
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        ],
     );
 
     let left = render(&mut mixer, BLOCK);
@@ -474,6 +492,12 @@ async fn a_replace_plays_the_old_consumer_out_of_the_tail(constant_half: &'stati
         left[offset..].windows(2).all(|pair| pair[1] <= pair[0]),
         "the tail ramps down"
     );
+    let mark = mixer.track(A).unwrap().mark(frame_at(BLOCK * 2)).unwrap();
+    assert_eq!(
+        mark.lane.frame,
+        (2 * BLOCK - REPLACE_AT) as u64,
+        "an unmarked Replace starts the new receiver at its head"
+    );
     let receipts = receipts(&mut ends);
     let (_, outcome, parts) = receipts
         .iter()
@@ -481,7 +505,7 @@ async fn a_replace_plays_the_old_consumer_out_of_the_tail(constant_half: &'stati
         .expect("the replace is answered");
     assert_applied_at(outcome, REPLACE_AT);
     assert!(
-        matches!(parts.as_slice(), [DeckPart::Returned(Returned::Pcm { slot, pcm: old })] if *slot == A && &**old.src() == "old"),
+        matches!(parts.as_slice(), [DeckPart::Returned(Returned::Pcm { slot, pcm: old, .. }), DeckPart::Start { .. }] if *slot == A && std::ptr::eq(old.as_ref(), old_ptr)),
         "the old consumer comes back: {parts:?}"
     );
 }
@@ -499,13 +523,13 @@ async fn a_chain_starts_its_slot_on_the_frame_after_the_end(constant_half: &'sta
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: A,
-                pcm: pcm(constant_half, "ending", 0.005),
+                pcm: pcm(constant_half, 0.005),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: B,
-                pcm: pcm(constant_half, "next", 60.0),
+                pcm: pcm(constant_half, 60.0),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {
@@ -564,14 +588,7 @@ fn a_deferred_adopt_restarts_an_ended_slot_after_repeated_eof_observation() {
     let mut end = chunk(spec, old, 4, 4, &[]);
     end.meta.end_of_track = true;
     packets.push(PcmPacket::Chunk(Box::new(end)));
-    let resource = Box::new(
-        PlayerResource::new(
-            PcmConsumer::new(packets.receiver.take().expect("receiver")),
-            Arc::from("repeat"),
-            &pools(),
-        )
-        .expect("resource"),
-    );
+    let resource = Box::new(packets.receiver.take().expect("receiver"));
     let attached = send_on(
         &mut ends,
         When::Next,
@@ -676,13 +693,13 @@ fn a_late_chain_enters_after_repeated_eof_observation() {
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: A,
-                pcm: pcm_samples("ending", 1.0, &[LEVEL; 8], true),
+                pcm: pcm_samples(1.0, &[LEVEL; 8], true),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: B,
-                pcm: pcm_samples("successor", 1.0, &[0.25; 32], false),
+                pcm: pcm_samples(1.0, &[0.25; 32], false),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {
@@ -758,13 +775,13 @@ async fn a_chain_whose_slot_shifted_comes_back_stale(constant_half: &'static [u8
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: A,
-                pcm: pcm(constant_half, "ending", 0.005),
+                pcm: pcm(constant_half, 0.005),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: B,
-                pcm: pcm(constant_half, "next", 60.0),
+                pcm: pcm(constant_half, 60.0),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {
@@ -817,13 +834,13 @@ async fn a_detached_slot_refuses_the_chain_behind_it(constant_half: &'static [u8
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: A,
-                pcm: pcm(constant_half, "ending", 0.005),
+                pcm: pcm(constant_half, 0.005),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: B,
-                pcm: pcm(constant_half, "next", 60.0),
+                pcm: pcm(constant_half, 60.0),
                 segment: SegmentId::FIRST,
             },
         ],
@@ -845,7 +862,7 @@ async fn a_detached_slot_refuses_the_chain_behind_it(constant_half: &'static [u8
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: B,
-                pcm: pcm(constant_half, "next", 60.0),
+                pcm: pcm(constant_half, 60.0),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {
@@ -872,13 +889,13 @@ async fn a_detached_slot_refuses_the_chain_behind_it(constant_half: &'static [u8
 #[kithara::test(tokio)]
 async fn an_attach_to_an_occupied_slot_is_refused(constant_half: &'static [u8]) {
     let (mut mixer, mut ends) = mixer();
-    send(
+    let first = send(
         &mut ends,
         When::Next,
         vec![DeckPart::Attach {
             item_id: kithara_events::TrackId::allocate(),
             slot: A,
-            pcm: pcm(constant_half, "held", 60.0),
+            pcm: pcm(constant_half, 60.0),
             segment: SegmentId::FIRST,
         }],
     );
@@ -888,7 +905,7 @@ async fn an_attach_to_an_occupied_slot_is_refused(constant_half: &'static [u8]) 
         vec![DeckPart::Attach {
             item_id: kithara_events::TrackId::allocate(),
             slot: A,
-            pcm: pcm(constant_half, "refused", 60.0),
+            pcm: pcm(constant_half, 60.0),
             segment: SegmentId::FIRST,
         }],
     );
@@ -900,7 +917,13 @@ async fn an_attach_to_an_occupied_slot_is_refused(constant_half: &'static [u8]) 
         outcome_of(&receipts, second),
         Outcome::Rejected(Rejection::Refused(DeckRefusal::Occupied { slot: A }))
     ));
-    assert_eq!(mixer.track(A).map(|track| &**track.src()), Some("held"));
+    assert_eq!(
+        mixer
+            .track(A)
+            .and_then(|track| track.slot_binding(SessionEpoch::new(0)))
+            .map(|binding| binding.attachment()),
+        Some(first)
+    );
 }
 
 /// A band cut sent to a playing deck rides the deck's own ring: the block after it renders the
@@ -916,7 +939,7 @@ async fn a_band_cut_lowers_the_deck_output_in_the_next_block(constant_half: &'st
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
                 slot: A,
-                pcm: pcm(constant_half, "eq", 60.0),
+                pcm: pcm(constant_half, 60.0),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Eq(DeckEqChange::Layout(eq_layout(&[GainDb::DEFAULT]))),
@@ -962,7 +985,7 @@ async fn a_full_event_ring_counts_its_overflows(constant_half: &'static [u8]) {
                 DeckPart::Attach {
                     item_id: kithara_events::TrackId::allocate(),
                     slot: A,
-                    pcm: pcm(constant_half, "short", 0.001),
+                    pcm: pcm(constant_half, 0.001),
                     segment: SegmentId::FIRST,
                 },
                 DeckPart::Start {
@@ -993,14 +1016,7 @@ async fn a_transport_reset_finishes_the_active_underrun_once(#[case] reset: Deck
     fixture
         .push(PcmPacket::Chunk(Box::new(prepared)))
         .expect("prepared PCM");
-    let resource = Box::new(
-        PlayerResource::new(
-            PcmConsumer::new(fixture.receiver.take().expect("receiver")),
-            Arc::from("stalled transport"),
-            &pools(),
-        )
-        .expect("resource"),
-    );
+    let resource = Box::new(fixture.receiver.take().expect("receiver"));
     let item = kithara_events::TrackId::allocate();
     let (mut mixer, mut ends) = mixer();
     send(
@@ -1075,4 +1091,493 @@ async fn a_transport_reset_finishes_the_active_underrun_once(#[case] reset: Deck
             [DeckEvent::UnderrunEnded { item: actual, position: Some(actual_position), frames, recovered: false, .. }]
                 if *actual == item && *actual_position == position && usize::try_from(*frames).expect("frame count") == BLOCK));
     }
+}
+
+enum ContinuationOutcome {
+    Cut,
+    Ahead,
+    Pause,
+    Hole,
+    Rate,
+    Closed,
+    Axis,
+    Owed,
+    OwedFailed { behind: bool },
+    OwedClosed { behind: bool },
+    FadeIn,
+    GainRamp,
+}
+
+#[kithara::test]
+#[case::silent_slot(false, ContinuationOutcome::Cut)]
+#[case::replace(true, ContinuationOutcome::Cut)]
+#[case::waits_for_a_cue_ahead_of_the_consumed_mark(false, ContinuationOutcome::Ahead)]
+#[case::replace_waits_for_a_cue_ahead_of_the_consumed_mark(true, ContinuationOutcome::Ahead)]
+#[case::paused_while_parked(false, ContinuationOutcome::Pause)]
+#[case::rejects_a_hole_in_a_private_receiver(true, ContinuationOutcome::Hole)]
+#[case::rejects_a_later_rate_change(true, ContinuationOutcome::Rate)]
+#[case::refuses_a_staged_receiver_closed_while_parked(false, ContinuationOutcome::Closed)]
+#[case::refuses_a_private_receiver_closed_while_parked(true, ContinuationOutcome::Closed)]
+#[case::refuses_an_axis_restart_while_parked(false, ContinuationOutcome::Axis)]
+#[case::waits_for_a_session_dropout_to_be_repaid(false, ContinuationOutcome::Owed)]
+#[case::refuses_a_failed_private_head_while_owed(true, ContinuationOutcome::OwedFailed { behind: false })]
+#[case::refuses_a_failed_staged_head_while_owed(false, ContinuationOutcome::OwedFailed { behind: false })]
+#[case::refuses_a_private_receiver_closed_while_owed(true, ContinuationOutcome::OwedClosed { behind: false })]
+#[case::refuses_a_private_failure_behind_stale_pcm_while_owed(true, ContinuationOutcome::OwedFailed { behind: true })]
+#[case::refuses_a_staged_failure_behind_stale_pcm_while_owed(false, ContinuationOutcome::OwedFailed { behind: true })]
+#[case::refuses_a_private_close_behind_stale_pcm_while_owed(true, ContinuationOutcome::OwedClosed { behind: true })]
+#[case::refuses_a_staged_close_behind_stale_pcm_while_owed(false, ContinuationOutcome::OwedClosed { behind: true })]
+#[case::replace_keeps_a_running_fade_in(true, ContinuationOutcome::FadeIn)]
+#[case::replace_keeps_a_running_gain_program(true, ContinuationOutcome::GainRamp)]
+fn a_source_continuation_catches_up_to_the_executed_pcm_cut(
+    #[case] replace: bool,
+    #[case] expected: ContinuationOutcome,
+) {
+    use kithara_events::TrackId;
+    use kithara_signal::SourceSpan;
+
+    let (mut mixer, mut ends) = mixer_without_declick();
+    let spec = AudioSpec::new(2, NonZeroU32::new(RATE).unwrap());
+    let duration = Duration::from_secs(12);
+    let mut outgoing = PacketRing::new(spec, duration, 2);
+    let mut incoming = PacketRing::new(spec, duration, 3);
+    let incoming_spec = AudioSpec::new(2, NonZeroU32::new(RATE * 2).unwrap());
+    let packet = |lane, origin, frames, value, source: AudioSpec, advance| {
+        let scale = u64::from(source.sample_rate.get() / RATE);
+        let raw = origin + 2 * scale * lane;
+        let samples = vec![value; usize::try_from(frames * 2).unwrap()];
+        let mut packet = chunk(spec, SegmentId::FIRST, lane, raw, &samples);
+        packet.meta.media_origin = Some(source.duration_for(origin).unwrap());
+        packet.meta.source_span = SourceSpan::new(
+            raw,
+            raw + advance * scale * frames,
+            source.sample_rate,
+            frames,
+        );
+        PcmPacket::Chunk(Box::new(packet))
+    };
+    let owed = matches!(
+        expected,
+        ContinuationOutcome::Owed
+            | ContinuationOutcome::OwedFailed { .. }
+            | ContinuationOutcome::OwedClosed { .. }
+    );
+    let delivered = if owed {
+        u64::try_from(BLOCK).unwrap()
+    } else {
+        4096
+    };
+    outgoing.push(packet(0, 500, delivered, 0.125, spec, 2));
+    let ahead = matches!(expected, ContinuationOutcome::Ahead);
+    if ahead {
+        incoming.push(packet(640, 2048, 128, 0.375, incoming_spec, 2));
+    } else {
+        incoming.push(packet(0, 2048, 128, -0.25, incoming_spec, 2));
+    }
+    let item = TrackId::allocate();
+    let to = if replace { A } else { B };
+    let mut initial = vec![
+        DeckPart::Attach {
+            slot: A,
+            item_id: item,
+            pcm: Box::new(outgoing.receiver.take().unwrap()),
+            segment: SegmentId::FIRST,
+        },
+        DeckPart::Start {
+            slot: A,
+            fade: if matches!(expected, ContinuationOutcome::FadeIn) {
+                Fade::Crossfade(CrossfadeSettings {
+                    duration: 1.0,
+                    curve: CrossfadeCurve::Linear,
+                    ..Default::default()
+                })
+            } else {
+                Fade::Declick
+            },
+        },
+    ];
+    if owed {
+        initial.push(DeckPart::Clock {
+            slot: A,
+            clock: crate::bridge::TrackClock::Session,
+        });
+    }
+    if !replace {
+        initial.push(DeckPart::Attach {
+            slot: B,
+            item_id: item,
+            pcm: Box::new(incoming.receiver.take().unwrap()),
+            segment: SegmentId::FIRST,
+        });
+    }
+    let initial_basis = if replace {
+        vec![(A, None)]
+    } else {
+        vec![(A, None), (B, None)]
+    };
+    let initial = send_on(&mut ends, When::Next, &initial_basis, initial);
+    let _ = render(&mut mixer, 0);
+    drop(receipts(&mut ends));
+    let mut owner = initial;
+    if matches!(expected, ContinuationOutcome::GainRamp) {
+        let observed = ends.deck.snapshot.read().slots[0];
+        let knot = |frame, value, shape| {
+            crate::bridge::ParameterKnot::new(frame_at(frame), value, shape).unwrap()
+        };
+        let program = crate::bridge::SlotGainProgram::new(vec![
+            knot(BLOCK, 1.0, crate::bridge::CurveShape::LINEAR),
+            knot(BLOCK + 4096, 0.0, crate::bridge::CurveShape::HOLD),
+        ])
+        .unwrap();
+        owner = send_on(
+            &mut ends,
+            at(BLOCK),
+            &[(A, Some(initial))],
+            vec![DeckPart::GainProgram {
+                slot: A,
+                binding: observed.binding.unwrap(),
+                authority: observed.output.authority(),
+                program,
+            }],
+        );
+    }
+    let basis = if replace {
+        vec![(A, Some(owner))]
+    } else {
+        vec![(A, Some(owner)), (B, Some(initial))]
+    };
+    let mut parts = vec![DeckPart::ContinueSource {
+        from: A,
+        to,
+        window: kithara_signal::FrameCount::new(128),
+    }];
+    if replace {
+        parts.push(DeckPart::Replace {
+            slot: A,
+            item_id: item,
+            pcm: Box::new(incoming.receiver.take().unwrap()),
+            segment: SegmentId::FIRST,
+        });
+    } else {
+        parts.push(DeckPart::Fade {
+            slot: A,
+            dir: FadeDir::Out,
+            settings: CrossfadeSettings {
+                duration: 0.0,
+                ..Default::default()
+            },
+        });
+    }
+    parts.push(DeckPart::Start {
+        slot: to,
+        fade: Fade::Declick,
+    });
+    let transition = send_on(&mut ends, at(BLOCK), &basis, parts);
+
+    let held = render_frames(&mut mixer, BLOCK, 128);
+    let missed = if owed { 0.0 } else { 0.125 };
+    let enveloped = matches!(
+        expected,
+        ContinuationOutcome::FadeIn | ContinuationOutcome::GainRamp
+    );
+    assert!(enveloped || held.iter().all(|sample| (*sample - missed).abs() < 1e-6));
+    let premature = receipts(&mut ends);
+    let foreign = matches!(expected, ContinuationOutcome::GainRamp).then_some(owner);
+    assert!(
+        premature.iter().all(|(seq, ..)| Some(*seq) == foreign),
+        "the incomplete cut retains its owned batch: {premature:?}"
+    );
+    assert_eq!(mixer.track(A).unwrap().state(), SlotState::Playing);
+
+    let applied_at = BLOCK + 128;
+    if let ContinuationOutcome::OwedFailed { behind } | ContinuationOutcome::OwedClosed { behind } =
+        expected
+    {
+        // The outgoing source stays open and starved, so its debt never clears.
+        let failed = matches!(expected, ContinuationOutcome::OwedFailed { .. });
+        if behind {
+            // Wholly behind the frozen logical position, so never a cut.
+            incoming.push(packet(128, 2048, 64, -0.25, incoming_spec, 2));
+        }
+        if failed {
+            incoming.push(PcmPacket::Failed {
+                segment: SegmentId::FIRST,
+                failure: kithara_audio::TrackFailureKind::SourceCancelled,
+            });
+        } else {
+            drop(incoming);
+        }
+        let _ = render_frames(&mut mixer, applied_at, 1);
+        let replies = receipts(&mut ends);
+        let expected = if failed {
+            DeckRefusal::SourceRange { slot: to }
+        } else {
+            DeckRefusal::SourceContinuation { slot: to }
+        };
+        assert!(
+            matches!(
+                outcome_of(&replies, transition),
+                Outcome::Rejected(Rejection::Refused(refusal)) if *refusal == expected
+            ),
+            "a terminal incoming head refuses the parked cut: {replies:?}"
+        );
+        assert_eq!(mixer.track(A).unwrap().state(), SlotState::Playing);
+        return;
+    }
+    if matches!(expected, ContinuationOutcome::Pause) {
+        let pause = send_on(
+            &mut ends,
+            at(applied_at),
+            &[(A, Some(initial))],
+            vec![DeckPart::Stop {
+                slot: A,
+                fade: Fade::Declick,
+            }],
+        );
+        let _ = render_frames(&mut mixer, applied_at, 1);
+        let replies = receipts(&mut ends);
+        assert_applied_at(outcome_of(&replies, pause), applied_at);
+        assert!(matches!(
+            outcome_of(&replies, transition),
+            Outcome::Rejected(Rejection::Stale)
+        ));
+        assert_eq!(mixer.track(A).unwrap().state(), SlotState::Stopped);
+        assert_eq!(mixer.track(B).unwrap().state(), SlotState::Stopped);
+        return;
+    }
+    if matches!(expected, ContinuationOutcome::Closed) {
+        drop(incoming);
+        let still_playing = render_frames(&mut mixer, applied_at, 1);
+        assert!((still_playing[0] - 0.125).abs() < 1e-6);
+        let replies = receipts(&mut ends);
+        assert!(matches!(
+            outcome_of(&replies, transition),
+            Outcome::Rejected(Rejection::Refused(DeckRefusal::SourceContinuation { slot }))
+                if *slot == to
+        ));
+        assert_eq!(mixer.track(A).unwrap().state(), SlotState::Playing);
+        return;
+    }
+    if matches!(expected, ContinuationOutcome::Axis) {
+        incoming.push(packet(128, 2048, 512, -0.25, incoming_spec, 2));
+        incoming.push(packet(640, 2048, 128, 0.375, incoming_spec, 2));
+        let _ = render_frames_in(&mut mixer, SessionEpoch::new(1), applied_at, 1);
+        let replies = receipts(&mut ends);
+        assert!(matches!(
+            outcome_of(&replies, transition),
+            Outcome::Rejected(Rejection::Refused(DeckRefusal::AxisRestarted))
+        ));
+        assert_eq!(mixer.track(B).unwrap().state(), SlotState::Stopped);
+        return;
+    }
+    if owed {
+        outgoing.push(packet(delivered, 500, 4096, 0.125, spec, 2));
+        incoming.push(packet(128, 2048, 512, -0.25, incoming_spec, 2));
+        // The cut lands one frame later than the plain cut, so the motion
+        // window needs PCM past lane 768.
+        incoming.push(packet(640, 2048, 256, 0.375, incoming_spec, 2));
+        let repaid = render_frames(&mut mixer, applied_at, 1);
+        assert!(
+            (repaid[0] - 0.125).abs() < 1e-6,
+            "the outgoing slot repays its dropout before the cut: {repaid:?}"
+        );
+        assert!(
+            receipts(&mut ends)
+                .iter()
+                .all(|(seq, ..)| *seq != transition),
+            "the same parked batch waits for the repaid mark"
+        );
+        let first = render_frames(&mut mixer, applied_at + 1, 1);
+        assert!(
+            (first[0] - 0.375).abs() < 1e-6,
+            "actual first PCM frame: {first:?}"
+        );
+        let replies = receipts(&mut ends);
+        let (_, result, parts) = replies.iter().find(|(seq, ..)| *seq == transition).unwrap();
+        assert_applied_at(result, applied_at + 1);
+        let mark = parts
+            .iter()
+            .find_map(|part| match part {
+                DeckPart::Returned(Returned::SourceContinued { mark, .. }) => Some(mark),
+                _ => None,
+            })
+            .expect("the applied cut carries the first incoming mark");
+        assert_eq!(mark.session, frame_at(applied_at + 1));
+        assert_eq!(mark.lane.frame, 641);
+        return;
+    }
+    if matches!(expected, ContinuationOutcome::Hole) {
+        incoming.push(packet(129, 2048, 512, -0.25, incoming_spec, 2));
+        let still_playing = render_frames(&mut mixer, applied_at, 1);
+        assert!((still_playing[0] - 0.125).abs() < 1e-6);
+        let replies = receipts(&mut ends);
+        assert!(matches!(
+            outcome_of(&replies, transition),
+            Outcome::Rejected(Rejection::Refused(DeckRefusal::SourceRange { slot: A }))
+        ));
+        assert_eq!(mixer.track(A).unwrap().state(), SlotState::Playing);
+        return;
+    }
+    if !ahead {
+        incoming.push(packet(128, 2048, 512, -0.25, incoming_spec, 2));
+    }
+    if matches!(expected, ContinuationOutcome::Rate) {
+        incoming.push(packet(640, 2048, 64, 0.375, incoming_spec, 2));
+        incoming.push(packet(704, 2048, 64, 0.375, incoming_spec, 3));
+        let still_playing = render_frames(&mut mixer, applied_at, 1);
+        assert!((still_playing[0] - 0.125).abs() < 1e-6);
+        let replies = receipts(&mut ends);
+        assert!(matches!(
+            outcome_of(&replies, transition),
+            Outcome::Rejected(Rejection::Refused(DeckRefusal::SourceMotion { slot: A }))
+        ));
+        assert_eq!(mixer.track(A).unwrap().state(), SlotState::Playing);
+        return;
+    }
+    if !ahead {
+        incoming.push(packet(640, 2048, 128, 0.375, incoming_spec, 2));
+    }
+    let first = render_frames(&mut mixer, applied_at, 2);
+    if enveloped {
+        let gains = [
+            held[126] / 0.125,
+            held[127] / 0.125,
+            first[0] / 0.375,
+            first[1] / 0.375,
+        ];
+        let steps = gains
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .collect::<Vec<_>>();
+        assert!(steps[0].abs() > 1e-5, "the envelope is moving: {gains:?}");
+        assert!(
+            steps.iter().all(|step| (step - steps[0]).abs() < 1e-6),
+            "the continued slot keeps its running envelope: {gains:?}"
+        );
+        let replies = receipts(&mut ends);
+        let (_, result, _) = replies.iter().find(|(seq, ..)| *seq == transition).unwrap();
+        assert_applied_at(result, applied_at);
+        return;
+    }
+    assert!(
+        first.iter().all(|sample| (*sample - 0.375).abs() < 1e-6),
+        "the continued slot sounds its aligned signal once: {first:?}"
+    );
+    let replies = receipts(&mut ends);
+    let (_, result, parts) = replies.iter().find(|(seq, ..)| *seq == transition).unwrap();
+    assert_applied_at(result, applied_at);
+    let mark = parts
+        .iter()
+        .find_map(|part| match part {
+            DeckPart::Returned(Returned::SourceContinued {
+                to: slot,
+                mark,
+                media_origin,
+            }) => {
+                assert_eq!(*slot, to);
+                assert_eq!(*media_origin, incoming_spec.duration_for(2048).unwrap());
+                Some(mark)
+            }
+            _ => None,
+        })
+        .expect("the applied cut carries the first incoming mark");
+    assert_eq!(mark.session, frame_at(applied_at));
+    assert_eq!(mark.lane.frame, 640);
+    assert_eq!(
+        mark.position,
+        incoming_spec.duration_for(2048 + 4 * 640).unwrap()
+    );
+}
+
+#[kithara::test]
+#[case::start_before_replace(A)]
+#[case::replace_another_sounding_slot(B)]
+fn a_continuation_rejects_invalid_receiver_ownership(#[case] to: Slot) {
+    let (mut mixer, mut ends) = mixer_without_declick();
+    let item = kithara_events::TrackId::allocate();
+    let pcm = |level| pcm_samples(1.0, &vec![level; BLOCK * 8], false);
+    let start = DeckPart::Start {
+        slot: to,
+        fade: Fade::Declick,
+    };
+    let mut initial = vec![
+        DeckPart::Attach {
+            slot: A,
+            item_id: item,
+            pcm: pcm(0.125),
+            segment: SegmentId::FIRST,
+        },
+        DeckPart::Start {
+            slot: A,
+            fade: Fade::Declick,
+        },
+    ];
+    let mut basis = vec![(A, None)];
+    if to == B {
+        initial.extend([
+            DeckPart::Attach {
+                slot: B,
+                item_id: kithara_events::TrackId::allocate(),
+                pcm: pcm(0.25),
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Start {
+                slot: B,
+                fade: Fade::Declick,
+            },
+        ]);
+        basis.push((B, None));
+    }
+    let attached = send_on(&mut ends, When::Next, &basis, initial);
+    render(&mut mixer, 0);
+    drop(receipts(&mut ends));
+    for (_, authority) in &mut basis {
+        *authority = Some(attached);
+    }
+
+    let mut parts = vec![
+        DeckPart::ContinueSource {
+            from: A,
+            to,
+            window: kithara_signal::FrameCount::new(128),
+        },
+        DeckPart::Replace {
+            slot: to,
+            item_id: item,
+            pcm: pcm(-0.25),
+            segment: SegmentId::FIRST,
+        },
+    ];
+    if to == A {
+        parts.insert(1, start);
+    } else {
+        parts.extend([
+            start,
+            DeckPart::Fade {
+                slot: A,
+                dir: FadeDir::Out,
+                settings: CrossfadeSettings {
+                    duration: 0.0,
+                    ..Default::default()
+                },
+            },
+        ]);
+    }
+    let transition = send_on(&mut ends, at(BLOCK), &basis, parts);
+    let frame = render_frames(&mut mixer, BLOCK, 1);
+    let replies = receipts(&mut ends);
+    let outcome = outcome_of(&replies, transition);
+    assert!(
+        matches!(
+            outcome,
+            Outcome::Rejected(Rejection::Refused(DeckRefusal::SourceContinuation { slot }))
+                if *slot == to
+        ),
+        "invalid continuation changed the deck: {outcome:?}",
+    );
+    for (slot, _) in basis {
+        assert_eq!(mixer.track(slot).unwrap().state(), SlotState::Playing);
+    }
+    let old = if to == A { 0.125 } else { 0.375 };
+    assert!((frame[0] - old).abs() < 1e-6, "outgoing PCM: {frame:?}");
 }

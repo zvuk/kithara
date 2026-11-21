@@ -1,4 +1,6 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, num::NonZeroU32};
+
+use num_traits::ToPrimitive;
 
 /// A count tagged with its unit, without trait bounds on the unit marker.
 #[derive_where::derive_where(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
@@ -40,11 +42,49 @@ impl<Unit> Count<Unit> {
     }
 }
 
+impl FrameCount {
+    /// Round single-precision seconds to frames, with half-frames rounded up.
+    /// Negative or `NaN` time becomes zero; overflow saturates at [`usize::MAX`].
+    #[must_use]
+    pub fn for_seconds(seconds: f32, sample_rate: NonZeroU32) -> Self {
+        let rate = sample_rate.get().to_f32().unwrap_or(f32::MAX);
+        Self::new(
+            (seconds.max(0.0) * rate)
+                .round()
+                .to_usize()
+                .unwrap_or(usize::MAX),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use kithara_test_utils::kithara;
 
     use super::{Count, FrameCount, SampleCount};
+
+    #[kithara::test]
+    #[case::declick_half_frame(0.005, 44_100, 221)]
+    #[case::half_frame(0.5, 1, 1)]
+    #[case::below_half_frame(0.49, 1, 0)]
+    #[case::zero(0.0, 48_000, 0)]
+    #[case::negative(-1.0, 48_000, 0)]
+    #[case::nan(f32::NAN, 48_000, 0)]
+    #[case::negative_infinity(f32::NEG_INFINITY, 48_000, 0)]
+    #[case::infinity(f32::INFINITY, 48_000, usize::MAX)]
+    #[case::overflow(f32::MAX, u32::MAX, usize::MAX)]
+    fn frame_counts_round_single_precision_seconds_and_saturate(
+        #[case] seconds: f32,
+        #[case] rate: u32,
+        #[case] expected: usize,
+    ) {
+        assert_eq!(
+            FrameCount::for_seconds(seconds, NonZeroU32::new(rate).expect("rate")).get(),
+            expected
+        );
+    }
 
     #[kithara::test]
     fn counts_keep_value_traits_without_marker_bounds() {

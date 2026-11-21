@@ -27,7 +27,8 @@ pub mod delay;
 pub mod envelope;
 /// Fade curves: one lexicon for firewheel's `MixDSP` and every crossfade gain.
 pub mod fade;
-/// Biquad cascades over channel planes and the designs that feed them.
+/// Biquad and state-variable filters, LR4 crossovers over channel planes and
+/// their designs.
 pub mod filter;
 /// Window interpolation at fractional positions and the rate ramps that
 /// place them.
@@ -43,11 +44,14 @@ pub mod param;
 pub mod spectrum;
 mod vector;
 
+#[cfg(feature = "routes")]
+pub use backend::route::table::measured as routes;
 pub use backend::sanitize;
 pub use layout::{
     deinterleave_channel_major, deinterleave_variable, downmix, interleave_channel_major,
 };
 pub use vector::{
-    add, affine, crossfade_linear, div, mul_add, multiply_in_place, ramp, scale_add,
-    scale_in_place, sub, sum_squares,
+    add, affine, crossfade_linear, div, last_loud, mul_add, multiply_in_place,
+    multiply_squared_in_place, narrow_f64, ramp, ratio_ramp, scale_add, scale_in_place, sub,
+    sum_squares,
 };

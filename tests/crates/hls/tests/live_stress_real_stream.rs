@@ -21,7 +21,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     net::NetOptions,
     platform::{CancelToken, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     signal::AudioChunk,
     stream::Stream,
 };
@@ -161,11 +161,10 @@ async fn build_live_audio(
         .build();
     kithara_integration_tests::mock::load_audio(
         worker,
-        kithara::play::TrackConfig::for_audio(
+        (
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
-        )
-        .block_on_underrun(true)
-        .build(),
+            TrackConfig::builder().block_on_underrun(true).build(),
+        ),
     )
     .await
     .expect("audio creation")
@@ -352,11 +351,10 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
     info!("creating Audio<Stream<Hls>> for DRM asset");
     let mut audio = kithara_integration_tests::mock::load_audio(
         &worker,
-        kithara::play::TrackConfig::for_audio(
+        (
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
-        )
-        .block_on_underrun(true)
-        .build(),
+            TrackConfig::builder().block_on_underrun(true).build(),
+        ),
     )
     .await
     .expect("audio creation");
@@ -452,7 +450,7 @@ async fn live_ephemeral_revisit_sequence_regression(
         .events(EventBus::default())
         .build();
 
-    let config = kithara::play::TrackConfig::for_audio(
+    let config = (
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
@@ -460,9 +458,8 @@ async fn live_ephemeral_revisit_sequence_regression(
                     .build(),
             )
             .build(),
-    )
-    .block_on_underrun(true)
-    .build();
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("audio creation");
@@ -477,7 +474,7 @@ async fn live_ephemeral_revisit_sequence_regression(
         let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
         let max_seek_secs =
             capped_seek_secs((duration_secs - 2.0).max(20.0), consts::WASM_MAX_SEEK_SECS);
-        let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
+        let mut rng = Xorshift64::new(0xa11c_5eed_0000_0001);
         let mut seek_positions = Vec::with_capacity(64);
         for _ in 0..64 {
             seek_positions.push(rng.range_f64(1.0, max_seek_secs));
@@ -543,7 +540,7 @@ async fn live_ephemeral_revisit_sequence_regression(
         let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
         let max_seek_secs =
             capped_seek_secs((duration_secs - 2.0).max(20.0), consts::WASM_MAX_SEEK_SECS);
-        let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
+        let mut rng = Xorshift64::new(0xa11c_5eed_0000_0001);
         let mut seek_positions = Vec::with_capacity(64);
         for _ in 0..64 {
             seek_positions.push(rng.range_f64(1.0, max_seek_secs));
@@ -638,7 +635,7 @@ async fn live_real_stream_seek_regression(
                 let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
                 let max_seek_secs =
                     capped_seek_secs((duration_secs - 2.0).max(20.0), consts::WASM_MAX_SEEK_SECS);
-                let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
+                let mut rng = Xorshift64::new(0xa11c_5eed_0000_0001);
                 (
                     "rng_prefix",
                     (0..80).map(|_| rng.range_f64(1.0, max_seek_secs)).collect(),
@@ -696,11 +693,10 @@ async fn live_real_stream_seek_resume_native(
 
     let mut audio = kithara_integration_tests::mock::load_audio(
         &worker,
-        kithara::play::TrackConfig::for_audio(
+        (
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
-        )
-        .block_on_underrun(true)
-        .build(),
+            TrackConfig::builder().block_on_underrun(true).build(),
+        ),
     )
     .await
     .expect("audio creation");
@@ -821,11 +817,10 @@ async fn live_stress_real_stream_seek_read_cache(
 
     let mut audio = kithara_integration_tests::mock::load_audio(
         &worker,
-        kithara::play::TrackConfig::for_audio(
+        (
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
-        )
-        .block_on_underrun(true)
-        .build(),
+            TrackConfig::builder().block_on_underrun(true).build(),
+        ),
     )
     .await
     .expect("audio creation");
@@ -841,7 +836,7 @@ async fn live_stress_real_stream_seek_read_cache(
         let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
         let max_seek_secs =
             capped_seek_secs((duration_secs - 2.0).max(20.0), consts::WASM_MAX_SEEK_SECS);
-        let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
+        let mut rng = Xorshift64::new(0xa11c_5eed_0000_0001);
         let seek_positions: Vec<f64> = (0..consts::RANDOM_SEEK_OPS)
             .map(|_| rng.range_f64(1.0, max_seek_secs))
             .collect();
@@ -970,11 +965,10 @@ async fn live_ephemeral_small_cache_playback(
 
     let mut audio = kithara_integration_tests::mock::load_audio(
         &worker,
-        kithara::play::TrackConfig::for_audio(
+        (
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
-        )
-        .block_on_underrun(true)
-        .build(),
+            TrackConfig::builder().block_on_underrun(true).build(),
+        ),
     )
     .await
     .expect("audio creation");
@@ -1069,7 +1063,7 @@ async fn live_ephemeral_small_cache_seek_stress(
             .initial_abr_mode(auto(0))
             .build();
 
-        let config = kithara::play::TrackConfig::for_audio(
+        let config = (
             AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .decoder(
                     kithara::audio::AudioDecoderConfig::builder()
@@ -1077,9 +1071,8 @@ async fn live_ephemeral_small_cache_seek_stress(
                         .build(),
                 )
                 .build(),
-        )
-        .block_on_underrun(true)
-        .build();
+            TrackConfig::builder().block_on_underrun(true).build(),
+        );
         let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
             .await
             .expect("audio creation");
@@ -1101,7 +1094,7 @@ async fn live_ephemeral_small_cache_seek_stress(
                 (duration_secs - 2.0).max(10.0),
                 consts::SMALL_CACHE_MAX_SEEK_SECS,
             );
-            let mut rng = Xorshift64::new(0xCA5E_5EE4_0001_0001);
+            let mut rng = Xorshift64::new(0xca5e_5ee4_0001_0001);
             let mut total_chunks = 0usize;
             let mut seeks_done = 0usize;
 

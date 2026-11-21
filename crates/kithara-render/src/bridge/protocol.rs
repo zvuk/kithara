@@ -6,13 +6,12 @@ use kithara_derive::Ranged;
 use kithara_effects::{DeckEffect, FxParamChange, GainDb, eq::EqLayout};
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
-use kithara_signal::{SegmentId, SessionFrame};
+use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 
 use super::{
-    DeckMixSettingsChange, EqBinding, EqGainProgram, FilterBinding, FilterProgram, SlotBinding,
-    SlotGainProgram, SlotMark,
+    DeckMixSettingsChange, DeckParameter, DeckProgram, SlotBinding, SlotGainProgram, SlotMark,
 };
-use crate::{CrossfadeSettings, rt::track::PlayerResource};
+use crate::{CrossfadeSettings, PcmPacket, PcmReceiver};
 
 /// One scoped deck's commands, clock and verdicts.
 #[derive(Debug)]
@@ -65,6 +64,18 @@ pub enum DeckRefusal {
         slot: Slot,
     },
     Deferral,
+    /// The timed batch cannot continue this source.
+    SourceContinuation {
+        slot: Slot,
+    },
+    /// The staged source does not cover the sounding media coordinate.
+    SourceRange {
+        slot: Slot,
+    },
+    /// Retained PCM does not support the sounding track's advance across the cut.
+    SourceMotion {
+        slot: Slot,
+    },
     AxisRestarted,
     /// A part names an FX unit the deck was not built with.
     MissingFxUnit {
@@ -75,19 +86,16 @@ pub enum DeckRefusal {
     RefusedFxParam {
         unit: usize,
     },
-    EqOutdated {
-        band: usize,
+    EqLayoutCapacity,
+    ParameterOutdated {
+        parameter: DeckParameter,
     },
-    EqUnavailable {
-        band: usize,
+    ParameterUnavailable {
+        parameter: DeckParameter,
     },
-    EqProgramClock {
-        band: usize,
+    ProgramClock {
+        parameter: DeckParameter,
     },
-    EqProgramCapacity,
-    FilterOutdated,
-    FilterProgramClock,
-    FilterProgramCapacity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -118,7 +126,7 @@ pub enum DeckPart {
     Attach {
         slot: Slot,
         item_id: TrackId,
-        pcm: Box<PlayerResource>,
+        pcm: Box<PcmReceiver>,
         segment: SegmentId,
     },
     Detach {
@@ -144,12 +152,18 @@ pub enum DeckPart {
     Replace {
         slot: Slot,
         item_id: TrackId,
-        pcm: Box<PlayerResource>,
+        pcm: Box<PcmReceiver>,
         segment: SegmentId,
     },
     Chain {
         from: Slot,
         to: Slot,
+    },
+    /// Aligns an equivalent source to the sounding one before the batch starts it.
+    ContinueSource {
+        from: Slot,
+        to: Slot,
+        window: FrameCount,
     },
     /// Sets the clock of the track seated in `slot`; an empty slot ignores it.
     Clock {
@@ -159,15 +173,10 @@ pub enum DeckPart {
     Mix(DeckMixSettingsChange),
     Eq(DeckEqChange),
     Fx(DeckFxChange),
-    FilterProgram {
-        binding: FilterBinding,
+    Program {
+        epoch: kithara_signal::SessionEpoch,
         authority: Option<Seq>,
-        program: FilterProgram,
-    },
-    EqProgram {
-        binding: EqBinding,
-        authority: Option<Seq>,
-        program: EqGainProgram,
+        program: DeckProgram,
     },
     GainProgram {
         slot: Slot,
@@ -180,11 +189,19 @@ pub enum DeckPart {
 
 /// Owning values travel back in their receipt, never dropped by the mixer.
 pub enum Returned {
+    Program(DeckProgram),
     Pcm {
         slot: Slot,
-        pcm: Box<PlayerResource>,
+        pcm: Box<PcmReceiver>,
+        /// Keeps a popped packet owned when the reverse ring is full.
+        packet: Option<PcmPacket>,
     },
     Eq(Box<EqLayout>),
+    SourceContinued {
+        to: Slot,
+        mark: SlotMark,
+        media_origin: Duration,
+    },
     Stopped {
         slot: Slot,
         resume: Option<SlotMark>,
@@ -198,8 +215,17 @@ pub enum Returned {
 
 #[derive(Debug)]
 pub enum DeckEqChange {
-    Gain { band: usize, gain: GainDb },
+    Gain {
+        band: usize,
+        gain: GainDb,
+    },
+    Kill {
+        band: usize,
+        layout: super::LayoutRevision,
+        on: bool,
+    },
     Layout(Box<EqLayout>),
+    Reset,
 }
 
 /// An FX unit's dry/wet: `0.0` sounds its input alone, `1.0` its effect's wet
@@ -294,7 +320,7 @@ impl fmt::Debug for DeckPart {
                 })
                 .field("slot", slot)
                 .field("item_id", item_id)
-                .field("src", pcm.src())
+                .field("pcm", pcm)
                 .field("segment", segment)
                 .finish(),
             Self::Detach { slot } => formatter
@@ -330,6 +356,12 @@ impl fmt::Debug for DeckPart {
                 .field("from", from)
                 .field("to", to)
                 .finish(),
+            Self::ContinueSource { from, to, window } => formatter
+                .debug_struct("ContinueSource")
+                .field("from", from)
+                .field("to", to)
+                .field("window", window)
+                .finish(),
             Self::Clock { slot, clock } => formatter
                 .debug_struct("Clock")
                 .field("slot", slot)
@@ -338,23 +370,13 @@ impl fmt::Debug for DeckPart {
             Self::Mix(change) => formatter.debug_tuple("Mix").field(change).finish(),
             Self::Eq(change) => formatter.debug_tuple("Eq").field(change).finish(),
             Self::Fx(change) => formatter.debug_tuple("Fx").field(change).finish(),
-            Self::FilterProgram {
-                binding,
+            Self::Program {
+                epoch,
                 authority,
                 program,
             } => formatter
-                .debug_struct("FilterProgram")
-                .field("binding", binding)
-                .field("authority", authority)
-                .field("program", program)
-                .finish(),
-            Self::EqProgram {
-                binding,
-                authority,
-                program,
-            } => formatter
-                .debug_struct("EqProgram")
-                .field("binding", binding)
+                .debug_struct("Program")
+                .field("epoch", epoch)
                 .field("authority", authority)
                 .field("program", program)
                 .finish(),
@@ -378,12 +400,24 @@ impl fmt::Debug for DeckPart {
 impl fmt::Debug for Returned {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Pcm { slot, pcm } => formatter
+            Self::Pcm { slot, pcm, packet } => formatter
                 .debug_struct("Pcm")
                 .field("slot", slot)
-                .field("src", pcm.src())
+                .field("pcm", pcm)
+                .field("held_packet", &packet.is_some())
                 .finish(),
             Self::Eq(_) => formatter.write_str("Eq"),
+            Self::SourceContinued {
+                to,
+                mark,
+                media_origin,
+            } => formatter
+                .debug_struct("SourceContinued")
+                .field("to", to)
+                .field("mark", mark)
+                .field("media_origin", media_origin)
+                .finish(),
+            Self::Program(program) => formatter.debug_tuple("Program").field(program).finish(),
             Self::Stopped { slot, resume } => formatter
                 .debug_struct("Stopped")
                 .field("slot", slot)

@@ -132,10 +132,10 @@ fn mono_float_wav(mono: &[u8], rate: u32) -> Vec<u8> {
 fn decoder_mp3_prefix(inputs: &[&[u8]]) -> Vec<u8> {
     let audio = inputs[0];
     let len = u32::try_from(audio.len()).expect("fixture fits an ID3 tag size");
-    let syncsafe = (len & 0x0FE0_0000) << 3
-        | (len & 0x001F_C000) << 2
-        | (len & 0x0000_3F80) << 1
-        | (len & 0x0000_007F);
+    let syncsafe = (len & 0x0fe0_0000) << 3
+        | (len & 0x001f_c000) << 2
+        | (len & 0x0000_3f80) << 1
+        | (len & 0x0000_007f);
     let mut prefix = vec![b'I', b'D', b'3', 4, 0, 0];
     prefix.extend_from_slice(&syncsafe.to_be_bytes());
     prefix.extend_from_slice(audio);

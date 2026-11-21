@@ -73,6 +73,11 @@ fn insert_deck_endpoints(registry: &mut MapEndpoints) {
         ("deck.track.title", ValueKind::Text),
         ("deck.track.source_kind", ValueKind::Text),
         ("deck.track.key", ValueKind::Text),
+        ("deck.key.sounding", ValueKind::Text),
+        ("deck.key.color", ValueKind::Color),
+        ("deck.track.key_color", ValueKind::Color),
+        ("deck.key.sounding_hidden", ValueKind::Bool),
+        ("deck.key.transpose_hidden", ValueKind::Bool),
         ("deck.focused", ValueKind::Bool),
     ] {
         registry.insert(
@@ -236,11 +241,18 @@ fn insert_quality_endpoints(registry: &mut MapEndpoints) {
         "deck.stream.quality",
         EndpointDesc::new(ValueKind::Text).with_scope("deck"),
     );
-    registry.insert(
-        EndpointCategory::Telemetry,
+    for id in [
         "deck.stream.quality_hidden",
-        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
-    );
+        "deck.stream.quality_ready",
+        "deck.stream.error_hidden",
+        "deck.stream.auto_hidden",
+    ] {
+        registry.insert(
+            EndpointCategory::Telemetry,
+            id,
+            EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
+        );
+    }
     registry.insert(
         EndpointCategory::Model,
         "deck.stream.variant_active",

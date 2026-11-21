@@ -1,7 +1,8 @@
 use kithara_command::{Live, ScopeId, Seq};
 use kithara_play::{HostedDeck, PlayError};
-use kithara_render::bridge::{
-    DeckEvents, DeckMixSettings, DeckProtocol, DeckSnapshot, MixerInputs, scope_channels,
+use kithara_render::{
+    bridge::{DeckEvents, DeckMixSettings, DeckProtocol, DeckSnapshot},
+    rt::MixerInputs,
 };
 use triple_buffer::Output;
 
@@ -26,7 +27,7 @@ impl<S, D: ?Sized + HostedDeck<S>> Deck<S, D> {
         let config = deck.mixer_config();
         let mix =
             Live::new(config.mix()).map_err(|error| PlayError::Internal(error.to_string()))?;
-        let (ends, inputs) = scope_channels(scope, config);
+        let (ends, inputs) = MixerInputs::new(scope, config);
         let session_bus = deck
             .resource_prep()
             .map_or_else(kithara_events::EventBus::default, |prep| prep.bus.clone());

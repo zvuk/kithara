@@ -30,6 +30,8 @@ platforms = [
 # xtask and kithara-devtools are host-side tooling and should not inherit the
 # application dependency union through the generated workspace hack.
 # The shared test-attribute parser stays in that same host-only closure.
+# The Wasm browser test runner and its protocol fixture are host-side test
+# tooling too: the runner's bindgen generator stays out of the shared hack.
 # kithara-app's desktop deps (incl env-filter) are gated to non-iOS in its own
 # manifest, and aarch64-apple-ios is a hakari platform, so env-filter resolves
 # only for the desktop platforms — the iOS device closure never requests
@@ -67,6 +69,7 @@ workspace-members = [
   "kithara-fixture-media",
   "kithara-fuzz",
   "kithara-harness-tests",
+  "kithara-hls-keys-tests",
   "kithara-hls-tests",
   "kithara-host-tests",
   "kithara-integration-tests",
@@ -91,6 +94,8 @@ workspace-members = [
   "kithara-ui-lottie",
   "kithara-ui-shaping",
   "kithara-warp-tests",
+  "kithara-wasm-runner-fixture",
+  "kithara-wasm-test-runner",
   "xtask",
 ]
 third-party = [

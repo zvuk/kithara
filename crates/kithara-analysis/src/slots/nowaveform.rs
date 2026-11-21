@@ -1,7 +1,7 @@
 use std::{convert::Infallible, num::NonZeroU32};
 
-use kithara_bufpool::{HasPool, PoolError, PoolRegion};
-use kithara_waveform::WaveformResume;
+use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_waveform::{AnalyzerError, WaveformResume};
 
 use crate::{BlobError, Waveform};
 
@@ -10,18 +10,18 @@ use crate::{BlobError, Waveform};
 #[derive(Default)]
 pub(crate) struct Slot(Option<Infallible>);
 
-impl<S> TryFrom<(usize, NonZeroU32, &PoolRegion<S>)> for Slot
+impl<S> TryFrom<(NonZeroU32, NonZeroU32, &PoolRegion<S>)> for Slot
 where
     S: HasPool<f32>,
 {
-    type Error = PoolError;
+    type Error = AnalyzerError;
 
-    fn try_from(_: (usize, NonZeroU32, &PoolRegion<S>)) -> Result<Self, Self::Error> {
+    fn try_from(_: (NonZeroU32, NonZeroU32, &PoolRegion<S>)) -> Result<Self, Self::Error> {
         Ok(Self(None))
     }
 }
 
-pub(crate) const fn cache_tag(_buckets: Option<usize>) -> Option<String> {
+pub(crate) const fn cache_tag(_fold: Option<NonZeroU32>) -> Option<String> {
     None
 }
 

@@ -50,7 +50,7 @@ pub(crate) mod host {
     use bon::Builder;
 
     use crate::{
-        expand::Binding,
+        expand::{Binding, ColorSpec},
         ids::InternId,
         module::{TextAlign, TextStyle},
         skin::{ColorRole, FontFamily, FontWeight},
@@ -61,7 +61,7 @@ pub(crate) mod host {
     pub(crate) struct Text<'a> {
         pub(crate) active: Option<&'a Binding>,
         pub(crate) active_color: Option<ColorRole>,
-        pub(crate) color: Option<ColorRole>,
+        pub(crate) color: Option<&'a ColorSpec>,
         pub(crate) font: Option<FontFamily>,
         pub(crate) label: Option<InternId>,
         pub(crate) weight: Option<FontWeight>,

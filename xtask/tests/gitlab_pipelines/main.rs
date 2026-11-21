@@ -577,6 +577,69 @@ fn merge_request_dispatch_is_admitted_without_duplicate_push_pipelines() {
 }
 
 #[test]
+fn bench_preview_is_optional_and_outside_the_verdict() {
+    let config = GitlabConfig::load(&workspace_root());
+    for name in ["deep:rtsan", "deep:bench"] {
+        let rules = config
+            .definition(name)
+            .get("rules")
+            .and_then(Value::as_sequence)
+            .unwrap();
+        for kind in ["branch", "merge-request", "quarantine"] {
+            let condition = format!("$KITHARA_PIPELINE_KIND == \"{kind}\"");
+            let rule = rules
+                .iter()
+                .filter_map(Value::as_mapping)
+                .find(|rule| rule.get("if").and_then(Value::as_str) == Some(condition.as_str()))
+                .unwrap();
+            assert_eq!(rule.get("when").and_then(Value::as_str), Some("manual"));
+            assert_eq!(
+                rule.get("allow_failure").and_then(Value::as_bool),
+                Some(true)
+            );
+            assert_eq!(
+                rule.get("interruptible").and_then(Value::as_bool),
+                Some(true)
+            );
+        }
+    }
+    let needs = config
+        .definition("verdict")
+        .get("needs")
+        .and_then(Value::as_sequence)
+        .unwrap();
+    assert!(
+        !needs
+            .iter()
+            .any(|need| need.get("job").and_then(Value::as_str) == Some("deep:bench"))
+    );
+}
+
+#[test]
+fn bench_pipeline_is_admitted_only_on_the_native_default_branch() {
+    let dispatch = yaml(workspace_root().join(".gitlab-ci.yml"));
+    let expected = "($CI_PIPELINE_SOURCE == \"web\" || $CI_PIPELINE_SOURCE == \"api\") && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $BENCH_TARGET && $RUN_BENCHMARKS == \"1\"";
+    let rules = dispatch["dispatch:bench"]["rules"].as_sequence().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_exact_rule(rules[0].as_mapping().unwrap(), expected, None);
+    assert!(
+        dispatch["workflow"]["rules"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|rule| rule.get("if").and_then(Value::as_str) == Some(expected))
+    );
+    assert_eq!(
+        dispatch["dispatch:bench"]["variables"]["KITHARA_PIPELINE_KIND"].as_str(),
+        Some("bench")
+    );
+    assert_eq!(
+        dispatch["dispatch:bench"]["interruptible"].as_bool(),
+        Some(false)
+    );
+}
+
+#[test]
 fn child_pipeline_includes_apple_lanes_and_the_blocking_verdict() {
     let pipeline = yaml(workspace_root().join(".gitlab/ci/pipeline.yml"));
     let pipeline = mapping(&pipeline, "the child pipeline");
@@ -610,7 +673,7 @@ fn child_pipeline_includes_apple_lanes_and_the_blocking_verdict() {
 }
 
 #[test]
-fn the_branch_verdict_expects_only_the_apple_test_producer() {
+fn the_branch_verdict_downloads_both_apple_test_producers() {
     let config = GitlabConfig::load(&workspace_root());
     let jobs = config.lane_jobs();
     let producers: BTreeSet<&str> = config.definition("verdict")["needs"]
@@ -626,7 +689,7 @@ fn the_branch_verdict_expects_only_the_apple_test_producer() {
                 .expect("a verdict producer runs a lane")
         })
         .collect();
-    assert_eq!(producers, BTreeSet::from(["apple-test"]));
+    assert_eq!(producers, BTreeSet::from(["apple-net-units", "apple-test"]));
 }
 
 #[test]
@@ -672,6 +735,75 @@ fn judged_jobs_stage_only_checkout_cleaned_verdict_evidence() {
         .and_then(Value::as_str)
         .expect("child pipeline defines checkout cleanup");
     assert!(!clean.contains(".ci-artifacts"));
+}
+
+/// A suite run on a native host writes its hang dumps where the job uploads
+/// them. Left unnamed, the harness falls back to the host's scratch root,
+/// which every job of the same trust shares and no job uploads; `target` is
+/// no better here, since it links to the lane's build and outlives the job.
+/// The checkout-cleaned evidence directory holds only this job's dumps.
+#[test]
+fn every_gitlab_suite_run_uploads_its_own_hang_dumps() {
+    const DUMP_DIR: &str = "KITHARA_HANG_DUMP_DIR";
+    const ROOT: &str = "{root}/";
+    let root = workspace_root();
+    let config = GitlabConfig::load(&root);
+    let lanes = lane_catalog(&root);
+
+    let mut checked = 0;
+    for (job, lane_name) in config.lane_jobs() {
+        let Some(lane) = lanes.get(&lane_name) else {
+            continue;
+        };
+        let suites = lane
+            .get("steps")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|step| {
+                step.get("args")
+                    .and_then(toml::Value::as_array)
+                    .is_some_and(|args| {
+                        args.iter()
+                            .take(2)
+                            .filter_map(toml::Value::as_str)
+                            .eq(["test", "run"])
+                    })
+            });
+        for step in suites {
+            let dir = step
+                .get("env")
+                .and_then(|env| env.get(DUMP_DIR))
+                .and_then(toml::Value::as_str)
+                .unwrap_or_else(|| panic!("lane `{lane_name}` runs a suite without {DUMP_DIR}"));
+            let relative = dir
+                .strip_prefix(ROOT)
+                .filter(|relative| relative.starts_with(".ci-artifacts/"))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "lane `{lane_name}` writes hang dumps outside the cleaned checkout: {dir}"
+                    )
+                });
+            let artifacts = config
+                .effective_value(&job, "artifacts")
+                .unwrap_or_else(|| panic!("job `{job}` uploads no artifacts"));
+            assert_eq!(
+                artifacts["when"].as_str(),
+                Some("always"),
+                "job `{job}` drops its hang dumps when it fails"
+            );
+            let uploaded = format!("{}/", relative.trim_end_matches('/'));
+            assert!(
+                artifacts["paths"]
+                    .as_sequence()
+                    .is_some_and(|paths| paths.iter().any(|path| path.as_str() == Some(&uploaded))),
+                "job `{job}` does not upload `{uploaded}`"
+            );
+            checked += 1;
+        }
+    }
+
+    assert!(checked > 0, "no GitLab job runs a suite lane");
 }
 
 /// A lane on a host that carries `just` builds in a build root of its own
@@ -739,7 +871,13 @@ fn macos_review_jobs_can_use_either_native_registration() {
         ["kithara-macos", "kithara-macos-1"],
         ["kithara-macos", "kithara-macos-2"],
     ];
-    for job in ["apple:lint", "apple:test", "apple:xcframework", "verdict"] {
+    for job in [
+        "apple:lint",
+        "apple:net-units",
+        "apple:test",
+        "apple:xcframework",
+        "verdict",
+    ] {
         let tags = config.effective_value(job, "tags").expect("job has tags");
         let tags = tags.as_sequence().expect("job tags are a sequence");
         assert!(!tags.is_empty(), "`{job}` must select the native pool");
@@ -827,6 +965,7 @@ fn verdict_downloads_every_judged_apple_report() {
         })
         .collect();
     for job in [
+        "apple:net-units",
         "apple:test",
         "apple:test-flash-off",
         "apple:swift-test",
@@ -844,6 +983,7 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         "apple:ios-test",
         "apple:lint",
         "apple:msrv",
+        "apple:net-units",
         "apple:pr-tests",
         "apple:safari",
         "apple:swift-test",
@@ -859,6 +999,7 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
 
     for (job, owner, judged) in [
         ("apple:lint", ".rules-verify-and-branch", false),
+        ("apple:net-units", ".rules-verify-and-branch", true),
         ("apple:test", ".rules-verify-and-branch", true),
         ("apple:xcframework", ".rules-verify-and-branch", false),
         ("apple:ios", ".rules-verify", false),
@@ -869,6 +1010,34 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
     ] {
         assert_active_review_job(&config, job, owner, judged);
     }
+}
+
+#[test]
+fn apple_network_units_upload_their_own_verdict_evidence() {
+    let config = GitlabConfig::load(&workspace_root());
+    let leaf = config.definition("apple:net-units");
+    let artifacts = &leaf["artifacts"];
+    assert_eq!(
+        artifacts["reports"]["junit"].as_str(),
+        Some(".ci-artifacts/junit/apple-net-units.xml")
+    );
+    let paths: BTreeSet<&str> = artifacts["paths"]
+        .as_sequence()
+        .expect("the producer names its artifacts")
+        .iter()
+        .map(|value| value.as_str().expect("an artifact path"))
+        .collect();
+    assert_eq!(
+        paths,
+        BTreeSet::from([
+            ".ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json",
+            ".ci-artifacts/junit/apple-net-units.xml",
+            ".ci-artifacts/junit/apple-net-units.selection.json",
+            ".ci-artifacts/junit/apple-net-units.failed",
+            ".ci-artifacts/hang/",
+        ])
+    );
+    assert_eq!(leaf["needs"][0].as_str(), Some("apple:lint"));
 }
 
 #[test]
@@ -1079,7 +1248,12 @@ fn dispatch_does_not_reserve_the_host_while_children_run() {
         );
     }
     let config = GitlabConfig::load(&workspace_root());
-    for job in ["apple:test", "apple:test-flash-off", "apple:ios-test"] {
+    for job in [
+        "apple:net-units",
+        "apple:test",
+        "apple:test-flash-off",
+        "apple:ios-test",
+    ] {
         assert_eq!(
             config
                 .effective_value(job, "resource_group")
@@ -1149,16 +1323,18 @@ fn a_draft_test_block_is_checked_before_the_suite_runs() {
         Some("$KITHARA_PIPELINE_KIND == \"branch\" && $KITHARA_PR_TESTS")
     );
     assert_eq!(check["script"][0].as_str(), Some("just ci pr-tests"));
-    let needs = apple["apple:test"]["needs"]
-        .as_sequence()
-        .expect("the suite names what it waits for");
-    assert!(
-        needs
-            .iter()
-            .any(|need| need["job"].as_str() == Some("apple:pr-tests")
-                && need["optional"].as_bool() == Some(true)),
-        "the suite does not wait for the block check: {needs:?}"
-    );
+    for suite in ["apple:test", "apple:net-units"] {
+        let needs = apple[suite]["needs"]
+            .as_sequence()
+            .expect("the suite names what it waits for");
+        assert!(
+            needs
+                .iter()
+                .any(|need| need["job"].as_str() == Some("apple:pr-tests")
+                    && need["optional"].as_bool() == Some(true)),
+            "{suite} does not wait for the block check: {needs:?}"
+        );
+    }
 }
 
 #[test]

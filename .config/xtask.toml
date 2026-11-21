@@ -149,6 +149,7 @@ lockbud_exclude = [
   "kithara-fuzz",
   "kithara-harness-tests",
   "kithara-hls-tests",
+  "kithara-hls-keys-tests",
   "kithara-host-tests",
   "kithara-integration-tests",
   "kithara-play-tests",
@@ -602,6 +603,9 @@ known_flakes = []
 # `ui` lane so the general workspace run does not build those test targets.
 features = []
 
+[test.required_case_prefixes]
+".ci-artifacts/junit/apple-net-units.selection.json" = "backend::apple::"
+
 # The test packages a draft runs whatever its pull request names: the seven
 # that failed on the most branches between 2026-10-05 and 2026-11-11, above the
 # gap between 19 branches and 13. Reviewed by hand; a ready pull request and
@@ -692,6 +696,7 @@ cargo.packages = [
   "kithara-file-tests",
   "kithara-hls",
   "kithara-hls-tests",
+  "kithara-hls-keys-tests",
   "kithara-host",
   "kithara-host-tests",
   "kithara-play",
@@ -741,9 +746,11 @@ cargo.packages = [
   "kithara-harness-tests",
   "kithara-hls",
   "kithara-hls-tests",
+  "kithara-hls-keys-tests",
   "kithara-host",
   "kithara-host-tests",
   "kithara-integration-tests",
+  "kithara-key",
   "kithara-link",
   "kithara-mp4",
   "kithara-mpa",
@@ -808,6 +815,7 @@ cargo.packages = [
   "kithara-decode-tests",
   "kithara-file-tests",
   "kithara-hls-tests",
+  "kithara-hls-keys-tests",
   "kithara-host-tests",
   "kithara-integration-tests",
   "kithara-play-tests",
@@ -872,10 +880,15 @@ cargo.packages = ["kithara-abr"]
 cargo.profile = "test-release"
 
 [test.lanes.analysis]
-default_features = ["kithara-beat/dsp", "kithara-waveform/dsp"]
+default_features = [
+  "kithara-beat/dsp",
+  "kithara-key/dsp",
+  "kithara-waveform/dsp",
+]
 cargo.packages = [
   "kithara-analysis",
   "kithara-beat",
+  "kithara-key",
   "kithara-waveform",
   "kithara-analysis-tests",
 ]
@@ -917,7 +930,7 @@ cargo.packages = ["kithara-file", "kithara-file-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.hls]
-cargo.packages = ["kithara-hls", "kithara-hls-tests"]
+cargo.packages = ["kithara-hls", "kithara-hls-tests", "kithara-hls-keys-tests"]
 cargo.profile = "test-release"
 
 [test.lanes.host]
@@ -1289,6 +1302,8 @@ pr_review_line_limit = 5000
 # project migration, so a moved known failure stays known while a new failure
 # still blocks the pipeline.
 [ext.ci.verdict.id_aliases]
+"kithara-hls-tests::hls::keys_integration::" = "kithara-hls-keys-tests::hls::keys_integration::"
+"kithara-hls-tests::hls_heavy::drm_stream_integrity::" = "kithara-hls-keys-tests::hls_heavy::drm_stream_integrity::"
 "kithara-assets::eviction_subscription::dropping_second_subscriber_preserves_first" = "kithara-assets::eviction_subscription::dropping_one_subscriber_preserves_the_other_second"
 "kithara-assets::eviction_subscription::dropping_first_subscriber_preserves_second" = "kithara-assets::eviction_subscription::dropping_one_subscriber_preserves_the_other_first"
 "kithara-assets::availability_persistence::delete_asset_persists_availability_deletion_across_rebuild" = "kithara-assets::availability_persistence::a_deletion_persists_in_availability_across_rebuild_delete_asset"
@@ -1630,12 +1645,37 @@ program = "just"
 steps = [
   { args = [
     "deps",
-    "hack-invariants",
-  ], label = "invariant and product feature checks" },
+    "hack-invariants-part",
+    "--partition",
+    "1/2",
+  ], label = "first invariant feature partition" },
+  { args = [
+    "deps",
+    "_hack-context",
+  ], label = "product feature checks" },
 ]
 role = "gate"
 kinds = []
-# The same schedule as the workspace part: together they are the whole plan.
+# Native partitions retain every combination within the per-job budget.
+kinds_github = ["main", "nightly"]
+timeout_minutes = 60
+
+[ext.ci.lanes.deps-features-invariants-rest]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "deps",
+    "hack-invariants-part",
+    "--partition",
+    "2/2",
+  ], label = "second invariant feature partition" },
+]
+role = "gate"
+kinds = []
 kinds_github = ["main", "nightly"]
 timeout_minutes = 60
 
@@ -1668,13 +1708,16 @@ steps = [
     "chrome",
     "webcodecs",
     "include",
-  ], label = "Chromium WebCodecs tests", env = { CHROMEDRIVER_ARGS = "--verbose --log-path={root}/target/web-chromium.log" } },
+  ], label = "Chromium WebCodecs tests" },
 ]
 role = "gate"
 kinds = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
-artifact = { name = "web-chromium-driver", path = "target/web-chromium.log", when = "failure" }
+# In a GitHub job the executor captures the ChromeDriver log and the wrapper's
+# NetLog files in the job's RUNNER_TEMP and hands the job its own copy there; a
+# local run keeps them in its build.
+artifact = { name = "web-chromium-driver", report = "chromium", when = "failure" }
 
 # Nightly here, not on the push gate: the full integration suite does not
 # compile for wasm32 today. The lane reports the break every night instead of
@@ -1830,15 +1873,17 @@ kinds = ["nightly"]
 timeout_minutes = 90
 
 [ext.ci.lanes.deep-bench]
-cache_group = "macos"
-label = "deep Apple"
-os = "macos"
+cache_group = "host"
+label = "benchmarks"
+os = ["linux", "macos"]
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["perf", "bench", "ci"], label = "benchmark suite" }]
 role = "deep"
-kinds = ["nightly"]
+kinds = ["nightly", "bench", "branch", "merge-request", "quarantine"]
+kinds_github = ["nightly", "bench"]
 timeout_minutes = 120
+artifact = { name = "bench-results", path = "bench-results.txt\nbench-results/", when = "always" }
 
 # A shader that stopped reading what Rust writes it looks identical from the
 # outside until a frame is rendered and read back, so this is the one suite
@@ -2102,7 +2147,7 @@ program = "just"
 # The pre-kill timer runs on the real clock that a flash wedge cannot stop, so
 # a snapshot of the flash state, the wait graph and the threads at 110s still
 # reaches this artifact.
-artifact = { name = "hang-dumps-simulated-clock", path = "target/hang", when = "failure" }
+artifact = { name = "hang-dumps-simulated-clock", path = ".ci-artifacts/hang", when = "failure" }
 steps = [
   { args = [
     "test",
@@ -2111,7 +2156,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
   { args = [
     "test",
     "test-utils",
@@ -2164,23 +2209,35 @@ timeout_minutes = 180
 # are written with, so a product change can break them from the other side.
 # These lanes, with `net-host` and `broadcast`, run them under their own
 # configuration: whole on a ready pull request, `main` and every night, and
-# the draft scope's part they hold on any other branch push. GitLab declares
-# them weekly behind its Linux platform gate, which no schedule opens.
+# the draft scope's part they hold on any other branch push.
 [ext.ci.lanes.linux-tooling]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
+artifact = { name = "hang-dumps-tooling", path = ".ci-artifacts/hang", when = "failure" }
+cache_group = "host"
+label = "tooling"
+os = ["macos", "linux"]
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
+  { program = "cargo", args = [
+    "fetch",
+    "--locked",
+  ], label = "prepare tooling dependency graphs" },
   { args = [
     "test",
     "run",
     "--lane=tooling",
-  ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Native tooling lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "gate"
-kinds = []
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "main",
+  "nightly",
+  "platforms",
+  "release",
+]
 kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
@@ -2401,7 +2458,7 @@ label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
-artifact = { name = "hang-dumps-real-clock", path = "target/hang", when = "failure" }
+artifact = { name = "hang-dumps-real-clock", path = ".ci-artifacts/hang", when = "failure" }
 steps = [
   { args = [
     "test",
@@ -2410,7 +2467,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "real-clock suite", rebuild_check = true, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ], label = "real-clock suite", rebuild_check = true, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
@@ -2834,6 +2891,46 @@ role = "platforms"
 kinds = ["platforms", "main", "nightly"]
 timeout_minutes = 60
 
+[ext.ci.lanes.apple-net-units]
+cache_group = "macos"
+label = "Apple network units"
+os = "macos"
+tools = ["cargo", "just", "sccache", "kache", "xcodebuild"]
+checks = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
+]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--net-backend=apple",
+    "--narrow=package(=kithara-net)",
+    "--selection-output=.ci-artifacts/junit/apple-net-units.selection.json",
+    "--flash=on",
+    "--no-block=on",
+    "--profile",
+    "ci",
+  ], label = "Apple network units", env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
+]
+role = "platforms"
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+kinds_github = []
+timeout_minutes = 60
+
 # A review ref asks the same question the default branch asks: what a reviewer
 # would have to fix anyway is cheaper to learn before merge.
 [ext.ci.lanes.apple-test]
@@ -2867,7 +2964,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ] } },
+  ] }, env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
   { args = [
     "test",
     "test-utils",
@@ -2908,7 +3005,7 @@ steps = [
     "--flash=off",
     "--profile",
     "ci",
-  ], label = "Apple flash-off gate" },
+  ], label = "Apple flash-off gate", env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]

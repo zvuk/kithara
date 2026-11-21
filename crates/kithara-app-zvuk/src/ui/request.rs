@@ -1,46 +1,51 @@
-use std::collections::HashSet;
-
 use kithara_app_library::AccessToken;
 use kithara_net::Net;
 
-use crate::{Client, Error, MediaTrack, PlaylistId, TrackId, TrackPage};
+use crate::{
+    ArtistId, Client, Error, PlaylistId, ReleaseId, SearchResults, SearchScope, TrackPage,
+};
 
 #[derive(Clone, PartialEq)]
 pub(super) enum Mode {
     Search,
     Liked,
     Playlist(PlaylistId),
+    Artist(ArtistId),
+    Album(ReleaseId),
 }
 
-pub(super) struct Batch {
-    pub(super) page: TrackPage,
-    pub(super) streams: Result<Vec<MediaTrack>, Error>,
+/// One immutable navigation request; replacing its job cancels every later phase.
+#[derive(Clone)]
+pub(super) struct Request {
+    pub(super) mode: Mode,
+    pub(super) query: String,
+    pub(super) scope: SearchScope,
+    pub(super) cursor: Option<String>,
 }
 
-impl Mode {
-    /// The node's page and its streams; a refused token fails the whole batch.
+pub(super) enum Loaded {
+    Tracks(TrackPage),
+    Search(SearchResults, bool),
+}
+
+impl Request {
     pub(super) async fn load<N: Net>(
-        &self,
+        self,
         client: &Client<N>,
         token: &AccessToken,
-        query: &str,
-    ) -> Result<Batch, Error> {
-        let page = match self {
-            Self::Search => client.search(token, query).await?,
-            Self::Liked => client.liked_tracks(token).await?,
-            Self::Playlist(id) => client.playlist_tracks(token, id).await?,
-        };
-        let mut listed = HashSet::new();
-        let ids = page
-            .tracks
-            .iter()
-            .filter(|track| listed.insert(&track.id))
-            .map(|track| track.id.clone())
-            .collect::<Vec<TrackId>>();
-        let streams = match client.streams(token, &ids).await {
-            Err(Error::AuthenticationRejected) => return Err(Error::AuthenticationRejected),
-            streams => streams,
-        };
-        Ok(Batch { page, streams })
+    ) -> Result<Loaded, Error> {
+        match self.mode {
+            Mode::Search => {
+                let append = self.cursor.is_some();
+                client
+                    .search(token, &self.query, self.scope, self.cursor.as_deref())
+                    .await
+                    .map(|page| Loaded::Search(page, append))
+            }
+            Mode::Liked => client.liked_tracks(token).await.map(Loaded::Tracks),
+            Mode::Playlist(id) => client.playlist_tracks(token, &id).await.map(Loaded::Tracks),
+            Mode::Artist(id) => client.artist_tracks(token, &id).await.map(Loaded::Tracks),
+            Mode::Album(id) => client.release_tracks(token, &id).await.map(Loaded::Tracks),
+        }
     }
 }

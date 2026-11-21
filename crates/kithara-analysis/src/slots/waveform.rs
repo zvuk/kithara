@@ -6,30 +6,29 @@ use tracing::warn;
 
 use crate::{AnalysisParams, BlobError, Waveform, WaveformAnalyzer};
 
-/// The analyzer and the bucket ceiling its snapshots are built to.
+/// The analyzer and the fold factor its snapshots use.
 #[derive(Default)]
-pub(crate) struct Slot(Option<(WaveformAnalyzer, usize)>);
+pub(crate) struct Slot(Option<(WaveformAnalyzer, NonZeroU32)>);
 
-/// Builds the pass that fills `buckets` at most. The caller decides whether a
+/// Builds the pass that folds columns by `fold`. The caller decides whether a
 /// waveform is wanted at all; reaching here means it is.
-impl<S> TryFrom<(usize, NonZeroU32, &PoolRegion<S>)> for Slot
+impl<S> TryFrom<(NonZeroU32, NonZeroU32, &PoolRegion<S>)> for Slot
 where
     S: HasPool<f32>,
 {
     type Error = AnalyzerError;
 
     fn try_from(
-        (buckets, rate, pools): (usize, NonZeroU32, &PoolRegion<S>),
+        (fold, rate, pools): (NonZeroU32, NonZeroU32, &PoolRegion<S>),
     ) -> Result<Self, Self::Error> {
         WaveformAnalyzer::new(rate.get(), AnalysisParams::default(), pools)
-            .map(|analyzer| Self(Some((analyzer, buckets))))
+            .map(|analyzer| Self(Some((analyzer, fold))))
     }
 }
 
-/// The tag of a waveform built to `buckets`. No bucket ceiling is no waveform,
-/// and so no tag.
-pub(crate) fn cache_tag(buckets: Option<usize>) -> Option<String> {
-    buckets.map(|buckets| format!("wave:native:max{buckets}:v2"))
+/// The tag names the requested fold factor; an absent factor disables the waveform.
+pub(crate) fn cache_tag(fold: Option<NonZeroU32>) -> Option<String> {
+    fold.map(|fold| format!("wave:fold{fold}:v3"))
 }
 
 pub(crate) fn push<S>(slot: &mut Slot, pools: &PoolRegion<S>, pcm: &[f32], channels: usize, at: u64)
@@ -50,7 +49,7 @@ pub(crate) fn snapshot(slot: &mut Slot, extent: Option<u64>) -> Option<Waveform>
     let result = slot
         .0
         .as_mut()
-        .map(|(analyzer, buckets)| analyzer.snapshot(*buckets, extent));
+        .map(|(analyzer, fold)| analyzer.snapshot(*fold, extent));
     match result {
         Some(Ok(waveform)) => Some(waveform),
         Some(Err(error)) => {

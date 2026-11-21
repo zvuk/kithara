@@ -1,18 +1,20 @@
 use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_platform::time::Duration;
+#[cfg(feature = "analysis-waveform")]
+use kithara_resampler::NoResamplerBackend;
 #[cfg(all(feature = "beat-nn", feature = "analysis-waveform"))]
 use kithara_resampler::rubato::RubatoBackend;
 use kithara_test_utils::kithara;
 use rangemap::RangeSet;
 
 use super::{AnalysisFile, AnalysisFileError, AnalysisFileSpec, AnalysisFileUpdate};
-#[cfg(all(feature = "beat-nn", feature = "analysis-waveform"))]
-use crate::test_pools::pools;
 use crate::{
-    AnalysisFingerprint, AnalysisProgress, TrackAnalysis, blob::Writer, consts,
-    progress::AnalysisResume,
+    AnalysisFingerprint, AnalysisProgress, KeyEstimate, Mode, MusicalKey, PitchClass,
+    TrackAnalysis, blob::Writer, consts, progress::AnalysisResume,
 };
+#[cfg(feature = "analysis-waveform")]
+use crate::{AnalyzerBuilder, Bucket, Waveform, test_pools::pools};
 
 fn rate(value: u32) -> NonZeroU32 {
     NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
@@ -23,7 +25,10 @@ fn chunk_frames(value: u64) -> NonZeroU64 {
 }
 
 fn fingerprint() -> AnalysisFingerprint {
-    AnalysisFingerprint::new(Some("beat:test:v1"), Some("wave:test:v1"))
+    AnalysisFingerprint::builder()
+        .beat("beat:test:v1")
+        .waveform("wave:test:v1")
+        .build()
 }
 
 fn spec() -> AnalysisFileSpec {
@@ -100,6 +105,7 @@ fn progress(analysis: TrackAnalysis, chunk_frames: NonZeroU64) -> AnalysisProgre
             chunk_frames,
             waveform.as_deref(),
             beat.as_deref(),
+            None,
         ))
     };
     AnalysisProgress::new(analysis, resume)
@@ -109,7 +115,7 @@ fn default_progress(analysis: TrackAnalysis) -> AnalysisProgress {
     progress(analysis, chunk_frames(consts::ARCHIVE_CHUNK_FRAMES))
 }
 
-fn apply(bytes: &mut Vec<u8>, update: &AnalysisFileUpdate) {
+pub(crate) fn apply(bytes: &mut Vec<u8>, update: &AnalysisFileUpdate) {
     if let Some(initial) = update.initial_bytes() {
         assert!(bytes.is_empty(), "only create supplies initial bytes");
         bytes.extend_from_slice(initial);
@@ -152,9 +158,9 @@ fn create_bytes(analysis: TrackAnalysis) -> Vec<u8> {
 #[cfg(all(feature = "beat-nn", feature = "analysis-waveform"))]
 #[kithara::test(native, flash(false))]
 fn effective_application_fingerprint_fits_the_fixed_header() {
-    let fingerprint = crate::AnalyzerBuilder::<RubatoBackend, _>::new(pools())
+    let fingerprint = AnalyzerBuilder::<RubatoBackend, _>::new(pools())
         .with_beat()
-        .with_waveform(2_000)
+        .with_waveform(NonZeroU32::MIN)
         .fingerprint();
     assert!(
         fingerprint.beat().is_some_and(|value| value.len() > 256),
@@ -356,7 +362,10 @@ fn parse_rejects_fingerprint_axis_extent_and_chunk_drift() {
     const CHUNK_FRAMES_FIELD: usize = 32;
 
     let bytes = create_bytes(analysis(1, &[(0, 16)], false));
-    let other_fingerprint = AnalysisFingerprint::new(Some("beat:other"), Some("wave:other"));
+    let other_fingerprint = AnalysisFingerprint::builder()
+        .beat("beat:other")
+        .waveform("wave:other")
+        .build();
     assert!(matches!(
         AnalysisFile::parse(&bytes, &other_fingerprint),
         Err(AnalysisFileError::Config)
@@ -388,6 +397,58 @@ fn parse_rejects_fingerprint_axis_extent_and_chunk_drift() {
 }
 
 #[kithara::test]
+fn a_narrowed_pass_reads_back_under_the_full_fingerprint() {
+    let full = AnalysisFingerprint::builder()
+        .beat("beat:test:v1")
+        .waveform("wave:test:v1")
+        .key("key:test:v1")
+        .build();
+    let a_minor = KeyEstimate::new(
+        MusicalKey {
+            tonic: PitchClass::A,
+            mode: Mode::Minor,
+        },
+        0.9,
+    )
+    .expect("a fixture strength is in range");
+    let stored = |key: &str| {
+        let mut coverage = RangeSet::new();
+        coverage.insert(0..consts::ARCHIVE_EXTENT);
+        let progress = default_progress(
+            TrackAnalysis::builder()
+                .token("archive:test".into())
+                .revision(1)
+                .source_sample_rate(rate(48_000))
+                .extent(consts::ARCHIVE_EXTENT)
+                .coverage(coverage)
+                .fingerprint(AnalysisFingerprint::builder().key(key).build())
+                .settled(true)
+                .key(a_minor)
+                .build(),
+        );
+        let spec = AnalysisFileSpec::for_analysis(
+            progress.analysis(),
+            chunk_frames(consts::ARCHIVE_CHUNK_FRAMES),
+        )
+        .expect("the pass knows its extent");
+        let mut bytes = Vec::new();
+        apply(
+            &mut bytes,
+            &AnalysisFile::create(&spec, &progress).expect("create succeeds"),
+        );
+        bytes
+    };
+
+    let file = AnalysisFile::parse(&stored("key:test:v1"), &full)
+        .expect("a key-only pass is part of what the full configuration produces");
+    assert_eq!(file.latest().analysis().key(), Some(a_minor));
+    assert!(matches!(
+        AnalysisFile::parse(&stored("key:other:v1"), &full),
+        Err(AnalysisFileError::Config)
+    ));
+}
+
+#[kithara::test]
 fn update_rejects_axis_extent_and_fingerprint_drift() {
     let bytes = create_bytes(analysis(1, &[(0, 16)], false));
     let file = AnalysisFile::parse(&bytes, &fingerprint()).expect("file restores");
@@ -412,7 +473,10 @@ fn update_rejects_axis_extent_and_fingerprint_drift() {
             2,
             rate(48_000),
             Some(consts::ARCHIVE_EXTENT),
-            AnalysisFingerprint::new(Some("beat:other"), Some("wave:other")),
+            AnalysisFingerprint::builder()
+                .beat("beat:other")
+                .waveform("wave:other")
+                .build(),
             &[(0, 16)],
             false,
         ),
@@ -443,7 +507,7 @@ fn update_rejects_completed_chunk_regression() {
 fn parser_rejects_truncation_corrupt_offsets_and_index_flags() {
     const PAYLOAD_END_FIELD: usize = 64;
     const LATEST_PAYLOAD_OFFSET_FIELD: usize = 72;
-    const HEADER_VERSION: u32 = 0x4b41_4604;
+    const HEADER_VERSION: u32 = 0x4b41_4605;
 
     let bytes = create_bytes(analysis(1, &[(0, 16)], false));
     for cut in [
@@ -530,5 +594,50 @@ fn parser_rejects_index_coverage_disagreement() {
     assert!(matches!(
         AnalysisFile::parse(&bytes, &fingerprint()),
         Err(AnalysisFileError::Corrupt)
+    ));
+}
+
+#[cfg(feature = "analysis-waveform")]
+#[kithara::test]
+fn a_stored_waveform_is_served_only_for_its_requested_factor() {
+    let fingerprint = |fold| {
+        AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
+            .with_waveform(fold)
+            .fingerprint()
+    };
+    let native = fingerprint(NonZeroU32::MIN);
+    let folded = fingerprint(NonZeroU32::new(4).unwrap());
+    assert_eq!(native.waveform(), Some("wave:fold1:v3"));
+    assert_eq!(folded.waveform(), Some("wave:fold4:v3"));
+    let waveform = Waveform::try_new(
+        vec![Bucket::new([0.5; 4], [0.5; 4])],
+        NonZeroU64::new(1024).unwrap(),
+    )
+    .unwrap();
+    let snapshot = TrackAnalysis::builder()
+        .media_origin(Duration::ZERO)
+        .token("archive:test".into())
+        .revision(1)
+        .source_sample_rate(rate(48_000))
+        .extent(consts::ARCHIVE_EXTENT)
+        .fingerprint(native.clone())
+        .settled(true)
+        .waveform(waveform)
+        .build();
+    let spec = AnalysisFileSpec::new(
+        rate(48_000),
+        consts::ARCHIVE_EXTENT,
+        chunk_frames(consts::ARCHIVE_CHUNK_FRAMES),
+        native.clone(),
+    )
+    .unwrap();
+    let update = AnalysisFile::create(&spec, &default_progress(snapshot)).unwrap();
+    let mut bytes = Vec::new();
+    apply(&mut bytes, &update);
+    let served = AnalysisFile::parse(&bytes, &native).unwrap();
+    assert_eq!(served.latest().analysis().waveform().unwrap().len(), 1);
+    assert!(matches!(
+        AnalysisFile::parse(&bytes, &folded),
+        Err(AnalysisFileError::Config)
     ));
 }

@@ -12,6 +12,7 @@ use kithara::{
     queue::QueueError,
 };
 use kithara_ffi::{item::AudioPlayerItem, player::AudioPlayer, types::FfiItemConfig};
+use kithara_test_utils::test::OutputStartupProbe;
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::{BroadcastChannel, MessageEvent};
@@ -320,16 +321,22 @@ fn assert_decoded_clicks(events: &Events, track_id: f64) {
 
 #[wasm_bindgen_test]
 async fn partial_replacement_keeps_the_accepted_target_and_publishes_its_analysis() {
+    let startup = OutputStartupProbe::new().expect("observe browser output startup");
     let (player, events, diagnostics) = observed_player();
     let player = Arc::new(player);
     player.append_js(clicks_url()).expect("append old item");
-    assert!(
-        drive(&player, &events, |_| player.item_count() == 1)
-            .await
-            .is_some(),
-        "the owner never admitted the old item; {}",
-        progress_report(&events, &diagnostics)
-    );
+    if drive(&player, &events, |_| player.item_count() == 1)
+        .await
+        .is_none()
+    {
+        let progress = progress_report(&events, &diagnostics);
+        let snapshot = startup.snapshot().await;
+        panic!(
+            "the owner never admitted the old item; {progress}; \
+             output startup snapshot taken after the deadline={snapshot:?}"
+        );
+    }
+    drop(startup);
     let old = player.items().pop().expect("published old item");
     let old_id = old.queue_id();
     let old_ref = Arc::downgrade(&old);
@@ -426,6 +433,7 @@ async fn partial_replacement_keeps_the_accepted_target_and_publishes_its_analysi
 
 #[wasm_bindgen_test]
 async fn analyzing_again_starts_a_new_revision_sequence_and_silences_the_old_pass() {
+    let startup = OutputStartupProbe::new().expect("observe browser output startup");
     let (player, events, diagnostics) = observed_player();
     let track_id = player.append_js(clicks_url()).expect("append");
     player.analyze_js(track_id).expect("analyze accepted");
@@ -434,11 +442,15 @@ async fn analyzing_again_starts_a_new_revision_sequence_and_silences_the_old_pas
         received.last().is_some_and(|e| boolean(e, "settled"))
     })
     .await;
-    assert!(
-        settled.is_some(),
-        "the first pass never settled after {DEADLINE_MS} ms; {}",
-        progress_report(&events, &diagnostics)
-    );
+    if settled.is_none() {
+        let progress = progress_report(&events, &diagnostics);
+        let snapshot = startup.snapshot().await;
+        panic!(
+            "the first pass never settled after {DEADLINE_MS} ms; {progress}; \
+             output startup snapshot taken after the deadline={snapshot:?}"
+        );
+    }
+    drop(startup);
 
     let before = events.borrow().len();
     player

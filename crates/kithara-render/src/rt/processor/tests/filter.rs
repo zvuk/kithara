@@ -3,7 +3,7 @@ use kithara_effects::filter::{FilterEffect, FilterKnob, FilterSettings};
 
 use super::*;
 use crate::{
-    bridge::{DeckMixSettings, DeckMixSettingsChange, FilterBinding},
+    bridge::{DeckMixSettings, DeckMixSettingsChange},
     worker::packet_tests::{PacketRing, chunk},
 };
 
@@ -17,21 +17,7 @@ fn stereo_frames(mixer: &mut TestMixer, start: usize, frames: usize) -> [Vec<f32
         outputs: &mut outputs,
     };
     mixer.inbox.0.drain();
-    let level = mixer.inbox.scope(mixer.mixer.scope).expect("live scope");
-    let context = OutputContext::new(
-        frame_at(start)..frame_at(start + frames),
-        shape().sample_rate,
-        SessionEpoch::new(0),
-        None,
-    )
-    .expect("output range");
-    mixer.mixer.render_block(
-        Some(level),
-        Some(&context),
-        frame_at(start),
-        &mut buffers,
-        frames,
-    );
+    render_realtime(mixer, SessionEpoch::new(0), start, frames, &mut buffers);
     pcm
 }
 
@@ -55,15 +41,6 @@ pub(super) fn reference(rate: NonZeroU32, start: FilterKnob) -> FilterEffect {
 
 pub(super) fn turn(value: f64) -> DeckPart {
     DeckPart::Mix(DeckMixSettingsChange::Filter(knob(value)))
-}
-
-pub(super) fn binding(ends: &mut TestEnds) -> FilterBinding {
-    ends.deck
-        .snapshot
-        .read()
-        .filter
-        .binding()
-        .expect("observed output stream")
 }
 
 pub(super) fn bits(pcm: &[f32]) -> Vec<u32> {
@@ -109,12 +86,7 @@ fn source_format_changes_preserve_pcm_metadata_and_the_deck_filter_rate(
         metadata.push(packet.meta);
         ring.push(PcmPacket::Chunk(Box::new(packet)));
     }
-    let resource = PlayerResource::new(
-        PcmConsumer::new(ring.receiver.take().expect("receiver")),
-        Arc::from("source format"),
-        &pools(),
-    )
-    .expect("resource");
+    let resource = Box::new(ring.receiver.take().expect("receiver"));
     let attached = send(
         &mut ends,
         at(1),
@@ -122,7 +94,7 @@ fn source_format_changes_preserve_pcm_metadata_and_the_deck_filter_rate(
             DeckPart::Attach {
                 slot: A,
                 item_id: kithara_events::TrackId::allocate(),
-                pcm: Box::new(resource),
+                pcm: resource,
                 segment: SegmentId::FIRST,
             },
             DeckPart::Start {
@@ -199,9 +171,9 @@ fn a_knob_turn_is_frame_exact_after_a_bit_transparent_center() {
     assert_eq!(snapshot.filter.authority(), Some(turned));
     assert_eq!(snapshot.filter.program(), None);
     assert_eq!(snapshot.filter.knob().to_bits(), filter.knob().to_bits());
-    assert_eq!(
-        snapshot.filter.binding().map(|binding| binding.instance()),
-        Some(None)
+    assert!(
+        snapshot.epoch.is_some(),
+        "the fixed filter remains on the live output axis"
     );
 }
 

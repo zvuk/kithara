@@ -128,7 +128,12 @@ fn apply_queue(
     command: QueueCommand<TestPools>,
 ) {
     let output = session.binding().get();
-    let deck = DeckSnapshot::new(kithara_play::DeckMixerConfig::default());
+    let mixer_config = kithara_play::DeckMixerConfig::default();
+    let deck = DeckSnapshot::new(
+        mixer_config.slots(),
+        mixer_config.eq_bands(),
+        mixer_config.fx_units(),
+    );
     let pass = DeckPass {
         mix: DeckMixSettings::default(),
         suspended: false,

@@ -3,14 +3,15 @@
 use kithara::{
     self,
     download::Downloader,
-    events::{EventReceiver, TrackId},
+    events::{EventReceiver, TrackId, TryRecvError},
     platform::{sync::Arc, time::Duration},
-    play::PlayError,
+    play::{DeckMixSettingsChange, PlayError, TrackSettingsChange},
     queue::{
         ActionAtItemEnd, AdvanceReason, Queue, QueueConfig, QueueControl, QueueError, QueueEvent,
         RepeatMode, TrackStatus, Transition,
     },
 };
+use kithara_command::When;
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
     event::TestEvent,
@@ -232,6 +233,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
 async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -693,7 +695,12 @@ async fn a_successor_the_deck_had_no_room_for_reloads_and_meets_its_predecessor(
              before A ends"
         );
         let refused = harness
-            .run(&queue, |q| (0..FLOOD).find_map(|_| q.set_volume(1.0).err()))
+            .run(&queue, |q| {
+                (0..FLOOD).find_map(|_| {
+                    q.mix(When::Next, DeckMixSettingsChange::Volume(1.0.into()))
+                        .err()
+                })
+            })
             .await;
         assert!(
             matches!(refused, Some(QueueError::Play(PlayError::Full(_)))),
@@ -1137,7 +1144,9 @@ async fn a_crossfade_at_double_speed_starts_its_duration_before_the_outgoing_end
         .await;
 
     harness
-        .run(&queue, |q| q.set_default_rate(SPEED))
+        .run(&queue, |q| {
+            q.configure_track(TrackSettingsChange::Speed(SPEED))
+        })
         .await
         .expect("a finite rate is accepted");
 
@@ -1284,7 +1293,9 @@ async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() 
     let queue = harness.insert_control(Queue::new(config)).await;
 
     harness
-        .run(&queue, move |q| q.set_default_rate(SPEED))
+        .run(&queue, move |q| {
+            q.configure_track(TrackSettingsChange::Speed(SPEED))
+        })
         .await
         .expect("a finite rate is accepted");
 
@@ -1700,6 +1711,7 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -1709,7 +1721,37 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     let solo = assets::constant_wav_three_0_4s();
     let id = append_loaded(&harness, &queue, &solo).await;
 
+    // Only re-arming the consumed solo track announces Pending.
+    let mut reloads: EventReceiver<QueueEvent> = queue.subscribe();
     let pcm = render_committed_queue(&queue, &harness, MAX_BLOCKS, (id, 0)).await;
+
+    loop {
+        match reloads.try_recv() {
+            Ok(envelope) => assert!(
+                !matches!(
+                    envelope.event,
+                    QueueEvent::TrackStatusChanged {
+                        id: reloaded,
+                        status: TrackStatus::Pending,
+                    } if reloaded == id
+                ),
+                "the sole autoplayed track must not re-enter Pending while playing: {:?}",
+                queue.playback_view(),
+            ),
+            Err(TryRecvError::Empty) => break,
+            Err(error) => {
+                panic!("queue event receiver failed while the queue is alive: {error:?}");
+            }
+        }
+    }
+    assert_eq!(
+        queue.mixer_metrics().underruns(),
+        0,
+        "a solo committed track must not underrun: playback={:?}, metrics={:?}, mixer_blocks={}",
+        queue.playback_view(),
+        queue.mixer_metrics(),
+        queue.mixer_blocks(),
+    );
 
     let onset =
         first_onset_frame(&pcm, 0.005).expect("the autoplayed track must produce audible samples");
@@ -1721,11 +1763,12 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
 
     assert!(
         mean_mid > 0.005,
-        "no signal mid-playback (mean={mean_mid}) — decoder likely self-armed; onset={onset}, window={window}, pcm_samples={}, current={:?}, deck={:?}, metrics={:?}",
+        "no signal mid-playback (mean={mean_mid}); onset={onset}, window={window}, pcm_samples={}, current={:?}, playback={:?}, metrics={:?}, mixer_blocks={}",
         pcm.len(),
         queue.current().map(|entry| (entry.id, entry.status)),
-        harness.deck_snapshot(),
-        harness.metrics(),
+        queue.playback_view(),
+        queue.mixer_metrics(),
+        queue.mixer_blocks(),
     );
     assert_eq!(
         queue.current_index(),

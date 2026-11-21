@@ -21,7 +21,8 @@ mod units;
 pub use approach::ExponentialApproach;
 pub use buffer::{InterleavedView, PlanarBuffer, PlanarView};
 pub use chunk::{
-    AudioChunk, AudioChunkInfo, SegmentId, SourceInverse, SourceSpan, SourceStep, SourceSteps,
+    AudioChunk, AudioChunkInfo, SegmentId, SourceElapsed, SourceInverse, SourceSpan, SourceStep,
+    SourceSteps,
 };
 pub use coverage::{CoverageRead, CoverageWrite, FrameCoverage, FrameSpan};
 pub use error::SignalError;
@@ -31,6 +32,6 @@ pub use revision::Revision;
 pub use sample::sanitize_sample;
 pub use session::{Bound, OutputContext, SessionEpoch, SessionFrame, TransportRevision};
 pub use spec::AudioSpec;
-pub use time::rescale_frame_ceil;
+pub use time::{rescale_frame_ceil, rescale_frame_round};
 pub use units::{Count, FrameCount, Frames, SampleCount, Samples};
 mod consts;

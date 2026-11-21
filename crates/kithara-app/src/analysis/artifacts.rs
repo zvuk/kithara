@@ -1,5 +1,5 @@
 use kithara::{
-    analysis::{AnalysisToken, BeatGridModel, TrackAnalysis, Waveform},
+    analysis::{AnalysisToken, BeatGridModel, MusicalKey, TrackAnalysis, Waveform},
     link::GridRefusal,
     platform::sync::Arc,
 };
@@ -61,6 +61,10 @@ impl TrackArtifacts {
             #[expr(Self::grid_from($, &self.prepared))]
             #[call(as_ref)]
             pub(crate) fn grid(&self) -> Option<&BeatGridModel>;
+            /// The track's key: the supplied one, else the analysed one.
+            #[expr(Self::key_from($, &self.prepared))]
+            #[call(as_ref)]
+            pub(crate) fn key(&self) -> Option<MusicalKey>;
         }
     }
 
@@ -73,6 +77,21 @@ impl TrackArtifacts {
             .value()
             .map(Arc::as_ref)
             .or_else(|| analysis.and_then(TrackAnalysis::grid))
+    }
+
+    /// The track's key: the supplied one, else the analysed one while nothing
+    /// was supplied.
+    pub(super) fn key_from(
+        analysis: Option<&TrackAnalysis>,
+        prepared: &Prepared,
+    ) -> Option<MusicalKey> {
+        match &prepared.key {
+            Supply::Ready(key) => Some(**key),
+            Supply::Missing => analysis
+                .and_then(TrackAnalysis::key)
+                .map(|estimate| estimate.key()),
+            Supply::Pending | Supply::Failed => None,
+        }
     }
 
     /// What this publication settles on for its track's grid.

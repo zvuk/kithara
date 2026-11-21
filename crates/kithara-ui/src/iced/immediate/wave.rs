@@ -85,7 +85,7 @@ struct MiniWaveState {
     /// Tessellated picture kept between frames. Without it every frame hands
     /// the renderer freshly built geometry, and its buffer pool grows to the
     /// high-water mark of all of them and never gives it back.
-    cache: canvas::Cache,
+    cache: cache::Cache,
     modifiers: Modifiers,
     loop_start: Option<f32>,
     /// Everything the picture is built from. The cache is dropped exactly when

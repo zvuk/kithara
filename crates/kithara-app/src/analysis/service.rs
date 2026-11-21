@@ -17,7 +17,7 @@ use kithara::{
 use tracing::{debug, warn};
 
 use super::{
-    TrackArtifacts,
+    TrackArtifacts, TrackFacts,
     entry::{Entry, Stage},
     handle::{AnalysisHandle, Request},
     load::LoadReply,
@@ -35,7 +35,7 @@ pub(crate) struct AnalysisService {
     pub(super) owner: Owner,
     cancel: CancelToken,
     rx: mpsc::Receiver<Request>,
-    bpms: watch::Sender<Arc<BTreeMap<String, f64>>>,
+    facts: watch::Sender<Arc<BTreeMap<String, TrackFacts>>>,
 }
 
 pub(super) struct Owner {
@@ -65,13 +65,13 @@ impl AnalysisService {
         /// entries.
         const LOAD_REPLIES: usize = 16;
 
-        let (bpms, published) = watch::channel(Arc::new(BTreeMap::new()));
+        let (facts, published) = watch::channel(Arc::new(BTreeMap::new()));
         let (handle, rx) = AnalysisHandle::channel(published);
         let runner = TrackAnalysisRunner::new(
             &cancel,
             config.base_worker.clone(),
             config.analysis_chunk_seconds,
-            config.waveform_max_buckets,
+            config.waveform_fold,
             config.beat_analysis.clone(),
             config.worker.pools().clone(),
         );
@@ -99,7 +99,7 @@ impl AnalysisService {
                 owner,
                 cancel,
                 rx,
-                bpms,
+                facts,
             },
             handle,
         )
@@ -110,7 +110,7 @@ impl AnalysisService {
             mut rx,
             mut owner,
             cancel,
-            bpms,
+            facts,
         } = self;
         loop {
             let changed = tokio::select! {
@@ -125,26 +125,28 @@ impl AnalysisService {
             if !changed {
                 continue;
             }
-            let next = owner.bpms();
-            if **bpms.borrow() != next {
-                bpms.send_replace(Arc::new(next));
+            let next = owner.track_facts();
+            if **facts.borrow() != next {
+                facts.send_replace(Arc::new(next));
             }
         }
     }
 }
 
 impl Owner {
-    pub(super) fn bpms(&self) -> BTreeMap<String, f64> {
+    pub(super) fn track_facts(&self) -> BTreeMap<String, TrackFacts> {
         self.entries
             .iter()
             .filter_map(|entry| {
-                let bpm = TrackArtifacts::grid_from(
-                    self.cache.analysis(entry.target()),
-                    entry.prepared(),
-                )?
-                .as_raw()
-                .bpm;
-                (bpm.is_finite() && bpm > 0.0).then(|| (entry.config().source().to_string(), bpm))
+                let analysis = self.cache.analysis(entry.target());
+                let facts = TrackFacts {
+                    bpm: TrackArtifacts::grid_from(analysis, entry.prepared())
+                        .map(|grid| grid.as_raw().bpm)
+                        .filter(|bpm| bpm.is_finite() && *bpm > 0.0),
+                    key: TrackArtifacts::key_from(analysis, entry.prepared()),
+                };
+                (facts != TrackFacts::default())
+                    .then(|| (entry.config().source().to_string(), facts))
             })
             .collect()
     }

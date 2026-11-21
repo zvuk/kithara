@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_command::{Seq, When};
-use kithara_render::bridge::DeckPart;
+use kithara_render::{LaneFrame, bridge::DeckPart};
 use kithara_signal::SessionFrame;
 use kithara_sync::SpeedCurve;
 
@@ -12,7 +12,7 @@ use super::{
 use crate::PlayError;
 
 /// A player of one track: what a queue drives and builds the next track from.
-pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSnapshot>> {
+pub trait Track: Player<Command = TrackCommand, Snapshot: AsRef<TrackSnapshot>> {
     /// Checks a configuration change without sending it. Receipt intake may
     /// change admission before a subsequent apply. Some contains the number of
     /// deck credits its immediate batch needs; None means no immediate batch,
@@ -24,7 +24,7 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
         &mut self,
         change: TrackSettingsChange,
         at: When<SessionFrame>,
-        out: &super::Outbox<'_, S>,
+        out: &super::Outbox<'_>,
     ) -> Result<Option<usize>, PlayError>;
 
     /// Whether the host's tempo, rather than this track's settings, drives its speed.
@@ -46,8 +46,22 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
     fn prepare_entry(
         &mut self,
         at: SessionFrame,
-        out: &mut super::Outbox<'_, S>,
+        out: &mut super::Outbox<'_>,
     ) -> Result<bool, PlayError>;
+
+    /// Prepares a linked equivalent-source entry without selecting a new beat.
+    ///
+    /// # Errors
+    /// Returns the silent entry's preparation refusal.
+    fn prepare_source_continuation(
+        &mut self,
+        at: SessionFrame,
+        _position: Position,
+        _speed: SpeedCurve,
+        out: &mut super::Outbox<'_>,
+    ) -> Result<bool, PlayError> {
+        self.prepare_entry(at, out)
+    }
 
     /// Projects media position and instantaneous speed on the output frame.
     ///
@@ -59,17 +73,29 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
         sample_rate: NonZeroU32,
     ) -> Result<(Position, f64), PlayError>;
 
+    /// Projects the accepted speed law from the output frame on, in output
+    /// frames after it, through every speed command still ahead.
+    ///
+    /// # Errors
+    /// Returns when no uninterrupted slot mark is known or the law cannot be
+    /// restated on another source.
+    fn planned_law(&self, at: SessionFrame) -> Result<SpeedCurve, PlayError>;
+
     /// Projects the first media end through accepted speed and jump history.
     ///
     /// # Errors
     /// Returns when the playing segment has no usable mark or effective clock.
     fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;
 
-    /// Takes a final speed verdict already drained by the track's lane owner.
-    fn speed_receipt(&mut self) -> Option<Settled>;
+    /// Takes one settled producer result in its lane clock. The driver drains these
+    /// each turn, through every decorator that owns matching work.
+    fn lane_receipt(&mut self) -> Option<Settled<LaneFrame>>;
 
-    /// Whether the lane accepted a particular speed batch, once it answered.
-    fn speed_applied(&mut self, seq: Seq) -> Option<bool>;
+    /// The dispatcher request this source still awaits, on the shared dispatcher channel.
+    fn source_request(&self) -> Option<Seq>;
+
+    /// The source scope has completed retirement and its final intake.
+    fn source_closed(&self) -> bool;
 
     /// Whether the track holds a deck slot or is joining one.
     fn attached(&self) -> bool {
@@ -84,7 +110,7 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
     fn seek(
         &mut self,
         to: Position,
-        out: &mut super::Outbox<'_, S>,
+        out: &mut super::Outbox<'_>,
     ) -> Result<Option<SeekBatch>, PlayError> {
         let sent = self.apply(TrackCommand::Seek { to }, out)?;
         let batch = if self.attached() {
@@ -95,10 +121,9 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
         Ok(sent.map(batch))
     }
 
-    /// Whether the seek sent as lane batch `seq` took effect, once that is final.
-    fn seek_applied(&mut self, seq: Seq) -> Option<bool> {
-        self.speed_applied(seq)
-    }
+    /// The seek's result while its lane effect is live; an unanswered batch
+    /// returns None and a retired request returns false.
+    fn seek_applied(&mut self, seq: Seq) -> Option<bool>;
 
     /// Binds a staged attachment to its shared batch or restores returned parts.
     fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);
@@ -111,13 +136,13 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
         &mut self,
         position: Position,
         speed: SpeedCurve,
-        out: &mut super::Outbox<'_, S>,
+        out: &mut super::Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError>;
 }
 
 /// How a queue builds the track that plays one item.
-pub trait TrackFactory<S> {
-    type Track: Track<S>;
+pub trait TrackFactory {
+    type Track: Track;
 
     /// # Errors
     ///
@@ -129,8 +154,8 @@ pub trait TrackFactory<S> {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlayerFactory;
 
-impl<S> TrackFactory<S> for PlayerFactory {
-    type Track = PlayerImpl<S>;
+impl TrackFactory for PlayerFactory {
+    type Track = PlayerImpl;
 
     fn track(&self, config: PlayerConfig) -> Result<Self::Track, PlayError> {
         PlayerImpl::new(config)

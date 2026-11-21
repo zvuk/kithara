@@ -217,9 +217,10 @@ async fn stress_random_seek_read_synthetic_wav(#[future(awt)] wav_file: NamedTem
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint("wav".to_string())
         .build();
-    let config = TrackConfig::for_audio(config)
-        .block_on_underrun(true)
-        .build();
+    let config = (
+        config,
+        TrackConfig::builder().block_on_underrun(true).build(),
+    );
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
@@ -249,7 +250,7 @@ async fn stress_random_seek_read_synthetic_wav(#[future(awt)] wav_file: NamedTem
     info!(chunk_duration_secs, chunk_samples, "Read chunk size");
 
     let result = spawn_blocking(move || {
-        let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
+        let mut rng = Xorshift64::new(0xdead_beef_cafe_1337);
         let mut buf = vec![0.0f32; chunk_samples];
 
         let max_seek_secs = total_secs - chunk_duration_secs;

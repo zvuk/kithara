@@ -8,7 +8,7 @@ use masonry::core::{NewWidget, Widget, WidgetId};
 
 use super::{
     CustomWidget, MasonryNode,
-    built::{BlockState, LayerParts},
+    built::{BlockState, ColorTarget, LayerParts},
     controls::Retained,
     custom::{HostAction, MappedCustom},
     flex::{ChildLayout, Flex},
@@ -26,9 +26,9 @@ use super::{
     window_layer::WindowLayer,
 };
 use crate::{
-    draw::{Rgba, Transform},
+    draw::Transform,
     engine::Presses,
-    expand::{Binding, ControlSpec, ExpandedNode},
+    expand::{Binding, ColorSpec, ControlSpec, ExpandedNode},
     hosts::{
         controls::Draws,
         hosted::HostedControlPlan,
@@ -40,7 +40,7 @@ use crate::{
     ids::InternId,
     layout::{Axis, FrameSides},
     masonry::hosted::hosted_control_plan,
-    module::{ChromeStyle, MeasureAxis, TextStyle},
+    module::{MeasureAxis, TextStyle},
     mount,
     render::{
         ControlAction, CustomSkin, InputOwner, Published, ReadValue, Skin,
@@ -268,74 +268,90 @@ where
         (layouts, nodes)
     }
 
-    /// One module's chrome around the content the walk already produced.
-    fn mount_module(
+    fn mount_group(
         &self,
-        module: &mut Module<'_>,
-        content: Option<MasonryNode<Action>>,
+        group: Group<'_>,
+        children: Vec<GroupMount<MasonryNode<Action>>>,
     ) -> MasonryNode<Action> {
-        let chrome = module.chrome();
-        let frame = Some((
-            module.frame(),
-            self.skin.rgba(self.skin.chrome.frame.border),
-            self.skin.chrome.frame.border_width,
-        ));
-        let panel = Some(self.skin.rgba(self.skin.chrome.panel_background));
-        match chrome {
-            ChromeStyle::Full if module.collapsed() => MasonryNode::chrome(
-                NodeLayout::Stack,
-                Size::new(Length::Fill, Length::Fixed(self.skin.chrome.header_height)),
-                vec![self.module_header(module)],
-                panel,
-                frame,
+        let size = group.size().unwrap_or(SizeSpec::FILL);
+        let (layouts, nodes) = self.flow(children);
+        let alpha = group.background_alpha().unwrap_or(1.0);
+        let face = |background: Option<ColorRole>, frame_color: ColorRole| Face {
+            background: background.map(|role| {
+                let mut color = self.skin.rgba(role);
+                color.a = alpha;
+                color
+            }),
+            frame: group
+                .frame()
+                .map(|sides| (sides, self.skin.rgba(frame_color), group.frame_width())),
+        };
+        let idle = face(group.background(), group.frame_color());
+        let lit = group
+            .lit()
+            .map(|lit| (lit.flag(), face(lit.background(), lit.frame_color())));
+        let shown = lit
+            .as_ref()
+            .is_some_and(|(flag, _)| self.ctx.flag(Some(flag)));
+        let Face { background, frame } = lit
+            .as_ref()
+            .filter(|_| shown)
+            .map_or(idle, |(_, face)| *face);
+        let mut output = MasonryNode::document(
+            NodeLayout::Flex(
+                Flex::new(
+                    group.axis(),
+                    solve::length(size.w),
+                    solve::length(size.h),
+                    Padding {
+                        top: group.padding_y(),
+                        right: group.padding_x(),
+                        bottom: group.padding_y(),
+                        left: group.padding_x(),
+                    },
+                    group.gap(),
+                    alignment(group.alignment()),
+                    layouts,
+                )
+                .measure(group.measure()),
             ),
-            ChromeStyle::Full => {
-                let header = self.module_header(module);
-                let first_line = furniture(
-                    self.skin.chrome.inner_line_width,
-                    Some(self.skin.rgba(self.skin.chrome.inner_line)),
-                );
-                let content =
-                    content.unwrap_or_else(|| MasonryNode::empty(declared(SizeSpec::FILL)));
-                let second_line = furniture(
-                    self.skin.chrome.inner_line_width,
-                    Some(self.skin.rgba(self.skin.chrome.inner_line)),
-                );
-                let footer = self.module_footer(module.take_footer().unwrap_or_default());
-                let children = vec![header, first_line, content, second_line, footer];
-                let layouts = children
-                    .iter()
-                    .map(|child| ChildLayout::natural(child.natural(), None))
-                    .collect();
-                MasonryNode::document(
-                    NodeLayout::Flex(Flex::new(
-                        Axis::Vertical,
-                        Length::Fill,
-                        Length::Fill,
-                        Padding::default(),
-                        0.0,
-                        Alignment::Start,
-                        layouts,
-                    )),
-                    Size::new(Length::Fill, Length::Fill),
-                    children,
-                    true,
-                    panel,
-                    frame,
-                )
-            }
-            ChromeStyle::Frame | ChromeStyle::Plain => {
-                let child = content.unwrap_or_else(|| MasonryNode::empty(declared(SizeSpec::FILL)));
-                MasonryNode::document(
-                    NodeLayout::Stack,
-                    Size::new(Length::Fill, Length::Fill),
-                    vec![child],
-                    true,
-                    (chrome == ChromeStyle::Frame).then_some(panel).flatten(),
-                    (chrome == ChromeStyle::Frame).then_some(frame).flatten(),
-                )
+            declared(size),
+            nodes,
+            true,
+            background,
+            frame,
+        )
+        .rounded(group.round(), self.skin.chrome.frame.radius);
+        if let Some(surface) = group.surface() {
+            output.set_detent(Detent::new(
+                self.ctx.ui.resolve(surface.path).to_owned(),
+                Rc::clone(&self.map_event),
+                surface
+                    .entry
+                    .as_ref()
+                    .map(|entry| (entry_value(self.ctx, entry), self.skin.clone())),
+            ));
+            if let Some(entry) = &surface.entry {
+                output.watch(entry);
             }
         }
+        if let Some((flag, lit)) = lit {
+            let faces = Faces { idle, lit };
+            if let Some(source @ ColorSpec::FromRead { .. }) =
+                group.lit().and_then(|lit| lit.background_source())
+            {
+                output.set_faces(faces);
+                output.watch_color(
+                    source,
+                    Some(flag),
+                    self.skin,
+                    ColorTarget::ActiveBackground { alpha },
+                );
+            } else {
+                output.lights(flag.clone(), Some(faces));
+            }
+        }
+        output
     }
 
     pub(crate) fn shader_leaf(
@@ -368,9 +384,10 @@ where
         declared: Size<Length>,
     ) -> MasonryNode<Action> {
         let style = spec.style;
+        let base_color = self.ctx.color_role(spec.color);
         let face = |active| {
             let role = skin
-                .text_role(style, spec.color, spec.active_color, active)
+                .text_role(style, base_color, spec.active_color, active)
                 .faced(spec.font, spec.weight);
             TextFace {
                 role,
@@ -386,12 +403,7 @@ where
             .as_ref()
             .filter(|_| shown)
             .map_or(idle, |(_, face)| *face);
-        let padding_x = match style {
-            TextStyle::VisFooter => skin.vis.footer_padding_x,
-            TextStyle::VisMeta => skin.vis.index_padding_x,
-            TextStyle::VisTitle => skin.vis.name_padding_x,
-            _ => 0.0,
-        };
+        let padding_x = text_padding_x(style, skin);
         let content = role.cased(content).into_owned();
         let mut output = MasonryNode::document(
             NodeLayout::Leaf(Leaf::Text {
@@ -410,7 +422,16 @@ where
             None,
             None,
         );
-        if let Some((flag, _)) = lit {
+        if let Some(source @ ColorSpec::FromRead { .. }) = spec.color {
+            output.watch_color(
+                source,
+                spec.active,
+                skin,
+                ColorTarget::Text {
+                    active_uses_base: skin.active_text_color(style, spec.active_color).is_none(),
+                },
+            );
+        } else if let Some((flag, _)) = lit {
             output.lights(flag.clone(), None);
         }
         output
@@ -618,72 +639,7 @@ where
     }
 
     fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output {
-        let size = group.size().unwrap_or(SizeSpec::FILL);
-        let (layouts, nodes) = self.flow(children);
-        let alpha = group.background_alpha().unwrap_or(1.0);
-        let face = |background: Option<ColorRole>, frame_color: ColorRole| Face {
-            background: background.map(|role| {
-                let mut color = self.skin.rgba(role);
-                color.a = alpha;
-                color
-            }),
-            frame: group
-                .frame()
-                .map(|sides| (sides, self.skin.rgba(frame_color), group.frame_width())),
-        };
-        let idle = face(group.background(), group.frame_color());
-        let lit = group
-            .lit()
-            .map(|lit| (lit.flag(), face(lit.background(), lit.frame_color())));
-        let shown = lit
-            .as_ref()
-            .is_some_and(|(flag, _)| self.ctx.flag(Some(flag)));
-        let Face { background, frame } = lit
-            .as_ref()
-            .filter(|_| shown)
-            .map_or(idle, |(_, face)| *face);
-        let mut output = MasonryNode::document(
-            NodeLayout::Flex(
-                Flex::new(
-                    group.axis(),
-                    solve::length(size.w),
-                    solve::length(size.h),
-                    Padding {
-                        top: group.padding_y(),
-                        right: group.padding_x(),
-                        bottom: group.padding_y(),
-                        left: group.padding_x(),
-                    },
-                    group.gap(),
-                    alignment(group.alignment()),
-                    layouts,
-                )
-                .measure(group.measure()),
-            ),
-            declared(size),
-            nodes,
-            true,
-            background,
-            frame,
-        )
-        .rounded(group.round(), self.skin.chrome.frame.radius);
-        if let Some(surface) = group.surface() {
-            output.set_detent(Detent::new(
-                self.ctx.ui.resolve(surface.path).to_owned(),
-                Rc::clone(&self.map_event),
-                surface
-                    .entry
-                    .as_ref()
-                    .map(|entry| (entry_value(self.ctx, entry), self.skin.clone())),
-            ));
-            if let Some(entry) = &surface.entry {
-                output.watch(entry);
-            }
-        }
-        if let Some((flag, lit)) = lit {
-            output.lights(flag.clone(), Some(Faces { idle, lit }));
-        }
-        output
+        self.mount_group(group, children)
     }
 
     fn hosted(&mut self, _node: &ExpandedNode, mut child: Self::Output) -> Self::Output {
@@ -922,12 +878,13 @@ where
     }
 }
 
-fn furniture<Action>(height: f32, background: Option<Rgba>) -> MasonryNode<Action> {
-    MasonryNode::furniture(
-        NodeLayout::Leaf(Leaf::Empty),
-        Size::new(Length::Fill, Length::Fixed(height)),
-        background,
-    )
+fn text_padding_x(style: TextStyle, skin: &Skin) -> f32 {
+    match style {
+        TextStyle::VisFooter => skin.vis.footer_padding_x,
+        TextStyle::VisMeta => skin.vis.index_padding_x,
+        TextStyle::VisTitle => skin.vis.name_padding_x,
+        _ => 0.0,
+    }
 }
 
 /// Asks whichever control the document named to mount itself as a leaf.

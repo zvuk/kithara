@@ -24,7 +24,6 @@ pub use cmd::{
 pub use config::{DownloaderConfig, DownloaderConfigPatch};
 pub use downloader::Downloader;
 pub use event::{CancelReason, DownloaderEvent, RequestId, RequestMethod, RequestPriority};
-use humantime_serde as _;
 pub use peer::{Peer, PeerHandle};
 pub use response::{BodyStream, FetchResponse};
 mod consts;

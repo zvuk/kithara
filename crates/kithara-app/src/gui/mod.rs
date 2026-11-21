@@ -8,6 +8,8 @@ mod frontend;
 mod library;
 mod message;
 mod overlay;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod quality_tests;
 mod reads;
 #[cfg(feature = "masonry")]
 pub(crate) mod retained;

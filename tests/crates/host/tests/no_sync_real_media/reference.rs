@@ -108,13 +108,12 @@ pub(super) async fn open_reference(
             .events(bus)
             .initial_abr_mode(AbrMode::manual(0))
             .build();
-        let config = TrackConfig::for_audio(
+        let config = (
             AudioConfig::<Hls<TestPools>, PlaybackResamplerBackend>::for_stream(stream)
                 .host_sample_rate(sample_rate)
                 .build(),
-        )
-        .block_on_underrun(true)
-        .build();
+            TrackConfig::builder().block_on_underrun(true).build(),
+        );
         ReferenceAudio::Hls(
             load_audio(worker, config)
                 .await
@@ -125,14 +124,13 @@ pub(super) async fn open_reference(
             .store(memory_asset_store())
             .events(bus)
             .build();
-        let config = TrackConfig::for_audio(
+        let config = (
             AudioConfig::<File<TestPools>, PlaybackResamplerBackend>::for_stream(stream)
                 .host_sample_rate(sample_rate)
                 .hint("mp3".to_owned())
                 .build(),
-        )
-        .block_on_underrun(true)
-        .build();
+            TrackConfig::builder().block_on_underrun(true).build(),
+        );
         ReferenceAudio::File(
             load_audio(worker, config)
                 .await

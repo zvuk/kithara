@@ -4,8 +4,8 @@ use bon::bon;
 use kithara_command::Seq;
 use kithara_dsp::param::SmootherConfig;
 use kithara_events::TrackId;
-use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::{FrameCount, SegmentId, SessionFrame};
+use kithara_platform::time::Duration;
+use kithara_signal::{FrameCount, SegmentId, SessionFrame, SourceElapsed};
 
 use super::{PlayerResource, RtSink, fade::TrackFade, gate::TrackGate, output::SlotOutput};
 use crate::{
@@ -31,7 +31,7 @@ enum StopState {
 /// A slot's packet consumer and session-time envelope.
 pub struct PlayerTrack {
     pub(super) item_id: TrackId,
-    pub(super) resource: Box<PlayerResource>,
+    pub(super) resource: PlayerResource,
     pub(super) fade: TrackFade,
     pub(super) gate: TrackGate,
     pub(super) state: SlotState,
@@ -51,13 +51,14 @@ impl PlayerTrack {
     #[builder]
     #[must_use]
     pub fn new(
-        #[builder(finish_fn)] mut resource: Box<PlayerResource>,
+        #[builder(finish_fn)] pcm: Box<crate::PcmReceiver>,
         item_id: TrackId,
         sample_rate: NonZeroU32,
         attachment: Option<Seq>,
         #[builder(default = DEFAULT_DECLICK)] declick: SmootherConfig,
         #[builder(default = SegmentId::FIRST)] segment: SegmentId,
     ) -> Self {
+        let mut resource = PlayerResource::new(pcm);
         resource.select_segment(segment);
         Self {
             item_id,
@@ -76,6 +77,34 @@ impl PlayerTrack {
         }
     }
 
+    pub(in crate::rt) fn sounding_source(
+        &self,
+        at: SessionFrame,
+    ) -> Option<(TrackId, SourceElapsed)> {
+        if self.state != SlotState::Playing || !matches!(self.stop, StopState::Idle) {
+            return None;
+        }
+        self.mark(at)?;
+        let origin = self.resource.source_info()?.media_origin?;
+        let position = self.resource.position()?.elapsed_at(0, origin)?;
+        Some((self.item_id, position))
+    }
+
+    /// Takes over the logical slot `old` sounds: its envelope, gain program,
+    /// clock and transport carry over, leaving `old` with this track's fresh ones.
+    pub(in crate::rt) fn continue_slot(&mut self, old: &mut Self) {
+        std::mem::swap(&mut self.fade, &mut old.fade);
+        std::mem::swap(&mut self.gate, &mut old.gate);
+        std::mem::swap(&mut self.output, &mut old.output);
+        self.clock = old.clock;
+        self.state = old.state;
+        self.resource.set_playing(self.state == SlotState::Playing);
+    }
+
+    pub(in crate::rt) fn stages_item(&self, item: TrackId) -> bool {
+        self.state == SlotState::Stopped && self.item_id == item
+    }
+
     #[must_use]
     pub const fn state(&self) -> SlotState {
         self.state
@@ -92,9 +121,11 @@ impl PlayerTrack {
 
     delegate::delegate! {
         to self.resource {
-            pub(in crate::rt) fn waits_offline(&self) -> bool;
-            #[must_use]
-            pub fn duration(&self) -> f64;
+            pub(in crate::rt) fn packets(&self) -> impl Iterator<Item = (&crate::PcmPacket, usize)>;
+            pub(in crate::rt) fn trim_cut(&mut self, frames: usize, budget: &mut usize) -> bool;
+            pub(in crate::rt) fn cut_closed(&self) -> bool;
+            pub(crate) fn waits_offline(&self) -> bool;
+            pub(crate) fn refill(&mut self, budget: &mut usize) -> Option<&crate::worker::PcmReceiver>;
             #[must_use]
             pub(crate) fn source_info(&self) -> Option<kithara_signal::AudioChunkInfo>;
             #[must_use]
@@ -103,10 +134,6 @@ impl PlayerTrack {
             pub fn media_origin(&self) -> Option<Duration>;
             #[must_use]
             pub fn decoded_frontier(&self) -> f64;
-            #[must_use]
-            pub fn cached_span(&self) -> f64;
-            #[must_use]
-            pub fn src(&self) -> &Arc<str>;
             #[must_use]
             pub fn segment(&self) -> SegmentId;
             #[call(refresh_mark)]
@@ -223,7 +250,7 @@ impl PlayerTrack {
 
     /// Lane frames the track still drops before it plays: the dropout's
     /// unpaid frames under session time, none under media time.
-    pub(super) const fn owed(&self) -> u32 {
+    pub(in crate::rt) const fn owed(&self) -> u32 {
         match self.clock {
             TrackClock::Session => self.gap.saturating_sub(self.paid),
             TrackClock::Media => 0,
@@ -311,8 +338,8 @@ impl PlayerTrack {
     }
 
     #[must_use]
-    pub fn into_resource(mut self) -> Box<PlayerResource> {
+    pub(crate) fn into_pcm(mut self) -> (Box<crate::PcmReceiver>, Option<crate::PcmPacket>) {
         self.resource.set_playing(false);
-        self.resource
+        (self.resource.receiver, self.resource.packet)
     }
 }

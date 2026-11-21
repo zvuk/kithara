@@ -1,7 +1,11 @@
 use kithara::{
+    analysis::{Mode, MusicalKey},
     effects::GainDb,
-    play::Pitch,
-    ui::render::{Node, ReadValue, Scope, WaveformView},
+    ui::{
+        builtin::{MAJOR_KEY_COLORS, MINOR_KEY_COLORS},
+        render::{Node, ReadValue, Scope, WaveformView},
+        skin::ColorRole,
+    },
 };
 use num_traits::cast::AsPrimitive;
 
@@ -143,11 +147,21 @@ struct TrackNode<'a> {
     shown: &'a DeckSnapshot,
 }
 
+fn key_color(key: MusicalKey) -> ColorRole {
+    let roles = match key.mode {
+        Mode::Major => &MAJOR_KEY_COLORS,
+        Mode::Minor => &MINOR_KEY_COLORS,
+    };
+    roles[key.open_key_index()]
+}
+
 impl<'a> Node<'a> for TrackNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
             "title" => ReadValue::Text(title(self.shown)?),
             "source_kind" => ReadValue::Text(&self.cache.subtitle),
+            "key" => ReadValue::Text(self.shown.analysis.key.map_or("", MusicalKey::open_key)),
+            "key_color" => ReadValue::Color(key_color(self.shown.analysis.key?)),
             "artwork" => ReadValue::Image(self.cache.artwork.image()?),
             _ => return None,
         };
@@ -177,11 +191,33 @@ struct KeyNode<'a> {
     shown: &'a DeckSnapshot,
 }
 
+impl KeyNode<'_> {
+    fn sounding(&self) -> Option<MusicalKey> {
+        self.shown.analysis.key.map(|key| {
+            let speed = f64::from(self.shown.speed);
+            let factor = if self.shown.warp_controls_available {
+                self.shown.settings.controls().pitch().factor(speed)
+            } else {
+                speed
+            };
+            let shift = (12.0 * factor.log2()).round().rem_euclid(12.0).as_();
+            key.transposed(shift)
+        })
+    }
+}
+
 impl<'a> Node<'a> for KeyNode<'a> {
     fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
-            "locked" => ReadValue::Bool(self.shown.pitch.is_some_and(Pitch::keylock)),
-            "lock_hidden" => ReadValue::Bool(self.shown.pitch.is_none()),
+            "locked" => ReadValue::Bool(
+                self.shown.warp_controls_available
+                    && self.shown.settings.controls().pitch().keylock(),
+            ),
+            "lock_hidden" => ReadValue::Bool(!self.shown.warp_controls_available),
+            "sounding" => ReadValue::Text(self.sounding().map_or("", MusicalKey::open_key)),
+            "color" => ReadValue::Color(key_color(self.sounding()?)),
+            "sounding_hidden" => ReadValue::Bool(self.shown.analysis.key.is_none()),
+            "transpose_hidden" => ReadValue::Bool(self.cache.transpose.is_empty()),
             "transpose" => ReadValue::Text(&self.cache.transpose),
             _ => return None,
         };
@@ -218,9 +254,17 @@ impl_child_node!(StreamNode<'a>, |this, segment, scope| {
     let stream = *this;
     let value = match segment {
         "quality" => ReadValue::Text(&stream.cache.quality),
-        "quality_hidden" => ReadValue::Bool(stream.shown.stream.variants.is_empty()),
+        "quality_hidden" => ReadValue::Bool(
+            stream.shown.stream.variants.is_empty() && !stream.shown.stream.awaiting_ladder,
+        ),
+        "quality_ready" => ReadValue::Bool(!stream.shown.stream.awaiting_ladder),
+        "error_hidden" => ReadValue::Bool(!stream.shown.stream.failed),
+        "auto_hidden" => ReadValue::Bool(!stream.shown.stream.auto_available),
         "variant_active" => ReadValue::Bool(stream.active(scope.get("variant")?)),
-        "variant_hidden" => ReadValue::Bool(stream.rung(scope.get("variant")?).is_none()),
+        "variant_hidden" => {
+            let variant = scope.get("variant")?;
+            ReadValue::Bool(stream.rung(variant).is_none())
+        }
         "variant_label" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.label),
         "variant_sub" => ReadValue::Text(&stream.rung(scope.get("variant")?)?.detail),
         _ => return None,

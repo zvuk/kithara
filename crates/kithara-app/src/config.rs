@@ -15,8 +15,7 @@ use kithara::{
     hls::HlsConfigPatch,
     net::{Headers, HttpClient},
     platform::{CancelToken, sync::Arc},
-    play::policy::DomainKeyPolicy,
-    prelude::PlaybackResamplerBackend,
+    play::{PlaybackResamplerBackend, policy::DomainKeyPolicy},
     queue::QueueConfigPatch,
     warp::WarpConfig,
     worker::{DispatcherConfigPatch, Worker},
@@ -164,10 +163,9 @@ pub struct AppConfig {
     /// spelling of those knobs.
     #[config(skip = "transferred to the broadcast owner", patch(skip))]
     pub broadcast: Option<AppBroadcastConfig>,
-    /// Upper bound on waveform buckets (native = one per peak column). Only
-    /// caps very long tracks, to bound the cached blob.
-    #[config(builder(default = kithara::analysis::MAX_BUCKETS))]
-    pub waveform_max_buckets: usize,
+    /// Native peak columns folded into each waveform bucket.
+    #[config(builder(default = NonZeroU32::MIN))]
+    pub waveform_fold: NonZeroU32,
     /// Band count of the EQ layout every deck's player graph is built with.
     #[config(builder(default = 3))]
     pub eq_bands: usize,
@@ -220,7 +218,7 @@ impl fmt::Debug for AppConfig {
                 &self.base_worker.as_ref().map(Worker::is_cancelled),
             )
             .field("broadcast", &self.broadcast)
-            .field("waveform_max_buckets", &self.waveform_max_buckets)
+            .field("waveform_fold", &self.waveform_fold)
             .field("eq_bands", &self.eq_bands)
             .field("sample_rate", &self.sample_rate)
             .field("output_block_frames", &self.output_block_frames)

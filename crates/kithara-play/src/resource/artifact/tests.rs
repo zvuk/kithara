@@ -1,9 +1,15 @@
-use std::{convert::Infallible, fs, num::NonZeroU16, path::PathBuf};
+use std::{
+    convert::Infallible,
+    fs,
+    num::{NonZeroU16, NonZeroU64},
+    path::PathBuf,
+};
 
 use axum::{Router, body::Body, routing::get};
 use futures::stream;
 use kithara_beat::{BeatGridModel, BeatGridState, GridBeat, RawBeatGrid, SCHEMA_VERSION};
 use kithara_download::{Downloader, DownloaderConfig};
+use kithara_key::{KEY_SCHEMA_VERSION, Mode, MusicalKey, PitchClass, RawKey};
 use kithara_net::{Headers, HttpClient, NetOptions};
 use kithara_platform::CancelToken;
 use kithara_sync::Meter;
@@ -44,7 +50,8 @@ fn grid() -> RawBeatGrid {
 
 fn waveform() -> Waveform {
     let bands = [0.25, 0.5, 0.5, 0.75];
-    Waveform::try_from(vec![Bucket::new(bands, bands)]).expect("BUG: bands are in range")
+    Waveform::try_new(vec![Bucket::new(bands, bands)], NonZeroU64::MIN)
+        .expect("BUG: bands are in range")
 }
 
 fn downloader() -> Downloader {
@@ -136,6 +143,44 @@ async fn a_document_of_the_wrong_kind_is_an_error() {
 
     assert!(
         matches!(error, ArtifactLoadError::Decode { kind, .. } if kind == "beat grid"),
+        "{error}"
+    );
+}
+
+#[kithara::test(tokio)]
+async fn a_key_document_at_a_path_loads_as_that_key() {
+    let key = MusicalKey {
+        tonic: PitchClass::A,
+        mode: Mode::Minor,
+    };
+    let bytes = serde_json::to_vec(&key).expect("BUG: serializable");
+    let path = file("key.json", &bytes);
+    let audio = audio();
+    let fetch = ArtifactFetch::new(&audio, None, None, None);
+    let source = ArtifactSource::<MusicalKey>::Source(ResourceSrc::Path(path));
+
+    let loaded = source.load(&fetch).await.expect("BUG: a written key reads");
+
+    assert_eq!(*loaded, key);
+}
+
+#[kithara::test(tokio)]
+async fn a_refused_key_document_is_a_key_decode_error() {
+    let raw = RawKey {
+        schema_version: KEY_SCHEMA_VERSION,
+        tonic: 12,
+        mode: Mode::Major,
+    };
+    let bytes = serde_json::to_vec(&raw).expect("BUG: serializable");
+    let path = file("refused-key.json", &bytes);
+    let audio = audio();
+    let fetch = ArtifactFetch::new(&audio, None, None, None);
+    let source = ArtifactSource::<MusicalKey>::Source(ResourceSrc::Path(path));
+
+    let error = source.load(&fetch).await.expect_err("BUG: no such tonic");
+
+    assert!(
+        matches!(error, ArtifactLoadError::Decode { kind, .. } if kind == "key"),
         "{error}"
     );
 }

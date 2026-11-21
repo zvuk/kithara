@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_resampler::rubato::RubatoBackend;
 use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
 use kithara_test_utils::kithara;
@@ -16,7 +18,7 @@ use crate::{
 
 fn builder(pools: &Pools) -> AnalyzerBuilder<RubatoBackend, TestPools> {
     AnalyzerBuilder::<RubatoBackend, _>::new(pools.clone())
-        .with_waveform(64)
+        .with_waveform(NonZeroU32::MIN)
         .with_beat_config(
             BeatAnalysisConfig::builder()
                 .resampler_backend(RubatoBackend::default())
@@ -50,23 +52,34 @@ fn a_range_the_beat_pass_turned_down_is_told_apart_from_one_it_has(analysis_pcm:
     let read =
         |at: u64, seconds: usize| chunk(&pools, sine_from(analysis_pcm, at, seconds * second), at);
     assert_eq!(
-        pass.push(&read(0, 2), &mut extent, detector.as_mut()),
+        pass.push(&read(0, 2), &mut extent, detector.as_mut())
+            .expect("key estimation succeeds"),
         Ingest::Accepted
     );
-    assert_eq!(pass.push(&read(0, 2), &mut extent, None), Ingest::Covered);
+    assert_eq!(
+        pass.push(&read(0, 2), &mut extent, None)
+            .expect("key estimation succeeds"),
+        Ingest::Covered
+    );
 
     let mut at = 2 * step;
     loop {
         assert!(at < 60 * step, "the hold is bounded");
-        pass.push(&read(at, 1), &mut extent, None);
-        if pass.push(&read(at, 1), &mut extent, None) == Ingest::Deferred {
+        pass.push(&read(at, 1), &mut extent, None)
+            .expect("key estimation succeeds");
+        if pass
+            .push(&read(at, 1), &mut extent, None)
+            .expect("key estimation succeeds")
+            == Ingest::Deferred
+        {
             break;
         }
         at = at.saturating_add(step);
     }
 
     assert_eq!(
-        pass.push(&read(0, 2), &mut extent, None),
+        pass.push(&read(0, 2), &mut extent, None)
+            .expect("key estimation succeeds"),
         Ingest::Covered,
         "a range every consumer has stays covered"
     );

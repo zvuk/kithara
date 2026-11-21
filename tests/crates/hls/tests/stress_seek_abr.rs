@@ -6,7 +6,7 @@ use kithara::{
         time::{Duration, Instant},
         tokio::task::spawn_blocking,
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -131,9 +131,10 @@ async fn stress_seek_during_abr_switch_real_decoder(
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
 
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .expect("audio creation");
+    let mut audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .expect("audio creation");
     audio = kithara_integration_tests::mock::with_blocking_reads(audio);
 
     let result = spawn_blocking(move || {
@@ -219,9 +220,10 @@ async fn seek_sequence_from_log_real_stream(
         .initial_abr_mode(auto(0))
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
-        .await
-        .expect("audio creation");
+    let mut audio =
+        kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
+            .await
+            .expect("audio creation");
 
     let result = spawn_blocking(move || {
         read_until_samples(&mut audio, 1);

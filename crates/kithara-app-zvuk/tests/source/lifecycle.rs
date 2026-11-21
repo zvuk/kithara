@@ -2,12 +2,12 @@ use kithara_app_library::{Context, Environment, RegisterError, Secrets};
 use kithara_app_zvuk::Source;
 use kithara_net::{HttpClient, NetError, NetOptions};
 use kithara_platform::{CancelToken, tokio::runtime::Handle};
-use kithara_test_utils::bufpool::pools;
+use kithara_test_utils::{TestTempDir, bufpool::pools};
 use kithara_ui::{error::UiDocError, ids::SourceUri, text::parse_text};
 use serde_yaml_ng::Value as Section;
 
 use super::{
-    support::{memory, queue_completed, refusing},
+    support::{memory, queue_catalogue, refusing},
     *,
 };
 
@@ -123,7 +123,12 @@ async fn reselecting_the_current_node_keeps_its_request_rows_and_query() {
     wait_until(
         Duration::from_secs(2),
         "the collection result awaits a tick",
-        || net.events().len() == 4,
+        || {
+            if net.events().len() < 4 {
+                source.tick();
+            }
+            net.events().len() == 4
+        },
     )
     .await
     .expect("the original collection request must complete before repeated selection");
@@ -198,9 +203,6 @@ async fn a_side_operation_fault_keeps_the_page_fault_and_its_retry() {
             )))),
         NetMock::post_bytes
             .next_call(matching!(_, _, _))
-            .returns(Ok(search_reply())),
-        NetMock::post_bytes
-            .next_call(matching!(_, _, _))
             .returns(Ok(stream_reply())),
     )));
     let mut source = loaded_search(net.clone()).await;
@@ -257,11 +259,10 @@ async fn a_side_operation_fault_keeps_the_page_fault_and_its_retry() {
 async fn leaving_search_discards_its_queued_result_and_clears_the_query() {
     let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes.next_call(matching!(_, _, _)).returns(Ok(search_reply())),
-        NetMock::post_bytes.next_call(matching!(_, _, _)).returns(Ok(stream_reply())),
         NetMock::post_bytes.next_call(matching!((_, body, _) if String::from_utf8_lossy(body).contains("KitharaPlaylist"))).returns(Ok(Bytes::from_static(br#"{"data":{"playlists":[{"id":"empty","tracks":[]}]}}"#))),
     )));
     let mut source = source(net.clone()).await;
-    queue_completed(&mut *source, &net, "old", 4).await;
+    queue_catalogue(&mut *source, &net, "old", 2).await;
     source.select("playlist:empty");
     source.tick();
     assert_eq!(source.read("query"), Some(ReadValue::Text("")));
@@ -362,19 +363,79 @@ async fn dropping_the_source_cancels_its_request_without_cancelling_the_parent()
 
 #[kithara::test]
 async fn shutdown_discards_a_completion_already_waiting_for_tick() {
-    let net = DelayedNet::new(Unimock::new((
+    let net = DelayedNet::new(Unimock::new(
         NetMock::post_bytes
             .next_call(matching!(_, _, _))
             .returns(Ok(search_reply())),
-        NetMock::post_bytes
-            .next_call(matching!(_, _, _))
-            .returns(Ok(stream_reply())),
-    )));
+    ));
     let parent = kithara_test_utils::cancel_token();
     let mut source = registered(net.clone(), &parent).await;
-    queue_completed(&mut *source, &net, "needle", 4).await;
+    queue_catalogue(&mut *source, &net, "needle", 2).await;
     parent.cancel();
     source.tick();
     assert!(source.rows(None).is_empty());
     release(source, &net).await;
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn the_registered_source_restores_its_native_streaming_preference() {
+    let directory = TestTempDir::new();
+    let path = directory.path().join("nested").join("zvuk.json");
+    let cancel = kithara_test_utils::cancel_token();
+    let environment = environment(&cancel, memory());
+    let build = || {
+        let entry: Section = serde_yaml_ng::from_str("{user_agent: agent}").unwrap();
+        let context = Context::new(cancel.child(), entry).with_settings_path(Some(path.clone()));
+        let registered = (Source::FACTORY.register)(&environment, context).unwrap();
+        let text = registered.page().texts[0];
+        let words = parse_text(text.text, &SourceUri(text.path.to_owned())).unwrap();
+        registered.build(&words).unwrap()
+    };
+    let mut first = build();
+    wait_until(Duration::from_secs(2), "initial preference is read", || {
+        first.tick();
+        first.read("streaming_pending") == Some(ReadValue::Bool(false))
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        first.read("adaptive_streaming"),
+        Some(ReadValue::Bool(true))
+    );
+    first.write("adaptive_streaming", &WriteValue::Trigger);
+    wait_until(
+        Duration::from_secs(2),
+        "changed preference is saved",
+        || {
+            first.tick();
+            first.read("streaming_pending") == Some(ReadValue::Bool(false))
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        first.read("adaptive_streaming"),
+        Some(ReadValue::Bool(false))
+    );
+    assert_eq!(
+        first.read("streaming_fault_hidden"),
+        Some(ReadValue::Bool(true))
+    );
+    drop(first);
+    let mut restarted = build();
+    wait_until(
+        Duration::from_secs(2),
+        "restarted preference is read",
+        || {
+            restarted.tick();
+            restarted.read("streaming_pending") == Some(ReadValue::Bool(false))
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        restarted.read("adaptive_streaming"),
+        Some(ReadValue::Bool(false))
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "false");
 }

@@ -15,9 +15,8 @@ const THRESHOLD_BLOCK: usize = 512;
 struct ThresholdRig {
     queue: Queue<TestPools>,
     mixer: Option<mock::MixerRig>,
-    fixture_dispatcher: kithara_command::Sender<
-        kithara_render::DispatcherProtocol<kithara_play::ResourceLoad<TestPools>>,
-    >,
+    fixture_dispatcher:
+        kithara_command::Sender<kithara_render::DispatcherProtocol<kithara_play::ResourceLoad>>,
     _fixture_driver: kithara_worker::TaskHandle,
     loads: mock::DeckRig<TestPools>,
     source_packets: Option<kithara_render::mock::PacketRing>,
@@ -201,7 +200,7 @@ impl ThresholdRig {
             let declared = Some(Duration::from_secs_f64(duration));
             let (declared_load, mut packets) = crate::mock::synthetic_loaded(
                 seq,
-                loaded.opened.pcm.src(),
+                &loaded.opened.src,
                 AudioChunkInfo {
                     media_end: declared,
                     ..source
@@ -280,7 +279,7 @@ impl ThresholdRig {
 
     fn pass<Value>(
         &mut self,
-        run: impl FnOnce(&mut Queue<TestPools>, &mut Outbox<'_, TestPools>) -> Value,
+        run: impl FnOnce(&mut Queue<TestPools>, &mut Outbox<'_>) -> Value,
     ) -> Value {
         let value = real_outbox(
             &mut self.queue,
@@ -755,7 +754,7 @@ fn real_outbox<Value>(
     loads: &mut mock::DeckRig<TestPools>,
     at: SessionFrame,
     frames: u32,
-    run: impl FnOnce(&mut Queue<TestPools>, &mut Outbox<'_, TestPools>) -> Value,
+    run: impl FnOnce(&mut Queue<TestPools>, &mut Outbox<'_>) -> Value,
 ) -> Value {
     let shape = kithara_render::rt::StreamShape::new(
         NonZeroU32::new(1024).expect("block size"),

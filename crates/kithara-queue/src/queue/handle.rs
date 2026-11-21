@@ -3,8 +3,8 @@ use kithara_command::{Refused, Ticket, When};
 use kithara_events::TrackId;
 use kithara_platform::time::{Duration, Instant};
 use kithara_play::{
-    CrossfadeSettings, CrossfaderGain, DeckFxChange, EqBandConfig, FilterKnob, InterruptionKind,
-    PitchStep, PlayError, Position, TrackSettingsChange, Trim,
+    CrossfadeSettings, DeckFxChange, DeckMixSettingsChange, EqBandConfig, InterruptionKind,
+    LayoutRevision, PitchStep, PlayError, Position, TrackSettingsChange,
 };
 use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
@@ -123,6 +123,23 @@ where
         self.call(QueueCommand::Select { id, transition })
     }
 
+    /// Replaces the current track with another source of the same media.
+    /// The logical track retains its identity, media position and known duration
+    /// while the incoming source has yet to report its extent.
+    /// The accepted source changes when the replacement enters the deck.
+    /// # Errors
+    /// Returns an unknown or non-current identity, an admission refusal or a closed mailbox.
+    pub fn replace_source<T: Into<TrackSource<S>>>(
+        &self,
+        id: TrackId,
+        source: T,
+    ) -> Result<(), QueueError> {
+        self.call(QueueCommand::ReplaceSource {
+            id,
+            source: source.into(),
+        })
+    }
+
     /// Moves after the last requested target.
     /// Answers once the owner accepted and sent it; effects publish on receipts.
     /// # Errors
@@ -180,14 +197,11 @@ where
         self.call(QueueCommand::Close)
     }
 
-    /// Changes the track speed across every active track.
+    /// Changes one setting on active and subsequent tracks.
     /// # Errors
     /// Returns the broadcast's refusal or a closed mailbox.
-    pub fn set_rate(&self, rate: f32) -> Result<(), QueueError> {
-        self.call(QueueCommand::ConfigureTrack(
-            TrackSettingsChange::Speed(rate),
-            When::Next,
-        ))
+    pub fn configure_track(&self, change: TrackSettingsChange) -> Result<(), QueueError> {
+        self.call(QueueCommand::ConfigureTrack(change, When::Next))
     }
 
     /// Moves the deck's pitch by `step`; every active track and every later
@@ -196,13 +210,6 @@ where
     /// Returns the broadcast's refusal or a closed mailbox.
     pub fn step_pitch(&self, step: PitchStep) -> Result<(), QueueError> {
         self.call(QueueCommand::StepPitch(step))
-    }
-
-    /// Changes the speed inherited by subsequent tracks.
-    /// # Errors
-    /// Returns the broadcast's refusal or a closed mailbox.
-    pub fn set_default_rate(&self, rate: f32) -> Result<(), QueueError> {
-        self.set_rate(rate)
     }
 
     /// Changes the next transition's crossfade profile.
@@ -225,25 +232,15 @@ where
         let _ = self.call(QueueCommand::SetActionAtItemEnd(action));
     }
 
-    /// Forwards volume to the host owner.
+    /// Forwards one mix change to the deck owner at `at`.
     /// # Errors
-    /// Returns the host's refusal or a closed mailbox.
-    pub fn set_volume(&self, volume: f32) -> Result<(), QueueError> {
-        self.call(QueueCommand::SetVolume(volume))
-    }
-
-    /// Forwards the deck's trim to the host owner.
-    /// # Errors
-    /// Returns the host's refusal or a closed mailbox.
-    pub fn set_trim(&self, trim: Trim) -> Result<(), QueueError> {
-        self.call(QueueCommand::SetTrim(trim))
-    }
-
-    /// Forwards the deck's crossfader gain to the host owner.
-    /// # Errors
-    /// Returns the host's refusal or a closed mailbox.
-    pub fn set_crossfader(&self, gain: CrossfaderGain) -> Result<(), QueueError> {
-        self.call(QueueCommand::SetCrossfader(gain))
+    /// Returns the owner's refusal or a closed mailbox.
+    pub fn mix(
+        &self,
+        at: When<SessionFrame>,
+        change: DeckMixSettingsChange,
+    ) -> Result<(), QueueError> {
+        self.call(QueueCommand::Mix(change, at))
     }
 
     /// Forwards `changes` of the deck's FX units, applied at `at`, to the host owner.
@@ -253,32 +250,33 @@ where
         self.call(QueueCommand::Fx { at, changes })
     }
 
-    /// Turn the deck filter knob on frame `at`.
-    /// # Errors
-    /// Returns the host's refusal or a closed mailbox.
-    pub fn filter(&self, at: When<SessionFrame>, knob: FilterKnob) -> Result<(), QueueError> {
-        self.call(QueueCommand::Filter { at, knob })
-    }
-
-    /// Forward a program of the deck filter knob.
-    /// # Errors
-    /// Returns preparation, delivery or mailbox refusal.
-    pub fn filter_program(&self, program: kithara_play::FilterProgram) -> Result<(), QueueError> {
-        self.call(QueueCommand::FilterProgram(program))
-    }
-
-    /// Forwards mute to the host owner.
-    /// # Errors
-    /// Returns the host's refusal or a closed mailbox.
-    pub fn set_muted(&self, muted: bool) -> Result<(), QueueError> {
-        self.call(QueueCommand::SetMuted(muted))
-    }
-
     /// Forwards an EQ gain to the host owner.
     /// # Errors
     /// Returns the host's refusal or a closed mailbox.
     pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), QueueError> {
         self.call(QueueCommand::SetEqGain { band, gain_db })
+    }
+
+    /// Changes a band's kill state in the observed EQ layout at a mixer frame.
+    ///
+    /// `layout` is the revision `eq_layout` reports and `eq_killed` answers for. Like a manual
+    /// gain, a kill addresses the layout that receives commands: one still waiting to be
+    /// crossed over to holds it until that layout sounds.
+    /// # Errors
+    /// Returns an admission refusal or a closed mailbox.
+    pub fn set_eq_kill(
+        &self,
+        at: When<SessionFrame>,
+        band: usize,
+        layout: LayoutRevision,
+        on: bool,
+    ) -> Result<(), QueueError> {
+        self.call(QueueCommand::SetEqKill {
+            at,
+            band,
+            layout,
+            on,
+        })
     }
 
     /// Forwards an EQ layout to the host owner.
@@ -288,7 +286,7 @@ where
         self.call(QueueCommand::SetEqLayout(layout))
     }
 
-    /// Requests flat host EQ gains.
+    /// Requests neutral gains and clears kill in the deck's EQ layout.
     /// # Errors
     /// Returns the host's refusal or a closed mailbox.
     pub fn reset_eq(&self) -> Result<(), QueueError> {
