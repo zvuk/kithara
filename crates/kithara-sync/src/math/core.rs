@@ -1,5 +1,5 @@
 use kithara_platform::time::Duration;
-use kithara_signal::SessionFrame;
+use kithara_signal::{ExponentialApproach, SessionFrame};
 use num_traits::ToPrimitive;
 
 use super::{
@@ -32,10 +32,12 @@ impl PhaseError {
 /// What asks a sounding deck to slew.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SlewCause {
-    /// A tempo command: the slew starts at the new reference speed and closes
-    /// the phase at any size.
-    Commanded,
-    /// Phase drift: the slew ramps from the deck's current speed.
+    /// A tempo command follows the new Host law, retaining its bounded phase nudge.
+    Commanded {
+        /// Speed the deck plays at when the slew starts.
+        from: f64,
+    },
+    /// Phase drift: the slew starts at the deck's current speed.
     Drift {
         /// Speed the deck plays at when the slew starts.
         from: f64,
@@ -76,12 +78,9 @@ pub fn covers(grid: &TrackGrid, position: Duration) -> bool {
 }
 
 /// The cue's phase on the source grid, relative to its declared meter.
-fn phase_at(grid: &SourceGrid, position: Duration) -> Option<f64> {
-    if !grid.covers(position) {
-        return None;
-    }
-    let beat = grid.beat_at(position.as_secs_f64())?;
-    let (origin, stride, _) = grid.phase_axes(position.as_secs_f64())?;
+fn phase_at(grid: &SourceGrid, position: f64) -> Option<f64> {
+    let beat = grid.beat_at(position)?;
+    let (origin, stride, _) = grid.phase_axes(position)?;
     Some((beat - origin).rem_euclid(stride))
 }
 
@@ -112,7 +111,7 @@ pub fn speed_curve(
         landing,
         horizon,
     };
-    source::curve(host, grid, position, span, &[(0, 0.0)], None)
+    source::curve(host, grid, position.as_secs_f64(), span, &[(0, 0.0)], None)
         .ok()
         .map(|(curve, _, coverage)| (curve, coverage))
 }
@@ -127,13 +126,179 @@ struct SlewStart {
     error: PhaseError,
 }
 
-/// Plans bounded speed correction from `at`, renewing long corrections after `horizon` frames;
-/// `None` when the grid has no speed law there.
+/// Plans bounded correction, renewing long plans after `horizon` frames.
+/// Drift and commanded phase nudges retain the current speed at their origin.
+/// Larger commanded speed mismatches start at the Host reference.
 #[must_use]
 pub fn slew(
     host: &TempoTrajectory,
     grid: &SourceGrid,
     position: Duration,
+    at: SessionFrame,
+    epsilon: f32,
+    cause: SlewCause,
+    horizon: u64,
+) -> Option<Slew> {
+    if !grid.covers(position) {
+        return None;
+    }
+    let position = position.as_secs_f64();
+    let from = match cause {
+        SlewCause::Commanded { from } | SlewCause::Drift { from } => from,
+    };
+    if horizon == 0 || !(f64::from(MIN_SPEED)..=f64::from(MAX_SPEED)).contains(&from) {
+        return None;
+    }
+    let nominal = nominal_slew(host, grid, position, at, epsilon, cause, horizon)?;
+    let Slew::Corrects { curve, .. } = &nominal else {
+        return Some(nominal);
+    };
+    let reference = host.anchor_at(at).tempo_at(at) * grid.slope_at(position)?;
+    if !retains_origin(curve, reference, epsilon, cause)? {
+        return Some(nominal);
+    }
+    hold_origin(
+        host,
+        grid,
+        position,
+        Span {
+            start: at,
+            landing: None,
+            horizon,
+        },
+        epsilon,
+        cause,
+    )
+}
+
+fn retains_origin(
+    curve: &SpeedCurve,
+    reference: f64,
+    epsilon: f32,
+    cause: SlewCause,
+) -> Option<bool> {
+    let from = match cause {
+        SlewCause::Commanded { from } | SlewCause::Drift { from } => from,
+    };
+    if opening_speed(curve)? == from {
+        return Some(false);
+    }
+    if matches!(cause, SlewCause::Drift { .. }) {
+        return Some(true);
+    }
+    let limit = f64::from(epsilon);
+    let nudged = (reference - limit).to_f32()?..=(reference + limit).to_f32()?;
+    Some(nudged.contains(&from.to_f32()?))
+}
+
+fn hold_origin(
+    host: &TempoTrajectory,
+    grid: &SourceGrid,
+    position: f64,
+    span: Span,
+    epsilon: f32,
+    cause: SlewCause,
+) -> Option<Slew> {
+    let from = match cause {
+        SlewCause::Commanded { from } | SlewCause::Drift { from } => from,
+    };
+    let after = position + from / f64::from(host.sample_rate().get());
+    if !after.is_finite() || after <= position {
+        return None;
+    }
+    let before_beat = grid.beat_at(position)?;
+    let Some(after_beat) = grid.beat_at(after) else {
+        return Some(Slew::Uncovered);
+    };
+    if after_beat <= before_beat {
+        return None;
+    }
+    let next = source::session_frame(span.start, 1)?;
+    let origin = ExponentialApproach::new(from, from, 0.0)?;
+    if span.horizon == 1 {
+        return one_frame_slew(host, grid, after, next, epsilon, origin);
+    }
+    let remainder = nominal_slew(host, grid, after, next, epsilon, cause, span.horizon - 1)?;
+    preceded_by_frame(remainder, origin)
+}
+
+fn one_frame_slew(
+    host: &TempoTrajectory,
+    grid: &SourceGrid,
+    position: f64,
+    at: SessionFrame,
+    epsilon: f32,
+    origin: ExponentialApproach,
+) -> Option<Slew> {
+    let endpoint = nominal_slew(
+        host,
+        grid,
+        position,
+        at,
+        epsilon,
+        SlewCause::Drift {
+            from: origin.initial(),
+        },
+        1,
+    )?;
+    let Slew::Corrects { curve, .. } = endpoint else {
+        return Some(endpoint);
+    };
+    let speed = opening_speed(&curve)?;
+    let control = ExponentialApproach::new(speed, speed, 0.0)?;
+    Some(Slew::Corrects {
+        curve: SpeedCurve::ApproachSteps(vec![(0, origin), (1, control)].into()),
+        frames: 1,
+        coverage: Coverage::Until(1),
+    })
+}
+
+fn opening_speed(curve: &SpeedCurve) -> Option<f64> {
+    match curve {
+        SpeedCurve::Constant(speed) => Some(f64::from(*speed)),
+        SpeedCurve::Approach(law) => Some(law.initial()),
+        SpeedCurve::ApproachSteps(laws) => Some(laws.first()?.1.initial()),
+        SpeedCurve::Ramp { .. } | SpeedCurve::Steps(_) => None,
+    }
+}
+
+fn preceded_by_frame(slew: Slew, origin: ExponentialApproach) -> Option<Slew> {
+    let Slew::Corrects {
+        curve,
+        frames,
+        coverage,
+    } = slew
+    else {
+        return Some(slew);
+    };
+    let mut laws = vec![(0, origin)];
+    match curve {
+        SpeedCurve::Constant(speed) => {
+            let speed = f64::from(speed);
+            laws.push((1, ExponentialApproach::new(speed, speed, 0.0)?));
+        }
+        SpeedCurve::Approach(law) => laws.push((1, law)),
+        SpeedCurve::ApproachSteps(parts) => {
+            for (frame, law) in parts.iter() {
+                laws.push((frame.checked_add(1)?, *law));
+            }
+        }
+        SpeedCurve::Ramp { .. } | SpeedCurve::Steps(_) => return None,
+    }
+    Some(Slew::Corrects {
+        curve: SpeedCurve::ApproachSteps(laws.into()),
+        frames: frames.checked_add(1)?,
+        coverage: match coverage {
+            Coverage::Until(frame) => Coverage::Until(frame.checked_add(1)?),
+            Coverage::GridEnd => Coverage::GridEnd,
+        },
+    })
+}
+
+fn nominal_slew(
+    host: &TempoTrajectory,
+    grid: &SourceGrid,
+    position: f64,
     at: SessionFrame,
     epsilon: f32,
     cause: SlewCause,
@@ -152,7 +317,7 @@ pub fn slew(
 fn close_slew(
     host: &TempoTrajectory,
     grid: &SourceGrid,
-    position: Duration,
+    position: f64,
     span: Span,
     epsilon: f32,
     cause: SlewCause,
@@ -165,7 +330,7 @@ fn close_slew(
     let correction = Correction {
         phase: start.error.wrapped(1.0),
         starts: match cause {
-            SlewCause::Commanded => starts.max(1),
+            SlewCause::Commanded { .. } => starts.max(1),
             SlewCause::Drift { .. } => starts,
         },
         scale: grid.maximum_slope()?,
@@ -185,21 +350,21 @@ fn close_slew(
 fn slew_start(
     host: &TempoTrajectory,
     grid: &SourceGrid,
-    position: Duration,
+    position: f64,
     at: SessionFrame,
     epsilon: f32,
     cause: SlewCause,
 ) -> Option<SlewStart> {
-    let local = grid.slope_at(position.as_secs_f64())?;
+    let local = grid.slope_at(position)?;
     let reference = host.anchor_at(at).tempo_at(at) * local;
     let from = match cause {
-        SlewCause::Commanded => reference,
-        SlewCause::Drift { from, .. } => from,
+        SlewCause::Commanded { .. } => reference,
+        SlewCause::Drift { from } => from,
     };
     Some(SlewStart {
         reference,
         plan: checked_correction(from, reference, epsilon)?,
-        error: phase_error(host, grid, position, at)?,
+        error: phase_error_at(host, grid, position, at)?,
     })
 }
 
@@ -215,7 +380,10 @@ pub fn entry(
     position: Duration,
     bound: Bound,
 ) -> Option<SessionFrame> {
-    let offset = phase_at(grid, position)?;
+    if !grid.covers(position) {
+        return None;
+    }
+    let offset = phase_at(grid, position.as_secs_f64())?;
     let stride = if grid.phase_axes(position.as_secs_f64())?.2 {
         host.beats_per_bar()
     } else {
@@ -272,8 +440,20 @@ pub fn phase_error(
     position: Duration,
     at: SessionFrame,
 ) -> Option<PhaseError> {
+    if !grid.covers(position) {
+        return None;
+    }
+    phase_error_at(host, grid, position.as_secs_f64(), at)
+}
+
+fn phase_error_at(
+    host: &TempoTrajectory,
+    grid: &SourceGrid,
+    position: f64,
+    at: SessionFrame,
+) -> Option<PhaseError> {
     let phase = phase_at(grid, position)?;
-    let stride = if grid.phase_axes(position.as_secs_f64())?.2 {
+    let stride = if grid.phase_axes(position)?.2 {
         host.beats_per_bar()
     } else {
         1.0

@@ -252,15 +252,18 @@ fn a_later_grid_recovers_sync_at_the_tempo_changed_while_the_grid_was_unsupporte
         panic!("recovery must send only a timed speed law: {commands:?}");
     };
     assert_eq!(*at, SessionFrame::new(96_128));
-    let first = match curve {
-        SpeedCurve::Constant(speed) => f64::from(*speed),
-        SpeedCurve::Approach(law) => law.initial(),
-        SpeedCurve::ApproachSteps(laws) => laws.first().expect("recovery speed law").1.initial(),
-        other => panic!("recovery must preserve an analytic speed law: {other:?}"),
+    let SpeedCurve::ApproachSteps(laws) = curve else {
+        panic!("recovery must preserve an analytic speed law: {curve:?}");
     };
+    let [(0, origin), (1, correction), ..] = laws.as_ref() else {
+        panic!("recovery must hold the sounding rate for exactly one frame: {laws:?}");
+    };
+    assert_eq!(origin.initial(), 1.0);
+    assert_eq!(origin.target(), 1.0);
+    let reached = correction.initial();
     assert!(
-        (1.0 - f64::from(LinkConfig::default().epsilon())..1.0).contains(&first),
-        "recovery must start slowing toward 110/120, not retain the stale 120 BPM: {first}"
+        (1.0 - f64::from(LinkConfig::default().epsilon())..1.0).contains(&reached),
+        "recovery must start slowing toward 110/120 after the held frame: {reached}"
     );
     probe.read(|observation| assert_eq!(observation.snapshot.sync, SyncStatus::On));
     host.with_deck(id, &mut |member, _, _| {
