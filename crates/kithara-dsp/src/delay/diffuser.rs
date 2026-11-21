@@ -1,4 +1,7 @@
-use std::ops::{DerefMut, Range};
+use std::{
+    num::NonZeroUsize,
+    ops::{DerefMut, Range},
+};
 
 use num_traits::ToPrimitive;
 
@@ -41,6 +44,17 @@ impl<const CHANNELS: usize> DelayDiffuser<CHANNELS> {
             tap,
             feedback,
         })
+    }
+
+    /// Changes the delay on the prepared ring without clearing its history.
+    ///
+    /// # Errors
+    /// [`DelayError::OutOfRange`] when `frames` exceeds the line's capacity;
+    /// the current delay remains active on refusal.
+    pub fn retime(&mut self, frames: NonZeroUsize) -> Result<(), DelayError> {
+        let frames = frames.get().to_f64().ok_or(DelayError::OutOfRange)?;
+        self.tap = self.line.tap(frames)?;
+        Ok(())
     }
 
     /// Replaces `range` of every plane with its diffused signal, without allocation.
