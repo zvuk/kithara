@@ -137,7 +137,7 @@ pub(crate) struct CiEnvironment {
     /// Held for the life of the job so a reclaim — this job's own or a sibling
     /// job's — leaves the directory this one builds into alone. The ceiling
     /// still charges its bytes; the claim only says they cannot be taken back.
-    _target: Target,
+    target: Target,
     vars: BTreeMap<OsString, OsString>,
 }
 
@@ -299,9 +299,13 @@ impl CiEnvironment {
             temp,
             leases,
             kache,
-            _target: target,
+            target,
             vars,
         })
+    }
+
+    pub(super) fn report_target(&self, checkout: &FsPath) -> Result<PathBuf> {
+        self.target.report_root(checkout, is_ci())
     }
 
     pub(crate) fn vars(&self) -> BTreeMap<OsString, OsString> {
