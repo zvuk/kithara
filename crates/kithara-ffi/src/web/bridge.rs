@@ -110,7 +110,7 @@ impl QueueBridge {
         );
         let control = queue.control();
         let (analysis, requests) = mpsc::channel();
-        let worker = thread::spawn(move || {
+        let worker = thread::spawn_named("kithara-web-queue", move || {
             crate::web::worker::worker_main(queue, host_sender, pools, requests);
         });
         std::mem::forget(worker);

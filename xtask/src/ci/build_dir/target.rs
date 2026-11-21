@@ -55,7 +55,9 @@ impl Target {
                 let build = BuildDir::enter(checkout, &alias, &slots, lane.name, lane.window)?;
                 // Artifact paths name the checkout's `target`; Cargo is told
                 // the alias, the one path every lane's compilations share.
-                expose_build_target(checkout, build.path())?;
+                if let Some(slot) = exposed_slot(&build) {
+                    expose_build_target(checkout, slot)?;
+                }
                 Ok(Self::Alias {
                     alias,
                     build: Box::new(build),
@@ -72,6 +74,20 @@ impl Target {
             Self::Named(dir) => dir.as_deref(),
         }
     }
+
+    pub(crate) fn report_root(&self, checkout: &Path, ci: bool) -> Result<PathBuf> {
+        match self {
+            Self::Alias { build, .. } => {
+                Ok(exposed_slot(build).map_or_else(|| checkout.join("target"), Path::to_path_buf))
+            }
+            Self::Named(_) if ci => bail!("a CI report producer needs an acquired target"),
+            Self::Named(_) => Ok(checkout.join("target")),
+        }
+    }
+}
+
+fn exposed_slot(build: &BuildDir) -> Option<&Path> {
+    (!cfg!(windows)).then(|| build.path().as_path())
 }
 
 /// Links the checkout's `target` to the build directory, so reports and
@@ -79,9 +95,6 @@ impl Target {
 /// checkout is the job's own, so whatever stands at `target` is replaced.
 /// Windows keeps its build target in the checkout.
 fn expose_build_target(checkout: &Path, build: &Path) -> Result<()> {
-    if cfg!(windows) {
-        return Ok(());
-    }
     let target = checkout.join("target");
     match fs::symlink_metadata(&target) {
         Ok(metadata) if metadata.file_type().is_symlink() => {

@@ -257,7 +257,7 @@ impl AppleBodyStream {
 
 impl Drop for AppleBodyStream {
     fn drop(&mut self) {
-        if !self.done {
+        if !self.done && !self.body_complete() {
             self.task.cancel();
         }
     }
@@ -354,5 +354,79 @@ impl Drop for StreamStartGuard {
             self.task.cancel();
             self.events.remove_stream(self.task_id);
         }
+    }
+}
+
+#[cfg(test)]
+pub(super) mod tests {
+    use kithara_apple::foundation::{
+        ns::{NSURLSession, NSURLSessionDataTask},
+        objc::rc::{Retained, autoreleasepool},
+    };
+    use kithara_test_utils::{cancel_token, kithara};
+    use url::Url;
+
+    use super::*;
+    use crate::{
+        backend::apple::request::{AppleRequest, Method},
+        types::AcceptEncodingPolicy,
+    };
+
+    pub(in crate::backend::apple) fn suspended_task(
+        method: Method,
+    ) -> Retained<NSURLSessionDataTask> {
+        let request = AppleRequest::new(
+            &Url::parse("https://example.invalid/not-started").expect("test URI"),
+            method,
+            None,
+            None,
+            None,
+            AcceptEncodingPolicy::Identity,
+        )
+        .expect("Apple request")
+        .into_ns_request("identity")
+        .expect("native request");
+        autoreleasepool(move |_| NSURLSession::sharedSession().dataTaskWithRequest(&request))
+    }
+
+    #[kithara::test(native)]
+    #[case::empty_complete(Some(0), 0, false)]
+    #[case::finite_complete(Some(4), 4, false)]
+    #[case::finite_incomplete(Some(4), 2, true)]
+    #[case::unknown_length(None, 4, true)]
+    fn dropping_a_body_cancels_only_outstanding_delivery(
+        #[case] expected_len: Option<u64>,
+        #[case] received: u64,
+        #[case] cancel: bool,
+    ) {
+        let raw = suspended_task(Method::Get);
+        let before = raw.state();
+        let task: AppleTask = raw.clone().into();
+        let queue = Arc::new(AppleBodyQueue::new(
+            task.clone(),
+            16,
+            8,
+            ByteBuffers::new(crate::test_pools::pools()),
+        ));
+        let body = AppleBodyStream {
+            task,
+            body_queue: queue,
+            cancel: cancel_token(),
+            cancel_wake: None,
+            expected_len,
+            received,
+            done: false,
+        };
+        drop(body);
+        if cancel {
+            assert_ne!(raw.state(), before, "unfinished delivery is cancelled");
+        } else {
+            assert_eq!(
+                raw.state(),
+                before,
+                "complete delivery must not cancel the native task"
+            );
+        }
+        raw.cancel();
     }
 }

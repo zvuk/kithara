@@ -18,6 +18,22 @@ macro_rules! vector_routes {
                 entry: crate::mul_add;
                 targets: [Simd, Simd, Simd];
             }
+            ratio_ramp(output: &mut [f64], first: u64, divisor: std::num::NonZeroU64) -> usize {
+                simd: crate::backend::curve::ratio::ratio_kernel;
+                scalar: crate::backend::curve::ratio::ratio_scalar;
+                entry: crate::ratio_ramp;
+                targets: [Scalar, Simd, Simd];
+            }
+            parameter_hold(positions: &mut [f64], endpoints: [f64; 2]) -> () {
+                simd: crate::backend::curve::parameter::hold_kernel;
+                entry: crate::backend::curve::parameter::hold;
+                targets: [Simd, Simd, Simd];
+            }
+            parameter_linear(positions: &mut [f64], endpoints: [f64; 2]) -> () {
+                simd: crate::backend::curve::parameter::linear_kernel;
+                entry: crate::backend::curve::parameter::linear;
+                targets: [Simd, Simd, Simd];
+            }
         }
     };
 }

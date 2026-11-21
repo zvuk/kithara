@@ -92,6 +92,8 @@ members = [
     "tests/crates/sync",
     "tests/crates/warp",
     "tests/fuzz",
+    "tests/wasm-runner",
+    "tests/wasm-runner-fixture",
     "xtask",
 ]
 default-members = [
@@ -598,13 +600,16 @@ velato = { version = "0.8", default-features = false }
 vello = { version = "0.6", default-features = false }
 # Dev-only scene inspector; must stay on the vello fork rev patched in .cargo/config.toml.
 vello_encoding = { version = "0.6", default-features = false }
+walrus = "0.26.1"
 # Exact, because `wasm-bindgen` refuses a Wasm file whose bindgen schema differs from the
-# CLI's, and the CI image carries `wasm-bindgen-cli` 0.2.120. The UI stack added here
-# (wgpu 27, winit, softbuffer, bevy_platform) accepts `js-sys`/`web-sys` 0.3.103, which
-# pulls bindgen 0.2.126; the browser lane then rejects every Wasm file it is handed and
-# reports nothing rather than failing loudly. Caret ranges cannot express "whatever the
-# image installed", so the three move together and only with the image.
+# generator's, and the browser test runner generates with `wasm-bindgen-cli-support`. The UI
+# stack added here (wgpu 27, winit, softbuffer, bevy_platform) accepts `js-sys`/`web-sys`
+# 0.3.103, which pulls bindgen 0.2.126; the browser lane then rejects every Wasm file it is
+# handed and reports nothing rather than failing loudly. The runner's lock test fails when
+# `wasm-bindgen`, `wasm-bindgen-test` and the generator resolve to different bindgen
+# versions, so they move together.
 wasm-bindgen = "=0.2.120"
+wasm-bindgen-cli-support = "=0.2.120"
 wasm-bindgen-futures = "=0.4.70"
 wasm-bindgen-test = "=0.3.70"
 wasm_safe_thread = "0.1.1"

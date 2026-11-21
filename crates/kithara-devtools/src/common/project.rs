@@ -618,6 +618,8 @@ pub struct TestCommandConfig {
     /// a visible act in the diff with an owner attached — not a list a lane
     /// grows to stay green.
     pub known_flakes: Vec<KnownFlake>,
+    /// Selection receipts that require an executed case from a given namespace.
+    pub required_case_prefixes: BTreeMap<String, String>,
     /// The tests a draft runs whatever it names.
     #[config(nested)]
     pub required: TestRequiredConfig,

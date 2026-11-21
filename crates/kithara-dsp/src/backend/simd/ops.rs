@@ -3,6 +3,8 @@ use std::{
     ops::{Add, Deref, Div, Mul, Range, Shr, Sub},
 };
 
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
+use fearless_simd::f64x2;
 use fearless_simd::{Level, dispatch, prelude::*};
 use num_traits::AsPrimitive;
 
@@ -493,6 +495,53 @@ pub(in crate::backend) fn first_quiet_kernel<S: Simd, P: Deref<Target = [f32]>>(
                 .all(|plane| plane.get(*frame).expect("validated frame").abs() <= limit)
         })
         .unwrap_or(range.end)
+}
+
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
+pub(crate) fn narrow_f64(input: &[f64], output: &mut [f32]) -> usize {
+    dispatch!(Level::new(), simd => narrow_kernel(simd, input, output))
+}
+
+#[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
+pub(in crate::backend) fn narrow_kernel<S: Simd>(
+    simd: S,
+    input: &[f64],
+    output: &mut [f32],
+) -> usize {
+    let count = input.len().min(output.len());
+    let (Some(input), Some(output)) = (input.get(..count), output.get_mut(..count)) else {
+        return 0;
+    };
+    for (input, output) in input.chunks(4).zip(output.chunks_mut(4)) {
+        let low = f64x2::from_fn(simd, |lane| input.get(lane).copied().unwrap_or(0.0));
+        let high = f64x2::from_fn(simd, |lane| {
+            input.get(lane.saturating_add(2)).copied().unwrap_or(0.0)
+        });
+        let value = low.narrow(high);
+        if let Some(values) = value.as_slice().get(..output.len()) {
+            output.copy_from_slice(values);
+        }
+    }
+    count
+}
+
+pub(crate) fn multiply_squared_in_place(
+    samples: &mut [f32],
+    square: &[f32],
+    gains: &[f32],
+) -> usize {
+    dispatch!(Level::new(), simd => multiply_squared_kernel(simd, samples, square, gains))
+}
+
+pub(in crate::backend) fn multiply_squared_kernel<S: Simd>(
+    simd: S,
+    samples: &mut [f32],
+    square: &[f32],
+    gains: &[f32],
+) -> usize {
+    update(simd, samples, [square, gains], |x, [square, gain]| {
+        x.mul(square.mul(square)).mul(gain)
+    })
 }
 
 pub(crate) fn last_loud(samples: &[f32], limit: f32) -> Option<usize> {
