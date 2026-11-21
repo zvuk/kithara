@@ -371,7 +371,9 @@ fn a_source_discontinuity_rebases_an_approach_at_its_reached_rate() {
         .expect("exact postseek phase");
     let after = trajectory.span(50, rate, 128).expect("after backward seek");
     assert_eq!(after.source_ratio_at(0), Some(position));
-    let expected_curve = first.resumed(97).expect("the course entered at the discontinuity");
+    let expected_curve = first
+        .resumed(97)
+        .expect("the course entered at the discontinuity");
     assert_eq!(
         expected_curve.rate_at(0.0),
         first.rate_at(97.0),
