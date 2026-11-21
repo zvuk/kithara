@@ -292,13 +292,18 @@ async fn a_dry_wet_program_applies_on_its_frames_under_two_partitions() {
 }
 
 #[kithara::test(tokio)]
-async fn a_replaced_effect_returns_only_its_unit_dry_wet_program() {
-    let harness = prepared(64).await;
+#[case::dry_wet(FxTarget::Mix)]
+#[case::parameter(FxTarget::Param(0))]
+async fn a_replaced_effect_returns_only_its_unit_program(#[case] target: FxTarget) {
+    let harness = match target {
+        FxTarget::Mix => prepared(64).await,
+        FxTarget::Param(_) => prepared_with(64, None, tone, FxMix::MAX).await,
+    };
     let start = after(harness.deck_snapshot().at, 64);
     let programs = vec![
         long(DeckParameter::Crossfader, start, [1.0, 0.5]),
-        long(mix(0, layout(&harness, 0)), start, [0.0, 1.0]),
-        long(mix(1, layout(&harness, 1)), start, [0.0, 1.0]),
+        long(fx(0, layout(&harness, 0), target), start, [0.0, 1.0]),
+        long(fx(1, layout(&harness, 1), target), start, [0.0, 1.0]),
     ];
     harness
         .with_queue(move |queue| queue.deck_programs(programs))
@@ -316,7 +321,15 @@ async fn a_replaced_effect_returns_only_its_unit_dry_wet_program() {
         .expect("the deck takes the new effect");
     let _ = render(&harness, 256, 64).await;
     let snapshot = harness.deck_snapshot();
-    let unit = |unit: usize| snapshot.fx[unit].mix;
+    let unit = |unit: usize| {
+        snapshot
+            .parameter(fx(
+                unit,
+                snapshot.fx[unit].layout.expect("current unit"),
+                target,
+            ))
+            .expect("current parameter metadata")
+    };
     assert_ne!(snapshot.fx[0].layout, Some(replaced), "unit 0 advanced");
     assert_eq!(
         unit(0).program(),
@@ -331,7 +344,7 @@ async fn a_replaced_effect_returns_only_its_unit_dry_wet_program() {
         crossfader.program().is_some(),
         "the crossfader program runs"
     );
-    let stale = long(mix(0, replaced), after(snapshot.at, 64), [0.0, 1.0]);
+    let stale = long(fx(0, replaced, target), after(snapshot.at, 64), [0.0, 1.0]);
     assert!(
         matches!(
             harness
