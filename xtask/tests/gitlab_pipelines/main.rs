@@ -673,7 +673,7 @@ fn child_pipeline_includes_apple_lanes_and_the_blocking_verdict() {
 }
 
 #[test]
-fn the_branch_verdict_expects_only_the_apple_test_producer() {
+fn the_branch_verdict_downloads_both_apple_test_producers() {
     let config = GitlabConfig::load(&workspace_root());
     let jobs = config.lane_jobs();
     let producers: BTreeSet<&str> = config.definition("verdict")["needs"]
@@ -689,7 +689,7 @@ fn the_branch_verdict_expects_only_the_apple_test_producer() {
                 .expect("a verdict producer runs a lane")
         })
         .collect();
-    assert_eq!(producers, BTreeSet::from(["apple-test"]));
+    assert_eq!(producers, BTreeSet::from(["apple-net-units", "apple-test"]));
 }
 
 #[test]
@@ -871,7 +871,13 @@ fn macos_review_jobs_can_use_either_native_registration() {
         ["kithara-macos", "kithara-macos-1"],
         ["kithara-macos", "kithara-macos-2"],
     ];
-    for job in ["apple:lint", "apple:test", "apple:xcframework", "verdict"] {
+    for job in [
+        "apple:lint",
+        "apple:net-units",
+        "apple:test",
+        "apple:xcframework",
+        "verdict",
+    ] {
         let tags = config.effective_value(job, "tags").expect("job has tags");
         let tags = tags.as_sequence().expect("job tags are a sequence");
         assert!(!tags.is_empty(), "`{job}` must select the native pool");
@@ -959,6 +965,7 @@ fn verdict_downloads_every_judged_apple_report() {
         })
         .collect();
     for job in [
+        "apple:net-units",
         "apple:test",
         "apple:test-flash-off",
         "apple:swift-test",
@@ -976,6 +983,7 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         "apple:ios-test",
         "apple:lint",
         "apple:msrv",
+        "apple:net-units",
         "apple:pr-tests",
         "apple:safari",
         "apple:swift-test",
@@ -991,6 +999,7 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
 
     for (job, owner, judged) in [
         ("apple:lint", ".rules-verify-and-branch", false),
+        ("apple:net-units", ".rules-verify-and-branch", true),
         ("apple:test", ".rules-verify-and-branch", true),
         ("apple:xcframework", ".rules-verify-and-branch", false),
         ("apple:ios", ".rules-verify", false),
@@ -1001,6 +1010,33 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
     ] {
         assert_active_review_job(&config, job, owner, judged);
     }
+}
+
+#[test]
+fn apple_network_units_upload_their_own_verdict_evidence() {
+    let config = GitlabConfig::load(&workspace_root());
+    let leaf = config.definition("apple:net-units");
+    let artifacts = &leaf["artifacts"];
+    assert_eq!(
+        artifacts["reports"]["junit"].as_str(),
+        Some(".ci-artifacts/junit/apple-net-units.xml")
+    );
+    let paths: BTreeSet<&str> = artifacts["paths"]
+        .as_sequence()
+        .expect("the producer names its artifacts")
+        .iter()
+        .map(|value| value.as_str().expect("an artifact path"))
+        .collect();
+    assert_eq!(
+        paths,
+        BTreeSet::from([
+            ".ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json",
+            ".ci-artifacts/junit/apple-net-units.xml",
+            ".ci-artifacts/junit/apple-net-units.selection.json",
+            ".ci-artifacts/junit/apple-net-units.failed",
+        ])
+    );
+    assert_eq!(leaf["needs"][0].as_str(), Some("apple:lint"));
 }
 
 #[test]
@@ -1211,7 +1247,12 @@ fn dispatch_does_not_reserve_the_host_while_children_run() {
         );
     }
     let config = GitlabConfig::load(&workspace_root());
-    for job in ["apple:test", "apple:test-flash-off", "apple:ios-test"] {
+    for job in [
+        "apple:net-units",
+        "apple:test",
+        "apple:test-flash-off",
+        "apple:ios-test",
+    ] {
         assert_eq!(
             config
                 .effective_value(job, "resource_group")
@@ -1281,16 +1322,18 @@ fn a_draft_test_block_is_checked_before_the_suite_runs() {
         Some("$KITHARA_PIPELINE_KIND == \"branch\" && $KITHARA_PR_TESTS")
     );
     assert_eq!(check["script"][0].as_str(), Some("just ci pr-tests"));
-    let needs = apple["apple:test"]["needs"]
-        .as_sequence()
-        .expect("the suite names what it waits for");
-    assert!(
-        needs
-            .iter()
-            .any(|need| need["job"].as_str() == Some("apple:pr-tests")
-                && need["optional"].as_bool() == Some(true)),
-        "the suite does not wait for the block check: {needs:?}"
-    );
+    for suite in ["apple:test", "apple:net-units"] {
+        let needs = apple[suite]["needs"]
+            .as_sequence()
+            .expect("the suite names what it waits for");
+        assert!(
+            needs
+                .iter()
+                .any(|need| need["job"].as_str() == Some("apple:pr-tests")
+                    && need["optional"].as_bool() == Some(true)),
+            "{suite} does not wait for the block check: {needs:?}"
+        );
+    }
 }
 
 #[test]

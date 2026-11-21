@@ -155,7 +155,7 @@ pub fn current() -> Thread {
     wasm_safe_thread::current()
 }
 
-/// Spawn a new named thread (WASM variant).
+/// Spawn a new named thread (WASM variant). The name becomes the Worker's name.
 ///
 /// # Panics
 ///
@@ -165,8 +165,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    let _name = name.into();
-    spawn(counted(f))
+    spawn_with(WasmThreadBuilder::new().name(name.into()), counted(f))
 }
 
 /// Uses the consumer-registered shim name (`set_wasm_shim_name`) when set, falling back to
@@ -176,7 +175,14 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    let mut builder = WasmThreadBuilder::new();
+    spawn_with(WasmThreadBuilder::new(), f)
+}
+
+fn spawn_with<F, T>(mut builder: WasmThreadBuilder, f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
     if let Some(shim) = wasm_shim_name().get() {
         builder = builder.shim_name(shim.clone());
     }
@@ -237,8 +243,10 @@ mod tests {
     };
 
     use kithara_test_utils::kithara;
+    use wasm_bindgen::JsCast;
+    use web_sys::DedicatedWorkerGlobalScope;
 
-    use super::spawn;
+    use super::{spawn, spawn_named};
     use crate::time::{Duration, sleep};
 
     mod consts {
@@ -248,6 +256,21 @@ mod tests {
         /// several concurrent module loads drops a thread on most runs.
         pub(super) const WORKERS: usize = 8;
         pub(super) const TICK: Duration = Duration::from_millis(10);
+        pub(super) const NAME: &str = "kithara-named-worker";
+    }
+
+    fn worker_name() -> String {
+        js_sys::global()
+            .unchecked_into::<DedicatedWorkerGlobalScope>()
+            .name()
+    }
+
+    #[kithara::test(wasm, timeout(Duration::from_secs(10)))]
+    async fn spawn_named_names_the_worker() {
+        let named = spawn_named(consts::NAME, worker_name).join_async().await;
+        let unnamed = spawn(worker_name).join_async().await;
+        assert_eq!(named, Ok(consts::NAME.to_owned()));
+        assert!(unnamed.is_ok_and(|name| name != consts::NAME));
     }
 
     #[kithara::test(wasm, flash(false), timeout(Duration::from_secs(10)))]

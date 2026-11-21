@@ -603,6 +603,9 @@ known_flakes = []
 # `ui` lane so the general workspace run does not build those test targets.
 features = []
 
+[test.required_case_prefixes]
+".ci-artifacts/junit/apple-net-units.selection.json" = "backend::apple::"
+
 # The test packages a draft runs whatever its pull request names: the seven
 # that failed on the most branches between 2026-10-05 and 2026-11-11, above the
 # gap between 19 branches and 13. Reviewed by hand; a ready pull request and
@@ -2875,6 +2878,46 @@ steps = [
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]
+timeout_minutes = 60
+
+[ext.ci.lanes.apple-net-units]
+cache_group = "macos"
+label = "Apple network units"
+os = "macos"
+tools = ["cargo", "just", "sccache", "kache", "xcodebuild"]
+checks = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
+]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--net-backend=apple",
+    "--narrow=package(=kithara-net)",
+    "--selection-output=.ci-artifacts/junit/apple-net-units.selection.json",
+    "--flash=on",
+    "--no-block=on",
+    "--profile",
+    "ci",
+  ], label = "Apple network units" },
+]
+role = "platforms"
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+kinds_github = []
 timeout_minutes = 60
 
 # A review ref asks the same question the default branch asks: what a reviewer
