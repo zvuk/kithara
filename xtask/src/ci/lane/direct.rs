@@ -1204,42 +1204,43 @@ label = "run"
         assert_eq!(copies_in(runner_temp.path()), Vec::<PathBuf>::new());
     }
 
-    /// A GitHub job that names no build root holds no build, so it refuses a
+    /// A CI job that names no build root holds no build, so it refuses a
     /// report before the browser runs instead of capturing it in a target
-    /// another run may share.
+    /// another run may share. A GitHub job and any other CI job alike.
     #[cfg(unix)]
     #[test]
-    fn a_github_job_holding_no_build_fails_before_the_browser_runs() {
+    fn a_ci_job_holding_no_build_fails_before_the_browser_runs() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
-        let checkout = tempfile::tempdir_in(temp.path()).expect("create the job's checkout");
-        let marker = temp.path().join("ran");
         let runner_temp = tempfile::tempdir_in(temp.path()).expect("create the job's RUNNER_TEMP");
         let github_env = temp.path().join("github-env");
         fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
-        let (ctx, args) = chromium_lane(checkout.path(), &format!("touch {}", marker.display()));
+        let github_env = github_env.to_str().expect("a UTF-8 GITHUB_ENV");
+        let runner_temp = runner_temp.path().to_str().expect("a UTF-8 RUNNER_TEMP");
+        let room = [
+            ("CI", "true"),
+            (consts::JOB_ROOM_BYTES_ENV, "0"),
+            (consts::JOB_ROOM_WAIT_ENV, "0"),
+        ];
+        let github = [
+            ("GITHUB_ACTIONS", "true"),
+            ("GITHUB_ENV", github_env),
+            ("RUNNER_TEMP", runner_temp),
+        ];
+        for job in [[room.as_slice(), &github].concat(), room.to_vec()] {
+            let checkout = tempfile::tempdir_in(temp.path()).expect("create the job's checkout");
+            let marker = temp.path().join("ran");
+            let (ctx, args) =
+                chromium_lane(checkout.path(), &format!("touch {}", marker.display()));
 
-        let error = run_in(
-            &args,
-            &ctx,
-            &environment(&[
-                ("CI", "true"),
-                ("GITHUB_ACTIONS", "true"),
-                (consts::JOB_ROOM_BYTES_ENV, "0"),
-                (consts::JOB_ROOM_WAIT_ENV, "0"),
-                (
-                    "GITHUB_ENV",
-                    github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
-                ),
-                (
-                    "RUNNER_TEMP",
-                    runner_temp.path().to_str().expect("a UTF-8 RUNNER_TEMP"),
-                ),
-            ]),
-        )
-        .expect_err("the job holds no build to capture a report in");
+            let error = run_in(&args, &ctx, &environment(&job))
+                .expect_err("the job holds no build to capture a report in");
 
-        assert!(format!("{error:#}").contains("holds none"), "{error:#}");
-        assert!(!marker.exists(), "the lane's step did not run");
+            assert!(
+                format!("{error:#}").contains("acquired target"),
+                "{job:?}: {error:#}"
+            );
+            assert!(!marker.exists(), "{job:?}: the lane's step did not run");
+        }
     }
 
     /// A GitHub job that does not name its own storage fails before the

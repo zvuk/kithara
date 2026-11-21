@@ -5,12 +5,12 @@ use std::{
     path::Path,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 #[cfg(unix)]
 use super::chromium::ChromiumReport;
 use crate::{
-    ci::build_dir::Target,
+    ci::{build_dir::Target, environment::ci_in},
     config::{CiLaneArtifact, CiLaneConfig, LaneReport},
 };
 
@@ -28,11 +28,11 @@ impl Capture {
     /// Prepares the report `lane` declares for a run in the build `target`
     /// holds.
     ///
-    /// A GitHub job captures the report in its own `RUNNER_TEMP` and runs the
-    /// lane only in a build it holds, so the build is not released before the
-    /// report is handed to later steps: a target named by path is shared with
-    /// whatever else names that path. Anywhere else the report stays in the
-    /// build it was written in, and a named target is where that is.
+    /// The build is the one `Target::report_root` places reports in, so a CI
+    /// job runs the lane only in a build it acquired. A GitHub job captures the
+    /// report in its own `RUNNER_TEMP` and hands it to later steps while it
+    /// still holds that build; anywhere else the report stays in the build it
+    /// was written in.
     ///
     /// # Errors
     ///
@@ -52,16 +52,9 @@ impl Capture {
         };
         let text = |name: &str| var(name).and_then(|value| value.into_string().ok());
         let github = crate::job::github_in(&text);
-        let build = match target {
-            Target::Alias { build, .. } => build.path().to_path_buf(),
-            Target::Named(_) if github => bail!(
-                "a GitHub job runs a lane with a {} report only in a build it holds, and it holds none: CARGO_TARGET_DIR names no build root",
-                report.name()
-            ),
-            Target::Named(dir) => dir
-                .as_ref()
-                .map_or_else(|| root.join("target"), |dir| root.join(dir)),
-        };
+        let build = target
+            .report_root(root, ci_in(var))
+            .with_context(|| format!("placing this run's {} report", report.name()))?;
         let report = match report {
             LaneReport::Chromium => ChromiumReport::prepare(&build, github, var)
                 .context("preparing this run's Chromium report")?,
@@ -120,7 +113,7 @@ impl ChromiumReport {
         _github: bool,
         _var: &dyn Fn(&str) -> Option<OsString>,
     ) -> Result<Self> {
-        bail!("a Chromium report is captured on Unix only")
+        anyhow::bail!("a Chromium report is captured on Unix only")
     }
 
     fn env(&self) -> [(OsString, OsString); 2] {

@@ -1756,19 +1756,12 @@ args = ['-c', 'echo driver > "$(eval "set -- $CHROMEDRIVER_ARGS"; echo "$2" | cu
     fn a_report_left_unfinished_removes_nothing_its_name_points_at() {
         let checkout = tempfile::tempdir().expect("create a checkout");
         let root = checkout.path();
-        let target = root.join("named");
         let (_ctx, ext, lane) = report_lane(root);
-        let report = declared_report(
-            &lane,
-            &ext.ci.lanes,
-            &Target::Named(Some(target.clone())),
-            root,
-            &|_| None,
-        )
-        .expect("a named run captures its report")
-        .expect("the lane declares a report");
-        let capture = fs::read_dir(&target)
-            .expect("list the named target")
+        let report = declared_report(&lane, &ext.ci.lanes, &Target::Named(None), root, &|_| None)
+            .expect("a local run captures its report")
+            .expect("the lane declares a report");
+        let capture = fs::read_dir(root.join("target"))
+            .expect("list the checkout's target")
             .next()
             .expect("the capture is made")
             .expect("read a target entry")
@@ -1786,20 +1779,21 @@ args = ['-c', 'echo driver > "$(eval "set -- $CHROMEDRIVER_ARGS"; echo "$2" | cu
     }
 
     /// A named `ci run` of a lane with a Chromium report tells its steps
-    /// where to write through the same owner as `ci lane`, and outside a
-    /// GitHub job a failed lane keeps the report in the target it named.
+    /// where to write through the same owner as `ci lane`, and a local failed
+    /// lane keeps the report where every other report is written: the
+    /// checkout's `target`, not the directory `CARGO_TARGET_DIR` names.
     #[cfg(unix)]
     #[test]
-    fn a_named_run_of_a_report_lane_keeps_a_failed_report_where_it_built() {
+    fn a_named_run_of_a_report_lane_keeps_a_failed_report_in_the_checkout_target() {
         let checkout = tempfile::tempdir().expect("create a checkout");
         let root = checkout.path();
-        let target = root.join("named");
+        let named = root.join("named");
         let (ctx, ext, lane) = report_lane(root);
 
         let report = declared_report(
             &lane,
             &ext.ci.lanes,
-            &Target::Named(Some(target.clone())),
+            &Target::Named(Some(named.clone())),
             root,
             &|_| None,
         )
@@ -1818,8 +1812,9 @@ args = ['-c', 'echo driver > "$(eval "set -- $CHROMEDRIVER_ARGS"; echo "$2" | cu
         report.finish(outcome.is_err());
         outcome.expect_err("the lane fails");
 
-        let captures = fs::read_dir(&target)
-            .expect("list the named target")
+        assert!(!named.exists(), "the named directory holds no report");
+        let captures = fs::read_dir(root.join("target"))
+            .expect("list the checkout's target")
             .map(|entry| entry.expect("read a target entry").path())
             .collect::<Vec<_>>();
         assert_eq!(captures.len(), 1, "{captures:?}");
