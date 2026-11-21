@@ -304,9 +304,11 @@ mod consts {
     /// state-wait equivalent — synchronising on a settled state would dissolve
     /// the contended window (see the test's own note).
     pub(super) const RACE_GAP: Duration = Duration::from_millis(50);
-    /// Window after the selects during which the completion-race test watches
-    /// for a barge-in (slow stomping current fast). Ample for the racing
-    /// completion's `select_item` to land (~tens of ms when it does).
+    /// Window after `fast` becomes current during which the completion-race
+    /// test watches for a barge-in (slow stomping current fast). Ample for the
+    /// racing completion's `select_item` to land (~tens of ms when it does).
+    /// How long `fast` takes to load is bounded separately by
+    /// `OBSERVE_DEADLINE`.
     pub(super) const RACE_OBSERVE: Duration = Duration::from_secs(1);
 }
 
@@ -792,13 +794,17 @@ async fn observe_completion_order(
     snapshot: Option<TrackId>,
     fast: TrackId,
     slow: TrackId,
-    budget: Duration,
+    arrival: Duration,
+    watch: Duration,
 ) -> Result<(), String> {
-    let watch = time::Instant::now();
+    let start = time::Instant::now();
     let mut history = Vec::new();
-    let mut saw_fast = false;
+    let mut fast_at = None;
     loop {
-        let remaining = budget.saturating_sub(watch.elapsed());
+        let remaining = fast_at.map_or_else(
+            || arrival.saturating_sub(start.elapsed()),
+            |at: time::Instant| watch.saturating_sub(at.elapsed()),
+        );
         hang_tick!(format!("completion-race history={history:?}"));
         if remaining.is_zero() {
             break;
@@ -811,52 +817,71 @@ async fn observe_completion_order(
         else {
             break;
         };
+        hang_reset!();
         if current != history.last().copied().flatten() {
             history.push(current);
         }
-        if current == Some(fast) {
-            saw_fast = true;
+        if current == Some(fast) && fast_at.is_none() {
+            fast_at = Some(time::Instant::now());
         }
-        if saw_fast && current == Some(slow) {
+        if fast_at.is_some() && current == Some(slow) {
             return Err(format!(
                 "slow became current after fast at {} ms (snapshot={snapshot:?}, history={history:?})",
-                watch.elapsed().as_millis(),
+                start.elapsed().as_millis(),
             ));
         }
     }
-    if !saw_fast {
+    if fast_at.is_none() {
         return Err(format!(
-            "fast was not observed (snapshot={snapshot:?}, history={history:?})"
+            "fast was not observed within {} ms (snapshot={snapshot:?}, history={history:?})",
+            start.elapsed().as_millis(),
         ));
     }
     Ok(())
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-#[case::ordered_backlog(&[0, 1], None)]
-#[case::late_slow(&[0, 1, 0], Some("slow became current after fast"))]
-#[case::missing_fast(&[0], Some("fast was not observed"))]
-#[case::no_events(&[], Some("fast was not observed"))]
+#[case::ordered_backlog(&[0, 1], Duration::ZERO, None)]
+#[case::late_slow(&[0, 1, 0], Duration::ZERO, Some("slow became current after fast"))]
+#[case::missing_fast(&[0], Duration::ZERO, Some("fast was not observed"))]
+#[case::no_events(&[], Duration::ZERO, Some("fast was not observed"))]
+#[case::fast_after_the_race_window(
+    &[1],
+    consts::RACE_OBSERVE + consts::RACE_GAP,
+    None
+)]
+#[case::late_fast_then_slow(
+    &[1, 0],
+    consts::RACE_OBSERVE + consts::RACE_GAP,
+    Some("slow became current after fast")
+)]
 async fn completion_observer_keeps_current_changes_in_bus_order(
     #[case] changes: &[u64],
+    #[case] delay: Duration,
     #[case] expected_error: Option<&str>,
 ) {
     let bus = EventBus::new(16);
     let mut events = bus.subscribe::<TestEvent>();
-    for &id in changes {
-        bus.publish(TestEvent::Queue(QueueEvent::CurrentTrackChanged {
-            id: Some(TrackId(id)),
-        }));
-    }
-    drop(bus);
-    let result = observe_completion_order(
-        &mut events,
-        Some(TrackId(1)),
-        TrackId(1),
-        TrackId(0),
-        consts::RACE_OBSERVE,
-    )
-    .await;
+    let publish = async move {
+        sleep(delay).await;
+        for &id in changes {
+            bus.publish(TestEvent::Queue(QueueEvent::CurrentTrackChanged {
+                id: Some(TrackId(id)),
+            }));
+        }
+        drop(bus);
+    };
+    let (result, ()) = kithara::platform::tokio::join!(
+        observe_completion_order(
+            &mut events,
+            Some(TrackId(1)),
+            TrackId(1),
+            TrackId(0),
+            consts::OBSERVE_DEADLINE,
+            consts::RACE_OBSERVE,
+        ),
+        publish,
+    );
     match expected_error {
         Some(expected) => assert!(
             result
@@ -888,9 +913,10 @@ async fn completion_observer_keeps_current_changes_in_bus_order(
 /// exclusive, so it must not.
 // The absence watch (slow must not stomp the already-current fast) follows
 // `CurrentTrackChanged` on the bus rather than polling a virtual clock, so each
-// step blocks on a real current-track change; `RACE_OBSERVE` only bounds it as
-// a safety cap. The one remaining timer is `RACE_GAP` between `select(slow)`
-// and `select(fast)`: it is a deliberate race-WIDENING delay (it must land
+// step blocks on a real current-track change. `OBSERVE_DEADLINE` bounds fast's
+// arrival (load + select) as a stall cap; `RACE_OBSERVE` then bounds the
+// barge-in watch after `fast` becomes current. The one remaining timer is
+// `RACE_GAP` between `select(slow)` and `select(fast)`: it is a deliberate race-WIDENING delay (it must land
 // `select(fast)` mid-flight, around slow's loader-completion `select_item`), not
 // a wait for a settled state — synchronising on slow reaching `Loaded` would
 // order the completion before the select and dissolve the contended window this
@@ -948,9 +974,15 @@ async fn concurrent_completion_race_does_not_barge_in(
             .unwrap_or_else(|e| panic!("[iter {iter}] select fast: {e}"));
 
         let snapshot = queue.current().map(|entry| entry.id);
-        if let Err(error) =
-            observe_completion_order(&mut rx, snapshot, fast_id, slow_id, consts::RACE_OBSERVE)
-                .await
+        if let Err(error) = observe_completion_order(
+            &mut rx,
+            snapshot,
+            fast_id,
+            slow_id,
+            consts::OBSERVE_DEADLINE,
+            consts::RACE_OBSERVE,
+        )
+        .await
         {
             failures.push(format!(
                 "[iter {iter}] {error}; current={:?}, fast_status={:?}, slow_status={:?}, playing={}",
