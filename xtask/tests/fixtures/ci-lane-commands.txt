@@ -2500,54 +2500,63 @@
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / branch
   <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --draft --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / platforms
   <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / merge-request
   <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / quarantine
   <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / main
   <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / nightly
   <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / weekly
   <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / release
   <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-usdt / bench
   <require os> linux
   <require tools> cargo just sccache kache
