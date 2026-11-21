@@ -24,9 +24,10 @@ pub const SVF_CHUNK_FRAMES: usize = 256;
 pub enum Response {
     LowPass,
     HighPass,
+    AllPass,
 }
 
-/// A checked LP/HP design for a fixed-cutoff state-variable filter.
+/// A checked LP/HP/all-pass design for a fixed-cutoff state-variable filter.
 #[derive(Clone, Copy, Debug)]
 pub struct SvfDesign {
     response: Response,
@@ -102,7 +103,7 @@ pub fn decay_frames(design: SvfDesign, floor: f64) -> usize {
         .map_or(usize::MAX, |frames| frames.max(1))
 }
 
-fn coefficients(gain: f64, damping: f64) -> [f64; 3] {
+pub(crate) fn coefficients(gain: f64, damping: f64) -> [f64; 3] {
     let a1 = (1.0 + gain * (gain + damping)).recip();
     let a2 = gain * a1;
     [a1, a2, gain * a2]
@@ -121,7 +122,7 @@ fn coefficients(gain: f64, damping: f64) -> [f64; 3] {
 /// State is two `f64` planes, `CHANNELS` wide, held inline and processed in
 /// channel pairs. Gain preparation uses Accelerate on Apple and portable SIMD
 /// elsewhere; its scratch is on the stack, so nothing allocates.
-/// Low-pass and high-pass are outputs of the same
+/// Low-pass, high-pass and all-pass are outputs of the same
 /// state; at fixed `g` and `k` they equal the RBJ cookbook responses. Two
 /// consecutive frames whose input and output both stay at or below `1e-9`
 /// reset the state, so silence never decays into denormals.
@@ -423,6 +424,7 @@ mod tests {
                     let output = match response {
                         Response::LowPass => v2,
                         Response::HighPass => x - damping * v1 - v2,
+                        Response::AllPass => x - 2.0 * damping * v1,
                     }
                     .to_f32()
                     .unwrap_or(f32::NAN);
@@ -505,6 +507,7 @@ mod tests {
     #[kithara::test]
     #[case(Response::LowPass)]
     #[case(Response::HighPass)]
+    #[case(Response::AllPass)]
     fn simd_recurrence_keeps_scalar_order_history_and_quiet_state(#[case] response: Response) {
         for damping in [0.1, 1.0, 10.0, f64::INFINITY] {
             ordered_recurrence::<1>(response, damping);
