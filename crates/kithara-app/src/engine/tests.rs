@@ -1526,7 +1526,13 @@ async fn a_synced_tone_plays_on_without_a_gap_across_a_tempo_step_and_a_keylock_
     drop(served);
 }
 
-#[kithara::test(native, tokio, flash(false), tracing("info"))]
+#[kithara::test(
+    native,
+    tokio,
+    flash(false),
+    tracing("info"),
+    timeout(::std::time::Duration::from_millis(7876))
+)]
 #[case::aligned(false)]
 #[case::correcting(true)]
 async fn master_tempo_gestures_preserve_a_synced_keylocked_tones_level(
