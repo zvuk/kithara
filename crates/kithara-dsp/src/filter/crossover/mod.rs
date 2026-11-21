@@ -4,7 +4,6 @@ mod design;
 pub(crate) mod measured;
 
 #[cfg(test)]
-#[path = "../../backend/crossover/tests.rs"]
 mod tests;
 
 pub use core::Crossover;

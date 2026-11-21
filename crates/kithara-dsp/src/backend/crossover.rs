@@ -1,7 +1,7 @@
 use std::ops::{Deref, DerefMut};
 
 use fearless_simd::{Level, dispatch, f64x2, prelude::*};
-use num_traits::{AsPrimitive, ToPrimitive};
+use num_traits::AsPrimitive;
 
 use crate::{
     backend::svf,
@@ -13,21 +13,24 @@ struct Section<const CHANNELS: usize> {
     state: [[f64; CHANNELS]; 2],
     quiet: [usize; CHANNELS],
     coefficients: [f64; 3],
-    response: Response,
 }
 
 impl<const CHANNELS: usize> Section<CHANNELS> {
-    fn new(gain: f64, response: Response) -> Self {
+    fn new(gain: f64) -> Self {
         Self {
             state: [[0.0; CHANNELS]; 2],
             quiet: [0; CHANNELS],
             coefficients: coefficients(gain, consts::CROSSOVER_DAMPING),
-            response,
         }
     }
 
     #[inline(always)]
-    fn run<S: Simd>(&mut self, simd: S, mut samples: [f32; CHANNELS]) -> [f32; CHANNELS] {
+    fn run<S: Simd>(
+        &mut self,
+        simd: S,
+        mut samples: [f32; CHANNELS],
+        response: Response,
+    ) -> [f32; CHANNELS] {
         let [state1, state2] = &mut self.state;
         for (((samples, memory1), memory2), quiet) in samples
             .chunks_mut(2)
@@ -44,7 +47,7 @@ impl<const CHANNELS: usize> Section<CHANNELS> {
                 [load_pair(simd, memory1), load_pair(simd, memory2)],
                 self.coefficients,
                 consts::CROSSOVER_DAMPING,
-                self.response,
+                response,
             );
             let memory = memory1.iter_mut().zip(memory2);
             let next = next1.as_slice().iter().zip(next2.as_slice());
@@ -53,7 +56,7 @@ impl<const CHANNELS: usize> Section<CHANNELS> {
                 output.zip(memory).zip(quiet.iter_mut().zip(next))
             {
                 let input = *sample;
-                *sample = output.to_f32().unwrap_or(f32::NAN);
+                *sample = output.as_();
                 let silent =
                     input.abs() <= consts::SILENT_PEAK && sample.abs() <= consts::SILENT_PEAK;
                 *quiet = if silent {
@@ -128,11 +131,9 @@ pub(crate) struct Split<const CHANNELS: usize> {
 impl<const CHANNELS: usize> Split<CHANNELS> {
     pub(crate) fn new(gain: f64, later: impl Iterator<Item = f64>) -> Self {
         Self {
-            lowpass: std::array::from_fn(|_| Section::new(gain, Response::LowPass)),
-            highpass: std::array::from_fn(|_| Section::new(gain, Response::HighPass)),
-            allpass: later
-                .map(|gain| Section::new(gain, Response::AllPass))
-                .collect(),
+            lowpass: std::array::from_fn(|_| Section::new(gain)),
+            highpass: std::array::from_fn(|_| Section::new(gain)),
+            allpass: later.map(Section::new).collect(),
         }
     }
 
@@ -181,35 +182,30 @@ pub(crate) fn process_scalar<
     bands: &mut [[P; CHANNELS]],
     frames: usize,
 ) {
-    for (channel, input) in input.iter().enumerate() {
-        for (frame, &sample) in input
-            .get(..frames)
-            .expect("validated scalar prefix")
-            .iter()
-            .enumerate()
-        {
-            let mut high = sample;
-            let (high_band, lower) = bands.split_last_mut().expect("validated high band");
-            for (split, band) in splits.iter_mut().zip(lower) {
-                let mut low = high;
+    let (high_band, lower) = bands.split_last_mut().expect("validated high band");
+    for (channel, (input, high)) in input.iter().zip(high_band.iter_mut()).enumerate() {
+        let high = high
+            .get_mut(..frames)
+            .expect("validated scalar high frames");
+        high.copy_from_slice(input.get(..frames).expect("validated scalar prefix"));
+        for (split, band) in splits.iter_mut().zip(lower.iter_mut()) {
+            let band = band
+                .get_mut(channel)
+                .and_then(|plane| plane.get_mut(..frames))
+                .expect("validated scalar band frames");
+            for (high, band) in high.iter_mut().zip(band) {
+                let mut low = *high;
                 for section in &mut split.lowpass {
                     low = section.run_scalar(channel, low, Response::LowPass);
                 }
                 for section in &mut split.highpass {
-                    high = section.run_scalar(channel, high, Response::HighPass);
+                    *high = section.run_scalar(channel, *high, Response::HighPass);
                 }
                 for section in &mut split.allpass {
                     low = section.run_scalar(channel, low, Response::AllPass);
                 }
-                *band
-                    .get_mut(channel)
-                    .and_then(|plane| plane.get_mut(frame))
-                    .expect("validated scalar band frame") = low;
+                *band = low;
             }
-            *high_band
-                .get_mut(channel)
-                .and_then(|plane| plane.get_mut(frame))
-                .expect("validated scalar high frame") = high;
         }
     }
 }
@@ -237,13 +233,13 @@ fn process_kernel<
         for (split, band) in splits.iter_mut().zip(lower) {
             let mut low = high;
             for section in &mut split.lowpass {
-                low = section.run(simd, low);
+                low = section.run(simd, low, Response::LowPass);
             }
             for section in &mut split.highpass {
-                high = section.run(simd, high);
+                high = section.run(simd, high, Response::HighPass);
             }
             for section in &mut split.allpass {
-                low = section.run(simd, low);
+                low = section.run(simd, low, Response::AllPass);
             }
             for (plane, value) in band.iter_mut().zip(low) {
                 *plane
@@ -262,6 +258,7 @@ fn process_kernel<
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use num_traits::ToPrimitive;
 
     use super::*;
 
