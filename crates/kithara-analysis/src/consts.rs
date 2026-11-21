@@ -191,7 +191,7 @@ pub(crate) const CH: u16 = 2;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
-pub(crate) const HOLD_BUCKETS: usize = 64;
+pub(crate) const HOLD_FOLD: NonZeroU32 = NonZeroU32::MIN;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -219,7 +219,7 @@ pub(crate) const TICK_LIMIT: u64 = 1 << 20;
 
 #[cfg(feature = "analysis-waveform")]
 #[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) const NODE_BUCKETS: usize = 64;
+pub(crate) const NODE_FOLD: NonZeroU32 = NonZeroU32::MIN;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[cfg(feature = "beat-backend")]

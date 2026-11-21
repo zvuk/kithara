@@ -283,13 +283,13 @@ fn read_ranges(reader: &mut Reader<'_>) -> Result<Vec<Range<u64>>, BlobError> {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::num::{NonZeroU32, NonZeroU64};
 
     use kithara_test_utils::kithara;
     use rangemap::RangeSet;
 
     use super::*;
-    use crate::artifact::FitRegion;
+    use crate::{Bucket, artifact::FitRegion};
 
     fn fingerprint(wave: &str, beat: &str) -> AnalysisFingerprint {
         AnalysisFingerprint::builder()
@@ -299,7 +299,7 @@ mod tests {
     }
 
     fn active() -> AnalysisFingerprint {
-        fingerprint("wave:native:max1500:v1", consts::BEAT_TAG)
+        fingerprint("wave:fold1:v2", consts::BEAT_TAG)
     }
 
     fn rate() -> NonZeroU32 {
@@ -307,8 +307,8 @@ mod tests {
     }
 
     fn wave() -> Waveform {
-        Waveform::try_from([1, 0, 0, 0, 0, 0, 0, 63, 0, 0, 0, 63, 0, 0, 0, 63].as_slice())
-            .expect("hand-built blob is valid")
+        Waveform::try_new(vec![Bucket::new(0.5, 0.5, 0.5)], NonZeroU64::MIN)
+            .expect("hand-built buckets are valid")
     }
 
     fn grid() -> BeatArtifact {
@@ -543,7 +543,7 @@ mod tests {
         let tagged = |key: &str| {
             AnalysisFingerprint::builder()
                 .beat(consts::BEAT_TAG)
-                .waveform("wave:native:max1500:v1")
+                .waveform("wave:fold1:v2")
                 .key(key)
                 .build()
         };

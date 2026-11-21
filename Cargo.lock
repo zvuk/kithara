@@ -6084,6 +6084,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-warp",
+ "kithara-waveform",
  "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",

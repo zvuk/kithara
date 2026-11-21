@@ -4,11 +4,13 @@ pub(crate) mod accelerate;
 mod bins;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 mod cascade;
+pub(crate) mod crossover;
 pub(crate) mod curve;
-mod delay;
+pub(crate) mod delay;
 mod envelope;
 mod fir;
 mod interpolate;
+mod one_pole;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) mod portable;
 pub(crate) mod route;
@@ -32,6 +34,7 @@ pub(crate) use delay::read as delay_read;
 pub(crate) use envelope::attack_release;
 pub use fir::Fir;
 pub(crate) use interpolate::quadratic;
+pub(crate) use one_pole::low_pass as one_pole_low_pass;
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use portable as platform;
 pub use simd::sanitize;

@@ -138,23 +138,21 @@ fn scalar_gain_matches_ieee_multiplication_at_every_level() {
     }
 }
 
-type Diffuse = fn(&mut [f32], &mut [f32], f32, &mut [f32]) -> usize;
+type Diffuse = fn(&mut [f32], &[f32], f32, &mut [f32]) -> usize;
 type DelayBlend = fn(&[f32], &[f32], f32, &mut [f32]) -> usize;
 
-fn delay_kernels() -> [(&'static str, Diffuse, DelayBlend); 3] {
-    [
-        ("platform", platform::delay_diffuse, platform::delay_blend),
-        (
-            "portable-native",
-            portable::delay_diffuse,
-            portable::delay_blend,
-        ),
-        (
-            "portable-fallback",
-            |x, d, g, w| dispatch!(Level::fallback(), simd => delay::diffuse_kernel(simd, x, d, g, w)),
-            |x, d, f, y| dispatch!(Level::fallback(), simd => delay::blend_kernel(simd, x, d, f, y)),
-        ),
-    ]
+/// Measured diffuser forms and the fallback parity reference.
+fn diffusers() -> impl Iterator<Item = (&'static str, Diffuse)> {
+    let fallback: Diffuse =
+        |x, d, g, w| dispatch!(Level::fallback(), simd => delay::diffuse_kernel(simd, x, d, g, w));
+    route::table::delay_diffuse::routes().chain([("fallback", fallback)])
+}
+
+/// Measured delay blend forms and the fallback parity reference.
+fn delay_blends() -> impl Iterator<Item = (&'static str, DelayBlend)> {
+    let fallback: DelayBlend =
+        |x, d, f, y| dispatch!(Level::fallback(), simd => delay::blend_kernel(simd, x, d, f, y));
+    route::table::delay_blend::routes().chain([("fallback", fallback)])
 }
 
 fn assert_delay_bits(name: &str, actual: &[f32], expected: &[f32]) {
@@ -170,7 +168,7 @@ fn assert_delay_bits(name: &str, actual: &[f32], expected: &[f32]) {
 
 #[kithara::test]
 fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
-    for (name, diffuse, _) in delay_kernels() {
+    for (name, diffuse) in diffusers() {
         for frames in SIZES {
             let input: Vec<_> = [0.3, -0.7, -0.0, 0.125, -1.000_488_3]
                 .into_iter()
@@ -183,10 +181,10 @@ fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
                 .take(frames)
                 .collect();
             let mut whole = input.clone();
-            let mut whole_history = history.clone();
+            let whole_history = history.clone();
             let mut writes = vec![0.0; frames];
             assert_eq!(
-                diffuse(&mut whole, &mut whole_history, 0.731, &mut writes),
+                diffuse(&mut whole, &whole_history, 0.731, &mut writes),
                 frames
             );
             let expected: Vec<_> = history.iter().zip(&input).map(|(d, x)| d - x).collect();
@@ -196,10 +194,10 @@ fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
                 .map(|(d, x)| d.mul_add(0.731, *x))
                 .collect();
             assert_delay_bits(name, &whole, &expected);
-            assert_delay_bits(name, &whole_history, &expected);
+            assert_delay_bits(name, &whole_history, &history);
             assert_delay_bits(name, &writes, &expected_writes);
             let mut split = input;
-            let mut split_history = history;
+            let split_history = history;
             let mut split_writes = vec![0.0; frames];
             let mut start = 0_usize;
             for count in [0, 1, 3, 127, 2, 257].into_iter().cycle() {
@@ -207,7 +205,7 @@ fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
                 assert_eq!(
                     diffuse(
                         split.get_mut(start..end).unwrap(),
-                        split_history.get_mut(start..end).unwrap(),
+                        split_history.get(start..end).unwrap(),
                         0.731,
                         split_writes.get_mut(start..end).unwrap()
                     ),
@@ -226,7 +224,7 @@ fn delay_diffusion_native_and_fallback_keep_bits_across_partitions() {
 
 #[kithara::test]
 fn delay_fraction_native_and_fallback_preserve_fused_scalar_bits() {
-    for (name, _, blend) in delay_kernels() {
+    for (name, blend) in delay_blends() {
         for fraction in [0.0_f32, 0.1, 0.25, 0.731, 0.999_999_94] {
             for frames in SIZES {
                 let newer: Vec<_> = [0.3, -0.7, -0.0, 0.125, -1.000_488_3]

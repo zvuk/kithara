@@ -18,7 +18,7 @@ use crate::{
 
 fn configured(pools: Pools) -> (AnalyzerBuilder<NoResamplerBackend, TestPools>, Detector) {
     let mut builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
-        .with_waveform(8)
+        .with_waveform(NonZeroU32::MIN)
         .with_beat_detector(beat_detector(), GridParams::default());
     let detector = builder
         .take_detector()
