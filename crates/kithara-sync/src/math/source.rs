@@ -273,7 +273,7 @@ impl SourceGrid {
     }
 }
 
-fn session_frame(start: SessionFrame, offset: u64) -> Option<SessionFrame> {
+pub(super) fn session_frame(start: SessionFrame, offset: u64) -> Option<SessionFrame> {
     Some(SessionFrame::new(
         i64::from(start).checked_add(i64::try_from(offset).ok()?)?,
     ))
@@ -773,7 +773,7 @@ fn reached_horizon(
 pub(super) fn curve(
     host: &TempoTrajectory,
     source: &SourceGrid,
-    media: Duration,
+    media: f64,
     span: Span,
     offsets: &[(u64, f64)],
     correction: Option<&Correction>,
@@ -784,9 +784,7 @@ pub(super) fn curve(
         horizon,
     } = span;
     let rate = f64::from(host.sample_rate().get());
-    let first_beat = source
-        .beat_at(media.as_secs_f64())
-        .ok_or(CurveError::NoLaw)?;
+    let first_beat = source.beat_at(media).ok_or(CurveError::NoLaw)?;
     let mut beat = first_beat;
     let CurveSchedule {
         mut boundaries,

@@ -125,7 +125,7 @@ impl<P: Track> Linked<P> {
 
         let source = self.source(grid)?;
         let law = match cause {
-            Cause::Commanded => SlewCause::Commanded,
+            Cause::Commanded => SlewCause::Commanded { from },
             Cause::Drift => SlewCause::Drift { from },
         };
         let planned = slew(

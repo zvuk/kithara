@@ -201,6 +201,7 @@ pub(crate) struct SyncCase {
     pub(super) capacity: Option<NonZeroUsize>,
     /// Each deck's track carries its beat grid, so a group can prepare it.
     pub(super) gridded: bool,
+    pub(super) defer_grid: bool,
     /// Each player's control-to-audio deadline; `None` keeps it unbounded.
     pub(super) response_budget: Option<NonZeroUsize>,
 }
@@ -222,12 +223,18 @@ impl SyncCase {
             updates_hz: 60,
             capacity: None,
             gridded: false,
+            defer_grid: false,
             response_budget: None,
         }
     }
 
     pub(crate) const fn response_budget(mut self, frames: NonZeroUsize) -> Self {
         self.response_budget = Some(frames);
+        self
+    }
+
+    pub(crate) const fn defer_grid(mut self) -> Self {
+        self.defer_grid = true;
         self
     }
 
@@ -241,7 +248,7 @@ impl SyncCase {
         self
     }
 
-    const fn paused(mut self) -> Self {
+    pub(crate) const fn paused(mut self) -> Self {
         self.paused = true;
         self
     }

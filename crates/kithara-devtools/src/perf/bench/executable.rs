@@ -28,7 +28,7 @@ pub(super) fn build(
     target: &Target,
     directory: &Path,
     ctx: &Ctx,
-    preflight: bool,
+    cargo_json: Option<&Path>,
     log: &mut Log,
 ) -> Result<Binary> {
     let mut command = Command::new(ctx.config.tools.program("cargo"));
@@ -45,13 +45,16 @@ pub(super) fn build(
             "--no-run",
             "--message-format=json",
         ]);
-    if preflight {
-        command.env(PREFLIGHT_STRIP, "none");
+    if cargo_json.is_some() {
+        command.env(PREFLIGHT_STRIP, "none").arg("-v");
     }
     if !target.features.is_empty() {
         command.args(["--features", &target.features.join(",")]);
     }
     let output = log.output(&mut command, true)?;
+    if let Some(path) = cargo_json {
+        fs::write(path, &output.stdout)?;
+    }
     let mut executable = None;
     for message in Message::parse_stream(BufReader::new(output.stdout.as_slice())) {
         if let Message::CompilerArtifact(artifact) = message?

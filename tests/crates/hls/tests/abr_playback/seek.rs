@@ -1,17 +1,23 @@
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    sync::atomic::{AtomicUsize, Ordering},
+    task::{Context, Poll},
+};
 
 use kithara::{
-    abr::AbrEvent,
+    abr::{Abr, AbrEvent},
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome, ReadOutcome},
     decode::DecoderBackend,
-    download::{Downloader, DownloaderConfig, DownloaderEvent, RequestId},
+    download::{Downloader, DownloaderConfig, DownloaderEvent, FetchCmd, Peer, RequestId},
     events::{EventBus, EventReceiver},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
     net::NetOptions,
     platform::{
-        CancelToken, time,
+        CancelToken,
+        sync::{Arc, Mutex},
+        time,
         time::{Duration, Instant, WallInstant},
         tokio::{sync::broadcast::error::TryRecvError, task::spawn_blocking},
     },
@@ -452,6 +458,19 @@ fn abr_seek_evidence() -> Vec<String> {
     .collect()
 }
 
+/// The first ABR decision after the last seek unlock.
+fn decision_after_unlock(decisions: &[AbrEvent]) -> Option<&AbrEvent> {
+    let unlocked = decisions
+        .iter()
+        .rposition(|event| matches!(event, AbrEvent::Unlocked))?;
+    decisions[unlocked + 1..].iter().find(|event| {
+        matches!(
+            event,
+            AbrEvent::VariantApplied { .. } | AbrEvent::DecisionSkipped { .. }
+        )
+    })
+}
+
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn drain_abr_decisions(events: &mut EventReceiver<TestEvent>, sink: &mut Vec<AbrEvent>) {
     loop {
@@ -489,6 +508,68 @@ fn drain_abr_decisions(events: &mut EventReceiver<TestEvent>, sink: &mut Vec<Abr
             Err(TryRecvError::Empty | TryRecvError::Closed) => return,
         }
     }
+}
+
+/// Hands the downloader one batch of streamed fetches, so their samples feed
+/// the same ABR estimate as the track's own segment fetches.
+struct FetchBurst {
+    cancel: CancelToken,
+    cmds: Mutex<Option<Vec<FetchCmd>>>,
+}
+
+impl Abr for FetchBurst {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+}
+
+impl Peer for FetchBurst {
+    fn poll_next(&self, _cx: &mut Context<'_>, _budget: usize) -> Poll<Option<Vec<FetchCmd>>> {
+        self.cmds
+            .lock()
+            .take()
+            .map_or(Poll::Pending, |cmds| Poll::Ready(Some(cmds)))
+    }
+}
+
+/// Stream every `urls` body through `downloader` and wait until all complete.
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+async fn fetch_burst(
+    downloader: &Downloader,
+    cancel: CancelToken,
+    urls: impl Iterator<Item = Url>,
+) {
+    let completed = Arc::new(AtomicUsize::new(0));
+    let failures = Arc::new(Mutex::new(Vec::new()));
+    let cmds: Vec<_> = urls
+        .map(|url| {
+            let completed = Arc::clone(&completed);
+            let failures = Arc::clone(&failures);
+            FetchCmd::get(url)
+                .writer(Box::new(|_chunk: &[u8]| Ok(())))
+                .on_complete(Box::new(move |_bytes, _headers, error| {
+                    if let Some(error) = error {
+                        failures.lock().push(error.to_string());
+                    }
+                    completed.fetch_add(1, Ordering::AcqRel);
+                }))
+                .build()
+        })
+        .collect();
+    let expected = cmds.len();
+    let _peer = downloader.register(
+        Arc::new(FetchBurst {
+            cancel,
+            cmds: Mutex::new(Some(cmds)),
+        }),
+        None,
+    );
+    while completed.load(Ordering::Acquire) < expected {
+        hang_tick!();
+        time::sleep(Duration::from_millis(2)).await;
+    }
+    let failures = std::mem::take(&mut *failures.lock());
+    assert!(failures.is_empty(), "burst fetches failed: {failures:?}");
 }
 
 struct SeekPressure {
@@ -576,9 +657,13 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(
     const PREFETCH_SEGMENTS: usize = 5;
     const SEEK_SEGMENT: usize = 25;
     const SLOW_FROM_SEGMENT: usize = SEEK_SEGMENT + 1;
-    const SEEK_TARGET: Duration = Duration::from_secs(153);
+    const SLOW_BURST: usize = 20;
+    // Packaged to whole AAC and FLAC frames: 36864 frames, about 0.836 s.
+    const SEGMENT_SECS: f64 = 0.8;
+    const SEEK_TARGET: Duration = Duration::from_millis(21_300);
     const SOFT_TIMEOUT: Duration = Duration::from_secs(10);
     const EVENT_BUS_CAPACITY: usize = 4096;
+    const LADDER_BANDWIDTHS: [u64; 4] = [1_056_080, 2_145_712, 4_318_880, 15_820_128];
 
     let server = TestServerHelper::new().await;
     let pools = pools();
@@ -587,7 +672,8 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(
     let plain = server
         .create_hls(
             mixed_codec_ladder()
-                .variant_bandwidths(vec![1_056_080, 2_145_712, 4_318_880, 15_820_128]),
+                .segment_duration_secs(SEGMENT_SECS)
+                .variant_bandwidths(LADDER_BANDWIDTHS.to_vec()),
         )
         .await
         .expect("create the ladder");
@@ -595,7 +681,7 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(
         .get_bytes(plain.master_url(), None)
         .await
         .expect("fetch the master playlist");
-    let top_bandwidth: u64 = String::from_utf8_lossy(&master)
+    let bandwidths: Vec<u64> = String::from_utf8_lossy(&master)
         .split("BANDWIDTH=")
         .skip(1)
         .filter_map(|rest| {
@@ -604,25 +690,39 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(
                 .parse()
                 .ok()
         })
+        .collect();
+    let top_bandwidth = *bandwidths
+        .iter()
         .max()
         .expect("the master playlist advertises bandwidths");
-    let slow_segment_bytes = net
-        .get_bytes(plain.segment_url(TOP_VARIANT, SLOW_FROM_SEGMENT), None)
-        .await
-        .expect("fetch a top-variant segment")
-        .len();
-    let slow_segment_bytes = u64::try_from(slow_segment_bytes).expect("segment size fits u64");
+    let lowest_bandwidth = *bandwidths
+        .iter()
+        .min()
+        .expect("the master playlist advertises bandwidths");
+    let segment_bytes = async |variant, segment| {
+        let bytes = net
+            .get_bytes(plain.segment_url(variant, segment), None)
+            .await
+            .expect("fetch a segment")
+            .len();
+        u64::try_from(bytes).expect("segment size fits u64")
+    };
     // Each slow segment then measures half the top bandwidth.
-    let slow_segment_delay_ms = slow_segment_bytes * 8 * 2 * 1000 / top_bandwidth;
+    let slow_segment_delay_ms =
+        segment_bytes(TOP_VARIANT, SLOW_FROM_SEGMENT).await * 8 * 2 * 1000 / top_bandwidth;
+    // The variant below the top then measures the lowest bandwidth.
+    let lower_segment_delay_ms =
+        segment_bytes(TOP_VARIANT - 1, SEEK_SEGMENT).await * 8 * 1000 / lowest_bandwidth;
     let created = server
         .create_hls(
             mixed_codec_ladder()
-                .variant_bandwidths(vec![1_056_080, 2_145_712, 4_318_880, 15_820_128])
+                .segment_duration_secs(SEGMENT_SECS)
+                .variant_bandwidths(LADDER_BANDWIDTHS.to_vec())
                 .delay_rules(vec![
                     DelayRule {
                         variant: Some(TOP_VARIANT - 1),
                         segment_gte: Some(SEEK_SEGMENT),
-                        delay_ms: 750,
+                        delay_ms: lower_segment_delay_ms,
                         ..Default::default()
                     },
                     DelayRule {
@@ -669,6 +769,8 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(
     );
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
     let mut events = bus.subscribe();
+    let burst_downloader = downloader.clone();
+    let burst_cancel = cancel.child();
     let hls_config = HlsConfig::for_url(created.master_url())
         .download_batch_size(PREFETCH_SEGMENTS)
         .store(
@@ -746,8 +848,11 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(
     pressure.drain(&mut events);
     pressure.estimate = None;
     audio.seek(SEEK_TARGET).expect("seek must not fail");
+    // ABR measures transfers on the wall clock, so the slow network exists for
+    // it only while real I/O paces the fixture delays. It stays slow from the
+    // pressure until ABR decides after the seek lock ends.
+    let real_io = kithara::platform::flash::real_io();
     {
-        let _real_io = kithara::platform::flash::real_io();
         let mut pressure_deadline = None;
         let mut auto_enabled = false;
         while !auto_enabled
@@ -795,13 +900,26 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(
             time::sleep(Duration::from_millis(2)).await;
         }
     }
+    // Slow segments that complete after the estimate fell below the top must
+    // still measure slow while the seek is pending.
+    fetch_burst(
+        &burst_downloader,
+        burst_cancel,
+        std::iter::repeat_n(
+            created.segment_url(TOP_VARIANT, SLOW_FROM_SEGMENT),
+            SLOW_BURST,
+        ),
+    )
+    .await;
     seek_segment.release();
 
     fn read_after_seek(
         audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
         mut events: EventReceiver<TestEvent>,
         overlap_real_work: bool,
+        real_io: kithara::platform::flash::RealIoScope,
     ) -> Vec<AbrEvent> {
+        let mut real_io = Some(real_io);
         let landing = match read_abr_chunk(
             format!(
                 "seek landing; recent_abr_newest_first={:?}",
@@ -881,6 +999,9 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(
             last_chunk = chunk.meta;
             let variant = chunk.meta.variant_index.expect("HLS chunk has a variant");
             drain_abr_decisions(&mut events, &mut decisions);
+            if decision_after_unlock(&decisions).is_some() {
+                real_io.take();
+            }
             if variant != TOP_VARIANT {
                 assert!(variant < TOP_VARIANT, "ABR must switch down");
                 break;
@@ -896,22 +1017,17 @@ pub(crate) async fn abr_frozen_during_seek_resumes_after(
     }
     let (_audio, decisions) = kithara_integration_tests::reads::blocking_audio(
         kithara_integration_tests::mock::with_blocking_reads(audio),
-        move |audio| read_after_seek(audio, events, overlap_real_work),
+        move |audio| read_after_seek(audio, events, overlap_real_work, real_io),
     )
     .await;
-    let unlocked = decisions
-        .iter()
-        .rposition(|event| matches!(event, AbrEvent::Unlocked))
-        .expect("the seek lock must end once the landing output is committed");
-    let decided = decisions[unlocked + 1..]
-        .iter()
-        .find(|event| {
-            matches!(
-                event,
-                AbrEvent::VariantApplied { .. } | AbrEvent::DecisionSkipped { .. }
-            )
-        })
-        .expect("ABR must decide once the seek lock ended");
+    assert!(
+        decisions
+            .iter()
+            .any(|event| matches!(event, AbrEvent::Unlocked)),
+        "the seek lock must end once the landing output is committed"
+    );
+    let decided =
+        decision_after_unlock(&decisions).expect("ABR must decide once the seek lock ended");
     assert!(
         matches!(
             decided,

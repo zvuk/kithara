@@ -2206,12 +2206,11 @@ timeout_minutes = 180
 # are written with, so a product change can break them from the other side.
 # These lanes, with `net-host` and `broadcast`, run them under their own
 # configuration: whole on a ready pull request, `main` and every night, and
-# the draft scope's part they hold on any other branch push. GitLab declares
-# them weekly behind its Linux platform gate, which no schedule opens.
+# the draft scope's part they hold on any other branch push.
 [ext.ci.lanes.linux-tooling]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
+cache_group = "host"
+label = "tooling"
+os = ["macos", "linux"]
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
@@ -2223,10 +2222,18 @@ steps = [
     "test",
     "run",
     "--lane=tooling",
-  ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Native tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = []
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "main",
+  "nightly",
+  "platforms",
+  "release",
+]
 kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
