@@ -1,5 +1,6 @@
 mod biquad;
 mod error;
+mod one_pole;
 mod svf;
 #[cfg(test)]
 mod tests;
@@ -8,6 +9,7 @@ mod tests;
 /// import path the workspace uses.
 pub use ::biquad::{Coefficients, Errors, Hertz, Type};
 pub use error::FilterError;
+pub use one_pole::OnePoleLowPass;
 
 pub use self::{
     biquad::Biquad,
