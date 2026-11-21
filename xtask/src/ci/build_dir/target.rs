@@ -75,6 +75,14 @@ impl Target {
         }
     }
 
+    /// Where a run's reports are written: the build an acquired target holds,
+    /// and otherwise the checkout's `target` even when `CARGO_TARGET_DIR` names
+    /// another directory, since nextest keeps its store there and the Android
+    /// and xcresult reports are written there too.
+    ///
+    /// # Errors
+    ///
+    /// When a CI job names its target instead of acquiring one.
     pub(crate) fn report_root(&self, checkout: &Path, ci: bool) -> Result<PathBuf> {
         match self {
             Self::Alias { build, .. } => {

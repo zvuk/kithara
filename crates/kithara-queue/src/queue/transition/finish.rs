@@ -44,6 +44,11 @@ where
         let Some(target) = self.target else {
             return Ok(());
         };
+        // A seated replacement has already exchanged its slot's receiver;
+        // only the seat's own receipt settles that ownership.
+        if target.seated() {
+            return Err(QueueError::NotReady(target.to));
+        }
         let consumed = target.auto
             && self
                 .incoming_index(target.to)

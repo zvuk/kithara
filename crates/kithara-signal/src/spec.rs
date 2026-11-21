@@ -55,15 +55,7 @@ impl AudioSpec {
     /// Fractional or unrepresentable endpoints retain their time difference.
     #[must_use]
     pub fn elapsed_since(self, origin: Duration, time: Duration) -> Duration {
-        let frame_on_grid = |timestamp| {
-            let frame = self.frame_at(timestamp).ok()?;
-            let frame_time = self.duration_for(frame).ok()?;
-            (timestamp.abs_diff(frame_time) <= Duration::from_nanos(1)).then_some(frame)
-        };
-        frame_on_grid(origin)
-            .zip(frame_on_grid(time))
-            .and_then(|(origin, time)| self.duration_for(time.saturating_sub(origin)).ok())
-            .unwrap_or_else(|| time.saturating_sub(origin))
+        time::elapsed_since(self.sample_rate, origin, time)
     }
 
     /// Convert an exact interleaved sample count to complete frames.

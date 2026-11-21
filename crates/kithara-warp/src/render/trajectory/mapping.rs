@@ -261,14 +261,18 @@ impl Trajectory {
             },
             Ok,
         )?;
-        let shifted = basis
-            .checked_sub(segment)
-            .and_then(|elapsed| elapsed.to_f64())
-            .and_then(|elapsed| curve.rate_at(elapsed))
-            .and_then(|initial| {
-                ExponentialApproach::new(initial, curve.target(), curve.time_constant())
-            })
-            .ok_or(ElasticError::SampleCountOverflow)?;
+        let shifted = if basis == segment {
+            curve
+        } else {
+            basis
+                .checked_sub(segment)
+                .and_then(|elapsed| elapsed.to_f64())
+                .and_then(|elapsed| curve.rate_at(elapsed))
+                .and_then(|initial| {
+                    ExponentialApproach::new(initial, curve.target(), curve.time_constant())
+                })
+                .ok_or(ElasticError::SampleCountOverflow)?
+        };
         SourceSpan::approaching(
             origin.numerator,
             origin.denominator,

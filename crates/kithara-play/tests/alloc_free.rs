@@ -29,9 +29,12 @@ use kithara_play::{
 };
 use kithara_render::{
     Open, PcmPacket,
-    bridge::{DeckPart, DeckProtocol, Fade, FadeDir, Returned, SessionInbox, Slot, scope_channels},
+    bridge::{DeckPart, DeckProtocol, Fade, FadeDir, Returned, SessionInbox, Slot},
     mock::{PacketRing, chunk},
-    rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
+    rt::{
+        DeckMixer, DeckMixerConfig, MixerInputs, StreamShape, install_render_context,
+        publish_render_context,
+    },
 };
 use kithara_signal::{AudioSpec, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_fixtures::assets;
@@ -87,7 +90,7 @@ async fn a_deck_attaches_fades_and_retires_without_allocating(#[case] programs: 
         .slots(NonZeroUsize::new(ABSENT_FADES + 2).expect("held and absent slots"))
         .build();
     let scope = ring.open(config.slots().get()).expect("deck scope");
-    let (mut ends, inputs) = scope_channels(scope, config);
+    let (mut ends, inputs) = MixerInputs::new(scope, config);
     let mut deck =
         DeckMixer::<TestSessionInbox>::new(inputs, shape, &pools()).expect("mixer pools");
     let settings = CrossfadeSettings::default();

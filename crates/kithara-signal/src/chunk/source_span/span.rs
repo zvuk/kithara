@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     num::{NonZeroU32, NonZeroU64, NonZeroU128},
     ops::Range,
 };
@@ -50,6 +51,27 @@ impl SourceInverse {
     }
 }
 
+/// Exact source time from a media origin to a [`SourceSpan`] boundary.
+///
+/// Boundaries keep their rational phase. An origin within nanosecond
+/// precision of a whole source frame counts as that frame; any other origin
+/// counts as its exact timestamp. Spans of different sample rates compare on
+/// one time axis.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceElapsed(Ratio);
+
+impl Ord for SourceElapsed {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.compare(other.0)
+    }
+}
+
+impl PartialOrd for SourceElapsed {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 fn fractional_nanos(numerator: u128, denominator: u128) -> u32 {
     let mut remainder = 0;
     let mut nanos = 0;
@@ -97,10 +119,104 @@ impl SourceSpan {
         Some(Duration::new(seconds, nanos))
     }
 
+    /// Exact source time from `origin` to an output boundary, saturating at zero.
+    #[must_use]
+    pub fn elapsed_at(self, output_frame: u64, origin: Duration) -> Option<SourceElapsed> {
+        let rate = u128::from(self.sample_rate.get());
+        let origin = match crate::time::frame_on_grid(self.sample_rate, origin) {
+            Some(frame) => Ratio::new(u128::from(frame), NonZeroU128::MIN)?,
+            None => Ratio::new(
+                origin.as_nanos().checked_mul(rate)?,
+                NonZeroU128::new(1_000_000_000)?,
+            )?,
+        };
+        let (numerator, denominator) = self.source_ratio_at(output_frame)?;
+        let position = Ratio::new(numerator, denominator)?;
+        let frames = if position.compare(origin) == Ordering::Greater {
+            position.sub(origin)?
+        } else {
+            Ratio::new(0, NonZeroU128::MIN)?
+        };
+        Some(SourceElapsed(
+            frames.mul(Ratio::new(1, NonZeroU128::new(rate)?)?)?,
+        ))
+    }
+
+    /// The output boundary in `[from, output_frames]` whose
+    /// [`elapsed_at`](Self::elapsed_at) `origin` is nearest to `elapsed`; an
+    /// exact midpoint rounds to the earlier boundary.
+    ///
+    /// Boundary `from` also owns the half step before it, sized by its own
+    /// first output frame; an `elapsed` earlier than that rounds before the
+    /// range and returns `Some(None)`. Every validated mapping is
+    /// non-decreasing, so this inverts nonlinear spans too. An empty range and
+    /// unrepresentable positions return `None`.
+    #[must_use]
+    pub fn output_nearest_since(
+        self,
+        from: u64,
+        origin: Duration,
+        elapsed: SourceElapsed,
+    ) -> Option<Option<u64>> {
+        if from >= self.output_frames {
+            return None;
+        }
+        if self.rounds_before(from, origin, elapsed)? {
+            return Some(None);
+        }
+        let reached = self.output_reaching(from, origin, elapsed)?;
+        if reached == from {
+            return Some(Some(from));
+        }
+        let below = self.elapsed_at(reached - 1, origin)?;
+        if reached <= self.output_frames
+            && elapsed
+                .0
+                .compare(Self::midpoint(below, self.elapsed_at(reached, origin)?)?)
+                == Ordering::Greater
+        {
+            return Some(Some(reached));
+        }
+        self.output_reaching(from, origin, below).map(Some)
+    }
+
+    /// Whether `elapsed` lies before the half step that boundary `from` owns
+    /// ahead of itself, sized by its first output frame.
+    fn rounds_before(self, from: u64, origin: Duration, elapsed: SourceElapsed) -> Option<bool> {
+        let first = self.elapsed_at(from, origin)?;
+        let step = Self::midpoint(first, self.elapsed_at(from + 1, origin)?)?.sub(first.0)?;
+        Some(
+            step.compare(first.0) != Ordering::Greater
+                && elapsed.0.compare(first.0.sub(step)?) == Ordering::Less,
+        )
+    }
+
+    fn midpoint(low: SourceElapsed, high: SourceElapsed) -> Option<Ratio> {
+        let half = Ratio::new(1, NonZeroU128::new(2)?)?;
+        low.0.add(high.0.sub(low.0)?.mul(half)?)
+    }
+
+    /// The first output boundary in `[from, output_frames]` whose elapsed
+    /// time reaches `elapsed`, or `output_frames + 1` when none does.
+    fn output_reaching(self, from: u64, origin: Duration, elapsed: SourceElapsed) -> Option<u64> {
+        let (mut reached, mut past) = (from, self.output_frames.checked_add(1)?);
+        while reached < past {
+            let mid = reached + (past - reached) / 2;
+            if self.elapsed_at(mid, origin)? < elapsed {
+                reached = mid + 1;
+            } else {
+                past = mid;
+            }
+        }
+        Some(reached)
+    }
+
     /// Maps an original exponential source basis over a nonempty output span.
     ///
     /// Rates are source frames per output frame; elapsed and the time constant
-    /// are output frames. The rational origin is at curve elapsed zero.
+    /// are output frames. The rational origin is at the approach's own elapsed
+    /// zero; a resumed approach reaches it already inside its course, so its
+    /// advance counts from there.
     /// Unrepresentable coordinates or an overflowing range return `None`.
     #[must_use]
     pub fn approaching(
@@ -114,11 +230,24 @@ impl SourceSpan {
         if output_frames == 0 {
             return None;
         }
-        let mapping = Mapping::Approach(Approach {
-            curve,
-            elapsed,
+        let phase = curve.phase();
+        let course = Approach {
+            curve: curve.course(),
+            elapsed: 0,
             origin: Ratio::new(origin_numerator, origin_denominator)?,
             affine: Affine::identity()?,
+        };
+        let mapping = Mapping::Approach(if phase == 0 {
+            Approach { elapsed, ..course }
+        } else {
+            Approach {
+                elapsed: elapsed.checked_add(phase)?,
+                affine: Affine {
+                    offset: Offset::Subtract(course.advance_at(phase)?),
+                    ..course.affine
+                },
+                ..course
+            }
         });
         mapping.validate(output_frames)?;
         Some(Self {
@@ -715,6 +844,123 @@ mod tests {
     }
 
     #[kithara::test]
+    #[case::affine(SourceSpan::try_from((3, 2, NonZeroU128::new(3).expect("denominator"), NonZeroU32::new(44_100).expect("rate"), 64)).expect("affine"), Duration::ZERO)]
+    #[case::ramp(SourceSpan::try_from((0, 1, 1, NonZeroU128::MIN, NonZeroU32::new(48_000).expect("rate"), 64)).expect("ramp"), Duration::ZERO)]
+    #[case::approach(SourceSpan::approaching(0, NonZeroU128::MIN, ExponentialApproach::new(1.0, 0.5, 16.0).expect("curve"), 0, NonZeroU32::new(48_000).expect("rate"), 64).expect("approach"), Duration::ZERO)]
+    #[case::still(SourceSpan::try_from((5, 0, NonZeroU128::MIN, NonZeroU32::new(48_000).expect("rate"), 8)).expect("still"), Duration::ZERO)]
+    #[case::whole_frame_origin(SourceSpan::new(49_025, 49_155, NonZeroU32::new(48_000).expect("rate"), 130).expect("affine"), Duration::from_nanos(21_333_333))]
+    #[case::fractional_origin(SourceSpan::try_from((3, 2, NonZeroU128::new(3).expect("denominator"), NonZeroU32::new(44_100).expect("rate"), 64)).expect("affine"), Duration::from_nanos(7))]
+    fn output_nearest_matches_the_closest_boundary_to_an_elapsed_time(
+        #[case] span: SourceSpan,
+        #[case] origin: Duration,
+    ) {
+        let frames = span.output_frames();
+        let elapsed = (0..=frames)
+            .map(|frame| span.elapsed_at(frame, origin).expect("elapsed").0)
+            .collect::<Vec<_>>();
+        let at = |frame: u64| elapsed[usize::try_from(frame).expect("frame")];
+        let half = Ratio::new(1, NonZeroU128::new(2).expect("two")).expect("half");
+        let instant = Ratio::new(
+            1,
+            NonZeroU128::new(1_000_000_000_000_000).expect("femtosecond"),
+        )
+        .expect("instant");
+        let midpoints = elapsed.windows(2).map(|pair| {
+            pair[0]
+                .add(pair[1].sub(pair[0]).expect("step").mul(half).expect("half"))
+                .expect("midpoint")
+        });
+        let probes = elapsed.iter().copied().chain(midpoints).flat_map(|time| {
+            [time.sub(instant), Some(time), time.add(instant)]
+                .into_iter()
+                .flatten()
+        });
+        let distance = |first: Ratio, second: Ratio| {
+            if first.compare(second) == Ordering::Less {
+                second.sub(first)
+            } else {
+                first.sub(second)
+            }
+            .expect("distance")
+        };
+        for probe in probes {
+            for from in 0..frames {
+                let reach = at(from + 1)
+                    .sub(at(from))
+                    .expect("step")
+                    .mul(half)
+                    .expect("half step");
+                let before = probe.add(reach).expect("reach").compare(at(from)) == Ordering::Less;
+                let expected = (!before).then(|| {
+                    (from..=frames)
+                        .min_by(|&first, &second| {
+                            distance(probe, at(first)).compare(distance(probe, at(second)))
+                        })
+                        .expect("nonempty range")
+                });
+                assert_eq!(
+                    span.output_nearest_since(from, origin, SourceElapsed(probe)),
+                    Some(expected),
+                    "from {from}, elapsed {probe:?}"
+                );
+            }
+        }
+        assert_eq!(
+            span.output_nearest_since(frames, origin, SourceElapsed(elapsed[0])),
+            None
+        );
+    }
+
+    /// Both spans follow one `step / denominator` law; the outgoing one
+    /// starts at zero and the incoming one at origin frame 1024, so the
+    /// incoming boundary after `incoming_start` is the outgoing `consumed`.
+    /// The incoming origin may carry a sub-nanosecond residue on either side
+    /// of the outgoing position; the matching boundary is still the nearest.
+    #[kithara::test]
+    #[case::whole_frame(1, 1, 48_002, 49_025, 0, 0)]
+    #[case::fractional_phase(5, 4, 48_001, 61_024, 0, 0)]
+    #[case::incoming_after_the_outgoing(1, 1, 48_002, 49_025, 0, 1)]
+    #[case::incoming_before_the_outgoing(1, 1, 48_002, 49_025, 1, 0)]
+    #[case::fractional_incoming_after_the_outgoing(5, 4, 48_001, 61_024, 0, 1)]
+    fn an_origin_relative_boundary_match_is_the_nearest_boundary(
+        #[case] step: u128,
+        #[case] denominator: u128,
+        #[case] consumed: u64,
+        #[case] incoming_start: u128,
+        #[case] outgoing_residue: u128,
+        #[case] incoming_residue: u128,
+    ) {
+        const MICRO: u128 = 1_000_000;
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let denominator = NonZeroU128::new(denominator * MICRO).expect("denominator");
+        let outgoing = SourceSpan::try_from((
+            outgoing_residue,
+            step * MICRO,
+            denominator,
+            rate,
+            consumed + 1,
+        ))
+        .expect("outgoing");
+        let incoming = SourceSpan::try_from((
+            incoming_start * denominator.get() + incoming_residue,
+            step * MICRO,
+            denominator,
+            rate,
+            8,
+        ))
+        .expect("incoming");
+        let origin = crate::time::duration_for(rate, 1_024).expect("origin");
+        let elapsed = outgoing
+            .elapsed_at(consumed, Duration::ZERO)
+            .expect("consumed");
+
+        assert_eq!(
+            incoming.output_nearest_since(0, origin, elapsed),
+            Some(Some(1))
+        );
+    }
+
+    #[kithara::test]
     fn inverse_rejects_nonlinear_and_invalid_source_geometry() {
         let rate = NonZeroU32::new(48_000).expect("rate");
         let ramp = SourceSpan::try_from((0, 1, 1, NonZeroU128::MIN, rate, 2)).expect("ramp");
@@ -987,6 +1233,55 @@ mod tests {
             assert_eq!(normalized.source_ratio_at(0), empty.source_ratio_at(0));
             assert_eq!(normalized.for_output_range(0..0), Some(normalized));
             assert_eq!(empty.for_output_range(0..1), None);
+        }
+    }
+
+    #[kithara::test]
+    #[case::inside_the_source(30_001, 3)]
+    #[case::at_a_fresh_segment(0, 1)]
+    fn a_resumed_approach_continues_its_course_frame_for_frame(
+        #[case] numerator: u128,
+        #[case] denominator: u128,
+    ) {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let origin = Ratio::new(
+            numerator,
+            NonZeroU128::new(denominator).expect("denominator"),
+        )
+        .expect("origin");
+        let curve = ExponentialApproach::new(1.0, 1.0333333333333334, 240.0).expect("curve");
+        let (entered, tail) = (383, 512);
+        let course = SourceSpan::approaching(
+            origin.numerator,
+            origin.denominator,
+            curve,
+            0,
+            rate,
+            entered + tail,
+        )
+        .expect("whole course");
+        let resumed = SourceSpan::approaching(
+            origin.numerator,
+            origin.denominator,
+            curve.resumed(entered).expect("resumed course"),
+            0,
+            rate,
+            tail,
+        )
+        .expect("a resumed course starts at any origin");
+        let words: [u64; 24] = resumed.into();
+        assert_eq!(SourceSpan::try_from(words), Ok(resumed));
+        let at = |span: SourceSpan, frame| {
+            let (numerator, denominator) = span.source_ratio_at(frame).expect("source ratio");
+            Ratio::new(numerator, denominator).expect("ratio")
+        };
+        let lead = at(course, entered).sub(origin).expect("course lead");
+        for frame in 0..=tail {
+            assert_eq!(
+                at(resumed, frame).add(lead),
+                Some(at(course, entered + frame)),
+                "frame {frame}"
+            );
         }
     }
 }

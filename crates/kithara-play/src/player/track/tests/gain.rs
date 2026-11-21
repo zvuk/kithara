@@ -319,6 +319,15 @@ fn future_gain_program_cannot_mute_a_reused_attachment() {
             },
         )
         .expect("replacement in the same slot and segment");
+    let start = mixer
+        .send(
+            When::At(frame(ORIGIN + 4)),
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        )
+        .expect("the replacement's own start");
     let (mut left, mut right) = ([0.0; 8], [0.0; 8]);
     assert_no_alloc::assert_no_alloc(|| {
         mixer
@@ -341,8 +350,13 @@ fn future_gain_program_cannot_mute_a_reused_attachment() {
         let (outcome, _batch) = receipt.into();
         received.push((seq, outcome));
     }
-    assert_eq!(received.len(), 2);
+    assert_eq!(received.len(), 3);
     assert!(received.iter().any(|(seq, outcome)| *seq == replacement && matches!(outcome, Outcome::Applied { .. })));
+    assert!(
+        received
+            .iter()
+            .any(|(seq, outcome)| *seq == start && matches!(outcome, Outcome::Applied { .. }))
+    );
     assert!(received.iter().any(|(seq, outcome)| *seq == stale
         && matches!(outcome, Outcome::Rejected(Rejection::Refused(DeckRefusal::Outdated { slot })) if *slot == A)));
     assert_eq!(mixer.ends.snapshot.read().slots[0].output.gain(), 1.0);
@@ -522,6 +536,15 @@ fn muted_complete_output_stays_muted_in_the_evicted_consumer_tail() {
             },
         )
         .expect("new source after the old complete output was muted");
+    mixer
+        .send(
+            When::At(frame(ORIGIN + 7)),
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        )
+        .expect("the new source's own start");
     let (mut left, mut right) = ([0.0; 16], [0.0; 16]);
     assert_no_alloc::assert_no_alloc(|| {
         mixer

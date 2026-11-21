@@ -1,3 +1,4 @@
+use num_traits::ToPrimitive;
 use ordered_float::NotNan;
 
 /// A positive rate approaching a target with an exponential time constant.
@@ -5,12 +6,16 @@ use ordered_float::NotNan;
 /// The time constant and elapsed inputs use the same units. A zero time
 /// constant selects the target immediately. Evaluation rejects invalid times
 /// and results outside the finite nonnegative range.
+///
+/// A resumed approach is the same course entered after a whole number of
+/// elapsed units, so its evaluation continues the original course exactly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ExponentialApproach {
     initial: NotNan<f64>,
     target: NotNan<f64>,
     time_constant: NotNan<f64>,
+    phase: u64,
 }
 
 impl ExponentialApproach {
@@ -30,10 +35,37 @@ impl ExponentialApproach {
             initial: NotNan::new(initial).ok()?,
             target: NotNan::new(target).ok()?,
             time_constant: NotNan::new(time_constant).ok()?,
+            phase: 0,
         })
     }
 
-    /// The rate at the beginning of the approach.
+    /// The same course entered `elapsed` units later.
+    ///
+    /// A course that holds one rate has nothing to resume and is returned as is.
+    #[must_use]
+    pub fn resumed(self, elapsed: u64) -> Option<Self> {
+        if self.time_constant() == 0.0 || self.initial == self.target {
+            return Some(self);
+        }
+        Some(Self {
+            phase: self.phase.checked_add(elapsed)?,
+            ..self
+        })
+    }
+
+    /// The units of the course already elapsed when this approach begins.
+    #[must_use]
+    pub fn phase(self) -> u64 {
+        self.phase
+    }
+
+    /// The course from its own beginning.
+    #[must_use]
+    pub(crate) fn course(self) -> Self {
+        Self { phase: 0, ..self }
+    }
+
+    /// The rate at the beginning of the course.
     #[must_use]
     pub fn initial(self) -> f64 {
         self.initial.into_inner()
@@ -57,6 +89,7 @@ impl ExponentialApproach {
         if !elapsed.is_finite() || elapsed < 0.0 {
             return None;
         }
+        let elapsed = elapsed + self.phase.to_f64()?;
         let rate = if self.time_constant() == 0.0 {
             self.target()
         } else if self.initial() < self.target() {
@@ -98,6 +131,7 @@ impl ExponentialApproach {
         } else if self.time_constant() == 0.0 || self.initial() == self.target() {
             self.target() * elapsed
         } else {
+            let start = start + self.phase.to_f64()?;
             self.target() * elapsed
                 + (-start / self.time_constant()).exp() * self.transient_advance(elapsed)?
         };
@@ -124,10 +158,13 @@ impl ExponentialApproach {
         if !factor.is_finite() || factor <= 0.0 {
             return None;
         }
-        Self::new(
-            self.initial() * factor,
-            self.target() * factor,
-            self.time_constant(),
-        )
+        Some(Self {
+            phase: self.phase,
+            ..Self::new(
+                self.initial() * factor,
+                self.target() * factor,
+                self.time_constant(),
+            )?
+        })
     }
 }

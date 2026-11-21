@@ -5,5 +5,5 @@ mod ratio;
 mod span;
 mod steps;
 
-pub use span::{SourceInverse, SourceSpan};
+pub use span::{SourceElapsed, SourceInverse, SourceSpan};
 pub use steps::{SourceStep, SourceSteps};

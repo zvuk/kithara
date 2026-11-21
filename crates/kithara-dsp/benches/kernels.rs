@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod support;
+
 use std::{
     f64::consts::{FRAC_1_SQRT_2, TAU},
     hint::black_box,
@@ -67,6 +69,7 @@ fn scalar_svf_fixed(
             *sample = match response {
                 Response::LowPass => v2,
                 Response::HighPass => (x - damping * v1) - v2,
+                Response::AllPass => x - 2.0 * damping * v1,
             }
             .as_();
         }
@@ -945,6 +948,7 @@ criterion_group!(
     routed_mul_add,
     downmix,
     biquad,
+    support::crossover_biquad::bench,
     biquad_decay,
     svf,
     interp,

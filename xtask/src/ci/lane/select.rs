@@ -351,13 +351,39 @@ mod tests {
         );
     }
 
+    /// The workflow picks a report's upload from the matrix row alone, so the
+    /// row names the report and no checkout path.
+    #[test]
+    fn a_report_artifact_reaches_the_matrix_without_a_path() {
+        let mut lanes = catalog();
+        lanes.get_mut("linux-lint").unwrap().artifact = Some(CiLaneArtifact {
+            name: "web-chromium-driver".to_owned(),
+            path: None,
+            report: Some(crate::config::LaneReport::Chromium),
+            when: ArtifactWhen::Failure,
+        });
+
+        let selection =
+            render(&lanes, &args("gate", PipelineKind::Main, &[])).expect("the gate role renders");
+
+        assert_eq!(
+            serde_json::to_value(&selection.matrix[0].artifact).unwrap(),
+            serde_json::json!({
+                "name": "web-chromium-driver",
+                "report": "chromium",
+                "when": "failure",
+            })
+        );
+    }
+
     // Asking for one lane must bring what reads its artifact, and nothing else.
     #[test]
     fn selecting_one_lane_brings_only_its_own_dependents() {
         let mut catalog = catalog();
         catalog.get_mut("deep-stress").unwrap().artifact = Some(CiLaneArtifact {
             name: "stress-evidence".to_owned(),
-            path: "target/stress".to_owned(),
+            path: Some("target/stress".to_owned()),
+            report: None,
             when: ArtifactWhen::Always,
         });
         let dependent = catalog
@@ -365,7 +391,8 @@ mod tests {
             .expect("the dependent lane is in the catalog");
         dependent.artifact = Some(CiLaneArtifact {
             name: "quality-report".to_owned(),
-            path: "target/consolidated-quality-report.md".to_owned(),
+            path: Some("target/consolidated-quality-report.md".to_owned()),
+            report: None,
             when: ArtifactWhen::Failure,
         });
         let selection = render(
@@ -413,7 +440,8 @@ mod tests {
         ] {
             lanes.get_mut(name).unwrap().artifact = Some(CiLaneArtifact {
                 name: artifact.to_owned(),
-                path: "target/report".to_owned(),
+                path: Some("target/report".to_owned()),
+                report: None,
                 when: ArtifactWhen::Always,
             });
         }

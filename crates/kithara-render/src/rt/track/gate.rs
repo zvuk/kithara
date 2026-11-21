@@ -1,6 +1,7 @@
 use std::{num::NonZeroU32, ops::Range};
 
 use kithara_dsp::param::SmootherConfig;
+use kithara_signal::FrameCount;
 use num_traits::ToPrimitive;
 
 /// A track's transport: the ramp that lets its share into the mix on start and takes it out on
@@ -24,7 +25,7 @@ impl TrackGate {
             from: Self::level(open),
             target: Self::level(open),
             frame: 0,
-            frames: crate::rt::config::declick_frame_count(declick, sample_rate).get(),
+            frames: FrameCount::for_seconds(declick.smooth_seconds, sample_rate).get(),
             declick,
         }
     }
@@ -48,7 +49,7 @@ impl TrackGate {
     }
 
     pub(super) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        self.frames = crate::rt::config::declick_frame_count(self.declick, sample_rate).get();
+        self.frames = FrameCount::for_seconds(self.declick.smooth_seconds, sample_rate).get();
         self.from = self.level;
         self.frame = 0;
     }

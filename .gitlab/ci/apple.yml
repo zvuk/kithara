@@ -18,6 +18,7 @@ apple:lint:
     expire_in: 30 days
     paths:
       - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - .ci-artifacts/hang/
       - target/quality-report.md
       - target/trait-mock-audit.md
       - target/rstest-audit.md
@@ -69,6 +70,7 @@ apple:test:
     paths:
       - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - .ci-artifacts/junit/
+      - .ci-artifacts/hang/
       - "tests/crates/sync/.ci-artifacts/audio/"
 
 # A separate job preserves both suites' JUnit reports.
@@ -94,6 +96,7 @@ apple:net-units:
       - .ci-artifacts/junit/apple-net-units.xml
       - .ci-artifacts/junit/apple-net-units.selection.json
       - .ci-artifacts/junit/apple-net-units.failed
+      - .ci-artifacts/hang/
 
 # The same suite with the clock left real. It owns a second target directory,
 # so it is another whole build of the workspace, and what it guards is the
@@ -119,6 +122,7 @@ apple:test-flash-off:
     paths:
       - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - .ci-artifacts/junit/
+      - .ci-artifacts/hang/
       - "tests/crates/sync/.ci-artifacts/audio/"
 
 apple:xcframework:

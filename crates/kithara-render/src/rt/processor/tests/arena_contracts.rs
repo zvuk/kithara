@@ -146,7 +146,8 @@ fn engine_arena_full_error() {
     assert_eq!(mixer.track(A).map(PlayerTrack::segment), Some(segment));
     assert_eq!(
         mixer.track(A).map(PlayerTrack::state),
-        Some(SlotState::Playing)
+        Some(SlotState::Stopped),
+        "a replacement is seated stopped until a start plays it"
     );
     assert!(mixer.track(B).is_none());
 

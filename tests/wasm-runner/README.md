@@ -13,8 +13,10 @@ CHROMEDRIVER=/path/to/chromedriver \
 ```
 
 `CHROMEDRIVER`, `GECKODRIVER` or `SAFARIDRIVER` selects the browser, and
-`<VAR>_ARGS` passes extra driver arguments. Session capabilities come from
-`webdriver.json`. The media fixtures come from `test_server`, which
+`<VAR>_ARGS` passes extra driver arguments, split as a shell splits them.
+Session capabilities come from `webdriver.json`; for the traced fixtures Chrome
+also records performance logs, and a network log in `KITHARA_WEB_NETLOG_DIR`
+when the lane names one. The media fixtures come from `test_server`, which
 `kithara-integration-tests` builds next to the runner; the runner starts it
 unless one already answers on `TEST_SERVER_PORT`.
 

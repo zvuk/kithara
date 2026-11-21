@@ -9,9 +9,8 @@ use ringbuf::traits::Producer;
 
 use crate::{
     LaneFrame, PcmReceiver,
-    bridge::{
-        DeckEvent, DeckPart, DeckProtocol, DeckRefusal, MixerInputs, Returned, Slot, SlotMark,
-    },
+    bridge::{DeckEvent, DeckPart, DeckProtocol, DeckRefusal, Returned, Slot, SlotMark},
+    rt::MixerInputs,
 };
 pub use crate::{
     rt::processor_fixture::{
@@ -270,11 +269,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{
-        bridge::{Fade, scope_channels},
-        rt::DeckMixerConfig,
-        worker::packet_tests::PacketRing,
-    };
+    use crate::{bridge::Fade, rt::DeckMixerConfig, worker::packet_tests::PacketRing};
 
     #[kithara::test]
     fn a_deferred_chain_applies_on_its_leading_slots_end_frame() {
@@ -289,7 +284,7 @@ mod tests {
                 .build(),
         );
         let scope = sender.open(config.slots().get()).expect("scope");
-        let (_ends, inputs) = scope_channels(scope, config);
+        let (_ends, inputs) = MixerInputs::new(scope, config);
         let mut deck = MockDeck::new(inputs);
         let from = Slot::new(0);
         let to = Slot::new(1);
@@ -358,7 +353,7 @@ mod tests {
                 .build(),
         );
         let scope = sender.open(config.slots().get()).expect("scope");
-        let (_ends, inputs) = scope_channels(scope, config);
+        let (_ends, inputs) = MixerInputs::new(scope, config);
         let mut deck = MockDeck::new(inputs);
         let slot = Slot::new(0);
         let segment = SegmentId::FIRST.next();

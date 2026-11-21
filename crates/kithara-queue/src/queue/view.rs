@@ -27,7 +27,7 @@ impl DeckObservation {
     pub(super) fn new(config: DeckMixerConfig) -> Self {
         Self {
             mix: config.mix(),
-            mixer: DeckSnapshot::new(config),
+            mixer: DeckSnapshot::new(config.slots(), config.eq_bands(), config.fx_units()),
             suspended: false,
         }
     }
@@ -152,6 +152,9 @@ where
         let follows_host = shown.map(Track::follows_host);
         let mut track = shown.map(|track| track.snapshot().as_ref().clone());
         if let Some(track) = &mut track {
+            if self.current == Some(track.item) {
+                track.duration = self.tracks.known_duration(track.item, track.duration);
+            }
             match self.held_position {
                 Some(SeekPosition::Held(to)) => track.position = to,
                 Some(SeekPosition::Pending { item, to, .. }) if track.item == item => {

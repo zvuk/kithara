@@ -1708,13 +1708,16 @@ steps = [
     "chrome",
     "webcodecs",
     "include",
-  ], label = "Chromium WebCodecs tests", env = { CHROMEDRIVER_ARGS = "--verbose --log-path={root}/target/web-chromium.log" } },
+  ], label = "Chromium WebCodecs tests" },
 ]
 role = "gate"
 kinds = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
-artifact = { name = "web-chromium-driver", path = "target/web-chromium.log", when = "failure" }
+# In a GitHub job the executor captures the ChromeDriver log and the wrapper's
+# NetLog files in the job's RUNNER_TEMP and hands the job its own copy there; a
+# local run keeps them in its build.
+artifact = { name = "web-chromium-driver", report = "chromium", when = "failure" }
 
 # Nightly here, not on the push gate: the full integration suite does not
 # compile for wasm32 today. The lane reports the break every night instead of
@@ -2144,7 +2147,7 @@ program = "just"
 # The pre-kill timer runs on the real clock that a flash wedge cannot stop, so
 # a snapshot of the flash state, the wait graph and the threads at 110s still
 # reaches this artifact.
-artifact = { name = "hang-dumps-simulated-clock", path = "target/hang", when = "failure" }
+artifact = { name = "hang-dumps-simulated-clock", path = ".ci-artifacts/hang", when = "failure" }
 steps = [
   { args = [
     "test",
@@ -2153,7 +2156,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
   { args = [
     "test",
     "test-utils",
@@ -2208,6 +2211,7 @@ timeout_minutes = 180
 # configuration: whole on a ready pull request, `main` and every night, and
 # the draft scope's part they hold on any other branch push.
 [ext.ci.lanes.linux-tooling]
+artifact = { name = "hang-dumps-tooling", path = ".ci-artifacts/hang", when = "failure" }
 cache_group = "host"
 label = "tooling"
 os = ["macos", "linux"]
@@ -2222,7 +2226,7 @@ steps = [
     "test",
     "run",
     "--lane=tooling",
-  ], label = "Native tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Native tooling lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "gate"
 kinds = [
@@ -2454,7 +2458,7 @@ label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
-artifact = { name = "hang-dumps-real-clock", path = "target/hang", when = "failure" }
+artifact = { name = "hang-dumps-real-clock", path = ".ci-artifacts/hang", when = "failure" }
 steps = [
   { args = [
     "test",
@@ -2463,7 +2467,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "real-clock suite", rebuild_check = true, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ], label = "real-clock suite", rebuild_check = true, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
@@ -2912,7 +2916,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ], label = "Apple network units" },
+  ], label = "Apple network units", env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "platforms"
 kinds = [
@@ -2960,7 +2964,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ] } },
+  ] }, env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
   { args = [
     "test",
     "test-utils",
@@ -3001,7 +3005,7 @@ steps = [
     "--flash=off",
     "--profile",
     "ci",
-  ], label = "Apple flash-off gate" },
+  ], label = "Apple flash-off gate", env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]

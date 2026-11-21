@@ -183,6 +183,7 @@ tempfile = { workspace = true }
 kithara = { workspace = true, default-features = false, features = ["test", "download", "client-reqwest", "net", "tls-rustls"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-integration-tests = { workspace = true, features = ["audio"] }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "wav"] }
 
 # Dev-only kithara-net mirrors the per-target production backend so test
