@@ -51,6 +51,12 @@ on:
         description: Path the artifact is collected from. Empty uploads nothing.
         default: ""
         type: string
+      artifact-report:
+        description: >-
+          The report `ci lane` captures for this job in place of a path, such
+          as `chromium`. Empty when the artifact is a path.
+        default: ""
+        type: string
       artifact-when:
         description: >-
           `always` uploads the artifact regardless of the lane's result;
@@ -143,6 +149,7 @@ jobs:
           pattern: ${{ format('@({0})-{1}-{2}', inputs.download, github.run_id, github.run_attempt) }}
 
       - name: Run the lane
+        id: lane
         env:
           GITHUB_FETCH_TOKEN: ${{ github.token }}
           # A filterset is shell syntax, so it reaches the script as data.
@@ -206,10 +213,73 @@ jobs:
       # that expect it: a declared artifact is the lane's own claim that it
       # will produce that file, and an upload that finds nothing is that
       # claim broken, not a reason to warn and move on.
+      #
+      # A report lane's `ci lane` names its job's copy in KITHARA_LANE_REPORT
+      # only once every file is copied, so a wanted report it did not name is
+      # missing or partial: this step fails it on its own, beside the lane's
+      # own result, instead of skipping the upload. Whether the report is
+      # wanted is the lane step's own outcome: another step failing after a
+      # passing lane is no reason to expect a report the lane discarded.
+      #
+      # The copy is a directory made directly in this job's RUNNER_TEMP, with
+      # one dot in its name, before the report's own name. A value cut short
+      # by a failed write names that directory's parent or a prefix of its
+      # name, never both a child of RUNNER_TEMP and a name ending that way, so
+      # only the whole path passes. What it holds is the report's own shape,
+      # as `ci lane` copies it: a Chromium report is the driver's non-empty
+      # log and a network log directory of non-empty JSONL files, and nothing
+      # else. The upload takes the path this step checked, escaped for the
+      # upload's glob, and only when it passed. An ordinary artifact path
+      # stays a glob as written.
+      - name: Check the lane's report
+        id: report
+        if: ${{ always() && inputs.artifact-report != '' && (steps.lane.outcome == 'failure' || (inputs.artifact-when == 'always' && steps.lane.outcome == 'success')) }}
+        env:
+          REPORT: ${{ inputs.artifact-report }}
+        run: |
+          case $REPORT in
+            chromium) driver=web-chromium.log netlog=web-chromium-netlog ;;
+            *) echo "::error title=Lane report::no shape is known for a $REPORT report"; exit 1 ;;
+          esac
+          fail() {
+            echo "::error title=Lane report::the lane named no whole copy of its $REPORT report in this job's RUNNER_TEMP; $1"
+            exit 1
+          }
+          copy=$KITHARA_LANE_REPORT
+          temp=$(cd -- "$RUNNER_TEMP" && pwd -P) || fail "RUNNER_TEMP does not resolve"
+          name=${copy##*/}
+          [ -n "$copy" ] && [ "${copy%/*}" = "$temp" ] && [[ $name =~ ^[^./]+\.${REPORT}$ ]] \
+            || fail "the lane's log says why"
+          [ -d "$copy" ] && [ ! -L "$copy" ] \
+            && [ -f "$copy/$driver" ] && [ ! -L "$copy/$driver" ] && [ -s "$copy/$driver" ] \
+            && [ -d "$copy/$netlog" ] && [ ! -L "$copy/$netlog" ] \
+            || fail "it does not hold the report's shape"
+          # Relative to the copy, so no character of RUNNER_TEMP is read as a
+          # pattern, and a walk that cannot finish fails rather than reading
+          # as a walk that found nothing.
+          extra=$(cd -- "$copy" && find . -mindepth 1 ! -path "./$driver" ! -path "./$netlog" \
+            ! \( -path "./$netlog/*.jsonl" ! -path "./$netlog/*/*" -type f -size +0c \) -print -quit) \
+            || fail "its files could not all be read"
+          [ -z "$extra" ] || fail "it holds files outside the report's shape"
+          # The upload reads its path as a glob, where a backslash escapes and
+          # `[`, `?` and `*` match other names; each is escaped the way that
+          # glob reads back as the character itself, so the upload takes this
+          # copy and no sibling the bare path would also match.
+          glob=
+          for ((i = 0; i < ${#copy}; i++)); do
+            c=${copy:i:1}
+            case $c in
+              \\) glob+='\\' ;;
+              \[ | \? | \*) glob+="[$c]" ;;
+              *) glob+=$c ;;
+            esac
+          done
+          echo "path=$glob" >> "$GITHUB_OUTPUT"
+
       - name: Upload the lane's report
-        if: ${{ always() && inputs.artifact-path != '' && (inputs.artifact-when == 'always' || failure()) }}
+        if: ${{ always() && ((inputs.artifact-report != '' && steps.report.outcome == 'success') || (inputs.artifact-report == '' && inputs.artifact-path != '' && (inputs.artifact-when == 'always' || failure()))) }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ inputs.artifact-path }}
+          path: ${{ inputs.artifact-report != '' && steps.report.outputs.path || inputs.artifact-path }}
           if-no-files-found: error

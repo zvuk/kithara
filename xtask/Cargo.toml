@@ -87,9 +87,10 @@ tracing-subscriber = { workspace = true, optional = true }
 uniffi_bindgen = { workspace = true, optional = true }
 
 # The descriptor ceiling this raises is a Unix concept; Windows hands out
-# handles from a pool with no per-process limit to lift.
+# handles from a pool with no per-process limit to lift. A lane's report is
+# read through the directory descriptors held since its capture began.
 [target.'cfg(unix)'.dependencies]
-nix = { workspace = true }
+nix = { workspace = true, features = ["dir", "fs"] }
 socket2 = { workspace = true }
 
 # kache names its Windows daemon pipe after a BLAKE3 hash of the socket path.
