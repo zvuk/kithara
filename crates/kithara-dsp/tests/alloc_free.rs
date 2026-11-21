@@ -8,7 +8,7 @@ use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use kithara_dsp::spectrum::{Autocorrelation, Fft, FftLen, prediction_difference};
 use kithara_dsp::{
     fade::{self, FadeCurve},
-    filter::{Biquad, Coefficients, Hertz, Response, StateVariableFilter, Type},
+    filter::{Biquad, Coefficients, Crossover, Hertz, Response, StateVariableFilter, Type},
     interp::{InterpError, Interpolation, interpolate, interpolate_frame, weighted_frames},
 };
 use kithara_test_utils::{bufpool::pools, kithara};
@@ -169,6 +169,28 @@ fn state_variable_filter_construction_and_processing_never_allocate() {
                 Response::HighPass,
             )
             .expect("shape matches");
+    });
+}
+
+#[kithara::test(native)]
+fn crossover_split_reset_and_retune_never_allocate() {
+    let cutoff = Hertz::from_hz(200.0).expect("positive cutoff");
+    let rate = Hertz::from_hz(48_000.0).expect("positive rate");
+    let retuned_rate = Hertz::from_hz(96_000.0).expect("positive rate");
+    let mut filter = Crossover::<2>::new(&[cutoff], rate).expect("valid design");
+    let input = [[0.25; 128], [-0.125; 128]];
+    let input = input.each_ref().map(<[f32; 128]>::as_slice);
+    let mut output = [[[0.0; 128]; 2]; 2];
+    let mut bands = output
+        .each_mut()
+        .map(|band| band.each_mut().map(<[f32; 128]>::as_mut_slice));
+    assert_no_alloc(|| {
+        assert_eq!(filter.split(&input, &mut bands), 128);
+        filter.reset();
+        filter
+            .update_sample_rate(retuned_rate)
+            .expect("valid design");
+        assert_eq!(filter.split(&input, &mut bands), 128);
     });
 }
 
