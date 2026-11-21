@@ -129,7 +129,11 @@ fn apply_queue(
 ) {
     let output = session.binding().get();
     let mixer_config = kithara_play::DeckMixerConfig::default();
-    let deck = DeckSnapshot::new(mixer_config.slots(), mixer_config.eq_bands());
+    let deck = DeckSnapshot::new(
+        mixer_config.slots(),
+        mixer_config.eq_bands(),
+        mixer_config.fx_units(),
+    );
     let pass = DeckPass {
         mix: DeckMixSettings::default(),
         suspended: false,

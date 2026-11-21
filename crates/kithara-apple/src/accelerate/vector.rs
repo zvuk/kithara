@@ -214,3 +214,13 @@ pub fn add_f32(x: &[f32], acc: &mut [f32]) -> usize {
     unsafe { vDSP_vadd(x.as_ptr(), 1, sums.cast_const(), 1, sums, 1, len) };
     len
 }
+
+/// Round doubles to floats over the common prefix; return its length.
+pub fn narrow_f64_to_f32(input: &[f64], output: &mut [f32]) -> usize {
+    let len = input.len().min(output.len());
+    if len != 0 {
+        // SAFETY: both nonoverlapping slices hold len values at stride one; vDSP is synchronous.
+        unsafe { super::ffi::vDSP_vdpsp(input.as_ptr(), 1, output.as_mut_ptr(), 1, len) };
+    }
+    len
+}

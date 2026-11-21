@@ -1147,7 +1147,11 @@ fn a_ready_paused_segment_keeps_its_cue_over_an_old_slot_snapshot() {
     track.settle_lane();
     let output = mock::output(None).get();
     let mixer_config = DeckMixerConfig::default();
-    let snapshot = crate::DeckSnapshot::new(mixer_config.slots(), mixer_config.eq_bands());
+    let snapshot = crate::DeckSnapshot::new(
+        mixer_config.slots(),
+        mixer_config.eq_bands(),
+        mixer_config.fx_units(),
+    );
     let pass = crate::DeckPass {
         mix: DeckMixSettings::default(),
         suspended: false,

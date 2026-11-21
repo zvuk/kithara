@@ -804,7 +804,11 @@ fn a_host_pass_publishes_the_deck_mixer_counters(#[by_ref] worker_owner: &Worker
     let control = queue.control();
     assert_eq!(control.mixer_blocks(), 0);
     let mixer_config = DeckMixerConfig::default();
-    let mut deck = kithara_play::DeckSnapshot::new(mixer_config.slots(), mixer_config.eq_bands());
+    let mut deck = kithara_play::DeckSnapshot::new(
+        mixer_config.slots(),
+        mixer_config.eq_bands(),
+        mixer_config.fx_units(),
+    );
     deck.blocks = 7;
     let output = mock::output(None).get();
     let pass = DeckPass {

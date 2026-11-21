@@ -277,7 +277,7 @@ mod tests {
             channel::<DispatcherProtocol<ResourceLoad>>(ChannelConfig::builder().build());
         let rate = NonZeroU32::new(48_000).expect("sample rate");
         let output = SessionOutputView::new(rate).get();
-        let mut deck = DeckSnapshot::new(config.slots(), config.eq_bands());
+        let mut deck = DeckSnapshot::new(config.slots(), config.eq_bands(), config.fx_units());
         deck.sample_rate = rate.get();
         let pass = DeckPass {
             mix: DeckMixSettings::default(),

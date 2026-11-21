@@ -1,6 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 mod cases;
+mod deck_programs;
 mod eq_programs;
 mod filter_programs;
 mod gain;

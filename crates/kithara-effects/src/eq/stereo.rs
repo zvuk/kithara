@@ -5,9 +5,19 @@ use kithara_dsp::{
     fade::FadeCurve,
     param::{Mix, MixDSP},
 };
+use num_traits::AsPrimitive;
 
 use super::{EqBandConfig, EqConfig, IsolatorEq};
 use crate::GainDb;
+
+/// An active gain row must cover every frame of the stereo call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("EQ band {band} has {actual} gain values for {expected} frames")]
+pub struct GainShapeError {
+    pub band: usize,
+    pub expected: usize,
+    pub actual: usize,
+}
 
 /// One band layout built for both channels of a stereo signal. It is built off the audio
 /// thread, so taking it in allocates nothing there.
@@ -42,14 +52,30 @@ impl EqLayout {
         self.right.set_gain(band, gain_db);
     }
 
+    fn set_kill(&mut self, band: usize, on: bool) {
+        self.left.set_kill(band, on);
+        self.right.set_kill(band, on);
+    }
+
     fn set_explicit(&mut self, band: usize, gain_db: GainDb) {
         self.left.set_explicit(band, gain_db);
         self.right.set_explicit(band, gain_db);
     }
 
+    fn apply_gains(&mut self, gains: &[impl AsRef<[f64]>], frame: usize) {
+        for (band, values) in gains.iter().enumerate() {
+            if let Some(value) = values.as_ref().get(frame) {
+                self.set_explicit(band, GainDb::from(AsPrimitive::<f32>::as_(*value)));
+            }
+        }
+    }
+
     delegate::delegate! {
         to self.left {
-            fn band_count(&self) -> usize;
+            /// Number of bands prepared in this layout.
+            #[must_use]
+            pub fn band_count(&self) -> usize;
+            fn killed(&self, band: usize) -> Option<bool>;
             fn target_gain(&self, band: usize) -> Option<GainDb>;
         }
     }
@@ -130,6 +156,8 @@ impl StereoEq {
     /// the last crossover retired. Nothing it held is freed here.
     pub fn take_layout(&mut self, mut layout: Box<EqLayout>) -> Option<Box<EqLayout>> {
         layout.update_sample_rate(self.sample_rate);
+        layout.left.clear_kills();
+        layout.right.clear_kills();
         self.update
             .replace(LayoutUpdate::Pending(layout))
             .map(LayoutUpdate::into_inner)
@@ -138,12 +166,25 @@ impl StereoEq {
     /// Ramps `band` to `gain_db` on the layout a gain speaks of: the one waiting to be crossed
     /// over to, else the one sounding.
     pub fn set_gain(&mut self, band: usize, gain_db: GainDb) {
-        let layout = match &mut self.update {
-            Some(LayoutUpdate::Pending(layout)) => Some(layout),
-            _ => self.active.as_mut(),
-        };
-        if let Some(layout) = layout {
+        if let Some(layout) = self.target_layout_mut() {
             layout.set_gain(band, gain_db);
+        }
+    }
+
+    /// Applies a kill change to a band in the command-addressable layout.
+    pub fn set_kill(&mut self, band: usize, on: bool) {
+        if let Some(layout) = self.target_layout_mut() {
+            layout.set_kill(band, on);
+        }
+    }
+
+    /// Returns every addressed band to neutral gain with kill off.
+    pub fn reset_gains(&mut self) {
+        if let Some(layout) = self.target_layout_mut() {
+            for band in 0..layout.band_count() {
+                layout.set_gain(band, GainDb::DEFAULT);
+                layout.set_kill(band, false);
+            }
         }
     }
 
@@ -160,12 +201,34 @@ impl StereoEq {
         layout.band_count()
     }
 
+    /// Copies kill flags from the same layout as the target gains.
+    pub fn read_kills(&self, kills: &mut [bool]) {
+        if let Some(layout) = self.target_layout() {
+            for (band, killed) in kills.iter_mut().enumerate().take(layout.band_count()) {
+                *killed = layout.killed(band).unwrap_or(false);
+            }
+        }
+    }
+
+    /// The number of bands in the layout that receives commands.
+    #[must_use]
+    pub fn band_count(&self) -> usize {
+        self.target_layout().map_or(0, EqLayout::band_count)
+    }
+
     fn target_layout(&self) -> Option<&EqLayout> {
         match &self.update {
             Some(LayoutUpdate::Pending(layout)) => Some(layout),
             _ => self.active.as_ref(),
         }
         .map(Box::as_ref)
+    }
+
+    fn target_layout_mut(&mut self) -> Option<&mut EqLayout> {
+        match &mut self.update {
+            Some(LayoutUpdate::Pending(layout)) => Some(layout.as_mut()),
+            _ => self.active.as_deref_mut(),
+        }
     }
 
     /// Whether a settled sounding layout contains the requested band.
@@ -177,13 +240,6 @@ impl StereoEq {
                 .active
                 .as_ref()
                 .is_some_and(|layout| band < layout.band_count())
-    }
-
-    /// Apply one admitted trajectory value without manual-target smoothing.
-    pub fn set_gain_explicit(&mut self, band: usize, gain_db: GainDb) {
-        if let Some(layout) = self.active.as_mut() {
-            layout.set_explicit(band, gain_db);
-        }
     }
 
     /// Retunes every layout this EQ holds, and its crossover, to `sample_rate`.
@@ -205,6 +261,45 @@ impl StereoEq {
     /// Runs both channels through the sounding layout in place, crossing over from the layout
     /// it replaced until the crossover settles.
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.process_gains(left, right, &[] as &[&[f64]]);
+    }
+
+    /// Apply one prepared dB row per band; an empty row leaves that band under manual control.
+    /// # Errors
+    /// Refuses a nonempty row whose length differs from the common channel prefix, before mutation.
+    pub fn process_with_gains<G: AsRef<[f64]>>(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        gains: &[G],
+    ) -> Result<(), GainShapeError> {
+        if validate_gains(gains, left.len().min(right.len()))? {
+            self.process_gains(left, right, gains);
+        } else {
+            self.process(left, right);
+        }
+        Ok(())
+    }
+
+    /// Apply gain values for silent frames without advancing filter or crossover history.
+    /// # Errors
+    /// Refuses a nonempty row whose length differs from `frames`, before mutation.
+    pub fn advance_gains<G: AsRef<[f64]>>(
+        &mut self,
+        gains: &[G],
+        frames: usize,
+    ) -> Result<(), GainShapeError> {
+        if validate_gains(gains, frames)?
+            && let Some(active) = self.active.as_deref_mut()
+        {
+            for frame in 0..frames {
+                active.apply_gains(gains, frame);
+            }
+        }
+        Ok(())
+    }
+
+    fn process_gains(&mut self, left: &mut [f32], right: &mut [f32], gains: &[impl AsRef<[f64]>]) {
         self.advance();
         if let Some(active) = self.active.as_deref_mut() {
             render_stereo(
@@ -213,6 +308,7 @@ impl StereoEq {
                 &mut self.crossover,
                 left,
                 right,
+                gains,
             );
         }
     }
@@ -235,14 +331,32 @@ impl StereoEq {
     }
 }
 
+fn validate_gains(gains: &[impl AsRef<[f64]>], expected: usize) -> Result<bool, GainShapeError> {
+    let mut has_gains = false;
+    for (band, values) in gains.iter().enumerate() {
+        let actual = values.as_ref().len();
+        if actual != 0 && actual != expected {
+            return Err(GainShapeError {
+                band,
+                expected,
+                actual,
+            });
+        }
+        has_gains |= actual != 0;
+    }
+    Ok(has_gains)
+}
+
 fn render_stereo(
     active: &mut EqLayout,
     mut retiring: Option<&mut EqLayout>,
     crossover: &mut MixDSP,
     left: &mut [f32],
     right: &mut [f32],
+    gains: &[impl AsRef<[f64]>],
 ) {
-    for (left, right) in left.iter_mut().zip(right.iter_mut()) {
+    for (frame, (left, right)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
+        active.apply_gains(gains, frame);
         let (dry_left, dry_right) = (*left, *right);
         let mut wet_left = [active.left.process_sample(dry_left)];
         let mut wet_right = [active.right.process_sample(dry_right)];
@@ -264,5 +378,137 @@ fn render_stereo(
         }
         *left = wet_left[0];
         *right = wet_right[0];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    #[case(1)]
+    #[case(2)]
+    fn eq_kill_reaches_exact_stereo_silence_at_neutral_or_with_a_floor_band(#[case] bands: usize) {
+        let config = EqConfig::builder(crate::test_pools::pools()).build();
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let mut bands = super::super::generate_log_spaced_bands(bands);
+        if let Some(band) = bands.get_mut(1) {
+            band.set_gain_db(GainDb::MIN);
+        }
+        let layout = EqLayout::new(&config, &bands, rate).expect("layout");
+        let mut eq = StereoEq::with_layout(&config, rate, Box::new(layout));
+        eq.set_kill(0, true);
+        for _ in 0..64 {
+            let mut left = [0.25; 128];
+            let mut right = [-0.5; 128];
+            eq.process(&mut left, &mut right);
+            assert!(
+                left.iter()
+                    .chain(&right)
+                    .all(|value| *value == 0.0 || value.is_normal())
+            );
+        }
+        let mut left = [0.25; 128];
+        let mut right = [-0.5; 128];
+        eq.process(&mut left, &mut right);
+        assert!(left.iter().chain(&right).all(|value| value.to_bits() == 0));
+        eq.set_gain(0, GainDb::MAX);
+        left.fill(0.25);
+        right.fill(-0.5);
+        eq.process(&mut left, &mut right);
+        assert!(left.iter().chain(&right).all(|value| value.to_bits() == 0));
+        eq.set_kill(0, false);
+        let mut gains = [GainDb::DEFAULT; 2];
+        eq.read_gains(&mut gains);
+        assert_eq!(gains[0], GainDb::MAX);
+    }
+
+    #[kithara::test]
+    fn eq_kill_is_cleared_when_a_returned_pending_layout_is_reused() {
+        let config = EqConfig::builder(crate::test_pools::pools()).build();
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let make_layout = || {
+            Box::new(
+                EqLayout::new(&config, &[EqBandConfig::builder().build()], rate).expect("layout"),
+            )
+        };
+        let mut eq = StereoEq::with_layout(&config, rate, make_layout());
+        eq.take_layout(make_layout());
+        eq.set_kill(0, true);
+        let mut kills = [false];
+        eq.read_kills(&mut kills);
+        assert_eq!(kills, [true]);
+        let returned = eq
+            .take_layout(make_layout())
+            .expect("displaced pending layout");
+        eq.take_layout(returned);
+        eq.read_kills(&mut kills);
+        assert_eq!(kills, [false]);
+    }
+
+    #[kithara::test]
+    fn eq_kill_on_a_pending_layout_sounds_once_that_layout_is_active() {
+        let config = EqConfig::builder(crate::test_pools::pools()).build();
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let make_layout = || {
+            Box::new(
+                EqLayout::new(&config, &[EqBandConfig::builder().build()], rate).expect("layout"),
+            )
+        };
+        let mut eq = StereoEq::with_layout(&config, rate, make_layout());
+        eq.take_layout(make_layout());
+        assert!(!eq.accepts_gain_program(0));
+        eq.set_kill(0, true);
+        let mut kills = [false];
+        eq.read_kills(&mut kills);
+        assert_eq!(kills, [true]);
+        let mut left = [0.25; 128];
+        let mut right = [-0.5; 128];
+        for _ in 0..512 {
+            left.fill(0.25);
+            right.fill(-0.5);
+            eq.process(&mut left, &mut right);
+        }
+        assert!(eq.accepts_gain_program(0));
+        assert!(left.iter().chain(&right).all(|value| value.to_bits() == 0));
+    }
+
+    #[kithara::test]
+    fn prepared_gain_rows_refuse_wrong_lengths_before_pcm_or_state_changes() {
+        let config = EqConfig::builder(crate::test_pools::pools()).build();
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let layout =
+            EqLayout::new(&config, &[EqBandConfig::builder().build()], rate).expect("layout");
+        let mut eq = StereoEq::with_layout(&config, rate, Box::new(layout));
+        for count in [1, 2, 4, 5] {
+            let row = vec![-6.0; count];
+            let rows = [&[-6.0; 3][..], row.as_slice()];
+            let error = Err(GainShapeError {
+                band: 1,
+                expected: 3,
+                actual: count,
+            });
+            let mut left = [0.25; 3];
+            let mut right = [-0.5; 3];
+            assert_eq!(eq.process_with_gains(&mut left, &mut right, &rows), error);
+            assert_eq!(eq.advance_gains(&rows, 3), error);
+            assert_eq!(left, [0.25; 3]);
+            assert_eq!(right, [-0.5; 3]);
+            let mut gains = [GainDb::MIN];
+            assert_eq!(eq.read_gains(&mut gains), 1);
+            assert_eq!(gains, [GainDb::DEFAULT]);
+        }
+        let row = [-6.0, -3.0, 0.0];
+        let mut left = [0.25; 3];
+        let mut right = [-0.5; 3];
+        eq.process_with_gains(&mut left, &mut right, &[&row[..]])
+            .expect("one value per frame");
+        for ((left, right), db) in left.into_iter().zip(right).zip([-6.0_f32, -3.0, 0.0]) {
+            let gain = 10.0_f32.powf(db / 20.0);
+            assert_eq!(left.to_bits(), (0.25 * gain).to_bits());
+            assert_eq!(right.to_bits(), (-0.5 * gain).to_bits());
+        }
     }
 }
