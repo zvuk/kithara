@@ -737,6 +737,11 @@ opt-level = 3
 [profile.release.package.kithara-warp]
 opt-level = 3
 
+# The waveform analyzer folds every filtered window into column peaks; at "z"
+# the per-frame lane copy, peak scan and finite check stay scalar.
+[profile.release.package.kithara-waveform]
+opt-level = 3
+
 # Best-of-both-worlds profile for maximum testing speed.
 # Combines release-grade runtime performance (opt-level 3) with fast
 # parallel compilation (codegen-units 16, LTO off).
