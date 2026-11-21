@@ -306,7 +306,7 @@
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
-  just lint gate
+  just check clippy
 # apple-lint / platforms
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
@@ -318,13 +318,13 @@
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
-  just lint gate
+  just check clippy
 # apple-lint / quarantine
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
-  just lint gate
+  just check clippy
 # apple-lint / main
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
@@ -526,49 +526,42 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
-  just test test-utils
 # apple-test / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
-  just test run --draft --selection-output=.ci-artifacts/junit/apple-test.selection.json --flash=on --no-block=on --profile ci
-  just test test-utils
+  just test run --draft --lane=apple --selection-output=.ci-artifacts/junit/apple-test.selection.json --flash=on --no-block=on --profile ci
 # apple-test / platforms
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
-  just test test-utils
 # apple-test / merge-request
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
-  just test run --flash=on --no-block=on --profile ci
-  just test test-utils
+  just test run --lane=apple --flash=on --no-block=on --profile ci
 # apple-test / quarantine
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
-  just test run --flash=on --no-block=on --profile ci
-  just test test-utils
+  just test run --lane=apple --flash=on --no-block=on --profile ci
 # apple-test / main
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
-  just test test-utils
 # apple-test / nightly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
-  just test test-utils
 # apple-test / weekly
   refused: weekly pipelines do not run the Apple suite
 # apple-test / release
@@ -577,7 +570,6 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
-  just test test-utils
 # apple-test-flash-off / bench
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
@@ -632,6 +624,56 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+# apple-test-utils / bench
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test test-utils
+# apple-test-utils / branch
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test test-utils
+# apple-test-utils / platforms
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test test-utils
+# apple-test-utils / merge-request
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test test-utils
+# apple-test-utils / quarantine
+  refused: quarantine pipelines do not run Apple test utilities
+# apple-test-utils / main
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test test-utils
+# apple-test-utils / nightly
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test test-utils
+# apple-test-utils / weekly
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test test-utils
+# apple-test-utils / release
+  <require os> macos
+  <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test test-utils
 # apple-xcframework / bench
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen

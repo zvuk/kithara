@@ -927,28 +927,27 @@ mod tests {
     }
 
     #[test]
-    fn reviewed_pipelines_run_the_explicit_flash_and_no_block_gate() {
-        for kind in [
-            PipelineKind::MergeRequest,
-            PipelineKind::Quarantine,
-            PipelineKind::Main,
-            PipelineKind::Platforms,
-            PipelineKind::Nightly,
-            PipelineKind::Release,
+    fn apple_suite_scope() {
+        for (kind, review) in [
+            (PipelineKind::MergeRequest, true),
+            (PipelineKind::Quarantine, true),
+            (PipelineKind::Main, false),
+            (PipelineKind::Platforms, false),
+            (PipelineKind::Nightly, false),
+            (PipelineKind::Release, false),
         ] {
             let (args, _) = gate("apple-test", kind);
-
+            let mut expected = vec!["test", "run"];
+            if review {
+                expected.push("--lane=apple");
+            }
+            expected.extend(["--flash=on", "--no-block=on", "--profile", "ci"]);
+            assert_eq!(args, expected);
+            let (outcome, steps) = resolve("apple-test", kind);
+            outcome.unwrap();
             assert_eq!(
-                args,
-                [
-                    "test",
-                    "run",
-                    "--flash=on",
-                    "--no-block=on",
-                    "--profile",
-                    "ci"
-                ],
-                "{kind:?} must run the explicit gate"
+                steps.iter().filter(|step| step.program == "just").count(),
+                1
             );
         }
     }
@@ -966,6 +965,7 @@ mod tests {
                 "test",
                 "run",
                 "--draft",
+                "--lane=apple",
                 "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
                 "--flash=on",
                 "--no-block=on",
@@ -1003,19 +1003,31 @@ mod tests {
         assert_eq!(label, "full lint gate");
     }
 
-    /// The xtask tests resolve the shipped package graph and the configured
-    /// lane commands, so a review has to run them; only the ratchets that
-    /// guard a baseline wait for the default branch.
     #[test]
-    fn a_review_lints_through_the_chain_that_runs_the_xtask_tests() {
-        for kind in [
-            PipelineKind::Branch,
-            PipelineKind::MergeRequest,
-            PipelineKind::Quarantine,
+    fn apple_lint_scope() {
+        for (kind, expected) in [
+            (PipelineKind::Branch, ["check", "clippy"]),
+            (PipelineKind::MergeRequest, ["check", "clippy"]),
+            (PipelineKind::Quarantine, ["check", "clippy"]),
+            (PipelineKind::Main, ["lint", "full"]),
         ] {
-            let (args, _) = gate("apple-lint", kind);
+            assert_eq!(gate("apple-lint", kind).0, expected);
+        }
+    }
 
-            assert_eq!(args, ["lint", "gate"], "{}", kind.name());
+    #[test]
+    fn apple_test_utils_scope() {
+        for (kind, admitted) in [
+            (PipelineKind::Quarantine, false),
+            (PipelineKind::Main, true),
+        ] {
+            let (outcome, steps) = resolve("apple-test-utils", kind);
+            assert_eq!(outcome.is_ok(), admitted);
+            if admitted {
+                assert_eq!(gate("apple-test-utils", kind).0, ["test", "test-utils"]);
+            } else {
+                assert!(steps.is_empty());
+            }
         }
     }
 

@@ -35,6 +35,16 @@ apple:msrv:
   script:
     - just ci run apple-msrv
 
+apple:test-utils:
+  extends:
+    - .macos-job
+    - .rules-integration
+  stage: apple
+  timeout: 60 minutes
+  needs: []
+  script:
+    - just ci run apple-test-utils
+
 # A draft's test block is checked before any suite runs it: a block the runner
 # would refuse fails the pipeline here, not inside a lane minutes in.
 apple:pr-tests:

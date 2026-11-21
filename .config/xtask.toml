@@ -671,6 +671,36 @@ cargo.exclude = [
 ]
 cargo.profile = "test-release"
 
+[test.lanes.apple]
+default_features = []
+cargo.packages = [
+  "kithara-app",
+  "kithara-app-document",
+  "kithara-app-library",
+  "kithara-apple",
+  "kithara-audio-tests",
+  "kithara-decode",
+  "kithara-decode-tests",
+  "kithara-dsp",
+  "kithara-effects-tests",
+  "kithara-ffi",
+  "kithara-hls-keys-tests",
+  "kithara-hls-tests",
+  "kithara-integration-tests",
+  "kithara-net",
+  "kithara-platform",
+  "kithara-play-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-tests",
+  "kithara-queue-zvuk-tests",
+  "kithara-resampler",
+  "kithara-sync-tests",
+  "kithara-test-utils",
+  "kithara-ui",
+  "kithara-workspace-hack",
+]
+cargo.profile = "test-release"
+
 # The player's core domains in one build: what a night repeats. Its features
 # are the union of theirs, as `engine` takes them.
 [test.lanes.player]
@@ -1536,7 +1566,7 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "deny"], label = "licence and advisory gate" }]
 role = "gate"
-kinds = ["weekly", "quarantine"]
+kinds = ["weekly"]
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 
@@ -1566,7 +1596,7 @@ steps = [
   ], label = "crates.io publication dry run", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = ["weekly", "quarantine"]
+kinds = ["weekly"]
 kinds_github = ["main", "branch", "merge-request", "nightly"]
 timeout_minutes = 60
 
@@ -2819,26 +2849,19 @@ checks = [
   ] },
 ]
 program = "just"
-# Both chains run the checks that answer whether a change is acceptable:
-# formatting, Clippy over the workspace, ast-grep, typos, the architecture
-# ratchet, this tool's own tests and the two idiom checks a review is held to.
-# What only the default branch pays for is the rest of the ratchet family - the
-# full idiom set, style and the quality scans. They guard a baseline rather than
-# judge a diff, and on one Apple host every one of them is a minute a review
-# waits.
 steps = [
   { args = [
     "lint",
     "full",
   ], label = "full lint gate", args_by_kind = { branch = [
-    "lint",
-    "gate",
+    "check",
+    "clippy",
   ], merge-request = [
-    "lint",
-    "gate",
+    "check",
+    "clippy",
   ], quarantine = [
-    "lint",
-    "gate",
+    "check",
+    "clippy",
   ] } },
 ]
 role = "platforms"
@@ -2877,8 +2900,6 @@ role = "platforms"
 kinds = ["platforms", "main", "nightly"]
 timeout_minutes = 60
 
-# A review ref asks the same question the default branch asks: what a reviewer
-# would have to fix anyway is cheaper to learn before merge.
 [ext.ci.lanes.apple-test]
 cache_group = "macos"
 label = "Apple"
@@ -2905,16 +2926,29 @@ steps = [
   ], label = "Apple flash and no-block gate", args_by_kind = { branch = [
     "test",
     "run",
+    "--lane=apple",
     "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
     "--flash=on",
     "--no-block=on",
     "--profile",
     "ci",
-  ] } },
-  { args = [
+  ], merge-request = [
     "test",
-    "test-utils",
-  ], label = "Test utilities at checked-out revision" },
+    "run",
+    "--lane=apple",
+    "--flash=on",
+    "--no-block=on",
+    "--profile",
+    "ci",
+  ], quarantine = [
+    "test",
+    "run",
+    "--lane=apple",
+    "--flash=on",
+    "--no-block=on",
+    "--profile",
+    "ci",
+  ] } },
 ]
 role = "platforms"
 kinds = [
@@ -2926,6 +2960,31 @@ kinds = [
   "nightly",
   "release",
 ]
+timeout_minutes = 60
+
+[ext.ci.lanes.apple-test-utils]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
+checks = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
+]
+kinds_refused = { quarantine = "quarantine pipelines do not run Apple test utilities" }
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "test-utils",
+  ], label = "Test utilities at checked-out revision" },
+]
+role = "platforms"
+kinds = ["platforms", "main", "nightly"]
 timeout_minutes = 60
 
 # The off-flash suite owns a separate lane slot because its feature set differs

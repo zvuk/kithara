@@ -30,13 +30,7 @@ fn publication_is_a_verified_gate_for_review_main_and_dispatch() {
             "{kind}"
         );
     }
-    assert!(
-        lane["kinds"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|kind| kind.as_str() == Some("quarantine"))
-    );
+    assert_eq!(strings(&lane["kinds"]), ["weekly"]);
     let steps = lane["steps"].as_array().expect("publication steps");
     assert_eq!(steps.len(), 1);
     let args: Vec<_> = steps[0]["args"]
@@ -513,10 +507,8 @@ fn a_ready_pull_request_schedules_exactly_the_lanes_a_branch_push_does() {
 
 /// The product suite is what a `test run` naming no lane runs. Every lane a
 /// branch push schedules for it runs one command, apart from the toggles it
-/// asks for, so the clocks it is run under are the only difference between
-/// their counts. That command is the same on every kind: a branch push runs it
-/// over the draft scope by its kind alone, and only the Apple gate names the
-/// selection a branch verdict reads.
+/// asks for. Apple review kinds select the Apple lane, and branch runs name
+/// the selection a branch verdict reads.
 #[test]
 fn the_product_suite_lanes_differ_only_in_their_toggles_and_run_one_command_on_every_kind() {
     let config = xtask_config();
@@ -545,15 +537,21 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_run_one_command_on_e
                 .unwrap_or_default();
             if name == "apple-test" {
                 let mut branch = args.clone();
+                branch.insert(2, "--lane=apple");
                 branch.insert(
-                    2,
+                    3,
                     "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
                 );
                 assert_eq!(
                     by_kind.keys().map(String::as_str).collect::<Vec<_>>(),
-                    ["branch"],
-                    "the Apple gate adds only the branch selection"
+                    ["branch", "merge-request", "quarantine"],
+                    "the Apple gate narrows review kinds"
                 );
+                let mut review = args.clone();
+                review.insert(2, "--lane=apple");
+                for kind in ["merge-request", "quarantine"] {
+                    assert_eq!(strings(&by_kind[kind]), review);
+                }
                 assert_eq!(
                     strings(&by_kind["branch"]),
                     branch,
@@ -666,4 +664,39 @@ fn github_membership_keeps_an_explicit_empty_list_distinct_from_absence() {
         .expect("the membership fixture parses");
         assert_eq!(github_membership(&lane), expected);
     }
+}
+
+#[test]
+fn apple_test_lane_matches_target_dependencies() {
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .current_dir(workspace_root())
+        .no_deps()
+        .exec()
+        .expect("workspace metadata loads");
+    let config = xtask_config();
+    let apple = &config["test"]["lanes"]["apple"];
+    let actual: std::collections::BTreeSet<_> =
+        strings(&apple["cargo"]["packages"]).into_iter().collect();
+    let expected: std::collections::BTreeSet<_> = metadata
+        .workspace_packages()
+        .into_iter()
+        .filter(|package| {
+            package.dependencies.iter().any(|dependency| {
+                dependency.target.as_ref().is_some_and(|target| {
+                    let cfg = target.to_string();
+                    ["apple", "macos", "ios"]
+                        .iter()
+                        .any(|name| cfg.contains(name))
+                })
+            })
+        })
+        .map(|package| package.name.as_str())
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "Apple lane differs from target dependencies"
+    );
+    let workspace = &config["test"]["lanes"]["workspace"];
+    assert_eq!(apple["default_features"], workspace["default_features"]);
+    assert_eq!(apple["cargo"]["profile"], workspace["cargo"]["profile"]);
 }

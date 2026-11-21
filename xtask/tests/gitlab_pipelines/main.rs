@@ -912,6 +912,7 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         "apple:swift-test",
         "apple:test",
         "apple:test-flash-off",
+        "apple:test-utils",
         "apple:xcframework",
     ]);
     let actual_jobs: BTreeSet<&str> = config
@@ -1482,5 +1483,24 @@ fn native_dependency_audits_retain_the_linux_fleet_and_host_cache() {
             .filter_map(toml::Value::as_str)
             .collect::<Vec<_>>(),
         ["nightly"]
+    );
+}
+
+#[test]
+fn host_independent_apple_jobs_wait_for_full_kinds() {
+    let config = GitlabConfig::load(&workspace_root());
+    for job in ["deps:deny", "deps:publish"] {
+        assert_eq!(
+            config.admitted_kinds(job),
+            BTreeSet::from(["weekly".to_owned()])
+        );
+    }
+    assert_eq!(
+        config.admitted_kinds("apple:test-utils"),
+        BTreeSet::from(["platforms", "main", "nightly"].map(str::to_owned))
+    );
+    assert_eq!(
+        config.effective_value("apple:test-utils", "needs"),
+        Some(Value::Sequence(vec![]))
     );
 }

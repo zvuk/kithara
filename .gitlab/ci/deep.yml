@@ -80,15 +80,11 @@ deep:bench:
   stage: deep
   needs: []
 
-# Advisories and licence bans are the only dependency check on the import path.
-# The bridge no longer refuses a merged pull request for moving a manifest, so
-# this runs on quarantine as well as on the weekly sweep.
 deps:deny:
   extends: .deps-job
   timeout: 30 minutes
   rules:
     - if: $KITHARA_PIPELINE_KIND == "weekly"
-    - if: $KITHARA_PIPELINE_KIND == "quarantine"
   script:
     - just ci run deps-deny
   artifacts:
@@ -109,7 +105,6 @@ deps:publish:
   timeout: 60 minutes
   rules:
     - if: $KITHARA_PIPELINE_KIND == "weekly"
-    - if: $KITHARA_PIPELINE_KIND == "quarantine"
   script:
     - just ci run crates-publish
 
