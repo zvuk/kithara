@@ -181,7 +181,7 @@ async fn public_deck_programs_admit_the_next_unrendered_frame_and_refuse_the_pre
     assert_eq!(harness.render(1).await, [0.25; 2]);
     let snapshot = harness.deck_snapshot();
     let applied = snapshot.parameter(DeckParameter::Trim).expect("trim");
-    assert_eq!(applied.value(), 0.5);
+    assert_eq!(applied.value(), Some(0.5));
     assert!(applied.program().is_some());
     assert_eq!(
         snapshot.at,
@@ -257,7 +257,7 @@ async fn public_deck_programs_refuse_an_unknown_band_and_a_stale_layout_as_one_b
     );
     let trim = snapshot.parameter(DeckParameter::Trim).expect("trim");
     assert_eq!(trim.program(), None, "the refused batch started no part");
-    assert_eq!(trim.value(), 1.0);
+    assert_eq!(trim.value(), Some(1.0));
     let take = render_effect_window(&harness, 256).await;
     assert!(
         take.iter()

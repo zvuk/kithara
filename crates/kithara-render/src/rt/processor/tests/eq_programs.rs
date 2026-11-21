@@ -52,7 +52,12 @@ fn part(ends: &mut TestEnds, prepare: impl FnOnce(LayoutRevision) -> DeckProgram
 
 fn value_at(curve: &crate::bridge::ParameterCurve, at: SessionFrame) -> f64 {
     let mut value = [0.0];
-    curve.write(&mut crate::bridge::CurveCursor::default(), at, &mut value);
+    curve.write(
+        &mut crate::bridge::CurveCursor::default(),
+        at,
+        &mut value,
+        false,
+    );
     value[0]
 }
 

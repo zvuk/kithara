@@ -2,13 +2,14 @@ use std::num::NonZeroU32;
 
 use kithara_bufpool::SampleBuffer;
 use kithara_dsp::param::SmoothedParam;
-use kithara_effects::{DeckEffect, FxParamChange};
+use kithara_effects::{DeckEffect, FxParamChange, FxParamDescriptor};
 use num_traits::cast::AsPrimitive;
 
 use super::RenderPass;
 use crate::{
     bridge::{DeckFxChange, DeckPart, Returned},
     consts::FADE_CHUNK,
+    rt::command::DeckPrograms,
 };
 
 /// One FX unit: an optional effect, its dry/wet and its power.
@@ -16,6 +17,8 @@ pub(super) struct FxUnit {
     pub(super) effect: Option<Box<dyn DeckEffect>>,
     pub(super) mix: SmoothedParam,
     pub(super) on: bool,
+    /// The value last delivered to each effect parameter the deck has room for.
+    pub(super) delivered: Box<[Option<f64>]>,
 }
 
 impl RenderPass {
@@ -35,6 +38,22 @@ impl RenderPass {
         self.units
             .iter()
             .map(|unit| f64::from(unit.mix.target_value()))
+    }
+
+    /// The descriptor of parameter `index` of the effect `unit` holds.
+    pub(crate) fn fx_param(&self, unit: usize, index: usize) -> Option<&FxParamDescriptor> {
+        self.units
+            .get(unit)
+            .and_then(|unit| unit.effect.as_deref())
+            .and_then(|effect| effect.parameters().get(index))
+    }
+
+    /// The value each unit last delivered to each effect parameter, in unit
+    /// then parameter order.
+    pub(crate) fn fx_delivered(&self) -> impl Iterator<Item = Option<f64>> + '_ {
+        self.units
+            .iter()
+            .flat_map(|unit| unit.delivered.iter().copied())
     }
 
     /// Check a parameter against the effect after preceding installs and clears.
@@ -77,9 +96,13 @@ impl RenderPass {
                 mut effect,
             } => {
                 effect.update_sample_rate(sample_rate);
+                unit.delivered.fill(None);
                 (index, unit.effect.replace(effect))
             }
-            DeckFxChange::Clear { unit: index } => (index, unit.effect.take()),
+            DeckFxChange::Clear { unit: index } => {
+                unit.delivered.fill(None);
+                (index, unit.effect.take())
+            }
             DeckFxChange::Power { on, .. } => {
                 if on
                     && !unit.on
@@ -97,6 +120,9 @@ impl RenderPass {
             DeckFxChange::Param { change: param, .. } => {
                 if let Some(effect) = &mut unit.effect {
                     effect.set(param);
+                    if let Some(value) = unit.delivered.get_mut(param.index) {
+                        *value = Some(param.value);
+                    }
                 }
                 return Some(DeckPart::Fx(change));
             }
@@ -110,6 +136,80 @@ impl FxUnit {
     /// On, holding an effect, and not settled fully dry.
     pub(super) fn running(&self) -> bool {
         self.on && self.effect.is_some() && !self.mix.has_settled_at(0.0)
+    }
+
+    /// Deliver to the effect each parameter value a program prepared for
+    /// `frame` that differs from the last one delivered.
+    fn deliver(&mut self, rows: &DeckPrograms, unit: usize, frame: usize, frames: usize) {
+        let Some(effect) = self.effect.as_mut() else {
+            return;
+        };
+        for (index, last) in self.delivered.iter_mut().enumerate() {
+            if let Some(&value) = rows
+                .param_values(unit, index, frames)
+                .and_then(|values| values.get(frame))
+                && Some(value.to_bits()) != last.map(f64::to_bits)
+            {
+                effect.set(FxParamChange { index, value });
+                *last = Some(value);
+            }
+        }
+    }
+
+    /// Whether a program prepared a parameter value for `frame` that differs
+    /// from the last one delivered.
+    fn changes_at(&self, rows: &DeckPrograms, unit: usize, frame: usize, frames: usize) -> bool {
+        self.delivered.iter().enumerate().any(|(index, last)| {
+            rows.param_values(unit, index, frames)
+                .and_then(|values| values.get(frame))
+                .is_some_and(|value| Some(value.to_bits()) != last.map(f64::to_bits))
+        })
+    }
+
+    /// Run the unit over a stereo pair under the values programs prepared for
+    /// this chunk. The effect processes in runs of frames between parameter
+    /// changes, so each value applies on its frame whatever the chunking.
+    pub(super) fn run(
+        &mut self,
+        unit: usize,
+        [left, right]: [&mut [f32]; 2],
+        wet: &mut [SampleBuffer; 2],
+        programs: Option<&DeckPrograms>,
+    ) {
+        let frames = left.len().min(right.len());
+        let mix = programs.and_then(|rows| rows.mix_values(unit, frames));
+        let Some(rows) = programs.filter(|rows| {
+            self.effect.is_some()
+                && (0..self.delivered.len())
+                    .any(|index| rows.param_values(unit, index, frames).is_some())
+        }) else {
+            self.process(left, right, wet, mix);
+            return;
+        };
+        let mut start = 0;
+        while start < frames {
+            self.deliver(rows, unit, start, frames);
+            let mut end = start + 1;
+            while end < frames && !self.changes_at(rows, unit, end, frames) {
+                end += 1;
+            }
+            self.process(
+                &mut left[start..end],
+                &mut right[start..end],
+                wet,
+                mix.map(|values| &values[start..end]),
+            );
+            start = end;
+        }
+    }
+
+    /// Move over `frames` that sounded nothing: the last dry/wet and the last
+    /// effect parameter values programs prepared take effect at once.
+    pub(super) fn advance(&mut self, rows: &DeckPrograms, unit: usize, frames: usize) {
+        self.hold(rows.mix_values(unit, frames));
+        if let Some(last) = frames.checked_sub(1) {
+            self.deliver(rows, unit, last, frames);
+        }
     }
 
     /// Take the last dry/wet a program prepared, bypassing the ramp.

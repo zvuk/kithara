@@ -1034,9 +1034,7 @@ impl DeckEffect for ParameterGain {
         self.gain = change.value;
     }
 
-    fn reset(&mut self) {
-        self.gain = 0.75;
-    }
+    fn reset(&mut self) {}
 
     fn tail_exhausted(&self) -> bool {
         true

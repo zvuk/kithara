@@ -501,6 +501,7 @@ fn native_marked_at<R>(
         mixer_config.slots(),
         mixer_config.eq_bands(),
         mixer_config.fx_units(),
+        mixer_config.fx_parameters(),
     );
     snapshot.slots[0].mark = Some(mark);
     snapshot.slots[0].position = mark.position.as_secs_f64();

@@ -119,8 +119,7 @@ impl<E: SessionInbox> DeckMixer<E> {
             render: RenderPass::new(pools, shape, config)?,
             programs: DeckPrograms::new(
                 inputs.scope,
-                config.eq_bands(),
-                config.fx_units(),
+                [config.eq_bands(), config.fx_units(), config.fx_parameters()],
                 capacity,
             ),
             tracks: TrackSlots::new(slots),
@@ -330,6 +329,7 @@ impl<E: SessionInbox> DeckMixer<E> {
             self.deck.render.control_values(),
             self.deck.render.filter_knob(),
             self.deck.render.fx_mixes(),
+            self.deck.render.fx_delivered(),
         );
         self.snapshot.publish();
     }

@@ -80,6 +80,7 @@ impl RenderPass {
                     effect: None,
                     mix: smoothed(0.0, shape.sample_rate),
                     on: false,
+                    delivered: vec![None; config.fx_parameters()].into_boxed_slice(),
                 })
                 .collect(),
             wet: [
@@ -141,8 +142,7 @@ impl RenderPass {
         let gains = programs.map_or(&[][..], DeckPrograms::eq_values);
         self.eq.process_with_gains(left, right, gains)?;
         for (index, unit) in self.units.iter_mut().enumerate() {
-            let mix = programs.and_then(|rows| rows.mix_values(index, frames));
-            unit.process(left, right, &mut self.wet, mix);
+            unit.run(index, [&mut *left, &mut *right], &mut self.wet, programs);
         }
         let planes = &mut [&mut left[..frames], &mut right[..frames]];
         let knobs = programs.and_then(|rows| rows.values(DeckParameter::FILTER, frames));
@@ -238,7 +238,7 @@ impl RenderPass {
         }
         self.eq.advance_gains(programs.eq_values(), frames)?;
         for (index, unit) in self.units.iter_mut().enumerate() {
-            unit.hold(programs.mix_values(index, frames));
+            unit.advance(programs, index, frames);
         }
         let knobs = programs.values(DeckParameter::FILTER, frames);
         if let Some(value) = knobs.and_then(<[f64]>::last) {
@@ -637,7 +637,7 @@ mod tests {
                 .build(),
         );
         let scope = sender.open(1).expect("scope");
-        let mut programs = DeckPrograms::new(scope, 1, 2, 4);
+        let mut programs = DeckPrograms::new(scope, [1, 2, 0], 4);
         programs.write_curve(DeckParameter::eq_index(0), &program, start, 4);
         let (mut left, mut right) = ([0.125; 4], [-0.5; 4]);
         render
@@ -707,7 +707,7 @@ mod tests {
                 .collect(),
         )
         .expect("prepared gain program");
-        let mut programs = DeckPrograms::new(scope, 2, config.fx_units(), 3);
+        let mut programs = DeckPrograms::new(scope, [2, config.fx_units(), 0], 3);
         programs.write_curve(DeckParameter::eq_index(0), &curve, start, 3);
         actual.advance(3, &programs).expect("quiet gain rows");
         actual.idle();

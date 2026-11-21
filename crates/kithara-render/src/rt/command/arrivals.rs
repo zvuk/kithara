@@ -291,17 +291,7 @@ impl Deck {
                     }
                 }
                 DeckPart::Fx(change) => {
-                    let unit = change.unit();
-                    if unit >= self.render.fx_units() {
-                        return Err(DeckRefusal::MissingFxUnit { unit });
-                    }
-                    if let DeckFxChange::Param { change, .. } = change
-                        && !commands.get(..part_index).is_some_and(|preceding| {
-                            self.render.accepts_fx(unit, *change, preceding)
-                        })
-                    {
-                        return Err(DeckRefusal::RefusedFxParam { unit });
-                    }
+                    self.validate_fx(change, commands.get(..part_index).unwrap_or_default())?;
                 }
                 DeckPart::ContinueSource { .. }
                 | DeckPart::Clock { .. }
@@ -313,5 +303,30 @@ impl Deck {
             }
         }
         Ok(())
+    }
+
+    /// Check an FX change against the unit it names and the parts before it.
+    fn validate_fx(
+        &self,
+        change: &DeckFxChange,
+        preceding: &[DeckPart],
+    ) -> Result<(), DeckRefusal> {
+        let unit = change.unit();
+        if unit >= self.render.fx_units() {
+            return Err(DeckRefusal::MissingFxUnit { unit });
+        }
+        match change {
+            DeckFxChange::Install { effect, .. }
+                if effect.parameters().len() > self.programs.fx_parameters() =>
+            {
+                Err(DeckRefusal::FxParamCapacity { unit })
+            }
+            DeckFxChange::Param { change, .. }
+                if !self.render.accepts_fx(unit, *change, preceding) =>
+            {
+                Err(DeckRefusal::RefusedFxParam { unit })
+            }
+            _ => Ok(()),
+        }
     }
 }

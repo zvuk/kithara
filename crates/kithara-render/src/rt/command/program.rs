@@ -1,4 +1,5 @@
 use kithara_command::{Due, LevelInbox, ScopeId, Seq};
+use kithara_effects::{FxParamDescriptor, FxParamMapping};
 use kithara_signal::{SessionEpoch, SessionFrame};
 
 use super::{
@@ -12,11 +13,13 @@ use crate::bridge::{
 };
 
 /// Where each parameter of a deck keeps its program state: the fixed
-/// controls, then each EQ band the deck has room for, then each unit's dry/wet.
+/// controls, then each EQ band the deck has room for, then each unit's dry/wet,
+/// then each unit's effect parameters.
 #[derive(Clone, Copy)]
 struct Slots {
     bands: usize,
     units: usize,
+    params: usize,
 }
 
 impl Slots {
@@ -24,8 +27,12 @@ impl Slots {
         DeckParameter::eq_index(self.bands)
     }
 
+    const fn params_start(self) -> usize {
+        DeckParameter::eq_index(self.bands) + self.units
+    }
+
     const fn count(self) -> usize {
-        self.fx_start() + self.units
+        self.params_start() + self.units * self.params
     }
 
     const fn eq(self, index: usize) -> bool {
@@ -34,6 +41,16 @@ impl Slots {
 
     fn mix(self, unit: usize) -> Option<usize> {
         (unit < self.units).then(|| self.fx_start() + unit)
+    }
+
+    fn param(self, unit: usize, index: usize) -> Option<usize> {
+        (unit < self.units && index < self.params)
+            .then(|| self.params_start() + unit * self.params + index)
+    }
+
+    fn params_of(self, unit: usize) -> std::ops::Range<usize> {
+        let start = self.params_start() + unit * self.params;
+        start..start + self.params
     }
 
     fn of(self, parameter: DeckParameter) -> Option<usize> {
@@ -47,9 +64,10 @@ impl Slots {
                 ..
             } => self.mix(unit),
             DeckParameter::Fx {
-                target: FxTarget::Param(_),
+                unit,
+                target: FxTarget::Param(index),
                 ..
-            } => None,
+            } => self.param(unit, index),
             fixed => fixed.fixed(),
         }
     }
@@ -65,8 +83,16 @@ pub(in crate::rt) struct DeckPrograms {
 }
 
 impl DeckPrograms {
-    pub(in crate::rt) fn new(scope: ScopeId, bands: usize, units: usize, capacity: usize) -> Self {
-        let slots = Slots { bands, units };
+    pub(in crate::rt) fn new(
+        scope: ScopeId,
+        [bands, units, params]: [usize; 3],
+        capacity: usize,
+    ) -> Self {
+        let slots = Slots {
+            bands,
+            units,
+            params,
+        };
         let count = slots.count();
         Self {
             scope,
@@ -76,6 +102,11 @@ impl DeckPrograms {
             fields: vec![ParameterState::default(); count],
             values: (0..count).map(|_| Vec::with_capacity(capacity)).collect(),
         }
+    }
+
+    /// Effect parameters each unit has program room for.
+    pub(in crate::rt) const fn fx_parameters(&self) -> usize {
+        self.slots.params
     }
 
     pub(in crate::rt) fn has_seq(&self, seq: Seq) -> bool {
@@ -166,13 +197,27 @@ impl DeckPrograms {
             .and_then(|index| self.values(index, frames))
     }
 
+    /// The value a program prepared for effect parameter `index` of `unit`
+    /// over the next `frames` frames.
+    pub(in crate::rt) fn param_values(
+        &self,
+        unit: usize,
+        index: usize,
+        frames: usize,
+    ) -> Option<&[f64]> {
+        self.slots
+            .param(unit, index)
+            .and_then(|slot| self.values(slot, frames))
+    }
+
     pub(in crate::rt) fn publish(
         &self,
         snapshot: &mut DeckSnapshot,
         epoch: Option<SessionEpoch>,
         channels: [f64; DeckParameter::CHANNELS],
         knob: f64,
-        mixes: impl Iterator<Item = f64>,
+        mut mixes: impl Iterator<Item = f64>,
+        mut params: impl Iterator<Item = Option<f64>>,
     ) {
         snapshot.epoch = epoch;
         let layout = epoch.map(|_| LayoutRevision::new(self.scope, self.layout));
@@ -180,22 +225,32 @@ impl DeckPrograms {
         for (unit, revision) in snapshot.fx.iter_mut().zip(&self.units) {
             unit.layout = epoch.map(|_| LayoutRevision::new(self.scope, *revision));
         }
-        let mut mixes = mixes;
         for (index, field) in self.fields.iter().enumerate() {
             let program = field.program.applied();
             let authority = field.authority;
             if let Some(channel) = snapshot.channels.get_mut(index) {
-                *channel = ParameterSnapshot::new(channels[index], program, authority);
+                *channel = ParameterSnapshot::new(Some(channels[index]), program, authority);
             } else if index == DeckParameter::FILTER {
                 snapshot.filter.publish(knob, program, authority);
             } else if self.slots.eq(index) {
                 let band = index - DeckParameter::EQ_START;
                 snapshot.eq.publish_program(band, program, authority);
-            } else if let (Some(unit), Some(mix)) = (
-                snapshot.fx.get_mut(index - self.slots.fx_start()),
-                mixes.next(),
-            ) {
-                unit.mix = ParameterSnapshot::new(mix, program, authority);
+            } else if index < self.slots.params_start() {
+                if let (Some(unit), Some(mix)) = (
+                    snapshot.fx.get_mut(index - self.slots.fx_start()),
+                    mixes.next(),
+                ) {
+                    unit.mix = ParameterSnapshot::new(Some(mix), program, authority);
+                }
+            } else {
+                let offset = index - self.slots.params_start();
+                if let (Some(unit), Some(value)) = (
+                    snapshot.fx.get_mut(offset / self.slots.params),
+                    params.next(),
+                ) && let Some(entry) = unit.params.get_mut(offset % self.slots.params)
+                {
+                    *entry = ParameterSnapshot::new(value, program, authority);
+                }
             }
         }
     }
@@ -220,11 +275,14 @@ fn cancels(slots: Slots, part: &DeckPart, index: usize) -> bool {
         DeckPart::Eq(DeckEqChange::Gain { band, .. }) => {
             return index == DeckParameter::eq_index(*band);
         }
-        DeckPart::Fx(
-            DeckFxChange::Mix { unit, .. }
-            | DeckFxChange::Install { unit, .. }
-            | DeckFxChange::Clear { unit },
-        ) => return slots.mix(*unit) == Some(index),
+        DeckPart::Fx(DeckFxChange::Mix { unit, .. }) => return slots.mix(*unit) == Some(index),
+        DeckPart::Fx(DeckFxChange::Install { unit, .. } | DeckFxChange::Clear { unit }) => {
+            return slots.mix(*unit) == Some(index)
+                || (*unit < slots.units && slots.params_of(*unit).contains(&index));
+        }
+        DeckPart::Fx(DeckFxChange::Param { unit, change }) => {
+            return slots.param(*unit, change.index) == Some(index);
+        }
         DeckPart::Program { program, .. } => return slots.of(program.parameter()) == Some(index),
         DeckPart::Mix(DeckMixSettingsChange::Trim(_)) => DeckParameter::TRIM,
         DeckPart::Mix(DeckMixSettingsChange::Volume(_)) => DeckParameter::VOLUME,
@@ -270,7 +328,7 @@ impl Deck {
             let unavailable = DeckRefusal::ParameterUnavailable { parameter };
             let slot = slots.of(parameter).ok_or(unavailable)?;
             let field = self.programs.fields.get(slot).ok_or(unavailable)?;
-            self.validate_program_scope(parameter, layout_changes)?;
+            self.validate_program_scope(program, layout_changes)?;
             if *authority != field.authority
                 || commands.iter().any(|part| {
                     !matches!(part, DeckPart::Program { .. }) && cancels(slots, part, slot)
@@ -288,9 +346,10 @@ impl Deck {
     /// Check that a band or unit program names the layout the deck holds.
     fn validate_program_scope(
         &self,
-        parameter: DeckParameter,
+        program: &DeckProgram,
         layout_changes: bool,
     ) -> Result<(), DeckRefusal> {
+        let parameter = program.parameter();
         let unavailable = DeckRefusal::ParameterUnavailable { parameter };
         match parameter {
             DeckParameter::EqBand { band, layout } => {
@@ -299,13 +358,31 @@ impl Deck {
                     return Err(unavailable);
                 }
             }
-            DeckParameter::Fx { unit, layout, .. } => {
+            DeckParameter::Fx {
+                unit,
+                layout,
+                target,
+            } => {
                 let current = self.programs.units.get(unit).copied().ok_or(unavailable)?;
                 if layout != LayoutRevision::new(self.programs.scope, current) {
                     return Err(DeckRefusal::ParameterOutdated { parameter });
                 }
                 if !self.render.holds_fx(unit) {
                     return Err(unavailable);
+                }
+                if let FxTarget::Param(index) = target {
+                    let range = program.curve().value_range();
+                    let takes = self
+                        .render
+                        .fx_param(unit, index)
+                        .filter(|descriptor| descriptor.mapping().is_some())
+                        .is_some_and(|descriptor| {
+                            descriptor.range().contains(range.start())
+                                && descriptor.range().contains(range.end())
+                        });
+                    if !takes {
+                        return Err(unavailable);
+                    }
                 }
             }
             _ => {}
@@ -393,9 +470,23 @@ impl Deck {
                     fields.fill(ParameterState::default());
                 }
             }
-            DeckPart::Fx(DeckFxChange::Install { unit, .. } | DeckFxChange::Clear { unit }) => {
+            DeckPart::Fx(
+                change @ (DeckFxChange::Install { unit, .. } | DeckFxChange::Clear { unit }),
+            ) => {
                 if let Some(revision) = self.programs.units.get_mut(*unit) {
                     *revision = Some(due.seq());
+                    let declared = match change {
+                        DeckFxChange::Install { effect, .. } => effect.parameters(),
+                        _ => &[],
+                    };
+                    let slots = self.programs.slots.params_of(*unit);
+                    if let Some(fields) = self.programs.fields.get_mut(slots) {
+                        for (index, field) in fields.iter_mut().enumerate() {
+                            field.logarithmic =
+                                declared.get(index).and_then(FxParamDescriptor::mapping)
+                                    == Some(FxParamMapping::Log);
+                        }
+                    }
                 }
             }
             _ => {}

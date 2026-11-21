@@ -21,7 +21,12 @@ impl MixerInputs {
         let slots = config.slots().get();
         let (events_tx, events_rx) =
             HeapRb::<DeckEvent>::new(slots * crate::consts::EVENTS_PER_SLOT).split();
-        let initial = DeckSnapshot::new(config.slots(), config.eq_bands(), config.fx_units());
+        let initial = DeckSnapshot::new(
+            config.slots(),
+            config.eq_bands(),
+            config.fx_units(),
+            config.fx_parameters(),
+        );
         let (snapshot_in, snapshot_out) = triple_buffer(&initial);
         (
             DeckEnds {
