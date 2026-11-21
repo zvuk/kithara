@@ -6,8 +6,10 @@ use std::{
 
 use fearless_simd::{Level, dispatch, prelude::*};
 
-use super::simd::{blocks, store, vector};
-use crate::fade::FadeCurve;
+use crate::{
+    backend::simd::{blocks, store, vector},
+    fade::FadeCurve,
+};
 
 mod consts {
     /// Progress at or below which the fade is fully outgoing (firewheel's edge).
@@ -44,7 +46,7 @@ pub(crate) fn gains(
 }
 
 #[inline(always)]
-pub(super) fn gains_kernel<S: Simd>(
+pub(in crate::backend) fn gains_kernel<S: Simd>(
     simd: S,
     curve: FadeCurve,
     positions: &[f32],

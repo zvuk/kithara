@@ -1,9 +1,12 @@
 use kithara_command::Seq;
 use kithara_signal::{SessionEpoch, SessionFrame};
-use num_traits::ToPrimitive;
 
 use super::{PlayerTrack, RtSink};
-use crate::bridge::{ParameterCurve, SlotBinding, SlotOutputSnapshot};
+use crate::{
+    bridge::{ParameterCurve, SlotBinding, SlotOutputSnapshot},
+    consts::FADE_CHUNK,
+    rt::command::parameter::{ParameterState, ProgramState},
+};
 
 /// Applied complete-output amplitude and the inbox-owned program that supplies it.
 #[derive(fieldwork::Fieldwork)]
@@ -11,76 +14,60 @@ use crate::bridge::{ParameterCurve, SlotBinding, SlotOutputSnapshot};
 pub(super) struct SlotOutput {
     #[field(get, vis = "pub(super)")]
     gain: f64,
-    program: ProgramState,
-    #[field(get, vis = "pub(super)", copy)]
-    authority: Option<Seq>,
-}
-
-#[derive(Clone, Copy)]
-enum ProgramState {
-    Manual,
-    Running(Seq),
-    Held(Seq),
+    state: ParameterState,
 }
 
 impl Default for SlotOutput {
     fn default() -> Self {
         Self {
             gain: 1.0,
-            program: ProgramState::Manual,
-            authority: None,
+            state: ParameterState::default(),
         }
     }
 }
 
 impl SlotOutput {
-    pub(super) fn program(&self) -> Option<Seq> {
-        match self.program {
-            ProgramState::Manual => None,
-            ProgramState::Running(seq) | ProgramState::Held(seq) => Some(seq),
+    delegate::delegate! {
+        to self.state.program {
+            #[call(applied)]
+            pub(super) fn program(&self) -> Option<Seq>;
+            pub(super) fn active(&self) -> Option<Seq>;
         }
     }
 
-    pub(super) fn active(&self) -> Option<Seq> {
-        match self.program {
-            ProgramState::Running(seq) => Some(seq),
-            ProgramState::Manual | ProgramState::Held(_) => None,
-        }
+    pub(super) fn authority(&self) -> Option<Seq> {
+        self.state.authority
     }
 
     pub(super) fn replace(&mut self, seq: Seq) -> Option<Seq> {
         let previous = self.active();
-        self.program = ProgramState::Running(seq);
+        self.state.begin(seq);
         previous
     }
 
     /// Retire only custody; the last applied amplitude remains authoritative.
     pub(super) fn finish(&mut self) -> Option<Seq> {
         let seq = self.active()?;
-        self.program = ProgramState::Held(seq);
+        self.state.program = ProgramState::Held(seq);
         Some(seq)
     }
 
     pub(super) fn cancel(&mut self) -> Option<Seq> {
         let previous = self.active();
-        self.program = ProgramState::Manual;
+        self.state.program = ProgramState::Manual;
         previous
     }
 
     pub(super) fn revoke(&mut self, seq: Seq) -> Option<Seq> {
-        self.authority = Some(seq);
+        self.state.authority = Some(seq);
         self.cancel()
     }
 
-    pub(super) fn at(&mut self, curve: &ParameterCurve, at: SessionFrame) {
-        if let Some(elapsed) = at.frames_since(curve.start()) {
-            let (left, right, progression) = curve.segment_at(elapsed);
-            // Preserve exact knot bits, including signed zero.
-            self.gain = if left == right || progression == 0.0 {
-                left
-            } else {
-                left + (right - left) * progression
-            };
+    fn observe(&mut self, curve: &ParameterCurve, at: SessionFrame) {
+        if at >= curve.start() {
+            let mut value = [self.gain];
+            self.state.write(curve, at, &mut value);
+            self.gain = value[0];
         }
     }
 
@@ -92,21 +79,34 @@ impl SlotOutput {
         planes: &mut [&mut [f32]],
         range: std::ops::Range<usize>,
     ) {
+        if planes
+            .iter()
+            .any(|plane| plane.get(range.clone()).is_none())
+        {
+            return;
+        }
         if curve.is_none() && self.gain == 1.0 {
             return;
         }
-        for index in range {
+        for from in range.clone().step_by(FADE_CHUNK) {
+            let end = range.end.min(from.saturating_add(FADE_CHUNK));
+            let frames = end - from;
+            let mut values = [self.gain; FADE_CHUNK];
             if let Some(curve) = curve {
-                let offset = i64::try_from(index).expect("prepared block frame fits session time");
-                let at = SessionFrame::new(i64::from(start).saturating_add(offset));
-                self.at(curve, at);
+                let at = SessionFrame::new(
+                    i64::from(start).saturating_add(i64::try_from(from).unwrap_or(i64::MAX)),
+                );
+                self.state.write(curve, at, &mut values[..frames]);
             }
-            let gain = self
-                .gain
-                .to_f32()
-                .expect("prepared amplitude fits the f32 audio path");
+            if let Some(value) = values.get(frames.saturating_sub(1)) {
+                self.gain = *value;
+            }
+            let mut gains = [0.0; FADE_CHUNK];
+            kithara_dsp::narrow_f64(&values[..frames], &mut gains[..frames]);
             for plane in &mut *planes {
-                plane[index] *= gain;
+                if let Some(samples) = plane.get_mut(from..end) {
+                    kithara_dsp::multiply_in_place(samples, &gains[..frames]);
+                }
             }
         }
     }
@@ -144,7 +144,7 @@ impl PlayerTrack {
             self.output.replace(seq).is_none(),
             "the previous output program was retired"
         );
-        self.output.at(curve, at);
+        self.output.observe(curve, at);
         if curve.end() <= at {
             let _ = self.output.finish();
         }
@@ -155,7 +155,7 @@ impl PlayerTrack {
         curve: &ParameterCurve,
         at: SessionFrame,
     ) -> Option<Seq> {
-        self.output.at(curve, at);
+        self.output.observe(curve, at);
         (curve.end() <= at).then(|| self.output.finish()).flatten()
     }
 
@@ -166,7 +166,7 @@ impl PlayerTrack {
         at: SessionFrame,
     ) -> Option<Seq> {
         if let Some(curve) = curve {
-            self.output.at(curve, at);
+            self.output.observe(curve, at);
         }
         self.output.revoke(seq)
     }
@@ -177,7 +177,7 @@ impl PlayerTrack {
         at: SessionFrame,
     ) -> Option<Seq> {
         if let Some(curve) = curve {
-            self.output.at(curve, at);
+            self.output.observe(curve, at);
         }
         self.output.cancel()
     }
@@ -201,6 +201,7 @@ impl PlayerTrack {
 mod tests {
     use kithara_dsp::curve::CurveShape;
     use kithara_test_utils::kithara;
+    use num_traits::ToPrimitive;
 
     use super::*;
     use crate::bridge::ParameterKnot;

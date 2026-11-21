@@ -1,7 +1,9 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
     fs::{self, File},
     io::{self, Read, Write},
+    path::{Component, Path},
     process::{Command, Output, Stdio},
     thread,
 };
@@ -9,12 +11,13 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tempfile::Builder;
 
 use super::{
     dispatch,
-    executable::build,
-    source::{Sources, Target, metadata, select, targets},
+    executable::{Binary, build, callback_ids, ensure_no_criterion_results},
+    source::{Sources, Target, build_provenance, metadata, select, target_parts, targets},
 };
 use crate::{Ctx, verdict::ChildFailure};
 
@@ -65,6 +68,177 @@ impl Request {
     }
 }
 
+const PREFLIGHT_ENV: &str = "BENCH_PREFLIGHT";
+pub(super) const PREFLIGHT_STRIP: &str = "CARGO_PROFILE_BENCH_STRIP";
+
+#[derive(Deserialize)]
+pub(super) struct Preflight {
+    head: String,
+    collections: BTreeMap<String, Collection>,
+}
+
+#[derive(Deserialize)]
+struct Collection {
+    filter: String,
+    expected_head_ids: Vec<String>,
+    expected_base_ids: Option<Vec<String>>,
+}
+
+impl Preflight {
+    pub(super) fn parse(request: &Request, input: &str, measure: bool) -> Result<Self> {
+        ensure!(
+            !measure,
+            "preflight cannot run with benchmark timing enabled"
+        );
+        target_parts(&request.target)?;
+        ensure!(
+            request.filter.is_empty(),
+            "preflight filters belong to the declaration; leave BENCH_FILTER empty"
+        );
+        ensure!(
+            [&request.base, &request.head].into_iter().all(|sha| {
+                sha.len() == 40
+                    && sha
+                        .bytes()
+                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            }),
+            "preflight requires full lowercase base and head commit SHAs"
+        );
+        let declaration: Self =
+            serde_json::from_str(input).context("parse preflight declaration")?;
+        ensure!(
+            declaration.head == request.head,
+            "preflight declaration head does not match BENCH_REF"
+        );
+        ensure!(
+            !declaration.collections.is_empty(),
+            "preflight has no collections"
+        );
+        for (name, collection) in &declaration.collections {
+            let mut components = Path::new(name).components();
+            ensure!(
+                components.next() == Some(Component::Normal(name.as_ref()))
+                    && components.next().is_none()
+                    && !name.contains(['/', '\\', ':'])
+                    && !name.chars().any(char::is_control)
+                    && !matches!(name.as_str(), "elf" | "provenance.txt"),
+                "preflight collection name must be one safe path component"
+            );
+            ensure!(
+                !collection.filter.trim().is_empty()
+                    && !collection.filter.starts_with('-')
+                    && !collection.filter.chars().any(char::is_control),
+                "preflight collection {name:?} needs a valid filter"
+            );
+            for ids in std::iter::once(&collection.expected_head_ids)
+                .chain(collection.expected_base_ids.iter())
+            {
+                ensure!(
+                    !ids.is_empty()
+                        && ids.iter().all(|id| !id.trim().is_empty())
+                        && ids.iter().collect::<BTreeSet<_>>().len() == ids.len(),
+                    "preflight collection {name:?} has empty or duplicate expected IDs"
+                );
+            }
+            if let Some(base_ids) = &collection.expected_base_ids {
+                ensure!(
+                    base_ids.iter().collect::<BTreeSet<_>>()
+                        == collection.expected_head_ids.iter().collect(),
+                    "preflight collection {name:?} declares different base/head IDs"
+                );
+            }
+        }
+        Ok(declaration)
+    }
+
+    fn collect(
+        self,
+        ctx: &Ctx,
+        sources: &Sources,
+        binaries: [&Binary; 2],
+        digest: &str,
+        log: &mut Log,
+    ) -> Result<()> {
+        let parent = ctx.root.join("bench-results");
+        fs::create_dir_all(&parent)?;
+        let results = Builder::new()
+            .prefix("preflight-")
+            .tempdir_in(parent)?
+            .keep();
+        let mut checks = Vec::new();
+        let mut collections: Vec<_> = self.collections.iter().collect();
+        collections.sort_by_key(|(_, collection)| collection.expected_base_ids.is_none());
+        for (name, collection) in collections {
+            let arms = collection
+                .expected_base_ids
+                .iter()
+                .map(|ids| ("base", ids, binaries[0]))
+                .chain(std::iter::once((
+                    "head",
+                    &collection.expected_head_ids,
+                    binaries[1],
+                )));
+            for (arm, expected, binary) in arms {
+                let directory = results.join(name).join(arm);
+                fs::create_dir_all(&directory)?;
+                let (listed, output) = binary.ids(&collection.filter, &directory, log)?;
+                fs::write(directory.join("list.txt"), output)?;
+                let expected = expected.iter().cloned().collect();
+                checks.push((
+                    collection.filter.as_str(),
+                    directory,
+                    binary,
+                    expected,
+                    listed,
+                ));
+            }
+        }
+        for (_, directory, _, expected, listed) in &checks {
+            check_ids(expected, &listed.iter().cloned().collect())
+                .with_context(|| format!("preflight inventory {}", directory.display()))?;
+        }
+        for (filter, directory, binary, _, listed) in checks {
+            let output = binary.test(filter, &directory, log)?;
+            fs::write(directory.join("test.txt"), &output)?;
+            let callbacks = callback_ids(&output)
+                .with_context(|| format!("preflight callbacks {}", directory.display()))?;
+            ensure!(
+                listed == callbacks,
+                "preflight callbacks {} differ from inventory order; listed {listed:?}, ran {callbacks:?}",
+                directory.display()
+            );
+            ensure_no_criterion_results(&directory)?;
+        }
+
+        let elf = results.join("elf");
+        fs::create_dir(&elf)?;
+        let mut provenance = build_provenance(ctx, sources, digest, log)?;
+        for (arm, binary) in ["base", "head"].into_iter().zip(binaries) {
+            let hash = binary.retain(&elf.join(arm))?;
+            writeln!(provenance, "{arm} ELF SHA-256 {hash}")?;
+        }
+        log.line(provenance.trim_end())?;
+        fs::write(results.join("provenance.txt"), provenance)?;
+        log.line(&format!(
+            "Untimed benchmark preflight evidence: {}",
+            results.display()
+        ))
+    }
+}
+
+fn check_ids(expected: &BTreeSet<String>, observed: &BTreeSet<String>) -> Result<()> {
+    ensure!(
+        expected == observed,
+        "Criterion IDs do not match; {}",
+        selection_difference(expected, observed)
+    );
+    Ok(())
+}
+
+pub(super) fn sha256(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
 #[derive(Deserialize)]
 pub(super) struct Deployment {
     pub(super) github_repo: String,
@@ -85,22 +259,31 @@ impl Deployment {
 }
 
 pub(crate) fn run(args: &BenchArgs, ctx: &Ctx) -> Result<()> {
-    match &args.command {
+    let (request, measure) = match &args.command {
         BenchCommand::List => {
             for target in targets(ctx.metadata()?) {
                 println!("{}", target.id());
             }
-            Ok(())
+            return Ok(());
         }
-        BenchCommand::Dispatch(args) => dispatch::run(args, ctx),
-        BenchCommand::Build(request) => execute(ctx, request, false),
-        BenchCommand::Run(request) => execute(ctx, request, true),
-        BenchCommand::Ci(request) => execute(
-            ctx,
+        BenchCommand::Dispatch(args) => return dispatch::run(args, ctx),
+        BenchCommand::Build(request) => (request, false),
+        BenchCommand::Run(request) => (request, true),
+        BenchCommand::Ci(request) => (
             request,
             std::env::var("RUN_BENCHMARKS").as_deref() == Ok("1"),
         ),
-    }
+    };
+    let preflight = std::env::var_os(PREFLIGHT_ENV).filter(|value| !value.is_empty());
+    let preflight = preflight
+        .as_ref()
+        .map(|value| value.to_str().context("BENCH_PREFLIGHT must be UTF-8"))
+        .transpose()?;
+    ensure!(
+        preflight.is_none() || cfg!(target_os = "linux"),
+        "benchmark preflight requires Linux"
+    );
+    execute(ctx, request, measure, preflight)
 }
 
 pub(super) struct Log(File);
@@ -202,7 +385,12 @@ fn stream_output(command: &mut Command, log: &mut File) -> io::Result<Output> {
     })
 }
 
-fn execute(ctx: &Ctx, request: &Request, measure: bool) -> Result<()> {
+fn execute(ctx: &Ctx, request: &Request, measure: bool, input: Option<&str>) -> Result<()> {
+    let preflight = input
+        .map(|raw| {
+            Preflight::parse(request, raw, measure).map(|parsed| (parsed, sha256(raw.as_bytes())))
+        })
+        .transpose()?;
     ensure!(
         request.target.is_empty() || !request.target.chars().any(char::is_control),
         "invalid benchmark target"
@@ -216,7 +404,10 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool) -> Result<()> {
         "benchmark filter must not be a command option"
     );
     let mut log = Log(File::create(ctx.root.join("bench-results.txt"))?);
-    let sources = Sources::prepare(ctx, request, &mut log)?;
+    if let Some((_, digest)) = &preflight {
+        log.line(&format!("preflight declaration SHA-256 {digest}"))?;
+    }
+    let sources = Sources::prepare(ctx, request, preflight.is_some(), &mut log)?;
     let cargo = ctx.config.tools.program("cargo");
     let head = select(&metadata(&sources.head, cargo)?, &request.target)?;
     ensure!(!head.is_empty(), "workspace contains no benchmark targets");
@@ -243,6 +434,7 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool) -> Result<()> {
                 target,
                 &sources.scratch.path().join(format!("base-build-{index}")),
                 ctx,
+                preflight.is_some(),
                 &mut log,
             )?)
         } else {
@@ -253,9 +445,16 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool) -> Result<()> {
             target,
             &sources.scratch.path().join(format!("head-build-{index}")),
             ctx,
+            preflight.is_some(),
             &mut log,
         )?;
         binaries.push((base, head));
+    }
+    if let Some((declaration, digest)) = preflight {
+        let [(Some(base), head)] = binaries.as_slice() else {
+            anyhow::bail!("preflight requires one target built for both arms");
+        };
+        return declaration.collect(ctx, &sources, [base, head], &digest, &mut log);
     }
     if !measure {
         return log
@@ -272,9 +471,11 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool) -> Result<()> {
         "BENCH_SAMPLE_SIZE must be an integer >=10"
     );
     for (base, head) in &binaries {
-        let ids = head.ids(&request.filter, &data, &mut log)?;
+        let (ids, _) = head.ids(&request.filter, &data, &mut log)?;
         if let Some(base) = base {
-            let base_ids = base.ids(&request.filter, &data, &mut log)?;
+            let (base_ids, _) = base.ids(&request.filter, &data, &mut log)?;
+            let ids = ids.into_iter().collect();
+            let base_ids = base_ids.into_iter().collect();
             ensure!(
                 base_ids == ids,
                 "base/head Criterion IDs do not match; {}",

@@ -20,6 +20,9 @@ verdict:
     - job: apple:test
       artifacts: true
       optional: true
+    - job: apple:net-units
+      artifacts: true
+      optional: true
     - job: apple:test-flash-off
       artifacts: true
       optional: true

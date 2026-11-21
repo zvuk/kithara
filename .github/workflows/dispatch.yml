@@ -53,6 +53,9 @@ on:
       bench_base_ref:
         type: string
         default: ""
+      bench_preflight:
+        type: string
+        default: ""
       narrow:
         description: >-
           Nextest filterset every test suite of the run is narrowed to. A lane
@@ -71,8 +74,8 @@ on:
 # whole night per push for the fleet. Another selection, or the other cadence,
 # is another question and keeps its run.
 concurrency:
-  group: dispatch-${{ github.ref }}-${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly') }}-${{ inputs.only || '' }}-${{ inputs.narrow || '' }}-${{ inputs.mutants || false }}-${{ inputs.bench_target }}-${{ inputs.bench_filter }}-${{ inputs.bench_ref }}-${{ inputs.bench_base_ref }}
-  cancel-in-progress: true
+  group: dispatch-${{ github.ref }}-${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly') }}-${{ inputs.only || '' }}-${{ inputs.narrow || '' }}-${{ inputs.mutants || false }}-${{ inputs.bench_target }}-${{ inputs.bench_filter }}-${{ inputs.bench_ref }}-${{ inputs.bench_base_ref }}${{ (inputs.bench_preflight || '') != '' && '-preflight' || '' }}
+  cancel-in-progress: ${{ (inputs.bench_preflight || '') == '' }}
 
 jobs:
   # The gate lanes a night adds to the ones every push already runs: the
@@ -116,6 +119,7 @@ jobs:
       bench_filter: ${{ inputs.bench_filter || '' }}
       bench_ref: ${{ inputs.bench_ref || '' }}
       bench_base_ref: ${{ inputs.bench_base_ref || '' }}
+      bench_preflight: ${{ inputs.bench_preflight || '' }}
 
   # Never on a schedule: `mutants` runs every suite, and `only` runs the lanes
   # it names.

@@ -1,4 +1,5 @@
 use std::{
+    fmt::Write as _,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -9,7 +10,10 @@ use cargo_metadata::{Metadata, MetadataCommand};
 use tempfile::{Builder, TempDir};
 use toml::Value;
 
-use super::{Log, Request};
+use super::{
+    Log, Request,
+    command::{PREFLIGHT_STRIP, sha256},
+};
 use crate::Ctx;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,16 +51,21 @@ pub(super) fn targets(metadata: &Metadata) -> Vec<Target> {
     targets
 }
 
+pub(super) fn target_parts(selector: &str) -> Result<Vec<&str>> {
+    let parts: Vec<_> = selector.split(':').collect();
+    ensure!(
+        (2..=3).contains(&parts.len()) && !parts[0].is_empty() && !parts[1].is_empty(),
+        "bench target must be package:bench[:required-features]"
+    );
+    Ok(parts)
+}
+
 pub(super) fn select(metadata: &Metadata, selector: &str) -> Result<Vec<Target>> {
     let available = targets(metadata);
     if selector.is_empty() {
         return Ok(available);
     }
-    let parts: Vec<_> = selector.split(':').collect();
-    ensure!(
-        (2..=3).contains(&parts.len()),
-        "bench target must be package:bench[:required-features]"
-    );
+    let parts = target_parts(selector)?;
     let target = available
         .into_iter()
         .find(|target| target.package == parts[0] && target.bench == parts[1])
@@ -84,7 +93,12 @@ pub(super) struct Sources {
 }
 
 impl Sources {
-    pub(super) fn prepare(ctx: &Ctx, request: &Request, log: &mut Log) -> Result<Self> {
+    pub(super) fn prepare(
+        ctx: &Ctx,
+        request: &Request,
+        preflight: bool,
+        log: &mut Log,
+    ) -> Result<Self> {
         let target = ctx.metadata()?.target_directory.as_std_path();
         fs::create_dir_all(target)?;
         let scratch = Builder::new().prefix("bench-stage-").tempdir_in(target)?;
@@ -123,7 +137,10 @@ impl Sources {
                 log,
             )?)
         };
-        for (name, root) in [("head", Some(&head)), ("base", base.as_ref())] {
+        for (name, root, requested) in [
+            ("head", Some(&head), &request.head),
+            ("base", base.as_ref(), &request.base),
+        ] {
             if let Some(root) = root {
                 let output = log.output(
                     Command::new("git")
@@ -131,10 +148,13 @@ impl Sources {
                         .current_dir(root),
                     false,
                 )?;
-                log.line(&format!(
-                    "{name} commit {}",
-                    String::from_utf8_lossy(&output.stdout).trim()
-                ))?;
+                let actual = String::from_utf8(output.stdout)?;
+                let actual = actual.trim();
+                ensure!(
+                    !preflight || actual == requested,
+                    "preflight {name} staged {actual}, expected {requested}"
+                );
+                log.line(&format!("{name} commit {actual}"))?;
             }
         }
         Ok(Self {
@@ -184,4 +204,79 @@ pub(super) fn metadata(root: &Path, cargo: &str) -> Result<Metadata> {
         .other_options(vec!["--locked".to_owned()])
         .exec()
         .context("read benchmark source metadata")
+}
+
+pub(super) fn build_provenance(
+    ctx: &Ctx,
+    sources: &Sources,
+    digest: &str,
+    log: &mut Log,
+) -> Result<String> {
+    let controller = log.output(
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&ctx.root),
+        true,
+    )?;
+    let mut proof = format!(
+        "controller {}\nOS {}\nARCH {}\ndeclaration SHA-256 {digest}\n{PREFLIGHT_STRIP}=none\n",
+        std::str::from_utf8(&controller.stdout)?.trim(),
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    let base = sources.base.as_deref().context("preflight base source")?;
+    for (arm, root) in [("base", base), ("head", &sources.head)] {
+        let commit = log.output(
+            Command::new("git")
+                .args(["cat-file", "commit", "HEAD"])
+                .current_dir(root),
+            true,
+        )?;
+        let header = std::str::from_utf8(&commit.stdout)?
+            .split_once("\n\n")
+            .context("raw commit header")?
+            .0;
+        writeln!(proof, "{arm} raw commit header\n{header}")?;
+        for (tool, arg) in [("rustc", "-vV"), ("cargo", "-V")] {
+            let output = log.output(
+                Command::new(ctx.config.tools.program(tool))
+                    .arg(arg)
+                    .current_dir(root),
+                true,
+            )?;
+            writeln!(
+                proof,
+                "{arm} {}",
+                std::str::from_utf8(&output.stdout)?.trim()
+            )?;
+        }
+        let hash = sha256(&fs::read(root.join("Cargo.lock"))?);
+        writeln!(proof, "{arm} Cargo.lock SHA-256 {hash}")?;
+    }
+    for name in ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC_WRAPPER"] {
+        writeln!(proof, "{name}={:?}", std::env::var_os(name))?;
+    }
+    for profile in ["BENCH", "RELEASE"] {
+        for field in [
+            "CODEGEN_UNITS",
+            "DEBUG",
+            "DEBUG_ASSERTIONS",
+            "INCREMENTAL",
+            "LTO",
+            "OPT_LEVEL",
+            "OVERFLOW_CHECKS",
+            "PANIC",
+            "RPATH",
+            "SPLIT_DEBUGINFO",
+            "STRIP",
+        ] {
+            let name = format!("CARGO_PROFILE_{profile}_{field}");
+            if name != PREFLIGHT_STRIP
+                && let Some(value) = std::env::var_os(&name)
+            {
+                writeln!(proof, "{name}={value:?}")?;
+            }
+        }
+    }
+    Ok(proof)
 }

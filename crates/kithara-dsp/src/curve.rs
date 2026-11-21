@@ -4,7 +4,7 @@
 pub struct CurveShape(Progression);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Progression {
+pub(crate) enum Progression {
     Hold,
     Linear,
     Cubic { first: f64, second: f64 },
@@ -35,25 +35,9 @@ impl CurveShape {
         }
     }
 
-    /// Evaluate normalized time in f64; exact endpoints are copied directly.
-    #[must_use]
-    pub fn progress(self, time: f64) -> f64 {
-        if time <= 0.0 {
-            return 0.0;
-        }
-        if time >= 1.0 {
-            return 1.0;
-        }
-        match self.0 {
-            Progression::Hold => 0.0,
-            Progression::Linear => time,
-            Progression::Cubic { first, second } => {
-                let remaining = 1.0 - time;
-                let left = 3.0 * remaining * remaining * time * first;
-                let right = 3.0 * remaining * time * time * second;
-                ((left + right) + time * time * time).clamp(0.0, 1.0)
-            }
-        }
+    /// Interpolate normalized positions in place, copying exact endpoints outside zero to one.
+    pub fn process(self, positions: &mut [f64], endpoints: [f64; 2]) {
+        crate::backend::curve::interpolate(self.0, positions, endpoints);
     }
 }
 
@@ -85,12 +69,16 @@ mod tests {
             ((0.0, 1.0), [0.0, 0.15625, 0.5, 0.84375, 1.0]),
         ] {
             let shape = CurveShape::cubic(handles.0, handles.1).expect("bounded handles");
-            for (time, expected) in [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().zip(expected) {
-                assert_eq!(shape.progress(time), expected);
-            }
+            let mut values = [0.0, 0.25, 0.5, 0.75, 1.0];
+            shape.process(&mut values, [0.0, 1.0]);
+            assert_eq!(values, expected);
         }
-        assert_eq!(CurveShape::HOLD.progress(0.5), 0.0);
-        assert_eq!(CurveShape::LINEAR.progress(0.5), 0.5);
+        let mut values = [0.5];
+        CurveShape::HOLD.process(&mut values, [0.0, 1.0]);
+        assert_eq!(values, [0.0]);
+        values = [0.5];
+        CurveShape::LINEAR.process(&mut values, [0.0, 1.0]);
+        assert_eq!(values, [0.5]);
     }
 
     #[kithara::test]
@@ -102,14 +90,18 @@ mod tests {
             CurveShape::cubic(1.0, 1.0).expect("ease out"),
             CurveShape::cubic(0.0, 1.0).expect("S shape"),
         ] {
+            let mut values = [0.0; 1025];
+            for (value, frame) in values.iter_mut().zip(0..=1024_u16) {
+                *value = f64::from(frame) / 1024.0;
+            }
+            shape.process(&mut values, [0.0, 1.0]);
             let mut previous = 0.0;
-            for frame in 0..=1024_u16 {
-                let value = shape.progress(f64::from(frame) / 1024.0);
+            for value in values {
                 assert!((previous..=1.0).contains(&value));
                 previous = value;
             }
-            assert_eq!(shape.progress(0.0).to_bits(), 0.0_f64.to_bits());
-            assert_eq!(shape.progress(1.0).to_bits(), 1.0_f64.to_bits());
+            assert_eq!(values[0].to_bits(), 0.0_f64.to_bits());
+            assert_eq!(values[1024].to_bits(), 1.0_f64.to_bits());
         }
     }
 }

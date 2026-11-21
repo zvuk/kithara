@@ -210,8 +210,8 @@ pub(crate) fn make_selenium_attrs(_args: &TestArgs) -> TokenStream2 {
     quote! {}
 }
 
-/// Emit a `const _: ()` block that tells `wasm-bindgen-test-runner` to use a
-/// dedicated Web Worker instead of Node.js. Multiple copies are harmless — the
+/// Emit a `const _: ()` block that tells the Wasm test runner to run the binary
+/// in a dedicated Web Worker instead of on the page. Multiple copies are harmless — the
 /// anonymous `const _` wrapper prevents name collisions, and the linker merges
 /// the `__wasm_bindgen_test_unstable` section entries.
 pub(crate) fn make_dedicated_worker_config() -> TokenStream2 {
