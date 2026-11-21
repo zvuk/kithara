@@ -3,7 +3,7 @@ use kithara::{
         AudioDecoderConfig, DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent,
     },
     decode::DecoderBackend,
-    events::{EventBus, TrackId},
+    events::TrackId,
     play::{DeckMixSettingsChange, Settled},
     signal::SegmentId,
 };
@@ -44,7 +44,7 @@ pub(crate) struct ProductHarness {
     operation_grid: Option<kithara::warp::BeatGridSnapshot>,
     capture_marks: Vec<(SessionFrame, TrackId, SlotSnapshot)>,
     host_grids: Vec<(SessionFrame, kithara::warp::BeatGridSnapshot)>,
-    decoded: Vec<Arc<Mutex<super::control::DecodedRecorder>>>,
+    pub(super) decoded: Vec<Arc<Mutex<super::control::DecodedRecorder>>>,
     source_uris: Vec<String>,
     /// The second each deck's start opens it at, before its stagger.
     cues: Vec<f64>,
@@ -567,7 +567,7 @@ impl ProductHarness {
             .initial_abr_mode(AbrMode::manual(0))
             .discriminator(format!("{}-{provider:?}-{index}", case.id))
             .maybe_beat_grid(case.gridded.then(|| prepared.beat_grid(index)));
-            let events = EventBus::default();
+            let events = deck.bus().scoped();
             decoder_receivers.push(events.subscribe::<DecoderEvent>());
             let config = config.events(events);
             let config = if let Some(backend) = decoder {
@@ -660,7 +660,9 @@ impl ProductHarness {
                 });
             harness.decoder_rates.push(rates);
         }
-        harness.deliver_grids(case).await;
+        if !case.defer_grid {
+            harness.deliver_grids(case).await;
+        }
         harness.set_tempo(case, case.start_bpm(), true).await;
         harness.warm_up_transport(case).await;
         if !case.paused {

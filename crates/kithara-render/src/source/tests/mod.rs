@@ -61,6 +61,8 @@ use num_traits::AsPrimitive;
 use super::core::*;
 use crate::{LaneCommand, LaneFrame, LaneProtocol, LaneSetup};
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+mod clock;
 mod consts;
 mod doubles;
 mod flow;

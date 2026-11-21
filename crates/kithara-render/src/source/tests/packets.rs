@@ -202,22 +202,62 @@ fn a_stalled_source_holds_staged_frames_for_the_next_packet() {
     assert_eq!(packets.first().map(|&(start, _)| start), Some(0));
 }
 
+/// A decoder stamps each chunk when it emits it, so the outgoing frames a new
+/// revision finds are the lane's own, staged or still pending in the chunk it
+/// cuts into packets. They end the outgoing source before the lane adopts the
+/// revision, and none of them renders after it.
 #[kithara::test]
-fn a_discontinuity_never_joins_staged_frames_to_the_next_chunk() {
+#[case::staged(SHORT, false)]
+#[case::pending(PACKET + SHORT, true)]
+fn a_discontinuity_never_joins_staged_frames_to_the_next_chunk(
+    #[case] outgoing: u32,
+    #[case] pending: bool,
+) {
     let pools = pools();
     let discontinuity = Arc::new(Mutex::new(SourceDiscontinuity::new(1, spec())));
+    let mut chunks = chunks(&pools, &[outgoing]);
+    for chunk in &mut chunks {
+        chunk.meta.source_revision = 1;
+    }
     let raw = RevisionSource {
-        chunks: chunks(&pools, &[SHORT]),
+        chunks,
         discontinuity: Arc::clone(&discontinuity),
     };
     let (mut source, _lane) = packet_lane(&pools, raw);
-    assert_eq!(packets(&mut source, 4), []);
+    let mut before = Vec::new();
+    for _ in 0..64 {
+        let step = source.step_track();
+        flush_deferred(&mut source);
+        match step {
+            TrackStep::Produced(Fetch::Data { data, .. }) => {
+                before.push((data.meta.frame_offset, data.meta.frames));
+                break;
+            }
+            TrackStep::Blocked(_) => break,
+            TrackStep::Failed(failure) => panic!("the lane failed: {failure:?}"),
+            TrackStep::Eof => panic!("the outgoing source has no end"),
+            TrackStep::Produced(_) | TrackStep::StateChanged => {}
+        }
+    }
+    let rendered = u64::from(outgoing - SHORT);
+    assert_eq!(before, [(0, PACKET)][..usize::from(pending)]);
+    assert_eq!(
+        source.pending_input.is_some(),
+        pending,
+        "the outgoing frames the revision finds are Render's own"
+    );
 
     *discontinuity.lock() = SourceDiscontinuity::new(2, spec());
-    source.source.chunks.push_back(ramp(&pools, 10_000, PACKET));
+    let mut incoming = ramp(&pools, 10_000, PACKET);
+    incoming.meta.source_revision = 2;
+    source.source.chunks.push_back(incoming);
     let packets = packets(&mut source, 4);
 
-    assert_eq!(packets, [(0, SHORT), (10_000, PACKET)]);
+    assert_eq!(packets, [(rendered, SHORT), (10_000, PACKET)]);
+    assert_eq!(
+        source.discontinuity().map(|stamp| stamp.revision()),
+        Some(2)
+    );
 }
 
 /// An ABR variant promotion keeps the raw source coordinates but may drop the
