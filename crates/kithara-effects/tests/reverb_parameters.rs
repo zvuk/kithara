@@ -56,6 +56,7 @@ fn reverb_native_domains_use_ranged_bounds_and_seconds() {
     for rate in [8000, 48000, 96000] {
         let mut reverb = Reverb::new(
             std::num::NonZeroU32::new(rate).unwrap(),
+            std::num::NonZeroU32::new(rate).unwrap(),
             ReverbConfig::default(),
             &pools(),
         )
