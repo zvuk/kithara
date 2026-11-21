@@ -737,6 +737,75 @@ fn judged_jobs_stage_only_checkout_cleaned_verdict_evidence() {
     assert!(!clean.contains(".ci-artifacts"));
 }
 
+/// A suite run on a native host writes its hang dumps where the job uploads
+/// them. Left unnamed, the harness falls back to the host's scratch root,
+/// which every job of the same trust shares and no job uploads; `target` is
+/// no better here, since it links to the lane's build and outlives the job.
+/// The checkout-cleaned evidence directory holds only this job's dumps.
+#[test]
+fn every_gitlab_suite_run_uploads_its_own_hang_dumps() {
+    const DUMP_DIR: &str = "KITHARA_HANG_DUMP_DIR";
+    const ROOT: &str = "{root}/";
+    let root = workspace_root();
+    let config = GitlabConfig::load(&root);
+    let lanes = lane_catalog(&root);
+
+    let mut checked = 0;
+    for (job, lane_name) in config.lane_jobs() {
+        let Some(lane) = lanes.get(&lane_name) else {
+            continue;
+        };
+        let suites = lane
+            .get("steps")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|step| {
+                step.get("args")
+                    .and_then(toml::Value::as_array)
+                    .is_some_and(|args| {
+                        args.iter()
+                            .take(2)
+                            .filter_map(toml::Value::as_str)
+                            .eq(["test", "run"])
+                    })
+            });
+        for step in suites {
+            let dir = step
+                .get("env")
+                .and_then(|env| env.get(DUMP_DIR))
+                .and_then(toml::Value::as_str)
+                .unwrap_or_else(|| panic!("lane `{lane_name}` runs a suite without {DUMP_DIR}"));
+            let relative = dir
+                .strip_prefix(ROOT)
+                .filter(|relative| relative.starts_with(".ci-artifacts/"))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "lane `{lane_name}` writes hang dumps outside the cleaned checkout: {dir}"
+                    )
+                });
+            let artifacts = config
+                .effective_value(&job, "artifacts")
+                .unwrap_or_else(|| panic!("job `{job}` uploads no artifacts"));
+            assert_eq!(
+                artifacts["when"].as_str(),
+                Some("always"),
+                "job `{job}` drops its hang dumps when it fails"
+            );
+            let uploaded = format!("{}/", relative.trim_end_matches('/'));
+            assert!(
+                artifacts["paths"]
+                    .as_sequence()
+                    .is_some_and(|paths| paths.iter().any(|path| path.as_str() == Some(&uploaded))),
+                "job `{job}` does not upload `{uploaded}`"
+            );
+            checked += 1;
+        }
+    }
+
+    assert!(checked > 0, "no GitLab job runs a suite lane");
+}
+
 /// A lane on a host that carries `just` builds in a build root of its own
 /// checkout's, beside the checkout rather than in it: the runner cleans the
 /// checkout before every job. Cargo is told the root, and the lane runner
@@ -965,6 +1034,7 @@ fn apple_network_units_upload_their_own_verdict_evidence() {
             ".ci-artifacts/junit/apple-net-units.xml",
             ".ci-artifacts/junit/apple-net-units.selection.json",
             ".ci-artifacts/junit/apple-net-units.failed",
+            ".ci-artifacts/hang/",
         ])
     );
     assert_eq!(leaf["needs"][0].as_str(), Some("apple:lint"));
