@@ -49,7 +49,7 @@ impl TrackConfig {
     /// Output frames to subtract from a Jump's intended landing frame.
     #[must_use]
     pub fn declick_frames(&self, rate: std::num::NonZeroU32) -> kithara_signal::FrameCount {
-        crate::rt::declick_frame_count(self.declick, rate)
+        kithara_signal::FrameCount::for_seconds(self.declick.smooth_seconds, rate)
     }
 }
 

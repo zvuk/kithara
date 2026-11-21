@@ -27,7 +27,7 @@ impl DeckObservation {
     pub(super) fn new(config: DeckMixerConfig) -> Self {
         Self {
             mix: config.mix(),
-            mixer: DeckSnapshot::new(config),
+            mixer: DeckSnapshot::new(config.slots(), config.eq_bands(), config.fx_units()),
             suspended: false,
         }
     }

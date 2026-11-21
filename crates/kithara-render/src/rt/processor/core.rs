@@ -24,10 +24,10 @@ use super::{
 };
 use crate::{
     bridge::{
-        DeckEvent, DeckProtocol, DeckSnapshot, MixerInputs, RtMetrics, SessionInbox, Slot,
-        SlotSnapshot, SlotState,
+        DeckEvent, DeckProtocol, DeckSnapshot, RtMetrics, SessionInbox, Slot, SlotSnapshot,
+        SlotState,
     },
-    rt::{RenderPass, TrackSlots},
+    rt::{MixerInputs, RenderPass, TrackSlots},
 };
 
 /// The realtime executor of one generation of a session's deck scope.
@@ -312,9 +312,14 @@ impl<E: SessionInbox> DeckMixer<E> {
         snapshot.sample_rate = self.deck.sample_rate.get();
         snapshot.blocks = self.blocks;
         snapshot.metrics = self.deck.metrics.snapshot();
-        let bands = self.deck.render.read_eq(snapshot.eq.gains_mut());
-        self.deck.render.read_eq_kills(snapshot.eq.kills_mut());
-        snapshot.eq.set_bands(bands);
+        let active = self.deck.render.eq_bands();
+        for (band, record) in snapshot.eq.bands_mut().iter_mut().enumerate().take(active) {
+            if let Some(gain) = self.deck.render.eq_target_gain(band) {
+                record.gain = gain;
+            }
+            record.killed = self.deck.render.eq_killed(band).unwrap_or(false);
+        }
+        snapshot.eq.set_active(active);
         self.deck.programs.publish(
             snapshot,
             if self.retired { None } else { self.deck.epoch },
@@ -509,7 +514,7 @@ impl Deck {
         }
         self.sample_rate = sample_rate;
         self.declick_frames =
-            super::super::config::declick_frame_count(self.declick, sample_rate).get();
+            FrameCount::for_seconds(self.declick.smooth_seconds, sample_rate).get();
         for (_, track) in self.tracks.iter_mut() {
             track.set_host_sample_rate(sample_rate);
         }

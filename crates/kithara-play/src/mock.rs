@@ -31,9 +31,11 @@ use kithara_platform::{
 use kithara_render::{
     Dispatched, DispatcherCommand, DispatcherProtocol, LaneTask, LoadRefusal, LoadRequest, Loaded,
     OfflineDeck, Open, PlayerNode,
-    bridge::{DeckEnds, DeckEvents, DeckPart, DeckProtocol, Fade, Slot, SlotState, scope_channels},
+    bridge::{DeckEnds, DeckEvents, DeckPart, DeckProtocol, Fade, Slot, SlotState},
     mock::{MockDeck, TestSessionInbox},
-    rt::{DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
+    rt::{
+        DeckMixerConfig, MixerInputs, StreamShape, install_render_context, publish_render_context,
+    },
 };
 use kithara_signal::{AudioSpec, FrameCount, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_sync::{SessionBeat, Tempo, TempoStep, TempoTrajectory};
@@ -409,7 +411,7 @@ impl MixerRig {
         let scope = ring
             .open(targets)
             .map_err(|error| PlayError::Internal(error.to_string()))?;
-        let (ends, inputs) = scope_channels(scope, config);
+        let (ends, inputs) = MixerInputs::new(scope, config);
         let (node, offline) = PlayerNode::offline(inputs, pools.clone());
         node.prepare_stream(shape)
             .map_err(|error| PlayError::Internal(error.to_string()))?;
@@ -648,7 +650,7 @@ impl<S> DeckRig<S> {
                 .build(),
         );
         let scope = ring.open(targets)?;
-        let (mut ends, inputs) = scope_channels(scope, config);
+        let (mut ends, inputs) = MixerInputs::new(scope, config);
         let observation = ends.snapshot.read().clone();
         let (dispatcher, opens) = channel(ChannelConfig::builder().build());
         Ok(Self {

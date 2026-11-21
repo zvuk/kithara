@@ -6,15 +6,13 @@ use kithara_platform::sync::{
 };
 use kithara_signal::AudioSpec;
 use ringbuf::{
-    HeapCons, HeapProd, HeapRb,
-    traits::{Consumer, Observer, Producer, Split},
+    HeapCons, HeapProd,
+    traits::{Consumer, Observer, Producer},
 };
-use triple_buffer::{Input, Output, triple_buffer};
+use triple_buffer::Output;
 
 use super::{DeckEvent, DeckProtocol, DeckSnapshot};
-use crate::rt::DeckMixerConfig;
 
-/// Events a deck's mixer can hold for its owner per slot before it counts an overflow.
 /// The scope identity and observation ends of one deck's mixer.
 #[non_exhaustive]
 pub struct DeckEnds {
@@ -23,51 +21,19 @@ pub struct DeckEnds {
     pub snapshot: Output<DeckSnapshot>,
 }
 
-/// The mixer's ends of the same channels, taken by the mixer when it is built.
-#[non_exhaustive]
-pub struct MixerInputs {
-    pub(crate) scope: ScopeId,
-    pub(crate) events: HeapProd<DeckEvent>,
-    pub(crate) snapshot: Input<DeckSnapshot>,
-    pub(crate) config: DeckMixerConfig,
-}
-
 /// Borrows a deck's command level from the session's processor store.
 pub trait SessionInbox: Send + 'static {
     fn scope(&mut self, id: ScopeId) -> Option<LevelInbox<'_, DeckProtocol>>;
 }
 
 /// Events a deck's mixer reported, in the order it reported them.
-pub struct DeckEvents(HeapCons<DeckEvent>);
+pub struct DeckEvents(pub(crate) HeapCons<DeckEvent>);
 
 impl DeckEvents {
     /// Every event reported since the last call.
     pub fn drain(&mut self) -> impl Iterator<Item = DeckEvent> + '_ {
         std::iter::from_fn(|| self.0.try_pop())
     }
-}
-
-/// The channels between a deck's owner and the mixer `config` builds.
-#[must_use]
-pub fn scope_channels(scope: ScopeId, config: DeckMixerConfig) -> (DeckEnds, MixerInputs) {
-    let slots = config.slots().get();
-    let (events_tx, events_rx) =
-        HeapRb::<DeckEvent>::new(slots * crate::consts::EVENTS_PER_SLOT).split();
-    let initial = DeckSnapshot::new(config);
-    let (snapshot_in, snapshot_out) = triple_buffer(&initial);
-    (
-        DeckEnds {
-            scope,
-            events: DeckEvents(events_rx),
-            snapshot: snapshot_out,
-        },
-        MixerInputs {
-            scope,
-            config,
-            events: events_tx,
-            snapshot: snapshot_in,
-        },
-    )
 }
 
 /// Producer for interleaved stereo mix samples and their drop count.
