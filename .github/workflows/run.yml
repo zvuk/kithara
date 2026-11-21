@@ -52,6 +52,9 @@ on:
       bench_base_ref:
         type: string
         default: ""
+      bench_preflight:
+        type: string
+        default: ""
       narrow:
         description: >-
           Nextest filterset every lane's test suite is narrowed to. Empty
@@ -146,6 +149,7 @@ jobs:
       bench_filter: ${{ inputs.bench_filter }}
       bench_ref: ${{ inputs.bench_ref }}
       bench_base_ref: ${{ inputs.bench_base_ref }}
+      bench_preflight: ${{ inputs.bench_preflight }}
       pr-tests: ${{ inputs.pr-tests }}
 
   # A lane that reads what the matrix produced. It runs under `always()` so a

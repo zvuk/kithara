@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::{ffi::c_void, fs, path::Path};
 
 use crate::{BytesEncodeRequest, BytesEncodeTarget, EncodeError, EncodeResult, EncodedBytes};
@@ -61,7 +63,6 @@ pub(crate) fn encode(request: &BytesEncodeRequest<'_>) -> EncodeResult<EncodedBy
 
 #[cfg(windows)]
 fn wide_path(path: &Path) -> EncodeResult<Vec<WideChar>> {
-    use std::os::windows::ffi::OsStrExt;
     let mut value: Vec<_> = path.as_os_str().encode_wide().collect();
     if value.contains(&0) {
         return Err(EncodeError::InvalidInput("path contains NUL".to_owned()));

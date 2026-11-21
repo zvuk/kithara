@@ -1,7 +1,18 @@
+//! Browser capabilities for the `WebDriver` session, from `webdriver.json`.
+
 use std::{
-    fs, io,
+    env, fs, io,
     path::{Path, PathBuf},
 };
+
+use anyhow::{Context, Result, anyhow};
+use serde_json::{Map, Value, json};
+
+use crate::driver::Browser;
+
+/// The directory the CI lane that owns it names for Chrome network logs;
+/// without it no capture is chosen.
+const NET_LOG_DIR: &str = "KITHARA_WEB_NETLOG_DIR";
 
 // Limit network traces to the five known stall fixtures: the worklet-import pair, the observer suite and both lib-test binaries.
 const TRACED_FIXTURES: [&str; 5] = [
@@ -12,18 +23,40 @@ const TRACED_FIXTURES: [&str; 5] = [
     "web_observer-",
 ];
 
-/// Returns the wasm file stem when the runner targets one of the traced fixtures.
-pub(crate) fn perf_logging_target(args: &[String]) -> Option<&str> {
-    args.iter().find_map(|arg| {
-        let stem = Path::new(arg)
-            .file_name()?
-            .to_str()?
-            .strip_suffix(".wasm")?;
-        TRACED_FIXTURES
-            .iter()
-            .any(|prefix| stem.starts_with(prefix))
-            .then_some(stem)
-    })
+/// `webdriver.json` with Chrome's network and page tracing added for the binaries
+/// whose startup stalls are being traced, and their network log when the lane
+/// names a directory for it.
+pub(crate) fn load(browser: Browser, wasm: &Path) -> Result<Map<String, Value>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("webdriver.json");
+    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let mut config: Value =
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    if browser == Browser::Chrome
+        && let Some(stem) = perf_logging_target(wasm)
+    {
+        apply_perf_logging(&mut config).map_err(|error| anyhow!(error))?;
+        eprintln!("webdriver config: fixture network perf logging requested");
+        if let Some(dir) = env::var_os(NET_LOG_DIR) {
+            let file = net_log_file(&mut config, Path::new(&dir), stem)?;
+            eprintln!(
+                "webdriver config: fixture NetLog capture requested at {}",
+                file.display()
+            );
+        }
+    }
+    match config {
+        Value::Object(map) => Ok(map),
+        _ => Err(anyhow!("{} is not a JSON object", path.display())),
+    }
+}
+
+/// The wasm file stem when the run targets one of the traced fixtures.
+fn perf_logging_target(wasm: &Path) -> Option<&str> {
+    let stem = wasm.file_name()?.to_str()?.strip_suffix(".wasm")?;
+    TRACED_FIXTURES
+        .iter()
+        .any(|prefix| stem.starts_with(prefix))
+        .then_some(stem)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -47,7 +80,7 @@ pub(crate) enum NetLogError {
 /// previous run of the same binary left there removed, so a file present after
 /// the run was written by this run's browser.
 pub(crate) fn net_log_file(
-    config: &mut serde_json::Value,
+    config: &mut Value,
     dir: &Path,
     stem: &str,
 ) -> Result<PathBuf, NetLogError> {
@@ -73,10 +106,7 @@ pub(crate) fn net_log_file(
 /// Adds the default-capture network-log switches for `file` to the Chrome
 /// arguments. Any other network-log switch already present is refused rather than kept, so a
 /// sensitive capture mode or a second log path can never ride along.
-pub(crate) fn apply_net_log(
-    config: &mut serde_json::Value,
-    file: &Path,
-) -> Result<(), NetLogError> {
+pub(crate) fn apply_net_log(config: &mut Value, file: &Path) -> Result<(), NetLogError> {
     let file = file
         .to_str()
         .ok_or_else(|| NetLogError::Dir(file.to_path_buf()))?;
@@ -89,11 +119,11 @@ pub(crate) fn apply_net_log(
         .as_object_mut()
         .ok_or(NetLogError::Shape("webdriver.json", "object"))?
         .entry("goog:chromeOptions".to_string())
-        .or_insert_with(|| serde_json::json!({}))
+        .or_insert_with(|| json!({}))
         .as_object_mut()
         .ok_or(NetLogError::Shape("goog:chromeOptions", "object"))?
         .entry("args".to_string())
-        .or_insert_with(|| serde_json::json!([]))
+        .or_insert_with(|| json!([]))
         .as_array_mut()
         .ok_or(NetLogError::Shape("goog:chromeOptions.args", "array"))?;
     for arg in args.iter() {
@@ -108,43 +138,43 @@ pub(crate) fn apply_net_log(
     }
     for switch in switches {
         if !args.iter().any(|arg| arg.as_str() == Some(switch.as_str())) {
-            args.push(serde_json::Value::String(switch));
+            args.push(Value::String(switch));
         }
     }
     Ok(())
 }
 
-pub(crate) fn apply_perf_logging(config: &mut serde_json::Value) -> Result<(), String> {
+fn apply_perf_logging(config: &mut Value) -> Result<(), String> {
     let root = config
         .as_object_mut()
         .ok_or_else(|| "webdriver.json is not a JSON object".to_string())?;
     let logging = root
         .entry("goog:loggingPrefs".to_string())
-        .or_insert_with(|| serde_json::json!({}));
+        .or_insert_with(|| json!({}));
     logging
         .as_object_mut()
         .ok_or_else(|| "goog:loggingPrefs is not a JSON object".to_string())?
         .entry("performance".to_string())
-        .or_insert_with(|| serde_json::json!("ALL"));
+        .or_insert_with(|| json!("ALL"));
     let chrome_options = root
         .entry("goog:chromeOptions".to_string())
-        .or_insert_with(|| serde_json::json!({}));
+        .or_insert_with(|| json!({}));
     let perf = chrome_options
         .as_object_mut()
         .ok_or_else(|| "goog:chromeOptions is not a JSON object".to_string())?
         .entry("perfLoggingPrefs".to_string())
-        .or_insert_with(|| serde_json::json!({}));
+        .or_insert_with(|| json!({}));
     let perf = perf
         .as_object_mut()
         .ok_or_else(|| "perfLoggingPrefs is not a JSON object".to_string())?;
     perf.entry("enableNetwork".to_string())
-        .or_insert_with(|| serde_json::json!(true));
+        .or_insert_with(|| json!(true));
     perf.entry("enablePage".to_string())
-        .or_insert_with(|| serde_json::json!(true));
+        .or_insert_with(|| json!(true));
     Ok(())
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use std::{fs, path::Path};
 
@@ -173,7 +203,7 @@ mod tests {
         })
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn chrome_fixture_targets_are_scoped() {
         for binary in [
             "/cache/deps/web_bootstrap-8f845460d7dd326c.wasm",
@@ -183,13 +213,13 @@ mod tests {
             "/cache/deps/web_observer-894faf148f0e514e.wasm",
         ] {
             let stem = Path::new(binary).file_stem().and_then(|stem| stem.to_str());
-            assert_eq!(perf_logging_target(&[binary.to_string()]), stem);
+            assert_eq!(perf_logging_target(Path::new(binary)), stem);
         }
         let other = "/cache/deps/kithara_platform-5f7e0acd8e3ff6b5.wasm";
-        assert_eq!(perf_logging_target(&[other.to_string()]), None);
+        assert_eq!(perf_logging_target(Path::new(other)), None);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn merge_enables_network_and_keeps_every_prior_key() {
         let mut config = config();
         apply_perf_logging(&mut config).expect("merge applies");
@@ -205,7 +235,7 @@ mod tests {
         assert_eq!(config["custom:capability"], json!({ "kept": true }));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn merge_is_idempotent() {
         let mut config = config();
         apply_perf_logging(&mut config).expect("first merge");
@@ -214,7 +244,7 @@ mod tests {
         assert_eq!(config, once);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native)]
     fn wrong_shapes_are_errors_not_panics() {
         for mut bad in [
             json!([]),

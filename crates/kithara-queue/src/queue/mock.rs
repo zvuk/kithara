@@ -17,9 +17,10 @@ use kithara_play::{
     DeckMixSettings, DeckMixerConfig, DeckPart, DeckPass, HostedDeck, Outbox, PlayWorker, Player,
     ResourceConfig, ResourceLoad, ResourcePrep, ResourceSrc, TrackReceipt, mock, mock::DeckRig,
 };
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_render::{Dispatched, DispatcherCommand, PcmPacket, mock::PacketRing};
+use kithara_signal::{AudioChunk, FrameCount, SessionFrame};
 pub(crate) use kithara_test_utils::bufpool::{TestPools, pools};
-use kithara_test_utils::{TestTempDir, kithara};
+use kithara_test_utils::{TestTempDir, bufpool::sample_buffer, kithara};
 use kithara_warp::WarpConfig;
 use kithara_worker::Worker;
 
@@ -286,12 +287,8 @@ pub(crate) fn synthetic_loaded(
     source: kithara_signal::AudioChunkInfo,
 ) -> (
     kithara_render::Loaded<kithara_play::OpenedTrack>,
-    kithara_render::mock::PacketRing,
+    PacketRing,
 ) {
-    use kithara_render::{PcmPacket, mock::PacketRing};
-    use kithara_signal::AudioChunk;
-    use kithara_test_utils::bufpool::sample_buffer;
-
     let frames = usize::try_from(source.frames).expect("fixture frames fit usize");
     let samples = vec![0.5; frames * usize::from(source.spec.channels)];
     let region = pools();
@@ -374,8 +371,6 @@ pub(crate) fn requested_load(
     rig: &mut DeckRig<TestPools>,
     seq: Seq,
 ) -> kithara_render::LoadRequest<ResourceLoad> {
-    use kithara_render::DispatcherCommand;
-
     rig.opens.drain();
     while let Some(due) = rig.opens.next_due((), 1) {
         hang_tick!();
@@ -425,7 +420,7 @@ pub(crate) fn synthetic_request(
     source: kithara_signal::AudioChunkInfo,
 ) -> (
     kithara_render::Loaded<kithara_play::OpenedTrack>,
-    kithara_render::mock::PacketRing,
+    PacketRing,
 ) {
     let request = requested_load(rig, seq);
     rig.hold_lane(request.inbox);
@@ -463,8 +458,6 @@ pub(crate) fn answer_loaded(
     rig: &mut DeckRig<TestPools>,
     loaded: kithara_render::Loaded<kithara_play::OpenedTrack>,
 ) {
-    use kithara_render::{Dispatched, DispatcherCommand};
-
     rig.opens.drain();
     let wanted = selected_load_seq(queue);
     loop {

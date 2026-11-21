@@ -1,5 +1,7 @@
 use std::{mem, task::Waker};
 
+#[cfg(target_arch = "wasm32")]
+use kithara_platform::time::timeout;
 use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     time::Instant,
@@ -141,8 +143,6 @@ impl<R> Ticket<R> {
     /// [`Refused::Unanswered`] when the reply channel closes.
     #[cfg(target_arch = "wasm32")]
     pub async fn wait_until_async(self, deadline: Instant) -> Result<Result<(), Refused<R>>, Self> {
-        use kithara_platform::time::timeout;
-
         match timeout(
             deadline.saturating_duration_since(Instant::now()),
             self.answered.recv_async(),

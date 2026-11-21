@@ -1,10 +1,16 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::{
+    f64::consts::{FRAC_1_SQRT_2, PI},
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use kithara::{
     dsp::param::DEFAULT_SMOOTH_SECONDS,
-    effects::{DeckEffect, FxParamChange, FxParamDescriptor, FxParamMapping, FxParamUnit},
+    effects::{
+        DeckEffect, FxParamChange, FxParamDescriptor, FxParamMapping, FxParamUnit,
+        delay::{DelayTime, Feedback, FeedbackDelay, FeedbackDelayConfig, FeedbackHighPass},
+    },
     platform::{
         sync::{Arc, Mutex},
         time::Duration,
@@ -17,6 +23,7 @@ use kithara::{
 use kithara_command::When;
 use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions, asset_source};
 use kithara_test_fixtures::{asset::Asset, assets};
+use kithara_test_utils::bufpool::pools;
 use num_traits::ToPrimitive;
 
 use crate::mix_tap::load_source;
@@ -37,6 +44,10 @@ const CROSSFADE_TAKE: usize = 49_152;
 const DRY_AT: usize = LEAD + 1000 + 37;
 /// The frame it turns the unit wet again, long after the dry ramp settled.
 const WET_AT: usize = DRY_AT + 4096;
+const DELAY: usize = 256;
+const DELAY_CAPACITY: usize = 2 * DELAY;
+/// The -120 dBFS floor at or under which a sample counts as silent.
+const FLOOR: f32 = 1e-6;
 
 /// A memoryless effect: its wet signal is `curve` of each input sample.
 #[derive(Debug)]
@@ -164,6 +175,39 @@ impl DeckEffect for Clock {
     fn update_sample_rate(&mut self, _: NonZeroU32) {}
 }
 
+pub(super) fn delay_time(frames: usize) -> DelayTime {
+    DelayTime::checked(f64::from(
+        u32::try_from(frames).expect("a test delay fits u32"),
+    ))
+    .expect("a representable delay")
+}
+
+/// Frames the test delay waits after its last write above the floor before
+/// reporting its tail spent: its capacity, then the frames the slowest pole of
+/// its lowest high-pass takes to decay under the floor. The Butterworth
+/// high-pass has a conjugate pole pair of radius `√a2`.
+fn delay_window() -> usize {
+    let omega = 2.0 * PI * f64::from(f32::from(FeedbackHighPass::MIN)) / f64::from(SAMPLE_RATE);
+    let alpha = omega.sin() / (2.0 * FRAC_1_SQRT_2);
+    let a2 = (1.0 - alpha) / (1.0 + alpha);
+    let decay = (f64::from(FLOOR).ln() / a2.sqrt().ln()).ceil();
+    DELAY_CAPACITY + decay.to_usize().expect("a whole count of frames")
+}
+
+pub(super) fn feedback_delay(frames: usize) -> FeedbackDelay {
+    FeedbackDelay::new(
+        FeedbackDelayConfig::builder()
+            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("nonzero sample rate"))
+            .capacity(NonZeroUsize::new(2 * frames).expect("nonzero capacity"))
+            .time(delay_time(frames))
+            .feedback(Feedback::checked(0.5).expect("half is a feedback"))
+            .high_pass(FeedbackHighPass::MIN)
+            .build(),
+        &pools(),
+    )
+    .expect("the delay fits the test pools")
+}
+
 /// `effect` installed on `unit`, fully wet and on.
 pub(super) fn insert(unit: usize, effect: impl DeckEffect + 'static) -> Vec<DeckFxChange> {
     vec![
@@ -249,7 +293,7 @@ fn at(base: u64, offset: usize) -> When<SessionFrame> {
     ))
 }
 
-/// What a deck sounds playing `asset` for [`TAKE`] frames from its first
+/// What a deck sounds playing `asset` for `frames` frames from its first
 /// block: `setup` sent before it plays, each of `timed` at its offset into the
 /// take, and the deck paused once `pause` frames have rendered when set.
 async fn take(
@@ -258,6 +302,7 @@ async fn take(
     setup: Vec<DeckFxChange>,
     timed: Vec<(usize, Vec<DeckFxChange>)>,
     pause: Option<usize>,
+    frames: usize,
 ) -> Vec<f32> {
     if !setup.is_empty() {
         send(&harness, When::Next, setup).await;
@@ -272,7 +317,7 @@ async fn take(
         output.extend(render(&harness, pause - LEAD).await);
         harness.with_queue(QueueControl::pause).await;
     }
-    output.extend(render(&harness, TAKE - output.len() / CHANNELS).await);
+    output.extend(render(&harness, frames - output.len() / CHANNELS).await);
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;
     output
@@ -285,6 +330,7 @@ async fn plain_take(asset: Asset, setup: Vec<DeckFxChange>) -> Vec<f32> {
         setup,
         Vec::new(),
         None,
+        TAKE,
     )
     .await
 }
@@ -332,6 +378,7 @@ async fn deck_chain_trim_scales_fx_input() {
         insert(0, Echo::probe(&half)),
         Vec::new(),
         None,
+        TAKE,
     )
     .await;
     let unity = unity.lock().clone();
@@ -407,6 +454,7 @@ async fn deck_chain_fader_zero_leaves_fx_input_and_silences_output() {
         insert(0, Echo::probe(&closed)),
         Vec::new(),
         None,
+        TAKE,
     )
     .await;
     assert!(sounded.iter().any(|sample| *sample != 0.0));
@@ -429,6 +477,7 @@ async fn deck_fx_empty_units_are_transparent() {
         Vec::new(),
         Vec::new(),
         Some(LEAD + 1000),
+        TAKE,
     )
     .await;
     let empty = take(
@@ -437,6 +486,7 @@ async fn deck_fx_empty_units_are_transparent() {
         Vec::new(),
         Vec::new(),
         Some(LEAD + 1000),
+        TAKE,
     )
     .await;
     assert!(none.iter().any(|sample| *sample != 0.0));
@@ -483,6 +533,7 @@ async fn deck_fx_off_is_bypass_on_is_reset() {
             (ON, vec![DeckFxChange::Power { unit: 0, on: true }]),
         ],
         None,
+        TAKE,
     )
     .await;
     let echoed = wet(&mut Echo::new(ECHO), &dry[..OFF * CHANNELS]);
@@ -524,6 +575,7 @@ async fn deck_fx_unit_turned_dry_while_off_switches_on_dry() {
             (ON, vec![DeckFxChange::Power { unit: 0, on: true }]),
         ],
         None,
+        TAKE,
     )
     .await;
     assert_same(
@@ -596,6 +648,7 @@ async fn deck_fx_stop_rings_out() {
         Vec::new(),
         Vec::new(),
         Some(PAUSE),
+        TAKE,
     )
     .await;
     let fx = take(
@@ -604,6 +657,7 @@ async fn deck_fx_stop_rings_out() {
         insert(0, Echo::new(ECHO)),
         Vec::new(),
         Some(PAUSE),
+        TAKE,
     )
     .await;
     let silent = dry
@@ -641,6 +695,7 @@ async fn deck_fx_fader_cuts_tail() {
         Vec::new(),
         Vec::new(),
         Some(PAUSE),
+        TAKE,
     )
     .await;
     let tail = wet(&mut Echo::new(LONG), &dry);
@@ -867,12 +922,76 @@ async fn deck_fx_missing_unit_refuses_batch() {
             ],
         )],
         None,
+        TAKE,
     )
     .await;
     assert_same(
         &refused,
         &echoed,
         "a batch naming a unit the deck lacks changes no unit",
+    );
+}
+
+#[kithara::test(tokio)]
+async fn deck_fx_delay_echoes_outlive_deck_stop() {
+    const PAUSE: usize = LEAD + 2000;
+    /// Frames the takes render: past the report of the tail behind the
+    /// lowest high-pass.
+    const FRAMES: usize = 2 * TAKE;
+
+    let dry = take(
+        deck(None, DeckMixSettings::default()).await,
+        assets::fixed_constant_wav_cd_half_44100(),
+        Vec::new(),
+        Vec::new(),
+        Some(PAUSE),
+        FRAMES,
+    )
+    .await;
+    let fx = take(
+        deck(None, DeckMixSettings::default()).await,
+        assets::fixed_constant_wav_cd_half_44100(),
+        insert(0, feedback_delay(DELAY)),
+        Vec::new(),
+        Some(PAUSE),
+        FRAMES,
+    )
+    .await;
+    let tail = wet(&mut feedback_delay(DELAY), &dry);
+    let silent = dry
+        .chunks(CHANNELS)
+        .rposition(|frame| frame != [0.0; 2])
+        .expect("the dry take sounds")
+        + 1;
+    // The history the delay wrote is its wet signal one delay later.
+    let written = tail[DELAY * CHANNELS..]
+        .chunks(CHANNELS)
+        .rposition(|frame| frame.iter().any(|sample| sample.abs() > FLOOR))
+        .expect("the delay writes its echoes")
+        + 1;
+    let spent = (written + delay_window()) * CHANNELS;
+    assert!(
+        spent + CALLBACK * CHANNELS < fx.len(),
+        "the takes outlast the delay reporting its tail spent"
+    );
+    assert!(
+        fx[silent * CHANNELS..].iter().any(|sample| *sample != 0.0),
+        "the echoes sound after the deck's slots stop"
+    );
+    assert_same(
+        &fx[..spent],
+        &tail[..spent],
+        "the stopped deck rings its echoes out on their frames and at their levels",
+    );
+    assert!(
+        tail[spent..].iter().all(|sample| sample.abs() <= FLOOR),
+        "the delay reports its tail spent only under -120 dBFS"
+    );
+    assert!(
+        fx[spent + CALLBACK * CHANNELS..]
+            .iter()
+            .all(|sample| *sample == 0.0),
+        "the deck falls silent within a callback of the delay reporting its tail spent"
     );
 }
 
@@ -972,6 +1091,7 @@ async fn deck_fx_mismatched_param_refuses_batch() {
             ),
         ],
         None,
+        TAKE,
     )
     .await;
     assert_eq!(
@@ -1052,11 +1172,86 @@ async fn deck_fx_mismatched_param_refuses_batch() {
         setup(),
         timed,
         None,
+        TAKE,
     )
     .await;
     assert_same(
         &refused,
         &expected,
         "a mismatched parameter changes neither unit",
+    );
+}
+
+#[kithara::test(tokio)]
+async fn deck_fx_delay_mismatched_param_refuses_batch() {
+    let units = || {
+        let mut units = insert(0, Echo::new(ECHO));
+        units.extend(insert(1, feedback_delay(DELAY)));
+        units
+    };
+    let param = |unit, index, value| DeckFxChange::Param {
+        unit,
+        change: FxParamChange { index, value },
+    };
+    let gain = f64::from(f32::from(Feedback::MAX));
+    let invalid = [
+        (0, vec![param(0, 1, gain)]),
+        (
+            1,
+            vec![param(1, 0, f64::from(delay_time(DELAY_CAPACITY + 1)))],
+        ),
+        (0, vec![param(1, 3, gain)]),
+        (0, vec![param(1, 2, f64::NAN)]),
+        (0, vec![DeckFxChange::Clear { unit: 1 }, param(1, 1, gain)]),
+        (
+            0,
+            vec![
+                DeckFxChange::Install {
+                    unit: 1,
+                    effect: Box::new(Echo::new(ECHO)),
+                },
+                param(1, 1, gain),
+            ],
+        ),
+        (
+            0,
+            vec![
+                DeckFxChange::Install {
+                    unit: 1,
+                    effect: Box::new(feedback_delay(DELAY)),
+                },
+                DeckFxChange::Clear { unit: 1 },
+                param(1, 1, gain),
+            ],
+        ),
+    ];
+    let kept = plain_take(assets::metronome_sine_wav_full(), units()).await;
+    let timed = invalid
+        .into_iter()
+        .enumerate()
+        .map(|(index, (unit, mut changes))| {
+            changes.insert(
+                0,
+                DeckFxChange::Mix {
+                    unit,
+                    value: FxMix::MIN,
+                },
+            );
+            (LEAD + 500 + index * 1000, changes)
+        })
+        .collect();
+    let refused = take(
+        deck(None, DeckMixSettings::default()).await,
+        assets::metronome_sine_wav_full(),
+        units(),
+        timed,
+        None,
+        TAKE,
+    )
+    .await;
+    assert_same(
+        &refused,
+        &kept,
+        "every invalid descriptor change refuses its whole batch",
     );
 }

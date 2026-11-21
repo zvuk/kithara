@@ -38,6 +38,28 @@ pub(crate) const WASM_TEST_ARGS: &[&str] = &[
     "build-std-features=optimize_for_size",
 ];
 
+/// The minimal `wasm-bindgen-test` binaries, one per runner mode, that the
+/// runner's protocol test drives, and the variables that name them to it.
+pub(crate) const WASM_RUNNER_FIXTURES: &[&str] = &[
+    "-p",
+    "kithara-wasm-runner-fixture",
+    "--test",
+    "browser",
+    "--test",
+    "worker",
+];
+pub(crate) const WASM_RUNNER_FIXTURE_VARIABLES: &[(&str, &str)] = &[
+    ("browser", "KITHARA_WASM_RUNNER_FIXTURE_BROWSER"),
+    ("worker", "KITHARA_WASM_RUNNER_FIXTURE_WORKER"),
+];
+pub(crate) const WASM_RUNNER_PROTOCOL_TEST: &[&str] = &[
+    "test",
+    "-p",
+    "kithara-wasm-test-runner",
+    "--test",
+    "protocol",
+];
+
 pub(crate) const WASM_ENCODER_TEST: &[&str] = &[
     "-p",
     "kithara-encode",

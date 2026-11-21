@@ -474,7 +474,7 @@ async fn live_ephemeral_revisit_sequence_regression(
         let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
         let max_seek_secs =
             capped_seek_secs((duration_secs - 2.0).max(20.0), consts::WASM_MAX_SEEK_SECS);
-        let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
+        let mut rng = Xorshift64::new(0xa11c_5eed_0000_0001);
         let mut seek_positions = Vec::with_capacity(64);
         for _ in 0..64 {
             seek_positions.push(rng.range_f64(1.0, max_seek_secs));
@@ -540,7 +540,7 @@ async fn live_ephemeral_revisit_sequence_regression(
         let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
         let max_seek_secs =
             capped_seek_secs((duration_secs - 2.0).max(20.0), consts::WASM_MAX_SEEK_SECS);
-        let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
+        let mut rng = Xorshift64::new(0xa11c_5eed_0000_0001);
         let mut seek_positions = Vec::with_capacity(64);
         for _ in 0..64 {
             seek_positions.push(rng.range_f64(1.0, max_seek_secs));
@@ -635,7 +635,7 @@ async fn live_real_stream_seek_regression(
                 let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
                 let max_seek_secs =
                     capped_seek_secs((duration_secs - 2.0).max(20.0), consts::WASM_MAX_SEEK_SECS);
-                let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
+                let mut rng = Xorshift64::new(0xa11c_5eed_0000_0001);
                 (
                     "rng_prefix",
                     (0..80).map(|_| rng.range_f64(1.0, max_seek_secs)).collect(),
@@ -836,7 +836,7 @@ async fn live_stress_real_stream_seek_read_cache(
         let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
         let max_seek_secs =
             capped_seek_secs((duration_secs - 2.0).max(20.0), consts::WASM_MAX_SEEK_SECS);
-        let mut rng = Xorshift64::new(0xA11C_5EED_0000_0001);
+        let mut rng = Xorshift64::new(0xa11c_5eed_0000_0001);
         let seek_positions: Vec<f64> = (0..consts::RANDOM_SEEK_OPS)
             .map(|_| rng.range_f64(1.0, max_seek_secs))
             .collect();
@@ -1094,7 +1094,7 @@ async fn live_ephemeral_small_cache_seek_stress(
                 (duration_secs - 2.0).max(10.0),
                 consts::SMALL_CACHE_MAX_SEEK_SECS,
             );
-            let mut rng = Xorshift64::new(0xCA5E_5EE4_0001_0001);
+            let mut rng = Xorshift64::new(0xca5e_5ee4_0001_0001);
             let mut total_chunks = 0usize;
             let mut seeks_done = 0usize;
 

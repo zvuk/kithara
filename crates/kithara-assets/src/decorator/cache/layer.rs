@@ -622,8 +622,8 @@ mod tests {
     /// neither directly nor via `CacheKey`'s derived `Debug`.
     #[kithara::test(native, flash(false))]
     fn debug_redacts_identity_bytes() {
-        let key = [0xAB_u8; 16];
-        let iv = [0xCD_u8; 16];
+        let key = [0xab_u8; 16];
+        let iv = [0xcd_u8; 16];
         let bytes: Vec<u8> = key.iter().chain(iv.iter()).copied().collect();
         let identity = CtxIdentity::from(bytes.as_slice());
 

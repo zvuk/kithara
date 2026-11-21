@@ -101,7 +101,7 @@ impl CreatedHls {
                     .as_bytes()
                     .get(in_segment)
                     .copied()
-                    .unwrap_or(0xFF)
+                    .unwrap_or(0xff)
             }
         }
     }
@@ -195,7 +195,7 @@ fn scan_pattern(
             prefix[..prefix_len]
                 .iter()
                 .copied()
-                .chain(iter::repeat(0xFF)),
+                .chain(iter::repeat(0xff)),
             &actual[checked..checked + n],
             base_index + checked,
             mismatch,

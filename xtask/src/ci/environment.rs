@@ -307,6 +307,10 @@ impl CiEnvironment {
         })
     }
 
+    pub(super) fn report_target(&self, checkout: &FsPath) -> Result<PathBuf> {
+        self.target.report_root(checkout, is_ci())
+    }
+
     pub(crate) fn vars(&self) -> BTreeMap<OsString, OsString> {
         self.vars.clone()
     }
