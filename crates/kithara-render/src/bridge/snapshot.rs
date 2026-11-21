@@ -36,12 +36,9 @@ impl DeckSnapshot {
         Self {
             slots: vec![SlotSnapshot::default(); slots.get()],
             eq: EqSnapshot {
-                bands: eq_bands,
-                gains: vec![GainDb::default(); eq_bands],
-                kills: vec![false; eq_bands],
+                active: eq_bands,
+                bands: vec![EqBandSnapshot::default(); eq_bands],
                 layout: None,
-                programs: vec![None; eq_bands],
-                authorities: vec![None; eq_bands],
             },
             fx_layouts: vec![None; fx_units],
             ..Self::default()
@@ -106,16 +103,23 @@ impl DeckSnapshot {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get, get_mut)]
+#[fieldwork(opt_in, get_mut)]
 pub struct EqSnapshot {
-    bands: usize,
-    #[field(get_mut, vis = "pub(crate)")]
-    gains: Vec<GainDb>,
-    #[field(get_mut, vis = "pub(crate)")]
-    kills: Vec<bool>,
+    /// Bands of the layout that receives commands; at most `bands.len()`.
+    active: usize,
+    /// Every band the snapshot has room for, active or not.
+    #[field(get_mut = bands_mut, vis = "pub(crate)")]
+    bands: Vec<EqBandSnapshot>,
     layout: Option<LayoutRevision>,
-    programs: Vec<Option<Seq>>,
-    authorities: Vec<Option<Seq>>,
+}
+
+/// One EQ band as its mixer last published it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct EqBandSnapshot {
+    pub(crate) gain: GainDb,
+    pub(crate) killed: bool,
+    program: Option<Seq>,
+    authority: Option<Seq>,
 }
 
 impl EqSnapshot {
@@ -126,36 +130,36 @@ impl EqSnapshot {
 
     #[must_use]
     pub const fn bands(&self) -> usize {
-        self.bands
+        self.active
     }
 
     #[must_use]
     pub fn gain(&self, band: usize) -> Option<GainDb> {
-        self.gains.get(band).copied().filter(|_| band < self.bands)
+        let record = self.band(band)?;
+        Some(record.gain)
     }
 
     /// Whether kill is engaged for a band in the observed layout.
     #[must_use]
     pub fn killed(&self, band: usize) -> Option<bool> {
-        self.kills.get(band).copied().filter(|_| band < self.bands)
+        let record = self.band(band)?;
+        Some(record.killed)
     }
 
     #[must_use]
     pub fn program(&self, band: usize) -> Option<Seq> {
-        self.programs
-            .get(band)
-            .copied()
-            .flatten()
-            .filter(|_| band < self.bands)
+        let record = self.band(band)?;
+        record.program
     }
 
     #[must_use]
     pub fn authority(&self, band: usize) -> Option<Seq> {
-        self.authorities
-            .get(band)
-            .copied()
-            .flatten()
-            .filter(|_| band < self.bands)
+        let record = self.band(band)?;
+        record.authority
+    }
+
+    fn band(&self, band: usize) -> Option<&EqBandSnapshot> {
+        self.bands.get(band).filter(|_| band < self.active)
     }
 
     pub(crate) fn publish_program(
@@ -164,11 +168,9 @@ impl EqSnapshot {
         program: Option<Seq>,
         authority: Option<Seq>,
     ) {
-        if let Some(value) = self.programs.get_mut(band) {
-            *value = program;
-        }
-        if let Some(value) = self.authorities.get_mut(band) {
-            *value = authority;
+        if let Some(record) = self.bands.get_mut(band) {
+            record.program = program;
+            record.authority = authority;
         }
     }
 
@@ -176,8 +178,8 @@ impl EqSnapshot {
         self.layout = layout;
     }
 
-    pub(crate) fn set_bands(&mut self, bands: usize) {
-        self.bands = bands;
+    pub(crate) fn set_active(&mut self, active: usize) {
+        self.active = active;
     }
 }
 

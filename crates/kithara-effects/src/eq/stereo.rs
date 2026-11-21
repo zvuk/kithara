@@ -188,26 +188,16 @@ impl StereoEq {
         }
     }
 
-    /// Reads target gains into storage supplied by the mixer, without allocation.
-    pub fn read_gains(&self, gains: &mut [GainDb]) -> usize {
-        let Some(layout) = self.target_layout() else {
-            return 0;
-        };
-        for (band, gain) in gains.iter_mut().enumerate().take(layout.band_count()) {
-            if let Some(target) = layout.target_gain(band) {
-                *gain = target;
-            }
-        }
-        layout.band_count()
+    /// Target gain of `band` in the layout that receives commands.
+    #[must_use]
+    pub fn target_gain(&self, band: usize) -> Option<GainDb> {
+        self.target_layout()?.target_gain(band)
     }
 
-    /// Copies kill flags from the same layout as the target gains.
-    pub fn read_kills(&self, kills: &mut [bool]) {
-        if let Some(layout) = self.target_layout() {
-            for (band, killed) in kills.iter_mut().enumerate().take(layout.band_count()) {
-                *killed = layout.killed(band).unwrap_or(false);
-            }
-        }
+    /// Whether kill is engaged for `band` in the same layout as [`Self::target_gain`].
+    #[must_use]
+    pub fn killed(&self, band: usize) -> Option<bool> {
+        self.target_layout()?.killed(band)
     }
 
     /// The number of bands in the layout that receives commands.
@@ -420,9 +410,7 @@ mod tests {
         eq.process(&mut left, &mut right);
         assert!(left.iter().chain(&right).all(|value| value.to_bits() == 0));
         eq.set_kill(0, false);
-        let mut gains = [GainDb::DEFAULT; 2];
-        eq.read_gains(&mut gains);
-        assert_eq!(gains[0], GainDb::MAX);
+        assert_eq!(eq.target_gain(0), Some(GainDb::MAX));
     }
 
     #[kithara::test]
@@ -437,15 +425,12 @@ mod tests {
         let mut eq = StereoEq::with_layout(&config, rate, make_layout());
         eq.take_layout(make_layout());
         eq.set_kill(0, true);
-        let mut kills = [false];
-        eq.read_kills(&mut kills);
-        assert_eq!(kills, [true]);
+        assert_eq!(eq.killed(0), Some(true));
         let returned = eq
             .take_layout(make_layout())
             .expect("displaced pending layout");
         eq.take_layout(returned);
-        eq.read_kills(&mut kills);
-        assert_eq!(kills, [false]);
+        assert_eq!(eq.killed(0), Some(false));
     }
 
     #[kithara::test]
@@ -461,9 +446,7 @@ mod tests {
         eq.take_layout(make_layout());
         assert!(!eq.accepts_gain_program(0));
         eq.set_kill(0, true);
-        let mut kills = [false];
-        eq.read_kills(&mut kills);
-        assert_eq!(kills, [true]);
+        assert_eq!(eq.killed(0), Some(true));
         let mut left = [0.25; 128];
         let mut right = [-0.5; 128];
         for _ in 0..512 {
@@ -496,9 +479,8 @@ mod tests {
             assert_eq!(eq.advance_gains(&rows, 3), error);
             assert_eq!(left, [0.25; 3]);
             assert_eq!(right, [-0.5; 3]);
-            let mut gains = [GainDb::MIN];
-            assert_eq!(eq.read_gains(&mut gains), 1);
-            assert_eq!(gains, [GainDb::DEFAULT]);
+            assert_eq!(eq.band_count(), 1);
+            assert_eq!(eq.target_gain(0), Some(GainDb::DEFAULT));
         }
         let row = [-6.0, -3.0, 0.0];
         let mut left = [0.25; 3];

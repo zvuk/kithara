@@ -282,10 +282,10 @@ impl RenderPass {
 
     delegate::delegate! {
         to self.eq {
-            #[call(read_gains)]
-            pub(crate) fn read_eq(&self, gains: &mut [GainDb]) -> usize;
-            #[call(read_kills)]
-            pub(crate) fn read_eq_kills(&self, kills: &mut [bool]);
+            #[call(target_gain)]
+            pub(crate) fn eq_target_gain(&self, band: usize) -> Option<GainDb>;
+            #[call(killed)]
+            pub(crate) fn eq_killed(&self, band: usize) -> Option<bool>;
             #[call(band_count)]
             pub(crate) fn eq_bands(&self) -> usize;
             /// Ramp `band` of the deck's equaliser to `gain` from the next frame rendered.
@@ -645,9 +645,8 @@ mod tests {
             .expect("valid gain rows");
         assert_eq!(left.map(f32::to_bits), [0.125_f32.to_bits(); 4]);
         assert_eq!(right.map(f32::to_bits), [0.125_f32.to_bits(); 4]);
-        let mut gains = [GainDb::DEFAULT];
-        assert_eq!(render.read_eq(&mut gains), 1);
-        assert_eq!(gains[0], GainDb::MAX);
+        assert_eq!(render.eq_bands(), 1);
+        assert_eq!(render.eq_target_gain(0), Some(GainDb::MAX));
     }
 
     #[kithara::test]
