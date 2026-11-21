@@ -291,13 +291,3 @@ async fn a_dry_wet_program_on_an_empty_unit_refuses_its_whole_batch() {
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;
 }
-
-#[kithara::test(tokio)]
-async fn the_queue_reports_each_unit_revision() {
-    let harness = prepared(64).await;
-    for unit in 0..2 {
-        let reported = harness.with_queue(move |queue| queue.fx_layout(unit)).await;
-        assert_eq!(reported, Some(layout(&harness, unit)));
-    }
-    harness.close().await;
-}

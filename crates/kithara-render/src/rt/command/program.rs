@@ -270,24 +270,7 @@ impl Deck {
             let unavailable = DeckRefusal::ParameterUnavailable { parameter };
             let slot = slots.of(parameter).ok_or(unavailable)?;
             let field = self.programs.fields.get(slot).ok_or(unavailable)?;
-            match parameter {
-                DeckParameter::EqBand { band, layout } => {
-                    self.validate_eq_revision(band, layout, layout_changes)?;
-                    if !self.render.accepts_eq_program(band) {
-                        return Err(unavailable);
-                    }
-                }
-                DeckParameter::Fx { unit, layout, .. } => {
-                    let current = self.programs.units.get(unit).copied().ok_or(unavailable)?;
-                    if layout != LayoutRevision::new(self.programs.scope, current) {
-                        return Err(DeckRefusal::ParameterOutdated { parameter });
-                    }
-                    if !self.render.holds_fx(unit) {
-                        return Err(unavailable);
-                    }
-                }
-                _ => {}
-            }
+            self.validate_program_scope(parameter, layout_changes)?;
             if *authority != field.authority
                 || commands.iter().any(|part| {
                     !matches!(part, DeckPart::Program { .. }) && cancels(slots, part, slot)
@@ -298,6 +281,34 @@ impl Deck {
             {
                 return Err(DeckRefusal::ParameterOutdated { parameter });
             }
+        }
+        Ok(())
+    }
+
+    /// Check that a band or unit program names the layout the deck holds.
+    fn validate_program_scope(
+        &self,
+        parameter: DeckParameter,
+        layout_changes: bool,
+    ) -> Result<(), DeckRefusal> {
+        let unavailable = DeckRefusal::ParameterUnavailable { parameter };
+        match parameter {
+            DeckParameter::EqBand { band, layout } => {
+                self.validate_eq_revision(band, layout, layout_changes)?;
+                if !self.render.accepts_eq_program(band) {
+                    return Err(unavailable);
+                }
+            }
+            DeckParameter::Fx { unit, layout, .. } => {
+                let current = self.programs.units.get(unit).copied().ok_or(unavailable)?;
+                if layout != LayoutRevision::new(self.programs.scope, current) {
+                    return Err(DeckRefusal::ParameterOutdated { parameter });
+                }
+                if !self.render.holds_fx(unit) {
+                    return Err(unavailable);
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
