@@ -10,7 +10,6 @@ use kithara_assets::{
     AcquisitionResult, WriteSide,
     index::schema::{ArchivedAvailabilityFile, ArchivedLruIndexFile, ArchivedPinsIndexFile},
 };
-use kithara_platform::time::Duration;
 use kithara_test_utils::{kithara, temp_dir};
 use rkyv::option::ArchivedOption;
 
@@ -92,7 +91,7 @@ fn read_archived_availability(path: &Path, asset_root: &str, key: &str) -> Archi
 /// End-to-end persistence contract: realistic acquire → write →
 /// commit → read lifecycle, checking every index file at every
 /// observable step.
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::TestTempDir) {
     let root = temp_dir.path().to_path_buf();
     let asset_root = "persisted-asset";
@@ -225,7 +224,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::Test
 /// Minimal contract test: no reliance on eviction or lease configuration
 /// fine-print — just asserts the three files appear in the spots the
 /// documented API promises they will.
-#[kithara::test(timeout(Duration::from_secs(3)))]
+#[kithara::test]
 fn index_files_land_under_root_dir_index(temp_dir: kithara_test_utils::TestTempDir) {
     let root = temp_dir.path().to_path_buf();
     let scope = asset_scope(&temp_dir, "basic-asset");

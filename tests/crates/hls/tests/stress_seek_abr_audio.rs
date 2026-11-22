@@ -584,9 +584,9 @@ async fn flac_abr() -> (TestServerHelper, CreatedHls) {
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(30)),
     hang_timeout_secs(3),
-    tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
+    tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug"),
+    timeout(::std::time::Duration::from_millis(11672))
 )]
 #[case::wav_file_like(AbrAudioFixture::WavFileLike, wav_abr().await)]
 #[case::flac_fmp4(AbrAudioFixture::FlacFmp4, flac_abr().await)]

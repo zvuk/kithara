@@ -199,7 +199,7 @@ mod tests {
         thread,
     };
 
-    use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_platform::sync::Arc;
 
     use crate::{
         backend::{
@@ -244,7 +244,7 @@ mod tests {
     /// The publish/free is atomic under the state lock and `read_at` re-checks
     /// `committed` under the same lock; if that ordering regresses this panics
     /// (index out of range) on a reader thread.
-    #[kithara::test(timeout(Duration::from_secs(30)))]
+    #[kithara::test]
     fn concurrent_commit_reactivate_and_reads_never_panic() {
         let pools = pools();
         let (driver, _state) =

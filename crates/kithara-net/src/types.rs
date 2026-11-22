@@ -260,7 +260,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     #[case::empty_headers(Headers::default(), true)]
     #[case::headers_with_values({
         let mut h = Headers::default();
@@ -272,7 +272,7 @@ mod tests {
         assert_eq!(headers.is_empty(), expected_empty);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     #[case::simple_key("key1", "value1")]
     #[case::content_type("Content-Type", "application/json")]
     #[case::custom_header("X-Custom-Header", "custom-value")]
@@ -288,7 +288,7 @@ mod tests {
         assert_eq!(headers.get("non-existent"), None);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn test_headers_iter() {
         let mut headers = Headers::default();
         headers.insert("key1", "value1");
@@ -306,7 +306,7 @@ mod tests {
         assert_eq!(iterated.get("key3"), Some(&"value3".to_string()));
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     #[case::full_range(0, Some(100), "bytes=0-100")]
     #[case::open_ended(50, None, "bytes=50-")]
     #[case::single_byte(10, Some(10), "bytes=10-10")]
@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(range.to_string(), expected_header);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     #[case::equal_ranges(RangeSpec::new(0, Some(100)), RangeSpec::new(0, Some(100)), true)]
     #[case::different_starts(RangeSpec::new(0, Some(100)), RangeSpec::new(1, Some(100)), false)]
     #[case::different_ends(RangeSpec::new(0, Some(100)), RangeSpec::new(0, Some(99)), false)]
@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(range1 == range2, expected_equal);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn test_range_spec_debug() {
         let range = RangeSpec::new(10, Some(20));
         let debug_output = format!("{:?}", range);
@@ -345,7 +345,7 @@ mod tests {
         assert!(debug_output.contains("end: Some(20)"));
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn test_range_spec_clone() {
         let range1 = RangeSpec::new(10, Some(20));
         let range2 = range1.clone();
@@ -355,7 +355,7 @@ mod tests {
         assert_eq!(range1.end, range2.end);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn test_retry_policy_default() {
         let policy = RetryPolicy::default();
 
@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(policy.max_delay, Duration::from_secs(5));
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     #[case(1, Duration::from_millis(50), Duration::from_secs(1))]
     #[case(5, Duration::from_millis(100), Duration::from_secs(2))]
     #[case(10, Duration::from_millis(200), Duration::from_secs(10))]
@@ -384,7 +384,7 @@ mod tests {
         assert_eq!(policy.max_delay, max_delay);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     #[case(0, Duration::ZERO)]
     #[case(1, Duration::from_millis(100))]
     #[case(2, Duration::from_millis(200))]
@@ -403,7 +403,7 @@ mod tests {
         assert_eq!(delay, expected_delay);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     #[case(0, Duration::ZERO)]
     #[case(1, Duration::from_millis(50))]
     #[case(2, Duration::from_millis(100))]
@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(delay, expected_delay);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn test_retry_policy_debug() {
         let policy = RetryPolicy::default();
         let debug_output = format!("{:?}", policy);
@@ -434,7 +434,7 @@ mod tests {
         assert!(debug_output.contains("max_delay"));
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     #[case::zero_max_retries(0, Duration::from_millis(100), Duration::from_secs(1))]
     #[case::large_max_retries(100, Duration::from_millis(10), Duration::from_secs(10))]
     #[case::zero_base_delay(3, Duration::ZERO, Duration::from_secs(1))]
@@ -463,7 +463,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     #[case(10)]
     #[case(20)]
     async fn test_retry_policy_large_attempts(#[case] attempt: u32) {
@@ -475,7 +475,7 @@ mod tests {
         assert!(delay >= Duration::ZERO);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+    #[kithara::test(tokio)]
     #[case::insert_then_lookup({
         let mut h = Headers::default();
         h.insert("content-length", "13");

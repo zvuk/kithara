@@ -18,7 +18,7 @@ pub(crate) fn table_dividers(
     horizontal_offset: f32,
     table: TableMetrics<'_>,
 ) -> Vec<ColumnDividerLayout> {
-    let skin = &table.skin.table;
+    let skin = table.skin;
     let free = bounds.w - table.width(columns);
     let mut dividers: Vec<ColumnDividerLayout> = Vec::new();
     for (index, (column, cell)) in
@@ -111,7 +111,7 @@ mod tests {
 
     #[kithara::test]
     fn library_contract_dividers_are_invisible_full_height_resizable_handles() {
-        let skin = crate::builtin::skin();
+        let skin = &crate::builtin::skin_doc().table;
         let table = TableMetrics {
             skin,
             frame: TableFrame::new(0.0, 0.0, true),
@@ -144,12 +144,12 @@ mod tests {
         assert_eq!(dividers[1].column.id(), "artist");
         let divider = &dividers[0];
         assert_eq!(divider.column.id(), "index");
-        assert_eq!(divider.paint.h, skin.table.header_height);
+        assert_eq!(divider.paint.h, skin.header_height);
         assert_eq!(divider.paint.y, divider.hit.y);
-        assert_eq!(skin.table.divider_color, crate::skin::ColorRole::Line);
+        assert_eq!(skin.divider_color, crate::skin::ColorRole::Line);
 
-        assert_eq!(divider.hit.w, skin.table.divider_hit_width);
-        assert_eq!(divider.paint.w, skin.table.divider_width);
+        assert_eq!(divider.hit.w, skin.divider_hit_width);
+        assert_eq!(divider.paint.w, skin.divider_width);
         assert_eq!(divider.hit.w, 7.0);
         assert_eq!(divider.paint.w, 0.0);
         assert!(divider.hit.w > divider.paint.w);

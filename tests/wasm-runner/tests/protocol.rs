@@ -68,7 +68,7 @@ fn check(variable: &str, target: &str) {
 
 /// One test, so the runs share the fixture server one at a time as cargo's
 /// runs of real test binaries do.
-#[kithara::test(native)]
+#[kithara::test(native, timeout(::std::time::Duration::from_millis(33420)))]
 fn each_mode_reports_pass_fail_and_ignored() {
     check("KITHARA_WASM_RUNNER_FIXTURE_BROWSER", "browser");
     check("KITHARA_WASM_RUNNER_FIXTURE_WORKER", "worker");

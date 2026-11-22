@@ -7,7 +7,8 @@ use crate::{
     expand::scoped_key,
     interact::recognizers::Track,
     module::TableColumn,
-    render::{ReadValue, Reads, Skin},
+    render::{ReadValue, Reads},
+    skin::TableSkin,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -51,7 +52,7 @@ pub(crate) fn column_resize_track(
         minimum: if column.column.flexible() {
             column.column.width()
         } else {
-            table.skin.table.min_column_width
+            table.skin.min_column_width
         },
         maximum: reverse.then_some(column.width + available_width - table.width(columns)),
         direction: if reverse { -1.0 } else { 1.0 },
@@ -71,7 +72,7 @@ pub(crate) fn column_layouts(
     (columns, width): (&[TableColumn], Option<&str>),
     reads: &dyn Reads,
     state: Option<(&str, &str)>,
-    skin: &Skin,
+    skin: &TableSkin,
 ) -> Vec<ColumnLayout> {
     columns
         .iter()
@@ -88,7 +89,7 @@ fn effective_column_width(
     reads: &dyn Reads,
     width: Option<&str>,
     column: &TableColumn,
-    skin: &Skin,
+    skin: &TableSkin,
 ) -> f32 {
     let default = column.width();
     let Some(width) = width else {
@@ -111,7 +112,7 @@ fn effective_column_width(
     let minimum = if column.flexible() {
         column.width()
     } else {
-        skin.table.min_column_width
+        skin.min_column_width
     };
     width.max(minimum)
 }
@@ -181,7 +182,7 @@ mod tests {
 
     #[kithara::test]
     fn total_width_uses_host_override_and_flexible_minimum() {
-        let skin = crate::builtin::skin();
+        let skin = &crate::builtin::skin_doc().table;
         let columns = column_layouts(
             (
                 &[

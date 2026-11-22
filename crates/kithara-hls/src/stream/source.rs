@@ -408,7 +408,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(tokio, native, flash(false), timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio, native, flash(false))]
     async fn peer_activation_needs_no_background_executor() {
         let fixture = Fixture::with_look_ahead(Fixture::SEGMENT_BYTES);
         let peer = Arc::clone(fixture.source.hls_peer.as_ref().expect("fixture peer"));
@@ -438,7 +438,7 @@ mod tests {
         assert!(!fixture.wake.flush());
     }
 
-    #[kithara::test(tokio, native, flash(true), timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio, native, flash(true))]
     async fn retained_reader_wake_precedes_an_unrelated_deadline() {
         let fixture = Fixture::with_look_ahead(Fixture::SEGMENT_BYTES);
         let peer = Arc::clone(

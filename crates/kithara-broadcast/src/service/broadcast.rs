@@ -443,7 +443,7 @@ mod tests {
         assert!(playlist(&handle).contains("#EXT-X-ENDLIST\n"));
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Short))]
     fn dropping_the_output_finishes_the_stream() {
         let (mut output, handle) = start();
         write_second(&mut output);

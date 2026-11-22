@@ -10,7 +10,6 @@ use kithara::{
     hls::{Hls, HlsConfig},
     platform::{
         CancelToken,
-        time::Duration,
         tokio::{sync::broadcast::error::RecvError, task::spawn},
     },
     stream::Stream,
@@ -37,7 +36,6 @@ use url::Url;
 #[kithara::test(
     tokio,
     browser,
-    timeout(Duration::from_secs(5)),
     hang_timeout_secs(1),
     tracing("kithara_hls=info,kithara_stream=info,warn")
 )]
@@ -108,7 +106,7 @@ enum StreamOptions {
     LimitedCache,
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 #[case::init_segments(StreamOptions::Init)]
 #[case::never_cancel(StreamOptions::NeverCancel)]
 #[case::limited_cache(StreamOptions::LimitedCache)]
@@ -137,7 +135,7 @@ async fn hls_stream_options_open(
 }
 
 /// Test HLS session error handling with invalid URLs.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 #[case("http://127.0.0.1:0/master.m3u8")]
 #[case("not-a-valid-url")]
 #[case("")]
@@ -176,7 +174,7 @@ async fn test_hls_invalid_url_handling(
 
 /// Test that INIT segment comes first in byte stream (offset 0).
 /// This is critical for fMP4 HLS where decoder needs moov box before mdat.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 async fn test_init_segment_at_stream_start(
     temp_dir: TestTempDir,
     cancel_token: CancelToken,

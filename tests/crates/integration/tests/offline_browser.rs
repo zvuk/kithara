@@ -154,13 +154,7 @@ async fn render_filled_blocks(worker: &OfflineWorker, blocks: usize) -> Vec<f32>
 }
 
 /// The offline render carries the fixture's signal, read off complete PCM blocks.
-#[kithara::test(
-    tokio,
-    browser,
-    serial,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, browser, serial, hang_timeout_secs(1), timeout(Short))]
 async fn offline_render_carries_fixture_signal() {
     let worker = playing_worker().await;
     let _warmup = render_blocks(&worker, WARMUP_BLOCKS).await;
@@ -181,13 +175,7 @@ async fn offline_render_carries_fixture_signal() {
     );
 }
 
-#[kithara::test(
-    tokio,
-    browser,
-    serial,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, browser, serial, hang_timeout_secs(1), timeout(Short))]
 async fn offline_mix_tap_mirrors_render() {
     let worker = playing_worker().await;
     let _warmup = render_blocks(&worker, WARMUP_BLOCKS).await;

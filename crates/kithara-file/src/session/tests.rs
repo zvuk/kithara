@@ -434,7 +434,7 @@ fn file_source_probe_wait_range_clamps_read_ahead_at_known_eof() {
     assert_eq!(result.unwrap(), WaitOutcome::Ready);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(2)))]
+#[kithara::test(native)]
 fn source_cancel_interrupts_blocked_wait_without_poisoning_asset() {
     let (reader, writer) = create_active_resource(b"");
     let coord = make_coord();

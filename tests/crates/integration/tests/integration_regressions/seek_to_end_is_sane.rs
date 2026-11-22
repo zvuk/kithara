@@ -249,7 +249,7 @@ async fn run_case(
     queue.close().await;
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, multi_thread)]
 async fn seek_to_duration_keeps_time_and_duration_consistent(
     temp_dir: TestTempDir,
     #[future(awt)] end_sources: (TestServerHelper, [CreatedHls; 2]),

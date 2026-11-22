@@ -2,7 +2,6 @@ use std::num::NonZeroU32;
 
 use kithara::{
     decode::{GaplessInfo, GaplessTrimmer},
-    platform::time::Duration,
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
 };
 use kithara_integration_tests::bufpool_ext::{Pools, pools};
@@ -16,7 +15,7 @@ use crate::gapless_common::{
 
 const TRACK_FRAMES: usize = 48_000;
 
-#[kithara::test(timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::test(hang_timeout_secs(1))]
 fn synthetic_gapless_tracks_have_no_boundary_energy_dip(
     gapless_sine_first: Vec<f32>,
     gapless_sine_second: Vec<f32>,

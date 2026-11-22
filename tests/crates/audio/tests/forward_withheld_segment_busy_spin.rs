@@ -98,7 +98,7 @@ async fn gated_audio(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(Short),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
 async fn forward_into_withheld_segment_waits_and_resumes(

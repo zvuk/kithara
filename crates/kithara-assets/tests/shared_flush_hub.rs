@@ -8,7 +8,7 @@ mod support;
 use kithara_assets::{
     AcquisitionResult, AssetStore, FlushHub, FlushPolicy, StorageBackend, WriteSide,
 };
-use kithara_platform::{CancelToken, time::Duration};
+use kithara_platform::CancelToken;
 use kithara_test_utils::kithara;
 use support::{Test, resource, source};
 use tempfile::tempdir;
@@ -22,7 +22,7 @@ fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8])
     drop(w.commit(Some(data.len() as u64)).expect("commit"));
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn shared_hub_flush_now_persists_every_store() {
     let dir = tempdir().unwrap();
     let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());

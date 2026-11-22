@@ -655,7 +655,7 @@ impl<S: HostedState> TablePlan<S> {
             self.path.clone(),
             ScrollConfig::plain(
                 ScrollAxis::Vertical,
-                table_content_height(row_count, picture.skin()),
+                table_content_height(row_count, &picture.skin().table),
             ),
         ));
         descriptors.push(Descriptor::item(
@@ -743,7 +743,7 @@ impl<S: HostedState> TablePlan<S> {
             (table.columns, ctx.endpoint(table.width)),
             &ctx,
             state,
-            skin,
+            &skin.table,
         );
         let rows = rows.iter().map(TableRowData::from).collect();
         let picture = TableFace::new(rows, columns, skin, table.frame)

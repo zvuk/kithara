@@ -160,7 +160,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test]
+    #[kithara::test(timeout(Short))]
     fn the_add_folder_row_shows_wherever_a_folder_picker_exists() {
         let (package, library) =
             test_fixture::mount(None, vec![StartupSource::registered(Vec::new())])
@@ -175,7 +175,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Short))]
     fn the_app_reads_the_configuration_path_it_booted_with() {
         let state = booted(false, Some(Path::new("/opt/kithara/kithara.yaml")));
         let root = ReadRoot::new(&state);
@@ -186,7 +186,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Short))]
     fn the_root_decides_whether_the_window_chrome_is_hidden() {
         for chrome_hidden in [true, false] {
             let state = booted(chrome_hidden, None);

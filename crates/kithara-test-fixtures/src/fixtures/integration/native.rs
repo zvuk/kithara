@@ -54,10 +54,10 @@ pub fn constant_unity() -> &'static [u8] {
 #[must_use]
 pub fn deadline_tracks() -> [&'static [u8]; 4] {
     [
-        assets::deadline_track_one().bytes(),
-        assets::deadline_track_two().bytes(),
-        assets::deadline_track_three().bytes(),
-        assets::deadline_track_four().bytes(),
+        assets::deadline_block_one().bytes(),
+        assets::deadline_block_two().bytes(),
+        assets::deadline_block_three().bytes(),
+        assets::deadline_block_four().bytes(),
     ]
 }
 

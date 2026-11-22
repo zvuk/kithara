@@ -145,7 +145,7 @@ async fn render_until_gate_requested(
     );
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(90)))]
+#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(9808)))]
 #[case::no_delay(SeekScenario::NoDelay)]
 #[case::good_4g_500ms(SeekScenario::Gated {
     label: "good_4g_500ms_gate",

@@ -463,7 +463,7 @@ mod tests {
         assert_eq!(handle.request_count(), 1);
     }
 
-    #[kithara::test(tokio, flash(false))]
+    #[kithara::test(tokio, flash(false), timeout(Short))]
     async fn repeated_segment_gets_each_observe_configured_delay() {
         check_repeated_segment_delay().await;
     }

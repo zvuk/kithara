@@ -393,7 +393,7 @@ async fn a_held_track_preempts_a_background_run(tone_mp3: String, rhythm_a_mp3: 
     host.close().await;
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(native, tokio, timeout(Short))]
 async fn a_background_track_waits_for_a_held_one(
     tone_mp3: String,
     rhythm_a_mp3: String,
@@ -590,7 +590,7 @@ async fn a_failed_pass_refuses_the_grid_until_the_next_subscribe(tone_mp3: Strin
     run.close().await;
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(native, tokio, timeout(Short))]
 async fn a_pass_that_cannot_open_refuses_the_grid(tone_mp3: String) {
     /// Room for the sample pool's initial buffers, not for a pass's ingress ring.
     const BUDGET_BELOW_INGRESS: usize = 640 * 1024;
@@ -626,7 +626,7 @@ async fn a_pass_that_cannot_open_refuses_the_grid(tone_mp3: String) {
     host.close().await;
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(native, tokio, timeout(Short))]
 async fn a_close_without_a_value_is_retried_on_the_next_subscribe(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut run = close_run(&cancel, &tone_mp3, None).await;
@@ -702,7 +702,7 @@ async fn obsolete_unheld_entries_are_reclaimed(
     host.close().await;
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio, flash(false), timeout(Medium))]
 async fn removed_background_work_is_not_requeued_or_started(
     rhythm_a_mp3: String,
     rhythm_b_mp3: String,
@@ -784,7 +784,7 @@ async fn resumable_progress(url: &str) -> AnalysisProgress {
     }
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio, flash(false), timeout(Short))]
 async fn a_close_on_an_unsettled_value_is_resumed_on_the_next_subscribe(long_wav: String) {
     let url = long_wav;
     let checkpoint = resumable_progress(&url).await;
@@ -812,7 +812,7 @@ async fn a_close_on_an_unsettled_value_is_resumed_on_the_next_subscribe(long_wav
     run.close().await;
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(native, tokio, flash(false), timeout(Medium))]
 async fn a_rejected_checkpoint_opens_a_fresh_pass(long_wav: String) {
     let url = long_wav;
     let checkpoint = resumable_progress(&url).await;
@@ -941,7 +941,7 @@ async fn a_finished_background_entry_holds_its_value_only_in_the_cache(tone_mp3:
     host.close().await;
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(native, tokio, timeout(Short))]
 async fn warm_seeds_nothing_before_the_run_opens(tone_mp3: String, rhythm_a_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
@@ -974,7 +974,7 @@ async fn warm_seeds_nothing_before_the_run_opens(tone_mp3: String, rhythm_a_mp3:
     host.close().await;
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(1488)))]
 async fn a_background_warm_keeps_the_holder_of_a_held_entry(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
@@ -1002,7 +1002,7 @@ async fn settle(owner: &mut Owner) {
     }
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(native, tokio, timeout(Medium))]
 async fn a_stalled_analysis_pass_uses_the_virtual_progress_budget() {
     let (_publisher, mut publications) = watch::channel(None::<AnalysisProgress>);
     let virtual_mode = ::kithara::platform::flash::ambient_snapshot();
@@ -1149,7 +1149,8 @@ async fn an_invalid_layout_yields_no_analysis(tone_mp3: String) {
     tokio,
     tracing(
         "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
-    )
+    ),
+    timeout(Short)
 )]
 async fn a_track_shorter_than_its_header_claims_is_done(tone_short_mp3: String) {
     the_source_gave_everything_it_can(&tone_short_mp3).await;
@@ -1160,7 +1161,8 @@ async fn a_track_shorter_than_its_header_claims_is_done(tone_short_mp3: String) 
     tokio,
     tracing(
         "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
-    )
+    ),
+    timeout(Medium)
 )]
 async fn a_resampled_track_is_covered_from_its_first_frame(rhythm_a_short_mp3: String) {
     // Keep the rate-conversion geometry while bounding unrelated NN work.
@@ -1489,7 +1491,8 @@ fn a_settled_pass_owes_the_key_until_its_tag_is_published() {
     flash(false),
     tracing(
         "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
-    )
+    ),
+    timeout(Short)
 )]
 async fn a_served_waveform_leaves_only_the_beats_to_analyse(tone_mp3: String) {
     let pass = PreparedPass::run(&tone_mp3, None, Some(served_waveform())).await;

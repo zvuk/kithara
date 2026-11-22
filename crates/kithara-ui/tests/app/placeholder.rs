@@ -99,7 +99,7 @@ fn documents() -> MemResolver {
 /// The capture host binds a cleared stand-in for a declared device picture,
 /// so the frame rasterises, and rasterises again, with the red beneath the
 /// picture showing through it.
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1370)))]
 fn capture_host_draws_a_declared_device_picture_it_cannot_bind_as_cleared() {
     let declaration =
         ExternalImageDeclaration::new(ImageId::new("fixture/preview"), 4, 4, ImageAlphaType::Alpha)

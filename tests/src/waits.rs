@@ -432,7 +432,12 @@ mod tests {
     use crate::{HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayerOptions};
 
     #[cfg(feature = "flash")]
-    #[kithara::test(tokio, multi_thread, flash(true))]
+    #[kithara::test(
+        tokio,
+        multi_thread,
+        flash(true),
+        timeout(::std::time::Duration::from_millis(1190))
+    )]
     async fn modeled_render_progress_does_not_turn_fixture_delay_into_wall_time() {
         use std::num::{NonZeroU32, NonZeroUsize};
 

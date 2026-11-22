@@ -11,7 +11,7 @@ use kithara_test_utils::kithara;
 use velato::{Composition, Renderer as LottieRenderer};
 use vello::{Scene, kurbo::Affine, peniko::color::palette::css::BLACK};
 
-use super::{VelloBackend, conformance::rasterise_at};
+use super::{VelloBackend, conformance::Rasteriser};
 use crate::{
     draw::{DrawListBuilder, replay},
     lottie::{Artwork, emit},
@@ -30,29 +30,30 @@ fn artwork() -> Composition {
         .unwrap_or_else(|error| panic!("the probe artwork must read: {error}"))
 }
 
-fn painted(scene: &Scene, scale: f64) -> Vec<u8> {
+fn painted(rasteriser: &mut Rasteriser, scene: &Scene, scale: f64) -> Vec<u8> {
     let side = u32::try_from(Apart::CANVAS).unwrap_or(u32::MAX);
     let mut scaled = Scene::new();
     scaled.append(scene, Some(Affine::scale(scale)));
-    rasterise_at(&scaled, (side, side), BLACK)
+    rasteriser
+        .rasterise_at(&scaled, (side, side), BLACK)
         .unwrap_or_else(|error| panic!("vello must rasterise: {error}"))
 }
 
 /// What velato paints, which is the answer this emitter is measured against.
-fn oracle(artwork: &Composition, frame: f64, scale: f64) -> Vec<u8> {
+fn oracle(rasteriser: &mut Rasteriser, artwork: &Composition, frame: f64, scale: f64) -> Vec<u8> {
     let mut scene = Scene::new();
     LottieRenderer::new().append(artwork, frame, Affine::IDENTITY, 1.0, &mut scene);
-    painted(&scene, scale)
+    painted(rasteriser, &scene, scale)
 }
 
 /// What the neutral list paints, through the backend the application uses.
-fn seam(artwork: &Composition, frame: f64, scale: f64) -> Vec<u8> {
+fn seam(rasteriser: &mut Rasteriser, artwork: &Composition, frame: f64, scale: f64) -> Vec<u8> {
     let mut list = DrawListBuilder::default();
     emit(artwork, frame, &mut list)
         .unwrap_or_else(|error| panic!("the probe artwork must draw: {error}"));
     let mut scene = Scene::new();
     replay(&list.finish(), &mut VelloBackend::new(&mut scene));
-    painted(&scene, scale)
+    painted(rasteriser, &scene, scale)
 }
 
 /// What the two pictures disagree about.
@@ -96,8 +97,12 @@ impl Apart {
     const CANVAS: usize = 200;
 
     fn at(frame: f64) -> Self {
+        let mut rasteriser =
+            Rasteriser::new().unwrap_or_else(|error| panic!("vello must initialise: {error}"));
         let artwork = artwork();
-        Self::pixels(&oracle(&artwork, frame, 1.0), &seam(&artwork, frame, 1.0))
+        let reference = oracle(&mut rasteriser, &artwork, frame, 1.0);
+        let rendered = seam(&mut rasteriser, &artwork, frame, 1.0);
+        Self::pixels(&reference, &rendered)
     }
 
     fn pixels(oracle: &[u8], seam: &[u8]) -> Self {
@@ -148,18 +153,19 @@ impl Apart {
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(1892)))]
 fn admitted_external_animation_preserves_the_reference_at_authored_checkpoints() {
     let bytes = include_bytes!("../../tests/fixtures/artwork.json");
     let admitted = Artwork::parse(bytes).unwrap();
     let reference = Composition::from_slice(bytes).unwrap();
+    let mut rasteriser =
+        Rasteriser::new().unwrap_or_else(|error| panic!("vello must initialise: {error}"));
     for seconds in [0.0, 0.5, 0.75] {
         let frame = admitted.frame_at(seconds, 1.0);
         for scale in [1.0, 2.0] {
-            let apart = Apart::pixels(
-                &oracle(&reference, frame, scale),
-                &seam(admitted.composition(), frame, scale),
-            );
+            let oracle = oracle(&mut rasteriser, &reference, frame, scale);
+            let seam = seam(&mut rasteriser, admitted.composition(), frame, scale);
+            let apart = Apart::pixels(&oracle, &seam);
             assert_eq!(apart.flat, 0, "{apart}");
             assert!(apart.worst <= 1, "{apart}");
         }

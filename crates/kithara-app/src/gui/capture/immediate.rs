@@ -4,7 +4,6 @@ use std::rc::Rc;
 
 use iced::Theme;
 use kithara::ui::{
-    builtin,
     capture::{Geometry, Photographer, Stage},
     compile::CompiledUi,
     render::{Clock, tree},
@@ -12,7 +11,7 @@ use kithara::ui::{
 };
 
 use super::{
-    fixture::{self, Fixture},
+    fixture::Fixture,
     page::{Page, PoolSample, pooled},
 };
 use crate::{
@@ -35,11 +34,11 @@ pub(super) struct Immediate {
 }
 
 impl Immediate {
-    pub(super) fn new(geometry: Geometry) -> Result<Self, String> {
+    pub(super) fn new(package: Rc<Package>, geometry: Geometry) -> Result<Self, String> {
         Ok(Self {
             geometry,
             open: None,
-            package: fixture::package()?,
+            package,
             photographer: Photographer::new()?,
             pixels: Vec::new(),
             pools: String::new(),
@@ -60,7 +59,7 @@ impl Stage for Immediate {
             .open
             .as_ref()
             .ok_or_else(|| "no layout is open: turn to one before photographing".to_owned())?;
-        let skin = builtin::skin();
+        let skin = self.package.skin();
         let draw = || {
             tree::render(
                 &compiled.root,
@@ -91,7 +90,7 @@ impl Stage for Immediate {
     fn tick(&mut self) {}
 
     fn turn(&mut self, page: &Page) -> Result<(), String> {
-        let compiled = ui::compile_ui(page.0)
+        let compiled = ui::compile_package(&self.package, page.0)
             .map_err(|error| format!("compile {}: {error}", self.package.document(page.0)))?;
         let reads = Fixture::new(page.0, Rc::clone(&self.package))?;
         self.open = Some((*page, compiled, reads));

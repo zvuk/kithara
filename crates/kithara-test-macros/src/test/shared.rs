@@ -6,7 +6,7 @@
 use kithara_test_args::{TestArgs, TestFlags};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Attribute, Expr, Ident, ext::IdentExt as _};
+use syn::{Attribute, Ident, ReturnType, ext::IdentExt as _};
 
 pub(crate) fn make_serial_attr(args: &TestArgs) -> TokenStream2 {
     if args.flags().contains(TestFlags::SERIAL) {
@@ -33,16 +33,6 @@ pub(crate) fn make_wasm_serial_guard(args: &TestArgs) -> TokenStream2 {
     } else {
         quote! {}
     }
-}
-
-/// Test attributes for **sync** tests only (dual-platform: native `#[test]` + WASM).
-///
-/// Async tests are handled separately via `emit_async_runtime_test` /
-/// `emit_async_timeout_test` which create a manual tokio runtime on native.
-pub(crate) fn make_sync_test_attrs() -> TokenStream2 {
-    let native = quote! { #[cfg_attr(not(target_arch = "wasm32"), test)] };
-    let wasm = quote! { #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)] };
-    quote! { #native #wasm }
 }
 
 /// Generate the tokio runtime builder expression.
@@ -108,7 +98,6 @@ pub(crate) fn make_clock_measurement_stmt(args: &TestArgs, fn_name: &Ident) -> T
     let name = fn_name.unraw().to_string();
     let flash = args.flash().unwrap_or(true);
     quote! {
-        #[cfg(not(target_arch = "wasm32"))]
         let __kithara_clock_measurement =
             ::kithara_test_utils::test::ClockMeasurement::start(
                 concat!(module_path!(), "::", #name),
@@ -161,17 +150,21 @@ pub(crate) fn make_test_setup(args: &TestArgs, remaining_attrs: &[&Attribute]) -
     }
 }
 
-/// The test declares its panic (`#[should_panic]`, bare or inside `cfg_attr`).
-/// Token-level matching keeps the `cfg_attr` form covered without evaluating
-/// its condition: suppressing on a platform where the attribute is inactive
-/// only skips a dump for a test that then does not panic.
+// rustc expands cfg_attr for the consumer target before invoking the attribute macro.
 fn expects_panic(remaining_attrs: &[&Attribute]) -> bool {
-    use quote::ToTokens as _;
-    remaining_attrs.iter().any(|attr| {
-        attr.path().is_ident("should_panic")
-            || (attr.path().is_ident("cfg_attr")
-                && attr.to_token_stream().to_string().contains("should_panic"))
-    })
+    remaining_attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("should_panic"))
+}
+
+/// Pages the test binary's code in before a deadline is armed, so a budget
+/// measures the body rather than a cold page cache. Emitted only where that
+/// cost was observed.
+pub(crate) fn make_binary_resident_stmt() -> TokenStream2 {
+    quote! {
+        #[cfg(all(target_os = "linux", not(miri)))]
+        ::kithara_test_utils::test::make_binary_resident();
+    }
 }
 
 pub(crate) fn make_prekill_guard(fn_name: &Ident) -> TokenStream2 {
@@ -226,19 +219,21 @@ pub(crate) fn make_dedicated_worker_config() -> TokenStream2 {
 
 pub(crate) fn wrap_with_timeout(
     body: &TokenStream2,
-    timeout: &Option<Expr>,
+    args: &TestArgs,
     is_async: bool,
     fn_name: &Ident,
+    ret_type: &ReturnType,
 ) -> TokenStream2 {
     let fn_name_str = fn_name.to_string();
-    let Some(dur) = timeout else {
-        let prekill_guard = make_prekill_guard(fn_name);
-        return quote! { { #prekill_guard #body } };
-    };
+    let dur = super::timeout::resolve(args);
+    let prekill_guard = make_prekill_guard(fn_name);
+    let resident = make_binary_resident_stmt();
 
     if is_async {
         quote! {
             {
+                #resident
+                #prekill_guard
                 let __timeout_dur: ::std::time::Duration = #dur;
                 let __body = async { #body };
                 // Wall-clock safety net: must fire on REAL time even under
@@ -259,20 +254,44 @@ pub(crate) fn wrap_with_timeout(
             }
         }
     } else {
+        let result_type = match ret_type {
+            ReturnType::Default => quote! { () },
+            ReturnType::Type(_, ty) => quote! { #ty },
+        };
         quote! {
             {
+                #resident
+                #prekill_guard
                 let __timeout_dur: ::std::time::Duration = #dur;
                 let __body = move || { #body };
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let (tx, rx) = ::std::sync::mpsc::channel();
-                    let handle = ::std::thread::spawn(move || {
-                        tx.send(__body()).ok();
-                    });
+                    let mut __thread_builder = ::std::thread::Builder::new();
+                    if let Some(__thread_name) = ::std::thread::current().name() {
+                        __thread_builder = __thread_builder.name(__thread_name.to_owned());
+                    }
+                    let handle = __thread_builder
+                        .spawn(move || {
+                            // Only the exit code or panic payload crosses threads. The
+                            // user's Termination type can contain a non-Send error.
+                            let __outcome = ::std::panic::catch_unwind(
+                                ::std::panic::AssertUnwindSafe(|| {
+                                    let __result: #result_type = ({ __body })();
+                                    ::std::process::Termination::report(__result)
+                                }),
+                            );
+                            let _ = tx.send(__outcome);
+                        })
+                        .expect("kithara sync test thread");
                     match rx.recv_timeout(__timeout_dur) {
-                        Ok(v) => {
+                        Ok(Ok(__code)) => {
                             handle.join().ok();
-                            v
+                            __code
+                        }
+                        Ok(Err(__payload)) => {
+                            handle.join().ok();
+                            ::std::panic::resume_unwind(__payload)
                         }
                         Err(::std::sync::mpsc::RecvTimeoutError::Timeout) => {
                             let __timeout_diagnostic = format!(
@@ -295,7 +314,17 @@ pub(crate) fn wrap_with_timeout(
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
-                    __body()
+                    let __started = ::kithara_test_utils::kithara_platform::time::WallInstant::now();
+                    let __result = ({ __body })();
+                    if __started.elapsed() > __timeout_dur {
+                        let __diagnostic = format!(
+                            "test `{}` timed out after {:?}",
+                            #fn_name_str, __timeout_dur,
+                        );
+                        ::kithara_test_utils::hang::record_test_hang("sync-timeout", &__diagnostic);
+                        panic!("{}", __diagnostic);
+                    }
+                    __result
                 }
             }
         }
@@ -406,15 +435,20 @@ pub(crate) fn wrap_with_soft_fail(
                 let __result = std::panic::catch_unwind(
                     std::panic::AssertUnwindSafe(move || #body)
                 );
-                if let Err(__panic) = __result {
-                    #handle_panic
+                match __result {
+                    Ok(__value) => __value,
+                    Err(__panic) => {
+                        #handle_panic
+                        #[cfg(not(target_arch = "wasm32"))]
+                        { ::std::process::ExitCode::SUCCESS }
+                    }
                 }
             }
         }
     }
 }
 
-/// Combine native clock measurement, hang budget and optional soft-fail wrapping.
+/// Combine clock measurement, hang budget and optional soft-fail wrapping.
 pub(crate) fn finalize_body(
     inner: &TokenStream2,
     args: &TestArgs,
@@ -435,29 +469,100 @@ pub(crate) fn finalize_body(
     quote! { { #hang_budget #clock_measurement #body } }
 }
 
+/// Only a genuine panic may match `soft_fail`. Adapt a returned failure after the filter.
+pub(crate) fn sync_test_body(
+    body: &TokenStream2,
+    args: &TestArgs,
+    fn_name: &Ident,
+    ret_type: &ReturnType,
+    remaining_attrs: &[&Attribute],
+) -> TokenStream2 {
+    let timed = wrap_with_timeout(body, args, false, fn_name, ret_type);
+    let body = finalize_body(&timed, args, fn_name, false);
+    let unit_guard = expects_panic(remaining_attrs).then(|| {
+        quote! {
+            #[cfg(not(target_arch = "wasm32"))]
+            let _: fn() #ret_type = || ();
+        }
+    });
+    quote! {{
+        #unit_guard
+        let __result = #body;
+        #[cfg(not(target_arch = "wasm32"))]
+        assert!(__result == ::std::process::ExitCode::SUCCESS, "test body returned a failure exit code");
+        #[cfg(target_arch = "wasm32")]
+        { __result }
+    }}
+}
+
 #[cfg(test)]
 mod tests {
+    use kithara_test_args::TestArgs;
     use quote::quote;
-    use syn::{Expr, Ident, parse_quote};
+    use syn::{Ident, ReturnType, Stmt, parse_quote};
 
-    use super::wrap_with_timeout;
+    use super::{make_clock_measurement_stmt, wrap_with_timeout};
 
     #[test]
-    fn no_timeout_native_body_installs_prekill_guard() {
+    fn clock_measurement_is_emitted_for_every_target() -> syn::Result<()> {
+        let name: Ident = parse_quote!(clock_control);
+        let statement: Stmt =
+            syn::parse2(make_clock_measurement_stmt(&TestArgs::default(), &name))?;
+        let Stmt::Local(binding) = statement else {
+            panic!("measurement guard must live in the test body scope");
+        };
+        assert!(binding.attrs.is_empty(), "every target records its body");
+        Ok(())
+    }
+
+    #[test]
+    fn default_timeout_native_body_installs_prekill_guard() {
         let name: Ident = parse_quote!(stress_case);
 
-        let expanded = wrap_with_timeout(&quote!({}), &None, false, &name).to_string();
+        let expanded = wrap_with_timeout(
+            &quote!({}),
+            &TestArgs::default(),
+            false,
+            &name,
+            &ReturnType::Default,
+        )
+        .to_string();
 
         assert!(expanded.contains("PreKillGuard"));
         assert!(expanded.contains("stress_case"));
     }
 
     #[test]
+    fn sync_code_is_resident_before_the_deadline_is_armed() {
+        let name: Ident = parse_quote!(cold_binary);
+
+        let expanded = wrap_with_timeout(
+            &quote!({}),
+            &TestArgs::default(),
+            false,
+            &name,
+            &ReturnType::Default,
+        )
+        .to_string();
+
+        let resident = expanded.find("make_binary_resident");
+        let armed = expanded.find("recv_timeout");
+        assert!(
+            resident
+                .zip(armed)
+                .is_some_and(|(resident, armed)| resident < armed),
+            "{expanded}"
+        );
+    }
+
+    #[test]
     fn sync_timeout_records_durable_evidence_before_panicking() {
         let name: Ident = parse_quote!(stress_case);
-        let timeout: Option<Expr> = Some(parse_quote!(::std::time::Duration::from_secs(5)));
+        let mut args = TestArgs::default();
+        args.set_timeout(Some(parse_quote!(::std::time::Duration::from_secs(5))));
 
-        let expanded = wrap_with_timeout(&quote!({}), &timeout, false, &name).to_string();
+        let expanded =
+            wrap_with_timeout(&quote!({}), &args, false, &name, &ReturnType::Default).to_string();
 
         assert!(expanded.contains("record_test_hang"));
         assert!(expanded.contains("sync-timeout"));
@@ -467,9 +572,11 @@ mod tests {
     #[test]
     fn async_timeout_records_durable_evidence_before_panicking() {
         let name: Ident = parse_quote!(stress_case);
-        let timeout: Option<Expr> = Some(parse_quote!(::std::time::Duration::from_secs(5)));
+        let mut args = TestArgs::default();
+        args.set_timeout(Some(parse_quote!(::std::time::Duration::from_secs(5))));
 
-        let expanded = wrap_with_timeout(&quote!({}), &timeout, true, &name).to_string();
+        let expanded =
+            wrap_with_timeout(&quote!({}), &args, true, &name, &ReturnType::Default).to_string();
 
         assert!(expanded.contains("record_test_hang"));
         assert!(expanded.contains("wall-timeout"));

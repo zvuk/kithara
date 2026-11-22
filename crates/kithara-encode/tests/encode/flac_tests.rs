@@ -6,7 +6,7 @@ use kithara_test_utils::{bufpool::pools, kithara};
 const CHANNELS: u16 = 2;
 const SAMPLE_RATE: u32 = 48_000;
 
-#[kithara::test]
+#[kithara::test(timeout(::std::time::Duration::from_millis(10430)))]
 fn encode_packaged_flac_happy_path_emits_monotonic_access_units(encoder_saw_flac: Pcm) {
     let pcm = encoder_saw_flac;
     let media_info = MediaInfo::builder()

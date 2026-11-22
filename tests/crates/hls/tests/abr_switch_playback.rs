@@ -1,22 +1,19 @@
 use kithara::{decode::DecoderBackend, platform::time::Duration};
-use kithara_integration_tests::{TestServerHelper, mixed_encrypted, mixed_plain, served_mp3};
+use kithara_integration_tests::{
+    TestServerHelper, mixed_encrypted, mixed_plain, mixed_plain_url, served_mp3,
+};
 use kithara_test_utils::{TestTempDir, temp_dir};
 use packaged::create_packaged_abr_fixture;
 use url::Url;
 
 use super::abr_playback::{packaged, seek};
 
-#[kithara::test(
-    tokio,
-    native,
-    serial,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(3)
-)]
+#[kithara::test(tokio, native, serial, hang_timeout_secs(3))]
 async fn abr_switch_on_production_ladder_does_not_hang(
     temp_dir: TestTempDir,
-    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+    #[by_ref] mixed_plain_url: &Url,
 ) {
+    let mixed_plain = (TestServerHelper::new().await, mixed_plain_url.clone());
     packaged::abr_switch_on_production_ladder_does_not_hang(temp_dir, mixed_plain).await;
 }
 
@@ -24,7 +21,7 @@ async fn abr_switch_on_production_ladder_does_not_hang(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(::std::time::Duration::from_millis(9156)),
     hang_timeout_secs(3),
     tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
 )]
@@ -40,13 +37,14 @@ async fn packaged_abr_switch_keeps_player_continuity(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(60)),
+    timeout(::std::time::Duration::from_millis(1092)),
     hang_timeout_secs(5)
 )]
 async fn manual_cross_codec_switch_sustains_post_switch_playback(
     temp_dir: TestTempDir,
-    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+    #[by_ref] mixed_plain_url: &Url,
 ) {
+    let mixed_plain = (TestServerHelper::new().await, mixed_plain_url.clone());
     packaged::manual_cross_codec_switch_sustains_post_switch_playback(temp_dir, mixed_plain).await;
 }
 
@@ -54,7 +52,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(::std::time::Duration::from_millis(4490)),
     hang_timeout_secs(5)
 )]
 #[cfg_attr(not(target_os = "android"), case::drm_abr_auto_sw(true, true, DecoderBackend::Symphonia, mixed_encrypted().await))]
@@ -91,17 +89,12 @@ async fn stream_continues_after_seek(
     seek::stream_continues_after_seek(temp_dir, encrypted, abr_auto, backend, prepared).await;
 }
 
-#[kithara::test(
-    tokio,
-    native,
-    serial,
-    timeout(Duration::from_secs(20)),
-    hang_timeout_secs(3)
-)]
+#[kithara::test(tokio, native, serial, hang_timeout_secs(3))]
 async fn fixed_variant_on_production_ladder_plays_without_hang(
     temp_dir: TestTempDir,
-    #[future(awt)] mixed_plain: (TestServerHelper, Url),
+    #[by_ref] mixed_plain_url: &Url,
 ) {
+    let mixed_plain = (TestServerHelper::new().await, mixed_plain_url.clone());
     seek::fixed_variant_on_production_ladder_plays_without_hang(temp_dir, mixed_plain).await;
 }
 
@@ -109,7 +102,7 @@ async fn fixed_variant_on_production_ladder_plays_without_hang(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(::std::time::Duration::from_millis(7192)),
     hang_timeout_secs(5),
     tracing("kithara_audio=warn,kithara_hls=warn,symphonia_format_isomp4=warn")
 )]
@@ -123,13 +116,7 @@ async fn seek_after_eof_mmap_produces_samples(
     seek::seek_after_eof_mmap_produces_samples(temp_dir, encrypted, prepared).await;
 }
 
-#[kithara::test(
-    tokio,
-    native,
-    serial,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, native, serial, hang_timeout_secs(5))]
 async fn mp3_stream_continues_after_seek(
     temp_dir: TestTempDir,
     #[future(awt)] served_mp3: (TestServerHelper, Url),
@@ -141,7 +128,7 @@ async fn mp3_stream_continues_after_seek(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(20)),
+    timeout(::std::time::Duration::from_millis(7207)),
     hang_timeout_secs(3),
     tracing("kithara_abr=debug,kithara_abr_seek=debug,kithara_audio=info,kithara_hls=info")
 )]

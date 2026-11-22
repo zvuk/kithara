@@ -1708,7 +1708,7 @@ steps = [
     "chrome",
     "webcodecs",
     "include",
-  ], label = "Chromium WebCodecs tests" },
+  ], label = "Chromium WebCodecs tests", env = { KITHARA_TEST_CLOCK_MEASUREMENT = "1" } },
 ]
 role = "gate"
 kinds = []

@@ -47,7 +47,7 @@ use kithara_integration_tests::{
 use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched() {
     use kithara::{
@@ -555,7 +555,7 @@ fn mk_cfg(
 /// the supersede path → `slow` marked `Cancelled`), release `slow`'s init so
 /// its loader completes and skips on the cancelled status, then assert `slow`
 /// never becomes `current()` — including after `fast` plays out.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread, timeout(::std::time::Duration::from_millis(3880)))]
 async fn supersede_while_loading_cancels_slow_track(
     #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
 ) {
@@ -682,7 +682,7 @@ async fn supersede_while_loading_cancels_slow_track(
 /// Both loads are gated so the head track is still loading when `play()`
 /// runs; `play()` must not re-point the pending selection at the head and
 /// cancel the user's pick.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread)]
 async fn play_keeps_pending_select_of_loading_track(
     #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
 ) {
@@ -770,7 +770,7 @@ fn drain_event_backlog(rx: &mut EventReceiver<TestEvent>) {
 }
 
 #[cfg(feature = "flash")]
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio)]
 async fn an_idle_queue_event_wait_uses_virtual_time() {
     let bus = EventBus::new(16);
     let mut events = bus.subscribe::<TestEvent>();
@@ -922,7 +922,11 @@ async fn completion_observer_keeps_current_changes_in_bus_order(
 // order the completion before the select and dissolve the contended window this
 // gate exists to probe. It therefore has no state-wait equivalent and is left
 // as a timer on purpose.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara::test(
+    tokio,
+    multi_thread,
+    timeout(::std::time::Duration::from_millis(64488))
+)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn concurrent_completion_race_does_not_barge_in(
     #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),

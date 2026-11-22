@@ -6,7 +6,7 @@ use bytes::Bytes;
 use kithara::{
     drm::{DecryptContext, KeyRequest, KeyRequestFactory, aes128_cbc_process_chunk},
     hls::{HlsError, HlsResult, KeyProcessorRegistry},
-    platform::{sync::Arc, time::Duration},
+    platform::sync::Arc,
     play::policy::{DomainKeyPolicy, DomainKeyRule},
 };
 use kithara_integration_tests::{CreatedHls, TestServerHelper, hls_fixture::*, hls_server::*};
@@ -35,7 +35,7 @@ fn sentinel_key(_key: &[u8]) -> Bytes {
     Bytes::from_static(b"MODIFIED")
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 #[case::uppercase(uppercase_key, true, b"0123456789ABCDEF")]
 #[case::reverse(reverse_key, true, b"fedcba9876543210")]
 #[case::unmatched(sentinel_key, false, b"0123456789abcdef")]
@@ -62,7 +62,7 @@ async fn key_processor_cases(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 async fn key_store_error_handling(assets_fixture: TestAssets) -> HlsResult<()> {
     let key_store = test_key_store(&assets_fixture, None);
 
@@ -75,7 +75,7 @@ async fn key_store_error_handling(assets_fixture: TestAssets) -> HlsResult<()> {
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 async fn key_store_caching_behavior(
     #[future] aes128_hls: CreatedHls,
     assets_fixture: TestAssets,
@@ -93,7 +93,7 @@ async fn key_store_caching_behavior(
     Ok(())
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1))]
 async fn aes128_key_decrypts_ciphertext(
     #[future] aes128_hls: CreatedHls,
     assets_fixture: TestAssets,

@@ -352,9 +352,9 @@ fn frames_for_duration_rounded(sample_rate: u32, duration: Duration) -> u64 {
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(25)),
     hang_timeout_secs(1),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug"),
+    timeout(::std::time::Duration::from_millis(3628))
 )]
 #[cfg_attr(
     not(target_os = "android"),
@@ -675,7 +675,6 @@ async fn dump_aac_for_listening(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(30)),
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
@@ -762,9 +761,9 @@ async fn run_codec_compare(asset_a: ServedSignal, asset_b: ServedSignal, backend
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(30)),
     hang_timeout_secs(1),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug"),
+    timeout(::std::time::Duration::from_millis(1622))
 )]
 #[cfg_attr(not(target_os = "android"), case::mp3_vs_wav_symphonia(
     signal_mp3_sine440_60_s().await,
@@ -916,7 +915,7 @@ async fn codec_distortion_profile(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(25)),
+    timeout(::std::time::Duration::from_millis(5095)),
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
@@ -1109,7 +1108,6 @@ fn first_signal_window_phase(
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(25)),
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]

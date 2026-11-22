@@ -745,7 +745,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(::std::time::Duration::from_millis(2800)))]
     fn a_click_holds_the_true_peak_to_the_documented_bound() {
         // WHY: The overshoot documented on `consts::ATTACK_SECONDS` for mix
         // content up to 16 kHz. Under a full duck a mix held at the ceiling

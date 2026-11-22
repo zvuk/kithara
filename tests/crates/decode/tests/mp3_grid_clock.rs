@@ -141,13 +141,7 @@ impl Capture {
     }
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(20)),
-    hang_timeout_secs(2),
-    tracing("info")
-)]
+#[kithara::test(native, tokio, hang_timeout_secs(2), tracing("info"))]
 #[kithara::hang_watchdog(ctx = String)]
 #[case::symphonia_disabled(
     DecoderBackend::Symphonia,
