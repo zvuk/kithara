@@ -452,8 +452,8 @@ pub(super) fn assert_reader_visible_length_basis(analysis_pcm: &'static [f32]) {
         reader.chunk = 44_100;
         reader.media_origin = Some(media_origin);
         reader.visible_origin = visible_origin;
-        let builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
-            .with_waveform(consts::NODE_BUCKETS);
+        let builder =
+            AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_waveform(consts::NODE_FOLD);
         let mut pass = Pass::open_with_settings(
             reader,
             builder,
@@ -1113,7 +1113,7 @@ mod artifacts {
 
     fn beat_pass() -> AnalyzerBuilder<RubatoBackend, TestPools> {
         AnalyzerBuilder::<RubatoBackend, _>::new(pools())
-            .with_waveform(consts::HOLD_BUCKETS)
+            .with_waveform(consts::HOLD_FOLD)
             .with_beat_config(
                 BeatAnalysisConfig::builder()
                     .resampler_backend(RubatoBackend::default())

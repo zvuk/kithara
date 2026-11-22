@@ -33,7 +33,7 @@ impl WaveformAnalyzer {
     }
 
     pub(super) fn hop(&self) -> u64 {
-        u64::try_from(self.window_hop).unwrap_or(1)
+        self.window_hop.get()
     }
 
     #[cfg(test)]

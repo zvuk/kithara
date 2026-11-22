@@ -32,8 +32,6 @@ use kithara_test_fixtures::integration_fixtures::audio_wav_44100;
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
 
-const WAVEFORM_BUCKETS: usize = 100;
-
 #[derive(Clone)]
 struct CountState {
     gets: Arc<AtomicUsize>,
@@ -107,7 +105,7 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
         &master,
         None,
         CHUNK_SECONDS,
-        WAVEFORM_BUCKETS,
+        NonZeroU32::MIN,
         BeatAnalysisConfig::default(),
         pools,
     );
@@ -146,11 +144,8 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
     let player_ok = player_drain.await.expect("player drain task");
 
     assert!(player_ok, "player must decode the shared WAV to EOF");
-    assert!(
-        (1..=WAVEFORM_BUCKETS).contains(&envelope.len()),
-        "waveform analysis must produce native-resolution buckets capped by request, got {}",
-        envelope.len()
-    );
+    assert_eq!(envelope.len(), 40, "one second carries 40 native windows");
+    assert_eq!(envelope.span_frames().get(), 1024);
     assert_eq!(
         gets.load(Ordering::SeqCst),
         1,

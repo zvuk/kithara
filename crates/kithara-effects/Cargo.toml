@@ -55,5 +55,9 @@ assert_no_alloc = { workspace = true }
 name = "feedback_delay"
 harness = false
 
+[[bench]]
+name = "reverb"
+harness = false
+
 [lints]
 workspace = true

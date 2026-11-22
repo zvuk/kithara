@@ -27,7 +27,8 @@ pub mod delay;
 pub mod envelope;
 /// Fade curves: one lexicon for firewheel's `MixDSP` and every crossfade gain.
 pub mod fade;
-/// Biquad and state-variable filters over channel planes and their designs.
+/// Biquad and state-variable filters, LR4 crossovers over channel planes and
+/// their designs.
 pub mod filter;
 /// Window interpolation at fractional positions and the rate ramps that
 /// place them.

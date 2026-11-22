@@ -33,13 +33,13 @@ async fn run_analysis(
     master: &CancelToken,
     config: AppResourceConfig,
     pools: Pools,
-    buckets: usize,
+    fold: NonZeroU32,
 ) -> Option<TrackAnalysis> {
     let mut runner = TrackAnalysisRunner::new(
         master,
         None,
         CHUNK_SECONDS,
-        buckets,
+        fold,
         BeatAnalysisConfig::default(),
         pools,
     );
@@ -79,10 +79,7 @@ async fn runner_silent_wav_yields_all_zero_envelope(
     .store(memory_store(pools.clone()))
     .build();
 
-    // A silent 1s WAV must decode end to end and finalise to a native-resolution
-    // envelope capped by the requested maximum. No frames are loud, so nothing
-    // normalises up to 1.0.
-    let analysis = run_analysis(&CancelToken::never(), config, pools, 100)
+    let analysis = run_analysis(&CancelToken::never(), config, pools, NonZeroU32::MIN)
         .await
         .expect("silent WAV must decode to a finalised analysis");
     let waveform = analysis
@@ -90,11 +87,12 @@ async fn runner_silent_wav_yields_all_zero_envelope(
         .cloned()
         .expect("the registered waveform analyzer must fill its slot");
 
-    assert!(
-        (1..=100).contains(&waveform.len()),
-        "requested buckets are an upper bound, got {}",
-        waveform.len()
+    assert_eq!(
+        waveform.len(),
+        40,
+        "one second carries 40 complete native windows"
     );
+    assert_eq!(waveform.span_frames().get(), 1024);
     assert!(
         waveform.buckets().iter().all(|b| *b == Bucket::default()),
         "a silent source must yield all-zero buckets: {:?}",
@@ -122,7 +120,9 @@ async fn runner_returns_nothing_when_cancelled_upfront(
     let master = CancelToken::never();
     master.cancel();
     assert!(
-        run_analysis(&master, config, pools, 100).await.is_none(),
+        run_analysis(&master, config, pools, NonZeroU32::MIN)
+            .await
+            .is_none(),
         "a pre-cancelled analysis must not return an envelope"
     );
 }

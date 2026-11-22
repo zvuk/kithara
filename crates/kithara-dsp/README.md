@@ -25,6 +25,8 @@ minimum window, and FFT planes take their memory from the caller's
 `kithara-bufpool` region. The FFT builds only
 with the `spectrum` feature.
 
+`filter::Crossover` prepares LR4 split and allpass state off the audio thread.
+
 ## Usage
 
 ```rust
@@ -74,6 +76,8 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>filter::Coefficients</code></td><td>The <code>biquad</code> crate's RBJ cookbook designs (with <code>Type</code>, <code>Hertz</code> and <code>Errors</code>), re-exported as the one import path</td></tr>
 
+<tr><td><code>filter::Crossover</code></td><td>Planar LR4/allpass state; <code>split</code> writes ascending bands of channel planes; reset and rate changes clear history without allocation</td></tr>
+
 <tr><td><code>interp::interpolate</code></td><td>Reads a window at fractional positions with an <code>interp::Interpolation</code> method (linear, quadratic, Hermite, Watte); a position outside the window is an error and leaves the output untouched</td></tr>
 
 <tr><td><code>interp::interpolate_frame</code></td><td>Interpolates the common channel prefix of two resolved frames with a separate f64 fraction; integer phase copies exact bits, including signed zero</td></tr>
@@ -91,6 +95,8 @@ assert_eq!(samples, [0.0, 0.5]);
 <tr><td><code>spectrum::Autocorrelation</code></td><td>Unbiased autocorrelation of a frame over lags <code>0..N</code>; <code>new</code> takes its zero padding from the caller's pool region, <code>process</code> does not allocate</td></tr>
 
 <tr><td><code>delay::DelayLine</code></td><td>Planar frame history with one cursor for every channel, read before each write at a <code>Tap</code> of <code>1..=capacity</code> frames, integer or as the chord toward the older frame, in spans no longer than the delay; <code>new</code> takes the history from the caller's pool region, <code>read</code>, <code>write</code> and <code>reset</code> do not allocate</td></tr>
+
+<tr><td><code>delay::DelayDiffuser</code></td><td>Freeverb-form diffusion on prepared delay storage; <code>retime</code> changes the tap within that capacity without allocation or clearing history</td></tr>
 
 <tr><td><code>fade::FadeCurve</code></td><td>firewheel's fade curve, re-exported as the one import path</td></tr>
 

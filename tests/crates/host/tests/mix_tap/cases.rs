@@ -607,6 +607,83 @@ async fn deck_fx_delay_install_change_and_clear_during_playback() {
     harness.close().await;
 }
 
+/// Installs the reverb, moves decay and damping to both extremes and clears it
+/// while the deck plays. Under the realtime sanitizer the callback must neither
+/// allocate nor free: the reverb arrives with every ring and leaves through the
+/// receipt.
+#[kithara::test(tokio)]
+async fn deck_fx_reverb_install_change_and_clear_during_playback() {
+    use std::num::NonZeroU32;
+
+    use kithara::{
+        effects::{
+            FxParamChange,
+            reverb::{Damping, Decay, Reverb, ReverbConfig},
+        },
+        play::DeckFxChange,
+    };
+    use kithara_command::When;
+    use kithara_test_utils::bufpool::pools;
+
+    use crate::deck_fx::insert;
+
+    let level = 0.2_f32.to_bits();
+    let steady = |take: &[f32]| take.iter().all(|sample| sample.to_bits() == level);
+    let sounds = |take: &[f32]| {
+        take.iter().all(|sample| sample.is_finite()) && take.iter().any(|sample| *sample != 0.0)
+    };
+    let harness = play_source(
+        OfflinePlayer::with_sample_rate(
+            OfflinePlayerOptions::builder()
+                .block_on_underrun(true)
+                .build(),
+            SAMPLE_RATE,
+        )
+        .await,
+        asset_source(&assets::fixed_constant_wav_cd_fifth_1323000()).into(),
+    )
+    .await;
+    let send =
+        |changes: Vec<DeckFxChange>| harness.with_queue(move |queue| queue.fx(When::Next, changes));
+    assert!(steady(&render_blocks(&harness, 2).await), "the dry deck");
+
+    let rate = NonZeroU32::new(SAMPLE_RATE).expect("fixture rate");
+    let reverb = Reverb::new(rate, rate, ReverbConfig::default(), &pools())
+        .expect("the reverb fits the test pools");
+    send(insert(0, reverb)).await.expect("install the reverb");
+    assert!(
+        sounds(&render_blocks(&harness, 8).await),
+        "the installed reverb washes the deck"
+    );
+
+    let param = |index, value| DeckFxChange::Param {
+        unit: 0,
+        change: FxParamChange { index, value },
+    };
+    for (decay, damping) in [(Decay::MAX, Damping::MIN), (Decay::MIN, Damping::MAX)] {
+        send(vec![
+            param(0, f64::from(decay)),
+            param(1, f64::from(damping)),
+        ])
+        .await
+        .expect("change the decay and the damping");
+        assert!(
+            sounds(&render_blocks(&harness, 4).await),
+            "the retuned reverb keeps washing the deck"
+        );
+    }
+
+    send(vec![DeckFxChange::Clear { unit: 0 }])
+        .await
+        .expect("clear the unit");
+    assert!(
+        steady(&render_blocks(&harness, 2).await),
+        "the cleared deck is dry"
+    );
+    assert_eq!(harness.metrics().underruns(), 0);
+    harness.close().await;
+}
+
 pub(crate) async fn playing_harness() -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;

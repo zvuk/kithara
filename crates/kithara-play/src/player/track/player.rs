@@ -451,7 +451,9 @@ impl PlayerImpl {
             }
             DeckEvent::Faded { slot, at }
                 if Some(slot) == self.seat.slot()
-                    && !matches!(self.status, TrackStatus::Ended { .. }) =>
+                    && !matches!(self.status, TrackStatus::Ended { .. })
+                    && !matches!(self.status, TrackStatus::Playing { since }
+                        if at.frames_since(since).is_none()) =>
             {
                 self.status = TrackStatus::Faded { at }
             }
