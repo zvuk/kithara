@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use cargo_metadata::Message;
+use cargo_metadata::{Message, TargetKind};
 use kithara_devtools::Ctx;
 use tracing::info;
 
@@ -67,14 +67,33 @@ impl Consumer<'_> {
                 None,
             )?;
             let mut library = None;
-            for message in Message::parse_stream(report.as_bytes()) {
-                let Message::CompilerArtifact(artifact) = message? else {
+            let mut executable = None;
+            for line in report.lines() {
+                let message = serde_json::from_str::<Message>(line)
+                    .context("instrumentation Cargo message is not JSON")?;
+                let Message::CompilerArtifact(artifact) = message else {
                     continue;
                 };
                 ensure!(
                     artifact.target.name != "kithara_test_args",
                     "test argument compiler reached production instrumentation"
                 );
+                if artifact.target.name == "instrumentation" {
+                    ensure!(
+                        artifact.target.kind == [TargetKind::Example] && !artifact.profile.test,
+                        "instrumentation artifact is not a runnable example"
+                    );
+                    ensure!(
+                        executable.is_none(),
+                        "multiple instrumentation example executables"
+                    );
+                    executable = Some(
+                        artifact
+                            .executable
+                            .context("instrumentation example executable")?
+                            .into_std_path_buf(),
+                    );
+                }
                 if artifact.target.name == "kithara_test_macros" {
                     ensure!(library.is_none(), "multiple instrumentation macro units");
                     library = artifact.filenames.into_iter().next();
@@ -97,15 +116,9 @@ impl Consumer<'_> {
                 "test-only compiler inputs reached production instrumentation:\n{inputs}"
             );
             info!(features, "production macro inputs exclude the test DSL");
+            let executable = executable.context("instrumentation example artifact")?;
             self.checked(
-                &mut self.cargo(&[
-                    "run",
-                    "--example",
-                    "instrumentation",
-                    "--locked",
-                    "--features",
-                    features,
-                ]),
+                &mut Command::new(executable),
                 &format!("instrumentation-run-{features}"),
                 Some(300),
             )?;
@@ -544,7 +557,273 @@ fn forbidden_paths(tree: &str) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     #[cfg(unix)]
-    use crate::testing::signals;
+    use crate::testing::{install_double, install_scripted_double, signals};
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "invoked by the instrumentation regression parents"]
+    fn instrumentation_fixture_child() -> Result<()> {
+        let _signals = signals();
+        let cancel = child::Cancel::install()?;
+        let root = PathBuf::from(
+            env::var_os("KITHARA_TEST_UTILS_INSTRUMENTATION_ROOT")
+                .context("instrumentation regression root")?,
+        );
+        let consumer = Consumer {
+            cancel: &cancel,
+            directory: &root.join("consumer"),
+            capture: &root.join("capture"),
+            target: &root.join("target"),
+        };
+        let refused = child::output(
+            consumer.cargo(&["run"]).env_remove("KITHARA_TEST_TRACE"),
+            Some(&cancel),
+            Duration::from_secs(300),
+        )?;
+        assert_eq!(
+            refused.status.code(),
+            Some(97),
+            "fake Cargo must refuse run"
+        );
+        consumer.instrumentation()
+    }
+
+    #[cfg(unix)]
+    fn instrumentation_fixture(case: &str) -> Result<(tempfile::TempDir, Output)> {
+        let _signals = signals();
+        let cancel = child::Cancel::install()?;
+        let root = tempfile::tempdir()?;
+        let directory = root.path().join("consumer");
+        let bin = root.path().join("bin");
+        fs::create_dir(&directory)?;
+        fs::create_dir(root.path().join("capture"))?;
+        let executable = install_scripted_double(
+            &bin,
+            "instrumentation",
+            r#"set -eu
+test "$(pwd -P)" = "$(cat expected-cwd)"
+printf 'artifact\n' >> runtime-runs
+printf 'runtime stdout\n'
+printf 'runtime stderr\n' >&2
+if test -f runtime-fails; then exit 7; fi
+"#,
+        );
+        fs::write(
+            directory.join("expected-cwd"),
+            directory
+                .canonicalize()?
+                .to_str()
+                .context("UTF-8 fixture cwd")?,
+        )?;
+        let library = root.path().join("target/deps").join(format!(
+            "libkithara_test_macros-fixture{}",
+            env::consts::DLL_SUFFIX
+        ));
+        let example = serde_json::json!({
+            "reason": "compiler-artifact", "package_id": "path+file:///consumer#test-utils-check@0.0.0",
+            "manifest_path": "/consumer/Cargo.toml", "features": [], "fresh": false,
+            "filenames": [executable], "executable": executable,
+            "target": { "kind": ["example"], "crate_types": ["bin"], "name": "instrumentation", "src_path": "/consumer/examples/instrumentation.rs", "edition": "2024", "doc": false, "doctest": false, "test": false },
+            "profile": { "opt_level": "0", "debuginfo": 2, "debug_assertions": true, "overflow_checks": true, "test": false }
+        });
+        let mut macros = example.clone();
+        macros["target"]["name"] = "kithara_test_macros".into();
+        macros["target"]["kind"] = serde_json::json!(["proc-macro"]);
+        macros["target"]["crate_types"] = serde_json::json!(["proc-macro"]);
+        macros["filenames"] = serde_json::json!([library]);
+        macros["executable"] = serde_json::Value::Null;
+        let mut records = vec![macros.clone(), example.clone()];
+        let mut inputs = "/source/src/lib.rs".to_owned();
+        match case {
+            "missing-example" => {
+                records.pop();
+            }
+            "duplicate-example" => records.push(example),
+            "missing-executable" => records[1]["executable"] = serde_json::Value::Null,
+            "wrong-target" => records[1]["target"]["name"] = "other".into(),
+            "wrong-kind" => records[1]["target"]["kind"] = serde_json::json!(["bin"]),
+            "mixed-kind" => records[1]["target"]["kind"] = serde_json::json!(["example", "bin"]),
+            "test-profile" => records[1]["profile"]["test"] = true.into(),
+            "duplicate-macros" => records.push(macros),
+            "missing-macros" => {
+                records.remove(0);
+            }
+            "test-args" => {
+                let mut forbidden = macros;
+                forbidden["target"]["name"] = "kithara_test_args".into();
+                forbidden["target"]["kind"] = serde_json::json!(["lib"]);
+                forbidden["target"]["crate_types"] = serde_json::json!(["lib"]);
+                records.push(forbidden);
+            }
+            "test-input" => inputs.push_str(" /source/src/test/compiler.rs"),
+            "asset-input" => inputs.push_str(" /source/src/asset/compiler.rs"),
+            "fixture-input" => inputs.push_str(" /source/src/fixture.rs"),
+            "missing-input" => inputs = "/source/src/other.rs".into(),
+            "launch" => records[1]["executable"] = serde_json::json!(bin.join("missing")),
+            "nonzero" => fs::write(directory.join("runtime-fails"), "")?,
+            "ok" | "malformed" | "trailing-garbage" => {}
+            _ => anyhow::bail!("unknown instrumentation regression case: {case}"),
+        }
+        let mut lines = records.iter().map(ToString::to_string).collect::<Vec<_>>();
+        if case == "trailing-garbage" {
+            lines[1].push_str(" trailing garbage");
+        }
+        lines.push(serde_json::json!({"reason": "build-finished", "success": true}).to_string());
+        let mut report = lines.join("\n");
+        if case == "malformed" {
+            report.push_str("\n{");
+        }
+        fs::write(directory.join("report.json"), report)?;
+        fs::create_dir_all(library.parent().context("macro fixture directory")?)?;
+        fs::write(
+            library.with_file_name("kithara_test_macros-fixture.d"),
+            inputs,
+        )?;
+        install_double(&bin, "cargo");
+        let path = env::join_paths(
+            std::iter::once(bin).chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
+        )?;
+        let output = child::output(
+            Command::new(env::current_exe()?)
+                .args([
+                    "--exact",
+                    "test_utils::tests::instrumentation_fixture_child",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env("PATH", path)
+                .env("KITHARA_TEST_UTILS_INSTRUMENTATION_ROOT", root.path())
+                .env(
+                    "KITHARA_TEST_STDOUT",
+                    fs::read_to_string(directory.join("report.json"))?,
+                )
+                .env("KITHARA_TEST_TRACE", directory.join("cargo.calls"))
+                .env(
+                    "KITHARA_TEST_RULES",
+                    "cargo:build:*=0,cargo:run:*=97,cargo:*:*=98",
+                ),
+            Some(&cancel),
+            Duration::from_secs(300),
+        )?;
+        Ok((root, output))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn instrumentation_runs_build_artifact_in_consumer_without_cargo_run() -> Result<()> {
+        let (root, output) = instrumentation_fixture("ok")?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let directory = root.path().join("consumer");
+        let calls = fs::read_to_string(directory.join("cargo.calls"))?;
+        let mut expected = Vec::new();
+        for features in ["", "facade", "instrumented"] {
+            expected.push(format!(
+                "build --example instrumentation --message-format=json --locked --features {features}"
+            ));
+            let label = format!("instrumentation-run-{features}");
+            assert_eq!(
+                fs::read_to_string(root.path().join("capture").join(format!("{label}.stdout")))?,
+                "runtime stdout\n"
+            );
+            assert_eq!(
+                fs::read_to_string(root.path().join("capture").join(format!("{label}.stderr")))?,
+                "runtime stderr\n"
+            );
+        }
+        assert_eq!(
+            calls.lines().map(str::to_owned).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            fs::read_to_string(directory.join("runtime-runs"))?,
+            "artifact\n".repeat(3)
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn instrumentation_rejects_invalid_build_artifacts_and_failed_children() -> Result<()> {
+        for (case, expected) in [
+            ("missing-example", "instrumentation example artifact"),
+            (
+                "duplicate-example",
+                "multiple instrumentation example executables",
+            ),
+            ("missing-executable", "instrumentation example executable"),
+            ("wrong-target", "instrumentation example artifact"),
+            (
+                "wrong-kind",
+                "instrumentation artifact is not a runnable example",
+            ),
+            (
+                "mixed-kind",
+                "instrumentation artifact is not a runnable example",
+            ),
+            (
+                "test-profile",
+                "instrumentation artifact is not a runnable example",
+            ),
+            ("malformed", "instrumentation Cargo message is not JSON"),
+            (
+                "trailing-garbage",
+                "instrumentation Cargo message is not JSON",
+            ),
+            ("missing-macros", "instrumentation macro artifact"),
+            ("duplicate-macros", "multiple instrumentation macro units"),
+            (
+                "test-args",
+                "test argument compiler reached production instrumentation",
+            ),
+            (
+                "test-input",
+                "test-only compiler inputs reached production instrumentation",
+            ),
+            (
+                "asset-input",
+                "test-only compiler inputs reached production instrumentation",
+            ),
+            (
+                "fixture-input",
+                "test-only compiler inputs reached production instrumentation",
+            ),
+            ("missing-input", "missing macro source inputs"),
+            ("launch", "spawning owned command"),
+            ("nonzero", "instrumentation-run-"),
+        ] {
+            let (root, output) = instrumentation_fixture(case)?;
+            assert!(!output.status.success(), "{case}");
+            let diagnostics = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(diagnostics.contains(expected), "{case}: {diagnostics}");
+            let directory = root.path().join("consumer");
+            assert_eq!(
+                fs::read_to_string(directory.join("cargo.calls"))?
+                    .lines()
+                    .count(),
+                1,
+                "{case}"
+            );
+            if case == "nonzero" {
+                assert!(diagnostics.contains("runtime stdout"), "{diagnostics}");
+                assert!(diagnostics.contains("runtime stderr"), "{diagnostics}");
+                assert_eq!(
+                    fs::read_to_string(directory.join("runtime-runs"))?,
+                    "artifact\n"
+                );
+            } else {
+                assert!(!directory.join("runtime-runs").exists(), "{case}");
+            }
+        }
+        Ok(())
+    }
 
     #[cfg(unix)]
     #[test]
