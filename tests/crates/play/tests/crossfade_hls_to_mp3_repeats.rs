@@ -67,7 +67,9 @@ async fn hls_server(saw_segments: &'static [u8]) -> CreatedHls {
     tokio,
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(10),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
+    tracing(
+        "kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_render=trace,kithara_stream=debug,play=info"
+    )
 )]
 async fn repeated_hls_to_mp3_crossfade_leaves_no_silence_gap(
     tone_mp3: &'static [u8],

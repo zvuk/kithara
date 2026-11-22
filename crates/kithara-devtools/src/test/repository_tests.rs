@@ -523,11 +523,14 @@ fn private_fixture_consumers_are_admitted_only_by_the_secret_bearing_workflow() 
         3,
         "network plus both private consumer packages"
     );
-    assert_eq!(calls[0], ["--lane=network"]);
+    // The private consumer cohorts run before the shared network lane, so a
+    // lane failure cannot stop the `bash -e` script before either cohort is
+    // verified. Pinning the lane last makes the old network-first order fail.
+    assert_eq!(calls[2], ["--lane=network"]);
     for (args, package, binary, flash) in [
-        (&calls[1], "kithara-sync-tests", "sync", true),
+        (&calls[0], "kithara-sync-tests", "sync", true),
         (
-            &calls[2],
+            &calls[1],
             "kithara-test-fixtures",
             "library_contract",
             false,

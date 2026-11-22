@@ -44,10 +44,13 @@ jobs:
           KITHARA_DRM_STAGE_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_STAGE_AUTH_TOKEN }}
         # The dedicated runner mounts only its private cache scope. Keep the
         # build as one leased eviction unit under its persistent target root.
+        # The two private consumer cohorts run before the shared network lane:
+        # under `bash -e`, a lane failure must not stop the script before either
+        # cohort is verified.
         run: |
-          CARGO_TARGET_DIR=/cache/target/lane-network just ci cache-exec network just test run --lane=network
           CARGO_TARGET_DIR=/cache/target/lane-network just ci cache-exec network just test run --lane=workspace -p kithara-sync-tests --test sync --features kithara-sync-tests/private-fixtures
           CARGO_TARGET_DIR=/cache/target/lane-network just ci cache-exec network just test run --lane=workspace -p kithara-test-fixtures --test library_contract --features kithara-test-fixtures/private-fixtures --flash=off --net-backend=none
+          CARGO_TARGET_DIR=/cache/target/lane-network just ci cache-exec network just test run --lane=network
 
       - name: Upload compiler-cache evidence
         if: ${{ always() && hashFiles(format('.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}
