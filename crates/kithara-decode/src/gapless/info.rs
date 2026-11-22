@@ -46,10 +46,7 @@ pub(crate) struct DeclaredGapless {
 
 impl DeclaredGapless {
     /// The trim in frames of a track reported at `rate`.
-    pub(crate) fn at(self, rate: u32) -> DecodeResult<GaplessInfo> {
-        let rate = NonZeroU32::new(rate).ok_or(DecodeError::InvalidSampleRate {
-            resource: "gapless.track",
-        })?;
+    pub(crate) fn at(self, rate: NonZeroU32) -> DecodeResult<GaplessInfo> {
         self.info
             .rescaled(self.rate, rate)
             .ok_or(DecodeError::InvalidData {

@@ -109,7 +109,10 @@ impl AndroidCodec {
             drain: DrainState::Feeding,
             decoded_pts: Duration::ZERO,
             track_info: DecoderTrackInfo {
-                gapless: track.gapless,
+                gapless: track
+                    .gapless
+                    .map(|declaration| declaration.at(spec.sample_rate))
+                    .transpose()?,
                 ..DecoderTrackInfo::default()
             },
         })

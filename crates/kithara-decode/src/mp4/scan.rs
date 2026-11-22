@@ -1,6 +1,7 @@
 use std::{io::SeekFrom, ops::ControlFlow};
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_stream::AudioCodec;
 use thiserror::Error;
 
 use super::{
@@ -97,6 +98,20 @@ where
 
     fn parse_mdia(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         self.walk_children(end, |this, header| match header.kind {
+            consts::BOX_HDLR => {
+                let mut payload = [0; 12];
+                if header.end.saturating_sub(this.reader.stream_position()?) >= 12 {
+                    this.reader.read_exact(&mut payload)?;
+                } else {
+                    return Ok(ControlFlow::Continue(()));
+                }
+                if let Ok(handler) = <[u8; 4]>::try_from(&payload[8..12])
+                    && let Ok(kind) = re_mp4::TrackKind::try_from(&re_mp4::FourCC::from(handler))
+                {
+                    return Ok((this.visitor)(Mp4Event::TrackKind(kind)));
+                }
+                Ok(ControlFlow::Continue(()))
+            }
             consts::BOX_MDHD => {
                 let payload = read_payload(this.reader, header.end, "mdhd", this.pools)?;
                 if let Some(timing) = parse_mdhd(&payload) {
@@ -283,15 +298,27 @@ where
     S: HasPool<u8>,
 {
     let mut fourcc = None;
+    let mut kind = None;
+    let mut current_codec = None;
     let result = scan_mp4(
         reader,
         &mut |event| {
-            if let Mp4Event::TrackCodec(codec) = event {
-                fourcc = Some(codec);
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
+            match event {
+                Mp4Event::TrackBegin => {
+                    kind = None;
+                    current_codec = None;
+                }
+                Mp4Event::TrackKind(current) => kind = Some(current),
+                Mp4Event::TrackCodec(codec) => current_codec = Some(codec),
+                _ => {}
             }
+            if kind == Some(re_mp4::TrackKind::Audio)
+                && let Some(codec) = current_codec
+            {
+                fourcc = Some(codec);
+                return ControlFlow::Break(());
+            }
+            ControlFlow::Continue(())
         },
         pools,
     );
@@ -300,6 +327,16 @@ where
         Err(Mp4MetadataError::Io(error)) => Err(error.into()),
         Err(Mp4MetadataError::Pool(error)) => Err(error.into()),
         Err(Mp4MetadataError::InvalidData(_)) => Ok(None),
+    }
+}
+
+/// Audio sample entries understood by the decoder factory.
+pub(crate) const fn codec_from_mp4_fourcc(fourcc: [u8; 4]) -> Option<AudioCodec> {
+    match &fourcc {
+        b"mp4a" => Some(AudioCodec::AacLc),
+        b"fLaC" => Some(AudioCodec::Flac),
+        b"alac" => Some(AudioCodec::Alac),
+        _ => None,
     }
 }
 

@@ -184,7 +184,14 @@ where
             config,
             generation: 0,
             track_info: DecoderTrackInfo {
-                gapless: if gapless_enabled { track.gapless } else { None },
+                gapless: if gapless_enabled {
+                    track
+                        .gapless
+                        .map(|declaration| declaration.at(spec.sample_rate))
+                        .transpose()?
+                } else {
+                    None
+                },
                 ..DecoderTrackInfo::default()
             },
             decoded_pts: Duration::ZERO,

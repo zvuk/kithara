@@ -12,13 +12,15 @@ use serde::Deserialize;
 
 use super::{
     probe::{
-        ProbeHint, codec_from_mp4_fourcc, resolve_codec_container, sniff_caf_codec,
-        sniff_container_from_source, sniff_ogg_codec, sniff_wav_codec,
+        ProbeHint, resolve_codec_container, sniff_caf_codec, sniff_container_from_source,
+        sniff_ogg_codec, sniff_wav_codec,
     },
     segment::segment_aware_container,
 };
 use crate::{
-    DecodeResult, Decoder, DecoderConfig, consts, mp4::sniff_mp4_codec, traits::BoxedSource,
+    DecodeResult, Decoder, DecoderConfig, consts,
+    mp4::{codec_from_mp4_fourcc, sniff_mp4_codec},
+    traits::BoxedSource,
 };
 
 #[cfg(not(any(

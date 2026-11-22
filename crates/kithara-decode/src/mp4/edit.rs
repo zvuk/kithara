@@ -70,14 +70,11 @@ impl TrackEdit {
 }
 
 impl ItunSmpb {
-    /// Leading and trailing frames at `sample_rate`; the tag counts ticks of
-    /// the media timescale, like an edit.
-    pub(crate) fn gapless(self, media: Mp4MediaTiming, sample_rate: u32) -> Option<GaplessInfo> {
-        let leading = scale_frames(self.leading_frames, sample_rate, media.timescale)?;
-        let trailing = scale_frames(self.trailing_frames, sample_rate, media.timescale)?;
-        (leading != 0 || trailing != 0).then_some(GaplessInfo {
-            leading_frames: leading,
-            trailing_frames: trailing,
+    /// Leading and trailing PCM-frame counts in the tag's declaration clock.
+    pub(crate) fn gapless(self) -> Option<GaplessInfo> {
+        (self.leading_frames != 0 || self.trailing_frames != 0).then_some(GaplessInfo {
+            leading_frames: self.leading_frames,
+            trailing_frames: self.trailing_frames,
         })
     }
 }

@@ -15,7 +15,6 @@ use num_traits::ToPrimitive;
 
 use super::{consts, converter::derive_aac_asbd_from_esds, file::AppleAudioFile, flac::StreamInfo};
 use crate::{
-    GaplessInfo,
     codec::CodecPriming,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PreparedPacket, TrackInfo},
     error::{DecodeError, DecodeResult},
@@ -375,7 +374,7 @@ impl AppleAudioFileDemuxer {
     /// `AudioFileServices` does not expose MP4 edit lists,
     /// so the factory probes the source separately and pipes the
     /// captured trim counts through here.
-    pub(crate) const fn set_gapless(&mut self, gapless: Option<GaplessInfo>) {
+    pub(crate) const fn set_gapless(&mut self, gapless: Option<crate::gapless::DeclaredGapless>) {
         self.track_info.gapless = gapless;
     }
 

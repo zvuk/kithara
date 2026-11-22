@@ -873,7 +873,7 @@ impl SymphoniaDemuxer {
     }
 
     /// Set encoder trim obtained from container metadata.
-    pub(crate) const fn set_gapless(&mut self, gapless: Option<crate::GaplessInfo>) {
+    pub(crate) const fn set_gapless(&mut self, gapless: Option<crate::gapless::DeclaredGapless>) {
         self.track_info.gapless = gapless;
     }
 

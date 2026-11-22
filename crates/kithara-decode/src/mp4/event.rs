@@ -30,6 +30,7 @@ pub(crate) enum Mp4Event<'a> {
     MovieTimescale(u32),
     TrackBegin,
     TrackId(u32),
+    TrackKind(re_mp4::TrackKind),
     TrackCodec([u8; 4]),
     TrackEditList(&'a [Mp4EditListEntry]),
     TrackEnd,

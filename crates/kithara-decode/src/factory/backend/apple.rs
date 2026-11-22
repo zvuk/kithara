@@ -119,10 +119,7 @@ where
     )?;
     demuxer.set_byte_len_handle(config.byte_len_handle.clone());
     demuxer.set_byte_map(config.byte_map.clone());
-    let gapless = probed_gapless
-        .map(|declared| declared.at(demuxer.track_info().sample_rate))
-        .transpose()?;
-    demuxer.set_gapless(gapless);
+    demuxer.set_gapless(probed_gapless);
     let target_output_rate = decoder_embedded_target_output_rate(&config);
     let output_track = track_with_output_domain_gapless(demuxer.track_info(), target_output_rate)?;
     if output_track.gapless.is_some() {
@@ -150,11 +147,19 @@ fn track_with_output_domain_gapless(
     target_output_rate: Option<u32>,
 ) -> DecodeResult<crate::demuxer::TrackInfo> {
     let mut output_track = track.clone();
-    output_track.gapless = scale_gapless_for_output_domain(
-        output_track.gapless,
-        output_track.sample_rate,
-        target_output_rate,
-    )?;
+    if let Some(declared) = track.gapless
+        && let Some(output_rate) = target_output_rate
+    {
+        let rate = NonZeroU32::new(output_rate).ok_or(DecodeError::InvalidSampleRate {
+            resource: "apple.gapless.output",
+        })?;
+        let info = scale_gapless_for_output_domain(
+            Some(declared.info),
+            declared.rate.get(),
+            Some(output_rate),
+        )?;
+        output_track.gapless = info.map(|info| crate::gapless::DeclaredGapless { info, rate });
+    }
     Ok(output_track)
 }
 
@@ -347,10 +352,13 @@ mod apple_factory_tests {
         Ok(frames)
     }
 
-    const fn aac_track(sample_rate: u32, gapless: Option<GaplessInfo>) -> TrackInfo {
+    fn aac_track(sample_rate: u32, gapless: Option<GaplessInfo>) -> TrackInfo {
         TrackInfo {
             sample_rate,
-            gapless,
+            gapless: gapless.map(|info| crate::gapless::DeclaredGapless {
+                info,
+                rate: NonZeroU32::new(sample_rate).expect("test declaration clock"),
+            }),
             codec: AudioCodec::AacLc,
             channels: 2,
             extra_data: Vec::new(),
@@ -409,8 +417,14 @@ mod apple_factory_tests {
         let equal_target = track_with_output_domain_gapless(&track, Some(44_100))
             .expect("BUG: output-domain track with equal target");
 
-        assert_eq!(no_target.gapless, source_gapless);
-        assert_eq!(equal_target.gapless, source_gapless);
+        assert_eq!(
+            no_target.gapless.map(|declared| declared.info),
+            source_gapless
+        );
+        assert_eq!(
+            equal_target.gapless.map(|declared| declared.info),
+            source_gapless
+        );
     }
 
     #[kithara::test]
@@ -425,7 +439,7 @@ mod apple_factory_tests {
             .expect("BUG: output-domain track with fused SRC");
 
         assert_eq!(
-            output_track.gapless,
+            output_track.gapless.map(|declared| declared.info),
             Some(GaplessInfo {
                 leading_frames: 1115,
                 trailing_frames: 480,
@@ -476,7 +490,7 @@ mod apple_factory_tests {
         let source_track = aac_track(SOURCE_RATE, Some(source_gapless));
         let output_track = track_with_output_domain_gapless(&source_track, Some(OUTPUT_RATE))
             .expect("BUG: output-domain track with fused SRC");
-        let output_gapless = output_track.gapless.expect("BUG: scaled gapless");
+        let output_gapless = output_track.gapless.expect("BUG: scaled gapless").info;
         let frames_per_call = u32::try_from(
             round_scaled_frames(u64::from(PACKET_FRAMES), SOURCE_RATE, OUTPUT_RATE)
                 .expect("BUG: scaled packet frame count"),

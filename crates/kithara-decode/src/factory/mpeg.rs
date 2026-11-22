@@ -13,7 +13,6 @@ use super::{
 };
 use crate::{
     DecodeError, DecodeResult, Decoder, DecoderConfig,
-    demuxer::Demuxer,
     gapless::scoped_probe,
     symphonia::{SymphoniaDemuxer, adapter::ReadSeekAdapter},
     traits::BoxedSource,
@@ -73,9 +72,6 @@ where
         None,
         control,
     )?;
-    let gapless = gapless
-        .map(|declared| declared.at(demuxer.track_info().sample_rate))
-        .transpose()?;
     demuxer.set_gapless(gapless);
     let codec = open_codec(&mut demuxer)?;
     config.byte_len_handle = Some(byte_len_handle);

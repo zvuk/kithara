@@ -309,19 +309,6 @@ pub(super) fn probe_codec(hint: &ProbeHint) -> DecodeResult<AudioCodec> {
         .ok_or(DecodeError::ProbeFailed)
 }
 
-/// Map an MP4 `stsd` sample-entry tag to a codec. The `.m4a`/`.mp4`
-/// extension only narrows the container to MP4; the codec lives in the
-/// sample entry, so a sniffed tag disambiguates AAC vs ALAC vs FLAC.
-/// `mp4a` covers every AAC profile (AOT lives in the `esds`).
-pub(super) const fn codec_from_mp4_fourcc(fourcc: [u8; 4]) -> Option<AudioCodec> {
-    match &fourcc {
-        b"mp4a" => Some(AudioCodec::AacLc),
-        b"fLaC" => Some(AudioCodec::Flac),
-        b"alac" => Some(AudioCodec::Alac),
-        _ => None,
-    }
-}
-
 /// Infer likely codec from container format.
 pub(super) const fn codec_from_container(container: ContainerFormat) -> Option<AudioCodec> {
     match container {
@@ -347,7 +334,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::traits::BoxedSource;
+    use crate::{mp4::codec_from_mp4_fourcc, traits::BoxedSource};
 
     struct ShortSource(Cursor<Vec<u8>>);
 

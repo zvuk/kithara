@@ -4,19 +4,19 @@ use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::time::Duration;
 
 use super::{Mp4Event, Mp4MediaTiming, TrackEdit, scan_mp4};
-use crate::{DecodeResult, DecoderInput, GaplessInfo};
+use crate::{DecodeResult, DecoderInput, gapless::DeclaredGapless};
 
 pub(crate) struct Presentation {
     pub(crate) track_id: u32,
     pub(crate) media_origin: Option<Duration>,
     pub(crate) media_end: Option<Duration>,
-    pub(crate) gapless: Option<GaplessInfo>,
-    media: Mp4MediaTiming,
+    pub(crate) gapless: Option<DeclaredGapless>,
     sample_rate: u32,
 }
 
 #[derive(Default)]
 struct Track {
+    kind: Option<re_mp4::TrackKind>,
     id: Option<u32>,
     media: Option<Mp4MediaTiming>,
     sample_rate: Option<u32>,
@@ -25,10 +25,21 @@ struct Track {
 
 impl Track {
     fn presentation(self, movie_timescale: Option<u32>) -> Option<Presentation> {
+        if self.kind != Some(re_mp4::TrackKind::Audio) {
+            return None;
+        }
         let track_id = self.id?;
         let media = self.media?;
         let sample_rate = self.sample_rate?;
-        let gapless = self.edit.gapless(media, sample_rate, movie_timescale);
+        let gapless = self
+            .edit
+            .gapless(media, sample_rate, movie_timescale)
+            .and_then(|info| {
+                Some(DeclaredGapless {
+                    info,
+                    rate: std::num::NonZeroU32::new(sample_rate)?,
+                })
+            });
         let (media_origin, media_end) = match self.edit {
             TrackEdit::Identity => (
                 Some(Duration::ZERO),
@@ -50,7 +61,6 @@ impl Track {
             media_origin,
             media_end,
             gapless,
-            media,
             sample_rate,
         })
     }
@@ -73,6 +83,11 @@ where
             match event {
                 Mp4Event::MovieTimescale(scale) => movie_timescale = Some(scale),
                 Mp4Event::TrackBegin => track = Some(Track::default()),
+                Mp4Event::TrackKind(kind) => {
+                    if let Some(track) = &mut track {
+                        track.kind = Some(kind);
+                    }
+                }
                 Mp4Event::TrackId(id) => {
                     if let Some(track) = &mut track {
                         track.id = Some(id);
@@ -111,8 +126,12 @@ where
     if let [presentation] = result.as_mut_slice()
         && presentation.gapless.is_none()
     {
-        presentation.gapless =
-            itunsmpb.and_then(|info| info.gapless(presentation.media, presentation.sample_rate));
+        presentation.gapless = itunsmpb.and_then(|info| {
+            Some(DeclaredGapless {
+                info: info.gapless()?,
+                rate: std::num::NonZeroU32::new(presentation.sample_rate)?,
+            })
+        });
     }
     Ok(result)
 }
