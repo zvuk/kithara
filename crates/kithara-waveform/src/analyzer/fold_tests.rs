@@ -16,19 +16,25 @@ fn window(body: u64) -> u64 {
     if body == 0 { 0 } else { body * 3 - 1 }
 }
 
-fn set(analyzer: &mut WaveformAnalyzer, column: usize, bytes: [u8; 8]) {
-    let body = u64::try_from(column / consts::COLUMNS).expect("bounded column");
+fn set(analyzer: &mut WaveformAnalyzer, column: u64, bytes: [u8; 8]) {
+    let width = consts::COLUMNS as u64;
+    let body = column / width;
     let held: &mut Columns = analyzer
         .columns
         .entry(window(body))
         .or_insert([[0; 8]; consts::COLUMNS]);
-    held[column % consts::COLUMNS] = bytes;
+    let offset = usize::try_from(column % width).expect("bounded column offset");
+    held[offset] = bytes;
 }
 
 fn columns(count: usize) -> WaveformAnalyzer {
     let mut analyzer = analyzer();
     for column in 0..count {
-        set(&mut analyzer, column, FILL);
+        set(
+            &mut analyzer,
+            u64::try_from(column).expect("bounded column"),
+            FILL,
+        );
     }
     analyzer
 }
@@ -107,7 +113,11 @@ fn a_ten_minute_track_fold_keeps_its_click() {
     let stride = count.div_ceil(1_000);
     let click = count / 2;
     let mut analyzer = analyzer();
-    set(&mut analyzer, click, [255; 8]);
+    set(
+        &mut analyzer,
+        u64::try_from(click).expect("bounded column"),
+        [255; 8],
+    );
     let wave = analyzer
         .snapshot(
             factor(u32::try_from(stride).expect("bounded factor")),
@@ -159,20 +169,23 @@ fn the_largest_factor_has_a_source_frame_span() {
 
 #[kithara::test]
 fn sparse_coverage_of_a_huge_extent_stays_inside_the_format() {
-    let total = 1_usize << 34;
-    assert!(u64::try_from(total).expect("logical column count") > u64::from(u32::MAX));
-    let last = (total / consts::COLUMNS - 1) * consts::COLUMNS;
+    let total = 1_u64 << 34;
+    assert!(total > u64::from(u32::MAX));
+    let width = consts::COLUMNS as u64;
+    let last = (total / width - 1) * width;
     let mut analyzer = analyzer();
     set(&mut analyzer, last, [255; 8]);
     let wave = analyzer
-        .snapshot(NonZeroU32::MIN, Some(extent(total)))
+        .snapshot(NonZeroU32::MIN, Some(total * 64))
         .expect("finite columns");
-    let stride = total.div_ceil(MAX_BUCKETS);
-    assert_eq!(wave.len(), total.div_ceil(stride));
+    let stride = total.div_ceil(MAX_BUCKETS as u64);
+    let count = usize::try_from(total.div_ceil(stride)).expect("bounded bucket count");
+    assert_eq!(wave.len(), count);
     assert!(wave.len() <= MAX_BUCKETS);
-    assert_eq!(bucket(&wave, last / stride), Bucket::from([255; 8]));
+    let peak = usize::try_from(last / stride).expect("bounded bucket index");
+    assert_eq!(bucket(&wave, peak), Bucket::from([255; 8]));
     assert_eq!(bucket(&wave, 0), Bucket::default());
-    assert_eq!(wave.span_frames().get(), extent(stride));
+    assert_eq!(wave.span_frames().get(), 64 * stride);
     assert_eq!(
         wave.buckets()
             .filter(|bucket| *bucket != Bucket::default())

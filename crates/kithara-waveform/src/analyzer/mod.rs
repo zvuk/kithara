@@ -4,5 +4,5 @@ mod waveform;
 
 pub use waveform::WaveformAnalyzer;
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod fold_tests;
