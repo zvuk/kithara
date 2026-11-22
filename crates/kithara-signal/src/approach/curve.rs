@@ -142,12 +142,13 @@ impl ExponentialApproach {
         if !elapsed.is_finite() || elapsed < 0.0 {
             return None;
         }
-        let advance = if elapsed == 0.0 || self.time_constant() == 0.0 {
-            0.0
-        } else {
-            (self.initial() - self.target())
-                * (-self.time_constant() * (-elapsed / self.time_constant()).exp_m1())
-        };
+        let advance =
+            if elapsed == 0.0 || self.time_constant() == 0.0 || self.initial() == self.target() {
+                0.0
+            } else {
+                (self.initial() - self.target())
+                    * (-self.time_constant() * (-elapsed / self.time_constant()).exp_m1())
+            };
         advance.is_finite().then_some(advance)
     }
 
