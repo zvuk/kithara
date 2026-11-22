@@ -19,7 +19,7 @@ hls-inputs = ["hls"]
 # the two fetching families ship together. `rhythm` then analyses each
 # downloaded track, as it does every whole audio track.
 library = ["dep:sha2", "remote", "rhythm"]
-packaged = ["dep:kithara-bufpool", "wav"]
+packaged = ["dep:kithara-bufpool", "dep:kithara-signal", "wav"]
 # Everything that reaches the network at build time: the HTTP client, the
 # playlist hydrator, and the one build outcome only a fetch can produce.
 remote = ["dep:bytes", "dep:hls_m3u8", "dep:kithara-drm", "dep:rayon", "dep:reqwest", "dep:url", "hls"]

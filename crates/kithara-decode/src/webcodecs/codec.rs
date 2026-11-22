@@ -16,6 +16,7 @@ use crate::{
     codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
+    gapless::DeclaredGapless,
     types::{DecoderTrackInfo, checked_audio_spec},
 };
 
@@ -70,6 +71,7 @@ pub(crate) struct WebCodecsCodec<S> {
     spec: AudioSpec,
     config: CodecConfig,
     track_info: DecoderTrackInfo,
+    declared_gapless: Option<DeclaredGapless>,
     decoded_pts: Duration,
     pools: PoolRegion<S>,
     out: mpsc::Receiver<HostOut>,
@@ -138,8 +140,11 @@ where
                     channels,
                     generation,
                 } if generation == self.generation => {
-                    self.spec =
-                        checked_audio_spec(channels, sample_rate, "webcodecs.output.sample_rate")?;
+                    self.apply_output_spec(checked_audio_spec(
+                        channels,
+                        sample_rate,
+                        "webcodecs.output.sample_rate",
+                    )?)?;
                 }
                 HostOut::Pcm { generation, .. }
                 | HostOut::Configured { generation, .. }
@@ -161,6 +166,7 @@ where
         pools: PoolRegion<S>,
     ) -> DecodeResult<Self> {
         let config = codec_config(track)?;
+        let declared_gapless = track.gapless.filter(|_| gapless_enabled);
         let spec = checked_audio_spec(
             track.channels,
             track.sample_rate,
@@ -182,16 +188,12 @@ where
             out,
             spec,
             config,
+            declared_gapless,
             generation: 0,
             track_info: DecoderTrackInfo {
-                gapless: if gapless_enabled {
-                    track
-                        .gapless
-                        .map(|declaration| declaration.at(spec.sample_rate))
-                        .transpose()?
-                } else {
-                    None
-                },
+                gapless: declared_gapless
+                    .map(|declaration| declaration.at(spec.sample_rate))
+                    .transpose()?,
                 ..DecoderTrackInfo::default()
             },
             decoded_pts: Duration::ZERO,
@@ -265,8 +267,11 @@ where
                     channels,
                     generation,
                 } if generation == self.generation => {
-                    self.spec =
-                        checked_audio_spec(channels, sample_rate, "webcodecs.output.sample_rate")?;
+                    self.apply_output_spec(checked_audio_spec(
+                        channels,
+                        sample_rate,
+                        "webcodecs.output.sample_rate",
+                    )?)?;
                     out.clear();
                     return Ok(0);
                 }
@@ -291,6 +296,15 @@ where
                 }
             }
         }
+    }
+
+    fn apply_output_spec(&mut self, spec: AudioSpec) -> DecodeResult<()> {
+        self.track_info.gapless = self
+            .declared_gapless
+            .map(|declaration| declaration.at(spec.sample_rate))
+            .transpose()?;
+        self.spec = spec;
+        Ok(())
     }
 
     fn write_pcm(&mut self, out: &mut SampleBuffer, pcm: PcmOut) -> DecodeResult<u32> {

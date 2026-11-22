@@ -22,6 +22,7 @@ use crate::{
     codec::{CodecPriming, FrameCodec},
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
+    gapless::DeclaredGapless,
     types::DecoderTrackInfo,
 };
 
@@ -55,6 +56,7 @@ pub(crate) struct AndroidCodec {
     pcm_encoding: AndroidPcmEncoding,
     spec: AudioSpec,
     track_info: DecoderTrackInfo,
+    declared_gapless: Option<DeclaredGapless>,
     drain: DrainState,
     decoded_pts: Duration,
     codec: OwnedCodec,
@@ -108,6 +110,7 @@ impl AndroidCodec {
             pcm_encoding,
             drain: DrainState::Feeding,
             decoded_pts: Duration::ZERO,
+            declared_gapless: track.gapless,
             track_info: DecoderTrackInfo {
                 gapless: track
                     .gapless
@@ -278,8 +281,7 @@ impl AndroidCodec {
                     timeout = consts::NO_WAIT_US;
                 }
                 DequeueOutput::OutputFormatChanged(format) => {
-                    self.spec = output_spec(&format)?;
-                    self.pcm_encoding = format.pcm_encoding;
+                    self.apply_output_format(&format)?;
                 }
                 DequeueOutput::TryAgainLater => {
                     if draining && timeout != consts::NO_WAIT_US && out.is_empty() {
@@ -294,6 +296,17 @@ impl AndroidCodec {
             }
         }
         u32::try_from(out.len() / usize::from(self.spec.channels)).map_err(DecodeError::backend)
+    }
+
+    fn apply_output_format(&mut self, format: &OutputFormat) -> DecodeResult<()> {
+        let spec = output_spec(format)?;
+        self.track_info.gapless = self
+            .declared_gapless
+            .map(|declaration| declaration.at(spec.sample_rate))
+            .transpose()?;
+        self.spec = spec;
+        self.pcm_encoding = format.pcm_encoding;
+        Ok(())
     }
 }
 
@@ -364,4 +377,101 @@ fn append_pcm_float(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
     }
     out.truncate(end);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_fixtures::assets::{he_aac_implicit_declared, he_aac_implicit_undeclared};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        demuxer::{Frame, PacketMetadata},
+        fmp4::parsing::{parse_init, parse_segment_frames},
+        test_pools::pools,
+    };
+
+    #[kithara::test]
+    #[case::declared(true)]
+    #[case::undeclared(false)]
+    fn implicit_sbr_trim_follows_output_format_across_flush(#[case] declared: bool) {
+        let asset = if declared {
+            he_aac_implicit_declared()
+        } else {
+            he_aac_implicit_undeclared()
+        };
+        let bytes = asset.bytes();
+        let region = pools();
+        let init = parse_init(bytes, &region).expect("implicit HE init");
+        assert_eq!(init.sample_rate, 22_050);
+        assert_eq!(init.config.as_ref(), [0x13, 0x90]);
+        assert_eq!(init.gapless.is_some(), declared);
+        let packets = parse_segment_frames(&init, bytes).expect("real HE packets");
+        assert!(!packets.is_empty());
+        let track = TrackInfo {
+            codec: init.codec,
+            sample_rate: init.sample_rate,
+            channels: init.channels,
+            extra_data: init.config.as_ref().to_vec(),
+            duration: None,
+            gapless: init.gapless,
+        };
+        let mut codec = AndroidCodec::open_with_config(&track).expect("MediaCodec open");
+        assert_eq!(codec.spec().sample_rate.get(), 22_050);
+        let expected = init
+            .gapless
+            .map(|d| d.at(NonZeroU32::new(44_100).unwrap()).unwrap());
+        let expected_frames: u64 = packets.iter().map(|p| u64::from(p.duration)).sum();
+        assert_eq!(init.timescale, 44_100);
+        let mut output = region.get::<f32>();
+        let mut previous = None;
+        for pass in 0..2 {
+            if pass != 0 {
+                codec.flush().expect("MediaCodec flush");
+            }
+            let mut frames = 0u64;
+            let mut first_pts = None;
+            for packet in packets
+                .iter()
+                .map(Some)
+                .chain(std::iter::repeat_n(None, 100))
+            {
+                let frame = packet.map_or(
+                    Frame {
+                        data: &[],
+                        pts: Duration::ZERO,
+                        duration: Duration::ZERO,
+                        packet_desc: &[],
+                    },
+                    |p| Frame {
+                        data: &bytes[p.offset..p.offset + p.size],
+                        pts: init.time_at(p.decode_time),
+                        duration: init.time_at(u64::from(p.duration)),
+                        packet_desc: &[],
+                    },
+                );
+                let decoded = codec
+                    .decode_frame(frame, PacketMetadata::default(), &mut output)
+                    .expect("decode native implicit HE");
+                if decoded.frames != 0 {
+                    assert_eq!(codec.spec().sample_rate.get(), 44_100);
+                    assert_eq!(codec.track_info().gapless, expected, "pass {pass}");
+                    assert!(output.iter().all(|s| s.is_finite()));
+                    first_pts.get_or_insert(codec.decoded_pts().expect("native PCM timestamp"));
+                    frames += u64::from(decoded.frames);
+                }
+                if matches!(codec.drain, DrainState::Finished) {
+                    break;
+                }
+            }
+            assert!(matches!(codec.drain, DrainState::Finished), "native EOS");
+            assert_eq!(frames, expected_frames, "native output frame clock");
+            assert_eq!(first_pts, Some(Duration::ZERO), "raw native head");
+            let summary = (frames, first_pts.expect("native PCM"));
+            if let Some(previous) = previous {
+                assert_eq!(summary, previous, "flush idempotence");
+            }
+            previous = Some(summary);
+        }
+    }
 }

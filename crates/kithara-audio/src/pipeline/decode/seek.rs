@@ -174,7 +174,7 @@ impl DecoderGeneration {
         let profile = self.decoder.gapless_profile(codec);
         if self.native_pcm_basis.is_none() && profile.spec() != self.gapless_profile.spec() {
             self.gapless_profile = profile;
-            self.gapless = GaplessStage::build(profile, gapless_mode, codec);
+            self.gapless.refresh_initial(profile, gapless_mode, codec);
         }
         Ok(outcome)
     }
