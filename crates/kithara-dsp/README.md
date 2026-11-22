@@ -96,6 +96,8 @@ assert_eq!(samples, [0.0, 0.5]);
 
 <tr><td><code>delay::DelayLine</code></td><td>Planar frame history with one cursor for every channel, read before each write at a <code>Tap</code> of <code>1..=capacity</code> frames, integer or as the chord toward the older frame, in spans no longer than the delay; <code>new</code> takes the history from the caller's pool region, <code>read</code>, <code>write</code> and <code>reset</code> do not allocate</td></tr>
 
+<tr><td><code>delay::DelayDiffuser</code></td><td>Freeverb-form diffusion on prepared delay storage; <code>retime</code> changes the tap within that capacity without allocation or clearing history</td></tr>
+
 <tr><td><code>fade::FadeCurve</code></td><td>firewheel's fade curve, re-exported as the one import path</td></tr>
 
 <tr><td><code>param::*</code></td><td>firewheel's parameter smoother, smoothing filter and A/B mix, re-exported as the one import path</td></tr>

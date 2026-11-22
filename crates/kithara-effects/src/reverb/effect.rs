@@ -10,7 +10,7 @@ use kithara_dsp::{
 use num_traits::ToPrimitive;
 
 use super::{Damping, Decay, ReverbConfig, Width};
-use crate::{FxParamChange, FxParamDescriptor, FxParamMapping, FxParamUnit, consts};
+use crate::{DeckEffect, FxParamChange, FxParamDescriptor, FxParamMapping, FxParamUnit, consts};
 
 /// Why a reverb could not be prepared or a buffer shape was refused.
 #[derive(Debug, thiserror::Error)]
@@ -46,10 +46,11 @@ impl Comb {
     fn new<S: HasPool<f32>>(
         rate: NonZeroU32,
         length: NonZeroUsize,
+        capacity: NonZeroUsize,
         decay: Decay,
         pools: &PoolRegion<S>,
     ) -> Result<Self, ReverbError> {
-        let line = DelayLine::new(NonZeroUsize::MIN, length, pools)?;
+        let line = DelayLine::new(NonZeroUsize::MIN, capacity, pools)?;
         let tap = line.tap(length.get().to_f64().ok_or(ReverbError::Geometry(rate))?)?;
         let (feedback, input_gain) = comb_gains(rate, length.get(), decay)?;
         Ok(Self {
@@ -57,6 +58,74 @@ impl Comb {
             tap,
             feedback,
             input_gain,
+        })
+    }
+
+    fn retune(
+        &mut self,
+        rate: NonZeroU32,
+        length: NonZeroUsize,
+        decay: Decay,
+    ) -> Result<(), ReverbError> {
+        let tap = self
+            .line
+            .tap(length.get().to_f64().ok_or(ReverbError::Geometry(rate))?)?;
+        let (feedback, input_gain) = comb_gains(rate, length.get(), decay)?;
+        self.tap = tap;
+        self.feedback = feedback;
+        self.input_gain = input_gain;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Geometry {
+    combs: [NonZeroUsize; consts::REVERB_COMBS],
+    diffusers: [NonZeroUsize; consts::REVERB_DIFFUSER_LENGTHS.len()],
+    shortest: NonZeroUsize,
+    longest_comb: NonZeroUsize,
+    diffuser_tail: u64,
+}
+
+impl Geometry {
+    fn new(rate: NonZeroU32, channel: usize) -> Result<Self, ReverbError> {
+        let mut combs = [NonZeroUsize::MIN; consts::REVERB_COMBS];
+        let mut shortest =
+            NonZeroUsize::MIN.saturating_add(consts::REVERB_SCRATCH.saturating_sub(1));
+        let mut longest_comb = NonZeroUsize::MIN;
+        for (slot, reference) in combs.iter_mut().zip(consts::REVERB_COMB_LENGTHS) {
+            let length = frames(rate, reference, channel)?;
+            *slot = length;
+            shortest = shortest.min(length);
+            longest_comb = longest_comb.max(length);
+        }
+        let rounds = (consts::REVERB_TAIL_THRESHOLD.ln()
+            / f64::from(consts::REVERB_DIFFUSION).ln())
+        .ceil()
+        .to_u64()
+        .and_then(|rounds| rounds.checked_add(1))
+        .ok_or(ReverbError::Geometry(rate))?;
+        let mut diffusers = [NonZeroUsize::MIN; consts::REVERB_DIFFUSER_LENGTHS.len()];
+        let mut diffuser_tail = 0_u64;
+        for (slot, reference) in diffusers.iter_mut().zip(consts::REVERB_DIFFUSER_LENGTHS) {
+            let length = frames(rate, reference, channel)?;
+            *slot = length;
+            shortest = shortest.min(length);
+            let contribution = length
+                .get()
+                .to_u64()
+                .and_then(|length| length.checked_mul(rounds))
+                .ok_or(ReverbError::Geometry(rate))?;
+            diffuser_tail = diffuser_tail
+                .checked_add(contribution)
+                .ok_or(ReverbError::Geometry(rate))?;
+        }
+        Ok(Self {
+            combs,
+            diffusers,
+            shortest,
+            longest_comb,
+            diffuser_tail,
         })
     }
 }
@@ -74,42 +143,29 @@ struct Bank {
 impl Bank {
     fn new<S: HasPool<f32>>(
         rate: NonZeroU32,
+        max_rate: NonZeroU32,
         channel: usize,
         config: ReverbConfig,
         pools: &PoolRegion<S>,
     ) -> Result<Self, ReverbError> {
-        let mut shortest =
-            NonZeroUsize::MIN.saturating_add(consts::REVERB_SCRATCH.saturating_sub(1));
-        let mut longest_comb = NonZeroUsize::MIN;
+        let geometry = Geometry::new(rate, channel)?;
         let mut combs: Vec<Comb> = Vec::with_capacity(consts::REVERB_COMBS);
-        for reference in consts::REVERB_COMB_LENGTHS {
-            let length = frames(rate, reference, channel)?;
-            shortest = shortest.min(length);
-            longest_comb = longest_comb.max(length);
-            combs.push(Comb::new(rate, length, config.decay(), pools)?);
+        for (length, reference) in geometry.combs.into_iter().zip(consts::REVERB_COMB_LENGTHS) {
+            let capacity = frames(max_rate, reference, channel)?;
+            combs.push(Comb::new(rate, length, capacity, config.decay(), pools)?);
         }
         let mut diffusers: Vec<DelayDiffuser<1>> =
             Vec::with_capacity(consts::REVERB_DIFFUSER_LENGTHS.len());
-        let rounds = (consts::REVERB_TAIL_THRESHOLD.ln()
-            / f64::from(consts::REVERB_DIFFUSION).ln())
-        .ceil()
-        .to_u64()
-        .and_then(|rounds| rounds.checked_add(1))
-        .ok_or(ReverbError::Geometry(rate))?;
-        let mut diffuser_tail = 0_u64;
-        for reference in consts::REVERB_DIFFUSER_LENGTHS {
-            let length = frames(rate, reference, channel)?;
-            shortest = shortest.min(length);
-            let contribution = length
-                .get()
-                .to_u64()
-                .and_then(|length| length.checked_mul(rounds))
-                .ok_or(ReverbError::Geometry(rate))?;
-            diffuser_tail = diffuser_tail
-                .checked_add(contribution)
-                .ok_or(ReverbError::Geometry(rate))?;
-            let line = DelayLine::new(NonZeroUsize::MIN, length, pools)?;
-            diffusers.push(DelayDiffuser::new(line, consts::REVERB_DIFFUSION)?);
+        for (length, reference) in geometry
+            .diffusers
+            .into_iter()
+            .zip(consts::REVERB_DIFFUSER_LENGTHS)
+        {
+            let capacity = frames(max_rate, reference, channel)?;
+            let line = DelayLine::new(NonZeroUsize::MIN, capacity, pools)?;
+            let mut diffuser = DelayDiffuser::new(line, consts::REVERB_DIFFUSION)?;
+            diffuser.retime(length)?;
+            diffusers.push(diffuser);
         }
         // The normalized control never reaches a frozen damping pole.
         let coefficient =
@@ -118,10 +174,29 @@ impl Bank {
             combs,
             diffusers,
             damping: OnePoleLowPass::new(coefficient)?,
-            shortest,
-            longest_comb,
-            diffuser_tail,
+            shortest: geometry.shortest,
+            longest_comb: geometry.longest_comb,
+            diffuser_tail: geometry.diffuser_tail,
         })
+    }
+
+    fn retune(
+        &mut self,
+        rate: NonZeroU32,
+        channel: usize,
+        decay: Decay,
+    ) -> Result<Geometry, ReverbError> {
+        let geometry = Geometry::new(rate, channel)?;
+        for (comb, length) in self.combs.iter_mut().zip(geometry.combs) {
+            comb.retune(rate, length, decay)?;
+        }
+        for (diffuser, length) in self.diffusers.iter_mut().zip(geometry.diffusers) {
+            diffuser.retime(length)?;
+        }
+        self.shortest = geometry.shortest;
+        self.longest_comb = geometry.longest_comb;
+        self.diffuser_tail = geometry.diffuser_tail;
+        Ok(geometry)
     }
 
     fn process_span(&mut self, input: &[f32], output: &mut [f32]) -> Result<(), ReverbError> {
@@ -165,6 +240,7 @@ impl Bank {
 pub struct Reverb {
     banks: [Bank; 2],
     rate: NonZeroU32,
+    max_rate: NonZeroU32,
     decay: Decay,
     parameters: [FxParamDescriptor; 3],
     width: f32,
@@ -175,25 +251,31 @@ pub struct Reverb {
 }
 
 impl Reverb {
-    /// Prepares the fixed-rate section geometry and coefficients off the audio thread.
+    /// Prepares section geometry and storage for every rate up to `max_rate` off the audio thread.
+    /// Rate-scaled section lengths have a one-frame minimum.
     ///
     /// # Errors
-    /// Refuses unrepresentable geometry, unavailable pool storage or a failed
+    /// Refuses a maximum below the current rate, unavailable pool storage or a failed
     /// DSP design or native parameter domain; no partially prepared network is returned.
     pub fn new<S: HasPool<f32>>(
         rate: NonZeroU32,
+        max_rate: NonZeroU32,
         config: ReverbConfig,
         pools: &PoolRegion<S>,
     ) -> Result<Self, ReverbError> {
+        if max_rate < rate {
+            return Err(ReverbError::Geometry(max_rate));
+        }
         let parameters = parameter_domains()?;
-        let left = Bank::new(rate, 0, config, pools)?;
-        let right = Bank::new(rate, 1, config, pools)?;
+        let left = Bank::new(rate, max_rate, 0, config, pools)?;
+        let right = Bank::new(rate, max_rate, 1, config, pools)?;
         let span = left.shortest.min(right.shortest);
         let banks = [left, right];
         let tail_bound = tail_frames(rate, config.decay(), &banks)?;
         Ok(Self {
             banks,
             rate,
+            max_rate,
             decay: config.decay(),
             parameters,
             width: f64::from(config.width())
@@ -349,6 +431,37 @@ impl Reverb {
         Ok(())
     }
 
+    /// Moves the running network to `sample_rate` in its prepared storage.
+    ///
+    /// # Errors
+    /// [`ReverbError::Geometry`] when `sample_rate` exceeds the prepared maximum.
+    /// The running network remains unchanged on refusal.
+    pub fn retune(&mut self, sample_rate: NonZeroU32) -> Result<(), ReverbError> {
+        if sample_rate > self.max_rate {
+            return Err(ReverbError::Geometry(sample_rate));
+        }
+        if sample_rate == self.rate {
+            return Ok(());
+        }
+        let was_exhausted = self.tail_exhausted();
+        let left = self.banks[0].retune(sample_rate, 0, self.decay)?;
+        let right = self.banks[1].retune(sample_rate, 1, self.decay)?;
+        let elapsed = (u128::from(self.tail_age) * u128::from(sample_rate.get()))
+            .div_ceil(u128::from(self.rate.get()));
+        self.rate = sample_rate;
+        self.span = left.shortest.min(right.shortest);
+        self.tail_bound = tail_frames(sample_rate, self.decay, &self.banks)?;
+        self.tail_age = if was_exhausted {
+            self.tail_bound
+        } else {
+            u64::try_from(elapsed).unwrap_or(u64::MAX)
+        };
+        if !was_exhausted && self.tail_exhausted() {
+            self.reset();
+        }
+        Ok(())
+    }
+
     /// Returns every section to silence while preserving its configuration.
     pub fn reset(&mut self) {
         for bank in &mut self.banks {
@@ -362,6 +475,39 @@ impl Reverb {
     #[must_use]
     pub fn tail_exhausted(&self) -> bool {
         self.tail_age >= self.tail_bound
+    }
+}
+
+impl DeckEffect for Reverb {
+    /// Silences `wet` when the planes disagree in length.
+    fn process(&mut self, input: [&[f32]; 2], wet: [&mut [f32]; 2]) {
+        let [left, right] = wet;
+        if Self::process(self, input, [&mut *left, &mut *right]).is_err() {
+            left.fill(0.0);
+            right.fill(0.0);
+        }
+    }
+
+    fn parameters(&self) -> &[FxParamDescriptor] {
+        Self::parameters(self)
+    }
+
+    /// Keeps the current value when `change` lies outside the declared domains.
+    fn set(&mut self, change: FxParamChange) {
+        let _ = Self::set(self, change);
+    }
+
+    fn reset(&mut self) {
+        Self::reset(self);
+    }
+
+    fn tail_exhausted(&self) -> bool {
+        Self::tail_exhausted(self)
+    }
+
+    /// Keeps the current tuning when `sample_rate` exceeds the prepared maximum.
+    fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        let _ = self.retune(sample_rate);
     }
 }
 
@@ -438,6 +584,7 @@ fn frames(rate: NonZeroU32, reference: u32, channel: usize) -> Result<NonZeroUsi
         .ok_or(ReverbError::Geometry(rate))?;
     (f64::from(reference) * f64::from(rate.get()) / consts::REVERB_REFERENCE_RATE)
         .round()
+        .max(1.0)
         .to_usize()
         .and_then(NonZeroUsize::new)
         .ok_or(ReverbError::Geometry(rate))

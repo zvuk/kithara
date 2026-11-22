@@ -3,9 +3,10 @@
 use std::num::NonZeroU32;
 
 use kithara_effects::{
-    FxParamChange,
+    DeckEffect, FxParamChange,
     reverb::{Damping, Decay, Reverb, ReverbConfig, ReverbError, Width},
 };
+use kithara_test_fixtures::signal::{goertzel_magnitude, rms};
 use kithara_test_utils::{bufpool::pools, kithara};
 use num_traits::ToPrimitive;
 
@@ -19,8 +20,8 @@ fn reverb_network_is_bit_identical_across_uneven_partitions_and_reset() {
     let config = ReverbConfig::builder()
         .width(Width::checked(0.37).unwrap())
         .build();
-    let mut whole = Reverb::new(RATE, config, &pools()).unwrap();
-    let mut split = Reverb::new(RATE, config, &pools()).unwrap();
+    let mut whole = Reverb::new(RATE, RATE, config, &pools()).unwrap();
+    let mut split = Reverb::new(RATE, RATE, config, &pools()).unwrap();
     let mut expected = [vec![0.0_f32; 8192], vec![0.0_f32; 8192]];
     let [left, right] = &mut expected;
     whole
@@ -58,9 +59,33 @@ fn reverb_network_is_bit_identical_across_uneven_partitions_and_reset() {
 }
 
 #[kithara::test]
+fn maximum_rate_reserve_preserves_current_rate_pcm() {
+    let mut input = [vec![0.0_f32; 4096], vec![0.0_f32; 4096]];
+    input[0][0] = 1.0;
+    input[1][7] = -0.5;
+    let config = ReverbConfig::default();
+    let max_rate = NonZeroU32::new(96_000).unwrap();
+    let mut reserved = Reverb::new(RATE, max_rate, config, &pools()).unwrap();
+    let mut current = Reverb::new(RATE, RATE, config, &pools()).unwrap();
+    let mut expected = [vec![0.0_f32; 4096], vec![0.0_f32; 4096]];
+    let mut actual = expected.clone();
+    let [left, right] = &mut expected;
+    current
+        .process([&input[0], &input[1]], [left, right])
+        .unwrap();
+    let [left, right] = &mut actual;
+    reserved
+        .process([&input[0], &input[1]], [left, right])
+        .unwrap();
+    for (actual, expected) in actual.iter().flatten().zip(expected.iter().flatten()) {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+}
+
+#[kithara::test]
 fn zero_width_writes_the_same_wet_signal_to_both_channels() {
     let config = ReverbConfig::builder().width(Width::MIN).build();
-    let mut reverb = Reverb::new(RATE, config, &pools()).unwrap();
+    let mut reverb = Reverb::new(RATE, RATE, config, &pools()).unwrap();
     let mut input = vec![0.0_f32; 8192];
     input[0] = 1.0;
     let silence = vec![0.0_f32; 8192];
@@ -83,7 +108,7 @@ fn exhausted_tail_stays_exactly_silent_and_keeps_its_declared_boundary() {
         .damping(Damping::MAX)
         .width(Width::checked(0.37).unwrap())
         .build();
-    let mut reverb = Reverb::new(rate, config, &pools()).unwrap();
+    let mut reverb = Reverb::new(rate, rate, config, &pools()).unwrap();
     assert!(reverb.tail_exhausted());
     let mut left = [0.0_f32];
     let mut right = left;
@@ -138,7 +163,7 @@ fn parameter_extrema_keep_the_wet_network_finite() {
                     .damping(damping)
                     .width(width)
                     .build();
-                let mut reverb = Reverb::new(RATE, config, &pools()).unwrap();
+                let mut reverb = Reverb::new(RATE, RATE, config, &pools()).unwrap();
                 let mut left = vec![0.0_f32; input.len()];
                 let mut right = left.clone();
                 reverb
@@ -154,8 +179,8 @@ fn parameter_extrema_keep_the_wet_network_finite() {
 #[kithara::test]
 fn shape_refusal_preserves_wet_buffers_and_network_history() {
     let config = ReverbConfig::default();
-    let mut reverb = Reverb::new(RATE, config, &pools()).unwrap();
-    let mut control = Reverb::new(RATE, config, &pools()).unwrap();
+    let mut reverb = Reverb::new(RATE, RATE, config, &pools()).unwrap();
+    let mut control = Reverb::new(RATE, RATE, config, &pools()).unwrap();
     let input = [1.0_f32; 128];
     let mut warm = [vec![0.0; 128], vec![0.0; 128]];
     let [left, right] = &mut warm;
@@ -191,12 +216,14 @@ fn scalar_network(input: [&[f32]; 2], rate: u32, config: ReverbConfig) -> [Vec<f
         let comb_lengths = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617].map(|length| {
             ((f64::from(length + spread) * f64::from(rate)) / 44_100.0)
                 .round()
+                .max(1.0)
                 .to_usize()
                 .expect("fixture geometry fits usize")
         });
         let diffuser_lengths = [31, 47, 73, 101].map(|length| {
             ((f64::from(length + spread) * f64::from(rate)) / 44_100.0)
                 .round()
+                .max(1.0)
                 .to_usize()
                 .expect("fixture geometry fits usize")
         });
@@ -268,7 +295,7 @@ fn comb_damping_and_diffusion_match_an_independent_scalar_network() {
                 .build();
             let expected = scalar_network([&input[0], &input[1]], rate.get(), config);
             let mut actual = [vec![0.0_f32; 8192], vec![0.0_f32; 8192]];
-            let mut reverb = Reverb::new(rate, config, &pools()).unwrap();
+            let mut reverb = Reverb::new(rate, rate, config, &pools()).unwrap();
             let [left, right] = &mut actual;
             reverb
                 .process([&input[0], &input[1]], [left, right])
@@ -286,6 +313,89 @@ fn comb_damping_and_diffusion_match_an_independent_scalar_network() {
 }
 
 #[kithara::test]
+fn decay_envelope_matches_scalar_rt60_at_extrema() {
+    let rate = NonZeroU32::new(8000).unwrap();
+    let mut input = [vec![0.0_f32; 16384], vec![0.0_f32; 16384]];
+    input[0][0] = 1.0;
+    input[1][7] = -0.5;
+    for decay in [Decay::MIN, Decay::MAX] {
+        let config = ReverbConfig::builder()
+            .decay(decay)
+            .damping(Damping::MIN)
+            .build();
+        let expected = scalar_network([&input[0], &input[1]], rate.get(), config);
+        let mut actual = [vec![0.0_f32; input[0].len()], vec![0.0_f32; input[1].len()]];
+        let mut reverb = Reverb::new(rate, rate, config, &pools()).unwrap();
+        let [left, right] = &mut actual;
+        reverb
+            .process([&input[0], &input[1]], [left, right])
+            .unwrap();
+        for (actual, expected) in actual.iter().zip(expected) {
+            let expected: Vec<f32> = expected
+                .into_iter()
+                .map(|sample| sample.to_f32().expect("finite scalar fixture"))
+                .collect();
+            for window in [1024..2048, 4096..5120, 8192..9216] {
+                let actual_rms = rms(&actual[window.clone()]);
+                let expected_rms = rms(&expected[window.clone()]);
+                assert!(
+                    (actual_rms - expected_rms).abs() <= 2e-6,
+                    "decay {decay:?}, window {window:?}: {actual_rms} != {expected_rms}"
+                );
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn damping_extrema_match_scalar_band_energy_and_attenuate_highs() {
+    let rate = NonZeroU32::new(8000).unwrap();
+    let mut input = [vec![0.0_f32; 8192], vec![0.0_f32; 8192]];
+    input[0][0] = 1.0;
+    input[1][7] = -0.5;
+    // Damping filters only the comb feedback, so its attenuation is pinned
+    // where recirculation dominates; the oracle comparison covers both extrema.
+    for (decay, recirculates) in [(Decay::MIN, false), (Decay::MAX, true)] {
+        let mut high_energy = [0.0; 2];
+        for (index, damping) in [Damping::MIN, Damping::MAX].into_iter().enumerate() {
+            let config = ReverbConfig::builder()
+                .decay(decay)
+                .damping(damping)
+                .build();
+            let expected = scalar_network([&input[0], &input[1]], rate.get(), config);
+            let mut actual = [vec![0.0_f32; input[0].len()], vec![0.0_f32; input[1].len()]];
+            let mut reverb = Reverb::new(rate, rate, config, &pools()).unwrap();
+            let [left, right] = &mut actual;
+            reverb
+                .process([&input[0], &input[1]], [left, right])
+                .unwrap();
+            for (actual, expected) in actual.iter().zip(expected) {
+                let expected: Vec<f32> = expected
+                    .into_iter()
+                    .map(|sample| sample.to_f32().expect("finite scalar fixture"))
+                    .collect();
+                for frequency in [200.0, 3000.0] {
+                    let actual_energy = goertzel_magnitude(actual, frequency, rate.get());
+                    let expected_energy = goertzel_magnitude(&expected, frequency, rate.get());
+                    let tolerance = expected_energy.abs() * 1e-4 + 1e-5;
+                    assert!(
+                        (actual_energy - expected_energy).abs() <= tolerance,
+                        "decay {decay:?}, damping {damping:?}, frequency {frequency}: {actual_energy} != {expected_energy}"
+                    );
+                }
+            }
+            high_energy[index] = goertzel_magnitude(&actual[0], 3000.0, rate.get());
+        }
+        assert!(
+            !recirculates || high_energy[1] < high_energy[0],
+            "decay {decay:?}: damping must attenuate 3 kHz: {} !< {}",
+            high_energy[1],
+            high_energy[0]
+        );
+    }
+}
+
+#[kithara::test]
 fn retirement_and_reentry_keep_the_same_bits_across_partitions() {
     let rate = NonZeroU32::new(8000).unwrap();
     let config = ReverbConfig::builder()
@@ -295,8 +405,8 @@ fn retirement_and_reentry_keep_the_same_bits_across_partitions() {
     let mut input = [vec![0.0_f32; 6000], vec![0.0_f32; 6000]];
     input[0][0] = 1.0;
     input[1][4000] = -0.5;
-    let mut whole = Reverb::new(rate, config, &pools()).unwrap();
-    let mut split = Reverb::new(rate, config, &pools()).unwrap();
+    let mut whole = Reverb::new(rate, rate, config, &pools()).unwrap();
+    let mut split = Reverb::new(rate, rate, config, &pools()).unwrap();
     let mut expected = [vec![0.0_f32; 6000], vec![0.0_f32; 6000]];
     let mut actual = expected.clone();
     let [left, right] = &mut expected;
@@ -325,11 +435,141 @@ fn retirement_and_reentry_keep_the_same_bits_across_partitions() {
 }
 
 #[kithara::test]
-fn unrepresentable_rate_is_refused_without_clamping() {
+fn minimum_rate_uses_one_frame_sections() {
+    let rate = NonZeroU32::MIN;
+    let config = ReverbConfig::default();
+    let mut input = [vec![0.0_f32; 256], vec![0.0_f32; 256]];
+    input[0][0] = 1.0;
+    input[1][7] = -0.5;
+    let expected = scalar_network([&input[0], &input[1]], rate.get(), config);
+    let mut actual = [vec![0.0_f32; 256], vec![0.0_f32; 256]];
+    let mut reverb = Reverb::new(rate, rate, config, &pools()).unwrap();
+    let [left, right] = &mut actual;
+    reverb
+        .process([&input[0], &input[1]], [left, right])
+        .unwrap();
+    for (actual, expected) in actual.iter().zip(expected) {
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert!((f64::from(*actual) - expected).abs() <= 1e-6);
+        }
+    }
+}
+
+#[kithara::test]
+fn retune_preserves_history_and_matches_fresh_network_after_reset() {
+    let low = NonZeroU32::new(8000).unwrap();
+    let high = NonZeroU32::new(96_000).unwrap();
+    let config = ReverbConfig::builder()
+        .decay(Decay::checked(0.37).unwrap())
+        .damping(Damping::checked(0.25).unwrap())
+        .width(Width::checked(0.37).unwrap())
+        .build();
+    let mut input = [vec![0.0_f32; 4096], vec![0.0_f32; 4096]];
+    input[0][0] = 1.0;
+    input[1][7] = -0.5;
+    let mut retuned = Reverb::new(low, high, config, &pools()).unwrap();
+    let mut warm = [vec![0.0_f32; 4096], vec![0.0_f32; 4096]];
+    let [left, right] = &mut warm;
+    retuned
+        .process([&input[0], &input[1]], [left, right])
+        .unwrap();
+    DeckEffect::update_sample_rate(&mut retuned, high);
+    let silence = [vec![0.0_f32; 4096], vec![0.0_f32; 4096]];
+    let mut tail = [vec![0.0_f32; 4096], vec![0.0_f32; 4096]];
+    let [left, right] = &mut tail;
+    retuned
+        .process([&silence[0], &silence[1]], [left, right])
+        .unwrap();
     assert!(
-        matches!(Reverb::new(NonZeroU32::MIN, ReverbConfig::default(), &pools()),
-        Err(ReverbError::Geometry(rate)) if rate == NonZeroU32::MIN)
+        tail.iter().flatten().any(|sample| *sample != 0.0),
+        "retune retains the wet history"
     );
+
+    retuned.reset();
+    let mut fresh = Reverb::new(high, high, config, &pools()).unwrap();
+    let mut expected = [vec![0.0_f32; 4096], vec![0.0_f32; 4096]];
+    let [left, right] = &mut expected;
+    fresh
+        .process([&input[0], &input[1]], [left, right])
+        .unwrap();
+    let [left, right] = &mut warm;
+    retuned
+        .process([&input[0], &input[1]], [left, right])
+        .unwrap();
+    for (actual, expected) in warm.iter().flatten().zip(expected.iter().flatten()) {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+}
+
+#[kithara::test]
+fn refused_retune_preserves_running_network() {
+    let low = NonZeroU32::new(8000).unwrap();
+    let max = NonZeroU32::new(48_000).unwrap();
+    let config = ReverbConfig::default();
+    let mut actual = Reverb::new(low, max, config, &pools()).unwrap();
+    let mut control = Reverb::new(low, max, config, &pools()).unwrap();
+    let mut input = [vec![0.0_f32; 4096], vec![0.0_f32; 4096]];
+    input[0][0] = 1.0;
+    input[1][7] = -0.5;
+    let mut first = [vec![0.0_f32; 4096], vec![0.0_f32; 4096]];
+    let mut second = first.clone();
+    let [left, right] = &mut first;
+    actual
+        .process([&input[0], &input[1]], [left, right])
+        .unwrap();
+    let [left, right] = &mut second;
+    control
+        .process([&input[0], &input[1]], [left, right])
+        .unwrap();
+    let above = NonZeroU32::new(96_000).unwrap();
+    assert!(matches!(
+        actual.retune(above),
+        Err(ReverbError::Geometry(rate)) if rate == above
+    ));
+    let silence = [vec![0.0_f32; 4096], vec![0.0_f32; 4096]];
+    let [left, right] = &mut first;
+    actual
+        .process([&silence[0], &silence[1]], [left, right])
+        .unwrap();
+    let [left, right] = &mut second;
+    control
+        .process([&silence[0], &silence[1]], [left, right])
+        .unwrap();
+    for (actual, expected) in first.iter().flatten().zip(second.iter().flatten()) {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+}
+
+#[kithara::test]
+fn retune_scales_an_active_tail_clock() {
+    let low = NonZeroU32::new(8000).unwrap();
+    let high = NonZeroU32::new(96_000).unwrap();
+    let config = ReverbConfig::builder().decay(Decay::MIN).build();
+    let mut reverb = Reverb::new(low, high, config, &pools()).unwrap();
+    advance_reverb(&mut reverb, 1, 1.0);
+    let age = 37;
+    advance_reverb(&mut reverb, age, 0.0);
+    reverb.retune(high).unwrap();
+    let bound = declared_tail_frames(high, Decay::MIN);
+    let scaled_age = age * high.get().to_usize().unwrap() / low.get().to_usize().unwrap();
+    advance_reverb(&mut reverb, bound - scaled_age - 1, 0.0);
+    assert!(!reverb.tail_exhausted());
+    advance_reverb(&mut reverb, 1, 0.0);
+    assert!(reverb.tail_exhausted());
+}
+
+#[kithara::test]
+fn retune_keeps_an_exhausted_tail_exhausted() {
+    let low = NonZeroU32::new(8000).unwrap();
+    let high = NonZeroU32::new(96_000).unwrap();
+    let config = ReverbConfig::builder().decay(Decay::MIN).build();
+    let mut reverb = Reverb::new(low, high, config, &pools()).unwrap();
+    advance_reverb(&mut reverb, 1, 1.0);
+    advance_reverb(&mut reverb, declared_tail_frames(low, Decay::MIN), 0.0);
+    assert!(reverb.tail_exhausted());
+    reverb.retune(high).unwrap();
+    assert!(reverb.tail_exhausted());
+    assert_eq!(advance_reverb(&mut reverb, 512, 0.0), [0.0; 2]);
 }
 
 #[kithara::test]
@@ -350,7 +590,7 @@ fn maximum_decay_undamped_boundary_step_is_below_retirement_threshold() {
             .to_usize()
             .expect("fixture geometry fits usize");
         for excitation in [1, dc_frames] {
-            let mut reverb = Reverb::new(rate, config, &pools()).unwrap();
+            let mut reverb = Reverb::new(rate, rate, config, &pools()).unwrap();
             let mut left = [0.0_f32; 512];
             let mut right = left;
             let mut remaining = excitation;
@@ -404,6 +644,7 @@ fn declared_tail_frames(rate: NonZeroU32, decay: Decay) -> usize {
     let rate = f64::from(rate.get());
     let longest = (1630.0 * rate / 44_100.0)
         .round()
+        .max(1.0)
         .to_usize()
         .expect("fixture geometry fits usize");
     let diffusion: usize = [31, 47, 73, 101]
@@ -411,6 +652,7 @@ fn declared_tail_frames(rate: NonZeroU32, decay: Decay) -> usize {
         .map(|length| {
             (f64::from(length + 13) * rate / 44_100.0)
                 .round()
+                .max(1.0)
                 .to_usize()
                 .expect("fixture geometry fits usize")
         })
@@ -464,8 +706,8 @@ fn decay_change_rearms_active_history_from_the_command_frame(
 ) {
     let rate = NonZeroU32::new(8000).unwrap();
     let config = ReverbConfig::builder().decay(from).build();
-    let mut actual = Reverb::new(rate, config, &pools()).unwrap();
-    let mut unchanged = Reverb::new(rate, config, &pools()).unwrap();
+    let mut actual = Reverb::new(rate, rate, config, &pools()).unwrap();
+    let mut unchanged = Reverb::new(rate, rate, config, &pools()).unwrap();
     let warm = (4.0 * f64::from(from) * f64::from(rate.get()))
         .ceil()
         .to_usize()
@@ -530,6 +772,7 @@ fn decay_change_does_not_revive_an_exhausted_tail() {
     let rate = NonZeroU32::new(8000).unwrap();
     let mut reverb = Reverb::new(
         rate,
+        rate,
         ReverbConfig::builder().decay(Decay::MIN).build(),
         &pools(),
     )
@@ -552,8 +795,8 @@ fn decay_change_does_not_revive_an_exhausted_tail() {
 fn identical_decay_keeps_the_original_retirement_frame() {
     let rate = NonZeroU32::new(8000).unwrap();
     let config = ReverbConfig::builder().decay(Decay::MIN).build();
-    let mut actual = Reverb::new(rate, config, &pools()).unwrap();
-    let mut unchanged = Reverb::new(rate, config, &pools()).unwrap();
+    let mut actual = Reverb::new(rate, rate, config, &pools()).unwrap();
+    let mut unchanged = Reverb::new(rate, rate, config, &pools()).unwrap();
     for reverb in [&mut actual, &mut unchanged] {
         advance_reverb(reverb, 512, 1.0);
     }
@@ -583,8 +826,8 @@ fn indexed_parameters_match_prepared_values_and_refuse_without_changing_history(
         .damping(Damping::MAX)
         .width(Width::MIN)
         .build();
-    let mut actual = Reverb::new(RATE, ReverbConfig::default(), &pools()).unwrap();
-    let mut expected = Reverb::new(RATE, config, &pools()).unwrap();
+    let mut actual = Reverb::new(RATE, RATE, ReverbConfig::default(), &pools()).unwrap();
+    let mut expected = Reverb::new(RATE, RATE, config, &pools()).unwrap();
     for (index, value) in [
         f64::from(Decay::MAX),
         f64::from(Damping::MAX),
@@ -687,7 +930,7 @@ fn parameter_commands_keep_partition_bits_at_their_frames() {
         ),
     ];
     let render = |partition: &[usize]| {
-        let mut reverb = Reverb::new(RATE, ReverbConfig::default(), &pools()).unwrap();
+        let mut reverb = Reverb::new(RATE, RATE, ReverbConfig::default(), &pools()).unwrap();
         let mut output = [vec![0.0_f32; input.len()], vec![0.0_f32; input.len()]];
         let mut start = 0;
         let mut command = 0;

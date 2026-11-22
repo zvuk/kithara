@@ -66,6 +66,8 @@ fn boost_low_band<S: HasPool<f32>>(config: &EqConfig<S>, sample_rate: NonZeroU32
 
 <tr><td><code>PeakLimiter</code></td><td>Linked peak limiter holding a ceiling; a lookahead delays its output by the frames it reports</td></tr>
 
+<tr><td><code>reverb::Reverb</code></td><td>Bounded stereo deck reverb with ranged RT60 decay, damping and width; rings are reserved through the constructor's maximum rate and retune preserves their history</td></tr>
+
 <tr><td><code>GainDb</code></td><td>Band gain in dB, clamped to a fixed range</td></tr>
 
 <tr><td><code>StereoEq</code></td><td>Stereo equaliser crossing over between band layouts built off the audio thread</td></tr>
