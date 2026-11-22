@@ -56,7 +56,7 @@ pub(crate) fn fetch_verified(
         diagnostic(
             url,
             "complete",
-            format_args!("outcome=client_error attempts=0 retained_bytes=0"),
+            format_args!("outcome=client_error requests_started=0 retained_bytes=0"),
         );
         HydrateError::Request {
             url: RedactedUrl::new(url),
@@ -74,16 +74,16 @@ pub(crate) fn fetch_verified(
         ),
     );
     let mut bytes = Vec::new();
-    let mut attempts = 0_u64;
+    let mut requests_started = 0_u64;
     loop {
         let offset = bytes.len() as u64;
         let response =
-            request(&client, url, offset, deadline, &mut attempts).inspect_err(|_| {
+            request(&client, url, offset, deadline, &mut requests_started).inspect_err(|_| {
                 diagnostic(
                     url,
                     "complete",
                     format_args!(
-                        "outcome=request_error attempts={attempts} retained_bytes={offset}"
+                        "outcome=request_error requests_started={requests_started} retained_bytes={offset}"
                     ),
                 );
             })?;
@@ -95,7 +95,7 @@ pub(crate) fn fetch_verified(
             url,
             "body",
             format_args!(
-                "attempt={attempts} offset={offset} retained_bytes={} complete={complete}",
+                "request_sequence={requests_started} offset={offset} retained_bytes={} complete={complete}",
                 bytes.len()
             ),
         );
@@ -108,7 +108,9 @@ pub(crate) fn fetch_verified(
         diagnostic(
             url,
             "complete",
-            format_args!("outcome=length_error attempts={attempts} retained_bytes={received}"),
+            format_args!(
+                "outcome=length_error requests_started={requests_started} retained_bytes={received}"
+            ),
         );
         return Err(RemoteFileError::Length {
             received,
@@ -121,7 +123,9 @@ pub(crate) fn fetch_verified(
         diagnostic(
             url,
             "complete",
-            format_args!("outcome=digest_error attempts={attempts} retained_bytes={received}"),
+            format_args!(
+                "outcome=digest_error requests_started={requests_started} retained_bytes={received}"
+            ),
         );
         return Err(RemoteFileError::Digest {
             url: RedactedUrl::new(url),
@@ -132,7 +136,9 @@ pub(crate) fn fetch_verified(
     diagnostic(
         url,
         "complete",
-        format_args!("outcome=verified attempts={attempts} retained_bytes={received}"),
+        format_args!(
+            "outcome=verified requests_started={requests_started} retained_bytes={received}"
+        ),
     );
     Ok(bytes)
 }
@@ -151,26 +157,28 @@ fn diagnostic(url: &Url, phase: &str, fields: std::fmt::Arguments<'_>) {
 /// Requests `url` from byte `offset` on, refusing an answer that restarts or
 /// skips the body instead of continuing it; `None` when the request went
 /// unanswered for the client's stall timeout.
+/// `requests_started` records the request sequence after the deadline check;
+/// its value is used only by diagnostics.
 fn request(
     client: &Client,
     url: &Url,
     offset: u64,
     deadline: Deadline,
-    attempts: &mut u64,
+    requests_started: &mut u64,
 ) -> Result<Option<Response>, RemoteFileError> {
     let remaining = deadline.remaining(url).inspect_err(|_| {
         diagnostic(
             url,
             "budget_expired",
-            format_args!("attempts={attempts} retained_bytes={offset}"),
+            format_args!("requests_started={requests_started} retained_bytes={offset}"),
         );
     })?;
-    *attempts += 1;
+    *requests_started += 1;
     diagnostic(
         url,
         "request",
         format_args!(
-            "attempt={attempts} offset={offset} remaining_ms={}",
+            "request_sequence={requests_started} offset={offset} remaining_ms={}",
             remaining.as_millis()
         ),
     );
@@ -184,7 +192,7 @@ fn request(
             diagnostic(
                 url,
                 "response",
-                format_args!("attempt={attempts} offset={offset} outcome=timeout"),
+                format_args!("request_sequence={requests_started} offset={offset} outcome=timeout"),
             );
             return Ok(None);
         }
@@ -201,7 +209,7 @@ fn request(
         url,
         "response",
         format_args!(
-            "attempt={attempts} offset={offset} status={}",
+            "request_sequence={requests_started} offset={offset} status={}",
             status.as_u16()
         ),
     );

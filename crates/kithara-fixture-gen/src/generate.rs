@@ -747,13 +747,13 @@ mod tests {
         for fields in [
             "phase=budget_start",
             "timeout_ms=10000 stall_ms=200",
-            "phase=request attempt=1 offset=0",
-            "phase=response attempt=1 offset=0 status=200",
-            "phase=body attempt=1 offset=0 retained_bytes=3 complete=false",
-            "phase=request attempt=2 offset=3",
-            "phase=response attempt=2 offset=3 status=206",
-            "phase=body attempt=2 offset=3 retained_bytes=6 complete=true",
-            "phase=complete outcome=verified attempts=2 retained_bytes=6",
+            "phase=request request_sequence=1 offset=0",
+            "phase=response request_sequence=1 offset=0 status=200",
+            "phase=body request_sequence=1 offset=0 retained_bytes=3 complete=false",
+            "phase=request request_sequence=2 offset=3",
+            "phase=response request_sequence=2 offset=3 status=206",
+            "phase=body request_sequence=2 offset=3 retained_bytes=6 complete=true",
+            "phase=complete outcome=verified requests_started=2 retained_bytes=6",
         ] {
             assert!(
                 fetch.iter().any(|record| record.contains(fields)),
