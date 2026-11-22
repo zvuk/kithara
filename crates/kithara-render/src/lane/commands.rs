@@ -118,6 +118,7 @@ impl Lane {
                     source: None,
                     requested_entry,
                     render_revision: warp.render_revision(),
+                    q32_entry: false,
                     latency,
                 });
             } else {
@@ -189,6 +190,7 @@ impl LaneState {
             && let Some(pending) = &mut self.pending
             && pending.entry == self.cursor
         {
+            pending.q32_entry |= pending.source.is_some() && pending.render_revision != revision;
             pending.render_revision = revision;
             pending.latency = latency;
         }

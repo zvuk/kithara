@@ -149,6 +149,7 @@ struct Preparation {
     source: Option<AudioChunkInfo>,
     requested_entry: Option<Duration>,
     render_revision: u64,
+    q32_entry: bool,
     latency: FrameCount,
 }
 
@@ -179,12 +180,16 @@ impl Preparation {
                 ))
             });
             span.sample_rate() == source.spec.sample_rate
-                && expected
-                    .and_then(|position| {
+                && expected.is_some_and(|position| {
+                    if self.q32_entry {
+                        span.source_ratio_at(0)
+                            .is_some_and(|actual| q32_entry_matches(position, actual))
+                    } else {
                         span.scaled_from(position, (0, NonZeroU128::MIN), (1, NonZeroU128::MIN))
-                    })
-                    .and_then(|relative| relative.source_ratio_at(0))
-                    == Some((0, NonZeroU128::MIN))
+                            .and_then(|relative| relative.source_ratio_at(0))
+                            == Some((0, NonZeroU128::MIN))
+                    }
+                })
         })
     }
 }
@@ -441,6 +446,41 @@ impl Lane {
         });
         Ok(true)
     }
+}
+
+fn q32_entry_matches(expected: (u128, NonZeroU128), actual: (u128, NonZeroU128)) -> bool {
+    const Q32_BITS: u32 = 32;
+    const SCALE: u128 = 1u128 << Q32_BITS;
+
+    let actual_denominator = actual.1.get();
+    let actual_bits = actual_denominator.trailing_zeros();
+    if !actual_denominator.is_power_of_two() || actual_bits > Q32_BITS {
+        return false;
+    }
+    let expected_denominator = expected.1.get();
+    let mut remainder = expected.0 % expected_denominator;
+    let mut fraction = 0_u128;
+    for _ in 0..Q32_BITS {
+        fraction <<= 1;
+        let complement = expected_denominator - remainder;
+        if remainder >= complement {
+            remainder -= complement;
+            fraction += 1;
+        } else {
+            remainder += remainder;
+        }
+    }
+    if remainder >= expected_denominator - remainder {
+        fraction += 1;
+    }
+    let Some(rounded) = (expected.0 / expected_denominator)
+        .checked_mul(SCALE)
+        .and_then(|whole| whole.checked_add(fraction))
+    else {
+        return false;
+    };
+    let shift = Q32_BITS - actual_bits;
+    rounded & ((1_u128 << shift) - 1) == 0 && actual.0 == rounded >> shift
 }
 
 fn source_entry(
