@@ -21,6 +21,7 @@ fn reverb(c: &mut Criterion) {
         let mut right = left.clone();
         let mut effect = Reverb::new(
             NonZeroU32::new(48_000).expect("bench rate"),
+            NonZeroU32::new(48_000).expect("bench maximum rate"),
             ReverbConfig::default(),
             &pools(),
         )

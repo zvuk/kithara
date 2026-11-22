@@ -683,6 +683,53 @@ async fn deck_fx_stop_rings_out() {
 }
 
 #[kithara::test(tokio)]
+async fn deck_fx_reverb_wash_outlives_stop() {
+    use kithara::effects::reverb::{Decay, Reverb, ReverbConfig};
+    use kithara_test_utils::bufpool::pools;
+
+    const PAUSE: usize = LEAD + 2000;
+
+    let config = ReverbConfig::builder().decay(Decay::MIN).build();
+    let rate = NonZeroU32::new(SAMPLE_RATE).expect("fixture rate");
+    let reverb =
+        || Reverb::new(rate, rate, config, &pools()).expect("prepared reverb fits the test pool");
+    let dry = take(
+        deck(None, DeckMixSettings::default()).await,
+        assets::fixed_constant_wav_cd_half_44100(),
+        Vec::new(),
+        Vec::new(),
+        Some(PAUSE),
+        TAKE,
+    )
+    .await;
+    let fx = take(
+        deck(None, DeckMixSettings::default()).await,
+        assets::fixed_constant_wav_cd_half_44100(),
+        insert(0, reverb()),
+        Vec::new(),
+        Some(PAUSE),
+        TAKE,
+    )
+    .await;
+    let silent = dry
+        .chunks(CHANNELS)
+        .rposition(|frame| frame != [0.0; 2])
+        .expect("the dry take sounds")
+        + 1;
+    assert!(
+        fx[silent * CHANNELS..]
+            .iter()
+            .any(|sample| sample.abs() > 1e-6),
+        "the reverb wash sounds after the deck's slots stop"
+    );
+    assert_same(
+        &fx,
+        &wet(&mut reverb(), &dry),
+        "the stopped deck preserves the reverb's wet tail",
+    );
+}
+
+#[kithara::test(tokio)]
 async fn deck_fx_fader_cuts_tail() {
     const PAUSE: usize = LEAD + 2000;
     const DOWN: usize = PAUSE + 1000;

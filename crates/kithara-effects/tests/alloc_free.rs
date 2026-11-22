@@ -19,11 +19,20 @@ fn reverb_process_reset_and_tail_retirement_never_allocate() {
         .decay(Decay::MIN)
         .width(Width::checked(0.37).unwrap())
         .build();
-    let mut reverb = Reverb::new(NonZeroU32::new(8000).unwrap(), config, &pools()).unwrap();
+    let mut reverb = Reverb::new(
+        NonZeroU32::new(8000).unwrap(),
+        NonZeroU32::new(96_000).unwrap(),
+        config,
+        &pools(),
+    )
+    .unwrap();
     let silence = [0.0_f32; 4096];
     let mut left = [0.0_f32; 4096];
     let mut right = left;
     assert_no_alloc(|| {
+        for rate in [48_000, 96_000, 1, 8000] {
+            reverb.retune(NonZeroU32::new(rate).unwrap()).unwrap();
+        }
         for (index, value) in [
             (0, f64::from(Decay::MAX)),
             (1, f64::from(kithara_effects::reverb::Damping::MAX)),

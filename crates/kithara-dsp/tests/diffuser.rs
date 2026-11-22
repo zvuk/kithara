@@ -133,6 +133,27 @@ fn diffuser_is_bit_identical_across_uneven_partitions() {
 }
 
 #[kithara::test]
+fn diffuser_retime_preserves_history_on_its_prepared_ring() {
+    let line = DelayLine::new(TWO, NonZeroUsize::new(8).unwrap(), &pools()).unwrap();
+    let mut section = DelayDiffuser::<2>::new(line, 0.5).unwrap();
+    section.retime(NonZeroUsize::new(4).unwrap()).unwrap();
+    let mut first = [vec![0.0; 6], vec![0.0; 6]];
+    first[0][0] = 1.0;
+    section.process(&mut first, 0..6).unwrap();
+    assert_eq!(first[0], [-1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+
+    section.retime(TWO).unwrap();
+    let mut second = [vec![0.0; 3], vec![0.0; 3]];
+    section.process(&mut second, 0..3).unwrap();
+    assert_eq!(second[0], [0.5, 0.0, 0.25]);
+    assert!(second[1].iter().all(|sample| *sample == 0.0));
+    assert_eq!(
+        section.retime(NonZeroUsize::new(9).unwrap()),
+        Err(DelayError::OutOfRange)
+    );
+}
+
+#[kithara::test]
 fn diffuser_refuses_bad_shapes_without_changing_samples_or_history() {
     let mut section = diffuser(3, 0.5);
     let mut control = diffuser(3, 0.5);
