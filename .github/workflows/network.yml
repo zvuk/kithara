@@ -44,7 +44,10 @@ jobs:
           KITHARA_DRM_STAGE_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_STAGE_AUTH_TOKEN }}
         # The dedicated runner mounts only its private cache scope. Keep the
         # build as one leased eviction unit under its persistent target root.
-        run: CARGO_TARGET_DIR=/cache/target/lane-network just ci cache-exec network just test run --lane=network
+        run: |
+          CARGO_TARGET_DIR=/cache/target/lane-network just ci cache-exec network just test run --lane=network
+          CARGO_TARGET_DIR=/cache/target/lane-network just ci cache-exec network just test run --lane=workspace -p kithara-sync-tests --test sync --features kithara-sync-tests/private-fixtures
+          CARGO_TARGET_DIR=/cache/target/lane-network just ci cache-exec network just test run --lane=workspace -p kithara-test-fixtures --test library_contract --features kithara-test-fixtures/private-fixtures --flash=off --net-backend=none
 
       - name: Upload compiler-cache evidence
         if: ${{ always() && hashFiles(format('.ci-artifacts/cache/github-{0}-{1}-*.json', github.run_id, github.run_attempt)) != '' }}

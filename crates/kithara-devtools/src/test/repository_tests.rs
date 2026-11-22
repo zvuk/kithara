@@ -472,3 +472,107 @@ fn the_pinned_nextest_rejects_an_earlier_failed_stress_iteration() {
         String::from_utf8_lossy(&outcome.stderr)
     );
 }
+
+#[test]
+fn private_fixture_consumers_are_admitted_only_by_the_secret_bearing_workflow() {
+    let root = root();
+    let project = ProjectConfig::load(&root).expect("repository config");
+    let test = &project.test;
+    for name in test.lanes.keys() {
+        let lane = resolve(test, &requested(test, name, None).expect("lane")).expect("resolve");
+        let command = lane.command(NextestAction::Run, &[]).expect("run command");
+        assert!(
+            command.get_args().all(|arg| {
+                let arg = arg.to_string_lossy();
+                arg != "--all-features" && !arg.contains("private-fixtures")
+            }),
+            "ordinary lane {name} admits private fixtures"
+        );
+    }
+    let workflow: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+        &fs::read_to_string(root.join(".github/workflows/network.yml")).expect("network workflow"),
+    )
+    .expect("workflow YAML");
+    let step = workflow["jobs"]["network"]["steps"]
+        .as_sequence()
+        .expect("steps")
+        .iter()
+        .find(|step| step["name"].as_str() == Some("Run the lane"))
+        .expect("lane step");
+    assert_eq!(step["env"]["KITHARA_DRM_REQUIRE"].as_u64(), Some(1));
+    for name in [
+        "KITHARA_DRM_PROD_KEY",
+        "KITHARA_DRM_PROD_AUTH_TOKEN",
+        "KITHARA_DRM_PROD_SP_ZV_TOKEN",
+        "KITHARA_DRM_STAGE_KEY",
+        "KITHARA_DRM_STAGE_AUTH_TOKEN",
+    ] {
+        assert_eq!(
+            step["env"][name].as_str(),
+            Some(format!("${{{{ secrets.{name} }}}}").as_str())
+        );
+    }
+    let calls = step["run"].as_str().expect("lane script").lines()
+        .filter(|line| !line.trim().is_empty()).map(|line| {
+            line.trim().strip_prefix("CARGO_TARGET_DIR=/cache/target/lane-network just ci cache-exec network just test run")
+                .expect("private build retains the network cache lease")
+                .split_whitespace().map(str::to_owned).collect::<Vec<_>>()
+        }).collect::<Vec<_>>();
+    assert_eq!(
+        calls.len(),
+        3,
+        "network plus both private consumer packages"
+    );
+    assert_eq!(calls[0], ["--lane=network"]);
+    for (args, package, binary, flash) in [
+        (&calls[1], "kithara-sync-tests", "sync", true),
+        (
+            &calls[2],
+            "kithara-test-fixtures",
+            "library_contract",
+            false,
+        ),
+    ] {
+        let request = TestRequest::parse(args).expect("workflow test request");
+        assert_eq!(request.lanes, ["workspace"]);
+        let lane = resolve(
+            test,
+            &requested(test, "workspace", Some(&request)).expect("lane"),
+        )
+        .expect("resolve");
+        assert_eq!(
+            lane.features.iter().any(|feature| feature == "flash"),
+            flash
+        );
+        for action in [NextestAction::Run, NextestAction::List] {
+            let command = lane
+                .command(action, &request.passthrough)
+                .expect("workflow command");
+            let args = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            for (flag, value) in [
+                ("-p", package),
+                ("--test", binary),
+                ("--cargo-profile", "test-release"),
+            ] {
+                assert!(
+                    args.windows(2)
+                        .any(|pair| pair[0] == flag && pair[1] == value),
+                    "{package}: {args:?}"
+                );
+            }
+            assert!(
+                args.windows(2).any(|pair| pair[0] == "--features"
+                    && pair[1]
+                        .split(',')
+                        .any(|feature| feature == format!("{package}/private-fixtures"))),
+                "{package}: capability was dropped: {args:?}"
+            );
+            assert!(!args.iter().any(|arg| arg == "--workspace"
+                || arg == "--all-features"
+                || arg == "--no-default-features"));
+        }
+    }
+}

@@ -18,6 +18,7 @@ load = ["kithara-integration-tests/load"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
 apple-fused-src = ["kithara/apple-fused-src"]
+private-fixtures = []
 
 [dependencies]
 kithara = { workspace = true, features = ["test", "link", "usdt", "backend-cpal", "download", "dsp", "mock", "offline", "queue", "resample-rubato", "signal", "stretch-glide", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }

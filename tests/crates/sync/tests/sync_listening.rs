@@ -199,17 +199,35 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
 #[case::app_playlist_138535169_steady_host_120(super::sync_product_matrix::prepared_sources(super::sync_product_matrix::Provider::Library(&["library_mp3_zvuk_138535169"])).await, Start::Seconds(4.0), REAL_TRACK_SYNC, &[None])]
 #[case::app_playlist_130432502(super::sync_product_matrix::prepared_sources(super::sync_product_matrix::Provider::Library(&["library_mp3_zvuk_130432502"])).await, Start::Seconds(4.0), REAL_TRACK_SYNC, &[Some(96.0)])]
 #[case::app_playlist_132017169(super::sync_product_matrix::prepared_sources(super::sync_product_matrix::Provider::Library(&["library_mp3_zvuk_132017169"])).await, Start::Seconds(4.0), REAL_TRACK_SYNC, &[Some(96.0)])]
-#[case::techno_160997949(super::sync_product_matrix::prepared_sources(super::sync_product_matrix::Provider::Library(&["remote_track_techno_160997949_1"])).await, Start::bar(0), REAL_TRACK_SYNC, &[Some(127.0)])]
 #[case::tunnel_tempo_targets(tunnel_sources().await, Start::bar(0), REAL_TRACK_SYNC, &[None, Some(96.0), Some(127.0), Some(145.0)])]
 #[case::tunnel_four_deck_host_120(tunnel_sources().await, Start::bar(0), REAL_TRACK_FOUR_DECK_SYNC, &[None])]
 #[case::newtechno_tempo_targets(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_SYNC, &[None, Some(96.0), Some(127.0), Some(145.0)])]
 #[case::newtechno_four_deck_host_120(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_FOUR_DECK_SYNC, &[None])]
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn record_sync_listening_wavs(
     #[case] provider: PreparedSources,
     #[case] start: Start,
     #[case] case: SyncCase,
     #[case] targets: &[Option<f64>],
+) {
+    assert_sync_listening_wavs(provider, start, case, targets).await;
+}
+
+#[cfg(feature = "private-fixtures")]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+async fn record_sync_listening_wavs_techno_160997949() {
+    let provider = super::sync_product_matrix::prepared_sources(
+        super::sync_product_matrix::Provider::Library(&["remote_track_techno_160997949_1"]),
+    )
+    .await;
+    assert_sync_listening_wavs(provider, Start::bar(0), REAL_TRACK_SYNC, &[Some(127.0)]).await;
+}
+
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+async fn assert_sync_listening_wavs(
+    provider: PreparedSources,
+    start: Start,
+    case: SyncCase,
+    targets: &[Option<f64>],
 ) {
     let mut deck_reports = Vec::with_capacity(case.decks());
     let mut deck_audio = Vec::with_capacity(case.decks());

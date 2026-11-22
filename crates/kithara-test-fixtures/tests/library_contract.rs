@@ -95,7 +95,6 @@ fn a_steady_four_four_track_states_every_beat_and_its_bars() {
 /// grid that wanders instead makes a synced deck change speed, and pitch,
 /// while the music does not.
 #[kithara::test(native)]
-#[case::remote_techno_160997949_1("remote_track_techno_160997949_1", None)]
 #[case::app_playlist_151585912("library_mp3_zvuk_151585912", None)]
 #[case::app_playlist_125475417("library_mp3_zvuk_125475417", None)]
 #[case::app_playlist_138535169("library_mp3_zvuk_138535169", Some(140.0))]
@@ -108,6 +107,16 @@ fn a_one_tempo_track_holds_its_tempo_on_every_beat(
     #[case] track: &str,
     #[case] expected_bpm: Option<f64>,
 ) {
+    assert_one_tempo_track(track, expected_bpm);
+}
+
+#[cfg(feature = "private-fixtures")]
+#[kithara::test(native)]
+fn a_one_tempo_track_holds_its_tempo_on_every_beat_remote_techno_160997949_1() {
+    assert_one_tempo_track("remote_track_techno_160997949_1", None);
+}
+
+fn assert_one_tempo_track(track: &str, expected_bpm: Option<f64>) {
     let analysis = analysis_of(track);
     let grid = BeatGridModel::try_from(analysis.latest().analysis())
         .unwrap_or_else(|error| panic!("`{track}` states no grid: {error:?}"));
