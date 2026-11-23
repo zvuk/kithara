@@ -27,7 +27,7 @@ Test-utils forwards this opt-in through its own `test` feature.
 ## Usage
 
 ```rust
-#[kithara::test(tokio, browser, timeout(std::time::Duration::from_secs(30)))]
+#[kithara::test(tokio, browser, timeout(Long))]
 async fn plays_hls_in_browser() {
     // test body
 }
@@ -61,7 +61,7 @@ Derive macros:
 ### `#[kithara::test]` flags
 
 A bare `#[kithara::test]` is a sync test on native + wasm; flags can be combined
-(e.g. `#[kithara::test(native, tokio, timeout(Duration::from_secs(5)))]`). Flags
+(e.g. `#[kithara::test(native, tokio, timeout(Medium))]`). Flags
 include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`,
 `hang_timeout_secs(N)`,
 `tracing(...)`, `soft_fail(...)`, `serial`, `multi_thread`, `selenium`, and
@@ -74,6 +74,9 @@ is unchanged. `#[future]` injects an unpolled async fixture;
 `#[future(awt)]` awaits the fixture before the test body and retains its value
 until test teardown. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-macros) for per-flag semantics and the
 Flash/Loom debugging rules.
+
+`timeout(...)` accepts only `Quick`, `Short`, `Medium`, `Long`, or `Network`.
+Duration expressions are rejected.
 
 ### `#[kithara::probe(...)]` arguments
 
