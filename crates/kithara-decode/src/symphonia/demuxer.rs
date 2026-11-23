@@ -821,7 +821,6 @@ impl Demuxer for SymphoniaDemuxer {
                 .is_some_and(|raw_end| target >= raw_end)
         {
             self.pending_seek = None;
-            self.prepared = Some(PreparedPacket::Eof);
             return Ok(DemuxSeekOutcome::PastEof { duration });
         }
         let seek_to = SeekTo::Timestamp {

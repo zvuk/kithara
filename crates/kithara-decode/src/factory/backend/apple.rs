@@ -685,13 +685,15 @@ mod apple_output_clock_tests {
     use kithara_signal::AudioChunkInfo;
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
     use kithara_test_fixtures::assets::{
-        signal_flac_saw_1s, signal_profile_m4a_alac_44100_2ch_16bit,
-        signal_profile_mp3_libmp3lame_44100_1ch, signal_wav_saw_1s,
+        signal_flac_saw_1s, signal_profile_m4a_aac_44100_2ch,
+        signal_profile_m4a_alac_44100_2ch_16bit, signal_profile_mp3_libmp3lame_44100_1ch,
+        signal_wav_saw_1s,
     };
     use kithara_test_utils::kithara;
 
     use crate::{
-        Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory, PcmOrigin,
+        Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
+        DecoderSeekOutcome, PcmOrigin,
         apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode},
         composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
@@ -715,6 +717,46 @@ mod apple_output_clock_tests {
             config,
         )
         .expect("open native Apple MPEG fixture")
+    }
+
+    #[kithara::test]
+    fn apple_past_eof_seek_latches_the_next_chunk_at_eof() {
+        let media = MediaInfo::builder()
+            .codec(AudioCodec::AacLc)
+            .container(ContainerFormat::Mp4)
+            .build();
+        let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
+            DecoderConfig::builder()
+                .backend(DecoderBackend::Apple)
+                .gapless(true)
+                .pools(pools())
+                .build();
+        let mut decoder = DecoderFactory::create_from_media_info(
+            Cursor::new(signal_profile_m4a_aac_44100_2ch().bytes().to_vec()),
+            &media,
+            config,
+        )
+        .expect("open native Apple M4A fixture");
+        match decoder
+            .next_chunk()
+            .expect("decode one packet before seeking")
+        {
+            DecoderChunkOutcome::Chunk(chunk) => assert!(chunk.meta.frames > 0),
+            other => panic!("the M4A fixture must produce PCM: {other:?}"),
+        }
+
+        assert!(matches!(
+            decoder
+                .seek(Duration::from_secs(7))
+                .expect("seek past M4A duration"),
+            DecoderSeekOutcome::PastEof { .. }
+        ));
+        for _ in 0..2 {
+            assert!(matches!(
+                decoder.next_chunk().expect("read after PastEof"),
+                DecoderChunkOutcome::Eof
+            ));
+        }
     }
 
     #[kithara::hang_watchdog]

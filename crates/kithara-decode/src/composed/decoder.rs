@@ -53,6 +53,7 @@ where
             pools: runtime.pools,
             output: None,
             prefill: Prefill::Needed,
+            past_eof: false,
             byte_len_handle: runtime.byte_len_handle,
             hooks: runtime.hooks,
             frame_offset: 0,
@@ -339,6 +340,7 @@ where
     }
 
     fn apply_seek_outcome(&mut self, outcome: DemuxSeekOutcome) -> DecoderSeekOutcome {
+        self.past_eof = matches!(outcome, DemuxSeekOutcome::PastEof { .. });
         self.prefill = match outcome {
             DemuxSeekOutcome::Pending(reason) => Prefill::Seeking(reason),
             DemuxSeekOutcome::Landed { .. } | DemuxSeekOutcome::PastEof { .. } => Prefill::Needed,
@@ -405,6 +407,11 @@ where
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        if self.past_eof {
+            let outcome = DecoderChunkOutcome::Eof;
+            self.emit_chunk_signal(&outcome);
+            return Ok(outcome);
+        }
         if matches!(self.prefill, Prefill::Seeking(_)) {
             return self.next_chunk_prepared();
         }
@@ -457,6 +464,9 @@ where
     }
 
     fn prepare_next_chunk_with_wait(&mut self, wait: PrepareWait) {
+        if self.past_eof {
+            return;
+        }
         if self.has_prepared_result() || matches!(self.prefill, Prefill::Seeking(_)) {
             return;
         }

@@ -30,13 +30,13 @@ where
 /// Priority follows the established contract:
 /// 1. A track-level edit list (`elst`) that yields a positive leading/trailing
 ///    pair — emitted at track end. Once seen, the scan is told to stop.
-/// 2. An iTunSMPB freeform tag in the first audio track's sample-entry clock.
+/// 2. An iTunSMPB freeform tag in the first audio track's media timescale.
 ///    It never overrides that track's `elst`.
 #[derive(Default)]
 struct GaplessProbe {
     current: Option<TrackState>,
-    /// Media timing and rate of the first audio track.
-    first_track: Option<(Mp4MediaTiming, u32)>,
+    /// Media timing of the first audio track.
+    first_track: Option<Mp4MediaTiming>,
     elst_derived: Option<DeclaredGapless>,
     itunsmpb: Option<ItunSmpb>,
     movie_timescale: Option<u32>,
@@ -53,8 +53,8 @@ struct TrackState {
 impl From<GaplessProbe> for Option<DeclaredGapless> {
     fn from(probe: GaplessProbe) -> Self {
         probe.elst_derived.or_else(|| {
-            let (_, sample_rate) = probe.first_track?;
-            declared(probe.itunsmpb?.gapless()?, sample_rate)
+            let media = probe.first_track?;
+            declared(probe.itunsmpb?.gapless()?, media.timescale)
         })
     }
 }
@@ -98,7 +98,7 @@ impl GaplessProbe {
         if track.kind != Some(re_mp4::TrackKind::Audio) || self.first_track.is_some() {
             return ControlFlow::Continue(());
         }
-        self.first_track = track.media.zip(track.sample_rate);
+        self.first_track = track.media;
         if let Some(info) = derive_from_track(&track, self.movie_timescale) {
             self.elst_derived = Some(info);
             return ControlFlow::Break(());
@@ -378,7 +378,8 @@ mod tests {
         );
     }
 
-    /// Tag counts retain the audio sample-entry clock independently of media ticks.
+    /// Tag counts use the track's `mdhd` media timescale, including when the
+    /// sample entry names a different PCM rate.
     #[kithara::test]
     #[case::media_timescale_is_the_sample_rate(48_000, 48_000)]
     #[case::media_timescale_is_the_core_rate(48_000, 24_000)]
@@ -414,7 +415,7 @@ mod tests {
         let declared = probe_mp4_gapless_dyn(&mut reader, &pools())
             .expect("audio declaration probe")
             .expect("audio declaration");
-        assert_eq!(declared.rate.get(), sample_rate);
+        assert_eq!(declared.rate.get(), media_timescale);
     }
 
     #[kithara::test]

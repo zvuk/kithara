@@ -11,7 +11,7 @@ pub(crate) struct Presentation {
     pub(crate) media_origin: Option<Duration>,
     pub(crate) media_end: Option<Duration>,
     pub(crate) gapless: Option<DeclaredGapless>,
-    sample_rate: u32,
+    declaration_rate: u32,
 }
 
 #[derive(Default)]
@@ -61,7 +61,7 @@ impl Track {
             media_origin,
             media_end,
             gapless,
-            sample_rate,
+            declaration_rate: media.timescale,
         })
     }
 }
@@ -129,7 +129,7 @@ where
         presentation.gapless = itunsmpb.and_then(|info| {
             Some(DeclaredGapless {
                 info: info.gapless()?,
-                rate: std::num::NonZeroU32::new(presentation.sample_rate)?,
+                rate: std::num::NonZeroU32::new(presentation.declaration_rate)?,
             })
         });
     }

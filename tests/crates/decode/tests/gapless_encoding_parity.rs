@@ -35,17 +35,33 @@ fn itunsmpb_mux_probe_roundtrip_preserves_pcm_counts(
     assert_eq!(track.media_info.sample_rate, Some(48_000));
     assert!(track.codec_delay > 0);
     let expected = GaplessInfo::new(u64::from(track.codec_delay), 64);
+    let output_rate = NonZeroU32::new(48_000).expect("output rate");
+    let declaration_rate = NonZeroU32::new(track.timescale).expect("declaration rate");
+    let tag_counts = GaplessInfo::new(
+        kithara::signal::rescale_frame_round(
+            expected.leading_frames,
+            output_rate,
+            declaration_rate,
+        )
+        .expect("leading mdhd ticks"),
+        kithara::signal::rescale_frame_round(
+            expected.trailing_frames,
+            output_rate,
+            declaration_rate,
+        )
+        .expect("trailing mdhd ticks"),
+    );
     let package = mux_audio_track(&track, GaplessEncoding::ItunSmpb).expect("actual fixture mux");
     let tag = format!(
         " 00000000 {:08X} {:08X} ",
-        expected.leading_frames, expected.trailing_frames,
+        tag_counts.leading_frames, tag_counts.trailing_frames,
     );
     assert!(
         package
             .init_segment
             .windows(tag.len())
             .any(|bytes| bytes == tag.as_bytes()),
-        "raw tag must retain the encoder's PCM-frame counts",
+        "raw tag must declare its counts in mdhd ticks",
     );
     let mut decoder = DecoderFactory::create_from_media_info(
         Cursor::new(Vec::<u8>::from(package.clone())),
@@ -73,7 +89,7 @@ fn itunsmpb_mux_probe_roundtrip_preserves_pcm_counts(
     assert_eq!(
         declared.track_info().gapless,
         Some(expected),
-        "mdhd ticks must not rescale a raw PCM-count tag",
+        "iTunSMPB counts declared in mdhd ticks must be rescaled to output PCM frames",
     );
 }
 

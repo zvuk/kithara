@@ -399,22 +399,26 @@ fn elst_box(segment_duration: u64, media_time: i64) -> Vec<u8> {
 /// `<version> <leading> <trailing> <total> ...`. We pad the tail with
 /// zero tokens so the string size matches what real-world tooling produces.
 fn udta_itunsmpb_box(track: &EncodedTrack, total_duration: u64) -> Result<Vec<u8>, Fmp4MuxError> {
-    let leading = leading_frames(track);
-    let trailing = u64::from(track.trailing_delay);
     let (sample_rate, timescale) = clock_rates(track)?;
+    let leading = rescale_frame_round(leading_frames(track), sample_rate, timescale)
+        .ok_or(Fmp4MuxError::TimingOverflow)?;
+    let trailing = rescale_frame_round(u64::from(track.trailing_delay), sample_rate, timescale)
+        .ok_or(Fmp4MuxError::TimingOverflow)?;
     let total_frames = rescale_frame_round(total_duration, timescale, sample_rate)
         .ok_or(Fmp4MuxError::TimingOverflow)?;
     let total_audible = total_frames
-        .checked_sub(leading)
-        .and_then(|frames| frames.checked_sub(trailing))
+        .checked_sub(leading_frames(track))
+        .and_then(|frames| frames.checked_sub(u64::from(track.trailing_delay)))
         .ok_or(Fmp4MuxError::InvalidTrim)?;
+    let total = rescale_frame_round(total_audible, sample_rate, timescale)
+        .ok_or(Fmp4MuxError::TimingOverflow)?;
     let payload = format!(
         " 00000000 {leading:08X} {trailing:08X} {total:016X} \
          00000000 00000000 00000000 00000000 \
          00000000 00000000 00000000 00000000",
         leading = leading,
         trailing = trailing,
-        total = total_audible,
+        total = total,
     );
 
     Ok(mp4_box(*b"udta", |udta| {
