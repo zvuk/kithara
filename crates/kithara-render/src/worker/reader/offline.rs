@@ -23,7 +23,6 @@ pub(crate) fn wait_for_packet(receiver: &PcmReceiver) {
             hang_tick!();
         }
         receiver.wake.wake();
-        let _real_io = kithara_platform::flash::real_io();
         let remaining = __hang_detector.remaining();
         kithara::probe_event!(pcm_wait_started);
         ready.wait_timeout(since, remaining);
