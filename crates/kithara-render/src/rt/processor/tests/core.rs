@@ -87,17 +87,18 @@ pub(super) fn mixer_without_declick() -> (TestMixer, TestEnds) {
 fn a_constructed_deck_retains_scope_state_until_its_first_render() {
     let config = DeckMixerConfig::default();
     let (mut mixer, mut ends) = mixer_with_config(config, 64);
-    let initial = crate::bridge::DeckSnapshot::new(config);
+    let initial =
+        crate::bridge::DeckSnapshot::new(config.slots(), config.eq_bands(), config.fx_units());
     assert_eq!(*ends.deck.snapshot.read(), initial);
     render(&mut mixer, 0);
     let snapshot = ends.deck.snapshot.read();
     assert_eq!(snapshot.sample_rate, RATE);
     assert_eq!(snapshot.blocks, 1);
     assert_eq!(snapshot.slots, initial.slots);
-    let binding = snapshot.eq.binding();
-    assert!(binding.is_some(), "a rendered deck publishes its EQ axis");
+    let layout = snapshot.eq.layout();
+    assert!(layout.is_some(), "a rendered deck publishes its EQ axis");
     let mut eq = initial.eq.clone();
-    eq.set_binding(binding);
+    eq.set_layout(layout);
     assert_eq!(snapshot.eq, eq);
     assert_eq!(snapshot.metrics, initial.metrics);
 }
@@ -192,6 +193,16 @@ pub(super) fn render(mixer: &mut TestMixer, start: usize) -> Vec<f32> {
 }
 
 pub(super) fn render_frames(mixer: &mut TestMixer, start: usize, frames: usize) -> Vec<f32> {
+    render_frames_in(mixer, SessionEpoch::new(0), start, frames)
+}
+
+/// Renders `frames` from session frame `start` on the output axis `epoch`.
+pub(super) fn render_frames_in(
+    mixer: &mut TestMixer,
+    epoch: SessionEpoch,
+    start: usize,
+    frames: usize,
+) -> Vec<f32> {
     let mut left = vec![0.0f32; frames];
     let mut right = vec![0.0f32; frames];
     let inputs: [&[f32]; 0] = [];
@@ -201,13 +212,14 @@ pub(super) fn render_frames(mixer: &mut TestMixer, start: usize, frames: usize) 
         outputs: &mut outputs,
     };
     mixer.inbox.0.drain();
-    render_realtime(mixer, start, frames, &mut buffers);
+    render_realtime(mixer, epoch, start, frames, &mut buffers);
     left
 }
 
 #[kithara::rtsan_forbid_blocking]
 pub(super) fn render_realtime(
     mixer: &mut TestMixer,
+    epoch: SessionEpoch,
     start: usize,
     frames: usize,
     buffers: &mut ProcBuffers,
@@ -216,7 +228,7 @@ pub(super) fn render_realtime(
     let context = OutputContext::new(
         frame_at(start)..frame_at(start + frames),
         shape().sample_rate,
-        SessionEpoch::new(0),
+        epoch,
         None,
     )
     .expect("output range");
@@ -573,12 +585,18 @@ fn removing_a_slot_while_its_tail_sounds_preserves_gain_continuity(#[case] repla
     send(
         &mut ends,
         at(BLOCK),
-        vec![DeckPart::Replace {
-            item_id: kithara_events::TrackId::allocate(),
-            slot: A,
-            pcm: pcm_samples(1.0, &vec![1.0; 8192], false),
-            segment: SegmentId::FIRST,
-        }],
+        vec![
+            DeckPart::Replace {
+                item_id: kithara_events::TrackId::allocate(),
+                slot: A,
+                pcm: pcm_samples(1.0, &vec![1.0; 8192], false),
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        ],
     );
     const CUT: usize = 100;
     send(

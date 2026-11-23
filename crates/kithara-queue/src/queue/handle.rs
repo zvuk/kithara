@@ -4,7 +4,7 @@ use kithara_events::TrackId;
 use kithara_platform::time::{Duration, Instant};
 use kithara_play::{
     CrossfadeSettings, DeckFxChange, DeckMixSettingsChange, EqBandConfig, InterruptionKind,
-    PitchStep, PlayError, Position, TrackSettingsChange,
+    LayoutRevision, PitchStep, PlayError, Position, TrackSettingsChange,
 };
 use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
@@ -123,7 +123,9 @@ where
         self.call(QueueCommand::Select { id, transition })
     }
 
-    /// Replaces the current track's source, retaining its identity and media position.
+    /// Replaces the current track with another source of the same media.
+    /// The logical track retains its identity, media position and known duration
+    /// while the incoming source has yet to report its extent.
     /// The accepted source changes when the replacement enters the deck.
     /// # Errors
     /// Returns an unknown or non-current identity, an admission refusal or a closed mailbox.
@@ -248,18 +250,33 @@ where
         self.call(QueueCommand::Fx { at, changes })
     }
 
-    /// Forward a program of the deck filter knob.
-    /// # Errors
-    /// Returns preparation, delivery or mailbox refusal.
-    pub fn filter_program(&self, program: kithara_play::FilterProgram) -> Result<(), QueueError> {
-        self.call(QueueCommand::FilterProgram(program))
-    }
-
     /// Forwards an EQ gain to the host owner.
     /// # Errors
     /// Returns the host's refusal or a closed mailbox.
     pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), QueueError> {
         self.call(QueueCommand::SetEqGain { band, gain_db })
+    }
+
+    /// Changes a band's kill state in the observed EQ layout at a mixer frame.
+    ///
+    /// `layout` is the revision `eq_layout` reports and `eq_killed` answers for. Like a manual
+    /// gain, a kill addresses the layout that receives commands: one still waiting to be
+    /// crossed over to holds it until that layout sounds.
+    /// # Errors
+    /// Returns an admission refusal or a closed mailbox.
+    pub fn set_eq_kill(
+        &self,
+        at: When<SessionFrame>,
+        band: usize,
+        layout: LayoutRevision,
+        on: bool,
+    ) -> Result<(), QueueError> {
+        self.call(QueueCommand::SetEqKill {
+            at,
+            band,
+            layout,
+            on,
+        })
     }
 
     /// Forwards an EQ layout to the host owner.
@@ -269,7 +286,7 @@ where
         self.call(QueueCommand::SetEqLayout(layout))
     }
 
-    /// Requests flat host EQ gains.
+    /// Requests neutral gains and clears kill in the deck's EQ layout.
     /// # Errors
     /// Returns the host's refusal or a closed mailbox.
     pub fn reset_eq(&self) -> Result<(), QueueError> {

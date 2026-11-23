@@ -42,6 +42,7 @@ impl fmt::Debug for SpeedCurve {
                         let bits = if value == 0.0 { 0 } else { value.to_bits() };
                         bits.hash(&mut hasher);
                     }
+                    approach.phase().hash(&mut hasher);
                 }
                 f.debug_struct("ApproachSteps")
                     .field("count", &steps.len())

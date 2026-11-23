@@ -412,6 +412,69 @@
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just check workspace
     RUSTUP_TOOLCHAIN=1.95.0
+# apple-net-units / bench
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
+# apple-net-units / branch
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --draft --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
+# apple-net-units / platforms
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
+# apple-net-units / merge-request
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
+# apple-net-units / quarantine
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
+# apple-net-units / main
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
+# apple-net-units / nightly
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
+# apple-net-units / weekly
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
+# apple-net-units / release
+  <require os> macos
+  <require tools> cargo just sccache kache /usr/bin/xcodebuild
+  /usr/bin/xcodebuild -version
+  /usr/bin/xcodebuild -checkFirstLaunchStatus
+  just test run --net-backend=apple --narrow=package(=kithara-net) --selection-output=.ci-artifacts/junit/apple-net-units.selection.json --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-safari / bench
   <require os> macos
   <require tools> cargo just
@@ -526,42 +589,49 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --draft --lane=apple --selection-output=.ci-artifacts/junit/apple-test.selection.json --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test / platforms
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test / merge-request
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --lane=apple --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test / quarantine
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --lane=apple --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test / main
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test / nightly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test / weekly
   refused: weekly pipelines do not run the Apple suite
 # apple-test / release
@@ -570,60 +640,70 @@
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=on --no-block=on --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / bench
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / branch
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --draft --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / platforms
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / merge-request
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / quarantine
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / main
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / nightly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / weekly
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-flash-off / release
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
   just test run --flash=off --profile ci
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test-utils / bench
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
@@ -1304,42 +1384,78 @@
   <require os> linux
   <require tools> cargo just
   just test ui
+# deps-advisories / bench
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / branch
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / platforms
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / merge-request
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / quarantine
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / main
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / nightly
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / weekly
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / release
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
 # deps-deny / bench
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / branch
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / platforms
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / merge-request
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / quarantine
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / main
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / nightly
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / weekly
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / release
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-features-full / bench
   <require os> macos linux
   <require tools> cargo just
@@ -2281,106 +2397,106 @@
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / branch
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --draft --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --draft --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / platforms
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / main
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / nightly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / weekly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-real-clock / release
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
 # linux-test-simulated-clock / bench
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2389,7 +2505,7 @@
   <require tools> cargo just sccache kache
   just test run --draft --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2398,7 +2514,7 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2407,7 +2523,7 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2416,7 +2532,7 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2425,7 +2541,7 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2434,7 +2550,7 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2443,7 +2559,7 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
@@ -2452,64 +2568,73 @@
   <require tools> cargo just sccache kache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     KITHARA_HANG_PREKILL_SECS=110
   just test test-utils
     CARGO_BUILD_JOBS=2
 # linux-tooling / bench
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / branch
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --draft --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / platforms
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / merge-request
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / quarantine
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / main
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / nightly
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / weekly
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-tooling / release
-  <require os> linux
+  <require os> macos linux
   <require tools> cargo just sccache kache
   cargo fetch --locked
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-usdt / bench
   <require os> linux
   <require tools> cargo just sccache kache
@@ -3045,47 +3170,38 @@
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
-    CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
 # web-chromium / branch
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
-    CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
 # web-chromium / platforms
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
-    CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
 # web-chromium / merge-request
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
-    CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
 # web-chromium / quarantine
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
-    CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
 # web-chromium / main
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
-    CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
 # web-chromium / nightly
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
-    CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
 # web-chromium / weekly
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
-    CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
 # web-chromium / release
   <require os> linux
   <require tools> chromium chromedriver just
   just test wasm chrome webcodecs include
-    CHROMEDRIVER_ARGS=--verbose --log-path=<root>/target/web-chromium.log
 # web-firefox / bench
   <require os> linux
   <require tools> firefox geckodriver just

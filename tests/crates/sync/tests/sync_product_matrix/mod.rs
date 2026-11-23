@@ -1,5 +1,9 @@
+#[cfg(not(target_arch = "wasm32"))]
+mod abr;
 mod binding;
 mod cases;
+#[cfg(not(target_arch = "wasm32"))]
+mod catalogue;
 mod consumed;
 mod control;
 mod harness;

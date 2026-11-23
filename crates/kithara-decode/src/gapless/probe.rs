@@ -1,10 +1,10 @@
-use std::io::SeekFrom;
+use std::{io::SeekFrom, num::NonZeroU32};
 
 use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
 use kithara_stream::AudioCodec;
 
 use super::{
-    GaplessInfo,
+    DeclaredGapless, GaplessInfo,
     mp3::{consts as mp3_consts, read_lame_trim, skip_id3v2},
     mp4::probe_mp4_gapless_dyn,
 };
@@ -25,7 +25,7 @@ pub(crate) fn scoped_probe<S>(
     source: &mut dyn DecoderInput,
     codec: AudioCodec,
     pools: &PoolRegion<S>,
-) -> crate::error::DecodeResult<Option<GaplessInfo>>
+) -> crate::error::DecodeResult<Option<DeclaredGapless>>
 where
     S: HasPool<u8>,
 {
@@ -43,7 +43,7 @@ pub(crate) fn probe_codec_gapless<S>(
     codec: AudioCodec,
     source: &mut dyn DecoderInput,
     pools: &PoolRegion<S>,
-) -> crate::error::DecodeResult<Option<GaplessInfo>>
+) -> crate::error::DecodeResult<Option<DeclaredGapless>>
 where
     S: HasPool<u8>,
 {
@@ -57,9 +57,14 @@ where
         }
         AudioCodec::Mp3 => {
             let buffer = read_mp3_probe_prefix(source, pools)?;
-            Ok(read_lame_trim(&buffer).map(|trim| GaplessInfo {
-                leading_frames: u64::from(trim.enc_delay),
-                trailing_frames: u64::from(trim.enc_padding),
+            Ok(read_lame_trim(&buffer).and_then(|trim| {
+                Some(DeclaredGapless {
+                    info: GaplessInfo {
+                        leading_frames: u64::from(trim.enc_delay),
+                        trailing_frames: u64::from(trim.enc_padding),
+                    },
+                    rate: NonZeroU32::new(trim.sample_rate)?,
+                })
             }))
         }
         _ => Ok(None),

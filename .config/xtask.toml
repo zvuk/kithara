@@ -603,6 +603,9 @@ known_flakes = []
 # `ui` lane so the general workspace run does not build those test targets.
 features = []
 
+[test.required_case_prefixes]
+".ci-artifacts/junit/apple-net-units.selection.json" = "backend::apple::"
+
 # The test packages a draft runs whatever its pull request names: the seven
 # that failed on the most branches between 2026-10-05 and 2026-11-11, above the
 # gap between 19 branches and 13. Reviewed by hand; a ready pull request and
@@ -1560,14 +1563,41 @@ pr_review_line_limit = 5000
 # function only when a parameter cannot say what it does.
 [ext.ci.lanes.deps-deny]
 cache_group = "host"
-label = "dependency audit"
+label = "dependency policy audit"
 os = ["macos", "linux"]
 tools = ["cargo", "just"]
 program = "just"
-steps = [{ args = ["deps", "deny"], label = "licence and advisory gate" }]
+steps = [
+  { args = [
+    "deps",
+    "deny",
+    "bans",
+    "licenses",
+    "sources",
+  ], label = "licence and source gate" },
+]
 role = "gate"
 kinds = ["weekly"]
 kinds_github = ["main", "branch", "merge-request"]
+timeout_minutes = 30
+
+[ext.ci.lanes.deps-advisories]
+cache_group = "host"
+label = "RustSec advisory audit"
+os = ["macos", "linux"]
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "deps",
+    "deny",
+    "advisories",
+  ], label = "RustSec advisory gate" },
+]
+role = "gate"
+kinds = ["weekly", "quarantine"]
+kinds_github = ["main", "branch", "merge-request"]
+path_globs = ["Cargo.lock", "**/Cargo.toml", "deny.toml", ".cargo/config.toml"]
 timeout_minutes = 30
 
 [ext.ci.lanes.deps-unused]
@@ -1735,13 +1765,16 @@ steps = [
     "chrome",
     "webcodecs",
     "include",
-  ], label = "Chromium WebCodecs tests", env = { CHROMEDRIVER_ARGS = "--verbose --log-path={root}/target/web-chromium.log" } },
+  ], label = "Chromium WebCodecs tests" },
 ]
 role = "gate"
 kinds = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
-artifact = { name = "web-chromium-driver", path = "target/web-chromium.log", when = "failure" }
+# In a GitHub job the executor captures the ChromeDriver log and the wrapper's
+# NetLog files in the job's RUNNER_TEMP and hands the job its own copy there; a
+# local run keeps them in its build.
+artifact = { name = "web-chromium-driver", report = "chromium", when = "failure" }
 
 # Nightly here, not on the push gate: the full integration suite does not
 # compile for wasm32 today. The lane reports the break every night instead of
@@ -2171,7 +2204,7 @@ program = "just"
 # The pre-kill timer runs on the real clock that a flash wedge cannot stop, so
 # a snapshot of the flash state, the wait graph and the threads at 110s still
 # reaches this artifact.
-artifact = { name = "hang-dumps-simulated-clock", path = "target/hang", when = "failure" }
+artifact = { name = "hang-dumps-simulated-clock", path = ".ci-artifacts/hang", when = "failure" }
 steps = [
   { args = [
     "test",
@@ -2180,7 +2213,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ], label = "Linux flash and no-block gate", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
   { args = [
     "test",
     "test-utils",
@@ -2233,12 +2266,12 @@ timeout_minutes = 180
 # are written with, so a product change can break them from the other side.
 # These lanes, with `net-host` and `broadcast`, run them under their own
 # configuration: whole on a ready pull request, `main` and every night, and
-# the draft scope's part they hold on any other branch push. GitLab declares
-# them weekly behind its Linux platform gate, which no schedule opens.
+# the draft scope's part they hold on any other branch push.
 [ext.ci.lanes.linux-tooling]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
+artifact = { name = "hang-dumps-tooling", path = ".ci-artifacts/hang", when = "failure" }
+cache_group = "host"
+label = "tooling"
+os = ["macos", "linux"]
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [
@@ -2250,10 +2283,18 @@ steps = [
     "test",
     "run",
     "--lane=tooling",
-  ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Native tooling lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "gate"
-kinds = []
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "main",
+  "nightly",
+  "platforms",
+  "release",
+]
 kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
@@ -2474,7 +2515,7 @@ label = "Linux"
 os = "linux"
 tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
-artifact = { name = "hang-dumps-real-clock", path = "target/hang", when = "failure" }
+artifact = { name = "hang-dumps-real-clock", path = ".ci-artifacts/hang", when = "failure" }
 steps = [
   { args = [
     "test",
@@ -2483,7 +2524,7 @@ steps = [
     "--profile",
     "ci",
     "--timings",
-  ], label = "real-clock suite", rebuild_check = true, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/target/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
+  ], label = "real-clock suite", rebuild_check = true, env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang", KITHARA_HANG_PREKILL_SECS = "110" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
@@ -2900,6 +2941,48 @@ role = "platforms"
 kinds = ["platforms", "main", "nightly"]
 timeout_minutes = 60
 
+[ext.ci.lanes.apple-net-units]
+cache_group = "macos"
+label = "Apple network units"
+os = "macos"
+tools = ["cargo", "just", "sccache", "kache", "xcodebuild"]
+checks = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
+]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--net-backend=apple",
+    "--narrow=package(=kithara-net)",
+    "--selection-output=.ci-artifacts/junit/apple-net-units.selection.json",
+    "--flash=on",
+    "--no-block=on",
+    "--profile",
+    "ci",
+  ], label = "Apple network units", env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
+]
+role = "platforms"
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+kinds_github = []
+timeout_minutes = 60
+
+# A review ref asks the same question the default branch asks: what a reviewer
+# would have to fix anyway is cheaper to learn before merge.
 [ext.ci.lanes.apple-test]
 cache_group = "macos"
 label = "Apple"
@@ -2948,7 +3031,7 @@ steps = [
     "--no-block=on",
     "--profile",
     "ci",
-  ] } },
+  ] }, env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "platforms"
 kinds = [
@@ -3010,7 +3093,7 @@ steps = [
     "--flash=off",
     "--profile",
     "ci",
-  ], label = "Apple flash-off gate" },
+  ], label = "Apple flash-off gate", env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]

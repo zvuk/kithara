@@ -166,6 +166,93 @@ fn approaches_area(
         .ok_or(PlayError::Untimed)
 }
 
+/// The accepted speed law restated from one output frame on, in output frames
+/// after it, with every segment's parameters kept as accepted.
+#[derive(Default)]
+pub(super) struct RestatedLaw {
+    steps: Vec<(u64, ExponentialApproach)>,
+    constant: Option<f32>,
+}
+
+impl RestatedLaw {
+    pub(super) fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+
+    /// Replaces the law from `offset` on with `curve`, entered `elapsed` frames
+    /// after its own start from the speed `origin`: a later command supersedes
+    /// every accumulated step at or after its own boundary.
+    pub(super) fn restate(
+        &mut self,
+        curve: &SpeedCurve,
+        origin: f64,
+        elapsed: u64,
+        offset: u64,
+    ) -> Result<(), PlayError> {
+        self.steps
+            .truncate(self.steps.partition_point(|(at, _)| *at < offset));
+        let first = self.steps.is_empty();
+        match curve {
+            SpeedCurve::Constant(speed) => {
+                self.constant = first.then_some(*speed);
+                self.steps.push((offset, level(f64::from(*speed))?));
+            }
+            SpeedCurve::Approach(approach) => {
+                self.constant = None;
+                self.steps.push((offset, resumed(*approach, elapsed)?));
+            }
+            SpeedCurve::ApproachSteps(steps) => {
+                self.constant = None;
+                let entered = steps
+                    .partition_point(|(at, _)| *at <= elapsed)
+                    .checked_sub(1)
+                    .ok_or(PlayError::Untimed)?;
+                let (began, approach) = steps[entered];
+                self.steps
+                    .push((offset, resumed(approach, elapsed - began)?));
+                for &(at, approach) in &steps[entered + 1..] {
+                    self.steps.push((offset + (at - elapsed), approach));
+                }
+            }
+            SpeedCurve::Steps(steps) => {
+                self.constant = None;
+                self.steps
+                    .push((offset, level(curve_speed(curve, origin, elapsed)?)?));
+                for &(at, speed) in steps.iter().filter(|(at, _)| *at > elapsed) {
+                    self.steps
+                        .push((offset + (at - elapsed), level(f64::from(speed))?));
+                }
+            }
+            SpeedCurve::Ramp { .. } => {
+                return Err(PlayError::Internal(
+                    "a linear speed ramp cannot continue on another source".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn finish(self) -> Result<SpeedCurve, PlayError> {
+        match (self.steps.as_slice(), self.constant) {
+            ([], _) => Err(PlayError::Untimed),
+            ([_], Some(speed)) => Ok(SpeedCurve::Constant(speed)),
+            ([(_, approach)], None) => Ok(SpeedCurve::Approach(*approach)),
+            _ => Ok(SpeedCurve::ApproachSteps(self.steps.into())),
+        }
+    }
+}
+
+fn level(speed: f64) -> Result<ExponentialApproach, PlayError> {
+    ExponentialApproach::new(speed, speed, 0.0)
+        .ok_or_else(|| PlayError::Internal("speed is not a valid approach level".into()))
+}
+
+fn resumed(approach: ExponentialApproach, elapsed: u64) -> Result<ExponentialApproach, PlayError> {
+    approach
+        .resumed(elapsed)
+        .ok_or_else(|| PlayError::Internal("approach course overflows its phase".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_platform::sync::Arc;
@@ -174,7 +261,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use num_traits::ToPrimitive;
 
-    use super::{check_curve, curve_area, curve_speed};
+    use super::{RestatedLaw, check_curve, curve_area, curve_speed};
     use crate::PlayError;
 
     fn curve_end(
@@ -610,6 +697,63 @@ mod tests {
         assert_eq!(
             curve_end(&curve, 0.125, start, 1.75, Some(start + 1)).expect("one-frame tail EOF"),
             Some(start + 1)
+        );
+    }
+
+    #[kithara::test]
+    #[case::past_the_accepted_tail(400)]
+    #[case::inside_the_accepted_tail(100)]
+    fn a_restated_law_continues_every_accepted_segment_until_a_later_command(#[case] command: u64) {
+        let approach = |initial, target| {
+            ExponentialApproach::new(initial, target, 240.0).expect("approach course")
+        };
+        let accepted = SpeedCurve::ApproachSteps(Arc::from([
+            (0, approach(1.0, 1.04)),
+            (100, approach(1.03, 0.98)),
+            (300, approach(0.99, 1.02)),
+        ]));
+        let mut law = RestatedLaw::default();
+        law.restate(&accepted, 1.0, 150, 0).expect("entered law");
+        law.restate(&SpeedCurve::Constant(1.25), 1.02, 0, command)
+            .expect("speed command ahead");
+        let mut restated = law.finish().expect("restated law");
+        check_curve(&mut restated).expect("an ordered law");
+        for frame in [0, 1, 99, 100, 101, 149, 150, 151, 399, 400] {
+            let expected = if frame < command {
+                curve_speed(&accepted, 1.0, 150 + frame).expect("accepted rate")
+            } else {
+                1.25
+            };
+            assert_eq!(
+                curve_speed(&restated, 1.0, frame).expect("restated rate"),
+                expected,
+                "frame {frame}"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_restated_law_keeps_a_held_speed_and_refuses_a_linear_ramp() {
+        let mut held = RestatedLaw::default();
+        held.restate(&SpeedCurve::Constant(1.25), 1.0, 7, 0)
+            .expect("held speed");
+        assert!(matches!(
+            held.finish(),
+            Ok(SpeedCurve::Constant(speed)) if speed == 1.25
+        ));
+
+        let mut ramp = RestatedLaw::default();
+        assert!(
+            ramp.restate(
+                &SpeedCurve::Ramp {
+                    to: 1.5,
+                    frames: std::num::NonZeroU64::new(64).expect("ramp frames"),
+                },
+                1.0,
+                3,
+                0,
+            )
+            .is_err()
         );
     }
 }

@@ -1,9 +1,12 @@
-use std::ops::{DerefMut, Range};
+use std::{
+    num::NonZeroUsize,
+    ops::{DerefMut, Range},
+};
 
 use num_traits::ToPrimitive;
 
 use super::{DelayError, DelayLine, DiffuserError, Tap};
-use crate::{backend::platform, consts};
+use crate::{backend, consts};
 
 /// Delay diffusion with `d = read; y = d - x; write = x + g * d`.
 ///
@@ -43,6 +46,17 @@ impl<const CHANNELS: usize> DelayDiffuser<CHANNELS> {
         })
     }
 
+    /// Changes the delay on the prepared ring without clearing its history.
+    ///
+    /// # Errors
+    /// [`DelayError::OutOfRange`] when `frames` exceeds the line's capacity;
+    /// the current delay remains active on refusal.
+    pub fn retime(&mut self, frames: NonZeroUsize) -> Result<(), DelayError> {
+        let frames = frames.get().to_f64().ok_or(DelayError::OutOfRange)?;
+        self.tap = self.line.tap(frames)?;
+        Ok(())
+    }
+
     /// Replaces `range` of every plane with its diffused signal, without allocation.
     ///
     /// Reads precede writes in spans no longer than the delay. Backend kernels
@@ -80,7 +94,7 @@ impl<const CHANNELS: usize> DelayDiffuser<CHANNELS> {
                 self.line.read(channel, self.tap, history)?;
                 let samples = plane.get_mut(start..end).ok_or(DelayError::Shape)?;
                 let writes = writes.get_mut(..len).ok_or(DelayError::Shape)?;
-                platform::delay_diffuse(samples, history, self.feedback, writes);
+                backend::delay::diffuse(samples, history, self.feedback, writes);
             }
             self.line.write(
                 &writes

@@ -49,6 +49,20 @@ pub trait Track: Player<Command = TrackCommand, Snapshot: AsRef<TrackSnapshot>> 
         out: &mut super::Outbox<'_>,
     ) -> Result<bool, PlayError>;
 
+    /// Prepares a linked equivalent-source entry without selecting a new beat.
+    ///
+    /// # Errors
+    /// Returns the silent entry's preparation refusal.
+    fn prepare_source_continuation(
+        &mut self,
+        at: SessionFrame,
+        _position: Position,
+        _speed: SpeedCurve,
+        out: &mut super::Outbox<'_>,
+    ) -> Result<bool, PlayError> {
+        self.prepare_entry(at, out)
+    }
+
     /// Projects media position and instantaneous speed on the output frame.
     ///
     /// # Errors
@@ -58,6 +72,14 @@ pub trait Track: Player<Command = TrackCommand, Snapshot: AsRef<TrackSnapshot>> 
         at: SessionFrame,
         sample_rate: NonZeroU32,
     ) -> Result<(Position, f64), PlayError>;
+
+    /// Projects the accepted speed law from the output frame on, in output
+    /// frames after it, through every speed command still ahead.
+    ///
+    /// # Errors
+    /// Returns when no uninterrupted slot mark is known or the law cannot be
+    /// restated on another source.
+    fn planned_law(&self, at: SessionFrame) -> Result<SpeedCurve, PlayError>;
 
     /// Projects the first media end through accepted speed and jump history.
     ///

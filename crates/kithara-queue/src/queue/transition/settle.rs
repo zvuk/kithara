@@ -1,12 +1,19 @@
 use kithara_bufpool::HasPool;
-use kithara_command::{Batch, Outcome, Rejection, Seq};
+use kithara_command::{Batch, Outcome, Rejection, Seq, When};
+use kithara_events::TrackId;
+use kithara_platform::time::Duration;
 use kithara_play::{
-    Bound, DeckPart, DeckProtocol, FadeDir, Outbox, PlayError, Player, Settled, TrackFactory,
-    TrackStatus as PlayingStatus,
+    Bound, DeckPart, DeckProtocol, FadeDir, Outbox, PlayError, Player, Settled, TrackCommand,
+    TrackFactory, TrackStatus as PlayingStatus,
 };
 use kithara_signal::SessionFrame;
 
-use super::super::{Queue, command::play_error, slots::Role, types::Continuation};
+use super::super::{
+    Queue,
+    command::play_error,
+    slots::Role,
+    types::{Continuation, SeekPosition, Target},
+};
 use crate::{AdvanceReason, QueueEvent, TrackStatus};
 
 impl<S, F> Queue<S, F>
@@ -49,6 +56,7 @@ where
             .target
             .is_some_and(|target| target.to == id && !target.auto && target.stale == Some(seq));
         if self.target.is_none_or(|target| target.to != id) || withdrawn {
+            let duration = self.replacement_duration(id);
             if let Some(current) = self.active_current_index() {
                 self.active
                     .get_mut(current)
@@ -60,7 +68,7 @@ where
                 .ok_or(PlayError::NoActiveSlot)?
                 .role = Role::Current;
             self.active.activate_replacement(index);
-            let source_changed = self.tracks.commit_source(id);
+            let source_changed = self.commit_source(id, duration);
             if !source_changed {
                 self.navigation
                     .commit(self.current, id, pending.reason, &self.track_ids());
@@ -253,6 +261,7 @@ where
             let changing = self.tracks.is_changing_source(id);
             self.cancel_target(out).map_err(play_error)?;
             if changing {
+                tracing::debug!(?id, ?reason, "source continuation rejected by the deck");
                 self.tracks.fail_source(id);
             }
             Ok(())
@@ -266,6 +275,7 @@ where
         reason: AdvanceReason,
     ) -> Result<(), PlayError> {
         let target = self.target.ok_or(PlayError::NotReady)?;
+        let duration = self.replacement_duration(target.to);
         let outgoing = self.active_current_index();
         let incoming_slot = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.slot;
         let crossfading = outgoing
@@ -291,7 +301,7 @@ where
             .ok_or(PlayError::NoActiveSlot)?
             .role = Role::Current;
         self.active.activate_replacement(index);
-        let source_changed = self.tracks.commit_source(target.to);
+        let source_changed = self.commit_source(target.to, duration);
         if !source_changed {
             self.navigation
                 .commit(self.current, target.to, reason, &self.track_ids());
@@ -312,6 +322,28 @@ where
         }
         self.tracks.set_status(target.to, TrackStatus::Consumed);
         Ok(())
+    }
+
+    /// Commits `id`'s staged source. The replacement opened at the seek
+    /// target the outgoing receiver still holds pending, so that seek is done.
+    fn commit_source(&mut self, id: TrackId, duration: Option<Duration>) -> bool {
+        let changed = self.tracks.commit_source(id, duration);
+        if changed
+            && matches!(self.held_position, Some(SeekPosition::Pending { item, .. }) if item == id)
+        {
+            self.held_position = None;
+        }
+        changed
+    }
+
+    fn replacement_duration(&self, id: TrackId) -> Option<Duration> {
+        if !self.tracks.is_changing_source(id) {
+            return None;
+        }
+        self.active_current_index()
+            .and_then(|index| self.active.get(index))
+            .filter(|outgoing| outgoing.item == id)
+            .and_then(|outgoing| outgoing.track.snapshot().as_ref().duration)
     }
 }
 
@@ -382,6 +414,19 @@ where
         Ok(())
     }
 
+    fn continuation_rejected(
+        &mut self,
+        index: usize,
+        reason: &Rejection<PlayError>,
+        out: &mut Outbox<'_>,
+    ) -> Result<(), PlayError> {
+        if outlives(reason, self.active.is_replacement(index)) {
+            Ok(())
+        } else {
+            self.cancel_target(out).map_err(play_error)
+        }
+    }
+
     fn pause_settled(
         &mut self,
         index: usize,
@@ -391,39 +436,58 @@ where
         out: &mut Outbox<'_>,
     ) -> Result<(), PlayError> {
         let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
-        let continued_pause = active.role == Role::Incoming
-            && self.target.is_some_and(|target| {
-                !target.playing
-                    && target.to == active.item
-                    && target.continued == Some(Continuation::Pause(seq))
-            });
-        let paused = matches!(
-            active.track.snapshot().as_ref().status,
-            PlayingStatus::Paused { .. }
-        );
-        if continued_pause {
+        let Some(target) = self
+            .target
+            .filter(|target| active.role == Role::Incoming && target.to == active.item)
+        else {
+            return Ok(());
+        };
+        let continued = settled_continuation(target, seq);
+        // An applied seat already gave the slot to the replacement, so it
+        // enters whatever its status; a paused target waits for its frame.
+        let seated = matches!(continued, Some(Continuation::Seat(_)));
+        let paused = seated
+            || matches!(
+                active.track.snapshot().as_ref().status,
+                PlayingStatus::Paused { .. }
+            );
+        if continued.is_some() {
             self.target.as_mut().ok_or(PlayError::NotReady)?.continued = None;
             if let Settled::Rejected { reason, .. } = settled {
-                return if matches!(reason, Rejection::Late | Rejection::Stale) {
-                    Ok(())
-                } else {
-                    self.cancel_target(out).map_err(play_error)
-                };
+                return self.continuation_rejected(index, reason, out);
             }
         }
-        if applied
-            && self.target.is_some_and(|target| {
-                !target.playing
-                    && target.to == active.item
-                    && (target.stale.is_some() || continued_pause)
-            })
-            && active.role == Role::Incoming
-            && paused
-        {
-            self.target.as_mut().ok_or(PlayError::NotReady)?.stale = None;
-            let reason = self.target.ok_or(PlayError::NotReady)?.reason;
-            return self.enter_target(index, self.earliest()?, reason);
+        if !applied || !paused || !enters(target, continued) {
+            return Ok(());
+        }
+        self.target.as_mut().ok_or(PlayError::NotReady)?.stale = None;
+        self.enter_target(index, self.earliest()?, target.reason)?;
+        if target.playing {
+            self.transport(TrackCommand::Play { at: When::Next }, out)?;
         }
         Ok(())
     }
+}
+
+/// The continuation a pause receipt `seq` settles: a seat settles whatever
+/// transport arrived since, a pause only while the target still wants it
+/// paused.
+fn settled_continuation(target: Target, seq: Seq) -> Option<Continuation> {
+    match target.continued {
+        Some(seat @ Continuation::Seat(owner)) if owner == seq => Some(seat),
+        Some(pause @ Continuation::Pause(owner)) if owner == seq && !target.playing => Some(pause),
+        _ => None,
+    }
+}
+
+/// Whether an applied, held receipt enters the target: its own settled
+/// continuation does, and a paused target recomputing after a stale receipt.
+fn enters(target: Target, continued: Option<Continuation>) -> bool {
+    continued.is_some() || !target.playing && target.stale.is_some()
+}
+
+/// Whether a paused target outlives the rejection of its continuation; a
+/// refused seat releases the replacement, so it cannot retry.
+fn outlives<R>(reason: &Rejection<R>, replacement: bool) -> bool {
+    matches!(reason, Rejection::Late | Rejection::Stale) && !replacement
 }

@@ -156,6 +156,10 @@ impl Track for SnapshotTrack {
         panic!("terminal-event fixture does not project a render lane")
     }
 
+    fn planned_law(&self, _at: SessionFrame) -> Result<kithara_sync::SpeedCurve, PlayError> {
+        panic!("terminal-event fixture does not project a render lane")
+    }
+
     fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError> {
         let Some(duration) = self.0.duration else {
             return Ok(None);
@@ -1118,4 +1122,266 @@ fn should_arm_crossfade_cases(
             .expect("repeat deadline tick");
         assert_eq!(queue.target.expect("same transition").bound, sent);
     }
+}
+
+#[kithara::test]
+#[case::failed(Some(decode_fault()))]
+#[case::unready(None)]
+fn only_a_failed_private_receiver_ends_its_source_change(#[case] fault: Option<PlaybackFault>) {
+    let (mut queue, _, current) = selected_second();
+    let accepted = queue.control().current().expect("current").url;
+    queue
+        .tracks
+        .stage_source(
+            current,
+            TrackSource::from("https://example.com/alternate.mp3"),
+            kithara_play::Position::ZERO,
+        )
+        .expect("staged source");
+    let slot = Slot::new(2);
+    let mut track = queue
+        .config
+        .factory
+        .track(PlayerConfig {
+            item: current,
+            slot: Some(slot),
+            settings: TrackSettings::default(),
+        })
+        .expect("snapshot track");
+    track.0.status = fault.map_or(PlayerTrackStatus::Loading, |fault| {
+        PlayerTrackStatus::Failed {
+            at: SessionFrame::new(7),
+            fault,
+        }
+    });
+    queue.active.push(Active {
+        item: current,
+        slot,
+        track,
+        role: Role::Incoming,
+        load: None,
+    });
+    queue.target = Some(super::super::super::types::Target {
+        to: current,
+        bound: None,
+        settings: CrossfadeSettings::default(),
+        transition: Transition::None,
+        reason: crate::AdvanceReason::UserSelect,
+        playing: true,
+        auto: false,
+        stale: None,
+        continued: None,
+        repeat: None,
+        chained: false,
+    });
+    queue.clock = Some((SessionFrame::new(64), FrameCount::new(128)));
+    let mut events = queue.subscribe::<QueueEvent>();
+    let (mut deck, _deck_inbox) = channel(ChannelConfig::builder().build());
+    let (mut dispatcher, _dispatcher_inbox) = channel(ChannelConfig::builder().build());
+    queue
+        .transition_loaded(&mut Outbox::new(&mut deck, &mut dispatcher))
+        .expect("readiness pass");
+    queue.publish();
+
+    let failed = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event.event {
+            QueueEvent::TrackLoadFailed {
+                id,
+                reason,
+                auto_skipped: false,
+            } if id == current => Some(reason),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let after = queue.control().current().expect("current");
+    assert_eq!(
+        (
+            queue.target.is_some(),
+            queue.tracks.is_changing_source(current),
+            after.source_failed,
+            failed,
+        ),
+        (
+            fault.is_none(),
+            fault.is_none(),
+            fault.is_some(),
+            fault.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        ),
+        "only a terminal receiver ends the change"
+    );
+    if fault.is_some() {
+        assert_eq!((after.id, after.url), (current, accepted));
+    }
+}
+
+#[kithara::test]
+#[case::loaded(None)]
+#[case::failed(Some(decode_fault()))]
+fn an_applied_seat_hands_the_slot_to_its_replacement(#[case] fault: Option<PlaybackFault>) {
+    use super::super::super::types::{Continuation, Target};
+
+    let (mut queue, _, current) = selected_second();
+    let alternate = TrackSource::from("https://example.com/alternate.mp3");
+    queue
+        .tracks
+        .stage_source(current, alternate, kithara_play::Position::from_secs(1))
+        .expect("staged source");
+    let slot = Slot::new(0);
+    let mut track = queue
+        .config
+        .factory
+        .track(PlayerConfig {
+            item: current,
+            slot: Some(slot),
+            settings: TrackSettings::default(),
+        })
+        .expect("snapshot track");
+    track.0.status = fault.map_or(PlayerTrackStatus::Loaded, |fault| {
+        PlayerTrackStatus::Failed {
+            at: SessionFrame::new(7),
+            fault,
+        }
+    });
+    queue.active.stage(Active {
+        item: current,
+        slot,
+        track,
+        role: Role::Incoming,
+        load: None,
+    });
+    let seat = fixture_seq();
+    queue.target = Some(Target {
+        to: current,
+        bound: None,
+        settings: CrossfadeSettings::default(),
+        transition: Transition::None,
+        reason: crate::AdvanceReason::UserSelect,
+        playing: false,
+        auto: false,
+        stale: None,
+        continued: Some(Continuation::Seat(seat)),
+        repeat: None,
+        chained: false,
+    });
+    queue.clock = Some((SessionFrame::new(8), FrameCount::new(128)));
+    queue.deck.mixer.sample_rate = 48_000;
+    let replacement = queue.incoming_index(current).expect("staged replacement");
+    let (mut deck, _deck_inbox) = channel(ChannelConfig::builder().build());
+    let (mut dispatcher, _dispatcher_inbox) = channel(ChannelConfig::builder().build());
+    let mut out = Outbox::new(&mut deck, &mut dispatcher);
+
+    queue
+        .transition_settled(
+            replacement,
+            &Settled::Applied {
+                seq: seat,
+                at: SessionFrame::new(8),
+            },
+            &mut out,
+        )
+        .expect("seat receipt");
+    queue.transition_loaded(&mut out).expect("readiness pass");
+    queue.publish();
+
+    let owner = queue
+        .active_current_index()
+        .and_then(|index| queue.active.get(index))
+        .expect("the slot keeps a current owner");
+    assert_eq!(
+        (
+            queue.target.is_none(),
+            queue.tracks.is_changing_source(current),
+            owner.slot,
+            owner.track.snapshot().as_ref().status,
+            queue.control().current().and_then(|track| track.url),
+        ),
+        (
+            true,
+            false,
+            slot,
+            fault.map_or(PlayerTrackStatus::Loaded, |fault| {
+                PlayerTrackStatus::Failed {
+                    at: SessionFrame::new(7),
+                    fault,
+                }
+            }),
+            Some("https://example.com/alternate.mp3".to_owned()),
+        ),
+        "the seated receiver's track owns the slot whatever its status"
+    );
+}
+
+#[kithara::test]
+#[case::submitted_seat(true)]
+#[case::unsubmitted(false)]
+fn a_seek_waits_for_a_submitted_paused_replacement_seat(#[case] submitted: bool) {
+    use super::super::super::types::{Continuation, Target};
+
+    let (mut queue, first, current) = selected_second();
+    for id in [first, current] {
+        let index = queue
+            .active
+            .position(|active| active.item == id)
+            .expect("seated");
+        queue.active.get_mut(index).expect("seated").track.0.status = PlayerTrackStatus::Paused {
+            at: Duration::from_secs(1),
+        };
+    }
+    queue
+        .tracks
+        .stage_source(
+            current,
+            TrackSource::from("https://example.com/alternate.mp3"),
+            kithara_play::Position::from_secs(1),
+        )
+        .expect("staged source");
+    let slot = Slot::new(0);
+    let mut track = queue
+        .config
+        .factory
+        .track(PlayerConfig {
+            item: current,
+            slot: Some(slot),
+            settings: TrackSettings::default(),
+        })
+        .expect("snapshot track");
+    track.0.status = PlayerTrackStatus::Loaded;
+    queue.active.stage(Active {
+        item: current,
+        slot,
+        track,
+        role: Role::Incoming,
+        load: None,
+    });
+    queue.target = Some(Target {
+        to: current,
+        bound: None,
+        settings: CrossfadeSettings::default(),
+        transition: Transition::None,
+        reason: crate::AdvanceReason::UserSelect,
+        playing: false,
+        auto: false,
+        stale: None,
+        continued: submitted.then(|| Continuation::Seat(fixture_seq())),
+        repeat: None,
+        chained: false,
+    });
+    let (mut deck, _deck_inbox) = channel(ChannelConfig::builder().build());
+    let (mut dispatcher, _dispatcher_inbox) = channel(ChannelConfig::builder().build());
+
+    let result = queue.seek_to(
+        Duration::from_secs(5),
+        &mut Outbox::new(&mut deck, &mut dispatcher),
+    );
+
+    assert_eq!(
+        (
+            matches!(result, Err(QueueError::NotReady(id)) if id == current),
+            queue.target.is_some(),
+            queue.tracks.is_changing_source(current),
+            queue.incoming_index(current).is_some(),
+        ),
+        (submitted, submitted, submitted, submitted),
+        "only an unsubmitted replacement yields to the seek: {result:?}"
+    );
 }

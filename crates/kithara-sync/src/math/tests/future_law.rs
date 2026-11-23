@@ -304,7 +304,7 @@ fn correction_restores_an_approach_between_two_host_commands() {
     let actual = source::curve(
         &pending_targets(),
         &source,
-        position(0),
+        position(0).as_secs_f64(),
         source::Span {
             start: at,
             landing: None,
@@ -349,7 +349,7 @@ fn correction_restores_an_approach_between_two_host_commands() {
     let (base, _, _) = source::curve(
         &host,
         &SourceGrid::new(&model, host.sample_rate(), None, false).expect("source"),
-        cue,
+        cue.as_secs_f64(),
         source::Span {
             start: SessionFrame::new(0),
             landing: None,
@@ -382,9 +382,15 @@ fn correction_restores_an_approach_between_two_host_commands() {
         .0;
     let corrected_boundary = analytic_laws(&corrected)
         .into_iter()
-        .find(|(at, _)| *at > 0)
+        .find(|(at, _)| {
+            cue.as_secs_f64() + advance(&corrected, 0, *at) / 48_000.0 >= model.beats()[1].at
+        })
         .expect("corrected slope change")
         .0;
+    assert!(
+        cue.as_secs_f64() + advance(&corrected, 0, corrected_boundary - 1) / 48_000.0
+            < model.beats()[1].at
+    );
     assert!(corrected_boundary > base_boundary);
     let source = SourceGrid::new(&model, host.sample_rate(), None, false).expect("source");
     let actual = cue.as_secs_f64() + advance(&corrected, 0, end) / 48_000.0;
@@ -435,7 +441,7 @@ fn correction_collisions_preserve_host_targets_and_restore_the_remaining_law() {
     let actual = source::curve(
         &trajectory,
         &source,
-        position(0),
+        position(0).as_secs_f64(),
         source::Span {
             start: at,
             landing: None,

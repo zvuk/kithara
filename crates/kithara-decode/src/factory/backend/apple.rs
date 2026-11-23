@@ -147,11 +147,19 @@ fn track_with_output_domain_gapless(
     target_output_rate: Option<u32>,
 ) -> DecodeResult<crate::demuxer::TrackInfo> {
     let mut output_track = track.clone();
-    output_track.gapless = scale_gapless_for_output_domain(
-        output_track.gapless,
-        output_track.sample_rate,
-        target_output_rate,
-    )?;
+    if let Some(declared) = track.gapless
+        && let Some(output_rate) = target_output_rate
+    {
+        let rate = NonZeroU32::new(output_rate).ok_or(DecodeError::InvalidSampleRate {
+            resource: "apple.gapless.output",
+        })?;
+        let info = scale_gapless_for_output_domain(
+            Some(declared.info),
+            declared.rate.get(),
+            Some(output_rate),
+        )?;
+        output_track.gapless = info.map(|info| crate::gapless::DeclaredGapless { info, rate });
+    }
     Ok(output_track)
 }
 
@@ -344,10 +352,13 @@ mod apple_factory_tests {
         Ok(frames)
     }
 
-    const fn aac_track(sample_rate: u32, gapless: Option<GaplessInfo>) -> TrackInfo {
+    fn aac_track(sample_rate: u32, gapless: Option<GaplessInfo>) -> TrackInfo {
         TrackInfo {
             sample_rate,
-            gapless,
+            gapless: gapless.map(|info| crate::gapless::DeclaredGapless {
+                info,
+                rate: NonZeroU32::new(sample_rate).expect("test declaration clock"),
+            }),
             codec: AudioCodec::AacLc,
             channels: 2,
             extra_data: Vec::new(),
@@ -406,8 +417,14 @@ mod apple_factory_tests {
         let equal_target = track_with_output_domain_gapless(&track, Some(44_100))
             .expect("BUG: output-domain track with equal target");
 
-        assert_eq!(no_target.gapless, source_gapless);
-        assert_eq!(equal_target.gapless, source_gapless);
+        assert_eq!(
+            no_target.gapless.map(|declared| declared.info),
+            source_gapless
+        );
+        assert_eq!(
+            equal_target.gapless.map(|declared| declared.info),
+            source_gapless
+        );
     }
 
     #[kithara::test]
@@ -422,7 +439,7 @@ mod apple_factory_tests {
             .expect("BUG: output-domain track with fused SRC");
 
         assert_eq!(
-            output_track.gapless,
+            output_track.gapless.map(|declared| declared.info),
             Some(GaplessInfo {
                 leading_frames: 1115,
                 trailing_frames: 480,
@@ -473,7 +490,7 @@ mod apple_factory_tests {
         let source_track = aac_track(SOURCE_RATE, Some(source_gapless));
         let output_track = track_with_output_domain_gapless(&source_track, Some(OUTPUT_RATE))
             .expect("BUG: output-domain track with fused SRC");
-        let output_gapless = output_track.gapless.expect("BUG: scaled gapless");
+        let output_gapless = output_track.gapless.expect("BUG: scaled gapless").info;
         let frames_per_call = u32::try_from(
             round_scaled_frames(u64::from(PACKET_FRAMES), SOURCE_RATE, OUTPUT_RATE)
                 .expect("BUG: scaled packet frame count"),
@@ -668,13 +685,15 @@ mod apple_output_clock_tests {
     use kithara_signal::AudioChunkInfo;
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
     use kithara_test_fixtures::assets::{
-        signal_flac_saw_1s, signal_profile_m4a_alac_44100_2ch_16bit,
-        signal_profile_mp3_libmp3lame_44100_1ch, signal_wav_saw_1s,
+        signal_flac_saw_1s, signal_profile_m4a_aac_44100_2ch,
+        signal_profile_m4a_alac_44100_2ch_16bit, signal_profile_mp3_libmp3lame_44100_1ch,
+        signal_wav_saw_1s,
     };
     use kithara_test_utils::kithara;
 
     use crate::{
-        Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory, PcmOrigin,
+        Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
+        DecoderSeekOutcome, PcmOrigin,
         apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode},
         composed::{ComposedDecoder, DecoderRuntime},
         demuxer::Demuxer,
@@ -698,6 +717,46 @@ mod apple_output_clock_tests {
             config,
         )
         .expect("open native Apple MPEG fixture")
+    }
+
+    #[kithara::test]
+    fn apple_past_eof_seek_latches_the_next_chunk_at_eof() {
+        let media = MediaInfo::builder()
+            .codec(AudioCodec::AacLc)
+            .container(ContainerFormat::Mp4)
+            .build();
+        let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
+            DecoderConfig::builder()
+                .backend(DecoderBackend::Apple)
+                .gapless(true)
+                .pools(pools())
+                .build();
+        let mut decoder = DecoderFactory::create_from_media_info(
+            Cursor::new(signal_profile_m4a_aac_44100_2ch().bytes().to_vec()),
+            &media,
+            config,
+        )
+        .expect("open native Apple M4A fixture");
+        match decoder
+            .next_chunk()
+            .expect("decode one packet before seeking")
+        {
+            DecoderChunkOutcome::Chunk(chunk) => assert!(chunk.meta.frames > 0),
+            other => panic!("the M4A fixture must produce PCM: {other:?}"),
+        }
+
+        assert!(matches!(
+            decoder
+                .seek(Duration::from_secs(7))
+                .expect("seek past M4A duration"),
+            DecoderSeekOutcome::PastEof { .. }
+        ));
+        for _ in 0..2 {
+            assert!(matches!(
+                decoder.next_chunk().expect("read after PastEof"),
+                DecoderChunkOutcome::Eof
+            ));
+        }
     }
 
     #[kithara::hang_watchdog]

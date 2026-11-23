@@ -63,6 +63,18 @@ struct PitchLayout {
     passthrough: bool,
 }
 
+/// Source phase an outgoing source left past its physical end when its
+/// decoder changed the source clock.
+#[derive(Clone, Copy)]
+pub(in crate::render) struct CarriedPhase {
+    /// Outgoing source frames from the physical end to the next output start.
+    pub(in crate::render) residual: Fraction,
+    /// Decoded sample rate of the outgoing source.
+    pub(in crate::render) rate: NonZeroU32,
+    /// Decoder revision whose first window starts at this phase.
+    pub(in crate::render) revision: u64,
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::render) struct PreparedQuantum {
     pub(in crate::render) source_span: SourceSpan,
@@ -81,6 +93,8 @@ pub struct WarpRenderer<S> {
     pub(in crate::render) trajectory: Trajectory,
     pub(in crate::render) mapped_render: bool,
     pub(in crate::render) terminal_source_end: Option<u64>,
+    /// Phase the next source window starts from after a source clock change.
+    pub(in crate::render) carried_phase: Option<CarriedPhase>,
     pub(in crate::render) projection: Option<super::projected::Projection>,
     pub(in crate::render) spec: AudioSpec,
     pub(in crate::render) backends: ElasticBackendConfig,
@@ -167,6 +181,7 @@ where
             trajectory: Trajectory::new(speed),
             mapped_render: false,
             terminal_source_end: None,
+            carried_phase: None,
             projection: target.projection,
             residency: target.residency,
             backends: config.backends(),
@@ -316,6 +331,19 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.pending_unity_meta = None;
     }
 
+    /// Returns the current trajectory entry in the input's published source clock.
+    #[must_use]
+    pub fn published_source_entry(&self, meta: AudioChunkInfo) -> Option<(u128, NonZeroU128)> {
+        let basis = meta.source_geometry()?;
+        let span = self
+            .trajectory
+            .unity_span(meta.frame_offset, meta.spec.sample_rate, 1)
+            .ok()?;
+        basis
+            .map_output_span(meta.frame_offset, span)?
+            .source_ratio_at(0)
+    }
+
     /// Reanchors physical render phase after applying any source discontinuity.
     ///
     /// # Errors
@@ -325,6 +353,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         meta: AudioChunkInfo,
         position: (u128, NonZeroU128),
     ) -> Result<(), WarpRenderError> {
+        self.carried_phase = None;
         self.rebase_source(meta);
         self.trajectory
             .reanchor(meta.frame_offset, meta.spec.sample_rate, position)?;

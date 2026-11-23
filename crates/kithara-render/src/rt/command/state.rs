@@ -1,13 +1,22 @@
 use kithara_command::Seq;
-use kithara_signal::SegmentId;
+use kithara_signal::{SegmentId, SessionEpoch, SessionFrame};
 
-use super::super::track::PlayerTrack;
+use super::super::track::{CutPrefix, PlayerTrack};
 use crate::bridge::{DeckPart, Returned, Slot, SlotMark};
 
 #[derive(Clone, Copy)]
 pub(in crate::rt) enum EndAction {
-    Chain { to: Slot },
-    Adopt { segment: SegmentId },
+    Chain {
+        to: Slot,
+    },
+    Adopt {
+        segment: SegmentId,
+    },
+    ContinueSource {
+        epoch: Option<SessionEpoch>,
+        checked: SessionFrame,
+        prefix: Option<CutPrefix>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -25,14 +34,14 @@ pub(in crate::rt) fn shifted_slot(part: &DeckPart) -> Option<Slot> {
         | DeckPart::Adopt { slot, .. }
         | DeckPart::Replace { slot, .. } => Some(*slot),
         DeckPart::Fade { .. }
-        | DeckPart::EqProgram { .. }
+        | DeckPart::Program { .. }
         | DeckPart::GainProgram { .. }
         | DeckPart::Chain { .. }
         | DeckPart::Clock { .. }
         | DeckPart::Mix(_)
         | DeckPart::Eq(_)
         | DeckPart::Fx(_)
-        | DeckPart::FilterProgram { .. }
+        | DeckPart::ContinueSource { .. }
         | DeckPart::Returned(_) => None,
     }
 }

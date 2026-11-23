@@ -17,9 +17,9 @@ use num_traits::ToPrimitive;
 use super::{DeckMixer, StreamShape};
 use crate::{
     PcmReceiver,
-    bridge::{DeckEnds, DeckPart, DeckProtocol, SessionInbox, Slot, scope_channels},
+    bridge::{DeckEnds, DeckPart, DeckProtocol, SessionInbox, Slot},
     mock::{PacketRing, chunk},
-    rt::{DeckMixerConfig, track::PlayerResource},
+    rt::{DeckMixerConfig, MixerInputs, track::PlayerResource},
     worker::PcmPacket,
 };
 
@@ -123,7 +123,7 @@ pub fn mixer_with_shape(
             .build(),
     );
     let scope = ring.open(config.slots().get()).expect("deck scope");
-    let (deck, inputs) = scope_channels(scope, config);
+    let (deck, inputs) = MixerInputs::new(scope, config);
     let mixer = DeckMixer::new(inputs, shape, &pools()).expect("mixer pools");
     (
         TestMixer {

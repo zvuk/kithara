@@ -156,6 +156,25 @@ impl PcmReceiver {
         }
     }
 
+    pub(crate) fn packets(&self) -> impl Iterator<Item = &PcmPacket> {
+        self.forward.iter()
+    }
+
+    /// Advance a private incoming cursor without losing custody on the audio thread.
+    pub(crate) fn recycle_head(&mut self) -> bool {
+        if self.reverse.is_full() {
+            return false;
+        }
+        let Some(packet) = self.pop() else {
+            return false;
+        };
+        // This receiver is the sole producer of the reverse ring.
+        let Ok(()) = self.recycle(packet) else {
+            unreachable!("the reverse reader can only free space");
+        };
+        true
+    }
+
     pub(crate) fn terminal_info(&self) -> Option<kithara_signal::AudioChunkInfo> {
         let PcmPacket::Chunk(chunk) = self.forward.last()? else {
             return None;
@@ -195,7 +214,7 @@ impl PcmReceiver {
     pub fn peek(&self) -> Option<&PcmPacket> {
         let packet = self.forward.try_peek();
         if packet.is_none() {
-            self.notify();
+            self.request_refill();
         }
         packet
     }
@@ -207,7 +226,7 @@ impl PcmReceiver {
     /// Try to take one packet without waiting, regardless of blocking policy.
     pub fn pop(&mut self) -> Option<PcmPacket> {
         let packet = self.take_packet();
-        self.notify();
+        self.request_refill();
         packet
     }
 
@@ -241,7 +260,7 @@ impl PcmReceiver {
         result
     }
 
-    fn notify(&self) {
+    pub(crate) fn request_refill(&self) {
         self.wake.defer();
     }
 }

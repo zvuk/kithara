@@ -14,7 +14,7 @@ pub(super) struct Approach {
 }
 
 impl Approach {
-    fn advance_at(self, elapsed: u64) -> Option<Ratio> {
+    pub(super) fn advance_at(self, elapsed: u64) -> Option<Ratio> {
         let linear = Ratio::try_from(self.curve.target())
             .ok()?
             .mul(Ratio::new(u128::from(elapsed), NonZeroU128::MIN)?)?;

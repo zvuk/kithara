@@ -21,16 +21,24 @@ use url::Url;
 use crate::bufpool_ext::pools;
 
 #[kithara::test(tokio, flash(false))]
-#[case(false)]
-#[case(true)]
+#[case::paused(false, None)]
+#[case::playing(true, None)]
+#[case::paused_in_one_slot(false, Some(1))]
+#[case::playing_in_one_slot(true, Some(1))]
 async fn changing_a_current_source_preserves_identity_position_and_play_state(
     #[future(awt)] served_mp3: (TestServerHelper, Url),
     #[case] playing: bool,
+    #[case] slots: Option<usize>,
 ) {
     let (_server, url) = served_mp3;
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let region = pools();
+    let mixer = slots.map_or_else(kithara::play::DeckMixerConfig::default, |slots| {
+        kithara::play::DeckMixerConfig::builder()
+            .slots(std::num::NonZeroUsize::new(slots).expect("a slot"))
+            .build()
+    });
     let queue = OfflineQueue::paced(
         HostConfig::offline(region.clone()).build(),
         Queue::new(
@@ -41,6 +49,7 @@ async fn changing_a_current_source_preserves_identity_position_and_play_state(
                         .build(),
                 )
                 .store(store.clone())
+                .mixer(mixer)
                 .build(),
         ),
         RENDER_PACE,
@@ -128,6 +137,10 @@ async fn changing_a_current_source_preserves_identity_position_and_play_state(
             .unwrap();
     } else {
         assert_eq!(after, before, "a paused source retains its exact position");
+        queue.run(kithara::queue::QueueControl::play).await;
+        wait_for_position_at_least(&queue, after + 0.1, Duration::from_secs(10))
+            .await
+            .unwrap();
     }
     while let Ok(event) = events.try_recv() {
         assert!(!matches!(
@@ -137,6 +150,122 @@ async fn changing_a_current_source_preserves_identity_position_and_play_state(
                 | QueueEvent::CurrentTrackChanged { .. }
         ));
     }
+    ticker.stop().await;
+    queue.close().await;
+}
+
+/// A source change while every mixer slot sounds (the new current fading in,
+/// its predecessor fading out) must still land on the current track.
+#[kithara::test(tokio)]
+async fn a_source_change_on_a_full_mixer_lands_on_the_current_track(
+    #[future(awt)] served_mp3: (TestServerHelper, Url),
+) {
+    use kithara::{
+        play::{CrossfadeSettings, DeckMixerConfig},
+        queue::QueueSettings,
+    };
+
+    let (_server, url) = served_mp3;
+    let temp = temp_dir();
+    let store = kithara_integration_tests::disk_asset_store(temp.path());
+    let region = pools();
+    let queue = OfflineQueue::paced(
+        HostConfig::offline(region.clone()).build(),
+        Queue::new(
+            QueueConfig::builder()
+                .prep(
+                    ResourcePrep::builder()
+                        .worker(PlayWorker::new(PlayWorkerConfig::builder(region).build()))
+                        .build(),
+                )
+                .store(store.clone())
+                .mixer(
+                    DeckMixerConfig::builder()
+                        .slots(std::num::NonZeroUsize::new(2).expect("two slots"))
+                        .build(),
+                )
+                .settings(
+                    QueueSettings::builder()
+                        .crossfade(CrossfadeSettings {
+                            duration: 8.0,
+                            ..Default::default()
+                        })
+                        .build(),
+                )
+                .build(),
+        ),
+        RENDER_PACE,
+    )
+    .await
+    .unwrap();
+    let mut ticker = QueueTicker::spawn(queue.control(), Duration::from_millis(10));
+    let make_source = |query: &str| {
+        let mut url = url.clone();
+        url.set_query(Some(query));
+        let source = ResourceConfig::for_src(ResourceSrc::Url(url.clone()))
+            .downloader(create_test_downloader())
+            .store(store.clone())
+            .build();
+        (url, source)
+    };
+    let (_, first) = make_source("item=first");
+    let (_, second) = make_source("item=second");
+    let (first, second) = queue
+        .run(move |queue| {
+            let first = queue.append(first).unwrap();
+            let second = queue.append(second).unwrap();
+            queue.select(first, Transition::None).unwrap();
+            (first, second)
+        })
+        .await;
+    wait_for_position_at_least(&queue, 0.2, Duration::from_secs(10))
+        .await
+        .unwrap();
+    let mut events = queue.subscribe::<QueueEvent>();
+    queue
+        .run(move |queue| queue.select(second, Transition::Crossfade))
+        .await
+        .unwrap();
+    wait_until(
+        Duration::from_secs(10),
+        "the crossfade fills the mixer",
+        || {
+            while let Ok(event) = events.try_recv() {
+                if matches!(event.event, QueueEvent::CrossfadeStarted { .. }) {
+                    return true;
+                }
+            }
+            false
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        queue.control().current().map(|track| track.id),
+        Some(second)
+    );
+    assert_ne!(first, second);
+
+    let (alternate, source) = make_source("item=second&quality=alternate");
+    queue
+        .run(move |queue| queue.replace_source(second, source))
+        .await
+        .unwrap();
+    wait_until(Duration::from_secs(10), "the source change settles", || {
+        queue
+            .control()
+            .current()
+            .is_some_and(|track| !track.source_changing)
+    })
+    .await
+    .unwrap();
+    let current = queue.control().current().unwrap();
+    assert_eq!(current.id, second);
+    assert_eq!(
+        current.url.as_deref(),
+        Some(alternate.as_str()),
+        "the full mixer refused the source change: {current:?}"
+    );
     ticker.stop().await;
     queue.close().await;
 }

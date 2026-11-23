@@ -120,6 +120,7 @@ impl Track for RampedTrack {
             fn prepared_speed(&self) -> Option<&SpeedCurve>;
             fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_>) -> Result<bool, PlayError>;
             fn planned(&self, at: SessionFrame, sample_rate: NonZeroU32) -> Result<(Duration, f64), PlayError>;
+            fn planned_law(&self, at: SessionFrame) -> Result<SpeedCurve, PlayError>;
             fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;
             fn lane_receipt(&mut self) -> Option<Settled<kithara_render::LaneFrame>>;
             fn seek(&mut self, to: Duration, out: &mut Outbox<'_>) -> Result<Option<SeekBatch>, PlayError>;

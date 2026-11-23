@@ -12,7 +12,7 @@ use tracing::warn;
 use super::{
     Linked, LinkedPlayer, Waiting,
     geometry::{PastEnd, Placement, cue_position, place},
-    state::{CorrectionState, Cue, RunningCorrection, SpeedOperation},
+    state::{ContinuationAdmission, CorrectionState, Cue, RunningCorrection, SpeedOperation},
 };
 use crate::{covers, entry, jump_target};
 
@@ -58,14 +58,32 @@ impl<P: Track> Linked<P> {
         dir: FadeDir,
         out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, PlayError> {
-        self.check_synced_fade(at, dir)?;
+        let continuation = out.source_continuation().and_then(|(_, to)| {
+            (dir == FadeDir::In && self.inner.snapshot().as_ref().slot == Some(to)).then_some(to)
+        });
+        if continuation.is_some() {
+            if !matches!(at, When::At(_)) {
+                return Err(PlayError::Untimed);
+            }
+            if !self
+                .continuation
+                .as_ref()
+                .is_some_and(|entry| matches!(entry.admission, ContinuationAdmission::Preparing))
+            {
+                return Err(PlayError::NotReady);
+            }
+        } else {
+            self.check_synced_fade(at, dir)?;
+        }
         let sent = self
             .inner
             .apply(TrackCommand::Fade { at, settings, dir }, out)?;
         if dir == FadeDir::Out && matches!(self.waiting, Some(Waiting::Play { .. })) {
             self.waiting = None;
         }
-        if dir == FadeDir::In {
+        if let (Some(to), Some(entry)) = (continuation, &mut self.continuation) {
+            entry.admission = ContinuationAdmission::Staged(to);
+        } else if dir == FadeDir::In {
             self.entry_planned();
         }
         Ok(sent)
@@ -87,6 +105,7 @@ impl<P: Track> Linked<P> {
         self.relocation = None;
         self.paused_in_place = false;
         self.start = None;
+        self.continuation = None;
         self.start_caller = None;
         self.withdrawn.clear();
         self.cue = self.synced().then_some(Cue::Beat(position));

@@ -10,8 +10,11 @@ use kithara_test_utils::{bufpool::pools, kithara};
 use kithara_waveform::{AnalysisParams, WaveformAnalyzer};
 
 mod consts {
-    /// Columns one snapshot folds the band series into.
-    pub(super) const BUCKETS: usize = 512;
+    use std::num::NonZeroU32;
+
+    pub(super) const REFERENCE_COLUMNS: usize = 512;
+    /// Native analysis windows per bucket.
+    pub(super) const FOLD: NonZeroU32 = NonZeroU32::MIN;
     /// Rate the analysis fixtures are rendered at.
     pub(super) const RATE: u32 = 44_100;
     /// How far a band height may move and still match its reference.
@@ -20,7 +23,7 @@ mod consts {
     pub(super) const UPDATE_REFERENCE: &str = "KITHARA_WAVEFORM_UPDATE_REFERENCE";
 }
 
-/// Low, mid and high heights of every column the default analysis draws.
+/// Per-band maxima of native heights over the reference's equal-duration ranges.
 fn heights(pcm: &[f32], channels: usize) -> Vec<[f32; 3]> {
     let pools = pools();
     let mut analyzer = WaveformAnalyzer::new(consts::RATE, AnalysisParams::default(), &pools)
@@ -29,11 +32,21 @@ fn heights(pcm: &[f32], channels: usize) -> Vec<[f32; 3]> {
         .push(&pools, pcm, channels, 0)
         .expect("the fixture fits the test region");
     let extent = u64::try_from(pcm.len() / channels).expect("the frame count fits u64");
-    analyzer
-        .snapshot(consts::BUCKETS, Some(extent))
-        .buckets()
-        .iter()
-        .map(|bucket| [bucket.low(), bucket.mid(), bucket.high()])
+    let wave = analyzer.snapshot(consts::FOLD, Some(extent));
+    (0..consts::REFERENCE_COLUMNS)
+        .map(|index| {
+            let start = index * wave.len() / consts::REFERENCE_COLUMNS;
+            let end = (index + 1) * wave.len() / consts::REFERENCE_COLUMNS;
+            wave.buckets()[start..end]
+                .iter()
+                .fold([0.0_f32; 3], |max, bucket| {
+                    [
+                        max[0].max(bucket.low()),
+                        max[1].max(bucket.mid()),
+                        max[2].max(bucket.high()),
+                    ]
+                })
+        })
         .collect()
 }
 

@@ -25,8 +25,14 @@ use ::kithara::{
     ui::render::ControlAction,
     warp::{Beat, BeatGrid, BeatGridQuery, BeatGridSnapshot, MapPoint, MapPosition},
 };
+use kithara_app_library::{Playable, PlaybackChoice};
+use kithara_integration_tests::{
+    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, PrivateTestServer, TestServerHelper,
+};
+use kithara_test_fixtures::{assets, signal::rms};
 use kithara_test_utils::{kithara, off_thread::OffThread};
 use num_traits::cast::AsPrimitive;
+use url::Url;
 
 use super::owner::mock;
 use crate::{
@@ -961,6 +967,133 @@ async fn a_late_grid_keeps_the_incoming_track_playing_until_a_seek_aligns_it(
     served.abort();
 }
 
+/// The rhythm track as an HLS ladder of two identical FLAC rungs.
+async fn rhythm_ladder(helper: &TestServerHelper) -> Url {
+    let init = Arc::new(
+        assets::rhythm_fmp4_init_deck_a_120bpm_48k()
+            .bytes()
+            .to_vec(),
+    );
+    let media = Arc::new(
+        assets::rhythm_fmp4_media_deck_a_120bpm_48k()
+            .bytes()
+            .to_vec(),
+    );
+    helper
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(2)
+                .segments_per_variant(1)
+                .segment_duration_secs(consts::TRACK_SECONDS)
+                .segment_size(media.len())
+                .codecs("fLaC".to_owned())
+                .init_data_per_variant(vec![init; 2])
+                .custom_data(media),
+        )
+        .await
+        .expect("register the rhythmic HLS ladder")
+        .master_url()
+}
+
+/// A synced HLS deck takes the catalogue quality its popover selects and
+/// keeps the rhythm on the host beats.
+#[kithara::test(native, tokio)]
+async fn a_synced_hls_deck_switches_quality_on_the_host_beat() {
+    let server = PrivateTestServer::start().await;
+    let helper = server.helper();
+    let adaptive = rhythm_ladder(&helper).await;
+    let lossless = helper
+        .register_behavior(FixtureBehavior {
+            content: Content::StaticBytes {
+                bytes: Arc::new(assets::rhythm_wav_deck_a_120bpm_48k().bytes().to_vec()),
+                content_type: Some("audio/wav"),
+            },
+            delivery: Delivery::Range,
+        })
+        .child_url("lossless.wav");
+    let mut playable = Playable::new(adaptive.to_string());
+    playable.identity = Some("test:synced-quality".to_owned());
+    playable.choices = [(adaptive, "Auto", true), (lossless.clone(), "WAV", false)]
+        .into_iter()
+        .map(|(source, label, adaptive)| PlaybackChoice {
+            source,
+            label: label.to_owned(),
+            adaptive,
+        })
+        .collect();
+    let (analysis, requests) = AnalysisHandle::channel(watch::channel(Arc::default()).1);
+    let rig = OffThread::spawn("engine", move || {
+        Ok::<_, Infallible>(Rig::playback_with(analysis).on_device())
+    })
+    .await
+    .expect("rig fixture is infallible");
+    let track = rig
+        .call(move |rig| {
+            rig.pump();
+            rig.frame();
+            rig.send("deck-a/drop", ControlAction::Record(playable.into()));
+            assert_eq!(rig.pump().len(), 1, "the drop queues one load");
+            rig.until("deck A holds the drop", Rig::DEADLINE, Rig::frame, |rig| {
+                rig.queues[0].current().is_some()
+            });
+            rig.queues[0].current().expect("deck A holds the drop").id
+        })
+        .await;
+    let served = task::spawn(fixtures::serve_grid(requests, track, rhythm_grid()));
+    rig.call(move |rig| {
+        rig.until(
+            "deck A plays the HLS ladder with its grid",
+            Rig::DEADLINE,
+            Rig::frame,
+            |rig| {
+                rig.queues[0].is_playing()
+                    && rig.text("deck.playback.bpm@deck=a").as_deref() == Some("120.0")
+            },
+        );
+        let tempo = Tempo::new(consts::SYNC_BPM).expect("fixture tempo is in range");
+        mock::host(rig)
+            .set_tempo(tempo)
+            .expect("the host takes the tempo");
+        rig.until(
+            "the host confirms the tempo",
+            Rig::DEADLINE,
+            Rig::frame,
+            |rig| mock::host(rig).tempo() == tempo,
+        );
+        rig.send("deck-a/sync", ControlAction::Activate);
+        rig.pump();
+        let _ = capture(rig, consts::SETTLE);
+        assert_on_host_beats(rig, consts::SYNC_BPM, consts::CHANGE_BEATS);
+
+        rig.send("deck-a/stream/cell", ControlAction::Activate);
+        rig.send("deck-a/stream/variant-0/pick", ControlAction::Activate);
+        assert_eq!(rig.apply().len(), 1, "the row queues one quality command");
+        rig.until(
+            "the synced deck takes the selected quality",
+            Rig::DEADLINE,
+            Rig::frame,
+            |rig| {
+                let current = rig.queues[0].current().expect("the track stays current");
+                assert!(
+                    !current.source_failed,
+                    "the deck refused the selected quality"
+                );
+                current.id == track
+                    && !current.source_changing
+                    && current.url.as_deref() == Some(lossless.as_str())
+            },
+        );
+        assert!(
+            rig.flag("deck.playback.synced@deck=a"),
+            "the deck stays synced"
+        );
+        assert_on_host_beats(rig, consts::SYNC_BPM, consts::INCOMING_BEATS);
+    })
+    .await;
+    rig.close().await;
+    served.abort();
+}
+
 /// The level a capture holds on every sample, if it holds one.
 fn plateau(rig: &mut Rig) -> Option<f32> {
     let Rendered { pcm, .. } = capture(rig, consts::PULSE);
@@ -1523,6 +1656,100 @@ async fn a_synced_tone_plays_on_without_a_gap_across_a_tempo_step_and_a_keylock_
     .await;
     rig.close().await;
     drop(served);
+}
+
+#[kithara::test(native, tokio, flash(false), tracing("info"))]
+#[case::aligned(false)]
+#[case::correcting(true)]
+async fn master_tempo_gestures_preserve_a_synced_keylocked_tones_level(
+    #[case] correcting: bool,
+    long_wav: String,
+) {
+    let grid = if correcting {
+        grid_a_quarter_beat_late()
+    } else {
+        rhythm_grid()
+    };
+    let Synced { rig, served } = synced(vec![long_wav], consts::SYNC_BPM, |requests, tracks| {
+        task::spawn(fixtures::serve_grid(requests, tracks[0], grid))
+    })
+    .await;
+    let analysis = served.await.expect("the analysis fixture serves");
+    rig.call(move |rig| {
+        let _ = capture(rig, consts::SETTLE);
+        rig.frame();
+        assert!(rig.flag("deck.key.locked@deck=a"));
+        assert!(rig.flag("deck.playback.synced@deck=a"));
+        let steady = capture(rig, consts::PITCH_MEASURE);
+        let reference = rms(&steady.pcm);
+        assert!(reference > 0.1, "the steady synced tone is audible");
+
+        if correcting {
+            analysis.send_replace(Some(fixtures::supplied(rhythm_grid())));
+            rig.until(
+                "the revised grid starts a source phase correction",
+                Rig::DEADLINE,
+                Rig::frame,
+                |rig| (rig.queues[0].rate() - 1.05).abs() > 0.0005,
+            );
+        }
+
+        let mut through = Vec::new();
+        let mut lowest_rate = rig.queues[0].rate();
+        let mut highest_rate = lowest_rate;
+        for index in 0..100 {
+            let target = if index % 2 == 0 {
+                132.0
+            } else {
+                consts::SYNC_BPM
+            };
+            rig.send("bar/tempo", ControlAction::SetScalar(target));
+            assert_eq!(rig.apply().len(), 1, "the MASTER BPM gesture is applied");
+            through.extend(capture(rig, Duration::from_millis(20)).pcm);
+            let rate = rig.queues[0].rate();
+            lowest_rate = lowest_rate.min(rate);
+            highest_rate = highest_rate.max(rate);
+        }
+        assert!(
+            highest_rate - lowest_rate > 0.01,
+            "the tempo gestures reach the playing source: {lowest_rate}..{highest_rate}"
+        );
+        let channels = usize::from(consts::CHANNELS);
+        let window = usize::try_from(frames(rig, Duration::from_millis(50)))
+            .expect("RMS window fits usize")
+            * channels;
+        let hop = usize::try_from(frames(rig, Duration::from_millis(10)))
+            .expect("RMS hop fits usize")
+            * channels;
+        assert!(
+            through.len() >= window,
+            "the gesture produces measurable PCM"
+        );
+        let minimum = through
+            .windows(window)
+            .step_by(hop)
+            .map(rms)
+            .fold(f32::INFINITY, f32::min);
+        let minimum_db = 20.0 * (minimum / reference).log10();
+        tracing::info!(
+            reference,
+            minimum,
+            minimum_db,
+            correcting,
+            "MASTER BPM keylock level"
+        );
+        assert!(
+            minimum_db >= -1.0,
+            "MASTER BPM gestures lose {minimum_db:.2} dB with SYNC and KEYLOCK"
+        );
+        assert_pitch(
+            pitch(rig, &through),
+            consts::TONE_HZ,
+            "KEYLOCK during MASTER BPM gestures",
+        );
+    })
+    .await;
+    rig.close().await;
 }
 
 /// Presses one of deck A's transpose steps, `up` or `down`, and shows the

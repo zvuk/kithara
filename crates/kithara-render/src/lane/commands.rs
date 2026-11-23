@@ -47,6 +47,9 @@ impl Lane {
                 .is_none_or(|frames| frames > 0)
     }
 
+    /// Executes the batches due at the cursor. A control keeps the renderer on
+    /// `spec`, the format the stage renders; only a new source entry takes the
+    /// decoder's format.
     pub(crate) fn execute_due<T, S>(
         &mut self,
         source: &mut T,
@@ -70,8 +73,16 @@ impl Lane {
             }
             let at = due.at();
             let effects =
-                self.state
-                    .execute_commands(&due, source, warp, deferred, declick_frames)?;
+                match self
+                    .state
+                    .execute_commands(&due, source, warp, deferred, declick_frames)
+                {
+                    Ok(effects) => effects,
+                    Err(failure) => {
+                        due.refuse(failure);
+                        return Err(failure);
+                    }
+                };
             let CommandEffects {
                 segment,
                 requested_entry,
@@ -86,10 +97,16 @@ impl Lane {
                 due.refuse(failure);
                 return Err(failure);
             }
-            let next_spec = source.prepare_deferred().unwrap_or(spec);
-            let latency = warp
-                .prepare_engine_latency(next_spec)
-                .map_err(|_| TrackFailureKind::Render)?;
+            let deferred = source.prepare_deferred();
+            let next_spec = if segment.is_some() {
+                deferred.unwrap_or(spec)
+            } else {
+                spec
+            };
+            let Ok(latency) = warp.prepare_engine_latency(next_spec) else {
+                due.refuse(TrackFailureKind::Render);
+                return Err(TrackFailureKind::Render);
+            };
             if segment.is_some() {
                 let seq = due.defer();
                 self.finish_pending(None);
@@ -101,10 +118,12 @@ impl Lane {
                     source: None,
                     requested_entry,
                     render_revision: warp.render_revision(),
+                    source_position: None,
                     latency,
                 });
             } else {
                 due.apply(self.state.controls_applied(
+                    warp,
                     restored_same,
                     warp.render_revision(),
                     latency,
@@ -162,8 +181,9 @@ struct CommandEffects {
 }
 
 impl LaneState {
-    fn controls_applied(
+    fn controls_applied<S: HasPool<f32>>(
         &mut self,
+        warp: &WarpRenderer<S>,
         restored_same: bool,
         revision: u64,
         latency: FrameCount,
@@ -172,6 +192,9 @@ impl LaneState {
             && let Some(pending) = &mut self.pending
             && pending.entry == self.cursor
         {
+            pending.source_position = pending
+                .source
+                .and_then(|source| warp.published_source_entry(source));
             pending.render_revision = revision;
             pending.latency = latency;
         }

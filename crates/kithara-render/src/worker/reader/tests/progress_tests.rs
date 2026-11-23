@@ -14,7 +14,7 @@ struct ProducerTask {
     producer: PcmProducer,
     started: bool,
     next: usize,
-    first_output: std::sync::mpsc::Sender<()>,
+    produced: std::sync::mpsc::Sender<()>,
 }
 
 impl Task for ProducerTask {
@@ -42,9 +42,7 @@ impl Task for ProducerTask {
         self.producer.signal();
         self.producer.flush();
         self.next += 1;
-        if self.next == 1 {
-            self.first_output.send(()).expect("first output notice");
-        }
+        self.produced.send(()).expect("output notice");
         TickResult::Progress
     }
 }
@@ -88,6 +86,8 @@ pub(super) fn wait_for_demand(wake: &Wake, baseline: u64) {
 #[case::blocking_offline(true)]
 #[case::paced_nonblocking(false)]
 async fn a_live_producer_serves_consumed_packets_without_underruns(#[case] blocking: bool) {
+    const INITIAL_LEAD: usize = 4;
+
     let wake_slot = std::sync::Arc::new(std::sync::OnceLock::new());
     let (parked, empty) = std::sync::mpsc::channel();
     let (produced, output) = std::sync::mpsc::channel();
@@ -103,14 +103,14 @@ async fn a_live_producer_serves_consumed_packets_without_underruns(#[case] block
     );
     let wake = dispatcher.wake_handle();
     assert!(wake_slot.set(wake.clone()).is_ok());
-    let mut fixture = PcmFixture::with_wake(4, blocking, wake.clone()).await;
+    let mut fixture = PcmFixture::with_wake(INITIAL_LEAD, blocking, wake.clone()).await;
     let producer = fixture.producer.take().expect("producer owner");
     let _task = dispatcher
         .register(TaskConfig::new(), move |_| ProducerTask {
             producer,
             started: false,
             next: 0,
-            first_output: produced,
+            produced,
         })
         .expect("register live producer");
     receive_notice(&empty);
@@ -126,7 +126,9 @@ async fn a_live_producer_serves_consumed_packets_without_underruns(#[case] block
     } else {
         assert!(receiver.pop().is_none(), "the first poll states demand");
     }
-    receive_notice(&output);
+    for _ in 0..INITIAL_LEAD {
+        receive_notice(&output);
+    }
     assert_eq!(
         kithara_worker::mock::wake_state(&wake).0,
         baseline + u64::from(blocking),

@@ -5,7 +5,6 @@ use kithara_derive::Patch;
 use kithara_dsp::param::SmootherConfig;
 use kithara_effects::filter::FilterSettings;
 use kithara_signal::FrameCount;
-use num_traits::ToPrimitive;
 
 use crate::{
     bridge::{DeckMixSettings, DeckMixSettingsPatch},
@@ -51,16 +50,6 @@ impl DeckMixerConfig {
     /// Output frames in the configured declick, rounded to the nearest frame.
     #[must_use]
     pub fn declick_frames(self, sample_rate: NonZeroU32) -> FrameCount {
-        declick_frame_count(self.declick, sample_rate)
+        FrameCount::for_seconds(self.declick.smooth_seconds, sample_rate)
     }
-}
-
-pub(crate) fn declick_frame_count(declick: SmootherConfig, sample_rate: NonZeroU32) -> FrameCount {
-    let rate = sample_rate.get().to_f32().unwrap_or(f32::MAX);
-    FrameCount::new(
-        (declick.smooth_seconds.max(0.0) * rate)
-            .round()
-            .to_usize()
-            .unwrap_or(usize::MAX),
-    )
 }

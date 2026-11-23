@@ -394,7 +394,8 @@ impl ObservedTrack {
             Settled::Rejected { seq, .. } => (*seq, false),
             Settled::Pending => return,
         };
-        let item = self.inner.snapshot().item;
+        let track = self.inner.snapshot();
+        let item = track.item;
         let mut observation = self.observation.lock();
         observation.timeline.push(serde_json::json!({
             "event": "lane receipt", "item": u64::from(item), "seq": seq.get(),
@@ -424,9 +425,12 @@ impl ObservedTrack {
         {
             observation.ready_cues.push((item, seq));
         }
+        // A lane numbers its own commands; a same-item source continuation
+        // moves the track to another slot whose lane restarts that numbering.
         let timed = observation.speeds.iter().find(|speed| {
             speed.item == item
                 && speed.seq == seq
+                && speed.before.slot == track.slot
                 && matches!(
                     speed.before.status,
                     kithara::play::TrackStatus::Playing { .. }
@@ -841,6 +845,7 @@ impl Track for ObservedTrack {
             fn source_closed(&self) -> bool;
             fn prepared_speed(&self) -> Option<&kithara::sync::SpeedCurve>;
             fn prepare_entry(&mut self, at: SessionFrame, out: &mut Outbox<'_>) -> Result<bool, PlayError>;
+            fn planned_law(&self, at: SessionFrame) -> Result<kithara::sync::SpeedCurve, PlayError>;
             fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;
             fn seek_applied(&mut self, seq: Seq) -> Option<bool>;
             fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);

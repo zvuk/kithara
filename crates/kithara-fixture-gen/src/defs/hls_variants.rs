@@ -297,6 +297,11 @@ fn inputs() -> Vec<VariantInput> {
     ));
     profiles.push(Profile::new(
         &[AudioCodec::AacLc, AudioCodec::Flac],
+        37,
+        0.8,
+    ));
+    profiles.push(Profile::new(
+        &[AudioCodec::AacLc, AudioCodec::Flac],
         16,
         4.0,
     ));
@@ -366,6 +371,11 @@ fn inputs() -> Vec<VariantInput> {
         profile.gapless = GaplessEncoding::None;
         profiles.push(profile);
     }
+    let mut edit_listed = Profile::new(&[AudioCodec::AacHeV2, AudioCodec::Flac], 30, 2.0);
+    edit_listed.signal = Wave::sine(440.0);
+    edit_listed.encoder_delay = 2_112;
+    edit_listed.gapless = GaplessEncoding::Edts;
+    profiles.push(edit_listed);
     let mut sweep = Profile::new(&[AudioCodec::AacLc], 12, 4.0);
     sweep.signal = Wave::sweep(1_000.0, 5_000.0, 12 * 4 * 44_100, SweepMode::Linear);
     profiles.push(sweep);

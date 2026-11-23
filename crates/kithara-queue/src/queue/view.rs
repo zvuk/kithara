@@ -4,8 +4,8 @@ use kithara_bufpool::HasPool;
 use kithara_events::{EventReceiver, EventSet, TrackId};
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    DeckMixSettings, DeckMixerConfig, DeckSnapshot, EngineLoadSnapshot, Player, PlayerStatus,
-    Position, SlotSnapshot, Track, TrackFactory, TrackSettings, TrackSnapshot,
+    DeckMixSettings, DeckMixerConfig, DeckSnapshot, EngineLoadSnapshot, LayoutRevision, Player,
+    PlayerStatus, Position, SlotSnapshot, Track, TrackFactory, TrackSettings, TrackSnapshot,
     TrackStatus as PlayingStatus, WarpControls,
 };
 
@@ -27,7 +27,7 @@ impl DeckObservation {
     pub(super) fn new(config: DeckMixerConfig) -> Self {
         Self {
             mix: config.mix(),
-            mixer: DeckSnapshot::new(config),
+            mixer: DeckSnapshot::new(config.slots(), config.eq_bands(), config.fx_units()),
             suspended: false,
         }
     }
@@ -152,6 +152,9 @@ where
         let follows_host = shown.map(Track::follows_host);
         let mut track = shown.map(|track| track.snapshot().as_ref().clone());
         if let Some(track) = &mut track {
+            if self.current == Some(track.item) {
+                track.duration = self.tracks.known_duration(track.item, track.duration);
+            }
             match self.held_position {
                 Some(SeekPosition::Held(to)) => track.position = to,
                 Some(SeekPosition::Pending { item, to, .. }) if track.item == item => {
@@ -360,6 +363,14 @@ where
             #[expr($.map(f32::from))]
             #[call(gain)]
             pub fn eq_gain(&self, band: usize) -> Option<f32>;
+            /// The revision of the latest executed EQ layout, which addresses `set_eq_kill`.
+            #[must_use]
+            #[call(layout)]
+            pub fn eq_layout(&self) -> Option<LayoutRevision>;
+            /// Whether kill is engaged for `band` in that layout.
+            #[must_use]
+            #[call(killed)]
+            pub fn eq_killed(&self, band: usize) -> Option<bool>;
         }
     }
 

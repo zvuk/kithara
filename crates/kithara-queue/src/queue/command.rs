@@ -4,9 +4,9 @@ use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_play::{
     DeckEqChange, DeckFxChange, DeckMixSettingsChange, EqBandConfig, GainDb, InterruptionKind,
-    Outbox, OutputSnapshot, PitchStep, PlayError, Player, Position, SeekBatch, Track, TrackCommand,
-    TrackFactory, TrackSettings, TrackSettingsChange, TrackStatus as PlayingStatus,
-    WarpControlsChange,
+    LayoutRevision, Outbox, OutputSnapshot, PitchStep, PlayError, Player, Position, SeekBatch,
+    Track, TrackCommand, TrackFactory, TrackSettings, TrackSettingsChange,
+    TrackStatus as PlayingStatus, WarpControlsChange,
 };
 use kithara_signal::SessionFrame;
 
@@ -67,8 +67,7 @@ where
         item: TrackId,
         program: kithara_play::SlotGainProgram,
     },
-    EqGainProgram(kithara_play::EqGainProgram),
-    FilterProgram(kithara_play::FilterProgram),
+    DeckPrograms(Vec<kithara_play::DeckProgram>),
     ConfigureQueue(QueueSettingsChange, When<SessionFrame>),
     SetActionAtItemEnd(ActionAtItemEnd),
     SetPlaybackOrder(PlaybackOrder),
@@ -77,6 +76,12 @@ where
     SetEqGain {
         band: usize,
         gain_db: f32,
+    },
+    SetEqKill {
+        at: When<SessionFrame>,
+        band: usize,
+        layout: LayoutRevision,
+        on: bool,
     },
     SetEqLayout(Vec<EqBandConfig>),
     ResetEq,
@@ -143,6 +148,7 @@ where
             | QueueCommand::SetRepeat(_)
             | QueueCommand::Mix(..)
             | QueueCommand::SetEqGain { .. }
+            | QueueCommand::SetEqKill { .. }
             | QueueCommand::SetEqLayout(_)
             | QueueCommand::ResetEq) => self.apply_queue_settings(command, out),
             QueueCommand::Select { id, transition } => self.request_transition(
@@ -204,10 +210,7 @@ where
                     .apply(TrackCommand::GainProgram(program), out)
                     .map_err(Into::into)
             }
-            QueueCommand::EqGainProgram(program) => {
-                out.eq_gain_program(program).map_err(Into::into)
-            }
-            QueueCommand::FilterProgram(program) => out.filter_program(program).map_err(Into::into),
+            QueueCommand::DeckPrograms(programs) => out.deck_programs(programs).map_err(Into::into),
             QueueCommand::NotifyInterruption(kind) => {
                 self.deck.suspended = out.notify_interruption(kind)?;
                 Ok(None)
@@ -319,15 +322,16 @@ where
             QueueCommand::SetEqGain { band, gain_db } => {
                 self.set_eq_gain(band, gain_db, out).map_err(Into::into)
             }
-            QueueCommand::SetEqLayout(bands) => self.set_eq_layout(&bands, out).map_err(Into::into),
-            QueueCommand::ResetEq => out
-                .eq((0..self.deck.mixer.eq.bands())
-                    .map(|band| DeckEqChange::Gain {
-                        band,
-                        gain: GainDb::default(),
-                    })
-                    .collect())
+            QueueCommand::SetEqKill {
+                at,
+                band,
+                layout,
+                on,
+            } => out
+                .eq_at(at, vec![DeckEqChange::Kill { band, layout, on }])
                 .map_err(Into::into),
+            QueueCommand::SetEqLayout(bands) => self.set_eq_layout(&bands, out).map_err(Into::into),
+            QueueCommand::ResetEq => out.eq(vec![DeckEqChange::Reset]).map_err(Into::into),
             QueueCommand::ConfigureQueue(change, at) => self.configure_queue(change, at, out),
             _ => unreachable!("settings dispatch accepts only queue settings commands"),
         }
@@ -360,11 +364,16 @@ where
         at: When<SessionFrame>,
         out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
-        if self
-            .current
-            .is_some_and(|id| self.tracks.is_changing_source(id))
-        {
-            self.withdraw_transition(out)?;
+        if let Some(target) = self.target.as_mut().filter(|target| target.seated()) {
+            target.set_playing(false);
+            return Ok(None);
+        }
+        if self.target.is_some_and(|target| {
+            target.playing
+                && self.current == Some(target.to)
+                && self.tracks.is_changing_source(target.to)
+        }) {
+            self.cancel_target(out)?;
         }
         if self.active_current_index().is_none() && self.target.is_some() {
             self.withdraw_transition(out)?;
@@ -388,6 +397,10 @@ where
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_>,
     ) -> Result<Option<Seq>, QueueError> {
+        if let Some(target) = self.target.as_mut().filter(|target| target.seated()) {
+            target.set_playing(true);
+            return Ok(None);
+        }
         let requested = self
             .target
             .filter(|target| !target.auto)

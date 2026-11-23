@@ -146,11 +146,15 @@ impl PlayerImpl {
     /// Content position of a raw source time. A raw time read from the
     /// source keeps the observed source's frame grid across the subtraction.
     pub(super) fn content_position(&self, raw: Position) -> Option<Position> {
-        let origin = self.extent.media_origin?;
-        Some(self.observed_source.map_or_else(
+        Some(self.content_position_from(self.extent.media_origin?, raw))
+    }
+
+    /// Content position of a raw source time measured from `origin`.
+    pub(super) fn content_position_from(&self, origin: Position, raw: Position) -> Position {
+        self.observed_source.map_or_else(
             || raw.saturating_sub(origin),
             |source| source.spec.elapsed_since(origin, raw),
-        ))
+        )
     }
 
     pub(super) fn content_mark_position(&self, mark: SlotMark) -> Option<Position> {
@@ -221,18 +225,11 @@ impl PlayerImpl {
         at: When<SessionFrame>,
         out: &Outbox<'_>,
     ) -> Result<(), PlayError> {
-        if let When::At(frame) = at {
-            let pass = out.pass().ok_or(PlayError::Untimed)?;
-            let origin = self
-                .seat
-                .attached_at()
-                .map_or(pass.now, |attach| attach.max(pass.now));
-            if frame < origin + pass.deck_delivery {
-                return Err(PlayError::Late);
-            }
-            if self.seat.attached_at().is_none() {
-                return Err(PlayError::Untimed);
-            }
+        out.check_when(at)?;
+        if let When::At(_) = at
+            && self.seat.attached_at().is_none()
+        {
+            return Err(PlayError::Untimed);
         }
         Ok(())
     }

@@ -2,6 +2,7 @@
 //! edit-list / iTunSMPB / mdhd metadata.
 
 mod boxes;
+mod edit;
 mod event;
 mod freeform;
 mod parse;
@@ -11,7 +12,10 @@ mod scan;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use edit::TrackEdit;
 pub(crate) use event::{ItunSmpb, Mp4EditListEntry, Mp4Event, Mp4MediaTiming};
 #[cfg(feature = "symphonia")]
 pub(crate) use presentation::{Presentation, probe_presentations};
-pub(crate) use scan::{Mp4MetadataError, scan_mp4, sniff_mp4_codec, sniff_mp4_fragmented};
+pub(crate) use scan::{
+    Mp4MetadataError, codec_from_mp4_fourcc, scan_mp4, sniff_mp4_codec, sniff_mp4_fragmented,
+};

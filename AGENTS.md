@@ -37,12 +37,11 @@ Every fact below has one owner. Link to the owner; do not restate it.
 - Minimal magic and hidden dependencies. Predictability, testability, and
   reproducibility come first, and components stay loosely coupled.
 - Code and checks define executable behavior. Wiki pages explain cross-file
-  contracts and decision rationale; do not copy implementation inventories or
-  task status there. Comments document their local item, and README files
-  provide a brief overview, usage, and a link to the owning wiki page.
-- Keep source code and doc comments self-contained. Do not link to wiki pages
-  or repository documentation from source; route readers through README and
-  agent instructions.
+  contracts and decision rationale, not implementation inventories or task
+  status. Comments document their local item; README files give a brief
+  overview, usage, and a link to the owning wiki page.
+- Keep source code and doc comments self-contained: no links to wiki pages or
+  repository documentation; route readers through README and agent instructions.
 
 ## Non-Negotiables
 
@@ -52,7 +51,11 @@ Every fact below has one owner. Link to the owner; do not restate it.
 - Workspace-first dependencies. Add versions only in the root workspace and
   reuse existing crates when possible.
 - Do not add `[patch.crates-io]` overrides to workspace manifests or Cargo
-  configuration. Declare publish-compatible dependencies directly.
+  configuration. Declare publish-compatible dependencies directly. A fork is
+  allowed only if it blocks no crates.io publishing and this project neither
+  maintains nor publishes it. No workarounds (build-time patches, git, path, or
+  vendored copies, patched CI tools): fix the cause, switch crates, or solve it
+  in the workspace.
 - Encoded/container media types live in `kithara-stream`. Do not duplicate
   `AudioCodec`, `ContainerFormat`, or `MediaInfo` elsewhere. Decoded-audio
   signal value types and pure sample/time math live in `kithara-signal`.
@@ -74,21 +77,21 @@ Every fact below has one owner. Link to the owner; do not restate it.
   selected by the failure or absence of another path that produces the same
   result, so one job gets two execution paths; the parallel-chain section of
   `just lint similarity` lists candidates to check. When a case fails, extend
-  the owner's algorithm to cover it instead of adding a path per failure; each
-  such path is one more layer, and they stack. Syntax is not the test:
-  `or_else` or an extra `match` arm is fine when a domain input selects it. A
-  designed fallback (user-facing default, optional config, degraded mode) is
-  part of the owner's contract and is justified in the owning crate wiki page
-  or the task packet; a test that codifies any other fallback protects a
-  symptom.
+  the owner's algorithm to cover it instead of adding a path per failure.
+  Syntax is not the test: `or_else` or an extra `match` arm is fine when a
+  domain input selects it. A designed fallback (user-facing default, optional
+  config, degraded mode) is part of the owner's contract and is justified in
+  the owning crate wiki page or the task packet; a test that codifies any other
+  fallback protects a symptom.
 - Prefer generics and composition over near-duplicate protocol-specific types.
 - Use `tracing`, not `println!` or `dbg!`, in production code.
 - Do not use destructive git commands unless the user explicitly asks for them.
 - Cancel-token hierarchy is typed and propagate-down. Hard-coded
   `CancelToken::root()` and `CancelToken::never()` are forbidden outside
   sanctioned owner sites. See `docs/guides/cancel-policy.md`.
-- Zero tolerance for lint suppressions and baseline growth. An unavoidable lint
-  means STOP and fix the underlying code. See `docs/guides/lint-policy.md`.
+- No lint suppressions or baseline growth; STOP and fix the cause. Only
+  `kithara-abr` skips smoothing_primitive_sites. See
+  `docs/guides/lint-policy.md`.
 - Optimize for performance in hot paths. See `docs/guides/performance.md`.
 - Use repo harnesses for acceptance and formatting: `just test` and `just fmt`.
   Raw `cargo test`, `cargo nextest`, or direct formatter commands are scoped
@@ -100,8 +103,7 @@ Every fact below has one owner. Link to the owner; do not restate it.
 
 ## Command Routing
 
-Use these exact paths. Do not spend a turn on `just --list`; the root `justfile`
-exposes domain modules only, and recipes live under `.config/just/`.
+Use these exact paths, not `just --list`: recipes live under `.config/just/`.
 
 - Format: `just fmt`; check-only `just fmt check`.
 - Compile and Clippy: `just check`; `just check clippy`.
@@ -152,15 +154,13 @@ A change is done only when all of these hold:
 - A test that failed before the change now passes, and it pins the contract
   rather than an incidental detail.
 - `just fmt check` and `just lint fast` are clean, with no new baseline
-  entries and no lint suppressions. Both `lint fast` (the commit hook) and
+  entries and no lint suppressions. `lint fast` (the commit hook) and
   `lint full` run `style` through `_shared`. A review lints through
-  `lint gate`, which adds this tool's own tests. The `linux-lint` gate runs
-  `lint full` on main and branch pushes.
+  `lint gate`; `linux-lint` runs `lint full` on main and branch pushes.
 - The acceptance target named in the task packet passes, and the claim cites
   harness output, not a scoped probe.
-- Update the owning wiki page only when its described contract changes;
-  unrelated changes require no documentation edit. Track unfinished work in
-  issues, not explanatory pages or repository progress documents.
+- Update the owning wiki page only when its described contract changes. Track
+  unfinished work in issues, not explanatory pages or progress documents.
 
 ## Working Rules
 

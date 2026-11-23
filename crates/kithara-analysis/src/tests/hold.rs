@@ -44,7 +44,7 @@ struct Livelock {
 
 fn builder(pools: Pools) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
     AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
-        .with_waveform(consts::HOLD_BUCKETS)
+        .with_waveform(consts::HOLD_FOLD)
         .with_beat_config(
             BeatAnalysisConfig::builder()
                 .resampler_backend(NoResamplerBackend)

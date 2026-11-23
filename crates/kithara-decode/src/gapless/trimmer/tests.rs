@@ -408,3 +408,31 @@ fn codec_priming_metadata_takes_precedence_when_combined(
     );
     assert!(from_codec_out[0].abs() < 0.5 * 0.1);
 }
+
+#[kithara::test]
+#[case::declared_head(true, false, 4)]
+#[case::declared_seek(true, true, 0)]
+#[case::undeclared_head(false, false, 4)]
+#[case::undeclared_seek(false, true, 0)]
+fn refreshed_initial_counts_preserve_seek_disposition(
+    #[case] declared: bool,
+    #[case] seeked: bool,
+    #[case] first: usize,
+) {
+    let mut trimmer = if declared {
+        GaplessTrimmer::from(GaplessInfo::new(2, 1))
+    } else {
+        GaplessTrimmer::disabled()
+    };
+    if seeked {
+        trimmer.notify_seek();
+    }
+    trimmer.refresh_initial(GaplessTrimmer::from(GaplessInfo::new(4, 2)));
+    let pcm = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+    let mut output = trimmer
+        .push(chunk(mono_spec(), 0, 8, &pcm))
+        .expect("valid refreshed PCM");
+    output.extend(trimmer.flush().expect("valid refreshed tail"));
+    assert_eq!(collect_pcm(&output), pcm[first..6]);
+    assert_eq!(output[0].meta.frame_offset, first as u64);
+}

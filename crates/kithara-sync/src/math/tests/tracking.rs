@@ -8,12 +8,188 @@ use super::{
     future_law::{advance, rate_at},
 };
 use crate::{
-    Coverage, MIN_SPEED, Slew, SlewCause, SpeedCurve, TrackBeat, TrackGrid, consts::MAX_SPEED,
-    phase_error, slew,
+    Coverage, MIN_SPEED, Slew, SlewCause, SpeedCurve, Tempo, TrackBeat, TrackGrid,
+    consts::MAX_SPEED, phase_error, slew,
 };
 
 const HORIZON: u64 = 4 * 48_000;
 const EPSILON: f32 = 0.001;
+
+#[kithara::test]
+#[case::slower(0.9995, true)]
+#[case::faster(1.0005, true)]
+#[case::lower(1.0 - f64::from(EPSILON), true)]
+#[case::upper(1.0 + f64::from(EPSILON), true)]
+#[case::below(f64::from((1.0_f32 - EPSILON).next_down()), false)]
+#[case::above(f64::from((1.0_f32 + EPSILON).next_up()), false)]
+fn a_tempo_command_retains_only_a_bounded_phase_nudge_at_its_origin(
+    #[case] from: f64,
+    #[case] retained: bool,
+) {
+    let host = host(120.0, 4);
+    let model = grid(960_000, 960_000, 24_000, 6_000, None);
+    let source = source_grid(&model);
+    let at = SessionFrame::new(48_000);
+    let Some(Slew::Corrects { curve, .. }) = slew(
+        &host,
+        &source,
+        position(48_000),
+        at,
+        EPSILON,
+        SlewCause::Commanded { from },
+        HORIZON,
+    ) else {
+        panic!("the covered command has a speed law");
+    };
+    let opening = if retained { from } else { 1.0 };
+    assert_eq!(rate_at(&curve, 0), opening);
+    assert_eq!(advance(&curve, 0, 1), opening);
+    assert!(
+        (advance(&curve, 0, HORIZON) - HORIZON.to_f64().expect("horizon")).abs()
+            <= f64::from(EPSILON) * HORIZON.to_f64().expect("horizon")
+    );
+}
+
+#[kithara::test]
+#[case::empty(0)]
+#[case::one(1)]
+fn a_commanded_origin_respects_its_short_horizon(#[case] horizon: u64) {
+    let host = host(120.0, 4);
+    let model = grid(960_000, 960_000, 24_000, 6_000, None);
+    let from = 0.9995;
+    let planned = slew(
+        &host,
+        &source_grid(&model),
+        position(48_000),
+        SessionFrame::new(48_000),
+        EPSILON,
+        SlewCause::Commanded { from },
+        horizon,
+    );
+    if horizon == 0 {
+        assert_eq!(planned, None);
+    } else {
+        let Some(Slew::Corrects {
+            curve,
+            frames,
+            coverage,
+        }) = planned
+        else {
+            panic!("the origin is covered");
+        };
+        assert_eq!(frames, 1);
+        assert_eq!(coverage, Coverage::Until(1));
+        assert_eq!(rate_at(&curve, 0), from);
+        assert_eq!(advance(&curve, 0, 1), from);
+        assert_eq!(rate_at(&curve, 1), 1.0);
+    }
+}
+
+#[kithara::test]
+fn single_frame_drift_renewals_keep_closing_phase() {
+    let host = host(120.0, 4);
+    let model = grid(960_000, 960_000, 24_000, 6_000, None);
+    let source = source_grid(&model);
+    let mut cue = position(48_000);
+    let mut at = SessionFrame::new(48_000);
+    let mut from = 1.0;
+    let initial = phase_error(&host, &source, cue, at)
+        .expect("covered phase")
+        .wrapped(1.0);
+    for _ in 0..256 {
+        let Some(Slew::Corrects {
+            curve,
+            frames,
+            coverage,
+        }) = slew(
+            &host,
+            &source,
+            cue,
+            at,
+            EPSILON,
+            SlewCause::Drift { from },
+            1,
+        )
+        else {
+            panic!("the short drift window is covered");
+        };
+        assert_eq!(frames, 1);
+        assert_eq!(coverage, Coverage::Until(1));
+        assert_eq!(rate_at(&curve, 0), from);
+        assert_eq!(advance(&curve, 0, 1), from);
+        cue += Duration::from_secs_f64(from / 48_000.0);
+        at = at + FrameCount::new(1);
+        from = rate_at(&curve, 1);
+        assert!((1.0..=1.0 + f64::from(EPSILON)).contains(&from));
+    }
+    let final_error = phase_error(&host, &source, cue, at)
+        .expect("covered phase")
+        .wrapped(1.0);
+    assert!(final_error.abs() < initial.abs());
+}
+
+#[kithara::test]
+fn a_commanded_origin_preserves_a_host_change_on_the_next_frame() {
+    let mut host = host(120.0, 4);
+    let at = SessionFrame::new(48_000);
+    host.push(SessionFrame::new(48_001), Tempo::new(180.0).expect("tempo"))
+        .expect("future command");
+    let model = grid(960_000, 960_000, 24_000, 6_000, None);
+    let Some(Slew::Corrects { curve, .. }) = slew(
+        &host,
+        &source_grid(&model),
+        position(48_000),
+        at,
+        EPSILON,
+        SlewCause::Commanded { from: 0.9995 },
+        HORIZON,
+    ) else {
+        panic!("the command is covered");
+    };
+    assert_eq!(rate_at(&curve, 0), 0.9995);
+    assert_eq!(rate_at(&curve, 1), 1.0);
+    let expected = host
+        .anchor_at(SessionFrame::new(48_002))
+        .tempo_at(SessionFrame::new(48_002))
+        / 2.0;
+    assert!((rate_at(&curve, 2) - expected).abs() <= f64::from(EPSILON));
+}
+
+#[kithara::test]
+fn a_commanded_origin_cannot_step_past_partial_source_coverage() {
+    let host = host(120.0, 4);
+    let model = grid(48_000, 48_000, 24_000, 0, None);
+    assert_eq!(
+        slew(
+            &host,
+            &source_grid(&model),
+            position(47_999),
+            SessionFrame::new(47_999),
+            EPSILON,
+            SlewCause::Commanded { from: 1.0005 },
+            1,
+        ),
+        Some(Slew::Uncovered)
+    );
+}
+
+#[kithara::test]
+fn a_tempo_command_reanchors_an_unfinished_large_speed_match() {
+    let host = host(126.0, 4);
+    let model = grid(960_000, 960_000, 24_000, 0, None);
+    let Some(Slew::Corrects { curve, .. }) = slew(
+        &host,
+        &source_grid(&model),
+        position(48_000),
+        SessionFrame::new(48_000),
+        EPSILON,
+        SlewCause::Commanded { from: 0.6 },
+        HORIZON,
+    ) else {
+        panic!("the covered command has a speed law");
+    };
+    assert_eq!(rate_at(&curve, 0), 1.05);
+}
 
 #[kithara::test]
 fn a_large_phase_error_makes_bounded_progress_on_a_partial_grid() {
@@ -84,12 +260,15 @@ fn an_unfinished_tempo_ramp_renews_without_snapping_to_its_target() {
     };
     assert_eq!(frames, HORIZON);
     assert_eq!(coverage, Coverage::Until(HORIZON));
+    assert_eq!(rate_at(&curve, 0), 1.0);
+    assert_eq!(advance(&curve, 0, 1), 1.0);
     let mut previous = 1.0;
-    for second in 0..=4 {
-        let current = rate_at(&curve, second * 48_000);
+    for second in 0..4 {
+        let current = rate_at(&curve, second * 48_000 + 1);
         assert!(current > previous && current - previous <= f64::from(EPSILON));
         previous = current;
     }
+    assert_eq!(rate_at(&curve, HORIZON), previous);
     assert!(previous < 1.01);
 }
 

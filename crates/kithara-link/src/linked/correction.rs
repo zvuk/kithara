@@ -1,5 +1,5 @@
 use kithara_command::{Rejection, Seq, When};
-use kithara_play::{Outbox, PlayError, Position, Track, TrackCommand, TrackStatus};
+use kithara_play::{Bound, Outbox, PlayError, Position, Track, TrackCommand, TrackStatus};
 use kithara_render::{LaneFrame, bridge::SlotMark};
 use kithara_signal::{FrameCount, SessionFrame};
 use kithara_sync::{Slew, SlewCause, slew};
@@ -10,7 +10,7 @@ use super::{
     geometry::cue_position,
     state::{Cause, CorrectionState, Cue, Reissued, RunningCorrection, SpeedOperation},
 };
-use crate::{covers, jump_target};
+use crate::{covers, entry, jump_target};
 
 impl<P: Track> Linked<P> {
     pub(super) fn drain_lane_receipts(&mut self) {
@@ -125,7 +125,7 @@ impl<P: Track> Linked<P> {
 
         let source = self.source(grid)?;
         let law = match cause {
-            Cause::Commanded => SlewCause::Commanded,
+            Cause::Commanded => SlewCause::Commanded { from },
             Cause::Drift => SlewCause::Drift { from },
         };
         let planned = slew(
@@ -234,6 +234,59 @@ impl<P: Track> Linked<P> {
                 if let Refusal::Drop = self.triage(&error, out) {
                     self.alignment = None;
                 }
+            }
+        }
+    }
+
+    /// Cues `position` with `speed`; `plan` is where a speed plan of this
+    /// deck's own starts and how far it reaches, `None` for a caller's speed.
+    pub(super) fn send_cue(
+        &mut self,
+        position: Position,
+        speed: kithara_sync::SpeedCurve,
+        plan: Option<(SessionFrame, kithara_sync::Coverage)>,
+        out: &mut Outbox<'_>,
+    ) -> Result<Option<Seq>, PlayError> {
+        let sent = self.inner.cue(position, speed, out)?;
+        if sent.is_some() {
+            match plan {
+                Some((at, coverage)) => self.plan_sent(at, coverage),
+                None => self.plan_end = None,
+            }
+        }
+        Ok(sent)
+    }
+
+    pub(super) fn retime_silent(&mut self, at: SessionFrame, out: &mut Outbox<'_>) {
+        if self.continuation.is_some() {
+            return;
+        }
+        let Some(grid) = self.grid.as_ref() else {
+            return;
+        };
+        let snapshot = self.inner.snapshot();
+        let required = cue_position(snapshot.as_ref());
+        let Ok(source) = self.source(grid) else {
+            return;
+        };
+        let Some(entry_frame) = entry(&self.host, &source, required, Bound::AtOrAfter(at)) else {
+            return;
+        };
+        let sent =
+            self.curve(&source, required, entry_frame, None)
+                .and_then(|(curve, coverage)| {
+                    self.send_cue(required, curve, Some((entry_frame, coverage)), out)
+                });
+        match sent {
+            Ok(Some(_)) => {
+                if let Some(start) = self.start {
+                    self.start_caller.get_or_insert(start);
+                }
+                self.withdraw_start(required);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.triage(&error, out);
             }
         }
     }

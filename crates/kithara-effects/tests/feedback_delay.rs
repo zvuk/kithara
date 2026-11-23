@@ -17,9 +17,12 @@ use num_traits::ToPrimitive;
 const RATE: u32 = 44_100;
 /// Frames a time change crosses over in: the declared 20 ms at [`RATE`].
 const RAMP: u32 = 882;
+/// The -120 dBFS floor at or under which a sample counts as silent.
+const FLOOR: f32 = 1e-6;
 /// How far the effect may sit from the `f64` model of its loop.
 const MODEL: f64 = 1e-6;
 const REGULAR: [usize; 1] = [64];
+const IRREGULAR: [usize; 6] = [37, 64, 13, 50, 1, 63];
 
 #[derive(Clone, Copy)]
 struct Settings {
@@ -166,6 +169,13 @@ fn high_pass(cutoff: impl Into<f64>, rate: u32) -> [f64; 3] {
     [g, k, (1.0 + g * (g + k)).recip()]
 }
 
+fn tail_window(capacity: usize, cutoff: f32, rate: u32) -> usize {
+    let [g, k, _] = high_pass(cutoff, rate);
+    let radius = ((1.0 + g * g - k * g) / (1.0 + g * g + k * g)).sqrt();
+    let decay = (f64::from(FLOOR).ln() / radius.ln()).ceil();
+    capacity + decay.to_usize().expect("whole decay frames")
+}
+
 struct Section {
     coefficients: [f64; 3],
     state: [f64; 2],
@@ -221,6 +231,18 @@ impl Model {
         }
     }
 
+    fn play(settings: Settings, input: &[f32], changes: &[(usize, u32)]) -> Self {
+        let mut model = Self::new(settings);
+        for (frame, sample) in input.iter().enumerate() {
+            for (_, time) in changes.iter().filter(|(at, _)| *at == frame) {
+                model.ramp = Some((model.time, 0));
+                model.time = frames(*time);
+            }
+            model.step(*sample);
+        }
+        model
+    }
+
     fn read(&self, delay: usize) -> f64 {
         self.history
             .len()
@@ -259,6 +281,354 @@ fn sines(length: usize) -> [Vec<f32>; 2] {
             })
             .collect()
     })
+}
+
+fn largest_step(samples: impl Iterator<Item = f64> + Clone) -> f64 {
+    samples
+        .clone()
+        .zip(samples.skip(1))
+        .map(|(previous, next)| (next - previous).abs())
+        .fold(0.0, f64::max)
+}
+
+#[kithara::test]
+fn feedback_delay_echoes_land_on_their_frames_in_any_partition() {
+    const TIME: u32 = 1000;
+    let settings = settings(TIME, 1024, 0.5, f32::from(FeedbackHighPass::MIN));
+    let time = frames(TIME);
+    let input = impulses(8 * time);
+    let regular = run(&mut delay(settings), &input, &REGULAR, &[]);
+    let irregular = run(&mut delay(settings), &input, &IRREGULAR, &[]);
+    assert_eq!(
+        regular.each_ref().map(|plane| bits(plane)),
+        irregular.each_ref().map(|plane| bits(plane)),
+        "the echoes render the same in any block partition"
+    );
+    let [left, right] = &regular;
+    assert!(
+        left[..time].iter().all(|sample| *sample == 0.0),
+        "nothing sounds before the first echo"
+    );
+    assert_eq!(left[time], 1.0, "the first echo is the impulse itself");
+    assert!(
+        left[time + 1..2 * time].iter().all(|sample| *sample == 0.0),
+        "the first echo lasts one frame"
+    );
+    assert_ne!(left[2 * time], 0.0, "the second echo lands one delay later");
+    assert_eq!(right[time + 3], -0.5, "each channel echoes its own input");
+}
+
+#[kithara::test]
+fn feedback_delay_echo_amplitudes_follow_the_feedback_law() {
+    const TIME: u32 = 40;
+    let settings = settings(TIME, 64, 0.5, f32::from(FeedbackHighPass::MAX));
+    let input = impulses(12 * frames(TIME));
+    for blocks in [&REGULAR[..], &IRREGULAR[..]] {
+        let wet = run(&mut delay(settings), &input, blocks, &[]);
+        for (channel, (wet, input)) in wet.iter().zip(&input).enumerate() {
+            assert_near(
+                wet,
+                &Model::play(settings, input, &[]).wet,
+                &format!("channel {channel} in blocks {blocks:?}"),
+            );
+        }
+    }
+}
+
+#[kithara::test]
+fn feedback_delay_feedback_change_takes_effect_on_its_frame() {
+    const TIME: u32 = 40;
+    /// A frame inside the third echo, the high-pass ringing.
+    const CHANGE: usize = 3 * 40 + 7;
+    const TO: f32 = 0.9;
+    let settings = settings(TIME, 64, 0.5, f32::from(FeedbackHighPass::MAX));
+    let input = impulses(12 * frames(TIME));
+    let change = FxParamChange {
+        index: 1,
+        value: f64::from(f32::from(
+            Feedback::checked(TO).expect("a feedback below unity"),
+        )),
+    };
+    let wet = run(&mut delay(settings), &input, &REGULAR, &[(CHANGE, change)]);
+    for (channel, (wet, input)) in wet.iter().zip(&input).enumerate() {
+        let mut model = Model::new(settings);
+        for (frame, sample) in input.iter().enumerate() {
+            if frame == CHANGE {
+                model.feedback = f64::from(TO);
+            }
+            model.step(*sample);
+        }
+        assert_near(
+            wet,
+            &model.wet,
+            &format!("channel {channel}: the feedback moves to {TO} on the change's frame"),
+        );
+    }
+}
+
+#[kithara::test]
+fn feedback_delay_time_change_crosses_over_within_its_ramp() {
+    const FROM: u32 = 1000;
+    const TO: u32 = 1007;
+    const CHANGE: usize = 6000 + 37;
+    let settings = settings(FROM, 1024, 0.5, f32::from(FeedbackHighPass::MAX));
+    let length = CHANGE + 2 * frames(RAMP) + 1000;
+    let input = sines(length);
+    let steady = run(&mut delay(settings), &input, &REGULAR, &[]);
+    let changed = run(
+        &mut delay(settings),
+        &input,
+        &REGULAR,
+        &[(CHANGE, time(f64::from(TO)))],
+    );
+    for (channel, ((changed, steady), input)) in changed.iter().zip(&steady).zip(&input).enumerate()
+    {
+        assert_eq!(
+            bits(&changed[..CHANGE]),
+            bits(&steady[..CHANGE]),
+            "channel {channel}: nothing moves before the change's frame"
+        );
+        assert_ne!(
+            changed[CHANGE], steady[CHANGE],
+            "channel {channel}: the cross-read starts on the change's frame"
+        );
+        let model = Model::play(settings, input, &[(CHANGE, TO)]);
+        assert_near(
+            changed,
+            &model.wet,
+            &format!("channel {channel}: the cross-read completes within its ramp"),
+        );
+        let step = largest_step(model.history.iter().copied());
+        let peak = model
+            .history
+            .iter()
+            .map(|value| value.abs())
+            .fold(0.0, f64::max);
+        let bound = step + 2.0 * peak / f64::from(RAMP) + 2.0 * MODEL;
+        let jump = largest_step(
+            changed[CHANGE - 1..=CHANGE + frames(RAMP)]
+                .iter()
+                .map(|sample| f64::from(*sample)),
+        );
+        assert!(
+            jump <= bound,
+            "channel {channel}: the cross-read steps {jump}, above the declared {bound}"
+        );
+    }
+    let irregular = run(
+        &mut delay(settings),
+        &input,
+        &IRREGULAR,
+        &[(CHANGE, time(f64::from(TO)))],
+    );
+    assert_eq!(
+        changed.each_ref().map(|plane| bits(plane)),
+        irregular.each_ref().map(|plane| bits(plane)),
+        "the cross-read renders the same in any block partition"
+    );
+}
+
+#[kithara::test]
+fn feedback_delay_time_change_during_a_cross_waits_for_its_end() {
+    const FROM: u32 = 1000;
+    const TO: u32 = 1007;
+    /// A time asked for during the cross and replaced before it ends.
+    const REPLACED: u32 = 1500;
+    const LAST: u32 = 990;
+    const CHANGE: usize = 6000 + 37;
+    let settings = settings(FROM, 2048, 0.5, f32::from(FeedbackHighPass::MAX));
+    let during = CHANGE + frames(RAMP) / 2;
+    let end = CHANGE + frames(RAMP);
+    let input = sines(end + 2 * frames(RAMP) + 1000);
+    let changes = [
+        (CHANGE, time(f64::from(TO))),
+        (during, time(f64::from(REPLACED))),
+        (during, time(f64::from(LAST))),
+    ];
+    let wet = run(&mut delay(settings), &input, &REGULAR, &changes);
+    for (channel, (wet, input)) in wet.iter().zip(&input).enumerate() {
+        assert_near(
+            wet,
+            &Model::play(settings, input, &[(CHANGE, TO), (end, LAST)]).wet,
+            &format!(
+                "channel {channel}: the running cross completes, and the latest change asked \
+                 for during it starts on the frame after it ends"
+            ),
+        );
+    }
+    assert_eq!(
+        wet.each_ref().map(|plane| bits(plane)),
+        run(&mut delay(settings), &input, &IRREGULAR, &changes)
+            .each_ref()
+            .map(|plane| bits(plane)),
+        "the deferred change renders the same in any block partition"
+    );
+}
+
+#[kithara::test]
+fn feedback_delay_filters_each_repeat_once_more() {
+    const TIME: u32 = 512;
+    const PULSE: usize = 64;
+    const FEEDBACK: f32 = 0.8;
+    let settings = settings(
+        TIME,
+        frames(TIME),
+        FEEDBACK,
+        f32::from(FeedbackHighPass::MAX),
+    );
+    let time = frames(TIME);
+    let mut pulse = vec![0.0; 6 * time];
+    for (frame, sample) in pulse[..PULSE].iter_mut().enumerate() {
+        *sample = self::sample(0.5 - 0.5 * (2.0 * PI * index(frame) / index(PULSE)).cos());
+    }
+    let input = [pulse.clone(), vec![0.0; pulse.len()]];
+    let [wet, silent] = run(&mut delay(settings), &input, &REGULAR, &[]);
+    assert!(
+        silent.iter().all(|sample| *sample == 0.0),
+        "a silent channel stays silent"
+    );
+    assert_eq!(
+        bits(&wet[time..2 * time]),
+        bits(&pulse[..time]),
+        "the first echo is the input unfiltered: the filter is not on the wet path"
+    );
+    for repeat in 1..5 {
+        let mut filter = Section::new(settings.high_pass, RATE);
+        let expected: Vec<f64> = wet[repeat * time..(repeat + 1) * time]
+            .iter()
+            .map(|sample| f64::from(FEEDBACK) * filter.step(f64::from(*sample)))
+            .collect();
+        assert_near(
+            &wet[(repeat + 1) * time..(repeat + 2) * time],
+            &expected,
+            &format!("echo {} is echo {repeat} filtered once more", repeat + 1),
+        );
+    }
+}
+
+#[kithara::test]
+fn feedback_delay_reports_its_tail_spent_within_the_bound() {
+    /// Frames between two readings of the report away from where it turns.
+    const BLOCK: usize = 16;
+    /// Frames after which a delay still not reporting its tail spent fails.
+    const LIMIT: usize = 1 << 18;
+    let low = f32::from(FeedbackHighPass::MIN);
+    let high = f32::from(FeedbackHighPass::MAX);
+    // Settings, rate, the channel the impulse enters, and a cutoff the delay
+    // moves to on a frame.
+    let cases = [
+        (settings(256, 512, 0.5, low), RATE, 0, None),
+        (settings(256, 512, 0.5, low), RATE, 1, None),
+        (settings(16, 64, 0.95, low), RATE, 0, None),
+        (settings(64, 128, 0.95, low), RATE, 1, None),
+        (settings(256, 512, 0.95, 200.0), RATE, 0, None),
+        (settings(64, 64, 0.5, high), RATE, 1, None),
+        (settings(256, 512, 0.5, low), 96_000, 0, None),
+        (settings(256, 512, 0.5, low), RATE, 0, Some((3072, high))),
+    ];
+    for (case, (settings, rate, channel, change)) in cases.into_iter().enumerate() {
+        let mut effect = delay_at(settings, rate);
+        assert!(
+            effect.tail_exhausted(),
+            "case {case}: a prepared delay holds silence"
+        );
+        let time = frames(settings.time);
+        let mut window = tail_window(settings.capacity, settings.high_pass, rate);
+        let mut wet = [Vec::new(), Vec::new()];
+        // Whether each frame of the history rose above the floor: the history
+        // the delay wrote is its wet signal one delay later.
+        let mut loud = Vec::new();
+        let mut last_seen = None;
+        let mut reports = Vec::new();
+        let mut first = None;
+        while first.is_none_or(|first| wet[0].len() < first + window + time) {
+            let written = wet[0].len();
+            assert!(
+                written < LIMIT,
+                "case {case}: the delay never reports its tail spent"
+            );
+            if let Some((at, cutoff)) = change
+                && at == written
+            {
+                effect.set(high_pass_change(cutoff));
+                window = tail_window(settings.capacity, cutoff, rate);
+            }
+            // Around the frame the history seen so far turns the report on,
+            // read it after every frame.
+            let near =
+                last_seen.is_some_and(|last: usize| (last + 1 + window).abs_diff(written) <= BLOCK);
+            let block = if near { 1 } else { BLOCK };
+            let mut input = [[0.0; BLOCK]; 2];
+            if written == 0 {
+                input[channel][0] = 1.0;
+            }
+            let mut output = [[0.0; BLOCK]; 2];
+            let [left, right] = &mut output;
+            effect.process(
+                [&input[0][..block], &input[1][..block]],
+                [&mut left[..block], &mut right[..block]],
+            );
+            for (plane, output) in wet.iter_mut().zip(&output) {
+                plane.extend_from_slice(&output[..block]);
+            }
+            let written = wet[0].len();
+            while loud.len() + time < written {
+                let frame = loud.len() + time;
+                let above = wet[0][frame].abs().max(wet[1][frame].abs()) > FLOOR;
+                if above {
+                    last_seen = Some(loud.len());
+                }
+                loud.push(above);
+            }
+            let spent = effect.tail_exhausted();
+            if spent && first.is_none() {
+                first = Some(written);
+            }
+            reports.push((written, spent, window));
+        }
+        let first = first.expect("the loop ends on a report");
+        let turn = reports
+            .iter()
+            .position(|(written, ..)| *written == first)
+            .expect("the first report of a spent tail");
+        assert!(
+            turn > 0 && reports[turn - 1].0 + 1 == first,
+            "case {case}: the report turns between two readings one frame apart"
+        );
+        let mut last = None;
+        let mut read = 0;
+        for (written, spent, window) in reports {
+            if written > loud.len() {
+                break;
+            }
+            if let Some(frame) = loud[read..written].iter().rposition(|loud| *loud) {
+                last = Some(read + frame);
+            }
+            read = written;
+            assert_eq!(
+                spent,
+                last.is_none_or(|last| written - 1 - last >= window),
+                "case {case}: after {written} frames, the last above the floor at {last:?}: \
+                 the tail is spent exactly once the window of {window} frames holds none"
+            );
+            assert!(
+                written < first || spent,
+                "case {case}: after {written} frames, a spent tail stays spent"
+            );
+        }
+        assert!(
+            wet.iter()
+                .all(|plane| plane[first..].iter().all(|sample| sample.abs() <= FLOOR)),
+            "case {case}: the tail reported spent at {first} still sounds"
+        );
+        let mut input = [[0.0]; 2];
+        input[channel][0] = 0.1;
+        effect.process([&input[0], &input[1]], [&mut [0.0], &mut [0.0]]);
+        assert!(
+            !effect.tail_exhausted(),
+            "case {case}: new input sounds again"
+        );
+    }
 }
 
 #[kithara::test]

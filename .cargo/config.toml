@@ -11,7 +11,7 @@ runner = [
   "--bin",
   "wasm_test_runner",
   "-p",
-  "kithara-integration-tests",
+  "kithara-wasm-test-runner",
   "--",
 ]
 rustflags = [

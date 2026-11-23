@@ -141,6 +141,7 @@ impl Section {
         match self.response {
             Response::LowPass => low,
             Response::HighPass => input - k * band - low,
+            Response::AllPass => input - 2.0 * k * band,
         }
     }
 

@@ -103,3 +103,99 @@ fn an_integer_duration_survives_absolute_times_above_f64_integer_precision() {
     assert_eq!(curve.advance_over(start, elapsed), Some(0.9));
     assert_eq!(curve.advance_over(start, 0.0), Some(0.0));
 }
+
+#[kithara::test]
+fn equal_rate_transients_are_positive_zero_for_finite_extremes() {
+    let subnormal = f64::from_bits(1);
+    assert!((f64::MAX / subnormal).is_infinite());
+    assert_eq!((subnormal / f64::MAX).to_bits(), 0.0_f64.to_bits());
+
+    for rate in [subnormal, 1.05, f64::MAX] {
+        for time_constant in [subnormal, f64::MIN_POSITIVE, 1.0, f64::MAX] {
+            let curve = ExponentialApproach::new(rate, rate, time_constant)
+                .expect("finite constant course")
+                .resumed(383)
+                .expect("entered course");
+            for elapsed in [subnormal, f64::MIN_POSITIVE, 1.0, f64::MAX] {
+                assert_eq!(
+                    curve.transient_advance(elapsed).map(f64::to_bits),
+                    Some(0.0_f64.to_bits()),
+                    "rate={rate}, time_constant={time_constant}, elapsed={elapsed}",
+                );
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn zero_transients_still_reject_invalid_elapsed() {
+    for (initial, target, time_constant) in [(1.0, 1.0, 1.0), (1.0, 2.0, 1.0), (1.0, 1.0, 0.0)] {
+        let curve =
+            ExponentialApproach::new(initial, target, time_constant).expect("finite course");
+        for elapsed in [
+            f64::NAN,
+            f64::from_bits(0xfff8_0000_0000_0001),
+            f64::from_bits(0x7ff0_0000_0000_0001),
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            -f64::MAX,
+            -1.0,
+            -f64::from_bits(1),
+        ] {
+            assert!(curve.transient_advance(elapsed).is_none());
+        }
+    }
+}
+
+#[kithara::test]
+fn zero_time_constants_and_signed_zero_elapsed_keep_positive_zero() {
+    for time_constant in [0.0, -0.0, 1.0] {
+        for (initial, target) in [(1.0, 1.0), (1.0, 2.0)] {
+            let curve =
+                ExponentialApproach::new(initial, target, time_constant).expect("finite course");
+            for elapsed in [0.0, -0.0] {
+                assert_eq!(
+                    curve.transient_advance(elapsed).map(f64::to_bits),
+                    Some(0.0_f64.to_bits()),
+                );
+            }
+            if time_constant == 0.0 {
+                for elapsed in [f64::from_bits(1), 1.0, f64::MAX] {
+                    assert_eq!(
+                        curve.transient_advance(elapsed).map(f64::to_bits),
+                        Some(0.0_f64.to_bits()),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn unequal_rate_transients_keep_their_signed_course() {
+    for (initial, target, expected) in [
+        (1.0, 2.0, -0.632_120_558_828_557_7_f64),
+        (2.0, 1.0, 0.632_120_558_828_557_7_f64),
+    ] {
+        let curve = ExponentialApproach::new(initial, target, 1.0).expect("changing course");
+        assert_eq!(
+            curve.transient_advance(1.0).map(f64::to_bits),
+            Some(expected.to_bits()),
+        );
+    }
+
+    let rising = ExponentialApproach::new(1.0, 2.0, f64::MAX).expect("slow rising course");
+    let falling = ExponentialApproach::new(2.0, 1.0, f64::MAX).expect("slow falling course");
+    assert_eq!(
+        rising
+            .transient_advance(f64::from_bits(1))
+            .map(f64::to_bits),
+        Some((-0.0_f64).to_bits()),
+    );
+    assert_eq!(
+        falling
+            .transient_advance(f64::from_bits(1))
+            .map(f64::to_bits),
+        Some(0.0_f64.to_bits()),
+    );
+}

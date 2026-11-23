@@ -4,11 +4,13 @@ pub(crate) mod accelerate;
 mod bins;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 mod cascade;
-mod delay;
+pub(crate) mod crossover;
+pub(crate) mod curve;
+pub(crate) mod delay;
 mod envelope;
-mod fade;
 mod fir;
 mod interpolate;
+mod one_pole;
 #[cfg(any(test, not(any(target_os = "macos", target_os = "ios"))))]
 pub(crate) mod portable;
 pub(crate) mod route;
@@ -27,15 +29,17 @@ mod tests;
 pub(crate) use accelerate as platform;
 #[cfg(feature = "spectrum")]
 pub(crate) use bins::prediction_difference;
+pub(crate) use curve::{fade::gains, ratio::ratio_ramp};
 pub(crate) use delay::read as delay_read;
 pub(crate) use envelope::attack_release;
-pub(crate) use fade::gains;
 pub use fir::Fir;
 pub(crate) use interpolate::quadratic;
+pub(crate) use one_pole::low_pass as one_pole_low_pass;
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use portable as platform;
 pub use simd::sanitize;
 pub(crate) use simd::{
-    crossfade_linear, div, first_quiet, last_loud, mul_add, ramp, scale_in_place,
+    crossfade_linear, div, first_quiet, last_loud, mul_add, multiply_squared_in_place, ramp,
+    scale_in_place,
 };
 pub(crate) use strided::{gather, scatter};

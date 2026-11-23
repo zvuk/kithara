@@ -7,6 +7,20 @@ use num_traits::cast::AsPrimitive;
 
 use crate::GainDb;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kill {
+    Off,
+    On,
+    Releasing,
+}
+
+pub(crate) enum GainWrite {
+    Unchanged,
+    Applied,
+    Gliding,
+    Masked,
+}
+
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 struct SmoothedGain {
@@ -14,6 +28,7 @@ struct SmoothedGain {
     target: GainDb,
     filter: SmoothingFilter,
     target_linear: f32,
+    kill: Kill,
 }
 
 impl SmoothedGain {
@@ -23,6 +38,7 @@ impl SmoothedGain {
             target,
             filter: SmoothingFilter::new(linear),
             target_linear: linear,
+            kill: Kill::Off,
         }
     }
 
@@ -35,7 +51,39 @@ impl SmoothedGain {
             return;
         }
         self.target = target;
-        self.target_linear = target.linear();
+        self.update_linear_target();
+    }
+
+    fn update_linear_target(&mut self) {
+        self.target_linear = if self.kill == Kill::On {
+            0.0
+        } else {
+            self.target.linear()
+        };
+    }
+
+    fn set_explicit(&mut self, target: GainDb) -> GainWrite {
+        match self.kill {
+            Kill::On => {
+                self.target = target;
+                return GainWrite::Masked;
+            }
+            Kill::Releasing if !self.filter.has_settled(self.target_linear) => {
+                if self.target == target {
+                    return GainWrite::Masked;
+                }
+                self.set_target(target);
+                return GainWrite::Gliding;
+            }
+            Kill::Releasing => self.kill = Kill::Off,
+            Kill::Off => {}
+        }
+        if self.target == target && self.current() == self.target_linear {
+            GainWrite::Unchanged
+        } else {
+            *self = Self::new(target);
+            GainWrite::Applied
+        }
     }
 
     #[inline]
@@ -76,6 +124,9 @@ impl GainBank {
 
     pub(crate) fn set(&mut self, band: usize, gain_db: GainDb) {
         if let Some(gain) = self.gains.get_mut(band) {
+            if gain.kill == Kill::Releasing && gain.filter.has_settled(gain.target_linear) {
+                gain.kill = Kill::Off;
+            }
             gain.set_target(gain_db);
         }
     }
@@ -86,15 +137,47 @@ impl GainBank {
         }
     }
 
-    pub(crate) fn set_explicit(&mut self, band: usize, gain_db: GainDb) -> bool {
+    pub(crate) fn set_explicit(&mut self, band: usize, gain_db: GainDb) -> GainWrite {
+        self.gains
+            .get_mut(band)
+            .map_or(GainWrite::Unchanged, |gain| gain.set_explicit(gain_db))
+    }
+
+    pub(crate) fn set_kill(&mut self, band: usize, on: bool) -> bool {
         let Some(gain) = self.gains.get_mut(band) else {
             return false;
         };
-        if gain.target == gain_db && gain.current() == gain.target_linear {
+        if (gain.kill == Kill::On) == on {
             return false;
         }
-        *gain = SmoothedGain::new(gain_db);
+        gain.kill = if on { Kill::On } else { Kill::Releasing };
+        gain.update_linear_target();
         true
+    }
+
+    pub(crate) fn clear_kills(&mut self) -> bool {
+        let mut changed = false;
+        for gain in &mut self.gains {
+            if gain.kill != Kill::Off {
+                *gain = SmoothedGain::new(gain.target);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    pub(crate) fn bypass_and_silence(&self) -> (bool, bool) {
+        let mut bypass = true;
+        let mut silence = !self.gains.is_empty();
+        for gain in &self.gains {
+            let killed = gain.kill == Kill::On;
+            bypass &= !killed && gain.target == GainDb::DEFAULT;
+            silence &= killed || gain.target == GainDb::MIN;
+            if !bypass && !silence {
+                break;
+            }
+        }
+        (bypass, silence)
     }
 
     pub(crate) fn update_sample_rate(&mut self, sample_rate: f32) {
@@ -110,6 +193,9 @@ impl GainBank {
             #[expr($.map(SmoothedGain::target))]
             #[call(get)]
             pub(crate) fn target(&self, band: usize) -> Option<GainDb>;
+            #[expr($.map(|gain| gain.kill == Kill::On))]
+            #[call(get)]
+            pub(crate) fn killed(&self, band: usize) -> Option<bool>;
         }
     }
 }
@@ -170,5 +256,48 @@ mod tests {
             assert_eq!(bank.linear(1).to_bits(), reference.linear(1).to_bits());
             assert_eq!(bank.target(1), reference.target(1));
         }
+    }
+
+    #[kithara::test]
+    fn kill_keeps_the_program_value_while_the_band_reaches_exact_zero() {
+        let mut bank = GainBank::new(
+            [GainDb::MAX].into_iter(),
+            48_000.0,
+            SmootherConfig::default(),
+        );
+        assert!(bank.set_kill(0, true));
+        bank.set_explicit(0, GainDb::DEFAULT);
+        bank.tick();
+        assert_eq!(bank.target(0), Some(GainDb::DEFAULT));
+        assert!(bank.linear(0) > 0.0);
+        assert!(bank.linear(0) < GainDb::MAX.linear());
+        assert!(!bank.set_kill(0, true));
+        for _ in 0..48_000 {
+            bank.tick();
+        }
+        assert_eq!(bank.linear(0).to_bits(), 0);
+        assert!(bank.set_kill(0, false));
+        assert_eq!(bank.linear(0).to_bits(), 0);
+        bank.tick();
+        assert!(bank.linear(0) > 0.0 && bank.linear(0) < 1.0);
+    }
+
+    #[kithara::test]
+    fn eq_kill_keeps_the_strict_settle_boundary() {
+        let smoothing = SmootherConfig {
+            smooth_seconds: 1.0,
+            settle_ratio: 0.25,
+        };
+        let mut bank = GainBank::new([GainDb::DEFAULT].into_iter(), 2.0, smoothing);
+        assert!(bank.set_kill(0, true));
+        bank.tick();
+        assert_eq!(bank.linear(0).to_bits(), 0.5_f32.to_bits());
+        bank.tick();
+        assert_eq!(bank.linear(0).to_bits(), 0);
+        assert!(bank.set_kill(0, false));
+        bank.tick();
+        assert_eq!(bank.linear(0).to_bits(), 0.5_f32.to_bits());
+        bank.tick();
+        assert_eq!(bank.linear(0).to_bits(), 1.0_f32.to_bits());
     }
 }

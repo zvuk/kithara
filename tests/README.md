@@ -20,8 +20,11 @@ in `platform`. Fuzz targets remain in `tests/fuzz`.
 
 Binaries: `test_server` serves
 `/assets/*` (checked-in regression files), `/signal/*` (procedural encoded audio)
-and `/stream/*` (synthetic HLS); `wasm_test_runner` is the `wasm32` runner in
-`.cargo/config.toml` that starts it.
+and `/stream/*` (synthetic HLS). `wasm_test_runner` (package `tests/wasm-runner`)
+is the `wasm32` runner in `.cargo/config.toml`: it starts `test_server`,
+generates the bindings itself and drives a headless browser over WebDriver, on
+the page or in a dedicated worker, with the capabilities in its `webdriver.json`. Its `protocol` test runs the
+`tests/wasm-runner-fixture` binaries in the browser lanes.
 
 Command surface and harness rules: `AGENTS.md`, `docs/guides/test-harness.md`.
 This file carries what they cannot — which lane builds a suite.
@@ -110,7 +113,6 @@ check/build/size-check only and runs no tests.
 
 Player scenarios drive the real page via thirtyfour:
 `tests/crates/ffi-web/tests/selenium.rs`, auto-ignored by the macro flag.
-Capabilities are in `tests/webdriver.json`;
 `KITHARA_SELENIUM_PAGE_URL` and `KITHARA_SELENIUM_WEBDRIVER_URL` attach to an
 already-running page or driver instead of starting one.
 

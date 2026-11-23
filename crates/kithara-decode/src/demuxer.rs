@@ -119,7 +119,7 @@ pub(crate) struct TrackInfo {
     /// recognised source. Codec-level capture (`AppleCodec` `PrimeInfo`
     /// refresh, `Symphonia` `AudioDecoderOptions::gapless`) supplements
     /// this for codecs whose priming is not container-visible.
-    pub(crate) gapless: Option<crate::GaplessInfo>,
+    pub(crate) gapless: Option<crate::gapless::DeclaredGapless>,
     /// Codec-specific extra data — `AudioSpecificConfig` (AAC),
     /// `STREAMINFO` (FLAC), `esds` cookie (Apple), etc. Empty when the
     /// codec needs no extra data.

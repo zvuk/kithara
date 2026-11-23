@@ -657,7 +657,7 @@ mod tests {
     use kithara_platform::tokio::runtime::Builder;
     use kithara_play::{HostedDeck, PlayWorker, PlayWorkerConfig, Player, ResourcePrep};
     use kithara_queue::{Queue, QueueCommand, QueueConfig, TrackSource, Transition};
-    use kithara_render::{bridge::scope_channels, rt::DeckMixerConfig};
+    use kithara_render::rt::{DeckMixerConfig, MixerInputs};
     use kithara_signal::AudioSpec;
     use kithara_test_utils::{
         TestTempDir,
@@ -1113,7 +1113,7 @@ mod tests {
             .expect("graph channel")
             .open(deck.slots().get())
             .expect("fixture scope");
-        let (_ends, inputs) = scope_channels(scope, deck);
+        let (_ends, inputs) = MixerInputs::new(scope, deck);
         let id = BeatGridId::allocate().expect("fixture deck id");
         let refused = install_deck(&mut state, id, inputs, pools(), None)
             .expect_err("a deck has no output chain to join on a stopped context");

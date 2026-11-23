@@ -351,12 +351,16 @@ where
                 self.release_track(index, out)?;
                 self.reap_released();
             }
-            let victim = self
-                .active
-                .quietest(&self.deck.mixer, |_| true)
-                .ok_or_else(|| PlayError::InvalidConfiguration {
-                    reason: "a mixer must have at least one slot".into(),
-                })?;
+            // A source change continues inside its own slot; another sounding
+            // slot cannot receive the continuation.
+            let victim = if self.tracks.is_changing_source(id) {
+                self.active_current_index()
+            } else {
+                self.active.quietest(&self.deck.mixer, |_| true)
+            };
+            let victim = victim.ok_or_else(|| PlayError::InvalidConfiguration {
+                reason: "a mixer must have at least one slot".into(),
+            })?;
             Ok::<_, QueueError>(
                 self.active
                     .get(victim)

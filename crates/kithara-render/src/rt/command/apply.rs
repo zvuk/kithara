@@ -1,5 +1,4 @@
 use kithara_command::{Due, Seq, Target};
-use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_signal::{SegmentId, SessionFrame};
 #[cfg(feature = "usdt")]
@@ -12,30 +11,33 @@ use super::{
     },
     state::{answer_stop, returned_pcm},
 };
-use crate::bridge::{
-    DeckEqChange, DeckMixSettingsChange, DeckPart, DeckProtocol, Fade, Returned, Slot,
-};
+use crate::bridge::{DeckEqChange, DeckPart, DeckProtocol, Fade, Returned, Slot};
 
 impl Deck {
-    pub(in crate::rt) fn apply(
+    pub(super) fn apply(
         &mut self,
         part: DeckPart,
         at: SessionFrame,
         seq: Seq,
         context_valid: bool,
         read_pcm: ReadPcm,
+        cut: Option<super::continuation::SourceCut>,
     ) -> Option<DeckPart> {
         self.interrupt_underrun(&part, at);
+        let carried = cut.is_some_and(|cut| cut.carries(&part));
         match part {
             DeckPart::Attach {
                 slot,
                 item_id,
                 pcm,
                 segment,
-            } => self.attach(slot, item_id, pcm, segment, at, seq),
+            } => {
+                let track = self.source_track(slot, pcm, segment, item_id, seq, cut);
+                self.attach(slot, item_id, segment, at, seq, track)
+            }
             DeckPart::Detach { slot } => self.detach(slot, context_valid, read_pcm),
             DeckPart::Start { slot, fade } => {
-                if let Some(track) = self.tracks.at_mut(slot) {
+                if !carried && let Some(track) = self.tracks.at_mut(slot) {
                     track.start(fade);
                 }
                 Some(DeckPart::Start { slot, fade })
@@ -64,10 +66,21 @@ impl Deck {
                 pcm,
                 segment,
             } => {
-                let track = self.track(pcm, segment, item_id, seq);
-                Some(self.replace_track(slot, track, context_valid, read_pcm))
+                let track = self.source_track(slot, pcm, segment, item_id, seq, cut);
+                Some(if carried {
+                    self.continue_track(slot, track)
+                } else {
+                    self.replace_track(slot, track, context_valid, read_pcm)
+                })
             }
             DeckPart::Chain { from, to } => Some(self.chain_tracks(from, to)),
+            DeckPart::ContinueSource { to, .. } => cut.map(|cut| {
+                DeckPart::Returned(Returned::SourceContinued {
+                    to,
+                    mark: cut.point.mark(at),
+                    media_origin: cut.point.origin,
+                })
+            }),
             DeckPart::Clock { slot, clock } => {
                 if let Some(track) = self.tracks.at_mut(slot) {
                     track.set_clock(clock);
@@ -75,49 +88,30 @@ impl Deck {
                 Some(DeckPart::Clock { slot, clock })
             }
             DeckPart::Mix(change) => {
-                self.mix.apply_change(change);
-                if let DeckMixSettingsChange::Filter(knob) = change {
-                    self.render.set_filter_knob(knob);
-                } else {
-                    self.render.set_mix(self.mix);
-                }
+                self.render.set_mix(change);
                 Some(DeckPart::Mix(change))
             }
             DeckPart::Eq(DeckEqChange::Gain { band, gain }) => {
                 self.render.set_eq_gain(band, gain);
                 Some(DeckPart::Eq(DeckEqChange::Gain { band, gain }))
             }
-            DeckPart::Eq(DeckEqChange::Layout(layout)) => {
-                self.eq_programs.replace_layout(seq);
-                self.render
-                    .take_eq_layout(layout)
-                    .map(|layout| DeckPart::Returned(Returned::Eq(layout)))
+            DeckPart::Eq(DeckEqChange::Kill { band, layout, on }) => {
+                self.render.set_eq_kill(band, on);
+                Some(DeckPart::Eq(DeckEqChange::Kill { band, layout, on }))
             }
-            DeckPart::EqProgram {
-                binding,
-                authority,
-                program,
-            } => {
-                self.eq_programs.begin(program.band(), seq);
-                Some(DeckPart::EqProgram {
-                    binding,
-                    authority,
-                    program,
-                })
+            DeckPart::Eq(DeckEqChange::Reset) => {
+                self.render.reset_eq();
+                Some(DeckPart::Eq(DeckEqChange::Reset))
+            }
+            DeckPart::Eq(DeckEqChange::Layout(layout)) => self
+                .render
+                .take_eq_layout(layout)
+                .map(|layout| DeckPart::Returned(Returned::Eq(layout))),
+            DeckPart::Program { program, .. } => {
+                self.programs.begin(program.parameter(), seq);
+                Some(DeckPart::Returned(Returned::Program(program)))
             }
             DeckPart::Fx(change) => self.render.change_fx(change, self.sample_rate),
-            DeckPart::FilterProgram {
-                binding,
-                authority,
-                program,
-            } => {
-                self.begin_filter_program(seq);
-                Some(DeckPart::FilterProgram {
-                    binding,
-                    authority,
-                    program,
-                })
-            }
             DeckPart::GainProgram {
                 slot,
                 binding,
@@ -166,14 +160,13 @@ impl Deck {
         &mut self,
         slot: Slot,
         item_id: TrackId,
-        pcm: Box<crate::PcmReceiver>,
         segment: SegmentId,
         at: SessionFrame,
         seq: Seq,
+        track: PlayerTrack,
     ) -> Option<DeckPart> {
         #[cfg(not(feature = "usdt"))]
-        let _ = (at, seq);
-        let track = self.track(pcm, segment, item_id, seq);
+        let _ = (item_id, segment, at, seq);
         if let Some(track) = self.tracks.put(slot, track) {
             return Some(returned_pcm(slot, track));
         }
@@ -252,15 +245,14 @@ impl Deck {
         DeckPart::Adopt { slot, segment }
     }
 
+    /// Seats `track` stopped, as an attachment does; only a start plays it.
     fn replace_track(
         &mut self,
         slot: Slot,
-        mut track: PlayerTrack,
+        track: PlayerTrack,
         context_valid: bool,
         read_pcm: ReadPcm,
     ) -> DeckPart {
-        track.start(Fade::Declick);
-        track.snap_gate();
         let Some(current) = self.tracks.at_mut(slot) else {
             return returned_pcm(slot, track);
         };
@@ -277,6 +269,17 @@ impl Deck {
             );
         }
         returned_pcm(slot, old)
+    }
+
+    /// A same-slot continuation hands the slot's envelope to the aligned
+    /// receiver, so the cut sounds one signal instead of an eviction tail
+    /// over it.
+    fn continue_track(&mut self, slot: Slot, mut track: PlayerTrack) -> DeckPart {
+        let Some(current) = self.tracks.at_mut(slot) else {
+            return returned_pcm(slot, track);
+        };
+        track.continue_slot(current);
+        returned_pcm(slot, std::mem::replace(current, track))
     }
 
     pub(in crate::rt) fn track(

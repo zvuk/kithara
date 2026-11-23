@@ -134,3 +134,51 @@ async fn a_fade_out_takes_back_a_play_it_precedes_and_fades_one_it_follows(
     };
     assert_eq!(track.snapshot().status, status);
 }
+
+/// A pause's declick reports its fade on the event ring, apart from the deck
+/// receipts, so the report can arrive after a resume's Start has settled. It
+/// describes the playback the pause ended, never the one that followed it.
+#[kithara::test]
+async fn a_pause_fade_reported_after_the_resume_keeps_the_track_playing() {
+    let mut rig = rig();
+    let (mut track, _lane) = loaded(&mut rig, A, "resumed fade").await;
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Play {
+            at: When::At(frame(0)),
+        },
+    );
+    let mut answers = rig.block(frame(0), 0.0);
+    settle(&mut track, &mut rig, &mut answers);
+    command_at_zero(&mut track, &mut rig, TrackCommand::Pause { at: When::Next })
+        .expect("pause Stop");
+    let mut answers = rig.block(frame(128), 0.0);
+    settle(&mut track, &mut rig, &mut answers);
+    command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::Next })
+        .expect("resume Start");
+    let resumed = frame(1_024);
+    let mut answers = rig.block(resumed, 0.0);
+    settle(&mut track, &mut rig, &mut answers);
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: resumed }
+    );
+
+    rig.with_outbox(|out| {
+        track.settle(
+            TrackReceipt::Event(DeckEvent::Faded {
+                slot: A,
+                at: frame(256),
+            }),
+            out,
+        )
+    })
+    .expect("live scope");
+
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: resumed },
+        "the pause's fade report does not stop the resumed playback"
+    );
+}
