@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroU128, NonZeroUsize};
 
 use kithara_audio::{
     AudioReadError, AudioSource, FailureSource, SeekOutcome, TrackFailureKind, TrackStep,
@@ -350,6 +350,128 @@ fn a_segment_positioned_ahead_of_the_visible_origin_enters_there(
              {outcome:?}"
         ),
     }
+}
+
+#[kithara::test]
+fn a_speed_change_during_preparation_admits_only_its_q32_entry() {
+    let mut fixture = LaneFixture::new();
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("trace sample rate"));
+    fixture.spec = spec;
+    fixture.renderer = Warp::new((), &WarpConfig::builder().build()).renderer(spec, pools());
+    let from = Duration::from_nanos(98_329_848_902);
+    let segment = SegmentId::FIRST.next();
+    let segment_seq = fixture.begin_at(segment, from);
+    fixture
+        .lane
+        .observe_input(&mut fixture.renderer, fixture.entry, None)
+        .expect("exact source entry");
+
+    let exact_origin = (
+        21_681_731_682_891,
+        NonZeroU128::new(5_000_000).expect("exact entry denominator"),
+    );
+    let exact_span =
+        SourceSpan::try_from((exact_origin.0, 1, exact_origin.1, spec.sample_rate, 16))
+            .expect("exact entry span")
+            .with_render_revision(segment_seq.get());
+    fixture
+        .lane
+        .check_admission(&AudioChunkInfo {
+            spec,
+            frames: 16,
+            segment,
+            render_revision: segment_seq.get(),
+            source_span: Some(exact_span),
+            ..AudioChunkInfo::default()
+        })
+        .expect("the original preparation accepts its exact entry");
+
+    let speed_seq = fixture
+        .sender
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![LaneCommand::SetSpeed(SpeedCurve::Constant(0.72))],
+            },
+        )
+        .expect("speed command fits the channel");
+    fixture
+        .lane
+        .execute_due(&mut fixture.source, &mut fixture.renderer, spec)
+        .expect("speed replaces the pending entry law");
+    let q32_span = SourceSpan::try_from((
+        9_312_232_849_866_389,
+        1_546_188_288,
+        NonZeroU128::new(2_147_483_648).expect("Q32 denominator"),
+        spec.sample_rate,
+        512,
+    ))
+    .expect("rendered Q32 entry span")
+    .with_render_revision(speed_seq.get());
+    let q32_entry = AudioChunkInfo {
+        spec,
+        frames: 512,
+        segment,
+        render_revision: speed_seq.get(),
+        source_span: Some(q32_span),
+        ..AudioChunkInfo::default()
+    };
+    fixture
+        .lane
+        .check_admission(&q32_entry)
+        .expect("a pending speed replacement admits its rendered Q32 entry");
+
+    let projected_span = q32_span
+        .scaled_from(
+            q32_span.source_ratio_at(0).expect("Q32 origin"),
+            exact_origin,
+            (1, NonZeroU128::MIN),
+        )
+        .expect("fabricated exact projection");
+    fixture
+        .lane
+        .check_admission(&AudioChunkInfo {
+            source_span: Some(projected_span),
+            ..q32_entry
+        })
+        .expect_err("an unquantized projection cannot replace the rendered Q32 entry");
+
+    let mut before_source = LaneFixture::new();
+    before_source.spec = spec;
+    before_source.renderer = Warp::new((), &WarpConfig::builder().build()).renderer(spec, pools());
+    before_source.begin_at(segment, from);
+    let before_source_speed = before_source
+        .sender
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![LaneCommand::SetSpeed(SpeedCurve::Constant(0.72))],
+            },
+        )
+        .expect("early speed command fits the channel");
+    before_source
+        .lane
+        .execute_due(&mut before_source.source, &mut before_source.renderer, spec)
+        .expect("speed precedes the first source chunk");
+    before_source
+        .lane
+        .observe_input(&mut before_source.renderer, before_source.entry, None)
+        .expect("the later source entry is reanchored exactly");
+    before_source
+        .lane
+        .check_admission(&AudioChunkInfo {
+            render_revision: before_source_speed.get(),
+            source_span: Some(exact_span.with_render_revision(before_source_speed.get())),
+            ..AudioChunkInfo {
+                spec,
+                frames: 16,
+                segment,
+                ..AudioChunkInfo::default()
+            }
+        })
+        .expect("a speed command before the source keeps the exact entry");
 }
 
 #[kithara::test]

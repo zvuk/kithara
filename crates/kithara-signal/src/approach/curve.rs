@@ -41,12 +41,11 @@ impl ExponentialApproach {
 
     /// The same course entered `elapsed` units later.
     ///
-    /// A course that holds one rate has nothing to resume and is returned as is.
+    /// A course that holds one rate still carries its phase: the phase anchors
+    /// the rounded advance lattice, so a resumed course lands on the source
+    /// coordinates of the original course frame for frame.
     #[must_use]
     pub fn resumed(self, elapsed: u64) -> Option<Self> {
-        if self.time_constant() == 0.0 || self.initial == self.target {
-            return Some(self);
-        }
         Some(Self {
             phase: self.phase.checked_add(elapsed)?,
             ..self
@@ -143,12 +142,13 @@ impl ExponentialApproach {
         if !elapsed.is_finite() || elapsed < 0.0 {
             return None;
         }
-        let advance = if elapsed == 0.0 || self.time_constant() == 0.0 {
-            0.0
-        } else {
-            (self.initial() - self.target())
-                * (-self.time_constant() * (-elapsed / self.time_constant()).exp_m1())
-        };
+        let advance =
+            if elapsed == 0.0 || self.time_constant() == 0.0 || self.initial() == self.target() {
+                0.0
+            } else {
+                (self.initial() - self.target())
+                    * (-self.time_constant() * (-elapsed / self.time_constant()).exp_m1())
+            };
         advance.is_finite().then_some(advance)
     }
 
