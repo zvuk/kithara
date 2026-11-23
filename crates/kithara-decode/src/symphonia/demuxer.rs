@@ -72,8 +72,10 @@ mod raw_clock_tests {
 
     use super::SymphoniaDemuxer;
     use crate::{
-        CodecPriming, DecodeError,
+        CodecPriming, DecodeError, Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig,
+        DecoderFactory, DecoderSeekOutcome,
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
+        test_pools::pools,
     };
 
     fn reader() -> MpaReader<'static> {
@@ -184,22 +186,55 @@ mod raw_clock_tests {
         ));
     }
 
-    #[kithara::test]
-    fn media_end_seek_past_the_declared_endpoint_returns_past_eof() {
-        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
-            Box::new(reader()),
-            None,
-            None,
-            None,
-            kithara_stream::ReaderControl::new(None),
+    fn implicit_sbr_decoder() -> Box<dyn Decoder> {
+        let bytes = kithara_test_fixtures::assets::signal_profile_m4a_aac_44100_2ch()
+            .bytes()
+            .to_vec();
+        let info = kithara_stream::MediaInfo::builder()
+            .codec(kithara_stream::AudioCodec::AacLc)
+            .container(kithara_stream::ContainerFormat::Mp4)
+            .sample_rate(44_100)
+            .channels(2)
+            .build();
+        DecoderFactory::create_from_media_info(
+            Cursor::new(bytes),
+            &info,
+            DecoderConfig::<kithara_resampler::NoResamplerBackend, _>::builder()
+                .backend(DecoderBackend::Symphonia)
+                .pools(pools())
+                .gapless(true)
+                .build(),
         )
-        .expect("MPEG demuxer");
-        let duration = Duration::from_millis(20);
-        demuxer.track_info.duration = Some(crate::DecoderDuration::MediaEnd(duration));
+        .expect("M4A decoder")
+    }
+
+    #[kithara::test]
+    fn media_end_is_compared_on_the_raw_packet_clock() {
+        let mut decoder = implicit_sbr_decoder();
+        let outcome = decoder
+            .seek(Duration::from_millis(6_010))
+            .expect("seek inside the raw presentation");
+
+        assert!(
+            !matches!(outcome, DecoderSeekOutcome::PastEof { .. }),
+            "6.010 s precedes 6 s plus the 1,024-frame media origin"
+        );
+    }
+
+    #[kithara::test]
+    fn media_end_past_eof_parks_the_next_chunk_at_eof() {
+        let mut decoder = implicit_sbr_decoder();
+        let outcome = decoder
+            .seek(Duration::from_secs(7))
+            .expect("seek beyond the raw presentation");
 
         assert!(matches!(
-            demuxer.seek(Duration::from_secs(1), CodecPriming::default()),
-            Ok(DemuxSeekOutcome::PastEof { duration: actual }) if actual == duration
+            outcome,
+            DecoderSeekOutcome::PastEof { duration } if duration == Duration::from_secs(6)
+        ));
+        assert!(matches!(
+            decoder.next_chunk().expect("read after PastEof"),
+            DecoderChunkOutcome::Eof
         ));
     }
 
@@ -780,9 +815,13 @@ impl Demuxer for SymphoniaDemuxer {
         let backup_duration = Duration::from_secs_f64(priming_secs.max(packet_secs));
         let effective_target = target.saturating_sub(backup_duration);
         if let Some(crate::DecoderDuration::MediaEnd(duration)) = self.track_info.duration
-            && target >= duration
+            && self
+                .media_origin
+                .and_then(|origin| origin.checked_add(duration))
+                .is_some_and(|raw_end| target >= raw_end)
         {
             self.pending_seek = None;
+            self.prepared = Some(PreparedPacket::Eof);
             return Ok(DemuxSeekOutcome::PastEof { duration });
         }
         let seek_to = SeekTo::Timestamp {
