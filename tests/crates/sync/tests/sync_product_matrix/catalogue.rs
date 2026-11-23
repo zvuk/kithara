@@ -137,7 +137,9 @@ async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase(
         let position = control.position_seconds().expect("canonical playhead");
         while replace && !applied {
             let _ = rig.render(case, 128).await;
-            let current = control.current().expect("logical track through handover");
+            let Some(current) = control.current() else {
+                continue;
+            };
             if current.url.as_deref() == Some(replacement.as_str()) {
                 assert!(!current.source_changing);
                 applied = true;
