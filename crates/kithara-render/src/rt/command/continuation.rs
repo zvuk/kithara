@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     PcmPacket, PcmReceiver,
-    bridge::{DeckPart, DeckProtocol, DeckRefusal, FadeDir, Slot},
+    bridge::{DeckPart, DeckProtocol, DeckRefusal, FadeDir, Slot, SlotState},
     rt::TrackSlots,
 };
 
@@ -175,6 +175,43 @@ impl Continuation {
 }
 
 impl Deck {
+    /// Both sides of a parked cut supply PCM to its motion check. The outgoing
+    /// track keeps sounding while the graph retires the incoming stale prefix.
+    pub(crate) fn request_continuation_pcm(
+        &self,
+        parts: &[DeckPart],
+        frames: usize,
+        request: fn(&PcmReceiver, SegmentId, usize),
+    ) {
+        let Some((DeckPart::ContinueSource { from, to, window }, rest)) = parts.split_first()
+        else {
+            return;
+        };
+        let Some(old) = self
+            .tracks
+            .at(*from)
+            .filter(|track| track.state() == SlotState::Playing)
+        else {
+            return;
+        };
+        // The next graph turn may spend its whole block retiring stale PCM.
+        // Keep the motion window available beyond that advance.
+        let window = window.get().saturating_add(frames);
+        old.request_cut_window(window, request);
+        match rest.first() {
+            Some(
+                DeckPart::Attach { pcm, segment, .. } | DeckPart::Replace { pcm, segment, .. },
+            ) => {
+                request(pcm, *segment, window);
+            }
+            _ => {
+                if let Some(staged) = self.tracks.at(*to) {
+                    staged.request_cut_window(window, request);
+                }
+            }
+        }
+    }
+
     pub(super) fn prepare_continuation(
         &mut self,
         due: &mut Due<'_, DeckProtocol>,

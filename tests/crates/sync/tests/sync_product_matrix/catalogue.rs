@@ -100,25 +100,26 @@ async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase(
         let mut delivered = false;
         let mut applied = false;
         let mut frames = 5 * second;
-        while frames > 0 || (replace && !applied) {
+        while frames > 0 {
             let previous = control.position_seconds().expect("outgoing mark");
-            let block = if frames == 0 { 128 } else { frames.min(128) };
-            let rendered = rig.render(case, block).await;
-            if frames > 0 {
-                pcm.extend(rendered);
-                frames -= block;
-            }
-            if replace
-                && !applied
-                && let Some(current) = control.current()
-                && current.url.as_deref() == Some(replacement.as_str())
-            {
+            let block = frames.min(128);
+            pcm.extend(rig.render(case, block).await);
+            frames -= block;
+            if replace && !applied {
+                let current = control.current().expect("logical track through handover");
                 assert_eq!(current.id, item);
-                assert!(control.is_playing());
-                assert!(!current.source_changing);
-                let advanced = control.position_seconds().expect("incoming mark") - previous;
-                assert!(advanced >= 0.0, "accepted source rewound by {advanced}s");
-                applied = true;
+                if current.url.as_deref() == Some(replacement.as_str()) {
+                    assert!(!current.source_changing);
+                    assert!(control.is_playing());
+                    let advanced = control.position_seconds().expect("incoming mark") - previous;
+                    assert!(advanced >= 0.0, "accepted source rewound by {advanced}s");
+                    applied = true;
+                } else {
+                    assert!(
+                        current.source_changing,
+                        "Queue discarded the pending same-item source change: {current:?}"
+                    );
+                }
             }
             if replace
                 && !delivered
@@ -139,18 +140,23 @@ async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase(
                 delivered = true;
             }
         }
-        let position = control.position_seconds().expect("canonical playhead");
+        assert!(
+            !replace || applied,
+            "same-item replacement did not commit within {frames_rendered} rendered frames: grid delivered={delivered}, current={:?}",
+            control.current(),
+            frames_rendered = 5 * second,
+        );
         let current = control.current().expect("current track after the capture");
         assert_eq!(current.id, item);
         assert!(control.is_playing());
         assert!(!current.source_changing);
         assert_eq!(delivered, replace);
-        assert_eq!(applied, replace);
         if replace {
             assert_eq!(current.url.as_deref(), Some(replacement.as_str()));
         } else {
             assert_eq!(current.url, original);
         }
+        let position = control.position_seconds().expect("canonical playhead");
         positions.push(position);
         let snapshot = rig.decks[0]
             .read_snapshot()
