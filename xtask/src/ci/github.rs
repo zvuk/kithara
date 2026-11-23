@@ -115,17 +115,22 @@ pub fn pr_tests_block(body: &str) -> io::Result<Option<String>> {
     Ok(found)
 }
 
+type PullSelection = (&'static str, Option<String>, Option<String>);
+
 /// The pipeline kind of a push whose branch has the open pull requests
-/// `pulls` (the GitHub pulls API's JSON array), and the test block a draft
-/// runs. A ready pull request is a `merge-request`; a draft, or no pull
-/// request, is a `branch`.
-fn pull_kind(pulls: &str) -> io::Result<(&'static str, Option<String>)> {
+/// `pulls` (the GitHub pulls API's JSON array), the test block a draft runs,
+/// and the pull request's base revision. A ready pull request is a
+/// `merge-request`; a draft, or no pull request, is a `branch`.
+fn pull_kind(pulls: &str) -> io::Result<PullSelection> {
     let pulls: Vec<Value> =
         serde_json::from_str(pulls).map_err(|error| io::Error::other(format!("PULLS: {error}")))?;
-    let ready = pulls.iter().any(|pull| pull["draft"] == Value::Bool(false));
-    if ready {
-        return Ok(("merge-request", None));
+    if let Some(ready) = pulls
+        .iter()
+        .find(|pull| pull["draft"] == Value::Bool(false))
+    {
+        return Ok(("merge-request", None, Some(pull_base_sha(ready)?)));
     }
+    let base = pulls.first().map(pull_base_sha).transpose()?;
     let mut block = None;
     for pull in &pulls {
         let body = pull["body"].as_str().unwrap_or_default();
@@ -138,18 +143,27 @@ fn pull_kind(pulls: &str) -> io::Result<(&'static str, Option<String>)> {
             block = Some(found);
         }
     }
-    Ok(("branch", block))
+    Ok(("branch", block, base))
 }
 
-/// Writes the kind and the draft's test block as step outputs.
+fn pull_base_sha(pull: &Value) -> io::Result<String> {
+    pull.pointer("/base/sha")
+        .and_then(Value::as_str)
+        .filter(|sha| !sha.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| io::Error::other("open pull request has no base SHA"))
+}
+
+/// Writes the kind, the draft's test block and the comparison base as step outputs.
 fn publish_kind(pulls: &str, output: &str) -> io::Result<()> {
-    let (kind, block) = pull_kind(pulls)?;
+    let (kind, block, base) = pull_kind(pulls)?;
     let block = block.unwrap_or_default();
+    let base = base.unwrap_or_default();
     let delimiter = format!("KITHARA_PR_TESTS_{}", block.len());
     let mut file = OpenOptions::new().append(true).open(output)?;
     write!(
         file,
-        "kind={kind}\npr-tests<<{delimiter}\n{block}\n{delimiter}\n"
+        "kind={kind}\nbase-sha={base}\npr-tests<<{delimiter}\n{block}\n{delimiter}\n"
     )
 }
 
@@ -197,31 +211,38 @@ mod tests {
 
     #[test]
     fn a_ready_pull_request_runs_full_and_ignores_the_block() {
-        let pulls = r#"[{"draft": false, "body": "```kithara-tests\nfilter = 1\n```"}]"#;
+        let pulls = r#"[{"draft": false, "body": "```kithara-tests\nfilter = 1\n```", "base": {"sha": "base"}}]"#;
 
-        assert_eq!(pull_kind(pulls).unwrap(), ("merge-request", None));
+        assert_eq!(
+            pull_kind(pulls).unwrap(),
+            ("merge-request", None, Some("base".to_owned()))
+        );
     }
 
     #[test]
     fn a_draft_runs_its_block() {
-        let pulls = r#"[{"draft": true, "body": "```kithara-tests\npackages = [\"a\"]\n```"}]"#;
+        let pulls = r#"[{"draft": true, "body": "```kithara-tests\npackages = [\"a\"]\n```", "base": {"sha": "base"}}]"#;
 
         assert_eq!(
             pull_kind(pulls).unwrap(),
-            ("branch", Some("packages = [\"a\"]".to_owned()))
+            (
+                "branch",
+                Some("packages = [\"a\"]".to_owned()),
+                Some("base".to_owned())
+            )
         );
     }
 
     #[test]
     fn a_branch_without_a_pull_request_is_a_draft_with_no_block() {
-        assert_eq!(pull_kind("[]").unwrap(), ("branch", None));
+        assert_eq!(pull_kind("[]").unwrap(), ("branch", None, None));
     }
 
     #[test]
     fn a_draft_without_a_description_has_no_block() {
         assert_eq!(
-            pull_kind(r#"[{"draft": true, "body": null}]"#).unwrap(),
-            ("branch", None)
+            pull_kind(r#"[{"draft": true, "body": null, "base": {"sha": "base"}}]"#).unwrap(),
+            ("branch", None, Some("base".to_owned()))
         );
     }
 }

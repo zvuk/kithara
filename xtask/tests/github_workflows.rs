@@ -572,6 +572,14 @@ fn a_ready_pull_request_is_a_merge_request_pipeline() {
         mapping_field(outputs, "kind").as_str(),
         Some("${{ steps.kind.outputs.kind }}")
     );
+    assert_eq!(
+        mapping_field(outputs, "base-sha").as_str(),
+        Some("${{ steps.kind.outputs.base-sha }}")
+    );
+    assert_eq!(
+        mapping_field(outputs, "base-repository").as_str(),
+        Some("${{ steps.kind.outputs.base-repository }}")
+    );
     let step = named_step(authorize, "Name the pipeline kind");
     assert_eq!(mapping_field(step, "id").as_str(), Some("kind"));
     let env = mapping_field(step, "env")
@@ -601,6 +609,21 @@ fn a_ready_pull_request_is_a_merge_request_pipeline() {
             "role `{name}` decides the pipeline kind again"
         );
     }
+
+    let gate = mapping_field(workflow_job(jobs, "lanes"), "with")
+        .as_mapping()
+        .expect("the gate passes its comparison base");
+    assert_eq!(
+        mapping_field(gate, "base-repository").as_str(),
+        Some("${{ needs.authorize.outputs.base-repository }}")
+    );
+    let base = mapping_field(gate, "base-sha")
+        .as_str()
+        .expect("the gate has a fallback comparison base");
+    assert!(base.contains("needs.authorize.outputs.base-sha"));
+    assert!(base.contains("github.event.before"));
+    assert!(base.contains("0000000000000000000000000000000000000000"));
+    assert!(base.contains("github.event.repository.default_branch"));
 }
 
 // One entry reacts to every push. Optional suites belong inside that run so a
@@ -3120,6 +3143,14 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         ])
     );
     let select = workflow_job(jobs, "select");
+    let fetch = named_step(select, "Fetch the comparison base");
+    assert_eq!(
+        mapping_field(fetch, "if").as_str(),
+        Some(
+            "${{ inputs.base-sha != '' && (inputs.kind == 'branch' || inputs.kind == 'merge-request' || inputs.kind == 'quarantine') }}"
+        ),
+        "main must not fetch a comparison base it never reads"
+    );
     let outputs = mapping_field(select, "outputs")
         .as_mapping()
         .expect("the selector publishes its matrices");

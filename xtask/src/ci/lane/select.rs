@@ -1,6 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use kithara_devtools::Ctx;
 use serde::Serialize;
@@ -40,6 +43,9 @@ pub(crate) struct LanesArgs {
     /// YAML.
     #[arg(long, value_enum)]
     pub(crate) field: Option<Field>,
+    /// A path changed by the reviewed revision. Repeat for every changed path.
+    #[arg(long)]
+    pub(crate) changed_path: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -97,21 +103,38 @@ fn reachable(lane: &CiLaneConfig, fleet: Fleet) -> bool {
 /// a lane only narrowing pipelines schedule: its share of a suite is one the
 /// full lanes run whole. A lane with no membership belongs to a dedicated
 /// workflow and never enters this fleet's fan-out, even by name.
-fn is_asked_for(lane: &CiLaneConfig, name: &str, kind: &str, args: &LanesArgs) -> bool {
+fn is_asked_for(lane: &CiLaneConfig, name: &str, kind: &str, args: &LanesArgs) -> Result<bool> {
     if lane.role != args.role || !reachable(lane, args.fleet) {
-        return false;
+        return Ok(false);
     }
     let membership = membership(lane, args.fleet);
     if membership.is_empty() {
-        return false;
+        return Ok(false);
     }
-    if args.only.is_empty() {
-        membership.iter().any(|entry| entry == kind)
-    } else {
-        args.only
+    if !args.only.is_empty() {
+        return Ok(args
+            .only
             .iter()
-            .any(|only| only == name || (only == "all" && a_full_run_schedules(membership)))
+            .any(|only| only == name || (only == "all" && a_full_run_schedules(membership))));
     }
+    if !membership.iter().any(|entry| entry == kind) {
+        return Ok(false);
+    }
+    if lane.path_globs.is_empty() || args.kind.is_full() {
+        return Ok(true);
+    }
+    for glob in &lane.path_globs {
+        let glob = glob::Pattern::new(glob)
+            .with_context(|| format!("invalid path glob for CI lane `{name}`"))?;
+        if args
+            .changed_path
+            .iter()
+            .any(|path| glob.matches_path(Path::new(path)))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Whether some full pipeline kind schedules a lane with this membership.
@@ -143,18 +166,19 @@ pub(crate) fn render(
     }
     let kind = args.kind.name();
 
-    let matrix: Vec<Entry> = lanes
-        .iter()
-        .filter(|(name, lane)| lane.needs.is_empty() && is_asked_for(lane, name, kind, args))
-        .map(|(name, lane)| Entry {
-            lane: name.clone(),
-            timeout: lane.timeout_minutes,
-            history: lane.history,
-            artifact: lane.artifact.clone(),
-            queue: lane.queue.clone(),
-            runner: github_runner(lane, args.kind),
-        })
-        .collect();
+    let mut matrix = Vec::new();
+    for (name, lane) in lanes {
+        if lane.needs.is_empty() && is_asked_for(lane, name, kind, args)? {
+            matrix.push(Entry {
+                lane: name.clone(),
+                timeout: lane.timeout_minutes,
+                history: lane.history,
+                artifact: lane.artifact.clone(),
+                queue: lane.queue.clone(),
+                runner: github_runner(lane, args.kind),
+            });
+        }
+    }
 
     // A lane with `needs` never earns its own place through `--role`/`--kind`
     // or `--only`: it rides in only once a lane it reads from already made the
@@ -301,6 +325,7 @@ mod tests {
             only: only.iter().map(|name| (*name).to_owned()).collect(),
             fleet: Fleet::Github,
             field: None,
+            changed_path: Vec::new(),
         }
     }
 
@@ -896,6 +921,67 @@ mod tests {
                     gitlab.only = only.into_iter().map(str::to_owned).collect();
                     assert_eq!(render(&catalog, &gitlab)?.dependent.len(), 1);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn dependency_inputs_schedule_advisories_on_review_pipelines() -> Result<()> {
+        let root = crate::testing::workspace::root();
+        let ext = KitharaExt::load(&root)?;
+        for (fleet, kind) in [
+            (Fleet::Github, PipelineKind::Branch),
+            (Fleet::Github, PipelineKind::MergeRequest),
+            (Fleet::Gitlab, PipelineKind::Quarantine),
+        ] {
+            for (changed, expected) in [
+                (&["crates/kithara/src/lib.rs"][..], &["deps-deny"][..]),
+                (&["Cargo.lock"][..], &["deps-advisories", "deps-deny"][..]),
+                (&["Cargo.toml"][..], &["deps-advisories", "deps-deny"][..]),
+                (
+                    &["crates/kithara/Cargo.toml"][..],
+                    &["deps-advisories", "deps-deny"][..],
+                ),
+                (&["deny.toml"][..], &["deps-advisories", "deps-deny"][..]),
+                (
+                    &[".cargo/config.toml"][..],
+                    &["deps-advisories", "deps-deny"][..],
+                ),
+            ] {
+                let mut args = args("gate", kind, &[]);
+                args.fleet = fleet;
+                args.changed_path = changed.iter().map(|path| (*path).to_owned()).collect();
+                let selected = render(&ext.ci.lanes, &args)?;
+                let dependency_lanes = selected
+                    .matrix
+                    .iter()
+                    .map(|entry| entry.lane.as_str())
+                    .filter(|name| ["deps-advisories", "deps-deny"].contains(name))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    dependency_lanes,
+                    expected,
+                    "{fleet:?}/{}: {changed:?}",
+                    kind.name()
+                );
+            }
+        }
+
+        for (fleet, kind) in [
+            (Fleet::Github, PipelineKind::Main),
+            (Fleet::Gitlab, PipelineKind::Weekly),
+        ] {
+            let mut args = args("gate", kind, &[]);
+            args.fleet = fleet;
+            args.changed_path = vec!["crates/kithara/src/lib.rs".to_owned()];
+            let selected = render(&ext.ci.lanes, &args)?;
+            for name in ["deps-advisories", "deps-deny"] {
+                assert!(
+                    selected.matrix.iter().any(|entry| entry.lane == name),
+                    "{fleet:?}/{} must always schedule {name}",
+                    kind.name()
+                );
             }
         }
         Ok(())

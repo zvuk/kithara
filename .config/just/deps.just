@@ -9,7 +9,8 @@ hakari-check:
     cargo hakari generate --diff
     cargo hakari manage-deps --dry-run
 
-deny:
+[positional-arguments]
+deny *CHECKS:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p .ci-artifacts/deps-deny
@@ -18,7 +19,7 @@ deny:
     cargo fetch --locked
     cargo deny fetch db || echo "RustSec refresh unavailable; validating the cached database" >&2
     set +e
-    cargo deny --offline check --hide-inclusion-graph 2>&1 | tee .ci-artifacts/deps-deny/cargo-deny.log
+    cargo deny --offline check --hide-inclusion-graph {{ CHECKS }} 2>&1 | tee .ci-artifacts/deps-deny/cargo-deny.log
     check_status=("${PIPESTATUS[@]}")
     set -e
     printf 'cargo-deny=%s\ntee=%s\n' "${check_status[@]}" > .ci-artifacts/deps-deny/exit-status.txt
