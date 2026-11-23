@@ -134,6 +134,21 @@ async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase(
                 delivered = true;
             }
         }
+        if replace && !applied {
+            kithara_test_utils::wait_until(
+                Duration::from_secs(5),
+                "same-item catalogue replacement commits",
+                || {
+                    let current = control.current().expect("logical track through handover");
+                    if current.url.as_deref() == Some(replacement.as_str()) {
+                        applied = !current.source_changing;
+                    }
+                    applied
+                },
+            )
+            .await
+            .expect("catalogue replacement commits its source");
+        }
         let current = control.current().expect("current track after the capture");
         assert_eq!(current.id, item);
         assert!(control.is_playing());
