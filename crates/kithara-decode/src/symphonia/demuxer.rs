@@ -184,6 +184,25 @@ mod raw_clock_tests {
         ));
     }
 
+    #[kithara::test]
+    fn media_end_seek_past_the_declared_endpoint_returns_past_eof() {
+        let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(
+            Box::new(reader()),
+            None,
+            None,
+            None,
+            kithara_stream::ReaderControl::new(None),
+        )
+        .expect("MPEG demuxer");
+        let duration = Duration::from_millis(20);
+        demuxer.track_info.duration = Some(crate::DecoderDuration::MediaEnd(duration));
+
+        assert!(matches!(
+            demuxer.seek(Duration::from_secs(1), CodecPriming::default()),
+            Ok(DemuxSeekOutcome::PastEof { duration: actual }) if actual == duration
+        ));
+    }
+
     struct ScriptedReader {
         inner: Box<dyn FormatReader>,
         tracks: Vec<Track>,
@@ -760,6 +779,12 @@ impl Demuxer for SymphoniaDemuxer {
         let packet_secs = f64::from(mdct_packet_frames(self.track_info.codec)) / sr;
         let backup_duration = Duration::from_secs_f64(priming_secs.max(packet_secs));
         let effective_target = target.saturating_sub(backup_duration);
+        if let Some(crate::DecoderDuration::MediaEnd(duration)) = self.track_info.duration
+            && target >= duration
+        {
+            self.pending_seek = None;
+            return Ok(DemuxSeekOutcome::PastEof { duration });
+        }
         let seek_to = SeekTo::Timestamp {
             ts: self.duration_to_native_timestamp(effective_target)?,
             track_id: self.track_id,
