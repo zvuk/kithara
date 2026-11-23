@@ -151,10 +151,9 @@ async fn playing_deck(
     harness
 }
 
-/// Plays the deck at the device cadence and sends each change before its
-/// block. The pacing sleep shares the clock of the worker's park, so a block
-/// period elapses only once the worker has rendered; an underrun is then the
-/// lane's, not the machine's.
+/// Plays the deck against one device timeline and sends each change before
+/// its block. Absolute deadlines keep timer wakeup lateness from accumulating
+/// across the capture; every block is rendered before its deadline is awaited.
 #[kithara::flash(true)]
 #[kithara_test_utils::kithara::hang_watchdog]
 async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Take {
@@ -180,6 +179,7 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
     let period = Duration::from_secs_f64(
         BLOCK_FRAMES.to_f64().expect("block fits f64") / f64::from(SAMPLE_RATE),
     );
+    let started = Instant::now();
     let mut warmed = None;
     for block in 0..TOTAL_BLOCKS {
         hang_tick!();
@@ -206,12 +206,12 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
             );
             warmed = Some(harness.metrics().underruns());
         }
-        let started = Instant::now();
         let output = harness.render(BLOCK_FRAMES).await;
         if let Some(recording) = recording.as_mut() {
             recording.push(&output);
         }
-        time::sleep(period.saturating_sub(started.elapsed())).await;
+        let completed = u32::try_from(block + 1).expect("block count fits u32");
+        time::sleep((period * completed).saturating_sub(started.elapsed())).await;
         hang_reset!();
     }
     let opened = trace.events_of("source_opened").len();
