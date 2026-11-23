@@ -27,6 +27,14 @@ impl<'inbox, P: Protocol> LevelInbox<'inbox, P> {
             .flat_map(|sent| &sent.batch.commands)
     }
 
+    /// Borrows batches held by the executor for a later firing moment.
+    pub fn parked_batches(&self) -> impl Iterator<Item = &[P::Command]> {
+        self.docket
+            .parked
+            .iter()
+            .map(|sent| sent.batch.commands.as_slice())
+    }
+
     pub(super) fn reborrow(&mut self) -> LevelInbox<'_, P> {
         LevelInbox {
             docket: self.docket,

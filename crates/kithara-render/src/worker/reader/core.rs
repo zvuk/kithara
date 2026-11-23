@@ -214,7 +214,7 @@ impl PcmReceiver {
     pub fn peek(&self) -> Option<&PcmPacket> {
         let packet = self.forward.try_peek();
         if packet.is_none() {
-            self.notify();
+            self.request_refill();
         }
         packet
     }
@@ -226,7 +226,7 @@ impl PcmReceiver {
     /// Try to take one packet without waiting, regardless of blocking policy.
     pub fn pop(&mut self) -> Option<PcmPacket> {
         let packet = self.take_packet();
-        self.notify();
+        self.request_refill();
         packet
     }
 
@@ -260,7 +260,7 @@ impl PcmReceiver {
         result
     }
 
-    fn notify(&self) {
+    pub(crate) fn request_refill(&self) {
         self.wake.defer();
     }
 }

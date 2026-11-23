@@ -1,9 +1,8 @@
 use std::num::{NonZeroU32, NonZeroU128};
 
-use kithara_signal::{ExponentialApproach, SourceSpan};
+use kithara_signal::SourceSpan;
 use kithara_stretch::ElasticError;
 use kithara_sync::SpeedCurve;
-use num_traits::ToPrimitive;
 
 use super::{Fraction, Phase, Trajectory, core::divisor};
 
@@ -261,22 +260,17 @@ impl Trajectory {
             },
             Ok,
         )?;
-        let shifted = if basis == segment {
-            curve
-        } else {
-            basis
-                .checked_sub(segment)
-                .and_then(|elapsed| elapsed.to_f64())
-                .and_then(|elapsed| curve.rate_at(elapsed))
-                .and_then(|initial| {
-                    ExponentialApproach::new(initial, curve.target(), curve.time_constant())
-                })
-                .ok_or(ElasticError::SampleCountOverflow)?
-        };
+        // The origin is recorded inside the segment's course: the course resumes
+        // there, so its rounded advance stays on the lattice of the segment
+        // start that every other rendering of the same law shares.
+        let resumed = basis
+            .checked_sub(segment)
+            .and_then(|entered| curve.resumed(entered))
+            .ok_or(ElasticError::SampleCountOverflow)?;
         SourceSpan::approaching(
             origin.numerator,
             origin.denominator,
-            shifted,
+            resumed,
             elapsed
                 .checked_sub(basis)
                 .ok_or(ElasticError::SampleCountOverflow)?,
