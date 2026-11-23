@@ -134,20 +134,14 @@ async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase(
                 delivered = true;
             }
         }
-        if replace && !applied {
-            kithara_test_utils::wait_until(
-                Duration::from_secs(5),
-                "same-item catalogue replacement commits",
-                || {
-                    let current = control.current().expect("logical track through handover");
-                    if current.url.as_deref() == Some(replacement.as_str()) {
-                        applied = !current.source_changing;
-                    }
-                    applied
-                },
-            )
-            .await
-            .expect("catalogue replacement commits its source");
+        let position = control.position_seconds().expect("canonical playhead");
+        while replace && !applied {
+            let _ = rig.render(case, 128).await;
+            let current = control.current().expect("logical track through handover");
+            if current.url.as_deref() == Some(replacement.as_str()) {
+                assert!(!current.source_changing);
+                applied = true;
+            }
         }
         let current = control.current().expect("current track after the capture");
         assert_eq!(current.id, item);
@@ -160,7 +154,6 @@ async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase(
         } else {
             assert_eq!(current.url, original);
         }
-        let position = control.position_seconds().expect("canonical playhead");
         positions.push(position);
         let snapshot = rig.decks[0]
             .read_snapshot()
