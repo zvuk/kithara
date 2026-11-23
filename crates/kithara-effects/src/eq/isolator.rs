@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{HasPool, PoolError, SampleBuffer};
+use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_dsp::{
     fade::FadeCurve,
     filter::Crossover,
@@ -10,12 +10,12 @@ use kithara_dsp::{
 use kithara_signal::sanitize_sample;
 use num_traits::cast::AsPrimitive;
 
-use super::{EqBandConfig, EqConfig};
+use super::{EqBandConfig, EqConfig, EqError};
 use crate::{
     GainDb,
     consts::EQ_BLOCK_FRAMES,
     dsp::{
-        filter::{active_band_count, build_crossover, hertz},
+        filter::{active_band_count, build_crossover, hertz, validate_frequencies},
         gain::{GainBank, GainWrite},
     },
 };
@@ -48,21 +48,17 @@ impl IsolatorEq {
     ///
     /// # Errors
     ///
-    /// Returns [`PoolError`] when the region cannot hand out the crossover
-    /// filter states and the gain bank this isolator runs on.
-    ///
-    /// # Panics
-    ///
-    /// Panics when adjacent band frequencies do not form a finite, positive,
-    /// strictly increasing crossover design.
+    /// Returns [`EqError`] when the crossover design is invalid or the region
+    /// cannot hand out the filter states and gain bank this isolator runs on.
     pub fn new<S>(
         config: &EqConfig<S>,
         bands: &[EqBandConfig],
         sample_rate: u32,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {
+        validate_frequencies(bands.iter().map(EqBandConfig::frequency))?;
         let rate = NonZeroU32::new(sample_rate).unwrap_or(NonZeroU32::MIN);
         let bypass = if bands.iter().all(|band| band.gain_db() == GainDb::default()) {
             Mix::FULLY_DRY
@@ -81,7 +77,7 @@ impl IsolatorEq {
         for (frequency, pair) in crossover_freqs.iter_mut().zip(bands.windows(2)) {
             *frequency = (pair[0].frequency() * pair[1].frequency()).sqrt();
         }
-        let (filters, active_bands) = build_crossover(&crossover_freqs, rate.get());
+        let (filters, active_bands) = build_crossover(&crossover_freqs, rate.get())?;
         Ok(Self {
             bypass: MixDSP::new(bypass, FadeCurve::Linear, config.smoothing(), rate),
             silence: MixDSP::new(silence, FadeCurve::Linear, config.smoothing(), rate),
@@ -234,7 +230,8 @@ impl IsolatorEq {
                 self.active_bands = active_bands;
             } else {
                 (self.filters, self.active_bands) =
-                    build_crossover(&self.crossover_freqs, rate.get());
+                    build_crossover(&self.crossover_freqs, rate.get())
+                        .unwrap_or_else(|error| panic!("validated EQ crossover rebuild: {error}"));
             }
             self.sample_rate = rate.get();
         }

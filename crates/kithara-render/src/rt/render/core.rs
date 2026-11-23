@@ -1,12 +1,12 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::Seq;
 use kithara_config::LiveConfig;
 use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 use kithara_effects::{
     GainDb,
-    eq::{EqConfig, EqLayout, GainShapeError, StereoEq, generate_log_spaced_bands},
+    eq::{EqConfig, EqError, EqLayout, GainShapeError, StereoEq, generate_log_spaced_bands},
     filter::{FilterEffect, FilterKnob},
 };
 use num_traits::cast::AsPrimitive;
@@ -47,7 +47,7 @@ impl RenderPass {
         pools: &PoolRegion<S>,
         shape: StreamShape,
         config: DeckMixerConfig,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {

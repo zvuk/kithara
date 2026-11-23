@@ -1,3 +1,4 @@
+use kithara_dsp::filter::FilterError;
 use kithara_test_utils::kithara;
 
 use super::*;
@@ -33,6 +34,29 @@ fn layout(bands: usize) -> Box<EqLayout> {
         )
         .expect("a layout fits the test pool budget"),
     )
+}
+
+#[kithara::test]
+fn invalid_band_frequencies_are_rejected_without_panicking() {
+    for frequencies in [
+        vec![1_000.0, 0.0],
+        vec![1_000.0, -1.0],
+        vec![1_000.0, f32::NAN],
+        vec![1_000.0, f32::INFINITY],
+        vec![1_000.0, 1_000.0],
+        vec![2_000.0, 1_000.0],
+    ] {
+        let bands: Vec<_> = frequencies
+            .iter()
+            .map(|frequency| EqBandConfig::builder().frequency(*frequency).build())
+            .collect();
+        let error = EqLayout::new(&EqConfig::builder(pools()).build(), &bands, TEST_RATE)
+            .expect_err("invalid EQ design");
+        assert!(
+            matches!(error, EqError::Filter(FilterError::Parameters)),
+            "frequencies: {frequencies:?}"
+        );
+    }
 }
 
 #[kithara::test]

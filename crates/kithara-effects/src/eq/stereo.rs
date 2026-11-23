@@ -1,13 +1,13 @@
 use core::{fmt, num::NonZeroU32};
 
-use kithara_bufpool::{HasPool, PoolError};
+use kithara_bufpool::HasPool;
 use kithara_dsp::{
     fade::FadeCurve,
     param::{Mix, MixDSP},
 };
 use num_traits::AsPrimitive;
 
-use super::{EqBandConfig, EqConfig, IsolatorEq};
+use super::{EqBandConfig, EqConfig, EqError, IsolatorEq};
 use crate::{GainDb, consts::EQ_BLOCK_FRAMES};
 
 /// An active gain row must cover every frame of the stereo call.
@@ -31,18 +31,13 @@ impl EqLayout {
     ///
     /// # Errors
     ///
-    /// Returns [`PoolError`] when the region cannot hand out the crossover filter states and
-    /// the gain banks the two isolators run on.
-    ///
-    /// # Panics
-    ///
-    /// Panics when adjacent band frequencies do not form a finite, positive,
-    /// strictly increasing crossover design.
+    /// Returns [`EqError`] when the crossover design is invalid or the region
+    /// cannot hand out the filter states and gain banks the two isolators run on.
     pub fn new<S>(
         config: &EqConfig<S>,
         bands: &[EqBandConfig],
         sample_rate: NonZeroU32,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {

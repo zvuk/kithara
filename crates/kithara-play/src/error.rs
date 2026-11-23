@@ -2,6 +2,7 @@ use std::convert::Infallible;
 
 use kithara_audio::TrackFailureKind;
 use kithara_bufpool::PoolError;
+use kithara_effects::eq::EqError;
 use kithara_platform::time::Duration;
 use kithara_render::{InvalidCrossfade, bridge::DeckRefusal, rt::BufferGeometryError};
 
@@ -121,6 +122,9 @@ pub enum PlayError {
     #[error("playback buffer allocation failed: {0}")]
     Pool(#[from] PoolError),
 
+    #[error(transparent)]
+    EqPreparation(EqError),
+
     #[error("audio session is gone: {reason}")]
     SessionGone { reason: &'static str },
 
@@ -129,6 +133,15 @@ pub enum PlayError {
 
     #[error("{0}")]
     Internal(String),
+}
+
+impl From<EqError> for PlayError {
+    fn from(error: EqError) -> Self {
+        match error {
+            EqError::Pool(error) => Self::Pool(error),
+            error => Self::EqPreparation(error),
+        }
+    }
 }
 
 impl From<BufferGeometryError> for PlayError {
