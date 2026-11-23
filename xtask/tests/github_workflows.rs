@@ -3143,6 +3143,11 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         ])
     );
     let select = workflow_job(jobs, "select");
+    assert_eq!(
+        first_step(select)["with"]["fetch-depth"].as_u64(),
+        Some(2147483647),
+        "merge-base needs the checked-out branch's ancestry as well as the base"
+    );
     let fetch = named_step(select, "Fetch the comparison base");
     assert_eq!(
         mapping_field(fetch, "if").as_str(),
@@ -3183,12 +3188,19 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         mapping_field(env, "ONLY").as_str(),
         Some("${{ inputs.only }}")
     );
+    let render_script = mapping_field(render, "run").as_str().unwrap_or_default();
     assert!(
-        mapping_field(render, "run")
-            .as_str()
-            .unwrap_or_default()
-            .contains(r#"just ci lanes --role "$ROLE" --kind "$KIND""#),
+        render_script.contains(r#"just ci lanes --role "$ROLE" --kind "$KIND""#),
         "the selection comes from the catalog"
+    );
+    assert!(render_script.starts_with("set -euo pipefail\n"));
+    assert!(
+        render_script.contains("--base FETCH_HEAD"),
+        "a fetched branch name must be read through the named FETCH_HEAD ref"
+    );
+    assert!(
+        !render_script.contains("git diff"),
+        "the Rust selector owns comparison failure semantics"
     );
 
     let text = github_workflow_text("run.yml");

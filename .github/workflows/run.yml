@@ -97,13 +97,17 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2147483647
 
       - name: Fetch the comparison base
         if: ${{ inputs.base-sha != '' && (inputs.kind == 'branch' || inputs.kind == 'merge-request' || inputs.kind == 'quarantine') }}
         env:
           BASE_REPOSITORY: ${{ inputs.base-repository || github.repository }}
           BASE_SHA: ${{ inputs.base-sha }}
-        run: git fetch --no-tags --quiet --depth=2147483647 "https://github.com/$BASE_REPOSITORY" "$BASE_SHA"
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --quiet --depth=2147483647 "https://github.com/$BASE_REPOSITORY" "$BASE_SHA"
 
       # The inputs reach the script as environment variables rather than as
       # interpolations: a workflow that pastes a caller's string into a shell
@@ -116,17 +120,13 @@ jobs:
           ONLY: ${{ inputs.only }}
           BASE_SHA: ${{ inputs.base-sha }}
         run: |
-          changed_path=()
+          set -euo pipefail
+          base=()
           if [ -n "${BASE_SHA:-}" ] && [[ "$KIND" =~ ^(branch|merge-request|quarantine)$ ]]; then
-            changed_file=$(mktemp)
-            trap 'rm -f "$changed_file"' EXIT
-            git diff --name-only --no-renames -z --merge-base "$BASE_SHA" HEAD -- > "$changed_file"
-            while IFS= read -r -d '' path; do
-              changed_path+=(--changed-path "$path")
-            done < "$changed_file"
+            base=(--base FETCH_HEAD)
           fi
           # Assignment preserves selector failure before publishing an output.
-          selection=$(just ci lanes --role "$ROLE" --kind "$KIND" ${ONLY:+--only "$ONLY"} "${changed_path[@]}")
+          selection=$(just ci lanes --role "$ROLE" --kind "$KIND" ${ONLY:+--only "$ONLY"} "${base[@]}")
           echo "selection=$selection" >> "$GITHUB_OUTPUT"
 
       # A block the runner would reject fails the run here, before any lane

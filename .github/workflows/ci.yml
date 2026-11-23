@@ -111,7 +111,7 @@ jobs:
             echo "kind=main" >> "$GITHUB_OUTPUT"
           else
             upstream=$(gh api "repos/$REPOSITORY" --jq '.parent.full_name // .full_name')
-            echo "base-repository=$upstream" >> "$GITHUB_OUTPUT"
+            export BASE_REPOSITORY="$upstream"
             # Assignment preserves an API failure: a draft whose pull request
             # cannot be read is an error, not a full run.
             PULLS=$(gh api "repos/$upstream/pulls?head=$OWNER:$BRANCH&state=open")

@@ -11,7 +11,11 @@ use serde_json::Value;
 pub fn run(mode: &str) -> io::Result<()> {
     match mode {
         "authorize" => authorize(&input("ACTOR")?, &input("OWNER")?, &input("RUNNER_LABELS")?),
-        "kind" => publish_kind(&input("PULLS")?, &input("GITHUB_OUTPUT")?),
+        "kind" => publish_kind(
+            &input("PULLS")?,
+            &input("BASE_REPOSITORY")?,
+            &input("GITHUB_OUTPUT")?,
+        ),
         "required" => required(
             &input("RESULTS")?,
             &input("REQUIRED_LANES")?,
@@ -155,15 +159,19 @@ fn pull_base_sha(pull: &Value) -> io::Result<String> {
 }
 
 /// Writes the kind, the draft's test block and the comparison base as step outputs.
-fn publish_kind(pulls: &str, output: &str) -> io::Result<()> {
+fn publish_kind(pulls: &str, upstream: &str, output: &str) -> io::Result<()> {
     let (kind, block, base) = pull_kind(pulls)?;
     let block = block.unwrap_or_default();
+    let base_repository = base
+        .as_ref()
+        .map(|_| format!("base-repository={upstream}\n"))
+        .unwrap_or_default();
     let base = base.unwrap_or_default();
     let delimiter = format!("KITHARA_PR_TESTS_{}", block.len());
     let mut file = OpenOptions::new().append(true).open(output)?;
     write!(
         file,
-        "kind={kind}\nbase-sha={base}\npr-tests<<{delimiter}\n{block}\n{delimiter}\n"
+        "kind={kind}\nbase-sha={base}\n{base_repository}pr-tests<<{delimiter}\n{block}\n{delimiter}\n"
     )
 }
 
@@ -244,5 +252,30 @@ mod tests {
             pull_kind(r#"[{"draft": true, "body": null, "base": {"sha": "base"}}]"#).unwrap(),
             ("branch", None, Some("base".to_owned()))
         );
+    }
+
+    #[test]
+    fn base_repository_is_published_only_with_a_pull_request_base() {
+        for (pulls, upstream_is_published) in [
+            ("[]", false),
+            (
+                r#"[{"draft": false, "body": null, "base": {"sha": "base"}}]"#,
+                true,
+            ),
+        ] {
+            let output = tempfile::NamedTempFile::new().expect("temporary GitHub output");
+            publish_kind(
+                pulls,
+                "zvuk/kithara",
+                output.path().to_str().expect("UTF-8 temporary path"),
+            )
+            .expect("kind outputs are written");
+            let text = std::fs::read_to_string(output.path()).expect("kind outputs are readable");
+            assert_eq!(
+                text.contains("base-repository=zvuk/kithara"),
+                upstream_is_published,
+                "{text}"
+            );
+        }
     }
 }

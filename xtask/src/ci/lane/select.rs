@@ -1,12 +1,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
+    process::Command,
 };
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use kithara_devtools::Ctx;
 use serde::Serialize;
+use tracing::warn;
 
 use crate::{
     ci::run::PipelineKind,
@@ -23,7 +25,7 @@ pub(crate) enum Fleet {
     Gitlab,
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
 pub(crate) struct LanesArgs {
     /// The role whose lanes to render.
     #[arg(long)]
@@ -43,9 +45,12 @@ pub(crate) struct LanesArgs {
     /// YAML.
     #[arg(long, value_enum)]
     pub(crate) field: Option<Field>,
-    /// A path changed by the reviewed revision. Repeat for every changed path.
+    /// Revision the reviewed change is compared against. An unreadable
+    /// comparison selects every path-gated lane rather than none.
     #[arg(long)]
-    pub(crate) changed_path: Vec<String>,
+    pub(crate) base: Option<String>,
+    #[arg(skip)]
+    pub(crate) changed_paths: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -123,11 +128,13 @@ fn is_asked_for(lane: &CiLaneConfig, name: &str, kind: &str, args: &LanesArgs) -
     if lane.path_globs.is_empty() || args.kind.is_full() {
         return Ok(true);
     }
+    let Some(changed_paths) = args.changed_paths.as_deref() else {
+        return Ok(true);
+    };
     for glob in &lane.path_globs {
         let glob = glob::Pattern::new(glob)
             .with_context(|| format!("invalid path glob for CI lane `{name}`"))?;
-        if args
-            .changed_path
+        if changed_paths
             .iter()
             .any(|path| glob.matches_path(Path::new(path)))
         {
@@ -280,10 +287,45 @@ fn field(selection: &Selection, field: Option<Field>) -> Result<String> {
     })
 }
 
+fn changed_paths(root: &Path, base: &str) -> Option<Vec<String>> {
+    let paths = Command::new("git")
+        .current_dir(root)
+        .args([
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            "--merge-base",
+            base,
+            "HEAD",
+            "--",
+        ])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|output| {
+            output
+                .split('\0')
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        });
+    if paths.is_none() {
+        warn!(base, "comparison failed; selecting every path-gated lane");
+    }
+    paths
+}
+
 pub(crate) fn run(args: &LanesArgs, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
-    let selection = render(&ext.ci.lanes, args)?;
+    let mut args = args.clone();
+    args.changed_paths = args
+        .base
+        .as_deref()
+        .and_then(|base| changed_paths(&ctx.root, base));
+    let selection = render(&ext.ci.lanes, &args)?;
     println!("{}", field(&selection, args.field)?);
     Ok(())
 }
@@ -325,7 +367,8 @@ mod tests {
             only: only.iter().map(|name| (*name).to_owned()).collect(),
             fleet: Fleet::Github,
             field: None,
-            changed_path: Vec::new(),
+            base: None,
+            changed_paths: None,
         }
     }
 
@@ -951,7 +994,7 @@ mod tests {
             ] {
                 let mut args = args("gate", kind, &[]);
                 args.fleet = fleet;
-                args.changed_path = changed.iter().map(|path| (*path).to_owned()).collect();
+                args.changed_paths = Some(changed.iter().map(|path| (*path).to_owned()).collect());
                 let selected = render(&ext.ci.lanes, &args)?;
                 let dependency_lanes = selected
                     .matrix
@@ -974,7 +1017,7 @@ mod tests {
         ] {
             let mut args = args("gate", kind, &[]);
             args.fleet = fleet;
-            args.changed_path = vec!["crates/kithara/src/lib.rs".to_owned()];
+            args.changed_paths = Some(vec!["crates/kithara/src/lib.rs".to_owned()]);
             let selected = render(&ext.ci.lanes, &args)?;
             for name in ["deps-advisories", "deps-deny"] {
                 assert!(
@@ -983,6 +1026,34 @@ mod tests {
                     kind.name()
                 );
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn an_unknown_comparison_selects_path_gated_lanes() -> Result<()> {
+        let root = crate::testing::workspace::root();
+        assert!(changed_paths(&root, "HEAD").is_some());
+        assert_eq!(changed_paths(&root, "refs/kithara/missing"), None);
+
+        let ext = KitharaExt::load(&root)?;
+        for (fleet, kind) in [
+            (Fleet::Github, PipelineKind::Branch),
+            (Fleet::Github, PipelineKind::MergeRequest),
+            (Fleet::Gitlab, PipelineKind::Quarantine),
+        ] {
+            let mut args = args("gate", kind, &[]);
+            args.fleet = fleet;
+            args.changed_paths = None;
+            let selected = render(&ext.ci.lanes, &args)?;
+            assert!(
+                selected
+                    .matrix
+                    .iter()
+                    .any(|entry| entry.lane == "deps-advisories"),
+                "{fleet:?}/{} must fail open when the comparison is unknown",
+                kind.name()
+            );
         }
         Ok(())
     }
