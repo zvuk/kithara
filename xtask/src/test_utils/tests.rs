@@ -1,4 +1,23 @@
-use super::*;
+#[cfg(unix)]
+use std::{
+    env,
+    process::{Command, Output},
+    time::Duration,
+};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::Result;
+
+#[cfg(unix)]
+use super::consumer::Consumer;
+use super::consumer::{forbidden_paths, manifest, test_binary};
+#[cfg(unix)]
+use crate::child;
 #[cfg(unix)]
 use crate::testing::{install_double, install_scripted_double, signals};
 

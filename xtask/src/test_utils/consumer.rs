@@ -13,11 +13,11 @@ use tracing::info;
 
 use crate::{child, job};
 
-struct Consumer<'a> {
-    cancel: &'a child::Cancel,
-    directory: &'a Path,
-    capture: &'a Path,
-    target: &'a Path,
+pub(super) struct Consumer<'a> {
+    pub(super) cancel: &'a child::Cancel,
+    pub(super) directory: &'a Path,
+    pub(super) capture: &'a Path,
+    pub(super) target: &'a Path,
 }
 
 pub(crate) fn run(ctx: &Ctx) -> Result<()> {
@@ -51,7 +51,7 @@ pub(crate) fn run(ctx: &Ctx) -> Result<()> {
 }
 
 impl Consumer<'_> {
-    fn instrumentation(&self) -> Result<()> {
+    pub(super) fn instrumentation(&self) -> Result<()> {
         let libdir = self.checked(
             Command::new("rustc").args(["--print", "target-libdir"]),
             "instrumentation-target-libdir",
@@ -188,7 +188,7 @@ impl Consumer<'_> {
         Ok(())
     }
 
-    fn cargo(&self, args: &[&str]) -> Command {
+    pub(super) fn cargo(&self, args: &[&str]) -> Command {
         let mut command = Command::new("cargo");
         command
             .current_dir(self.directory)
@@ -205,7 +205,12 @@ impl Consumer<'_> {
         command
     }
 
-    fn checked(&self, command: &mut Command, label: &str, seconds: Option<u64>) -> Result<String> {
+    pub(super) fn checked(
+        &self,
+        command: &mut Command,
+        label: &str,
+        seconds: Option<u64>,
+    ) -> Result<String> {
         let output = self.execute(command, label, seconds)?;
         ensure!(
             output.status.success(),
@@ -282,7 +287,12 @@ impl Consumer<'_> {
         Ok(())
     }
 
-    fn execute(&self, command: &mut Command, label: &str, seconds: Option<u64>) -> Result<Output> {
+    pub(super) fn execute(
+        &self,
+        command: &mut Command,
+        label: &str,
+        seconds: Option<u64>,
+    ) -> Result<Output> {
         let stdout = self.capture.join(format!("{label}.stdout"));
         let stderr = self.capture.join(format!("{label}.stderr"));
         info!(label, ?command, "test utilities command");
@@ -414,7 +424,7 @@ impl Consumer<'_> {
     }
 }
 
-fn manifest(root: &Path, pin: Option<(&str, &str)>) -> Result<String> {
+pub(super) fn manifest(root: &Path, pin: Option<(&str, &str)>) -> Result<String> {
     let workspace: toml::Value = toml::from_str(&fs::read_to_string(root.join("Cargo.toml"))?)?;
     let dependencies = workspace
         .get("workspace")
@@ -503,7 +513,7 @@ wasm-bindgen-test = { workspace = true }
     toml::to_string(&manifest).context("serialize consumer manifest")
 }
 
-fn test_binary(report: &str) -> Result<PathBuf> {
+pub(super) fn test_binary(report: &str) -> Result<PathBuf> {
     let binaries = Message::parse_stream(report.as_bytes())
         .filter_map(|message| match message {
             Ok(Message::CompilerArtifact(artifact)) if artifact.profile.test => {
@@ -519,7 +529,7 @@ fn test_binary(report: &str) -> Result<PathBuf> {
     Ok(binary.clone())
 }
 
-fn forbidden_paths(tree: &str) -> Result<Vec<String>> {
+pub(super) fn forbidden_paths(tree: &str) -> Result<Vec<String>> {
     ensure!(!tree.is_empty(), "empty dependency closure");
     let mut path = Vec::new();
     let mut forbidden = Vec::new();
@@ -558,7 +568,3 @@ fn forbidden_paths(tree: &str) -> Result<Vec<String>> {
     }
     Ok(forbidden)
 }
-
-#[cfg(test)]
-#[path = "../tests/test_utils/unit.rs"]
-mod tests;
