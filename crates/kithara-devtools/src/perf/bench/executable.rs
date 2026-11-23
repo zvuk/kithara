@@ -67,7 +67,7 @@ pub(super) fn build(
     }
     let executable = executable.context("cargo did not report a benchmark executable")?;
     let libdir = log.output(
-        Command::new(ctx.config.tools.program("rustc"))
+        cargo::rustc(ctx.config.tools.program("rustc"))
             .args(["--print", "target-libdir"])
             .current_dir(root),
         true,

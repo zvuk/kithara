@@ -52,11 +52,6 @@ pub(crate) fn run(ctx: &Ctx) -> Result<()> {
 
 impl Consumer<'_> {
     pub(super) fn instrumentation(&self) -> Result<()> {
-        let libdir = self.checked(
-            Command::new("rustc").args(["--print", "target-libdir"]),
-            "instrumentation-target-libdir",
-            Some(30),
-        )?;
         for features in ["", "facade", "instrumented"] {
             let report = self.checked(
                 &mut self.cargo(&[
@@ -122,9 +117,8 @@ impl Consumer<'_> {
             );
             info!(features, "production macro inputs exclude the test DSL");
             let executable = executable.context("instrumentation example artifact")?;
-            let (variable, libraries) = cargo::library_path(&executable, Path::new(libdir.trim()))?;
             self.checked(
-                Command::new(executable).env(variable, libraries),
+                &mut self.native_command(&executable)?,
                 &format!("instrumentation-run-{features}"),
                 Some(300),
             )?;
@@ -132,8 +126,8 @@ impl Consumer<'_> {
         Ok(())
     }
 
-    fn capabilities(&self) -> Result<()> {
-        let toolchain = self.checked(Command::new("rustc").arg("-vV"), "toolchain", Some(30))?;
+    pub(super) fn capabilities(&self) -> Result<()> {
+        let toolchain = self.checked(cargo::rustc("rustc").arg("-vV"), "toolchain", Some(30))?;
         info!(toolchain = toolchain.trim(), "test utilities toolchain");
         for offline in [false, true] {
             for features in [
@@ -162,7 +156,7 @@ impl Consumer<'_> {
                     None,
                 )?;
                 let binary = test_binary(&report)?;
-                let report = self.checked(&mut Command::new(&binary), &label, Some(300))?;
+                let report = self.checked(&mut self.native_command(&binary)?, &label, Some(300))?;
                 info!(label, report = report.trim(), "native consumer passed");
                 if !offline && features == "test,hang" {
                     self.watchdog(&binary)?;
@@ -186,6 +180,18 @@ impl Consumer<'_> {
             }
         }
         Ok(())
+    }
+
+    fn native_command(&self, binary: &Path) -> Result<Command> {
+        let libdir = self.checked(
+            cargo::rustc("rustc").args(["--print", "target-libdir"]),
+            "native-target-libdir",
+            Some(30),
+        )?;
+        let (variable, libraries) = cargo::library_path(binary, Path::new(libdir.trim()))?;
+        let mut command = Command::new(binary);
+        command.env(variable, libraries);
+        Ok(command)
     }
 
     pub(super) fn cargo(&self, args: &[&str]) -> Command {
@@ -379,9 +385,9 @@ impl Consumer<'_> {
         Ok(())
     }
 
-    fn watchdog(&self, binary: &Path) -> Result<()> {
+    pub(super) fn watchdog(&self, binary: &Path) -> Result<()> {
         let output = self.execute(
-            Command::new(binary)
+            self.native_command(binary)?
                 .args([
                     "--ignored",
                     "--exact",

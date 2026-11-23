@@ -47,11 +47,17 @@ fn instrumentation_fixture_child() -> Result<()> {
         Some(97),
         "fake Cargo must refuse run"
     );
-    consumer.instrumentation()
+    match env::var("KITHARA_TEST_UTILS_CASE").as_deref() {
+        Ok("native") => consumer.capabilities(),
+        Ok("watchdog") => consumer.watchdog(&test_binary(&fs::read_to_string(
+            consumer.directory.join("report.json"),
+        )?)?),
+        _ => consumer.instrumentation(),
+    }
 }
 
 #[cfg(unix)]
-fn dynamic_artifact(consumer: &Consumer<'_>) -> Result<PathBuf> {
+fn dynamic_artifact(consumer: &Consumer<'_>, tests: bool) -> Result<PathBuf> {
     let directory = consumer.directory;
     let target = consumer.target.join("debug");
     let deps = target.join("deps");
@@ -78,37 +84,66 @@ fn dynamic_artifact(consumer: &Consumer<'_>) -> Result<PathBuf> {
         "dynamic-library-build",
         Some(300),
     )?;
-    fs::write(
-        directory.join("main.rs"),
+    let source = if tests {
+        r#"
+use std::io::Write as _;
+#[test]
+fn native_consumer() -> std::io::Result<()> {
+    assert_eq!(loader_contract::answer(), 42);
+    std::fs::OpenOptions::new().create(true).append(true).open("runtime-runs")?.write_all(b"native\n")
+}
+mod watchdog {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn hang_watchdog_fires() -> std::io::Result<()> {
+        assert_eq!(loader_contract::answer(), 42);
+        std::fs::OpenOptions::new().create(true).append(true).open("runtime-runs")?.write_all(b"watchdog\n")?;
+        let capture = std::env::var_os("KITHARA_HANG_DUMP_DIR").unwrap();
+        std::fs::write(std::path::PathBuf::from(capture).join("kithara-hang-test-utils-watchdog-fixture.json"),
+            "{\"schema\":\"kithara.hang.v1\",\"label\":\"test-utils-watchdog\"}")?;
+        eprintln!("[HangDetector] `test-utils-watchdog` no progress for 1s");
+        eprintln!("[kithara_hang_detector] hang detected: test-utils-watchdog");
+        std::process::exit(7)
+    }
+}
+"#
+    } else {
         r#"
 use std::io::Write as _;
 fn main() -> std::io::Result<()> {
-assert_eq!(loader_contract::answer(), 42);
-std::fs::OpenOptions::new().create(true).append(true).open("runtime-runs")?.write_all(b"artifact\n")?;
-println!("runtime stdout");
-eprintln!("runtime stderr");
-Ok(())
+    assert_eq!(loader_contract::answer(), 42);
+    std::fs::OpenOptions::new().create(true).append(true).open("runtime-runs")?.write_all(b"artifact\n")?;
+    println!("runtime stdout");
+    eprintln!("runtime stderr");
+    Ok(())
 }
-"#,
-    )?;
-    let executable = target.join("examples/instrumentation");
-    consumer.checked(
-        Command::new("rustc")
-            .args([
-                "--edition=2024",
-                "-C",
-                "prefer-dynamic",
-                "main.rs",
-                "--extern",
-            ])
-            .arg(format!("loader_contract={}", library.display()))
-            .arg("-L")
-            .arg(format!("dependency={}", deps.display()))
-            .arg("-o")
-            .arg(&executable),
-        "dynamic-example-build",
-        Some(300),
-    )?;
+"#
+    };
+    fs::write(directory.join("main.rs"), source)?;
+    let executable = target.join(if tests {
+        "deps/native-consumer"
+    } else {
+        "examples/instrumentation"
+    });
+    let mut compiler = Command::new("rustc");
+    compiler
+        .args([
+            "--edition=2024",
+            "-C",
+            "prefer-dynamic",
+            "main.rs",
+            "--extern",
+        ])
+        .arg(format!("loader_contract={}", library.display()))
+        .arg("-L")
+        .arg(format!("dependency={}", deps.display()))
+        .arg("-o")
+        .arg(&executable);
+    if tests {
+        compiler.arg("--test");
+    }
+    consumer.checked(&mut compiler, "dynamic-example-build", Some(300))?;
     let direct = consumer.execute(
         Command::new(&executable)
             .env_remove("LD_LIBRARY_PATH")
@@ -133,6 +168,87 @@ Ok(())
 }
 
 #[cfg(unix)]
+fn compiler_environment(
+    consumer: &Consumer<'_>,
+    bin: &Path,
+    case: &str,
+    command: &mut Command,
+) -> Result<()> {
+    let libdir = consumer.checked(
+        Command::new("rustc").args(["--print", "target-libdir"]),
+        "fixture-libdir",
+        Some(30),
+    )?;
+    fs::write(consumer.directory.join("compiler-libdir"), libdir)?;
+    install_double(bin, "rustc");
+    let selected = install_scripted_double(
+        bin,
+        "selected-rustc",
+        "printf 'selected\n' >> compiler.calls\ncat compiler-libdir\n",
+    );
+    let rejected = install_scripted_double(
+        bin,
+        "rejected-rustc",
+        "printf 'rejected\n' >> rejected.calls\nprintf 'selected compiler failed\n' >&2\nexit 91\n",
+    );
+    match case {
+        "compiler-rustc" => {
+            command.env("RUSTC", &selected);
+        }
+        "compiler-build" => {
+            command.env("CARGO_BUILD_RUSTC", &selected);
+        }
+        "compiler-priority" => {
+            command
+                .env("RUSTC", &selected)
+                .env("CARGO_BUILD_RUSTC", &rejected);
+        }
+        "compiler-fails" => {
+            command
+                .env("RUSTC", &rejected)
+                .env("CARGO_BUILD_RUSTC", &selected);
+        }
+        _ => anyhow::bail!("unknown compiler fixture case: {case}"),
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn fixture_output(root: &Path, bin: &Path, case: &str, cancel: &child::Cancel) -> Result<Output> {
+    let directory = root.join("consumer");
+    let path = env::join_paths(
+        std::iter::once(bin.to_path_buf())
+            .chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
+    )?;
+    let mut command = Command::new(env::current_exe()?);
+    command.args(["--exact", "test_utils::tests::instrumentation_fixture_child", "--ignored", "--nocapture"])
+        .env("PATH", path)
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("DYLD_FALLBACK_LIBRARY_PATH")
+        .env_remove("RUSTC")
+        .env_remove("CARGO_BUILD_RUSTC")
+        .env("KITHARA_TEST_UTILS_INSTRUMENTATION_ROOT", root)
+        .env("KITHARA_TEST_UTILS_CASE", case)
+        .env("KITHARA_TEST_STDOUT", fs::read_to_string(directory.join("report.json"))?)
+        .env("KITHARA_TEST_TRACE", directory.join("cargo.calls"))
+        .env("KITHARA_TEST_RULES", "cargo:build:*=0,cargo:test:*=0,cargo:check:*=0,cargo:run:*=97,rustc:*:*=96,cargo:*:*=98");
+    if case.starts_with("compiler-") {
+        compiler_environment(
+            &Consumer {
+                cancel,
+                directory: &directory,
+                capture: &root.join("capture"),
+                target: &root.join("target"),
+            },
+            bin,
+            case,
+            &mut command,
+        )?;
+    }
+    child::output(&mut command, Some(cancel), Duration::from_secs(300))
+}
+
+#[cfg(unix)]
 fn instrumentation_fixture(case: &str) -> Result<(tempfile::TempDir, Output)> {
     let _signals = signals();
     let cancel = child::Cancel::install()?;
@@ -141,26 +257,30 @@ fn instrumentation_fixture(case: &str) -> Result<(tempfile::TempDir, Output)> {
     let bin = root.path().join("bin");
     fs::create_dir(&directory)?;
     fs::create_dir(root.path().join("capture"))?;
-    let executable = if case == "dynamic" {
-        dynamic_artifact(&Consumer {
-            cancel: &cancel,
-            directory: &directory,
-            capture: &root.path().join("capture"),
-            target: &root.path().join("target"),
-        })?
-    } else {
-        install_scripted_double(
-            &bin,
-            "instrumentation",
-            r#"set -eu
+    let executable =
+        if matches!(case, "dynamic" | "native" | "watchdog") || case.starts_with("compiler-") {
+            dynamic_artifact(
+                &Consumer {
+                    cancel: &cancel,
+                    directory: &directory,
+                    capture: &root.path().join("capture"),
+                    target: &root.path().join("target"),
+                },
+                matches!(case, "native" | "watchdog"),
+            )?
+        } else {
+            install_scripted_double(
+                &bin,
+                "instrumentation",
+                r#"set -eu
 test "$(pwd -P)" = "$(cat expected-cwd)"
 printf 'artifact\n' >> runtime-runs
 printf 'runtime stdout\n'
 printf 'runtime stderr\n' >&2
 if test -f runtime-fails; then exit 7; fi
 "#,
-        )
-    };
+            )
+        };
     fs::write(
         directory.join("expected-cwd"),
         directory
@@ -186,6 +306,10 @@ if test -f runtime-fails; then exit 7; fi
     macros["filenames"] = serde_json::json!([library]);
     macros["executable"] = serde_json::Value::Null;
     let mut records = vec![macros.clone(), example.clone()];
+    if matches!(case, "native" | "watchdog") {
+        records[1]["profile"]["test"] = true.into();
+        records[1]["target"]["kind"] = serde_json::json!(["lib"]);
+    }
     let mut inputs = "/source/src/lib.rs".to_owned();
     match case {
         "missing-example" => {
@@ -214,7 +338,8 @@ if test -f runtime-fails; then exit 7; fi
         "missing-input" => inputs = "/source/src/other.rs".into(),
         "launch" => records[1]["executable"] = serde_json::json!(bin.join("missing")),
         "nonzero" => fs::write(directory.join("runtime-fails"), "")?,
-        "ok" | "dynamic" | "malformed" | "trailing-garbage" => {}
+        "ok" | "dynamic" | "native" | "watchdog" | "compiler-rustc" | "compiler-build"
+        | "compiler-priority" | "compiler-fails" | "malformed" | "trailing-garbage" => {}
         _ => anyhow::bail!("unknown instrumentation regression case: {case}"),
     }
     let mut lines = records.iter().map(ToString::to_string).collect::<Vec<_>>();
@@ -233,34 +358,77 @@ if test -f runtime-fails; then exit 7; fi
         inputs,
     )?;
     install_double(&bin, "cargo");
-    let path = env::join_paths(
-        std::iter::once(bin).chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
-    )?;
-    let output = child::output(
-        Command::new(env::current_exe()?)
-            .args([
-                "--exact",
-                "test_utils::tests::instrumentation_fixture_child",
-                "--ignored",
-                "--nocapture",
-            ])
-            .env("PATH", path)
-            .env_remove("LD_LIBRARY_PATH")
-            .env_remove("DYLD_FALLBACK_LIBRARY_PATH")
-            .env("KITHARA_TEST_UTILS_INSTRUMENTATION_ROOT", root.path())
-            .env(
-                "KITHARA_TEST_STDOUT",
-                fs::read_to_string(directory.join("report.json"))?,
-            )
-            .env("KITHARA_TEST_TRACE", directory.join("cargo.calls"))
-            .env(
-                "KITHARA_TEST_RULES",
-                "cargo:build:*=0,cargo:run:*=97,cargo:*:*=98",
-            ),
-        Some(&cancel),
-        Duration::from_secs(300),
-    )?;
+    let output = fixture_output(root.path(), &bin, case, &cancel)?;
     Ok((root, output))
+}
+
+#[cfg(unix)]
+#[test]
+fn native_consumers_run_dynamically_linked_artifacts() -> Result<()> {
+    let (root, output) = instrumentation_fixture("native")?;
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let runs = fs::read_to_string(root.path().join("consumer/runtime-runs"))?;
+    assert_eq!(runs.lines().filter(|line| *line == "native").count(), 18);
+    assert_eq!(runs.lines().filter(|line| *line == "watchdog").count(), 1);
+    assert_eq!(
+        fs::read_to_string(root.path().join("consumer/cargo.calls"))?
+            .lines()
+            .count(),
+        22
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn watchdog_runs_the_dynamically_linked_test_artifact() -> Result<()> {
+    let (root, output) = instrumentation_fixture("watchdog")?;
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("consumer/runtime-runs"))?,
+        "watchdog\n"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn instrumentation_uses_the_cargo_selected_compiler() -> Result<()> {
+    for case in ["compiler-rustc", "compiler-build", "compiler-priority"] {
+        let (root, output) = instrumentation_fixture(case)?;
+        assert!(
+            output.status.success(),
+            "{case}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join("consumer/runtime-runs"))?,
+            "artifact\n".repeat(3)
+        );
+        assert!(!fs::read_to_string(root.path().join("consumer/compiler.calls"))?.is_empty());
+        assert!(!root.path().join("consumer/rejected.calls").exists());
+    }
+    let (root, output) = instrumentation_fixture("compiler-fails")?;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("selected compiler failed"));
+    assert!(!root.path().join("consumer/runtime-runs").exists());
+    assert!(!root.path().join("consumer/compiler.calls").exists());
+    assert_eq!(
+        fs::read_to_string(root.path().join("consumer/rejected.calls"))?,
+        "rejected\n"
+    );
+    Ok(())
 }
 
 #[cfg(unix)]

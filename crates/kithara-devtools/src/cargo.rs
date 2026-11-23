@@ -1,9 +1,10 @@
-//! Loader paths for native executables produced by Cargo.
+//! Compiler selection and loader paths for native Cargo executables.
 
 use std::{
     env,
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use anyhow::{Context, Result, ensure};
@@ -53,9 +54,68 @@ pub fn library_path(executable: &Path, target_libdir: &Path) -> Result<(&'static
     Ok((variable, env::join_paths(paths)?))
 }
 
+/// Build a command for Cargo's selected Rust compiler.
+///
+/// `RUSTC` takes precedence over `CARGO_BUILD_RUSTC`, then `configured` supplies
+/// the compiler program when neither environment override is present.
+#[must_use]
+pub fn rustc<P: AsRef<OsStr>>(configured: P) -> Command {
+    let program = env::var_os("RUSTC")
+        .or_else(|| env::var_os("CARGO_BUILD_RUSTC"))
+        .unwrap_or_else(|| configured.as_ref().to_os_string());
+    Command::new(program)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "invoked by the compiler precedence parent"]
+    fn selected_compiler_child() {
+        assert_eq!(
+            rustc("configured-rustc").get_program(),
+            env::var_os("KITHARA_TEST_EXPECTED_RUSTC").expect("expected compiler")
+        );
+    }
+
+    #[test]
+    fn compiler_selection_obeys_cargo_environment_precedence() -> Result<()> {
+        for (rustc, build_rustc, expected) in [
+            (None, None, "configured-rustc"),
+            (Some("explicit-rustc"), None, "explicit-rustc"),
+            (None, Some("build-rustc"), "build-rustc"),
+            (
+                Some("explicit-rustc"),
+                Some("build-rustc"),
+                "explicit-rustc",
+            ),
+        ] {
+            let mut command = Command::new(env::current_exe()?);
+            command
+                .args(crate::common::child_test_args(
+                    module_path!(),
+                    "selected_compiler_child",
+                ))
+                .env_remove("RUSTC")
+                .env_remove("CARGO_BUILD_RUSTC")
+                .env("KITHARA_TEST_EXPECTED_RUSTC", expected);
+            if let Some(program) = rustc {
+                command.env("RUSTC", program);
+            }
+            if let Some(program) = build_rustc {
+                command.env("CARGO_BUILD_RUSTC", program);
+            }
+            let output = command.output()?;
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn loader_path_uses_the_artifact_profile_and_preserves_inherited_paths() -> Result<()> {
