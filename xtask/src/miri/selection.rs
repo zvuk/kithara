@@ -126,7 +126,7 @@ mod tests {
         let syntax = syn::parse_file(
             r#"
             mod nested {
-                #[kithara::test(miri, tokio, timeout(Medium))]
+                #[kithara::test(miri, tokio, timeout(Long))]
                 async fn selected() {}
                 #[kithara::test] fn ordinary() {}
                 #[kithara::test(tokio)] async fn native() {}
