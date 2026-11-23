@@ -375,9 +375,7 @@ mod tests {
 
     #[test]
     fn borrowed_timeout_fixture_is_created_outside_async_poll() -> syn::Result<()> {
-        let args = syn::parse_str::<TestArgs>(
-            "tokio, native, timeout(std::time::Duration::from_secs(1))",
-        )?;
+        let args = syn::parse_str::<TestArgs>("tokio, native, timeout(Quick)")?;
         let function = syn::parse_str("async fn contract(#[by_ref] owner: &Owner) {}")?;
         let mut expanded = syn::parse2::<syn::File>(generate(args, function)?)?;
         let mut context = FixtureContext::default();
@@ -483,9 +481,7 @@ mod tests {
 
     #[test]
     fn serial_browser_guard_precedes_body_timeout() -> syn::Result<()> {
-        let args = syn::parse_str::<TestArgs>(
-            "browser, serial, timeout(std::time::Duration::from_secs(10))",
-        )?;
+        let args = syn::parse_str::<TestArgs>("browser, serial, timeout(Long)")?;
         let function = syn::parse_str("async fn stress() {}")?;
 
         let expanded = generate(args, function)?.to_string();
@@ -514,15 +510,9 @@ mod tests {
             ("", "fn contract() {}"),
             ("", "async fn contract() {}"),
             ("tokio", "async fn contract() {}"),
-            (
-                "tokio, timeout(std::time::Duration::from_secs(5))",
-                "async fn contract() {}",
-            ),
+            ("tokio, timeout(Medium)", "async fn contract() {}"),
             ("tokio, native", "async fn contract() {}"),
-            (
-                "tokio, native, timeout(std::time::Duration::from_secs(5))",
-                "async fn contract() {}",
-            ),
+            ("tokio, native, timeout(Medium)", "async fn contract() {}"),
             ("browser", "async fn contract() {}"),
         ] {
             let args = syn::parse_str::<TestArgs>(attrs)?;
@@ -574,7 +564,7 @@ mod tests {
             "native",
             "serial",
             "native, browser",
-            "native, timeout(std::time::Duration::from_secs(2))",
+            "native, timeout(Short)",
         ] {
             let args = syn::parse_str::<TestArgs>(attrs)?;
             let function = syn::parse_str("fn contract() -> Result<(), String> { Ok(()) }")?;

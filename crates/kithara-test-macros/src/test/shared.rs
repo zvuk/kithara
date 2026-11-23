@@ -559,7 +559,7 @@ mod tests {
     fn sync_timeout_records_durable_evidence_before_panicking() {
         let name: Ident = parse_quote!(stress_case);
         let mut args = TestArgs::default();
-        args.set_timeout(Some(parse_quote!(::std::time::Duration::from_secs(5))));
+        args.set_timeout(Some(parse_quote!(Medium)));
 
         let expanded =
             wrap_with_timeout(&quote!({}), &args, false, &name, &ReturnType::Default).to_string();
@@ -573,7 +573,7 @@ mod tests {
     fn async_timeout_records_durable_evidence_before_panicking() {
         let name: Ident = parse_quote!(stress_case);
         let mut args = TestArgs::default();
-        args.set_timeout(Some(parse_quote!(::std::time::Duration::from_secs(5))));
+        args.set_timeout(Some(parse_quote!(Medium)));
 
         let expanded =
             wrap_with_timeout(&quote!({}), &args, true, &name, &ReturnType::Default).to_string();

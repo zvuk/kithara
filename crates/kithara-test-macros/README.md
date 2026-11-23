@@ -93,9 +93,10 @@ Mock expansion requires test-utils `mock` and direct `unimock` (`0.6`, feature
 those wrappers does not establish browser execution.
 
 Hang helpers become no-ops when test-utils `hang` is disabled. The explicit
-`timeout(...)` accepts a named `TestBudget` variant or a manual `Duration`.
-`Network` is only for tests against a live network or run by hand. Tests default
-to `Quick`; manual overrides use `Long` under Miri. The body timeout
+`timeout(...)` accepts only a `TestBudget` tier name: `Quick`, `Short`, `Medium`,
+`Long` or `Network`. Duration expressions, aliases and qualified paths are
+compile errors. `Network` is only for tests against a live network or run by
+hand. Tests default to `Quick`. The body timeout
 works separately from watchdog progress checks;
 `hang_timeout_secs(N)` sets the budget of watchdogs entered inside a test. USDT
 disabled builds require no DTrace tools. Test-utils' empty `client-*` and `tls-*`

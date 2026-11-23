@@ -3,31 +3,12 @@ use syn::{Expr, Ident, parse_quote};
 
 pub(crate) fn resolve(args: &TestArgs) -> Expr {
     let flash = args.flash().unwrap_or(true);
-    let budget = match args.timeout() {
-        None => Some(parse_quote!(Quick)),
-        Some(Expr::Path(path)) if path.qself.is_none() => path
-            .path
-            .get_ident()
-            .filter(|name| {
-                matches!(
-                    name.to_string().as_str(),
-                    "Quick" | "Short" | "Medium" | "Long" | "Network"
-                )
-            })
-            .cloned(),
-        _ => None,
-    };
-    if let Some(budget) = budget {
-        return named(&budget, flash);
-    }
-    let manual = args.timeout();
-    let miri = named(&parse_quote!(Long), flash);
-    parse_quote!({
-        #[cfg(miri)]
-        { #miri }
-        #[cfg(not(miri))]
-        { #manual }
-    })
+    let budget = args
+        .timeout()
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| parse_quote!(Quick));
+    named(&budget, flash)
 }
 
 fn named(budget: &Ident, flash: bool) -> Expr {
@@ -47,9 +28,39 @@ fn named(budget: &Ident, flash: bool) -> Expr {
 mod tests {
     use kithara_test_args::TestArgs;
     use quote::ToTokens;
-    use syn::Expr;
 
     use super::resolve;
+
+    #[test]
+    fn timeout_accepts_every_named_tier() -> syn::Result<()> {
+        for tier in ["Quick", "Short", "Medium", "Long", "Network"] {
+            let args = syn::parse_str::<TestArgs>(&format!("timeout({tier})"))?;
+            assert_eq!(
+                args.timeout().as_ref().map(ToString::to_string).as_deref(),
+                Some(tier)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn timeout_rejects_non_tier_expressions() {
+        for expression in [
+            "Duration::from_secs(5)",
+            "std::time::Duration::from_millis(2186)",
+            "::std::time::Duration::from_secs(5)",
+            "SOME_TIMEOUT",
+            "TestBudget::Long",
+            "1000",
+            "{ Long }",
+            "Long, Short",
+        ] {
+            assert!(
+                syn::parse_str::<TestArgs>(&format!("timeout({expression})")).is_err(),
+                "timeout expression must be rejected: {expression}"
+            );
+        }
+    }
 
     #[test]
     fn a_missing_timeout_uses_a_constant_quick_budget() -> syn::Result<()> {
@@ -72,18 +83,13 @@ mod tests {
     }
 
     #[test]
-    fn manual_expressions_are_replaced_only_in_miri() -> syn::Result<()> {
-        let args = syn::parse_str::<TestArgs>("timeout(Duration::from_secs(5))")?;
-        let expr = resolve(&args);
-        let Expr::Block(block) = &expr else {
-            panic!("manual timeout must select its mode at compile time");
-        };
-        assert_eq!(block.block.stmts.len(), 2);
-        let expanded = expr.to_token_stream().to_string();
-        assert!(expanded.contains("cfg (miri)"));
-        assert!(expanded.contains("TestBudget :: Long . timeout"));
-        assert!(expanded.contains("cfg (not (miri))"));
-        assert!(expanded.contains("Duration :: from_secs (5)"));
-        Ok(())
+    fn manual_duration_expressions_are_rejected() {
+        for expression in [
+            "Duration::from_secs(5)",
+            "std::time::Duration::from_millis(2186)",
+            "::std::time::Duration::from_secs(5)",
+        ] {
+            assert!(syn::parse_str::<TestArgs>(&format!("timeout({expression})")).is_err());
+        }
     }
 }

@@ -1,6 +1,6 @@
 use proc_macro2::Span;
 use syn::{
-    Error, Expr, Ident, Token,
+    Error, Ident, Token,
     parse::{Parse, ParseStream},
 };
 
@@ -30,12 +30,27 @@ pub struct TestArgs {
     flags: TestFlags,
     hang_timeout_secs: Option<u64>,
     #[field(get(option_borrow_inner = false))]
-    timeout: Option<Expr>,
+    timeout: Option<Ident>,
     tracing_filter: Option<String>,
     soft_fail_patterns: Vec<String>,
 }
 
 impl TestArgs {
+    fn parse_timeout(input: ParseStream<'_>) -> syn::Result<Ident> {
+        let expected =
+            "timeout requires a TestBudget tier name: Quick, Short, Medium, Long or Network";
+        let budget: Ident = input.parse().map_err(|_| input.error(expected))?;
+        if !input.is_empty()
+            || !matches!(
+                budget.to_string().as_str(),
+                "Quick" | "Short" | "Medium" | "Long" | "Network"
+            )
+        {
+            return Err(Error::new(budget.span(), expected));
+        }
+        Ok(budget)
+    }
+
     /// The explicit flash setting; absence keeps the expansion's default.
     #[must_use]
     pub fn flash(&self) -> Option<bool> {
@@ -149,7 +164,7 @@ impl Parse for TestArgs {
                 "timeout" => {
                     let content;
                     syn::parenthesized!(content in input);
-                    args.set_timeout(Some(content.parse()?));
+                    args.set_timeout(Some(Self::parse_timeout(&content)?));
                 }
                 "flash" => {
                     let content;

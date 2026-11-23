@@ -1718,9 +1718,6 @@ fn budget_seconds(expression: &Expr, path: &Path) -> Option<u64> {
 }
 
 fn live_or_hand_run_target(path: &Path) -> bool {
-    if fs::read_to_string(path).is_ok_and(|source| source.contains("#[ignore]")) {
-        return true;
-    }
     let Some(mut directory) = path.parent().map(Path::to_path_buf) else {
         return false;
     };
@@ -1733,11 +1730,7 @@ fn live_or_hand_run_target(path: &Path) -> bool {
             let Ok(manifest) = toml::from_str::<toml::Value>(&source) else {
                 return false;
             };
-            let Some(relative) = path
-                .strip_prefix(&directory)
-                .ok()
-                .and_then(|path| path.to_str())
-            else {
+            let Ok(relative) = path.strip_prefix(&directory) else {
                 return false;
             };
             return manifest
@@ -1745,7 +1738,10 @@ fn live_or_hand_run_target(path: &Path) -> bool {
                 .and_then(toml::Value::as_array)
                 .is_some_and(|targets| {
                     targets.iter().any(|target| {
-                        target.get("path").and_then(toml::Value::as_str) == Some(relative)
+                        target
+                            .get("path")
+                            .and_then(toml::Value::as_str)
+                            .is_some_and(|target_path| Path::new(target_path) == relative)
                             && target
                                 .get("required-features")
                                 .and_then(toml::Value::as_array)
@@ -2001,9 +1997,22 @@ fn timeout_source_audit_rejects_duration_literals() {
         "::std::time::Duration::from_millis(92270)",
         "SOME_TIMEOUT",
     ] {
-        let expression = syn::parse_str(literal).expect("literal expression");
+        let source = format!("#[kithara::test(timeout({literal}))] fn example() {{}}");
+        let tokens = source
+            .parse::<TokenStream>()
+            .expect("timeout fixture tokenizes");
+        let mut expressions = Vec::new();
+        let mut problems = Vec::new();
+        collect_timeout_attributes(
+            &tokens,
+            Path::new("literal-fixture.rs"),
+            &mut expressions,
+            &mut problems,
+        );
+        assert!(problems.is_empty(), "fixture must parse: {problems:?}");
+        assert_eq!(expressions.len(), 1, "one timeout: {literal}");
         assert_eq!(
-            timeout_seconds(&expression),
+            timeout_seconds(&expressions[0]),
             None,
             "Duration expression must be rejected: {literal}"
         );
@@ -2065,12 +2074,17 @@ fn network_budget_requires_a_live_or_hand_run_target() {
     );
 
     fs::write(&manifest, "[[test]]\npath = \"tests/network.rs\"\n").expect("ignored manifest");
-    fs::write(&target, "#[ignore]\nfn case() {}").expect("ignored source");
-    assert_eq!(
-        budget_seconds(&expression, &target),
-        Some(600),
-        "an explicitly ignored hand-run test must accept Network"
-    );
+    for source in [
+        "// #[ignore]\nfn case() {}",
+        "#[ignore]\nfn ignored_sibling() {}\nfn case() {}",
+    ] {
+        fs::write(&target, source).expect("gate source");
+        assert_eq!(
+            budget_seconds(&expression, &target),
+            None,
+            "ignore text or a sibling cannot turn a gate target into a hand-run target"
+        );
+    }
 }
 
 #[test]

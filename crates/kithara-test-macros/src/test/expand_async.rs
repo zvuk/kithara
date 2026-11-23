@@ -276,8 +276,11 @@ mod tests {
 
     #[test]
     fn native_timeout_emitter_records_wall_and_hard_hangs() -> syn::Result<()> {
-        let args =
-            syn::parse_str::<TestArgs>("tokio, timeout(::std::time::Duration::from_secs(5))")?;
+        assert!(
+            syn::parse_str::<TestArgs>("tokio, timeout(::std::time::Duration::from_secs(5))")
+                .is_err()
+        );
+        let args = syn::parse_str::<TestArgs>("tokio, timeout(Medium)")?;
         let name: Ident = parse_quote!(stress_case);
         let visibility = Visibility::Inherited;
         let return_type = ReturnType::Default;
@@ -305,8 +308,11 @@ mod tests {
 
     #[test]
     fn native_async_code_is_resident_before_the_deadline_is_armed() -> syn::Result<()> {
-        let args =
-            syn::parse_str::<TestArgs>("tokio, timeout(::std::time::Duration::from_secs(5))")?;
+        assert!(
+            syn::parse_str::<TestArgs>("tokio, timeout(::std::time::Duration::from_secs(5))")
+                .is_err()
+        );
+        let args = syn::parse_str::<TestArgs>("tokio, timeout(Medium)")?;
         let name: Ident = parse_quote!(cold_binary);
         let expanded = emit_async_timeout_test(
             &name,
