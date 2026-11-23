@@ -1,8 +1,10 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{HasPool, PoolError};
+use kithara_bufpool::{HasPool, PoolError, SampleBuffer};
 use kithara_dsp::{
     fade::FadeCurve,
+    filter::Crossover,
+    mul_add, multiply_in_place,
     param::{Mix, MixDSP},
 };
 use kithara_signal::sanitize_sample;
@@ -11,8 +13,9 @@ use num_traits::cast::AsPrimitive;
 use super::{EqBandConfig, EqConfig};
 use crate::{
     GainDb,
+    consts::EQ_BLOCK_FRAMES,
     dsp::{
-        filter::CrossoverFilters,
+        filter::{active_band_count, build_crossover, hertz},
         gain::{GainBank, GainWrite},
     },
 };
@@ -26,7 +29,13 @@ enum RoutingOwner {
 /// Single-channel isolator crossover EQ.
 #[non_exhaustive]
 pub struct IsolatorEq {
-    filters: CrossoverFilters,
+    filters: Crossover,
+    crossover_freqs: SampleBuffer,
+    active_bands: usize,
+    sample_rate: u32,
+    output: SampleBuffer,
+    band_blocks: Vec<[SampleBuffer; 1]>,
+    gain_blocks: Vec<SampleBuffer>,
     gains: GainBank,
     bypass: MixDSP,
     silence: MixDSP,
@@ -41,6 +50,11 @@ impl IsolatorEq {
     ///
     /// Returns [`PoolError`] when the region cannot hand out the crossover
     /// filter states and the gain bank this isolator runs on.
+    ///
+    /// # Panics
+    ///
+    /// Panics when adjacent band frequencies do not form a finite, positive,
+    /// strictly increasing crossover design.
     pub fn new<S>(
         config: &EqConfig<S>,
         bands: &[EqBandConfig],
@@ -67,12 +81,28 @@ impl IsolatorEq {
         for (frequency, pair) in crossover_freqs.iter_mut().zip(bands.windows(2)) {
             *frequency = (pair[0].frequency() * pair[1].frequency()).sqrt();
         }
+        let (filters, active_bands) = build_crossover(&crossover_freqs, rate.get());
         Ok(Self {
             bypass: MixDSP::new(bypass, FadeCurve::Linear, config.smoothing(), rate),
             silence: MixDSP::new(silence, FadeCurve::Linear, config.smoothing(), rate),
             bypass_owner: None,
             silence_owner: None,
-            filters: CrossoverFilters::new(crossover_freqs, sample_rate),
+            filters,
+            crossover_freqs,
+            active_bands,
+            sample_rate: rate.get(),
+            output: config.pools().get_with_len::<f32>(EQ_BLOCK_FRAMES)?,
+            band_blocks: (0..bands.len())
+                .map(|_| {
+                    config
+                        .pools()
+                        .get_with_len::<f32>(EQ_BLOCK_FRAMES)
+                        .map(|buffer| [buffer])
+                })
+                .collect::<Result<_, _>>()?,
+            gain_blocks: (0..bands.len())
+                .map(|_| config.pools().get_with_len::<f32>(EQ_BLOCK_FRAMES))
+                .collect::<Result<_, _>>()?,
             gains: GainBank::new(
                 bands.iter().map(EqBandConfig::gain_db),
                 sample_rate,
@@ -83,16 +113,38 @@ impl IsolatorEq {
 
     #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
-        let input = sanitize_sample(input);
-        self.gains.tick();
-        let mut output = [match self.gains.len() {
-            0 => input,
-            1 => sanitize_sample(input * self.gains.linear(0)),
-            _ => sanitize_sample(self.filters.process(input, |band| self.gains.linear(band))),
-        }];
-        self.bypass.mix_dry_into_wet_mono(&[input], &mut output, 1);
-        self.silence.mix_dry_into_wet_mono(&[0.0], &mut output, 1);
-        sanitize_sample(output[0])
+        self.process_block(std::slice::from_ref(&input))[0]
+    }
+
+    pub(super) fn process_block(&mut self, input: &[f32]) -> &mut [f32] {
+        let frames = input.len().min(self.output.len());
+        let output = self.output.split_at_mut(frames).0;
+        for (output, &input) in output.iter_mut().zip(input) {
+            *output = sanitize_sample(input);
+        }
+        self.gains.fill(&mut self.gain_blocks, frames);
+        match self.active_bands.min(self.gains.len()) {
+            0 => {}
+            1 => {
+                multiply_in_place(output, &self.gain_blocks[0][..frames]);
+            }
+            active => {
+                let bands = &mut self.band_blocks[..active];
+                self.filters.split(&[&*output], bands);
+                output.fill(0.0);
+                for (band, gain) in bands.iter().zip(&self.gain_blocks) {
+                    mul_add(&band[0][..frames], &gain[..frames], output);
+                }
+            }
+        }
+        for (output, &input) in output.iter_mut().zip(input) {
+            let dry = sanitize_sample(input);
+            let mut wet = [sanitize_sample(*output)];
+            self.bypass.mix_dry_into_wet_mono(&[dry], &mut wet, 1);
+            self.silence.mix_dry_into_wet_mono(&[0.0], &mut wet, 1);
+            *output = sanitize_sample(wet[0]);
+        }
+        output
     }
 
     pub fn reset(&mut self) {
@@ -163,13 +215,29 @@ impl IsolatorEq {
         update_route(&mut self.silence, &mut self.silence_owner, silence, owner);
     }
 
+    /// Retunes the crossover and smoothers, clearing filter history.
+    ///
+    /// # Panics
+    /// Panics if the previously validated crossover cannot be retuned.
     pub fn update_sample_rate(&mut self, sample_rate: u32) {
         let rate = NonZeroU32::new(sample_rate).unwrap_or(NonZeroU32::MIN);
         self.bypass.update_sample_rate(rate);
         self.silence.update_sample_rate(rate);
         let sample_rate = sample_rate.as_();
         self.gains.update_sample_rate(sample_rate);
-        self.filters.update_sample_rate(sample_rate);
+        let active_bands = active_band_count(&self.crossover_freqs, rate.get());
+        if self.sample_rate != rate.get() {
+            if self.active_bands == active_bands {
+                self.filters
+                    .update_sample_rate(hertz(f64::from(rate.get())))
+                    .unwrap_or_else(|error| panic!("validated EQ sample-rate retune: {error}"));
+                self.active_bands = active_bands;
+            } else {
+                (self.filters, self.active_bands) =
+                    build_crossover(&self.crossover_freqs, rate.get());
+            }
+            self.sample_rate = rate.get();
+        }
     }
 
     delegate::delegate! {
@@ -390,6 +458,60 @@ mod tests {
             max_step <= slope + ramp,
             "a gain move stepped the output: {max_step} > {slope} + {ramp}"
         );
+    }
+
+    #[kithara::test]
+    fn bands_above_nyquist_are_empty_instead_of_duplicating_the_input() {
+        let config = EqConfig::builder(pools()).build();
+        let mut bands = super::super::band::generate_log_spaced_bands(2);
+        bands[1].set_gain_db(GainDb::MAX);
+        let mut eq = IsolatorEq::new(&config, &bands, 1_000).expect("low-rate isolator");
+
+        for input in [0.25, -0.5, 1.0] {
+            assert_eq!(eq.process_sample(input).to_bits(), input.to_bits());
+        }
+    }
+
+    #[kithara::test]
+    fn retune_drops_and_restores_bands_at_nyquist() {
+        let config = EqConfig::builder(pools()).build();
+        let mut bands = super::super::band::generate_log_spaced_bands(3);
+        bands[1].set_gain_db(GainDb::checked(-6.0).expect("middle gain"));
+        bands[2].set_gain_db(GainDb::MAX);
+        let mut retuned = IsolatorEq::new(&config, &bands, 48_000).expect("initial isolator");
+        for sample in [0.25, -0.5, 0.75, -1.0] {
+            retuned.process_sample(sample);
+        }
+
+        retuned.update_sample_rate(2_000);
+        let mut fresh = IsolatorEq::new(&config, &bands, 2_000).expect("low-rate isolator");
+        for frame in 0..257 {
+            let input = f32::from(u16::try_from(frame % 31).expect("bounded input")) / 31.0 - 0.5;
+            assert_eq!(
+                retuned.process_sample(input).to_bits(),
+                fresh.process_sample(input).to_bits()
+            );
+        }
+
+        let mut other_high_gain = bands.clone();
+        other_high_gain[2].set_gain_db(GainDb::MIN);
+        let mut silent_high = IsolatorEq::new(&config, &other_high_gain, 2_000).expect("low rate");
+        let mut boosted_high = IsolatorEq::new(&config, &bands, 2_000).expect("low rate");
+        for input in [0.25, -0.5, 0.75, -1.0] {
+            assert_eq!(
+                silent_high.process_sample(input).to_bits(),
+                boosted_high.process_sample(input).to_bits()
+            );
+        }
+
+        retuned.update_sample_rate(48_000);
+        let mut restored = IsolatorEq::new(&config, &bands, 48_000).expect("restored isolator");
+        for input in [0.25, -0.5, 0.75, -1.0] {
+            assert_eq!(
+                retuned.process_sample(input).to_bits(),
+                restored.process_sample(input).to_bits()
+            );
+        }
     }
 
     #[kithara::test]
