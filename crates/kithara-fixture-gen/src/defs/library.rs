@@ -90,6 +90,11 @@ fn library_flac(
 /// Playlist tracks the application is exercised with, published as delivered
 /// by the Zvuk CDN: 320 kbit/s MP3, no re-encoding.
 #[kithara::asset(ext = "mp3", content_type = "audio/mpeg", optional)]
+#[case::zvuk_160997949(
+    "zvuk_160997949.mp3",
+    "e6d13a5830ae1f0320c2231ed4cc76c543d45f872febda321225f3f38e02a121",
+    9020603
+)]
 #[case::zvuk_27390231(
     "zvuk_27390231.mp3",
     "91e3657174821e9a570744d3f3c6b2b7fe09c161d285d08751480554884bb5a4",
