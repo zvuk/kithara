@@ -407,11 +407,6 @@ where
     }
 
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-        if self.past_eof {
-            let outcome = DecoderChunkOutcome::Eof;
-            self.emit_chunk_signal(&outcome);
-            return Ok(outcome);
-        }
         if matches!(self.prefill, Prefill::Seeking(_)) {
             return self.next_chunk_prepared();
         }
@@ -425,6 +420,11 @@ where
     }
 
     fn next_chunk_prepared(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        if self.past_eof {
+            let outcome = DecoderChunkOutcome::Eof;
+            self.emit_chunk_signal(&outcome);
+            return Ok(outcome);
+        }
         if let Prefill::Seeking(reason) = self.prefill {
             let outcome = DecoderChunkOutcome::Pending(reason);
             self.emit_chunk_signal(&outcome);

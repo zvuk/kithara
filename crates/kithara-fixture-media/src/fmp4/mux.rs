@@ -400,18 +400,12 @@ fn elst_box(segment_duration: u64, media_time: i64) -> Vec<u8> {
 /// zero tokens so the string size matches what real-world tooling produces.
 fn udta_itunsmpb_box(track: &EncodedTrack, total_duration: u64) -> Result<Vec<u8>, Fmp4MuxError> {
     let (sample_rate, timescale) = clock_rates(track)?;
-    let leading = rescale_frame_round(leading_frames(track), sample_rate, timescale)
-        .ok_or(Fmp4MuxError::TimingOverflow)?;
-    let trailing = rescale_frame_round(u64::from(track.trailing_delay), sample_rate, timescale)
-        .ok_or(Fmp4MuxError::TimingOverflow)?;
-    let total_frames = rescale_frame_round(total_duration, timescale, sample_rate)
-        .ok_or(Fmp4MuxError::TimingOverflow)?;
-    let total_audible = total_frames
-        .checked_sub(leading_frames(track))
-        .and_then(|frames| frames.checked_sub(u64::from(track.trailing_delay)))
+    let leading = trim_ticks(leading_frames(track), sample_rate, timescale)?;
+    let trailing = trim_ticks(u64::from(track.trailing_delay), sample_rate, timescale)?;
+    let total = total_duration
+        .checked_sub(leading)
+        .and_then(|duration| duration.checked_sub(trailing))
         .ok_or(Fmp4MuxError::InvalidTrim)?;
-    let total = rescale_frame_round(total_audible, sample_rate, timescale)
-        .ok_or(Fmp4MuxError::TimingOverflow)?;
     let payload = format!(
         " 00000000 {leading:08X} {trailing:08X} {total:016X} \
          00000000 00000000 00000000 00000000 \
@@ -917,9 +911,9 @@ mod tests {
             assert!(
                 has_marker(
                     &package.init_segment,
-                    b" 00000000 00000C40 00000780 0000000000000440 "
+                    b" 00000000 00000620 000003C0 0000000000000220 "
                 ),
-                "SMPB total and padding are PCM counts"
+                "SMPB total and padding are mdhd tick counts"
             );
         }
     }
@@ -937,17 +931,20 @@ mod tests {
         track.media_info.sample_rate = Some(48_000);
         track.timescale = 24_000;
         track.codec_delay = 1025;
-        assert!(matches!(
-            mux_audio_track(&track, GaplessEncoding::Edts),
-            Err(Fmp4MuxError::UnrepresentableTrim {
-                frames: 1025,
-                sample_rate: 48_000,
-                timescale: 24_000
-            })
-        ));
-        let tag =
-            mux_audio_track(&track, GaplessEncoding::ItunSmpb).expect("raw PCM-count declaration");
-        assert!(has_marker(&tag.init_segment, b"00000401"));
+        for encoding in [
+            GaplessEncoding::Edts,
+            GaplessEncoding::ItunSmpb,
+            GaplessEncoding::Both,
+        ] {
+            assert!(matches!(
+                mux_audio_track(&track, encoding),
+                Err(Fmp4MuxError::UnrepresentableTrim {
+                    frames: 1025,
+                    sample_rate: 48_000,
+                    timescale: 24_000
+                })
+            ));
+        }
     }
 
     #[kithara::test(native)]

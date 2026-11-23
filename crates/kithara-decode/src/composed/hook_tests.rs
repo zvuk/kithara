@@ -224,6 +224,66 @@ fn a_direct_pending_rearms_prefill_for_deferred_pcm(
 }
 
 #[kithara::test]
+fn past_eof_latches_prepared_reads_and_an_in_range_seek_releases_it(
+    trim_silence: Vec<f32>,
+    zero_packet: &'static [u8],
+) {
+    let log = Arc::new(Mutex::new(CallLog::default()));
+    let demuxer = StubDemuxer::with_outcomes(
+        zero_packet,
+        vec![
+            StubOutcome::Frame {
+                pts: Duration::from_millis(20),
+                duration: Duration::from_millis(20),
+            },
+            StubOutcome::Frame {
+                pts: Duration::ZERO,
+                duration: Duration::from_millis(20),
+            },
+        ],
+        vec![
+            DemuxSeekOutcome::Landed {
+                landed_at: Duration::ZERO,
+                landed_byte: Some(0),
+                preroll: crate::demuxer::PrerollHint::NotNeeded,
+            },
+            DemuxSeekOutcome::PastEof {
+                duration: Duration::from_secs(10),
+            },
+        ],
+    );
+    let mut decoder = build(&trim_silence, demuxer, log);
+    assert!(matches!(
+        decoder.next_chunk().expect("initial PCM"),
+        DecoderChunkOutcome::Chunk(_)
+    ));
+    assert!(matches!(
+        decoder
+            .seek(Duration::from_secs(15))
+            .expect("past-end seek"),
+        DecoderSeekOutcome::PastEof { .. }
+    ));
+    assert!(matches!(
+        decoder
+            .next_chunk_prepared()
+            .expect("prepared terminal read"),
+        DecoderChunkOutcome::Eof
+    ));
+    assert!(matches!(
+        decoder.next_chunk().expect("repeated terminal read"),
+        DecoderChunkOutcome::Eof
+    ));
+    assert!(matches!(
+        decoder.seek(Duration::ZERO).expect("seek back into range"),
+        DecoderSeekOutcome::Landed { .. }
+    ));
+    assert!(matches!(
+        decoder.next_chunk().expect("PCM after the in-range seek"),
+        DecoderChunkOutcome::Chunk(_)
+    ));
+}
+
+#[kithara::test]
 fn zero_frame_codec_yields_pending_before_demux_eof(
     trim_silence: Vec<f32>,
     zero_packet: &'static [u8],
