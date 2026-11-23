@@ -15,10 +15,10 @@ use super::{
     command::{PREFLIGHT_STRIP, sha256},
     source::Target,
 };
-use crate::Ctx;
+use crate::{Ctx, cargo};
 
 pub(super) struct Binary {
-    libraries: OsString,
+    libraries: (&'static str, OsString),
     executable: PathBuf,
     root: PathBuf,
 }
@@ -66,32 +66,16 @@ pub(super) fn build(
         }
     }
     let executable = executable.context("cargo did not report a benchmark executable")?;
-    let parent = executable
-        .parent()
-        .context("benchmark executable has no parent")?;
     let libdir = log.output(
         Command::new(ctx.config.tools.program("rustc"))
             .args(["--print", "target-libdir"])
             .current_dir(root),
         true,
     )?;
-    let variable = if cfg!(target_os = "macos") {
-        "DYLD_FALLBACK_LIBRARY_PATH"
-    } else {
-        "LD_LIBRARY_PATH"
-    };
-    let mut paths = vec![
-        parent.to_path_buf(),
-        parent
-            .parent()
-            .context("benchmark profile directory")?
-            .to_path_buf(),
-        PathBuf::from(String::from_utf8(libdir.stdout)?.trim()),
-    ];
-    if let Some(existing) = std::env::var_os(variable) {
-        paths.extend(std::env::split_paths(&existing));
-    }
-    let libraries = std::env::join_paths(paths)?;
+    let libraries = cargo::library_path(
+        &executable,
+        Path::new(String::from_utf8(libdir.stdout)?.trim()),
+    )?;
     let root = root.into();
     Ok(Binary {
         libraries,
@@ -106,14 +90,7 @@ impl Binary {
         command
             .current_dir(&self.root)
             .env("CRITERION_HOME", data)
-            .env(
-                if cfg!(target_os = "macos") {
-                    "DYLD_FALLBACK_LIBRARY_PATH"
-                } else {
-                    "LD_LIBRARY_PATH"
-                },
-                &self.libraries,
-            );
+            .env(self.libraries.0, &self.libraries.1);
         command
     }
 

@@ -5,6 +5,7 @@ mod ast_rules;
 #[cfg(feature = "lint")]
 pub mod audit;
 pub mod audit_clippy;
+pub mod cargo;
 pub mod ci_report;
 pub mod clippy;
 mod cohesion;
