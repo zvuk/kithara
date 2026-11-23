@@ -121,12 +121,12 @@ jobs:
           BASE_SHA: ${{ inputs.base-sha }}
         run: |
           set -euo pipefail
-          base=()
+          set --
           if [ -n "${BASE_SHA:-}" ] && [[ "$KIND" =~ ^(branch|merge-request|quarantine)$ ]]; then
-            base=(--base FETCH_HEAD)
+            set -- --base FETCH_HEAD
           fi
           # Assignment preserves selector failure before publishing an output.
-          selection=$(just ci lanes --role "$ROLE" --kind "$KIND" ${ONLY:+--only "$ONLY"} "${base[@]}")
+          selection=$(just ci lanes --role "$ROLE" --kind "$KIND" ${ONLY:+--only "$ONLY"} "$@")
           echo "selection=$selection" >> "$GITHUB_OUTPUT"
 
       # A block the runner would reject fails the run here, before any lane

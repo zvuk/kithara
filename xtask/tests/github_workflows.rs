@@ -3195,6 +3195,10 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
     );
     assert!(render_script.starts_with("set -euo pipefail\n"));
     assert!(
+        render_script.contains("set -- --base FETCH_HEAD") && !render_script.contains("${base[@]}"),
+        "empty optional arguments must not use an array, which older Bash rejects under `set -u`"
+    );
+    assert!(
         render_script.contains("--base FETCH_HEAD"),
         "a fetched branch name must be read through the named FETCH_HEAD ref"
     );
