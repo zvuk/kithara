@@ -15,7 +15,6 @@ use num_traits::ToPrimitive;
 
 use super::{consts, converter::derive_aac_asbd_from_esds, file::AppleAudioFile, flac::StreamInfo};
 use crate::{
-    GaplessInfo,
     codec::CodecPriming,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PreparedPacket, TrackInfo},
     error::{DecodeError, DecodeResult},
@@ -375,7 +374,7 @@ impl AppleAudioFileDemuxer {
     /// `AudioFileServices` does not expose MP4 edit lists,
     /// so the factory probes the source separately and pipes the
     /// captured trim counts through here.
-    pub(crate) const fn set_gapless(&mut self, gapless: Option<GaplessInfo>) {
+    pub(crate) const fn set_gapless(&mut self, gapless: Option<crate::gapless::DeclaredGapless>) {
         self.track_info.gapless = gapless;
     }
 
@@ -708,6 +707,7 @@ mod tests {
         inner: Cursor<Vec<u8>>,
         notify_not_ready: Option<Arc<AtomicBool>>,
         ready: Arc<AtomicU64>,
+        known_size: bool,
     }
 
     impl NotReadySource {
@@ -717,6 +717,14 @@ mod tests {
                 inner,
                 notify_not_ready,
                 ready: Arc::new(AtomicU64::new(ready)),
+                known_size: true,
+            }
+        }
+
+        fn unknown_size(bytes: Vec<u8>, ready: u64) -> Self {
+            Self {
+                known_size: false,
+                ..Self::new(bytes, ready, None)
             }
         }
     }
@@ -724,30 +732,35 @@ mod tests {
     impl Read for NotReadySource {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             let pos = self.inner.position();
+            let len = u64::try_from(self.inner.get_ref().len())
+                .map_err(|_| Error::other("NotReadySource length exceeds u64"))?;
+            let ready = self.ready.load(Ordering::Acquire);
+            if ready >= len {
+                return self.inner.read(buf);
+            }
             let want = u64::try_from(buf.len())
                 .map_err(|_| Error::other("NotReadySource request exceeds u64"))?;
             // `probe_read` waits on the whole requested range; a request crossing
             // the delivery boundary fails instead of returning a partial read.
-            let ready = self.ready.load(Ordering::Acquire);
             if pos.saturating_add(want) > ready {
                 if let Some(notify_not_ready) = &self.notify_not_ready {
                     notify_not_ready.store(true, Ordering::Release);
                 }
-                return Err(not_ready_error(
-                    pos,
-                    buf.len(),
-                    u64::try_from(self.inner.get_ref().len()).ok(),
-                ));
+                return Err(not_ready_error(pos, buf.len(), Some(len)));
             }
             self.inner.read(buf)
         }
     }
 
     impl Seek for NotReadySource {
-        delegate::delegate! {
-            to self.inner {
-                fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            if !self.known_size && matches!(pos, SeekFrom::End(_)) {
+                return Err(Error::new(
+                    ErrorKind::Unsupported,
+                    "unknown streaming extent",
+                ));
             }
+            self.inner.seek(pos)
         }
     }
 
@@ -878,6 +891,54 @@ mod tests {
             produced > 0,
             "should decode the ready prefix before parking"
         );
+    }
+
+    #[kithara::test(native)]
+    fn unknown_size_flac_produces_another_packet_as_the_resource_grows(flac_saw: &'static [u8]) {
+        let bytes = flac_saw.to_vec();
+        let total = u64::try_from(bytes.len()).expect("fixture length fits in u64");
+        let source = NotReadySource::unknown_size(bytes, 64 * 1024);
+        let ready = Arc::clone(&source.ready);
+        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(source),
+            AudioCodec::Flac,
+            Some(ContainerFormat::Flac),
+            SourceOpenMode::Streaming,
+        )
+        .expect("unknown-size streaming FLAC open");
+
+        let mut produced = 0_usize;
+        let mut pending_seen = false;
+        loop {
+            match dx.next_frame() {
+                Ok(DemuxOutcome::Frame(frame)) => {
+                    assert!(!frame.data.is_empty());
+                    produced += 1;
+                    assert!(produced < 5000, "fixture never reached its ready frontier");
+                }
+                Ok(DemuxOutcome::Pending(PendingReason::NotReady(_))) => {
+                    let current = ready.load(Ordering::Acquire);
+                    let next = current.saturating_add(4096).min(total);
+                    assert!(next > current, "fixture must not park at its real EOF");
+                    pending_seen = true;
+                    ready.store(next, Ordering::Release);
+                }
+                Ok(DemuxOutcome::Eof) => {
+                    assert!(pending_seen, "fixture must exercise a partial resource");
+                    assert_eq!(
+                        ready.load(Ordering::Acquire),
+                        total,
+                        "growing FLAC ended after {produced} packets"
+                    );
+                    return;
+                }
+                Ok(other) => panic!("unexpected growing FLAC outcome: {other:?}"),
+                Err(error) => panic!(
+                    "growing FLAC failed after {produced} packets at byte {}/{total}: {error}",
+                    ready.load(Ordering::Acquire)
+                ),
+            }
+        }
     }
 
     #[kithara::test(native)]

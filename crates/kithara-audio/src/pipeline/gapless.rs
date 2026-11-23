@@ -32,22 +32,22 @@ impl GaplessStage {
         mode: GaplessMode,
         codec: Option<AudioCodec>,
     ) -> Self {
-        let tail = tail_compensation(profile, codec);
-        let from_info = |info| GaplessTrimmer::from(info).with_tail_compensation(tail);
-        let trimmer = match mode {
-            GaplessMode::MediaOnly => profile
-                .gapless()
-                .map_or_else(GaplessTrimmer::disabled, from_info),
-            GaplessMode::CodecPriming => profile
-                .gapless()
-                .map_or_else(|| resolve_codec_priming(profile), from_info),
-            _ => GaplessTrimmer::disabled(),
-        };
+        let trimmer = configured_trimmer(profile, mode, codec);
         Self {
             trimmer,
             pending: None,
             retired_pending: Vec::with_capacity(1),
         }
+    }
+
+    pub(crate) fn refresh_initial(
+        &mut self,
+        profile: GaplessProfile,
+        mode: GaplessMode,
+        codec: Option<AudioCodec>,
+    ) {
+        self.trimmer
+            .refresh_initial(configured_trimmer(profile, mode, codec));
     }
 
     pub(crate) fn prepare_deferred(&mut self) {
@@ -111,6 +111,24 @@ impl GaplessStage {
     ) {
         self.trimmer
             .set_tail_compensation(tail_compensation(profile, codec));
+    }
+}
+
+fn configured_trimmer(
+    profile: GaplessProfile,
+    mode: GaplessMode,
+    codec: Option<AudioCodec>,
+) -> GaplessTrimmer {
+    let tail = tail_compensation(profile, codec);
+    let from_info = |info| GaplessTrimmer::from(info).with_tail_compensation(tail);
+    match mode {
+        GaplessMode::MediaOnly => profile
+            .gapless()
+            .map_or_else(GaplessTrimmer::disabled, from_info),
+        GaplessMode::CodecPriming => profile
+            .gapless()
+            .map_or_else(|| resolve_codec_priming(profile), from_info),
+        _ => GaplessTrimmer::disabled(),
     }
 }
 

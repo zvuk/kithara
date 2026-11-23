@@ -39,7 +39,7 @@ pub(crate) struct Fmp4InitInfo {
     /// (`elst` edit-list trim or `udta` `iTunSMPB`). `None` when the
     /// init blob carries neither — codec-side capture (Apple `PrimeInfo`
     /// refresh) supplements this when the codec exposes priming.
-    pub(crate) gapless: Option<crate::GaplessInfo>,
+    pub(crate) gapless: Option<crate::gapless::DeclaredGapless>,
     pub(crate) channels: u16,
     pub(crate) sample_rate: u32,
     pub(crate) timescale: u32,
@@ -71,11 +71,8 @@ where
         .traks
         .iter()
         .find(|trak| {
-            matches!(trak.mdia.minf.stbl.stsd.contents, StsdBoxContent::Mp4a(_))
-                || matches!(
-                    trak.mdia.minf.stbl.stsd.contents,
-                    StsdBoxContent::Unknown(_)
-                )
+            re_mp4::TrackKind::try_from(&trak.mdia.hdlr.handler_type).ok()
+                == Some(re_mp4::TrackKind::Audio)
         })
         .ok_or_else(|| DecodeError::InvalidData {
             detail: "no audio trak in init segment",
@@ -114,7 +111,7 @@ where
 
     let gapless = {
         let mut cursor = Cursor::new(bytes);
-        crate::gapless::probe_mp4_gapless(&mut cursor, pools).unwrap_or(None)
+        crate::gapless::probe_mp4_gapless_dyn(&mut cursor, pools).unwrap_or(None)
     };
 
     Ok(Fmp4InitInfo {

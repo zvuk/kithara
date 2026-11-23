@@ -1,9 +1,10 @@
 #![cfg(feature = "packaged")]
 
-use std::sync::OnceLock;
+use std::{num::NonZeroU32, sync::OnceLock};
 
 use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
-use kithara_encode::{EncoderFactory, PackagedEncodeRequest};
+use kithara_encode::{EncodedTrack, EncoderFactory, PackagedEncodeRequest};
+use kithara_signal::rescale_frame_round;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_macros as kithara;
 
@@ -118,7 +119,7 @@ fn analysis_rhythm_fmp4(inputs: &[&[u8]]) -> Vec<u8> {
     super::rhythm::analysed(&[&prepared])
 }
 
-fn aac_bytes(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {
+fn aac_track(codec: AudioCodec, bit_rate: u64) -> EncodedTrack {
     let frame_samples = EncoderFactory::frame_samples(codec).unwrap_or_else(|error| {
         panic!("kithara-test-fixtures: {codec:?} has no packaged frame size: {error}")
     });
@@ -136,7 +137,7 @@ fn aac_bytes(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {
         .channels(consts::CHANNELS)
         .build();
 
-    let track = EncoderFactory::encode_packaged(
+    EncoderFactory::encode_packaged(
         &pools(),
         &PackagedEncodeRequest::builder()
             .pcm(&pcm)
@@ -148,8 +149,11 @@ fn aac_bytes(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {
             .trailing_delay(0)
             .build(),
     )
-    .unwrap_or_else(|error| panic!("kithara-test-fixtures: {codec:?} encode failed: {error}"));
+    .unwrap_or_else(|error| panic!("kithara-test-fixtures: {codec:?} encode failed: {error}"))
+}
 
+fn aac_bytes(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {
+    let track = aac_track(codec, bit_rate);
     Vec::from(
         mux_audio_track(&track, GaplessEncoding::None).unwrap_or_else(|error| {
             panic!("kithara-test-fixtures: {codec:?} fMP4 mux failed: {error}")
@@ -174,6 +178,37 @@ fn aac() -> Vec<u8> {
 #[case::v2(AudioCodec::AacHeV2, consts::AAC_HE_V2_BIT_RATE)]
 fn he_aac(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {
     aac_bytes(codec, bit_rate)
+}
+
+#[kithara::asset(ext = "mp4", content_type = "audio/mp4", embed)]
+#[case::declared(true)]
+#[case::undeclared(false)]
+fn he_aac_implicit(declared: bool) -> Vec<u8> {
+    static TRACK: OnceLock<EncodedTrack> = OnceLock::new();
+    let mut track = TRACK
+        .get_or_init(|| aac_track(AudioCodec::AacHe, consts::AAC_HE_BIT_RATE))
+        .clone();
+    let output_rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("fixture output rate");
+    let core_rate = NonZeroU32::new(consts::SAMPLE_RATE / 2).expect("fixture core rate");
+    for count in [
+        &mut track.encoder_delay,
+        &mut track.codec_delay,
+        &mut track.trailing_delay,
+    ] {
+        *count = u32::try_from(
+            rescale_frame_round(u64::from(*count), output_rate, core_rate)
+                .expect("representable core-frame count"),
+        )
+        .expect("fixture trim fits u32");
+    }
+    track.media_info.sample_rate = Some(core_rate.get());
+    track.codec_config = vec![0x13, 0x90];
+    let encoding = if declared {
+        GaplessEncoding::ItunSmpb
+    } else {
+        GaplessEncoding::None
+    };
+    Vec::from(mux_audio_track(&track, encoding).expect("implicit-core HE fixture"))
 }
 
 #[cfg(all(test, feature = "rhythm"))]

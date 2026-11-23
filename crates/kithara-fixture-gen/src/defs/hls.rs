@@ -413,9 +413,58 @@ fn long_hls(context: &BuildContext<'_>, encrypted: bool) -> Vec<u8> {
         .unwrap_or_else(|error| panic!("kithara-test-fixtures: long HLS bundle failed: {error}"))
 }
 
+fn gapless_sample(
+    sample_rate: u32,
+    timescale: u32,
+    encoder_delay: u32,
+    trailing_delay: u32,
+) -> EncodedTrack {
+    let duration = 1_024 * timescale / sample_rate;
+    EncodedTrack {
+        media_info: MediaInfo::builder()
+            .codec(AudioCodec::AacLc)
+            .container(ContainerFormat::Fmp4)
+            .sample_rate(sample_rate)
+            .channels(2)
+            .build(),
+        access_units: (0..8_u64)
+            .map(|index| kithara_encode::EncodedAccessUnit {
+                bytes: vec![0],
+                is_sync: true,
+                duration,
+                dts: index * u64::from(duration),
+                pts: index * u64::from(duration),
+            })
+            .collect(),
+        codec_config: Vec::new(),
+        encoder_delay,
+        codec_delay: 1_024,
+        timescale,
+        trailing_delay,
+        bit_rate: 128_000,
+        packets_per_segment: 8,
+    }
+}
+
+fn gapless_format() -> Vec<u8> {
+    let mut format = Vec::new();
+    for (rate, timescale, leading, trailing) in
+        [(44_100, 44_100, 0, 0), (48_000, 24_000, 2_112, 960)]
+    {
+        let track = gapless_sample(rate, timescale, leading, trailing);
+        format.extend_from_slice(
+            &mux_audio_track_at(&track, GaplessEncoding::Both, &[8])
+                .expect("representable gapless format sample")
+                .init_segment,
+        );
+    }
+    format
+}
+
 #[kithara::asset(
     ext = "toml",
     content_type = "application/x-kithara-hls-bundle",
+    format = gapless_format,
     context
 )]
 #[case::plain(false)]
@@ -444,4 +493,117 @@ fn rss_hls(context: &BuildContext<'_>, encrypted: bool) -> Vec<u8> {
         consts::RSS_TARGET_DURATION,
     )
     .unwrap_or_else(|error| panic!("kithara-test-fixtures: RSS HLS bundle failed: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::tracing;
+
+    use super::*;
+    use crate::{registry::AssetDef, store};
+
+    #[kithara::test(native)]
+    fn gapless_format_keys_follow_actual_wire() {
+        let format = gapless_format();
+        let mut controls = Vec::new();
+        for rate in [44_100, 48_000] {
+            let track = gapless_sample(rate, rate, 2_112, 960);
+            for encoding in [
+                GaplessEncoding::None,
+                GaplessEncoding::Edts,
+                GaplessEncoding::ItunSmpb,
+                GaplessEncoding::Both,
+            ] {
+                controls.extend(Vec::<u8>::from(
+                    mux_audio_track_at(&track, encoding, &[8]).expect("unchanged clock domain"),
+                ));
+            }
+        }
+        let control_key = store::formatted_asset_id("unchanged_mux", "equal_clocks", &controls);
+        assert_eq!(control_key, "1b741cc8a23d0d4dd45952f455f1f65c");
+        for def in inventory::iter::<AssetDef>
+            .into_iter()
+            .filter(|def| def.func == "gapless_hls")
+        {
+            assert_eq!(def.format.expect("gapless wire callback")(), format);
+            let key = store::formatted_asset_id(def.func, def.case, &format);
+            let old_wire = match def.case {
+                "plain" => "cc0ff3ad7ed51c840d5cf9ddd921d15a",
+                "drm" => "ce58984b8e636490ccb71a00159f8bd6",
+                other => panic!("unrecorded gapless case {other}"),
+            };
+            assert_ne!(
+                key, old_wire,
+                "actual serialized format must drive identity"
+            );
+            let private = tempfile::tempdir().expect("private fixture store");
+            let legacy = store::asset_id(def.func, def.case);
+            for previous in [legacy.as_str(), old_wire] {
+                store::write_entry(private.path(), previous, "toml", b"old manifest")
+                    .expect("old parent");
+                BuildContext::new(private.path(), previous)
+                    .store("init.mp4", "mp4", b"old init")
+                    .expect("old side file");
+            }
+            let child = store::asset_id(&key, "init.mp4");
+            assert!(!store::has_entry(private.path(), &key, "toml"));
+            assert!(!store::has_entry(private.path(), &child, "mp4"));
+            let context = BuildContext::new(private.path(), &key);
+            let init = context
+                .store("init.mp4", "mp4", &format)
+                .expect("new side file");
+            assert_eq!(init, format!("{child}.mp4"));
+            let playlist = context
+                .store("index.m3u8", "m3u8", b"#EXTM3U\n#EXT-X-ENDLIST\n")
+                .expect("new playlist");
+            let manifest = Manifest {
+                master: "/hls/index.m3u8".to_owned(),
+                resources: vec![
+                    Resource {
+                        route: "/hls/init.mp4".to_owned(),
+                        file: init.clone(),
+                        content_type: "audio/mp4".to_owned(),
+                    },
+                    Resource {
+                        route: "/hls/index.m3u8".to_owned(),
+                        file: playlist,
+                        content_type: "application/vnd.apple.mpegurl".to_owned(),
+                    },
+                ],
+            };
+            let bytes = toml::to_string(&manifest).expect("new manifest");
+            store::write_entry(private.path(), &key, "toml", bytes.as_bytes()).expect("new parent");
+            let loaded: Manifest = toml::from_str(
+                std::str::from_utf8(
+                    &store::read_entry(private.path(), &key, "toml").expect("new parent body"),
+                )
+                .expect("manifest UTF8"),
+            )
+            .expect("manifest references");
+            assert_eq!(loaded.resources[0].file, init);
+            for previous in [legacy.as_str(), old_wire] {
+                assert_eq!(
+                    store::read_entry(private.path(), previous, "toml")
+                        .expect("old parent retained"),
+                    b"old manifest"
+                );
+            }
+            tracing::warn!(
+                case = def.case,
+                key,
+                control_key,
+                bytes = format.len(),
+                "MP4 wire identity sample"
+            );
+        }
+        assert_eq!(
+            format.windows(4).filter(|bytes| *bytes == b"elst").count(),
+            2
+        );
+        assert_eq!(
+            store::asset_id("library_flac", "c343"),
+            "7bcf6835cac64b2d2c10afda93030067"
+        );
+        assert_eq!(store::CACHE_VERSION.trim(), "v1");
+    }
 }

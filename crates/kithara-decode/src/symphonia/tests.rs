@@ -177,10 +177,9 @@ mod flac {
 
     #[kithara::test]
     fn demuxer_continuation_after_pending_keeps_the_whole_flac_track() {
-        let bytes =
-            kithara_test_fixtures::assets::signal_profile_flac_flac_44100_2ch_24bit().bytes();
+        let bytes = kithara_test_fixtures::assets::flac_unknown_length_saw_6s().bytes();
         let (reference, _) = reader(bytes, None);
-        let (fault, control) = reader(bytes, Some(31_744));
+        let (fault, control) = reader(bytes, Some(64 * 1024));
         let mut reference = SymphoniaDemuxer::from_reader_with_layout(
             Box::new(reference),
             None,
@@ -198,7 +197,7 @@ mod flac {
         )
         .expect("fault FLAC demuxer");
         let mut count = 0;
-        let mut interrupted = false;
+        let mut pending_count = 0;
         loop {
             fault
                 .prepare_frame_with_wait(crate::PrepareWait::Poll)
@@ -215,10 +214,16 @@ mod flac {
                     continue;
                 }
                 Ok(DemuxOutcome::Pending(_)) => {
-                    assert!(!interrupted, "one not-ready gate");
-                    assert_eq!(lock(&control.state).pos, 31_744);
-                    interrupted = true;
-                    control.release();
+                    let position = lock(&control.state).pos;
+                    if pending_count == 0 {
+                        assert_eq!(position, 64 * 1024);
+                    }
+                    pending_count += 1;
+                    lock(&control.state).interrupts_remaining = 0;
+                    if position < bytes.len() {
+                        control.arm_at(position.saturating_add(4096).min(bytes.len()), usize::MAX);
+                    }
+                    control.input.notify();
                     continue;
                 }
                 Ok(DemuxOutcome::Eof) => break,
@@ -238,7 +243,10 @@ mod flac {
             assert!(actual.data == expected.data, "frame {count} bytes changed");
             count += 1;
         }
-        assert!(interrupted, "regression must exercise not-ready recovery");
+        assert!(
+            pending_count > 1,
+            "regression must exercise repeated growth"
+        );
         assert!(matches!(
             reference.next_frame().expect("reference EOF"),
             DemuxOutcome::Eof

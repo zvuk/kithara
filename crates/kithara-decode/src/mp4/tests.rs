@@ -120,7 +120,7 @@ impl RecordingVisitor {
                     track.sample_rate = Some(sample_rate);
                 }
             }
-            Mp4Event::TrackCodec(_) | Mp4Event::TrackId(_) => {}
+            Mp4Event::TrackCodec(_) | Mp4Event::TrackId(_) | Mp4Event::TrackKind(_) => {}
         }
         ControlFlow::Continue(())
     }
@@ -242,6 +242,13 @@ fn stsd(sample_rate: u32, codec: [u8; 4]) -> Vec<u8> {
     full_box(*b"stsd", 0, &body)
 }
 
+fn audio_handler() -> Vec<u8> {
+    let mut body = vec![0; 4];
+    body.extend_from_slice(b"soun");
+    body.extend_from_slice(&[0; 13]);
+    full_box(*b"hdlr", 0, &body)
+}
+
 fn data_box(data_type: u32, value: &[u8]) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(&data_type.to_be_bytes());
@@ -273,6 +280,7 @@ fn make_track_mp4() -> Vec<u8> {
 
     let mut mdia = Vec::new();
     mdia.extend_from_slice(&mdhd_v0(48_000, 96_000));
+    mdia.extend(audio_handler());
     mdia.extend_from_slice(&atom(*b"minf", &minf));
 
     let mut edts = Vec::new();
@@ -294,6 +302,7 @@ fn make_track_mp4_with_codec(codec: [u8; 4]) -> Vec<u8> {
     let minf = atom(*b"minf", &stbl);
     let mut mdia = Vec::new();
     mdia.extend_from_slice(&mdhd_v0(44_100, 88_200));
+    mdia.extend(audio_handler());
     mdia.extend_from_slice(&minf);
     let trak = atom(*b"trak", &atom(*b"mdia", &mdia));
     let mut moov = Vec::new();
@@ -392,6 +401,7 @@ fn emits_v1_mvhd_and_mdhd_with_64bit_durations() {
 
     let mut mdia = Vec::new();
     mdia.extend_from_slice(&mdhd_v1(96_000, 1u64 << 33));
+    mdia.extend(audio_handler());
     mdia.extend_from_slice(&minf);
 
     let trak = atom(*b"trak", &atom(*b"mdia", &mdia));
