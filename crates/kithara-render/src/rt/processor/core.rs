@@ -77,7 +77,7 @@ impl<E: SessionInbox> DeckMixer<E> {
     /// The scope snapshot is published by the first actual render.
     ///
     /// # Errors
-    /// Returns a pool error if either scratch or any required tail cannot be allocated.
+    /// Returns an EQ error for an invalid crossover design or an allocation failure.
     pub fn new<S>(
         inputs: MixerInputs,
         shape: StreamShape,

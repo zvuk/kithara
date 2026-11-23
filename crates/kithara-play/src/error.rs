@@ -122,9 +122,6 @@ pub enum PlayError {
     #[error("playback buffer allocation failed: {0}")]
     Pool(#[from] PoolError),
 
-    #[error(transparent)]
-    EqPreparation(EqError),
-
     #[error("audio session is gone: {reason}")]
     SessionGone { reason: &'static str },
 
@@ -139,7 +136,12 @@ impl From<EqError> for PlayError {
     fn from(error: EqError) -> Self {
         match error {
             EqError::Pool(error) => Self::Pool(error),
-            error => Self::EqPreparation(error),
+            EqError::Filter(error) => Self::InvalidConfiguration {
+                reason: error.to_string(),
+            },
+            error => Self::InvalidConfiguration {
+                reason: error.to_string(),
+            },
         }
     }
 }
