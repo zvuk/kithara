@@ -127,12 +127,11 @@ impl AppleAudioFile {
             0
         };
 
-        let flac_frontier =
-            if has_size && !scan_packets && data_format.format_id == AUDIO_FORMAT_FLAC {
-                Some(Self::init_flac_frontier(&handle, pools)?)
-            } else {
-                None
-            };
+        let flac_frontier = if !scan_packets && data_format.format_id == AUDIO_FORMAT_FLAC {
+            Some(Self::init_flac_frontier(&handle, pools)?)
+        } else {
+            None
+        };
 
         Ok(Self {
             data_format,
