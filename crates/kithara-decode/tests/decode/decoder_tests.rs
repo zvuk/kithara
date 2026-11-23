@@ -56,7 +56,7 @@ fn decode_with_probe(
     assert!(!chunk.samples.is_empty());
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(9005)))]
+#[kithara::test(timeout(Short))]
 #[case::wav(true, "wav")]
 #[case::mp3(false, "mp3")]
 fn decode_complete(

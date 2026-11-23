@@ -2,13 +2,7 @@ use kithara::{audio::DecoderBackend as EventDecoderBackend, decode::DecoderBacke
 
 use super::{cases::*, harness::*, imports::*, providers::*};
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(::std::time::Duration::from_millis(29564))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::synthetic(synthetic_sources().await, CUE)]
 #[case::mp3_distinct(source_mp3_distinct().await, CUE)]
 #[case::hls_plain(source_hls_same_plain().await, CUE)]
@@ -272,13 +266,7 @@ async fn run_with_decoder(
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(::std::time::Duration::from_millis(9758))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Short))]
 #[case::mp3(source_mp3_same().await)]
 #[case::drm(source_hls_same_drm().await)]
 async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: PreparedSources) {
@@ -301,13 +289,7 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: Prepar
     drop(harness);
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(::std::time::Duration::from_millis(31654))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::play_sync_seek(PLAY_SYNC_SEEK, source_synthetic().await)]
 #[case::play_seek_sync(PLAY_SEEK_SYNC, source_synthetic().await)]
 #[case::seek_play_sync(SEEK_PLAY_SYNC, source_synthetic().await)]
@@ -330,13 +312,7 @@ async fn wav_product_rows_reach_the_pcm_oracle(
     run(case, provider, CUE).await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(::std::time::Duration::from_millis(17784))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::hls_mp3_sync_seek_play(source_hls_mp3_plain().await, SYNC_SEEK_PLAY)]
 #[case::hls_mp3_tempo_down_30hz(source_hls_mp3_plain().await, TEMPO_DOWN_30)]
 #[case::drm_mp3_sync_seek_play(source_hls_mp3_drm().await, SYNC_SEEK_PLAY)]
@@ -348,13 +324,7 @@ async fn supplied_grid_product_rows_reach_the_pcm_oracle(
     run(case, provider, CUE).await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(::std::time::Duration::from_millis(52448))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::hls_same_play_sync_seek(source_hls_same_plain().await, PLAY_SYNC_SEEK)]
 #[case::hls_same_play_seek_sync(source_hls_same_plain().await, PLAY_SEEK_SYNC)]
 #[case::hls_same_seek_play_sync(source_hls_same_plain().await, SEEK_PLAY_SYNC)]
@@ -424,13 +394,7 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     run(case, provider, CUE).await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(::std::time::Duration::from_millis(36442))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::tunnel_play_sync_seek(tunnel_sources().await, TUNNEL_CUE, PLAY_SYNC_SEEK.gridded())]
 #[case::tunnel_play_seek_sync(tunnel_sources().await, TUNNEL_CUE, PLAY_SEEK_SYNC.gridded())]
 #[case::tunnel_seek_play_sync(tunnel_sources().await, TUNNEL_CUE, SEEK_PLAY_SYNC.gridded())]
@@ -540,14 +504,7 @@ pub(crate) async fn newtechno_sources() -> PreparedSources {
 }
 
 #[cfg(not(target_os = "android"))]
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(::std::time::Duration::from_millis(14908)),
-    tracing("info")
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long), tracing("info"))]
 #[case::paused_sync_then_play(PAUSED_SYNC)]
 #[case::play_sync_seek(PLAY_SYNC_SEEK)]
 async fn mixed_mp3_and_hls_keep_the_pcm_contract_on_symphonia(#[case] case: SyncCase) {

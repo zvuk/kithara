@@ -37,7 +37,6 @@ pub(crate) async fn spawn(dir: PathBuf, index: String) -> TestHttpServer {
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use tokio::{
         io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -88,7 +87,7 @@ mod tests {
     /// Chrome holds six idle keep-alive connections per origin; the module a
     /// worker imports next arrives on a seventh and must be answered while the
     /// six stay open; the test's timeout bounds the wait for the seventh.
-    #[kithara::test(native, tokio, timeout(Duration::from_secs(1)))]
+    #[kithara::test(native, tokio, timeout(Quick))]
     async fn answers_a_new_connection_while_six_keep_alive_connections_stay_open() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("module.js"), "export {};").unwrap();
@@ -109,7 +108,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, tokio, timeout(Duration::from_secs(1)))]
+    #[kithara::test(native, tokio, timeout(Quick))]
     async fn every_response_is_cross_origin_isolated() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("worker.js"), "").unwrap();

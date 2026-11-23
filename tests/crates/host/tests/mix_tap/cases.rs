@@ -20,7 +20,7 @@ pub(super) const BLOCK_FRAMES: usize = 512;
 const BLOCKS: usize = 20;
 pub(crate) const ROOMY_CAPACITY: usize = 65_536;
 
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(10418)))]
+#[kithara::test(tokio, timeout(Long))]
 async fn deck_eq_processes_the_crossfade_sum() {
     use std::num::NonZeroU32;
 

@@ -18,12 +18,7 @@ use kithara_test_fixtures::{
 };
 use reqwest::Client;
 
-#[kithara::test(
-    native,
-    tokio,
-    hang_timeout_secs(1),
-    timeout(::std::time::Duration::from_millis(1738))
-)]
+#[kithara::test(native, tokio, hang_timeout_secs(1), timeout(Short))]
 #[case(SignalAsset::MP3_SAW_1S, "audio/mpeg", None)]
 #[case(SignalAsset::FLAC_SAW_1S, "audio/flac", Some(44100))]
 #[case(SignalAsset::AAC_SAW_1S, "audio/aac", None)]
@@ -276,12 +271,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
     .expect("raw decoder task completes");
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(::std::time::Duration::from_millis(3041)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Quick), hang_timeout_secs(1))]
 #[case::aac("aac", AudioCodec::AacLc)]
 #[case::flac("flac", AudioCodec::Flac)]
 async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
@@ -396,12 +386,7 @@ async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
 //   - Symphonia is always on (kithara-decode/symphonia in [dependencies]),
 //   - Apple is on for `target_os = "macos" | "ios"`,
 //   - Android is on for `target_os = "android"`.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(::std::time::Duration::from_millis(1172)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(native, tokio, timeout(Short), hang_timeout_secs(1))]
 #[cfg_attr(not(target_os = "android"), case::aac_lc_symphonia("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::Symphonia, aac_fragment().await))]
 #[cfg_attr(target_os = "android", case::aac_lc_symphonia_product_android("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::default(), aac_fragment().await))]
 #[cfg_attr(not(target_os = "android"), case::aac_he_v2_symphonia("aac_he_v2_symphonia", AudioCodec::AacHeV2, DecoderBackend::Symphonia, he_fragment().await))]

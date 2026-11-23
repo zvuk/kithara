@@ -670,11 +670,7 @@ impl NetObserver for HeadArrivals {
     }
 }
 
-#[kithara::test(
-    tokio,
-    timeout(::std::time::Duration::from_millis(1842)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, timeout(Short), hang_timeout_secs(1))]
 #[case::slow_alive_stream_completes(
     "/slow-body",
     Duration::from_millis(400),

@@ -78,7 +78,7 @@ fn thread_budget_audio_worker_is_one_thread() {
     multi_thread,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(2002)),
+    timeout(Quick),
     hang_timeout_secs(3)
 )]
 async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
@@ -137,7 +137,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     multi_thread,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(2034)),
+    timeout(Short),
     hang_timeout_secs(3)
 )]
 async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {

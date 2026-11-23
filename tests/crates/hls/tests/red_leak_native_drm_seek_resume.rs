@@ -159,12 +159,7 @@ async fn encrypted_ladder() -> (TestServerHelper, Url) {
 /// be bounded. Each iteration leaks at most a constant number of threads;
 /// iteration-over-iteration growth indicates a real thread/task leak tied
 /// to the DRM seek path.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(::std::time::Duration::from_millis(7282)),
-    hang_timeout_secs(10)
-)]
+#[kithara::test(native, tokio, timeout(Short), hang_timeout_secs(10))]
 async fn red_leak_native_drm_seek_resume_thread_budget(
     #[future(awt)] encrypted_ladder: (TestServerHelper, Url),
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {

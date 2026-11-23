@@ -266,7 +266,7 @@ impl PlayerObserver for DroppingObserver {
     }
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(1987)))]
+#[kithara::test(timeout(Quick))]
 #[case::mode_change(false)]
 #[case::loading(true)]
 fn an_observer_can_release_the_final_player(#[case] during_load: bool) {

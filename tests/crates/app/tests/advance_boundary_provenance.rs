@@ -276,12 +276,7 @@ async fn aac_tracks() -> (TestServerHelper, [Url; 2]) {
     .await
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(::std::time::Duration::from_millis(24860)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(5))]
 async fn natural_eof_advance_emits_only_b_after_a_flac(
     #[future(awt)] flac_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -396,12 +391,7 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(
     setup.close().await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(::std::time::Duration::from_millis(24856)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(5))]
 async fn natural_eof_advance_with_late_variant_switch_flac(
     #[future(awt)] multivariant_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -545,12 +535,7 @@ async fn natural_eof_advance_with_late_variant_switch_flac(
     setup.close().await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(::std::time::Duration::from_millis(44688)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(5))]
 #[case::flac(
     SAMPLE_RATE,
     collapse_short_unknown_islands,
@@ -604,12 +589,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance(
     setup.close().await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(::std::time::Duration::from_millis(92270)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(5))]
 async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real_geometry(
     #[future(awt)] real_geometry_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -658,12 +638,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
     setup.close().await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(::std::time::Duration::from_millis(24950)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(5))]
 async fn natural_eof_advance_emits_only_b_flac_resampled_48k(
     #[future(awt)] flac_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -807,12 +782,7 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(
     setup.close().await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(::std::time::Duration::from_millis(45834)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(5))]
 #[case::plain(false, "crossfade FLAC", CrossfadeFlavor::Plain)]
 #[case::eq(false, "crossfade FLAC eq", CrossfadeFlavor::Eq)]
 #[case::eq_stretch(false, "crossfade FLAC eq stretch", CrossfadeFlavor::EqStretch)]
@@ -1240,12 +1210,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(
 /// AAC cannot preserve the 0.67 Hz sawtooth slope/phase provenance reliably;
 /// this case uses 440 Hz vs 880 Hz tone provenance to keep the same replay
 /// contract on the lossy codec.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(::std::time::Duration::from_millis(24194)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(5))]
 async fn natural_eof_advance_emits_only_b_aac(
     #[future(awt)] aac_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,

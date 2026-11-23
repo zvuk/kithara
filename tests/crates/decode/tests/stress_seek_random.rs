@@ -195,7 +195,7 @@ fn read_final_tail(
 #[kithara::test(
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(1388)),
+    timeout(Quick),
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]

@@ -1,6 +1,6 @@
 use kithara::{
     link::{GridAnswer, LinkedHostCommand, SyncStatus},
-    platform::{sync::Arc, time::Duration},
+    platform::sync::Arc,
     play::{ArtifactSource, ResourceConfig, ResourceSrc},
     queue::QueueEvent,
 };
@@ -17,7 +17,7 @@ use super::{
     prepared_sources,
 };
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::constant_sync(None)]
 #[case::during_a_tempo_ramp(Some(124.0))]
 async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase(#[case] tempo: Option<f64>) {

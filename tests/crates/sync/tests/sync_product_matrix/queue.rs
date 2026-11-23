@@ -3516,7 +3516,7 @@ async fn capture_music(
     multi_thread,
     serial,
     tracing("kithara_test::sync::queue321=info"),
-    timeout(::std::time::Duration::from_millis(13200))
+    timeout(Long)
 )]
 async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overlap() {
     capture_music(
@@ -3540,7 +3540,7 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
     multi_thread,
     serial,
     tracing("kithara_test::sync::queue321=info"),
-    timeout(::std::time::Duration::from_millis(30156))
+    timeout(Long)
 )]
 #[case::rate_from_start(false, &[
     ("library_flac_song2", Start::Seconds(0.0)),

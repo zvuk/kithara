@@ -564,7 +564,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(timeout(::std::time::Duration::from_millis(7119)))]
+    #[kithara::test(timeout(Quick))]
     #[case::mem(Backend::Mem)]
     #[case::mmap(Backend::Mmap)]
     fn concurrent_generation_rewrite_never_tears_a_read(#[case] backend: Backend) {
@@ -656,7 +656,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(timeout(::std::time::Duration::from_millis(7622)))]
+    #[kithara::test(timeout(Short))]
     #[case::mem(Backend::Mem)]
     #[case::mmap(Backend::Mmap)]
     fn concurrent_varying_length_rewrite_via_wait_range_stays_consistent(#[case] backend: Backend) {

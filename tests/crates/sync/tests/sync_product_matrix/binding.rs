@@ -3610,13 +3610,7 @@ fn source_media_at(
 }
 
 #[cfg(not(target_os = "android"))]
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(::std::time::Duration::from_millis(12202))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::plain_tempo_hold(
     Provider::HlsMp3(HlsProtection::Plain),
     SyncCase { id: "tempo-hold-30hz", ride: TempoRide::Hold(120.0), ..TEMPO_DOWN_30 },

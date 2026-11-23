@@ -112,12 +112,7 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
 /// be released. This test creates many streams against a single
 /// shared Downloader and asserts that the OS thread count does not
 /// grow proportionally.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(::std::time::Duration::from_millis(2208)),
-    hang_timeout_secs(10)
-)]
+#[kithara::test(native, tokio, timeout(Medium), hang_timeout_secs(10))]
 async fn red_hls_source_drop_leaks_peer(
     #[future(awt)] test_pattern_hls: CreatedHls,
     temp_dir: TestTempDir,

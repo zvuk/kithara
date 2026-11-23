@@ -690,7 +690,7 @@ mod tests {
         (cmd, out)
     }
 
-    #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
+    #[kithara::test(wasm, timeout(Long))]
     async fn composed_mp3_reaches_eof_with_pcm(tone_mp3: &'static [u8]) {
         use symphonia::{
             core::{
@@ -754,7 +754,7 @@ mod tests {
         assert!(total_frames > 0, "no PCM through ComposedDecoder");
     }
 
-    #[kithara::test(wasm, timeout(Duration::from_secs(60)))]
+    #[kithara::test(wasm, timeout(Long))]
     async fn real_mp3_frames_produce_pcm(tone_mp3: &'static [u8]) {
         use symphonia::{
             core::{
@@ -818,7 +818,7 @@ mod tests {
         panic!("no PCM from WebCodecs for 64 real mp3 frames");
     }
 
-    #[kithara::test(wasm, timeout(Duration::from_secs(30)))]
+    #[kithara::test(wasm, timeout(Long))]
     async fn host_flushes_empty_configured_decoder() {
         let (cmd, out) = open_host();
         cmd.send(HostCmd::Configure {
@@ -852,7 +852,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(wasm, timeout(Duration::from_secs(30)))]
+    #[kithara::test(wasm, timeout(Long))]
     async fn host_replies_error_to_garbage_configure() {
         let (cmd, out) = open_host();
         cmd.send(HostCmd::Configure {

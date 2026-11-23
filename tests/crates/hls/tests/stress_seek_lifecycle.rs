@@ -451,7 +451,7 @@ async fn audio_server(
     tokio,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(6379)),
+    timeout(Long),
     hang_timeout_secs(5),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
 )]

@@ -3682,7 +3682,7 @@ fn full_notification_ring_retries_latest_effective_rate_once() {
     );
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(1756)))]
+#[kithara::test(timeout(Quick))]
 async fn an_unchanged_speed_target_still_cancels_a_ramp() {
     for sounding in [false, true] {
         let mut rig = rig();

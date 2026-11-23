@@ -32,13 +32,7 @@ const SILENCE_THRESHOLD: f32 = 0.001;
 const MIN_RMS: f32 = 0.55;
 const MAX_RMS: f32 = 0.75;
 
-#[kithara::test(
-    tokio,
-    browser,
-    serial,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, browser, serial, timeout(Long), hang_timeout_secs(1))]
 async fn offline_worker_construction_waits_for_its_player() {
     let (release, gate) = oneshot::channel();
     let (built, mut completion) = oneshot::channel();

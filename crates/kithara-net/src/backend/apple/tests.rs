@@ -137,7 +137,7 @@ async fn collect(mut stream: crate::ByteStream) -> Result<Bytes, NetError> {
     Ok(Bytes::from(out))
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn apple_accept_encoding_policy_is_authoritative_per_request() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let handler_seen = Arc::clone(&seen);
@@ -207,7 +207,7 @@ async fn apple_accept_encoding_policy_is_authoritative_per_request() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn apple_whole_body_preserves_configured_auto_decode() {
     let server = serve(|headers: HeaderMap| async move {
         assert_eq!(request_header(&headers, "accept-encoding"), Some("gzip"));
@@ -230,7 +230,7 @@ async fn apple_whole_body_preserves_configured_auto_decode() {
     assert_eq!(&body[..], PLAYLIST);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn apple_identity_stream_rejects_nonidentity_content_encoding() {
     let server = serve(|| async {
         respond(
@@ -253,7 +253,7 @@ async fn apple_identity_stream_rejects_nonidentity_content_encoding() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn apple_head_backfills_content_length_from_content_range() {
     let server = serve(|| async {
         respond(
@@ -270,7 +270,7 @@ async fn apple_head_backfills_content_length_from_content_range() {
     assert_eq!(headers.get("content-length"), Some("1234"));
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn apple_range_rejects_partial_without_content_range() {
     let server = serve(|| async { respond(StatusCode::PARTIAL_CONTENT, &[], "part") }).await;
     let url = server.url(PROBE);
@@ -286,7 +286,7 @@ async fn apple_range_rejects_partial_without_content_range() {
     assert!(matches!(error, NetError::Decode(detail) if detail.contains("content-range")));
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn apple_range_rejects_partial_without_content_length() {
     let server = serve(|| async {
         respond(
@@ -312,7 +312,7 @@ async fn apple_range_rejects_partial_without_content_length() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn apple_resume_rejects_a_different_content_range() {
     const BODY_LEN: usize = 2 * 1024 * 1024;
     const FIRST_WRITE_LEN: usize = 1024 * 1024;
@@ -358,7 +358,7 @@ async fn apple_resume_rejects_a_different_content_range() {
     assert_eq!(requests.load(Ordering::SeqCst), 2);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn apple_resume_rejects_a_conflicting_representation_total() {
     const BODY_LEN: usize = 2 * 1024 * 1024;
     const FIRST_WRITE_LEN: usize = 1024 * 1024;
@@ -409,7 +409,7 @@ async fn apple_resume_rejects_a_conflicting_representation_total() {
     assert_eq!(requests.load(Ordering::SeqCst), 2);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn apple_ignored_range_resume_continues_after_discovering_total() {
     const BODY_BYTE: u8 = 0x5a;
     const BODY_LEN: usize = 2 * 1024 * 1024;
@@ -469,7 +469,7 @@ async fn apple_ignored_range_resume_continues_after_discovering_total() {
     assert_eq!(requests.load(Ordering::SeqCst), 2);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn apple_open_ended_stream_delivers_chunks() {
     let server =
         serve(|| async { respond(StatusCode::OK, &[], unsized_body(&[b"abc", b"def"])) }).await;
@@ -483,7 +483,7 @@ async fn apple_open_ended_stream_delivers_chunks() {
     assert_eq!(&collect(stream).await.expect("body")[..], b"abcdef");
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn apple_short_body_yields_before_premature_eof_under_flash() {
     const BODY_LEN: usize = 2 * 1024 * 1024;
     const FIRST_WRITE_LEN: usize = 1024 * 1024;
@@ -558,7 +558,7 @@ async fn apple_short_body_yields_before_premature_eof_under_flash() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn apple_stream_head_stall_times_out() {
     let server = serve(stalled_head).await;
     let url = server.url(PROBE);
@@ -572,7 +572,7 @@ async fn apple_stream_head_stall_times_out() {
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn apple_stream_observes_cancellation() {
     let server = serve(stalled_head).await;
     let url = server.url(PROBE);
@@ -617,7 +617,7 @@ impl NetObserver for AttemptLog {
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+#[kithara::test(tokio, timeout(Short))]
 async fn apple_observed_handle_reports_every_attempt() {
     let server = serve(|| async { StatusCode::INTERNAL_SERVER_ERROR }).await;
     let url = server.url(PROBE);

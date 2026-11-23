@@ -153,7 +153,7 @@ impl Apart {
     }
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(1892)))]
+#[kithara::test(timeout(Short))]
 fn admitted_external_animation_preserves_the_reference_at_authored_checkpoints() {
     let bytes = include_bytes!("../../tests/fixtures/artwork.json");
     let admitted = Artwork::parse(bytes).unwrap();

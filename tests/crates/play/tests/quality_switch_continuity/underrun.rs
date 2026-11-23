@@ -699,7 +699,7 @@ fn cochlea_silent_buckets(samples: &[f32]) -> usize {
     multi_thread,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(7386)),
+    timeout(Long),
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug,render_refill=trace"
@@ -794,7 +794,7 @@ async fn target_rebuild_keeps_player_output_continuous(
     multi_thread,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(21624)),
+    timeout(Long),
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug,kithara_audio::pipeline::decode::transition=trace,kithara_audio::pipeline::source::variant=trace"
@@ -899,7 +899,7 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
     multi_thread,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(7388)),
+    timeout(Long),
     hang_timeout_secs(3)
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
@@ -1044,13 +1044,7 @@ fn cold_switch_failures(
     failures
 }
 
-#[kithara::test(
-    tokio,
-    multi_thread,
-    native,
-    serial,
-    timeout(::std::time::Duration::from_millis(7234))
-)]
+#[kithara::test(tokio, multi_thread, native, serial, timeout(Long))]
 async fn device_capture_exposes_a_starved_producer_as_missing_pcm() {
     let trace = kithara_test_utils::test::usdt::scope();
     let server = TestServerHelper::new().await;

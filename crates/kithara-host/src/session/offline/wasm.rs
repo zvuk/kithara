@@ -191,7 +191,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(wasm, timeout(Duration::from_secs(2)))]
+    #[kithara::test(wasm, timeout(Short))]
     async fn a_deck_wake_delivers_its_message() {
         let worker = Worker::new(WorkerConfig::new());
         let dispatcher = worker.dispatcher(
@@ -234,7 +234,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(wasm, flash(false), timeout(Duration::from_secs(40)))]
+    #[kithara::test(wasm, flash(false), timeout(Long))]
     async fn a_deck_wake_on_a_worker_runs_the_task_on_its_owner() {
         let worker = Worker::new(WorkerConfig::new());
         let dispatcher = worker.dispatcher(

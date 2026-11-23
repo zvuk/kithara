@@ -568,7 +568,7 @@ fn the_two_baseline_oracle_still_rejects_a_click_at_the_join(
     multi_thread,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(22346)),
+    timeout(Long),
     hang_timeout_secs(3)
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]

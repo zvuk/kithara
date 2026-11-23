@@ -21,7 +21,7 @@ async fn abr_switch_on_production_ladder_does_not_hang(
     tokio,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(9156)),
+    timeout(Long),
     hang_timeout_secs(3),
     tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
 )]
@@ -33,13 +33,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
         .await;
 }
 
-#[kithara::test(
-    tokio,
-    native,
-    serial,
-    timeout(::std::time::Duration::from_millis(1092)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, native, serial, timeout(Short), hang_timeout_secs(5))]
 async fn manual_cross_codec_switch_sustains_post_switch_playback(
     temp_dir: TestTempDir,
     #[by_ref] mixed_plain_url: &Url,
@@ -48,13 +42,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(
     packaged::manual_cross_codec_switch_sustains_post_switch_playback(temp_dir, mixed_plain).await;
 }
 
-#[kithara::test(
-    tokio,
-    native,
-    serial,
-    timeout(::std::time::Duration::from_millis(4490)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, native, serial, timeout(Quick), hang_timeout_secs(5))]
 #[cfg_attr(not(target_os = "android"), case::drm_abr_auto_sw(true, true, DecoderBackend::Symphonia, mixed_encrypted().await))]
 #[cfg_attr(target_os = "android", case::drm_abr_auto_android(true, true, DecoderBackend::default(), mixed_encrypted().await))]
 #[cfg_attr(
@@ -102,7 +90,7 @@ async fn fixed_variant_on_production_ladder_plays_without_hang(
     tokio,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(7192)),
+    timeout(Short),
     hang_timeout_secs(5),
     tracing("kithara_audio=warn,kithara_hls=warn,symphonia_format_isomp4=warn")
 )]
@@ -128,7 +116,7 @@ async fn mp3_stream_continues_after_seek(
     tokio,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(7207)),
+    timeout(Medium),
     hang_timeout_secs(3),
     tracing("kithara_abr=debug,kithara_abr_seek=debug,kithara_audio=info,kithara_hls=info")
 )]
@@ -140,7 +128,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     tokio,
     native,
     serial,
-    timeout(Duration::from_secs(20)),
+    timeout(Long),
     hang_timeout_secs(3),
     tracing("kithara_abr=debug,kithara_abr_seek=debug,kithara_audio=info,kithara_hls=info")
 )]
@@ -148,12 +136,7 @@ async fn abr_seek_reads_stay_live_while_real_work_delays_pacing(temp_dir: TestTe
     seek::abr_frozen_during_seek_resumes_after(temp_dir, true).await;
 }
 
-#[kithara::test(
-    native,
-    flash(false),
-    timeout(Duration::from_secs(20)),
-    hang_timeout_secs(3)
-)]
+#[kithara::test(native, flash(false), timeout(Long), hang_timeout_secs(3))]
 #[should_panic(expected = "no progress for 1s")]
 fn abr_pcm_read_budget_rejects_a_late_return() {
     seek::read_abr_chunk("deliberately late PCM read".to_owned(), || {

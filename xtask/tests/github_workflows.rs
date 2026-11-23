@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -8,9 +8,7 @@ use std::{
 use kithara_test_utils::TestBudget;
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use serde_yaml_ng::{Mapping, Value};
-use syn::{
-    BinOp, Expr, ItemConst, Meta, Stmt, Token, parse::Parser, punctuated::Punctuated, visit::Visit,
-};
+use syn::{Expr, Meta, Token, parse::Parser, punctuated::Punctuated};
 
 const STRESS_RAW_DIR: &str = "${{ runner.temp }}/kithara-stress/raw";
 const STRESS_EXECUTE_COMMAND: &str = r#"args=(
@@ -1710,6 +1708,62 @@ fn stress_profile_records_failures_with_a_dump_aware_outer_backstop() {
     assert_eq!(junit["store-failure-output"].as_bool(), Some(true));
 }
 
+fn budget_seconds(expression: &Expr, path: &Path) -> Option<u64> {
+    if matches!(expression, Expr::Path(path) if path.path.is_ident("Network"))
+        && !live_or_hand_run_target(path)
+    {
+        return None;
+    }
+    timeout_seconds(expression)
+}
+
+fn live_or_hand_run_target(path: &Path) -> bool {
+    if fs::read_to_string(path).is_ok_and(|source| source.contains("#[ignore]")) {
+        return true;
+    }
+    let Some(mut directory) = path.parent().map(Path::to_path_buf) else {
+        return false;
+    };
+    loop {
+        let manifest = directory.join("Cargo.toml");
+        if manifest.is_file() {
+            let Ok(source) = fs::read_to_string(manifest) else {
+                return false;
+            };
+            let Ok(manifest) = toml::from_str::<toml::Value>(&source) else {
+                return false;
+            };
+            let Some(relative) = path
+                .strip_prefix(&directory)
+                .ok()
+                .and_then(|path| path.to_str())
+            else {
+                return false;
+            };
+            return manifest
+                .get("test")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|targets| {
+                    targets.iter().any(|target| {
+                        target.get("path").and_then(toml::Value::as_str) == Some(relative)
+                            && target
+                                .get("required-features")
+                                .and_then(toml::Value::as_array)
+                                .is_some_and(|features| {
+                                    features.iter().any(|feature| {
+                                        feature.as_str() == Some("network")
+                                            || feature.as_str() == Some("network-manual")
+                                    })
+                                })
+                    })
+                });
+        }
+        if !directory.pop() {
+            return false;
+        }
+    }
+}
+
 #[test]
 fn stress_backstop_covers_every_kithara_test_timeout() {
     let root = workspace_root();
@@ -1724,7 +1778,7 @@ fn stress_backstop_covers_every_kithara_test_timeout() {
         for path in glob::glob(pattern).expect("source glob is valid") {
             let path = path.expect("source path is readable");
             let source = fs::read_to_string(&path).expect("Rust source is readable");
-            let file = match syn::parse_file(&source) {
+            let _file = match syn::parse_file(&source) {
                 Ok(file) => file,
                 Err(error) => {
                     unsupported.push(format!(
@@ -1734,8 +1788,6 @@ fn stress_backstop_covers_every_kithara_test_timeout() {
                     continue;
                 }
             };
-            let mut constants = TimeoutConstants::default();
-            constants.visit_file(&file);
             let tokens = match source.parse::<TokenStream>() {
                 Ok(tokens) => tokens,
                 Err(error) => {
@@ -1750,7 +1802,7 @@ fn stress_backstop_covers_every_kithara_test_timeout() {
             collect_timeout_attributes(&tokens, &path, &mut expressions, &mut unsupported);
             for expression in expressions {
                 observed = observed.saturating_add(1);
-                let Some(seconds) = timeout_seconds(&expression, &constants.values) else {
+                let Some(seconds) = budget_seconds(&expression, &path) else {
                     unsupported.push(format!(
                         "{}: unsupported kithara test timeout expression",
                         path.display()
@@ -1775,22 +1827,6 @@ fn stress_backstop_covers_every_kithara_test_timeout() {
         "declared test timeouts leave less than 30s before the configured pre-kill snapshot: {excessive:?}"
     );
     assert!(prekill >= observed_max + 30);
-}
-
-#[derive(Default)]
-struct TimeoutConstants {
-    values: BTreeMap<String, u64>,
-}
-
-impl<'ast> Visit<'ast> for TimeoutConstants {
-    fn visit_item_const(&mut self, item: &'ast ItemConst) {
-        if let Some(value) = integer_seconds(&item.expr, &self.values) {
-            self.values
-                .entry(item.ident.to_string())
-                .and_modify(|current| *current = (*current).max(value))
-                .or_insert(value);
-        }
-    }
 }
 
 fn collect_timeout_attributes(
@@ -1954,7 +1990,24 @@ fn timeout_source_audit_reads_macro_rules_and_cfg_attr_tokens() {
         "unexpected audit problems: {problems:?}"
     );
     assert_eq!(expressions.len(), 1);
-    assert_eq!(timeout_seconds(&expressions[0], &BTreeMap::new()), Some(5));
+    assert_eq!(timeout_seconds(&expressions[0]), None);
+}
+
+#[test]
+fn timeout_source_audit_rejects_duration_literals() {
+    for literal in [
+        "Duration::from_secs(5)",
+        "std::time::Duration::from_millis(5178)",
+        "::std::time::Duration::from_millis(92270)",
+        "SOME_TIMEOUT",
+    ] {
+        let expression = syn::parse_str(literal).expect("literal expression");
+        assert_eq!(
+            timeout_seconds(&expression),
+            None,
+            "Duration expression must be rejected: {literal}"
+        );
+    }
 }
 
 #[test]
@@ -1968,13 +2021,56 @@ fn timeout_source_audit_resolves_named_budgets_from_their_owner() {
     ] {
         let expression = syn::parse_str(name).expect("budget identifier");
         assert_eq!(
-            timeout_seconds(&expression, &BTreeMap::new()),
+            timeout_seconds(&expression),
             Some(budget.timeout(false).as_secs()),
             "{name}"
         );
     }
     let unknown = syn::parse_str("UnknownBudget").expect("unknown identifier");
-    assert_eq!(timeout_seconds(&unknown, &BTreeMap::new()), None);
+    assert_eq!(timeout_seconds(&unknown), None);
+}
+
+#[test]
+fn network_budget_requires_a_live_or_hand_run_target() {
+    let root = tempfile::tempdir().expect("network target fixture");
+    let target = root.path().join("tests/network.rs");
+    fs::create_dir_all(target.parent().expect("test directory")).expect("create test directory");
+    fs::write(&target, "fn case() {}").expect("test source");
+    let manifest = root.path().join("Cargo.toml");
+    let expression = syn::parse_str("Network").expect("network expression");
+
+    fs::write(&manifest, "[[test]]\npath = \"tests/network.rs\"\n").expect("gate manifest");
+    assert_eq!(
+        budget_seconds(&expression, &target),
+        None,
+        "gate test must reject Network"
+    );
+
+    fs::write(
+        &manifest,
+        "[[test]]\npath = \"tests/network.rs\"\nrequired-features = [\"network-manual\"]\n",
+    )
+    .expect("manual manifest");
+    assert_eq!(
+        budget_seconds(&expression, &target),
+        Some(600),
+        "hand-run target must accept Network"
+    );
+
+    fs::write(&manifest, "[[test]]\npath = \"tests/other.rs\"\n").expect("other manifest");
+    assert_eq!(
+        budget_seconds(&expression, &target),
+        None,
+        "a different test target must not inherit the classification"
+    );
+
+    fs::write(&manifest, "[[test]]\npath = \"tests/network.rs\"\n").expect("ignored manifest");
+    fs::write(&target, "#[ignore]\nfn case() {}").expect("ignored source");
+    assert_eq!(
+        budget_seconds(&expression, &target),
+        Some(600),
+        "an explicitly ignored hand-run test must accept Network"
+    );
 }
 
 #[test]
@@ -1994,88 +2090,28 @@ fn timeout_source_audit_includes_default_budgets() {
     assert_eq!(expressions.len(), 2);
     for expression in expressions {
         assert_eq!(
-            timeout_seconds(&expression, &BTreeMap::new()),
+            timeout_seconds(&expression),
             Some(TestBudget::default().timeout(false).as_secs())
         );
     }
 }
 
-fn timeout_seconds(expression: &Expr, constants: &BTreeMap<String, u64>) -> Option<u64> {
-    match expression {
-        Expr::Path(path) if path.qself.is_none() => {
-            let budget = match path.path.get_ident()?.to_string().as_str() {
-                "Quick" => TestBudget::Quick,
-                "Short" => TestBudget::Short,
-                "Medium" => TestBudget::Medium,
-                "Long" => TestBudget::Long,
-                "Network" => TestBudget::Network,
-                _ => return None,
-            };
-            Some(budget.timeout(false).as_secs())
-        }
-        Expr::Call(call)
-            if call_name(call).as_deref() == Some("from_secs") && call.args.len() == 1 =>
-        {
-            let segments = call_path(call)?;
-            (segments.iter().rev().nth(1).map(String::as_str) == Some("Duration"))
-                .then(|| call.args.first())
-                .flatten()
-                .and_then(|argument| integer_seconds(argument, constants))
-        }
-        Expr::Call(call)
-            if call_name(call).as_deref() == Some("from_millis") && call.args.len() == 1 =>
-        {
-            let segments = call_path(call)?;
-            (segments.iter().rev().nth(1).map(String::as_str) == Some("Duration"))
-                .then(|| call.args.first())
-                .flatten()
-                .and_then(|argument| integer_seconds(argument, constants))
-                .map(|millis| millis.div_ceil(1000))
-        }
-        Expr::Call(call)
-            if call_name(call).as_deref() == Some("browser_timeout") && call.args.len() == 2 =>
-        {
-            call.args
-                .iter()
-                .map(|argument| integer_seconds(argument, constants))
-                .collect::<Option<Vec<_>>>()
-                .and_then(|values| values.into_iter().max())
-        }
-        Expr::If(branch) => {
-            let then_value = block_value(&branch.then_branch)
-                .and_then(|value| timeout_seconds(value, constants))?;
-            let else_value = branch
-                .else_branch
-                .as_ref()
-                .and_then(|(_, value)| timeout_seconds(value, constants))?;
-            Some(then_value.max(else_value))
-        }
-        Expr::Block(block) => {
-            block_value(&block.block).and_then(|value| timeout_seconds(value, constants))
-        }
-        Expr::Group(group) => timeout_seconds(&group.expr, constants),
-        Expr::Paren(paren) => timeout_seconds(&paren.expr, constants),
-        _ => None,
+fn timeout_seconds(expression: &Expr) -> Option<u64> {
+    let Expr::Path(path) = expression else {
+        return None;
+    };
+    if path.qself.is_some() {
+        return None;
     }
-}
-
-fn integer_seconds(expression: &Expr, constants: &BTreeMap<String, u64>) -> Option<u64> {
-    match expression {
-        Expr::Lit(literal) => match &literal.lit {
-            syn::Lit::Int(value) => value.base10_parse().ok(),
-            _ => None,
-        },
-        Expr::Path(path) if path.qself.is_none() && path.path.segments.len() == 1 => constants
-            .get(&path.path.segments.first()?.ident.to_string())
-            .copied(),
-        Expr::Binary(binary) if matches!(binary.op, BinOp::Add(_)) => {
-            integer_seconds(&binary.left, constants)?
-                .checked_add(integer_seconds(&binary.right, constants)?)
-        }
-        Expr::Group(group) => integer_seconds(&group.expr, constants),
-        Expr::Paren(paren) => integer_seconds(&paren.expr, constants),
-        _ => None,
-    }
+    let budget = match path.path.get_ident()?.to_string().as_str() {
+        "Quick" => TestBudget::Quick,
+        "Short" => TestBudget::Short,
+        "Medium" => TestBudget::Medium,
+        "Long" => TestBudget::Long,
+        "Network" => TestBudget::Network,
+        _ => return None,
+    };
+    Some(budget.timeout(false).as_secs())
 }
 
 fn call_name(call: &syn::ExprCall) -> Option<String> {
@@ -2093,13 +2129,6 @@ fn call_path(call: &syn::ExprCall) -> Option<Vec<String>> {
             .map(|segment| segment.ident.to_string())
             .collect(),
     )
-}
-
-fn block_value(block: &syn::Block) -> Option<&Expr> {
-    match block.stmts.last()? {
-        Stmt::Expr(expression, None) => Some(expression),
-        _ => None,
-    }
 }
 
 #[test]

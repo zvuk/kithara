@@ -15,7 +15,7 @@ use kithara_test_fixtures::SignalAsset;
 
 use crate::bufpool_ext::pools;
 
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(6242)))]
+#[kithara::test(tokio, timeout(Long))]
 async fn queue_append_while_playing_does_not_wait_for_host() {
     let (harness, first_id) = sine_queue(SmoothingCase { eq_layout: None }).await;
     let server = TestServerHelper::new().await;

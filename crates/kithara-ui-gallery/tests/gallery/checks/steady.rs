@@ -393,7 +393,7 @@ mod retained {
     }
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(11786)))]
+#[kithara::test(timeout(Long))]
 fn a_page_held_at_one_moment_rasterises_the_same_twice() {
     /// Three draws rather than two: the first is also the first time this host
     /// has drawn the page, so a difference between the second and the third

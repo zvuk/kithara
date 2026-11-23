@@ -644,7 +644,7 @@ fn render_gesture(
     })
 }
 
-#[kithara::test(timeout(::std::time::Duration::from_millis(3934)))]
+#[kithara::test(timeout(Medium))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

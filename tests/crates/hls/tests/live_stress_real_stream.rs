@@ -393,7 +393,7 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
     tokio,
     browser,
     serial,
-    timeout(::std::time::Duration::from_millis(19127)),
+    timeout(Long),
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
@@ -588,7 +588,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     serial,
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info"),
-    timeout(::std::time::Duration::from_millis(3948))
+    timeout(Medium)
 )]
 #[case::hls_fixed("HLS", SeekRegression::FixedWindow, mixed_plain().await)]
 #[case::drm_fixed("DRM", SeekRegression::FixedWindow, mixed_encrypted().await)]
@@ -655,7 +655,7 @@ async fn live_real_stream_seek_regression(
     tracing(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
     ),
-    timeout(::std::time::Duration::from_millis(1355))
+    timeout(Quick)
 )]
 #[case::hls("HLS", mixed_plain().await)]
 #[case::drm("DRM", mixed_encrypted().await)]
@@ -735,7 +735,7 @@ async fn live_real_stream_seek_resume_native(
     tokio,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(12513)),
+    timeout(Long),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
@@ -925,7 +925,7 @@ async fn live_stress_real_stream_seek_read_cache(
     tokio,
     browser,
     serial,
-    timeout(::std::time::Duration::from_millis(13005)),
+    timeout(Long),
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
@@ -1012,7 +1012,7 @@ async fn live_ephemeral_small_cache_playback(
     serial,
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info"),
-    timeout(::std::time::Duration::from_millis(2425))
+    timeout(Medium)
 )]
 #[cfg_attr(not(target_os = "android"), case::hls_sw(false, "HLS", DecoderBackend::Symphonia, mixed_plain().await))]
 #[cfg_attr(target_os = "android", case::hls_android(false, "HLS", DecoderBackend::default(), mixed_plain().await))]

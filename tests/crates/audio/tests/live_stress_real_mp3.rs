@@ -165,7 +165,7 @@ async fn transfer_stats_ignore_unobserved_topic_overflow() {
     assert_eq!(stats.errors, 3);
 }
 
-#[kithara::test(tokio, timeout(::std::time::Duration::from_millis(1454)))]
+#[kithara::test(tokio, timeout(Quick))]
 #[case::file(true)]
 #[case::downloader(false)]
 async fn transfer_stats_reject_observed_topic_overflow(#[case] file_topic: bool) {
@@ -367,7 +367,7 @@ fn phase5_revisit_seeks(audio: &mut TestAudio, seek_positions: &[f64], random_op
     tokio,
     browser,
     serial,
-    timeout(::std::time::Duration::from_millis(4520)),
+    timeout(Short),
     hang_timeout_secs(1),
     tracing("kithara_audio=info,kithara_file=info")
 )]

@@ -346,12 +346,7 @@ fn beat_failures(onsets: &[Onset]) -> Vec<String> {
     failures
 }
 
-#[kithara::test(
-    tokio,
-    serial,
-    timeout(::std::time::Duration::from_millis(21506)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, serial, timeout(Long), hang_timeout_secs(5))]
 #[case::signalsmith(StretchKind::Signalsmith, true)]
 #[cfg_attr(
     all(

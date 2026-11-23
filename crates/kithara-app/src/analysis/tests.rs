@@ -974,7 +974,7 @@ async fn warm_seeds_nothing_before_the_run_opens(tone_mp3: String, rhythm_a_mp3:
     host.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(1488)))]
+#[kithara::test(native, tokio, timeout(Quick))]
 async fn a_background_warm_keeps_the_holder_of_a_held_entry(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);

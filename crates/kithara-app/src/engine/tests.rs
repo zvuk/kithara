@@ -479,7 +479,7 @@ fn assert_clicks_on_host_beats(rig: &mut Rig, found: &[Onset]) {
     );
 }
 
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(18002)))]
+#[kithara::test(native, tokio, timeout(Long))]
 async fn sync_puts_the_deck_on_the_host_beat(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {
@@ -491,7 +491,7 @@ async fn sync_puts_the_deck_on_the_host_beat(rhythm_a_wav: String) {
     drop(served);
 }
 
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(1708)))]
+#[kithara::test(native, tokio, timeout(Quick))]
 async fn offline_sync_capture_keeps_the_host_beat_clicks(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {
@@ -736,7 +736,7 @@ async fn a_sync_press_after_a_refusal_shows_sync_on_before_a_grid_arrives(rhythm
 
 /// A tempo the host takes while the current track is refused reaches the
 /// deck's next track, which sounds on the host beats of that tempo.
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(13784)))]
+#[kithara::test(native, tokio, timeout(Long))]
 async fn a_tempo_during_a_refusal_reaches_the_next_track(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
@@ -798,7 +798,7 @@ async fn a_tempo_during_a_refusal_reaches_the_next_track(
 }
 
 /// A playing deck whose grid runs past its duration turns SYNC on.
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(17804)))]
+#[kithara::test(native, tokio, timeout(Long))]
 async fn sync_on_a_playing_deck_with_a_grid_past_its_end(rhythm_a_wav: String) {
     let Synced { rig, served } = synced(vec![rhythm_a_wav], 124.0, |requests, tracks| {
         task::spawn(fixtures::serve_grid(
@@ -896,7 +896,7 @@ fn assert_revision_keeps_playback(rig: &mut Rig) {
 
 /// Revising the bar keeps playback continuous; a manual seek then lands on
 /// the revised host beat and downbeat.
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(14234)))]
+#[kithara::test(native, tokio, timeout(Long))]
 async fn a_bar_revision_keeps_playing_and_a_seek_lands_on_the_host_downbeat(rhythm_a_wav: String) {
     let early = grid_two_beats_off_the_bar();
     let revised = watch::channel(Some(fixtures::supplied(early))).0;
@@ -924,7 +924,7 @@ async fn a_bar_revision_keeps_playing_and_a_seek_lands_on_the_host_downbeat(rhyt
 
 /// A late grid keeps the incoming track playing continuously; a manual seek
 /// then puts its real clicks on the host beats and downbeats.
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(15718)))]
+#[kithara::test(native, tokio, timeout(Long))]
 async fn a_late_grid_keeps_the_incoming_track_playing_until_a_seek_aligns_it(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
@@ -1165,7 +1165,7 @@ fn tap_pause(rig: &mut Rig) {
 
 /// A Play taking back a tap pause just after a host downbeat sounds before the
 /// next host bar, with every click on a host beat and the accents on the bar.
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(11900)))]
+#[kithara::test(native, tokio, timeout(Long))]
 async fn a_resume_on_a_synced_deck_sounds_at_once(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {
@@ -1192,7 +1192,7 @@ async fn a_resume_on_a_synced_deck_sounds_at_once(rhythm_a_wav: String) {
     drop(served);
 }
 
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(13764)))]
+#[kithara::test(native, tokio, timeout(Long))]
 async fn a_synced_deck_crossfades_into_a_next_track_analysed_before_it_loads(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
@@ -1200,7 +1200,7 @@ async fn a_synced_deck_crossfades_into_a_next_track_analysed_before_it_loads(
     crossfade_into_the_next_track(rhythm_a_wav, rhythm_b_wav, true).await;
 }
 
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(13832)))]
+#[kithara::test(native, tokio, timeout(Long))]
 async fn a_synced_deck_crossfades_into_a_next_track_analysed_after_it_loads(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
@@ -1478,7 +1478,7 @@ fn joined(parts: &[&Rendered]) -> Vec<f32> {
 /// Under SYNC, deck A's clicks stay on the host beats right after a press of
 /// the key lock chip on, after a MASTER BPM step settles and right after a
 /// press off.
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(19760)))]
+#[kithara::test(native, tokio, timeout(Long))]
 async fn a_synced_deck_stays_on_the_beat_across_a_tempo_step_and_a_keylock_toggle(
     rhythm_a_wav: String,
 ) {
@@ -1496,7 +1496,7 @@ async fn a_synced_deck_stays_on_the_beat_across_a_tempo_step_and_a_keylock_toggl
 /// Under SYNC, a tone plays on through a press of the key lock chip on, a
 /// MASTER BPM step and a press off with no silent run and no step between
 /// samples steeper than its steady unlocked tone's.
-#[kithara::test(native, tokio, timeout(::std::time::Duration::from_millis(8422)))]
+#[kithara::test(native, tokio, timeout(Long))]
 async fn a_synced_tone_plays_on_without_a_gap_across_a_tempo_step_and_a_keylock_toggle(
     long_wav: String,
 ) {
@@ -1526,13 +1526,7 @@ async fn a_synced_tone_plays_on_without_a_gap_across_a_tempo_step_and_a_keylock_
     drop(served);
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    flash(false),
-    tracing("info"),
-    timeout(::std::time::Duration::from_millis(7876))
-)]
+#[kithara::test(native, tokio, flash(false), tracing("info"), timeout(Long))]
 #[case::aligned(false)]
 #[case::correcting(true)]
 async fn master_tempo_gestures_preserve_a_synced_keylocked_tones_level(

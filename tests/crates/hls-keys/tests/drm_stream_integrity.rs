@@ -292,13 +292,7 @@ fn assert_box_coverage(
     );
 }
 
-#[kithara::test(
-    tokio,
-    native,
-    serial,
-    timeout(::std::time::Duration::from_millis(4708)),
-    hang_timeout_secs(3)
-)]
+#[kithara::test(tokio, native, serial, timeout(Short), hang_timeout_secs(3))]
 #[case::hls_disk_v0("HLS-disk-v0", false, 0, mixed_plain().await)]
 #[case::hls_disk_v3("HLS-disk-v3", false, 3, mixed_plain().await)]
 #[case::hls_eph_v0("HLS-eph-v0", true, 0, mixed_plain().await)]

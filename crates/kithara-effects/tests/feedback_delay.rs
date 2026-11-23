@@ -11,7 +11,7 @@ use kithara_effects::{
     DeckEffect, FxParamChange, FxParamMapping, FxParamUnit,
     delay::{DelayTime, Feedback, FeedbackDelay, FeedbackDelayConfig, FeedbackHighPass},
 };
-use kithara_test_utils::{bufpool::pools, kithara, kithara_platform::time::Duration};
+use kithara_test_utils::{bufpool::pools, kithara};
 use num_traits::ToPrimitive;
 
 const RATE: u32 = 44_100;
@@ -884,7 +884,7 @@ fn feedback_delay_saturates_its_design_and_restores_the_requested_cutoff(
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(1)))]
+#[kithara::test(timeout(Quick))]
 fn feedback_delay_rate_drop_ends_a_cross_past_its_new_length() {
     const FROM: u32 = 1000;
     const TO: u32 = 1007;

@@ -453,7 +453,7 @@ fn rendered_source_frontier_excludes_backend_lookahead(
 }
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-#[kithara::test(timeout(::std::time::Duration::from_millis(2438)))]
+#[kithara::test(timeout(Medium))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

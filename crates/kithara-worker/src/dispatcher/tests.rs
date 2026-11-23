@@ -765,12 +765,7 @@ mod native {
         report
     }
 
-    #[kithara::test(
-        native,
-        tokio,
-        timeout(::std::time::Duration::from_millis(12028)),
-        hang_timeout_secs(2)
-    )]
+    #[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(2))]
     async fn an_idle_backpressure_poll_can_resume_after_an_unrelated_timer() {
         let owner = kithara_test_utils::off_thread::OffThread::spawn("idle-backpressure", || {
             Ok::<_, ()>(())

@@ -275,7 +275,7 @@ async fn run_case_paced(
     tokio,
     native,
     serial,
-    timeout(::std::time::Duration::from_millis(9266)),
+    timeout(Long),
     hang_timeout_secs(1),
     tracing(
         "info,kithara_render::lane=debug,render_refill=trace,kithara_hls=debug,kithara_decode=debug"
@@ -569,13 +569,7 @@ fn late_switches() -> Vec<(AbrMode, f64)> {
 /// vs `decode_head` in `execute_recreation`): the same seek+switch seams as
 /// `multi_switch`, but the consumer sleeps after every read so `committed`
 /// lags the producer the way full-suite CPU contention makes it lag.
-#[kithara::test(
-    tokio,
-    native,
-    serial,
-    timeout(::std::time::Duration::from_millis(25104)),
-    hang_timeout_secs(10)
-)]
+#[kithara::test(tokio, native, serial, timeout(Long), hang_timeout_secs(10))]
 #[cfg_attr(not(target_os = "android"), case::aac_lc_symphonia_pace1ms(
     Fixture::Single(Codec::AacLc),
     DecoderBackend::Symphonia,
@@ -652,13 +646,7 @@ async fn phase_continuity_hls_diag_paced(
 /// across sustained FLAC, the AAC→FLAC switch, 48 kHz resampling, and forced
 /// underruns — so the symptom needs true real-time cpal pressure or the live
 /// production stream, not a paced offline pull.
-#[kithara::test(
-    tokio,
-    native,
-    serial,
-    timeout(Duration::from_secs(25)),
-    hang_timeout_secs(1)
-)]
+#[kithara::test(tokio, native, serial, timeout(Long), hang_timeout_secs(1))]
 #[ignore = "pins real regression — uncompensated decoder warmup at HLS seek/switch seams (cross-codec AAC→FLAC ~1024 samples; he_v2 in-variant seek ~40 samples); unignore when HLS decoder-warmup / per-codec algo-delay fix lands"]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

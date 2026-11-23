@@ -65,7 +65,7 @@ async fn hls_server(saw_segments: &'static [u8]) -> CreatedHls {
 /// wait is a hang instead of a slow block.
 #[kithara::test(
     tokio,
-    timeout(::std::time::Duration::from_millis(27830)),
+    timeout(Long),
     hang_timeout_secs(10),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]

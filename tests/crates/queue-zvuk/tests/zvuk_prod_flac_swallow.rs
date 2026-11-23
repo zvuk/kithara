@@ -82,7 +82,7 @@ const COMMIT_DEADLINE: Duration = Duration::from_secs(10);
 ///     cargo nextest run -E 'test(zvuk_prod_flac_no_swallow)' --run-ignored=only
 /// ```
 // flash(false): real-time paced on purpose (see doc) — sleep paces render at 1x wall clock vs prod CDN.
-#[kithara::test(tokio, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, timeout(Long))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

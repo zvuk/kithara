@@ -146,7 +146,7 @@ mod tests {
 
     use super::expand;
 
-    #[kithara::test(native, timeout(::std::time::Duration::from_millis(1350)))]
+    #[kithara::test(native, timeout(Quick))]
     fn duplicate_owner_attributes_are_refused() {
         for second in [
             quote!(#[config_owner(inner)]),
@@ -162,7 +162,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, timeout(::std::time::Duration::from_millis(2502)))]
+    #[kithara::test(native, timeout(Quick))]
     fn delegate_names_exactly_one_field_of_the_struct() {
         for (attribute, message) in [
             (

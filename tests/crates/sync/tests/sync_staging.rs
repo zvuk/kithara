@@ -353,13 +353,7 @@ async fn schedule_start(harness: &mut ProductHarness, case: SyncCase) -> Operati
     }
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(::std::time::Duration::from_millis(7188))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Quick))]
 #[case::tunnel_unbounded_deadline(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE, STAGED_CUE)]
 #[case::tunnel_deadline_looser_than_the_ring(
     tunnel_sources().await,
@@ -491,13 +485,7 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
     drop(harness);
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(::std::time::Duration::from_millis(2028))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Quick))]
 #[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE)]
 #[case::tunnel_weak_beat(tunnel_sources().await, TUNNEL_RATE, TUNNEL_WEAK_CUE)]
 #[case::newtechno(newtechno_sources().await, NEWTECHNO_RATE, NEWTECHNO_PHRASE)]
@@ -539,13 +527,7 @@ async fn unloading_the_track_reports_its_installed_lane_cancelled(
     drop(harness);
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(::std::time::Duration::from_millis(8108))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Short))]
 #[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE)]
 #[case::tunnel_weak_beat(tunnel_sources().await, TUNNEL_RATE, TUNNEL_WEAK_CUE)]
 #[case::newtechno(newtechno_sources().await, NEWTECHNO_RATE, NEWTECHNO_PHRASE)]
@@ -578,13 +560,7 @@ async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
     drop(harness);
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(::std::time::Duration::from_millis(10590))
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::tunnel(tunnel_sources().await, TUNNEL_RATE, TUNNEL_CUE, TUNNEL_SUPERSEDING_CUE)]
 #[case::tunnel_weak_beat(
     tunnel_sources().await,

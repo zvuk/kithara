@@ -199,7 +199,7 @@ mod tests {
 
     use super::BytesEncodeTarget;
 
-    #[kithara::test(timeout(::std::time::Duration::from_millis(1494)))]
+    #[kithara::test(timeout(Quick))]
     fn bytes_target_maps_to_expected_media_info() {
         let info = BytesEncodeTarget::M4a.media_info(44_100, 2);
         assert_eq!(info.codec, Some(AudioCodec::AacLc));

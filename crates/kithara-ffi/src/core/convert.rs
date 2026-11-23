@@ -641,7 +641,7 @@ mod tests {
         ))
     }
 
-    #[kithara::test(timeout(::std::time::Duration::from_millis(18108)))]
+    #[kithara::test(timeout(Long))]
     fn event_routes_every_forwarded_domain() {
         let item_events = [
             ItemBusEvent::Decoder(DecoderEvent::ResamplerConfigured {

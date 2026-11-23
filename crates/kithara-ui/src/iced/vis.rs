@@ -306,7 +306,7 @@ mod tests {
         Uniforms::new(fixture::frame(level, 0.5, preset), [0.0, 0.0], [64.0, 64.0])
     }
 
-    #[kithara::test(timeout(::std::time::Duration::from_millis(1454)))]
+    #[kithara::test(timeout(Short))]
     fn the_visualiser_draws_what_the_uniform_block_says() {
         let instance = wgpu::Instance::default();
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {

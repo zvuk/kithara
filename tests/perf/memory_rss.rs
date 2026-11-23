@@ -163,13 +163,7 @@ fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
 }
 
 /// Multi-run RSS measurement: peak RSS delta must stay within budget.
-#[kithara::test(
-    native,
-    tokio,
-    serial,
-    timeout(Duration::from_secs(90)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(native, tokio, serial, timeout(Long), hang_timeout_secs(5))]
 async fn test_hls_playback_rss_within_budget(
     temp_dir: TestTempDir,
     #[future(awt)] rss_source: (TestServerHelper, Url),
@@ -244,13 +238,7 @@ async fn test_hls_playback_rss_within_budget(
 }
 
 /// RSS should stabilize after warmup — no sustained growth.
-#[kithara::test(
-    native,
-    tokio,
-    serial,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(native, tokio, serial, timeout(Long), hang_timeout_secs(5))]
 async fn test_hls_playback_no_rss_leak(
     temp_dir: TestTempDir,
     #[future(awt)] rss_source: (TestServerHelper, Url),

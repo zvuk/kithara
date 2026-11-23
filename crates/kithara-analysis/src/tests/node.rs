@@ -1284,7 +1284,7 @@ fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
 }
 
 #[cfg(feature = "analysis-beat")]
-#[kithara::test(timeout(::std::time::Duration::from_millis(2186)))]
+#[kithara::test(timeout(Quick))]
 async fn beat_slot_fills_the_beat_grid(analysis_pcm: &'static [f32]) {
     let raw = RawBeats::new(
         Vec::new(),
