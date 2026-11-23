@@ -100,20 +100,25 @@ async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase(
         let mut delivered = false;
         let mut applied = false;
         let mut frames = 5 * second;
-        while frames > 0 {
+        while frames > 0 || (replace && !applied) {
             let previous = control.position_seconds().expect("outgoing mark");
-            let block = frames.min(128);
-            pcm.extend(rig.render(case, block).await);
-            frames -= block;
-            if replace && !applied {
-                let current = control.current().expect("logical track through handover");
-                if current.url.as_deref() == Some(replacement.as_str()) {
-                    assert_eq!(current.id, item);
-                    assert!(control.is_playing());
-                    let advanced = control.position_seconds().expect("incoming mark") - previous;
-                    assert!(advanced >= 0.0, "accepted source rewound by {advanced}s");
-                    applied = true;
-                }
+            let block = if frames == 0 { 128 } else { frames.min(128) };
+            let rendered = rig.render(case, block).await;
+            if frames > 0 {
+                pcm.extend(rendered);
+                frames -= block;
+            }
+            if replace
+                && !applied
+                && let Some(current) = control.current()
+                && current.url.as_deref() == Some(replacement.as_str())
+            {
+                assert_eq!(current.id, item);
+                assert!(control.is_playing());
+                assert!(!current.source_changing);
+                let advanced = control.position_seconds().expect("incoming mark") - previous;
+                assert!(advanced >= 0.0, "accepted source rewound by {advanced}s");
+                applied = true;
             }
             if replace
                 && !delivered
@@ -135,16 +140,6 @@ async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase(
             }
         }
         let position = control.position_seconds().expect("canonical playhead");
-        while replace && !applied {
-            let _ = rig.render(case, 128).await;
-            let Some(current) = control.current() else {
-                continue;
-            };
-            if current.url.as_deref() == Some(replacement.as_str()) {
-                assert!(!current.source_changing);
-                applied = true;
-            }
-        }
         let current = control.current().expect("current track after the capture");
         assert_eq!(current.id, item);
         assert!(control.is_playing());
