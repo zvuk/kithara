@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::StreamExt;
 use http::{Method as HttpMethod, Request, Response};
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::CancelToken;
@@ -78,14 +77,10 @@ impl Transport {
         let body = matches!(method, Method::Post).then_some(body);
         let request = AppleRequest::new(&url, method, None, Some(headers), body, accept_encoding)?;
         let response = self.session.stream(request, self.cancel.clone()).await?;
-        Self::response(method, response, &url).await
+        Self::response(response, &url)
     }
 
-    async fn response(
-        method: Method,
-        response: AppleStreamResponse,
-        url: &Url,
-    ) -> Result<Response<HttpBody>, NetError> {
+    fn response(response: AppleStreamResponse, url: &Url) -> Result<Response<HttpBody>, NetError> {
         let Some(status) = response.status else {
             response.cancel();
             return Err(NetError::Network(format!(
@@ -96,17 +91,7 @@ impl Transport {
         for (name, value) in response.headers.iter() {
             head = head.header(name, value);
         }
-        let mut stream = ByteStream::from(response).into_inner();
-        let body: HttpBody = if matches!(method, Method::Head) {
-            // Release request admission only after the native HEAD task completes.
-            while let Some(chunk) = stream.next().await {
-                chunk?;
-            }
-            Box::pin(futures::stream::empty())
-        } else {
-            external_body(stream)
-        };
-        head.body(body)
+        head.body(external_body(ByteStream::from(response).into_inner()))
             .map_err(|error| NetError::Network(error.to_string()))
     }
 }
@@ -120,7 +105,7 @@ impl HttpTransport for Transport {
 
 #[cfg(test)]
 mod tests {
-    use std::{pin::pin, task::Poll};
+    use std::task::Poll;
 
     use futures::{StreamExt, poll};
     use kithara_apple::foundation::urlsession::UrlSessionEvents;
@@ -198,20 +183,18 @@ mod tests {
         .await
         .expect("native headers");
         let url = url::Url::parse("https://example.invalid/not-started").expect("test URI");
-        let mut response = pin!(Transport::response(method, response, &url));
-        let before_completion = poll!(response.as_mut());
-        let was_pending = before_completion.is_pending();
+        let response = Transport::response(response, &url).expect("available HTTP headers");
         if matches!(method, Method::Get) {
             queue.push(bytes::Bytes::from_static(b"body"));
         }
-        events.did_complete(id, None);
-        let response = match before_completion {
-            Poll::Ready(response) => response,
-            Poll::Pending => response.await,
-        }
-        .expect("completed HTTP response");
         let mut body = response.into_body();
+        let before_completion = poll!(body.next());
+        let was_pending = before_completion.is_pending();
+        events.did_complete(id, None);
         let mut received = Vec::new();
+        if let Poll::Ready(Some(chunk)) = before_completion {
+            received.extend_from_slice(&chunk.expect("first body delivery"));
+        }
         while let Some(chunk) = body.next().await {
             received.extend_from_slice(&chunk.expect("body delivery"));
         }
