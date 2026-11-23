@@ -46,8 +46,12 @@ enabled. On macOS, `usdt` emits native DTrace probes; on other targets, it
 emits the same probe records through `tracing`.
 
 `TestBudget` resolves named wall-time allowances for real, Flash and Miri execution.
-Tests default to `Quick`; `timeout(<Duration>)` is a manual override outside Miri
-and uses `Long` under Miri. With defaults disabled, enable `test` for these APIs.
+The levels are `Quick` (1 s), `Short` (2 s), `Medium` (5 s), `Long` (10 s) and
+`Network` (600 s, live-network and hand-run tests only) of real time. Under Flash
+every level is 1 s; under Miri `Quick` is 1 min, `Long` and `Network` are 8 min,
+and the other levels scale by 60. Tests default to `Quick`; `timeout(<Duration>)`
+is a manual override outside Miri and uses `Long` under Miri. With defaults
+disabled, enable `test` for these APIs.
 
 Set `KITHARA_TEST_CLOCK_MEASUREMENT=1` to emit per-body clock receipts. Native
 tests read it at invocation time; Wasm tests read it at build time and report

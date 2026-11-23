@@ -11,7 +11,7 @@ pub(crate) fn resolve(args: &TestArgs) -> Expr {
             .filter(|name| {
                 matches!(
                     name.to_string().as_str(),
-                    "Quick" | "Short" | "Medium" | "Long"
+                    "Quick" | "Short" | "Medium" | "Long" | "Network"
                 )
             })
             .cloned(),

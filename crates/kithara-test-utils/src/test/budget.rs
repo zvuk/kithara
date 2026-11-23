@@ -9,6 +9,8 @@ pub enum TestBudget {
     Short,
     Medium,
     Long,
+    /// A test against a live network or run only by hand, never a gate test.
+    Network,
 }
 
 impl TestBudget {
@@ -20,10 +22,11 @@ impl TestBudget {
             Self::Short => 2,
             Self::Medium => 5,
             Self::Long => 10,
+            Self::Network => 600,
         };
         if cfg!(miri) {
             Duration::from_secs(match self {
-                Self::Long => 480,
+                Self::Long | Self::Network => 480,
                 _ => seconds * 60,
             })
         } else {
@@ -58,6 +61,7 @@ mod tests {
             (TestBudget::Short, 2, 120),
             (TestBudget::Medium, 5, 300),
             (TestBudget::Long, 10, 480),
+            (TestBudget::Network, 600, 480),
         ] {
             let expected = if cfg!(miri) { miri } else { real };
             assert_eq!(budget.timeout(false), Duration::from_secs(expected));
