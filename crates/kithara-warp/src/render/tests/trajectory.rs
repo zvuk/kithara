@@ -371,12 +371,14 @@ fn a_source_discontinuity_rebases_an_approach_at_its_reached_rate() {
         .expect("exact postseek phase");
     let after = trajectory.span(50, rate, 128).expect("after backward seek");
     assert_eq!(after.source_ratio_at(0), Some(position));
-    let expected_curve = ExponentialApproach::new(
-        first.rate_at(97.0).expect("independent reached rate"),
-        first.target(),
-        first.time_constant(),
-    )
-    .expect("remaining approach");
+    let expected_curve = first
+        .resumed(97)
+        .expect("the course entered at the discontinuity");
+    assert_eq!(
+        expected_curve.rate_at(0.0),
+        first.rate_at(97.0),
+        "the rebased course starts at the independent reached rate"
+    );
     let expected = kithara_signal::SourceSpan::approaching(
         position.0,
         position.1,

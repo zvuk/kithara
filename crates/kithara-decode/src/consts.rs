@@ -33,6 +33,7 @@ pub(crate) const BOX_EDTS: [u8; 4] = *b"edts";
 pub(crate) const BOX_ELST: [u8; 4] = *b"elst";
 pub(crate) const BOX_FREEFORM: [u8; 4] = *b"----";
 pub(crate) const BOX_ILST: [u8; 4] = *b"ilst";
+pub(crate) const BOX_HDLR: [u8; 4] = *b"hdlr";
 pub(crate) const BOX_MDHD: [u8; 4] = *b"mdhd";
 pub(crate) const BOX_MDIA: [u8; 4] = *b"mdia";
 pub(crate) const BOX_MEAN: [u8; 4] = *b"mean";

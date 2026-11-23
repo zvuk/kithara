@@ -170,6 +170,12 @@ impl DecoderGeneration {
             None => {}
         }
         self.decoder.prepare_next_chunk_with_wait(wait);
+        if self.native_pcm_basis.is_none() && self.decoder.spec() != self.gapless_profile.spec() {
+            let codec = self.media_info.as_ref().and_then(|info| info.codec);
+            let profile = self.decoder.gapless_profile(codec);
+            self.gapless_profile = profile;
+            self.gapless.refresh_initial(profile, gapless_mode, codec);
+        }
         Ok(outcome)
     }
 }

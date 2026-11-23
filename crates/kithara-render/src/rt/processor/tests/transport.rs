@@ -1093,6 +1093,140 @@ async fn a_transport_reset_finishes_the_active_underrun_once(#[case] reset: Deck
     }
 }
 
+#[kithara::test(native)]
+#[case::realtime_staged(false, false)]
+#[case::realtime_private(true, false)]
+#[case::offline_staged(false, true)]
+#[case::offline_private(true, true)]
+fn a_parked_cut_requests_pcm_through_a_tempo_ramp(#[case] private: bool, #[case] offline: bool) {
+    use std::num::NonZeroU128;
+
+    use kithara_events::TrackId;
+    use kithara_signal::{ExponentialApproach, FrameCount, SourceSpan};
+
+    let (mut mixer, mut ends) = mixer_without_declick();
+    let spec = AudioSpec::new(2, NonZeroU32::new(RATE).unwrap());
+    let duration = Duration::from_secs(12);
+    let item = TrackId::allocate();
+    let segment = SegmentId::FIRST;
+    let ramp = ExponentialApproach::new(1.0, 124.0 / 120.0, 240.0).unwrap();
+    let span = |lane, frames| {
+        SourceSpan::approaching(0, NonZeroU128::MIN, ramp, lane, spec.sample_rate, frames).unwrap()
+    };
+    let packet = |lane, frames, sample| {
+        let map = span(lane, frames);
+        let samples = vec![sample; usize::try_from(frames).unwrap() * 2];
+        let mut chunk = chunk(spec, segment, lane, 0, &samples);
+        chunk.meta.media_origin = Some(Duration::ZERO);
+        chunk.meta.source_span = Some(map);
+        PcmPacket::Chunk(Box::new(chunk))
+    };
+    let wake = kithara_worker::Wake::default();
+    let mut incoming = PacketRing::with_wake(spec, duration, 3, 3, offline, wake.clone());
+    let mut outgoing = PacketRing::new(spec, duration, 2);
+    outgoing.push(packet(0, 4096, 0.125));
+    let mut basis = vec![(A, None)];
+    let mut setup = vec![
+        DeckPart::Attach {
+            slot: A,
+            item_id: item,
+            pcm: Box::new(outgoing.receiver.take().unwrap()),
+            segment,
+        },
+        DeckPart::Start {
+            slot: A,
+            fade: Fade::Declick,
+        },
+    ];
+    let to = if private { A } else { B };
+    let mut cut = vec![DeckPart::ContinueSource {
+        from: A,
+        to,
+        window: FrameCount::new(128),
+    }];
+    let pcm = Box::new(incoming.receiver.take().unwrap());
+    if private {
+        cut.push(DeckPart::Replace {
+            slot: A,
+            item_id: item,
+            pcm,
+            segment,
+        });
+    } else {
+        basis.push((B, None));
+        setup.push(DeckPart::Attach {
+            slot: B,
+            item_id: item,
+            pcm,
+            segment,
+        });
+        cut.push(DeckPart::Fade {
+            slot: A,
+            dir: FadeDir::Out,
+            settings: CrossfadeSettings {
+                duration: 0.0,
+                ..Default::default()
+            },
+        });
+    }
+    cut.push(DeckPart::Start {
+        slot: to,
+        fade: Fade::Declick,
+    });
+    let attached = send_on(&mut ends, When::Next, &basis, setup);
+    let _ = render(&mut mixer, 0);
+    drop(receipts(&mut ends));
+    for (_, owner) in &mut basis {
+        *owner = Some(attached);
+    }
+    let _ = kithara_worker::mock::flush_deferred(&wake);
+    let seq = send_on(&mut ends, at(BLOCK), &basis, cut);
+    let held = render_frames(&mut mixer, BLOCK, 128);
+    assert!(held.iter().all(|sample| (*sample - 0.125).abs() < 1e-6));
+    assert!(receipts(&mut ends).is_empty(), "the cut stays parked");
+    let frame = BLOCK + 128;
+    let incoming_frame = u64::try_from(frame).unwrap();
+    let stale = packet(0, incoming_frame, -0.25);
+    let aligned = packet(incoming_frame, 128, 0.375);
+    let deliver = move || {
+        incoming.push(stale);
+        incoming.push(aligned);
+    };
+    if offline {
+        let writer = kithara_platform::thread::spawn_named("continuation-pcm", move || {
+            kithara_test_utils::wait_until_blocking(
+                Duration::from_secs(1),
+                "offline continuation demand",
+                || kithara_worker::mock::wake_state(&wake).0 > 0,
+            )
+            .expect("offline preparation requests the incoming PCM");
+            deliver();
+        });
+        let scope = mixer.mixer.scope;
+        crate::offline::prepare_mixer(
+            &mut mixer.mixer,
+            mixer.inbox.0.scope(scope),
+            frame_at(frame),
+            2,
+            spec.sample_rate,
+        );
+        writer.join().unwrap();
+    } else {
+        assert_eq!(
+            kithara_worker::mock::wake_state(&wake),
+            (0, true),
+            "the callback defers incoming PCM demand"
+        );
+        deliver();
+    }
+    let first = render_frames(&mut mixer, frame, 2);
+    assert!(first.iter().all(|sample| (*sample - 0.375).abs() < 1e-6));
+    let replies = receipts(&mut ends);
+    let (_, outcome, parts) = replies.iter().find(|(id, ..)| *id == seq).unwrap();
+    assert_applied_at(outcome, frame);
+    assert!(parts.iter().any(|part| matches!(part, DeckPart::Returned(Returned::SourceContinued { mark, .. }) if mark.lane.frame == incoming_frame && mark.position == span(0, 4096).position_at(incoming_frame).unwrap())));
+}
+
 enum ContinuationOutcome {
     Cut,
     Ahead,

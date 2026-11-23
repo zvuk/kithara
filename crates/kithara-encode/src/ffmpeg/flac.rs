@@ -73,6 +73,7 @@ impl FlacFFmpegEncoder {
             bit_rate: request.bit_rate,
             packets_per_segment: request.packets_per_segment,
             encoder_delay: request.encoder_delay,
+            codec_delay: 0,
             trailing_delay: request.trailing_delay,
         })
     }

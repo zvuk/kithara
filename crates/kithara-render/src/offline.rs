@@ -164,6 +164,11 @@ pub(crate) fn prepare_mixer<E: SessionInbox>(
             break;
         }
     }
+    for parts in level.parked_batches() {
+        mixer
+            .deck
+            .request_continuation_pcm(parts, frames, crate::PcmReceiver::prepare_cut_window);
+    }
     let commands = level
         .frames_until_due(start)
         .and_then(|frames| usize::try_from(frames).ok())

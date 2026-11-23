@@ -12,7 +12,7 @@ use crate::{
     DecodeError, DecodeResult, Decoder, DecoderConfig,
     android::{AndroidCodec, AndroidMediaExtractorDemuxer},
     demuxer::Demuxer,
-    gapless::probe_mp4_gapless,
+    gapless::probe_mp4_gapless_dyn,
     traits::BoxedSource,
 };
 
@@ -103,7 +103,7 @@ where
             container,
             Some(ContainerFormat::Mp4 | ContainerFormat::Fmp4)
         ) {
-        probe_mp4_gapless(&mut source, &config.pools)?
+        probe_mp4_gapless_dyn(&mut *source, &config.pools)?
     } else {
         None
     };

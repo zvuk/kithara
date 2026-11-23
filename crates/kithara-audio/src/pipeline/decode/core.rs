@@ -331,6 +331,7 @@ impl ActiveDecode {
         &mut self,
         prepare_input: bool,
     ) -> DecodeResult<Option<DecoderSeekOutcome>> {
+        let profile = self.active.spec();
         let result = self
             .active
             .prepare_deferred(prepare_input, self.gapless_mode);
@@ -338,6 +339,16 @@ impl ActiveDecode {
         self.flush_incoming_reader_signals();
         if let Ok(Some(outcome)) = &result {
             self.observe_landing(outcome);
+        }
+        if result.is_ok()
+            && self.active.native_pcm_basis().is_none()
+            && self.active.spec() != profile
+        {
+            let profile = self.active.spec();
+            self.blender
+                .prepare_active(profile)
+                .map_err(DecodeError::backend)?;
+            self.blender.replace_active(profile);
         }
         result
     }

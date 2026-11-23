@@ -186,6 +186,10 @@ pub struct EncodedTrack {
     pub access_units: Vec<EncodedAccessUnit>,
     pub codec_config: Vec<u8>,
     pub encoder_delay: u32,
+    /// Frames per channel the codec's encoder emits before the first input
+    /// frame, as the encoder itself reports them. A decoder-side delay, such
+    /// as SBR in HE-AAC, is not part of it.
+    pub codec_delay: u32,
     pub timescale: u32,
     pub trailing_delay: u32,
     pub bit_rate: u64,
