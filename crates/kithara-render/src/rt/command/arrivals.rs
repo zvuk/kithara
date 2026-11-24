@@ -84,6 +84,7 @@ impl Deck {
         let cut = match self.prepare_continuation(&mut due, context_valid, prefix) {
             Ok(super::continuation::Preparation::Ready(cut)) => cut,
             Ok(super::continuation::Preparation::Pending { from, prefix }) => {
+                self.request_continuation_pcm(due.commands(), 0, |pcm, _, _| pcm.request_refill());
                 let checked = due.at();
                 self.armed[from.index()] = Some(Armed {
                     seq: due.defer(),

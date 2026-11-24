@@ -118,10 +118,12 @@ impl Lane {
                     source: None,
                     requested_entry,
                     render_revision: warp.render_revision(),
+                    source_position: None,
                     latency,
                 });
             } else {
                 due.apply(self.state.controls_applied(
+                    warp,
                     restored_same,
                     warp.render_revision(),
                     latency,
@@ -179,8 +181,9 @@ struct CommandEffects {
 }
 
 impl LaneState {
-    fn controls_applied(
+    fn controls_applied<S: HasPool<f32>>(
         &mut self,
+        warp: &WarpRenderer<S>,
         restored_same: bool,
         revision: u64,
         latency: FrameCount,
@@ -189,6 +192,9 @@ impl LaneState {
             && let Some(pending) = &mut self.pending
             && pending.entry == self.cursor
         {
+            pending.source_position = pending
+                .source
+                .and_then(|source| warp.published_source_entry(source));
             pending.render_revision = revision;
             pending.latency = latency;
         }

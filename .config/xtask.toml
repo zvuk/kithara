@@ -1533,14 +1533,41 @@ pr_review_line_limit = 5000
 # function only when a parameter cannot say what it does.
 [ext.ci.lanes.deps-deny]
 cache_group = "host"
-label = "dependency audit"
+label = "dependency policy audit"
 os = ["macos", "linux"]
 tools = ["cargo", "just"]
 program = "just"
-steps = [{ args = ["deps", "deny"], label = "licence and advisory gate" }]
+steps = [
+  { args = [
+    "deps",
+    "deny",
+    "bans",
+    "licenses",
+    "sources",
+  ], label = "licence and source gate" },
+]
 role = "gate"
 kinds = ["weekly", "quarantine"]
 kinds_github = ["main", "branch", "merge-request"]
+timeout_minutes = 30
+
+[ext.ci.lanes.deps-advisories]
+cache_group = "host"
+label = "RustSec advisory audit"
+os = ["macos", "linux"]
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "deps",
+    "deny",
+    "advisories",
+  ], label = "RustSec advisory gate" },
+]
+role = "gate"
+kinds = ["weekly", "quarantine"]
+kinds_github = ["main", "branch", "merge-request"]
+path_globs = ["Cargo.lock", "**/Cargo.toml", "deny.toml", ".cargo/config.toml"]
 timeout_minutes = 30
 
 [ext.ci.lanes.deps-unused]

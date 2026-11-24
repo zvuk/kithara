@@ -63,6 +63,7 @@ where
     source_frames_seen: u64,
     output_skip_frames: usize,
     prepared: Option<DecodeResult<DecoderChunkOutcome>>,
+    past_eof: bool,
 }
 
 impl<B, S> ResampledDecoder<B, S>
@@ -102,6 +103,7 @@ where
             output_skip_frames: resampler.output_delay(),
             pending_meta: None,
             prepared: None,
+            past_eof: false,
             pools: pools.clone(),
             reanchor: Some(Reanchor::Landing),
             resampler,
@@ -122,6 +124,7 @@ where
             self.observing_initial_pcm = false;
         }
         let outcome = self.decoder.seek_prefix_with_wait(native_bound, wait)?;
+        self.past_eof = matches!(outcome, DecoderSeekOutcome::PastEof { .. });
         self.prepared = None;
         self.reset_resampler_state();
         self.reanchor = Some(reanchor);
@@ -561,6 +564,9 @@ where
     }
 
     fn next_chunk_prepared(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        if self.past_eof {
+            return Ok(DecoderChunkOutcome::Eof);
+        }
         self.prepared.take().ok_or(DecodeError::InvalidData {
             detail: "resampled decoder output was not prepared",
         })?
@@ -577,6 +583,9 @@ where
     }
 
     fn prepare_next_chunk_with_wait(&mut self, wait: PrepareWait) {
+        if self.past_eof {
+            return;
+        }
         if !self.has_prepared_result() {
             self.prepared = Some(self.prepare_chunk(wait));
         }
@@ -1798,6 +1807,39 @@ mod tests {
         );
         decoder.flush_reader_signals();
         assert_eq!(calls.lock().expect("calls").flushes, 1);
+    }
+
+    #[kithara::test]
+    fn past_eof_latches_prepared_and_repeated_resampled_reads() {
+        let pools = pools();
+        let (mut decoder, calls) = scripted_resampled(
+            &pools,
+            vec![completed(&pools, Completion::Chunk)],
+            Some(vec![completed(&pools, Completion::Chunk)]),
+        );
+        decoder.prepare_next_chunk();
+        assert!(matches!(
+            consume_prepared(&mut decoder).expect("initial PCM"),
+            DecoderChunkOutcome::Chunk(_)
+        ));
+        calls.lock().expect("calls").seek_script = vec![DecoderSeekOutcome::PastEof {
+            duration: Duration::from_secs(2),
+        }]
+        .into();
+        assert!(matches!(
+            decoder.seek(Duration::from_secs(3)).expect("past-end seek"),
+            DecoderSeekOutcome::PastEof { .. }
+        ));
+        for _ in 0..2 {
+            assert!(matches!(
+                consume_prepared(&mut decoder).expect("prepared terminal read"),
+                DecoderChunkOutcome::Eof
+            ));
+        }
+        assert!(matches!(
+            decoder.next_chunk().expect("repeated terminal read"),
+            DecoderChunkOutcome::Eof
+        ));
     }
 
     #[kithara::test]

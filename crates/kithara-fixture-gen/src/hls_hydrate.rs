@@ -151,7 +151,7 @@ pub(crate) enum HydrateError {
     Manifest(#[from] toml::ser::Error),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Deadline {
     end: Instant,
 }
@@ -758,7 +758,9 @@ mod tests {
         .expect("resumed bytes");
 
         assert_eq!(bytes, b"abcdef");
+        assert!(server.url.as_str().is_ascii() && server.url.as_str().len() <= 64);
         let asked_again = server.finish();
+        assert_eq!(asked_again.len(), 1, "exactly two requests");
         assert!(
             asked_again
                 .first()

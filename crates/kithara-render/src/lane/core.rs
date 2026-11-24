@@ -149,6 +149,7 @@ struct Preparation {
     source: Option<AudioChunkInfo>,
     requested_entry: Option<Duration>,
     render_revision: u64,
+    source_position: Option<(u128, NonZeroU128)>,
     latency: FrameCount,
 }
 
@@ -166,25 +167,12 @@ impl Preparation {
             return false;
         }
         self.source.is_some_and(|source| {
-            let expected = source.source_geometry().and_then(|basis| {
-                let (numerator, denominator) =
-                    source_entry(basis, self.requested_entry, source.visible_origin)?;
-                Some((
-                    numerator.checked_mul(u128::from(source.spec.sample_rate.get()))?,
-                    NonZeroU128::new(
-                        denominator
-                            .get()
-                            .checked_mul(u128::from(basis.sample_rate().get()))?,
-                    )?,
-                ))
-            });
             span.sample_rate() == source.spec.sample_rate
-                && expected
-                    .and_then(|position| {
-                        span.scaled_from(position, (0, NonZeroU128::MIN), (1, NonZeroU128::MIN))
-                    })
-                    .and_then(|relative| relative.source_ratio_at(0))
-                    == Some((0, NonZeroU128::MIN))
+                && self.source_position.is_some_and(|position| {
+                    span.scaled_from(position, (0, NonZeroU128::MIN), (1, NonZeroU128::MIN))
+                        .and_then(|relative| relative.source_ratio_at(0))
+                        == Some((0, NonZeroU128::MIN))
+                })
         })
     }
 }
@@ -282,6 +270,7 @@ impl Lane {
             if let Some(to) = pending.requested_entry {
                 self.state.position = Some(reanchor_source(warp, meta, to, visible_origin)?);
             }
+            pending.source_position = warp.published_source_entry(meta);
             pending.source = Some(meta);
         }
         Ok(())

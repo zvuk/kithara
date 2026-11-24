@@ -1,3 +1,9 @@
+use std::num::NonZeroU32;
+
+use kithara_signal::rescale_frame_round;
+
+use crate::{DecodeError, DecodeResult};
+
 /// Gapless trim contract for one decoded track.
 ///
 /// The values are expressed in PCM frames, not scalar samples:
@@ -17,6 +23,35 @@ impl GaplessInfo {
             leading_frames,
             trailing_frames,
         }
+    }
+
+    /// The same trim counted in frames of `target_rate` instead of
+    /// `source_rate`; `None` on overflow.
+    #[must_use]
+    pub fn rescaled(self, source_rate: NonZeroU32, target_rate: NonZeroU32) -> Option<Self> {
+        Some(Self {
+            leading_frames: rescale_frame_round(self.leading_frames, source_rate, target_rate)?,
+            trailing_frames: rescale_frame_round(self.trailing_frames, source_rate, target_rate)?,
+        })
+    }
+}
+
+/// Trim a container declares, counted in frames of the rate the declaration
+/// uses: the sample-entry rate of an MP4 track, the stream rate of MP3.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DeclaredGapless {
+    pub(crate) info: GaplessInfo,
+    pub(crate) rate: NonZeroU32,
+}
+
+impl DeclaredGapless {
+    /// The trim in frames of a track reported at `rate`.
+    pub(crate) fn at(self, rate: NonZeroU32) -> DecodeResult<GaplessInfo> {
+        self.info
+            .rescaled(self.rate, rate)
+            .ok_or(DecodeError::InvalidData {
+                detail: "gapless track-rate frame count overflow",
+            })
     }
 }
 

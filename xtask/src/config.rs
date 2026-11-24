@@ -97,6 +97,9 @@ pub(crate) struct CiLaneConfig {
     /// only afford weekly. Omission uses `kinds`; an empty list leaves the
     /// lane to its dedicated workflow.
     pub(crate) kinds_github: Option<Vec<String>>,
+    /// Changed paths that schedule this lane in a narrowing pipeline. Full
+    /// pipeline kinds and explicit lane requests ignore this filter.
+    pub(crate) path_globs: Vec<String>,
     /// A stable GitHub runner label for lanes whose persistent build cache
     /// must stay on one runner slot. Empty keeps the lane on the shared pool.
     pub(crate) github_runner: Option<String>,
@@ -342,6 +345,11 @@ impl CiProjectConfig {
             }
             if lane.label.is_empty() {
                 bail!("ext.ci.lanes.{name} must carry a label to refuse under");
+            }
+            for pattern in &lane.path_globs {
+                glob::Pattern::new(pattern).with_context(|| {
+                    format!("ext.ci.lanes.{name}.path_globs contains an invalid glob")
+                })?;
             }
             for check in &lane.checks {
                 if check.tool.is_empty() {

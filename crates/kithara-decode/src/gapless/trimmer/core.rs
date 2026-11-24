@@ -34,6 +34,7 @@ enum GaplessMode {
         /// metadata-driven trim — that boundary is sample-exact.
         fade_in: Option<FadeInState>,
     },
+    Seeked,
 }
 
 impl GaplessTrimmer {
@@ -87,12 +88,36 @@ impl GaplessTrimmer {
         Self::default()
     }
 
+    /// Refresh initial counts without restoring a skipped head or discarding buffered PCM.
+    pub fn refresh_initial(&mut self, mut configuration: Self) {
+        match self.mode {
+            GaplessMode::Seeked => configuration.notify_seek(),
+            GaplessMode::Fixed {
+                leading_remaining: 0,
+                ..
+            } => {
+                if let GaplessMode::Fixed {
+                    leading_remaining,
+                    fade_in,
+                } = &mut configuration.mode
+                {
+                    *leading_remaining = 0;
+                    *fade_in = None;
+                }
+            }
+            _ => {}
+        }
+        self.mode = configuration.mode;
+        self.trailing_frames = configuration.trailing_frames;
+        self.tail_compensation = configuration.tail_compensation;
+    }
+
     /// # Errors
     /// Returns invalid geometry when retained PCM cannot be mapped.
     pub fn flush(&mut self) -> DecodeResult<GaplessOutput> {
         match &mut self.mode {
             GaplessMode::Disabled => Ok(GaplessOutput::new()),
-            GaplessMode::Fixed { .. } => {
+            GaplessMode::Fixed { .. } | GaplessMode::Seeked => {
                 let trailing_frames = self.compensated_trailing_frames();
                 self.tail_buffer.trim(trailing_frames)?;
                 Ok(self.tail_buffer.drain())
@@ -105,16 +130,7 @@ impl GaplessTrimmer {
     /// Call outside the non-blocking produce core: releasing a pooled buffer can deallocate
     /// when its shard is full.
     pub fn notify_seek(&mut self) {
-        match &mut self.mode {
-            GaplessMode::Disabled => {}
-            GaplessMode::Fixed {
-                leading_remaining,
-                fade_in,
-            } => {
-                *leading_remaining = 0;
-                *fade_in = None;
-            }
-        }
+        self.mode = GaplessMode::Seeked;
         self.tail_compensation = None;
         self.input_frames_seen = 0;
         self.tail_buffer.clear();
@@ -124,11 +140,11 @@ impl GaplessTrimmer {
     /// Rejects mapped metadata whose extent differs from the supplied PCM.
     pub fn push(&mut self, chunk: AudioChunk) -> DecodeResult<GaplessOutput> {
         validate_geometry(&chunk)?;
-        if matches!(self.mode, GaplessMode::Fixed { .. }) {
+        if matches!(self.mode, GaplessMode::Fixed { .. } | GaplessMode::Seeked) {
             self.input_frames_seen = self.input_frames_seen.saturating_add(chunk_frames(&chunk));
         }
-        match &mut self.mode {
-            GaplessMode::Disabled => Ok(output_with(chunk)),
+        let chunk = match &mut self.mode {
+            GaplessMode::Disabled => return Ok(output_with(chunk)),
             GaplessMode::Fixed {
                 leading_remaining,
                 fade_in,
@@ -140,10 +156,12 @@ impl GaplessTrimmer {
                 };
                 apply_fade_in(fade_in, &mut chunk);
 
-                self.tail_buffer.push(chunk);
-                Ok(self.tail_buffer.release(self.trailing_frames))
+                chunk
             }
-        }
+            GaplessMode::Seeked => chunk,
+        };
+        self.tail_buffer.push(chunk);
+        Ok(self.tail_buffer.release(self.trailing_frames))
     }
 }
 

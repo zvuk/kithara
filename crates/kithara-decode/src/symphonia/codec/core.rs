@@ -29,6 +29,7 @@ use crate::{
     codec::{CodecPriming, FrameCodec, access_unit_frames},
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
+    gapless::DeclaredGapless,
     symphonia::SymphoniaConfig,
     types::{DecoderTrackInfo, checked_audio_spec},
 };
@@ -54,6 +55,8 @@ pub(crate) struct SymphoniaCodec {
     /// gapless metadata captured by the demuxer before the codec is
     /// opened; left empty otherwise.
     track_info: DecoderTrackInfo,
+    /// Output snapshots are always derived from this original declaration clock.
+    declared_gapless: Option<DeclaredGapless>,
     codec: Option<AudioCodec>,
     /// One-shot guard for first-frame diagnostic log — compares the
     /// declared [`AudioSpec`] (from container `TrackInfo`) against the
@@ -96,6 +99,7 @@ impl SymphoniaCodec {
             spec,
             codec: None,
             track_info: DecoderTrackInfo::default(),
+            declared_gapless: None,
             logged_first_frame: false,
             aac_timing: None,
             decoded_offset: 0,
@@ -145,16 +149,13 @@ impl SymphoniaCodec {
         let decoder = registry
             .make_audio_decoder(&params, &opts)
             .map_err(DecodeError::backend)?;
-        let algo_delay = symphonia_decoder_algo_delay(track.codec);
-        let track_gapless = track
-            .gapless
-            .map(|info| apply_decoder_algo_delay(info, algo_delay));
-
         let prepared_rate = decoder
             .codec_params()
             .sample_rate
             .unwrap_or(track.sample_rate);
         let spec = checked_audio_spec(track.channels, prepared_rate, "symphonia.codec.track")?;
+        let track_gapless =
+            output_rate_gapless(track.gapless, Some(track.codec), spec.sample_rate)?;
         Ok(Self {
             decoder,
             spec,
@@ -163,6 +164,7 @@ impl SymphoniaCodec {
                 gapless: track_gapless,
                 ..DecoderTrackInfo::default()
             },
+            declared_gapless: track.gapless,
             logged_first_frame: false,
             aac_timing: matches!(
                 track.codec,
@@ -360,12 +362,17 @@ impl FrameCodec for SymphoniaCodec {
             Err(error) => return self.handle_decode_error(error, out, metadata),
         };
 
+        let previous_rate = self.spec.sample_rate;
         update_decoded_spec(
             &mut self.spec,
             &mut self.logged_first_frame,
             &decoded,
             pts_ticks,
         );
+        if self.spec.sample_rate != previous_rate {
+            self.track_info.gapless =
+                output_rate_gapless(self.declared_gapless, self.codec, self.spec.sample_rate)?;
+        }
         self.decoded_offset = 0;
         let decoded_frames = decoded.frames();
         if let Some(timing) = &mut self.aac_timing {
@@ -473,6 +480,23 @@ const fn symphonia_decoder_algo_delay(codec: AudioCodec) -> u64 {
     }
 }
 
+/// Container trims count frames at the track's media rate; SBR doubles the
+/// output rate of an HE-AAC track whose media rate is the core rate.
+fn output_rate_gapless(
+    declared: Option<DeclaredGapless>,
+    codec: Option<AudioCodec>,
+    output_rate: NonZeroU32,
+) -> DecodeResult<Option<GaplessInfo>> {
+    declared
+        .map(|declaration| declaration.at(output_rate))
+        .transpose()
+        .map(|info| {
+            info.map(|info| {
+                apply_decoder_algo_delay(info, codec.map_or(0, symphonia_decoder_algo_delay))
+            })
+        })
+}
+
 const fn apply_decoder_algo_delay(info: GaplessInfo, algo_delay: u64) -> GaplessInfo {
     if algo_delay == 0 {
         return info;
@@ -543,6 +567,116 @@ mod tests {
             Err(DecodeError::InvalidSampleRate { .. }) => {}
             Err(other) => panic!("expected InvalidSampleRate, got {other:?}"),
             Ok(_) => panic!("zero sample rate must be rejected"),
+        }
+    }
+
+    /// An HE-AAC track whose media rate is the 24 kHz core declares its trim
+    /// in core frames; the codec decodes SBR to 48 kHz and trims output frames.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "fdk-aac"))]
+    #[kithara::test]
+    fn declared_trim_is_scaled_from_the_media_rate_to_the_output_rate() {
+        let track = TrackInfo {
+            codec: AudioCodec::AacHe,
+            sample_rate: 24_000,
+            channels: 2,
+            extra_data: vec![0x13, 0x10, 0x56, 0xe5, 0x98],
+            duration: None,
+            gapless: Some(crate::gapless::DeclaredGapless {
+                info: crate::GaplessInfo::new(2112, 1216),
+                rate: std::num::NonZeroU32::new(24_000).expect("declaration rate"),
+            }),
+        };
+        let codec = SymphoniaCodec::open_with_config(&track, &SymphoniaConfig::default())
+            .expect("BUG: HE-AAC codec open");
+
+        assert_eq!(codec.spec().sample_rate.get(), 48_000);
+        assert_eq!(
+            codec.track_info().gapless,
+            Some(crate::GaplessInfo::new(4224, 2432))
+        );
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "fdk-aac"))]
+    #[kithara::test]
+    fn declared_trim_follows_implicit_sbr_pcm_geometry_across_reset() {
+        use kithara_test_fixtures::assets::he_aac_v1;
+
+        use crate::{
+            demuxer::{Frame, PacketMetadata},
+            fmp4::parsing::{parse_init, parse_segment_frames},
+            mp4::{Mp4MediaTiming, TrackEdit},
+            test_pools::pools,
+        };
+
+        let bytes = he_aac_v1().bytes().to_vec();
+        let region = pools();
+        let init = parse_init(&bytes, &region).expect("native HE-AAC init");
+        assert_eq!(init.sample_rate, 44_100);
+        let frames = parse_segment_frames(&init, &bytes).expect("native HE-AAC packets");
+        assert!(!frames.is_empty());
+        let declared = TrackEdit::Offset {
+            media_time: 2112,
+            segment: None,
+        }
+        .gapless(
+            Mp4MediaTiming {
+                timescale: 22_050,
+                duration: 0,
+            },
+            22_050,
+            None,
+        )
+        .expect("core-clock edit");
+        let track = TrackInfo {
+            codec: AudioCodec::AacLc,
+            sample_rate: 22_050,
+            channels: 2,
+            extra_data: vec![0x13, 0x90],
+            duration: None,
+            gapless: Some(crate::gapless::DeclaredGapless {
+                info: crate::GaplessInfo {
+                    trailing_frames: 1216,
+                    ..declared
+                },
+                rate: std::num::NonZeroU32::new(22_050).expect("declaration rate"),
+            }),
+        };
+        let mut codec = SymphoniaCodec::open_with_config(&track, &SymphoniaConfig::default())
+            .expect("implicit SBR codec open");
+        assert_eq!(codec.spec().sample_rate.get(), 22_050);
+        let mut output = region.get::<f32>();
+        for pass in 0..2 {
+            if pass != 0 {
+                codec.flush().expect("reset implicit SBR");
+            }
+            let mut produced = false;
+            for packet in &frames {
+                codec.prepare_output(&mut output).expect("prepare real PCM");
+                let decoded = codec
+                    .decode_frame(
+                        Frame {
+                            data: &bytes[packet.offset..packet.offset + packet.size],
+                            pts: init.time_at(packet.decode_time),
+                            duration: init.time_at(u64::from(packet.duration)),
+                            packet_desc: &[],
+                        },
+                        PacketMetadata::default(),
+                        &mut output,
+                    )
+                    .expect("decode real implicit-SBR packet");
+                if decoded.frames > 0 {
+                    produced = true;
+                    assert!(output.iter().all(|sample| sample.is_finite()));
+                    break;
+                }
+            }
+            assert!(produced, "native packets must produce PCM on pass {pass}");
+            assert_eq!(codec.spec().sample_rate.get(), 44_100);
+            assert_eq!(
+                codec.track_info().gapless,
+                Some(crate::GaplessInfo::new(4224, 2432)),
+                "trim must use the actual output clock on pass {pass}",
+            );
         }
     }
 
