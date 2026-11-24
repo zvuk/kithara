@@ -90,6 +90,7 @@ pub(super) struct Sources {
     pub(super) base: Option<PathBuf>,
     pub(super) head: PathBuf,
     pub(super) scratch: TempDir,
+    _checkouts: Option<TempDir>,
 }
 
 impl Sources {
@@ -117,11 +118,19 @@ impl Sources {
                     .to_owned(),
             )
         };
+        let checkouts = repository
+            .as_ref()
+            .map(|_| Builder::new().prefix("bench-source-").tempdir())
+            .transpose()?;
         let head = if request.head.is_empty() {
             ctx.root.clone()
         } else {
             checkout(
-                scratch.path().join("head"),
+                checkouts
+                    .as_ref()
+                    .context("benchmark checkout directory")?
+                    .path()
+                    .join("head"),
                 repository.as_deref().context("benchmark repository")?,
                 &request.head,
                 log,
@@ -131,7 +140,11 @@ impl Sources {
             None
         } else {
             Some(checkout(
-                scratch.path().join("base"),
+                checkouts
+                    .as_ref()
+                    .context("benchmark checkout directory")?
+                    .path()
+                    .join("base"),
                 repository.as_deref().context("benchmark repository")?,
                 &request.base,
                 log,
@@ -161,6 +174,7 @@ impl Sources {
             base,
             head,
             scratch,
+            _checkouts: checkouts,
         })
     }
 }
