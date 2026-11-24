@@ -21,5 +21,8 @@ proc-macro2 = { workspace = true }
 quote = { workspace = true }
 syn = { workspace = true, features = ["extra-traits", "visit-mut"] }
 
+[dev-dependencies]
+kithara-test-utils = { workspace = true, features = ["test", "temp-dir"] }
+
 [lints]
 workspace = true

@@ -14,22 +14,10 @@ use super::{
     },
 };
 
-/// Emit a native async test with a timeout using a **manual tokio runtime**.
+/// Emit a native async test with a deadline and joined runtime shutdown.
 ///
-/// Why: `#[tokio::test]` creates a runtime whose `Drop` waits indefinitely for
-/// `spawn_blocking` tasks.  If the test body spawns a blocking thread that
-/// outlives the timeout, the runtime shutdown hangs forever — even though
-/// `tokio::time::timeout` already fired and panicked.
-///
-/// This function generates a **sync** `#[test]` fn that:
-/// 1. Spawns a watchdog thread **outside** the tokio runtime.
-/// 2. Creates the runtime manually.
-/// 3. Runs the async body inside `block_on` with `tokio::time::timeout`.
-/// 4. Catches panics via `catch_unwind` so we can call `shutdown_timeout`
-///    before re-raising.
-/// 5. Calls `runtime.shutdown_timeout(100ms)` — never blocks on zombies.
-/// 6. The watchdog Drop guard fires **after** `shutdown_timeout`, so it only
-///    aborts if even the forced shutdown is stuck.
+/// Started blocking work stays owned until it finishes. The external watchdog
+/// bounds shutdown when that work cannot finish.
 pub(crate) fn emit_async_timeout_test(
     fn_name: &Ident,
     vis: &syn::Visibility,
@@ -101,11 +89,14 @@ pub(crate) fn emit_async_timeout_test(
         {
             #resident
             #test_setup
-            let __rt = #runtime_builder;
+            let __runtime = #runtime_builder;
             let __result = ::std::panic::catch_unwind(
-                ::std::panic::AssertUnwindSafe(|| {
-                    #scoped
-                    __rt.block_on(
+                ::std::panic::AssertUnwindSafe(move || {
+                    let __rt = __runtime;
+                    let __started = ::kithara_test_utils::kithara_platform::time::WallInstant::now();
+                    let __value = {
+                        #scoped
+                        __rt.block_on(
                         ::kithara_test_utils::kithara_platform::flash::participate(
                             async {
                                     ::kithara_test_utils::kithara_platform::time::timeout(
@@ -138,11 +129,20 @@ pub(crate) fn emit_async_timeout_test(
                             },
                             ::core::panic::Location::caller(),
                         ),
-                    )
+                        )
+                    };
+                    ::core::mem::drop(__rt);
+                    if __started.elapsed() > __timeout_dur {
+                        let __diagnostic = ::std::format!(
+                            "test `{}` timed out after {:?}",
+                            #fn_name_str, __timeout_dur,
+                        );
+                        ::kithara_test_utils::hang::record_test_hang("wall-timeout", &__diagnostic);
+                        ::core::panic!("{}", __diagnostic);
+                    }
+                    __value
                 })
             );
-
-            __rt.shutdown_timeout(::std::time::Duration::from_millis(100));
 
             match __result {
                 Ok(__v) => __v,
@@ -299,6 +299,16 @@ mod tests {
         )
         .to_string();
 
+        assert!(!expanded.contains("shutdown_timeout"));
+        let owned = expanded
+            .find("let __rt = __runtime")
+            .expect("owned runtime");
+        let joined = expanded.find("drop (__rt)").expect("joined shutdown");
+        let checked = expanded
+            .find("__started . elapsed () > __timeout_dur")
+            .expect("full lifetime deadline");
+        let reported = expanded.find("match __result").expect("result report");
+        assert!(owned < joined && joined < checked && checked < reported);
         assert!(!expanded.contains("PreKillGuard"));
         assert!(expanded.contains("record_test_hang"));
         assert!(expanded.contains("wall-timeout"));

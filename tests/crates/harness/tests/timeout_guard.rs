@@ -61,11 +61,11 @@ async fn async_infinite_loop_is_killed_by_timeout() {
 #[serial_test::serial]
 #[cfg_attr(not(target_arch = "wasm32"), should_panic(expected = "timed out"))]
 #[cfg_attr(target_arch = "wasm32", should_panic)]
-async fn async_spawn_blocking_zombie_is_killed_by_timeout() {
-    let _handle = spawn_blocking(|| {
-        loop {
-            hint::spin_loop();
-        }
+async fn async_blocking_wait_is_joined_after_timeout() {
+    let (release, released) = kithara::platform::sync::mpsc::channel::<()>();
+    let _ = spawn_blocking(move || {
+        assert!(released.recv().is_err());
     })
     .await;
+    drop(release);
 }

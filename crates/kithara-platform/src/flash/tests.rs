@@ -1647,11 +1647,10 @@ fn a_join_poll_the_budget_turns_away_holds_no_slot() {
     let rt = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("build current-thread runtime");
-    let release = Arc::new(AtomicUsize::new(0));
-    let release_in = Arc::clone(&release);
+    let (release, released) = mpsc::channel::<()>();
     let body = async move {
         let mut handle = crate::tokio::task::spawn_blocking(move || {
-            while release_in.load(Ordering::Acquire) == 0 {
+            while matches!(released.try_recv(), Err(mpsc::TryRecvError::Empty)) {
                 crate::thread::yield_now();
             }
         });
@@ -1666,7 +1665,7 @@ fn a_join_poll_the_budget_turns_away_holds_no_slot() {
         handle
     };
     let handle = rt.block_on(participate(body, Location::caller()));
-    release.store(1, Ordering::Release);
+    drop(release);
     while !handle.is_finished() {
         thread::yield_now();
     }

@@ -109,3 +109,9 @@ See the [runtime consumer requirements](../kithara-test-utils/README.md#independ
 for the dependency declarations and independent fixture.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-macros) for detailed contracts, invariants, and internals.
+
+Native async tests own their runtime through shutdown. Already-started blocking
+work finishes before the outcome returns, including panic and timeout paths.
+The external hard watchdog remains armed while shutdown joins that work; a
+blocked shutdown aborts the test process. Shutdown time remains inside the
+resolved deadline, so a delayed join cannot turn a missed budget into a pass.
