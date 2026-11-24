@@ -808,6 +808,7 @@ fn a_host_pass_publishes_the_deck_mixer_counters(#[by_ref] worker_owner: &Worker
         mixer_config.slots(),
         mixer_config.eq_bands(),
         mixer_config.fx_units(),
+        mixer_config.fx_parameters(),
     );
     deck.blocks = 7;
     let output = mock::output(None).get();

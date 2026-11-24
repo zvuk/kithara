@@ -119,8 +119,7 @@ impl<E: SessionInbox> DeckMixer<E> {
             render: RenderPass::new(pools, shape, config)?,
             programs: DeckPrograms::new(
                 inputs.scope,
-                config.eq_bands(),
-                config.fx_units(),
+                [config.eq_bands(), config.fx_units(), config.fx_parameters()],
                 capacity,
             ),
             tracks: TrackSlots::new(slots),
@@ -329,6 +328,8 @@ impl<E: SessionInbox> DeckMixer<E> {
             if self.retired { None } else { self.deck.epoch },
             self.deck.render.control_values(),
             self.deck.render.filter_knob(),
+            self.deck.render.fx_mixes(),
+            self.deck.render.fx_delivered(),
         );
         self.snapshot.publish();
     }
@@ -449,6 +450,10 @@ impl Deck {
             }
             return Ok(false);
         }
+        let at = SessionFrame::new(
+            i64::from(start).saturating_add(i64::try_from(range.start).unwrap_or(i64::MAX)),
+        );
+        self.programs.write(level, at, range.len());
         if self.render.take_priming() {
             for (_, track) in self.tracks.iter_mut() {
                 track.snap_gate();
@@ -498,7 +503,7 @@ impl Deck {
                 sounded = true;
             }
         }
-        sounded |= self.render.ringing();
+        sounded |= self.render.ringing(Some(&self.programs), range.len());
         self.finish_range(
             level,
             start,
