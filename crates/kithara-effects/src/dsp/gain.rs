@@ -1,4 +1,4 @@
-use std::{num::NonZeroU32, ops::Index};
+use std::{num::NonZeroU32, ops::DerefMut};
 
 use kithara_dsp::param::{
     DEFAULT_GAIN_SPAN, SmootherConfig, SmoothingFilter, SmoothingFilterCoeff,
@@ -137,6 +137,15 @@ impl GainBank {
         }
     }
 
+    pub(crate) fn fill<B: DerefMut<Target = [f32]>>(&mut self, blocks: &mut [B], frames: usize) {
+        for frame in 0..frames {
+            self.tick();
+            for (gain, block) in self.gains.iter().zip(blocks.iter_mut()) {
+                block[frame] = gain.current();
+            }
+        }
+    }
+
     pub(crate) fn set_explicit(&mut self, band: usize, gain_db: GainDb) -> GainWrite {
         self.gains
             .get_mut(band)
@@ -187,9 +196,6 @@ impl GainBank {
     delegate::delegate! {
         to self.gains {
             pub(crate) const fn len(&self) -> usize;
-            #[expr($.current())]
-            #[call(index)]
-            pub(crate) fn linear(&self, band: usize) -> f32;
             #[expr($.map(SmoothedGain::target))]
             #[call(get)]
             pub(crate) fn target(&self, band: usize) -> Option<GainDb>;
@@ -212,6 +218,10 @@ mod tests {
 
     use super::*;
 
+    fn linear(bank: &GainBank, band: usize) -> f32 {
+        bank.gains[band].current()
+    }
+
     /// `IsolatorEq::new` takes a plain `u32`, so a caller can hand the bank a
     /// rate no filter can be built from. The band still has to arrive.
     #[kithara::test]
@@ -227,7 +237,7 @@ mod tests {
             bank.tick();
         }
 
-        assert_eq!(bank.linear(0), GainDb::MAX.linear());
+        assert_eq!(linear(&bank, 0), GainDb::MAX.linear());
     }
 
     #[kithara::test]
@@ -252,8 +262,8 @@ mod tests {
             bank.set_explicit(0, value);
             bank.tick();
             reference.tick();
-            assert_eq!(bank.linear(0).to_bits(), value.linear().to_bits());
-            assert_eq!(bank.linear(1).to_bits(), reference.linear(1).to_bits());
+            assert_eq!(linear(&bank, 0).to_bits(), value.linear().to_bits());
+            assert_eq!(linear(&bank, 1).to_bits(), linear(&reference, 1).to_bits());
             assert_eq!(bank.target(1), reference.target(1));
         }
     }
@@ -269,17 +279,52 @@ mod tests {
         bank.set_explicit(0, GainDb::DEFAULT);
         bank.tick();
         assert_eq!(bank.target(0), Some(GainDb::DEFAULT));
-        assert!(bank.linear(0) > 0.0);
-        assert!(bank.linear(0) < GainDb::MAX.linear());
+        assert!(linear(&bank, 0) > 0.0);
+        assert!(linear(&bank, 0) < GainDb::MAX.linear());
         assert!(!bank.set_kill(0, true));
         for _ in 0..48_000 {
             bank.tick();
         }
-        assert_eq!(bank.linear(0).to_bits(), 0);
+        assert_eq!(linear(&bank, 0).to_bits(), 0);
         assert!(bank.set_kill(0, false));
-        assert_eq!(bank.linear(0).to_bits(), 0);
+        assert_eq!(linear(&bank, 0).to_bits(), 0);
         bank.tick();
-        assert!(bank.linear(0) > 0.0 && bank.linear(0) < 1.0);
+        assert!(linear(&bank, 0) > 0.0 && linear(&bank, 0) < 1.0);
+    }
+
+    #[kithara::test]
+    fn filled_blocks_match_frame_by_frame_ticks_and_final_settlement() {
+        let smoothing = SmootherConfig {
+            smooth_seconds: 1.0,
+            settle_ratio: 0.25,
+        };
+        let mut actual = GainBank::new([GainDb::DEFAULT; 2].into_iter(), 2.0, smoothing);
+        let mut reference = GainBank::new([GainDb::DEFAULT; 2].into_iter(), 2.0, smoothing);
+        actual.set(0, GainDb::MAX);
+        reference.set(0, GainDb::MAX);
+        assert!(actual.set_kill(1, true));
+        assert!(reference.set_kill(1, true));
+        let mut blocks = vec![vec![0.0; 256]; 2];
+        let mut expected = [Vec::new(), Vec::new()];
+
+        for frames in [1, 7, 255] {
+            for _ in 0..frames {
+                reference.tick();
+                for (band, expected) in expected.iter_mut().enumerate() {
+                    expected.push(linear(&reference, band));
+                }
+            }
+            actual.fill(&mut blocks, frames);
+            for (band, expected) in expected.iter().enumerate() {
+                assert_eq!(blocks[band][..frames], expected[expected.len() - frames..]);
+                assert_eq!(
+                    linear(&actual, band).to_bits(),
+                    linear(&reference, band).to_bits()
+                );
+            }
+        }
+        assert_eq!(linear(&actual, 0).to_bits(), GainDb::MAX.linear().to_bits());
+        assert_eq!(linear(&actual, 1).to_bits(), 0);
     }
 
     #[kithara::test]
@@ -291,13 +336,13 @@ mod tests {
         let mut bank = GainBank::new([GainDb::DEFAULT].into_iter(), 2.0, smoothing);
         assert!(bank.set_kill(0, true));
         bank.tick();
-        assert_eq!(bank.linear(0).to_bits(), 0.5_f32.to_bits());
+        assert_eq!(linear(&bank, 0).to_bits(), 0.5_f32.to_bits());
         bank.tick();
-        assert_eq!(bank.linear(0).to_bits(), 0);
+        assert_eq!(linear(&bank, 0).to_bits(), 0);
         assert!(bank.set_kill(0, false));
         bank.tick();
-        assert_eq!(bank.linear(0).to_bits(), 0.5_f32.to_bits());
+        assert_eq!(linear(&bank, 0).to_bits(), 0.5_f32.to_bits());
         bank.tick();
-        assert_eq!(bank.linear(0).to_bits(), 1.0_f32.to_bits());
+        assert_eq!(linear(&bank, 0).to_bits(), 1.0_f32.to_bits());
     }
 }

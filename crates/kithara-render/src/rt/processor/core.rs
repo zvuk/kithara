@@ -4,10 +4,10 @@ use firewheel::{
     StreamInfo,
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
-use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::{LevelInbox, ScopeId, Target};
 use kithara_dsp::param::SmootherConfig;
-use kithara_effects::eq::GainShapeError;
+use kithara_effects::eq::{EqError, GainShapeError};
 use kithara_signal::{FrameCount, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
 use ringbuf::HeapProd;
@@ -77,12 +77,12 @@ impl<E: SessionInbox> DeckMixer<E> {
     /// The scope snapshot is published by the first actual render.
     ///
     /// # Errors
-    /// Returns a pool error if either scratch or any required tail cannot be allocated.
+    /// Returns an EQ error for an invalid crossover design or an allocation failure.
     pub fn new<S>(
         inputs: MixerInputs,
         shape: StreamShape,
         pools: &PoolRegion<S>,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {
@@ -94,7 +94,7 @@ impl<E: SessionInbox> DeckMixer<E> {
         inputs: &MixerInputs,
         shape: StreamShape,
         pools: &PoolRegion<S>,
-    ) -> Result<PreparedDeck, PoolError>
+    ) -> Result<PreparedDeck, EqError>
     where
         S: HasPool<f32>,
     {

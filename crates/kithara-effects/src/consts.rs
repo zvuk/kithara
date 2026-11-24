@@ -1,10 +1,8 @@
 use core::num::NonZeroUsize;
 
-use biquad::Coefficients;
 use kithara_dsp::param::{MIN_SETTLE_RATIO, SmootherConfig};
 
-pub(crate) const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
-pub(crate) const NYQUIST_FACTOR: f32 = 2.0;
+pub(crate) const EQ_BLOCK_FRAMES: usize = 256;
 /// Highest cutoff the deck filter knob map gives, as a share of the sample
 /// rate: below Nyquist with margin, and above every default cutoff at 44.1 kHz
 /// and up.
@@ -17,14 +15,6 @@ pub(crate) const COMB_FLOOR: f32 = 1e-6;
 
 /// Seconds a delay time change crosses from the old read to the new one.
 pub(crate) const DELAY_RAMP_SECONDS: f64 = 0.02;
-
-pub(crate) const PASSTHROUGH: Coefficients<f32> = Coefficients {
-    a1: 0.0,
-    a2: 0.0,
-    b0: 1.0,
-    b1: 0.0,
-    b2: 0.0,
-};
 
 pub(crate) const BAND_MAX_FREQ: f32 = 18000.0;
 pub(crate) const BAND_MIN_FREQ: f32 = 60.0;
