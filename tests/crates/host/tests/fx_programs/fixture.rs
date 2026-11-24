@@ -88,14 +88,19 @@ pub(super) fn tone() -> Box<dyn DeckEffect> {
 
 /// A deck of two FX units playing a constant `INPUT`, called back `callback`
 /// frames at a time, with the halving effect installed on each unit, powered
-/// on and fully dry.
+/// on and fully dry. Opts into offline blocking, so its zero-underrun
+/// assertions are offline references; the deck-program callback returning
+/// under a withheld segment with zero PCM wait is proven in `nonblocking`.
 pub(super) async fn prepared(callback: usize) -> OfflinePlayer {
     prepared_with(callback, None, halving, FxMix::MIN).await
 }
 
 /// The same deck with `effect` on each unit at `mix`, and room for
 /// `parameters` effect parameters in each unit, the mixer default when unset.
-/// The effect leaves the constant as it is until a program moves it.
+/// The effect leaves the constant as it is until a program moves it. Opts into
+/// offline blocking, so its zero-underrun assertions are offline references;
+/// the false-mode proof that a program callback returns while its segment gate
+/// is closed lives in `nonblocking`.
 pub(super) async fn prepared_with(
     callback: usize,
     parameters: Option<usize>,

@@ -5735,6 +5735,7 @@ version = "0.0.1-alpha5"
 dependencies = [
  "cochlea-features",
  "delegate",
+ "futures",
  "kithara",
  "kithara-command",
  "kithara-config",

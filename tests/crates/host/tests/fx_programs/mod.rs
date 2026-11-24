@@ -21,4 +21,5 @@ use crate::{deck_fx::Curve, mix_tap::load_source};
 
 mod cases;
 mod fixture;
+mod nonblocking;
 mod regressions;

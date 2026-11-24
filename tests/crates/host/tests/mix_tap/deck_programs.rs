@@ -27,6 +27,11 @@ enum Control {
     Band,
 }
 
+/// A neutral deck playing the constant input, called back `callback` frames at
+/// a time. Opts into offline blocking, so its zero-underrun assertions are
+/// offline references; the false-mode proof that a deck-program callback
+/// returns while its segment gate is closed lives in `fx_programs::nonblocking`
+/// and `mix_tap::starvation`.
 async fn prepared(callback: usize, bands: usize) -> OfflinePlayer {
     let block = NonZeroU32::new(u32::try_from(callback).expect("callback fits u32"))
         .expect("nonzero callback");
