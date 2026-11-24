@@ -1600,7 +1600,6 @@ async fn render_until_b_with_postroll(
     class_tolerance: f32,
     render_sample_rate: u32,
 ) -> (Vec<f32>, usize) {
-    let block_duration = render_block_duration(render_sample_rate);
     let mut progress = RenderProgress::new();
     let mut expected_a_frames: Option<usize> = None;
 
@@ -1620,8 +1619,6 @@ async fn render_until_b_with_postroll(
         {
             expected_a_frames = Some(frames_from_secs(duration, render_sample_rate));
         }
-
-        time::sleep(block_duration).await;
 
         if (queue.current_index(), queue.position_seconds()) != before {
             hang_reset!();
@@ -1644,7 +1641,6 @@ async fn render_until_b_with_late_variant_switch(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer,
 ) -> (Vec<f32>, usize, usize, Option<usize>) {
-    let block_duration = render_block_duration(SAMPLE_RATE);
     let mut progress = RenderProgress::new();
     let mut events = queue.subscribe();
     let mut expected_a_frames: Option<usize> = None;
@@ -1696,7 +1692,6 @@ async fn render_until_b_with_late_variant_switch(
             switch_issue_frame.is_some(),
         );
 
-        time::sleep(block_duration).await;
         if (queue.current_index(), queue.position_seconds()) != before {
             hang_reset!();
         }
@@ -1726,7 +1721,6 @@ async fn render_crossfade_until_b_with_postroll(
     harness: &OfflinePlayer,
     render_sample_rate: u32,
 ) -> (Vec<f32>, usize) {
-    let block_duration = render_block_duration(render_sample_rate);
     let mut progress = RenderProgress::new();
     let mut expected_a_end_frame: Option<usize> = None;
 
@@ -1747,7 +1741,6 @@ async fn render_crossfade_until_b_with_postroll(
             expected_a_end_frame = Some(frames_from_secs(duration, render_sample_rate));
         }
 
-        time::sleep(block_duration).await;
         if (queue.current_index(), queue.position_seconds()) != before {
             hang_reset!();
         }
@@ -1787,7 +1780,6 @@ async fn render_app_layer_crossfade_until_b_with_postroll_config(
     block_budget: usize,
     duration_wait_secs: f64,
 ) -> (Vec<f32>, usize) {
-    let block_duration = render_block_duration(render_sample_rate);
     let mut progress = RenderProgress::new();
     let mut expected_a_end_frame: Option<usize> = None;
     let mut auto_advanced_index: Option<usize> = None;
@@ -1811,7 +1803,6 @@ async fn render_app_layer_crossfade_until_b_with_postroll_config(
             expected_a_end_frame = Some(frames_from_secs(duration, render_sample_rate));
         }
 
-        time::sleep(block_duration).await;
         if (queue.current_index(), queue.position_seconds()) != before {
             hang_reset!();
         }
@@ -1953,7 +1944,6 @@ async fn render_until_tone_b_with_postroll(
     harness: &OfflinePlayer,
     render_sample_rate: u32,
 ) -> (Vec<f32>, f64) {
-    let block_duration = render_block_duration(render_sample_rate);
     let mut progress = ToneRenderProgress::new();
     let mut track_duration: Option<f64> = None;
 
@@ -1974,7 +1964,6 @@ async fn render_until_tone_b_with_postroll(
             track_duration = Some(duration);
         }
 
-        time::sleep(block_duration).await;
         if (queue.current_index(), queue.position_seconds()) != before {
             hang_reset!();
         }
